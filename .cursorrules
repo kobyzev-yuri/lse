@@ -1,0 +1,1 @@
+"Project use Python 3.11, PostgreSQL with pgvector, pandas for math, and yfinance for data seeding. Always account for transaction costs and use log-returns for financial calculations."
