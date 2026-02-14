@@ -2,6 +2,7 @@
 Пример использования бэктестинга на исторических данных
 """
 
+import pandas as pd
 from datetime import datetime, timedelta
 from backtest_engine import BacktestEngine
 
