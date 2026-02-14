@@ -128,6 +128,58 @@ python report_generator.py
 - `total_value` - общая стоимость сделки
 - `sentiment_at_trade` - sentiment на момент сделки
 
+## Веб-интерфейс
+
+Система включает веб-интерфейс для управления торговлей, базой знаний и визуализации данных.
+
+### Запуск веб-интерфейса
+
+```bash
+python web_app.py
+```
+
+Или через uvicorn:
+```bash
+uvicorn web_app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Веб-интерфейс будет доступен по адресу: http://localhost:8000
+
+Подробнее см. [WEB_INTERFACE.md](WEB_INTERFACE.md)
+
+## Автоматизация (Cron)
+
+Для автоматического обновления данных и торговых циклов:
+
+```bash
+./setup_cron.sh
+```
+
+Это установит:
+- **Обновление цен**: ежедневно в 18:00
+- **Торговый цикл**: в 9:00, 13:00, 17:00 (пн-пт)
+
+## LLM интеграция
+
+Система поддерживает анализ через LLM (GPT-4o через proxyapi.ru).
+
+Для использования LLM анализа убедитесь, что в `../brats/config.env` настроены:
+```env
+OPENAI_API_KEY=your_proxyapi_key_here
+OPENAI_BASE_URL=https://api.proxyapi.ru/openai/v1
+OPENAI_MODEL=gpt-4o
+```
+
+Пример использования:
+```python
+from analyst_agent import AnalystAgent
+
+agent = AnalystAgent(use_llm=True)
+result = agent.get_decision_with_llm("MSFT")
+print(result['decision'])  # BUY, STRONG_BUY, HOLD
+print(result['llm_analysis'])  # Детальный анализ от LLM
+```
+
 ## План развития
 
 Подробный roadmap развития системы см. в файле [ROADMAP.md](ROADMAP.md)
@@ -136,8 +188,4 @@ python report_generator.py
 1. **Multi-Asset Rebalancing** - автоматическая ребалансировка портфеля
 2. **Visual Patterns Detection** - распознавание паттернов на графиках
 3. **Real-time API Integration** - переход к реальной торговле через демо-счет
-- `event_type` - тип события ('NEWS', 'TRADE_SIGNAL')
-- `content` - текстовое содержимое
-- `embedding` - векторное представление (1536 измерений для OpenAI)
-
-# lse-about.md
+4. **Векторная база знаний** - семантический поиск исторических паттернов (см. [docs/VECTOR_KB_IMPLEMENTATION.md](docs/VECTOR_KB_IMPLEMENTATION.md))

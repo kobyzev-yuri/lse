@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 import re
 
-from analyst_agent import load_config
+from config_loader import get_database_url
 
 logging.basicConfig(
     level=logging.INFO,
@@ -143,7 +143,7 @@ def update_all_prices(tickers=None, days_back=30):
         tickers: Список тикеров для обновления (если None - обновляет все из БД)
         days_back: Количество дней назад для загрузки (если данных нет)
     """
-    db_url = load_config()
+    db_url = get_database_url()
     engine = create_engine(db_url)
     
     if tickers is None:
@@ -177,4 +177,5 @@ if __name__ == "__main__":
     else:
         # Обновляем все тикеры из БД
         update_all_prices()
+
 

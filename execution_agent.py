@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from analyst_agent import AnalystAgent, load_config
+from analyst_agent import AnalystAgent
+from config_loader import get_database_url
 
 
 logging.basicConfig(
@@ -39,7 +40,7 @@ class ExecutionAgent:
     """
 
     def __init__(self):
-        self.db_url = load_config()
+        self.db_url = get_database_url()
         self.engine = create_engine(self.db_url)
         self.analyst = AnalystAgent()
 
@@ -163,10 +164,30 @@ class ExecutionAgent:
         except Exception as e:
             logger.warning(f"⚠️ Не удалось получить sentiment для {ticker}: {e}")
         return 0.0
+    
+    def _get_last_strategy_name(self, ticker: str) -> str:
+        """Получает название стратегии из последней сделки BUY для тикера."""
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(
+                    text("""
+                        SELECT strategy_name
+                        FROM trade_history
+                        WHERE ticker = :ticker AND side = 'BUY'
+                        ORDER BY ts DESC
+                        LIMIT 1
+                    """),
+                    {"ticker": ticker}
+                ).fetchone()
+                if result and result[0]:
+                    return str(result[0])
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось получить strategy_name для {ticker}: {e}")
+        return None
 
     # ---------- Торговые операции ----------
 
-    def _execute_buy(self, ticker: str, decision: str) -> None:
+    def _execute_buy(self, ticker: str, decision: str, strategy_name: str = None) -> None:
         """Имитация покупки по сигналу BUY/STRONG_BUY."""
         if self._has_open_position(ticker):
             logger.info(
@@ -241,11 +262,11 @@ class ExecutionAgent:
                 text("""
                     INSERT INTO trade_history (
                         ts, ticker, side, quantity, price, commission,
-                        signal_type, total_value, sentiment_at_trade
+                        signal_type, total_value, sentiment_at_trade, strategy_name
                     )
                     VALUES (
                         CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission,
-                        :signal, :total_value, :sentiment
+                        :signal, :total_value, :sentiment, :strategy_name
                     )
                 """),
                 {
@@ -256,11 +277,12 @@ class ExecutionAgent:
                     "signal": decision,
                     "total_value": total_cost,
                     "sentiment": sentiment,
+                    "strategy_name": strategy_name,
                 },
             )
 
         logger.info(
-            "🟢 BUY %s x %.0f @ %.2f, notional=%.2f, fee=%.2f, sentiment=%.3f (signal=%s)",
+            "🟢 BUY %s x %.0f @ %.2f, notional=%.2f, fee=%.2f, sentiment=%.3f (signal=%s, strategy=%s)",
             ticker,
             quantity,
             current_price,
@@ -268,9 +290,10 @@ class ExecutionAgent:
             commission,
             sentiment,
             decision,
+            strategy_name or "N/A",
         )
 
-    def _execute_sell(self, ticker: str, position: Position, reason: str) -> None:
+    def _execute_sell(self, ticker: str, position: Position, reason: str, strategy_name: str = None) -> None:
         """Закрытие позиции по текущей цене (например, по стоп‑лоссу)."""
         current_price = self._get_current_price(ticker)
         if current_price is None:
@@ -306,11 +329,11 @@ class ExecutionAgent:
                 text("""
                     INSERT INTO trade_history (
                         ts, ticker, side, quantity, price, commission,
-                        signal_type, total_value, sentiment_at_trade
+                        signal_type, total_value, sentiment_at_trade, strategy_name
                     )
                     VALUES (
                         CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission,
-                        :signal, :total_value, :sentiment
+                        :signal, :total_value, :sentiment, :strategy_name
                     )
                 """),
                 {
@@ -321,11 +344,12 @@ class ExecutionAgent:
                     "signal": signal_type,
                     "total_value": total_proceeds,
                     "sentiment": sentiment,
+                    "strategy_name": strategy_name,
                 },
             )
 
         logger.info(
-            "🔴 SELL %s x %.0f @ %.2f, notional=%.2f, fee=%.2f, log_return=%.4f, sentiment=%.3f (%s)",
+            "🔴 SELL %s x %.0f @ %.2f, notional=%.2f, fee=%.2f, log_return=%.4f, sentiment=%.3f (%s, strategy=%s)",
             ticker,
             quantity,
             current_price,
@@ -334,27 +358,62 @@ class ExecutionAgent:
             log_ret,
             sentiment,
             reason,
+            strategy_name or "N/A",
         )
 
     # ---------- Публичные методы ----------
 
-    def run_for_tickers(self, tickers: list[str]) -> None:
+    def run_for_tickers(self, tickers: list[str], use_llm: bool = True) -> None:
         """
         Запускает цикл анализа и исполнения по списку тикеров:
-        - получает сигнал от AnalystAgent
+        - получает сигнал от AnalystAgent (с LLM или без)
         - открывает позиции по BUY / STRONG_BUY, если их ещё нет
         - проверяет стоп‑лоссы
+        
+        Args:
+            tickers: Список тикеров для анализа
+            use_llm: Использовать LLM анализ (по умолчанию True)
         """
         logger.info("=" * 60)
         logger.info("🚀 Запуск ExecutionAgent для тикеров: %s", ", ".join(tickers))
         logger.info("=" * 60)
 
         for ticker in tickers:
-            decision = self.analyst.get_decision(ticker)
-            logger.info("🎯 Сигнал AnalystAgent для %s: %s", ticker, decision)
+            result = None
+            decision = "HOLD"
+            strategy_name = None
+            
+            if use_llm and hasattr(self.analyst, 'get_decision_with_llm'):
+                try:
+                    result = self.analyst.get_decision_with_llm(ticker)
+                    decision = result.get('decision', 'HOLD')
+                    strategy_name = result.get('selected_strategy')  # Получаем название стратегии
+                    logger.info("🎯 Сигнал AnalystAgent (с LLM) для %s: %s", ticker, decision)
+                    if strategy_name:
+                        logger.info("   Стратегия: %s", strategy_name)
+                    if result.get('llm_analysis'):
+                        logger.info("   LLM рекомендация: %s (уверенность: %.1f%%)", 
+                                  result['llm_analysis'].get('decision', 'N/A'),
+                                  result['llm_analysis'].get('confidence', 0) * 100)
+                except Exception as e:
+                    logger.warning("⚠️ Ошибка LLM анализа для %s, используем базовый анализ: %s", ticker, e)
+                    result = self.analyst.get_decision(ticker)
+                    decision = result if isinstance(result, str) else result.get('decision', 'HOLD')
+                    strategy_name = result.get('selected_strategy') if isinstance(result, dict) else None
+                    logger.info("🎯 Сигнал AnalystAgent (базовый) для %s: %s", ticker, decision)
+            else:
+                result = self.analyst.get_decision(ticker)
+                if isinstance(result, dict):
+                    decision = result.get('decision', 'HOLD')
+                    strategy_name = result.get('selected_strategy')
+                else:
+                    decision = result
+                logger.info("🎯 Сигнал AnalystAgent для %s: %s", ticker, decision)
+                if strategy_name:
+                    logger.info("   Стратегия: %s", strategy_name)
 
             if decision in ("BUY", "STRONG_BUY"):
-                self._execute_buy(ticker, decision)
+                self._execute_buy(ticker, decision, strategy_name)
             else:
                 logger.info("ℹ️ Сигнал %s для %s, покупка не выполняется", decision, ticker)
 
@@ -410,7 +469,9 @@ class ExecutionAgent:
                     entry_price=entry_price,
                     entry_ts=entry_ts,
                 )
-                self._execute_sell(ticker, position, reason)
+                # Получаем strategy_name из последней сделки BUY для этого тикера
+                strategy_name = self._get_last_strategy_name(ticker)
+                self._execute_sell(ticker, position, reason, strategy_name)
             else:
                 logger.info(
                     "✅ Стоп‑лосс для %s не сработал (log_ret=%.4f > %.4f)",

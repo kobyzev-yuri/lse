@@ -15,7 +15,7 @@ import csv
 import sys
 from pathlib import Path
 
-from analyst_agent import load_config
+from config_loader import load_config, get_database_url, get_config_value
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def add_news(engine, ticker, source, content, sentiment_score=None, ts=None):
+def add_news(engine, ticker, source, content, sentiment_score=None, insight=None, ts=None):
     """
     Добавляет новость в базу знаний.
     
@@ -34,6 +34,7 @@ def add_news(engine, ticker, source, content, sentiment_score=None, ts=None):
         source: Источник новости (например, 'BLS Release', 'Reuters', 'Bloomberg')
         content: Текст новости
         sentiment_score: Оценка настроения (0.0-1.0), если None - можно будет рассчитать позже
+        insight: Ключевой финансовый факт из новости (например, "рост 163%")
         ts: Временная метка (если None - используется текущее время)
     """
     if ts is None:
@@ -41,17 +42,18 @@ def add_news(engine, ticker, source, content, sentiment_score=None, ts=None):
     
     with engine.begin() as conn:
         conn.execute(text("""
-            INSERT INTO knowledge_base (ts, ticker, source, content, sentiment_score)
-            VALUES (:ts, :ticker, :source, :content, :sentiment_score)
+            INSERT INTO knowledge_base (ts, ticker, source, content, sentiment_score, insight)
+            VALUES (:ts, :ticker, :source, :content, :sentiment_score, :insight)
         """), {
             "ts": ts,
             "ticker": ticker,
             "source": source,
             "content": content,
-            "sentiment_score": sentiment_score
+            "sentiment_score": sentiment_score,
+            "insight": insight
         })
     
-    logger.info(f"✅ Новость добавлена: {ticker} от {source} (sentiment={sentiment_score})")
+    logger.info(f"✅ Новость добавлена: {ticker} от {source} (sentiment={sentiment_score}, insight={insight})")
 
 
 def add_news_interactive():
@@ -93,10 +95,24 @@ def add_news_interactive():
         except ValueError:
             print("⚠️ Неверный формат, sentiment будет None")
     
-    db_url = load_config()
+    db_url = get_database_url()
     engine = create_engine(db_url)
     
-    add_news(engine, ticker, source, content, sentiment_score)
+    # Автоматический расчет sentiment и insight, если не указан и включен в конфиге
+    insight = None
+    if sentiment_score is None:
+        auto_calculate = get_config_value('SENTIMENT_AUTO_CALCULATE', 'false').lower() == 'true'
+        if auto_calculate:
+            try:
+                from services.sentiment_analyzer import calculate_sentiment
+                sentiment_score, insight = calculate_sentiment(content)
+                logger.info(f"✅ Sentiment рассчитан автоматически: {sentiment_score:.3f}")
+                if insight:
+                    logger.info(f"   Insight: {insight}")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось рассчитать sentiment автоматически: {e}")
+    
+    add_news(engine, ticker, source, content, sentiment_score, insight)
     engine.dispose()
     
     print("✅ Новость успешно добавлена!")
@@ -107,8 +123,11 @@ def import_from_csv(file_path):
     
     Ожидаемые колонки: ticker, source, content, sentiment_score (опционально), ts (опционально)
     """
-    db_url = load_config()
+    db_url = get_database_url()
     engine = create_engine(db_url)
+    
+    # Проверяем, нужно ли автоматически рассчитывать sentiment
+    auto_calculate = get_config_value('SENTIMENT_AUTO_CALCULATE', 'false').lower() == 'true'
     
     df = pd.read_csv(file_path)
     
@@ -128,6 +147,13 @@ def import_from_csv(file_path):
             sentiment_score = None
             if 'sentiment_score' in df.columns and pd.notna(row['sentiment_score']):
                 sentiment_score = float(row['sentiment_score'])
+            elif auto_calculate:
+                # Автоматический расчет sentiment
+                try:
+                    from services.sentiment_analyzer import calculate_sentiment
+                    sentiment_score = calculate_sentiment(content)
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось рассчитать sentiment для строки {_ + 1}: {e}")
             
             ts = None
             if 'ts' in df.columns and pd.notna(row['ts']):
@@ -150,8 +176,11 @@ def import_from_json(file_path):
     
     Ожидаемый формат: список объектов с полями ticker, source, content, sentiment_score (опционально), ts (опционально)
     """
-    db_url = load_config()
+    db_url = get_database_url()
     engine = create_engine(db_url)
+    
+    # Проверяем, нужно ли автоматически рассчитывать sentiment
+    auto_calculate = get_config_value('SENTIMENT_AUTO_CALCULATE', 'false').lower() == 'true'
     
     with open(file_path, 'r', encoding='utf-8') as f:
         news_list = json.load(f)
@@ -166,6 +195,13 @@ def import_from_json(file_path):
             sentiment_score = news.get('sentiment_score')
             if sentiment_score is not None:
                 sentiment_score = float(sentiment_score)
+            elif auto_calculate:
+                # Автоматический расчет sentiment
+                try:
+                    from services.sentiment_analyzer import calculate_sentiment
+                    sentiment_score = calculate_sentiment(content)
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось рассчитать sentiment: {e}")
             
             ts = None
             if 'ts' in news and news['ts']:
@@ -185,7 +221,7 @@ def import_from_json(file_path):
 
 def show_recent_news(limit=10):
     """Показывает последние новости из базы."""
-    db_url = load_config()
+    db_url = get_database_url()
     engine = create_engine(db_url)
     
     with engine.connect() as conn:
@@ -240,4 +276,5 @@ if __name__ == "__main__":
         show_recent_news(limit)
     else:
         print(f"❌ Неизвестная команда: {command}")
+
 

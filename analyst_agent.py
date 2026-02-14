@@ -2,9 +2,38 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import numpy as np
 import re
+import json
 from pathlib import Path
 from datetime import datetime, timedelta
+from typing import Dict, Any, List
 import logging
+
+# Импорт LLM сервиса (опционально)
+try:
+    from services.llm_service import get_llm_service
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ LLM сервис недоступен, будет использоваться базовый анализ")
+
+# Импорт менеджера стратегий
+try:
+    from strategy_manager import get_strategy_manager
+    STRATEGY_MANAGER_AVAILABLE = True
+except ImportError:
+    STRATEGY_MANAGER_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ Менеджер стратегий недоступен")
+
+# Импорт утилит для sentiment
+try:
+    from utils.sentiment_utils import normalize_sentiment, denormalize_sentiment
+    SENTIMENT_UTILS_AVAILABLE = True
+except ImportError:
+    SENTIMENT_UTILS_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ Утилиты sentiment недоступны")
 
 # Настройка логирования
 logging.basicConfig(
@@ -15,42 +44,51 @@ logger = logging.getLogger(__name__)
 
 
 def load_config():
-    """Загружает конфигурацию из ../brats/config.env"""
-    config_path = Path(__file__).parent.parent / "brats" / "config.env"
-    
-    if not config_path.exists():
-        raise FileNotFoundError(f"Конфигурационный файл не найден: {config_path}")
-    
-    config = {}
-    with open(config_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                key, value = line.split('=', 1)
-                config[key.strip()] = value.strip()
-    
-    # Извлекаем параметры из DATABASE_URL
-    db_url = config.get('DATABASE_URL', 'postgresql://postgres:1234@localhost:5432/brats')
-    
-    # Парсим DATABASE_URL: postgresql://user:password@host:port/database
-    match = re.match(r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)', db_url)
-    if match:
-        user, password, host, port, _ = match.groups()
-        # Используем базу данных lse_trading
-        db_url_lse = f"postgresql://{user}:{password}@{host}:{port}/lse_trading"
-        return db_url_lse
-    else:
-        raise ValueError(f"Неверный формат DATABASE_URL: {db_url}")
+    """Загружает конфигурацию из локального config.env или ../brats/config.env"""
+    from config_loader import get_database_url
+    return get_database_url()
 
 
 class AnalystAgent:
     """Агент для анализа торговых сигналов на основе технических индикаторов и базы знаний"""
     
-    def __init__(self):
-        """Инициализация подключения к базе данных"""
+    def __init__(self, use_llm: bool = True, use_strategy_factory: bool = True):
+        """
+        Инициализация подключения к базе данных
+        
+        Args:
+            use_llm: Использовать LLM для улучшения анализа (по умолчанию True)
+            use_strategy_factory: Использовать фабрику стратегий (по умолчанию True)
+        """
         self.db_url = load_config()
         self.engine = create_engine(self.db_url)
-        logger.info("✅ AnalystAgent инициализирован, подключение к БД установлено")
+        self.use_llm = use_llm and LLM_AVAILABLE
+        self.use_strategy_manager = use_strategy_factory and STRATEGY_MANAGER_AVAILABLE
+        
+        if self.use_llm:
+            try:
+                self.llm_service = get_llm_service()
+                logger.info("✅ AnalystAgent инициализирован с LLM поддержкой")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось инициализировать LLM: {e}, используется базовый анализ")
+                self.use_llm = False
+                self.llm_service = None
+        else:
+            self.llm_service = None
+        
+        if self.use_strategy_manager:
+            try:
+                self.strategy_manager = get_strategy_manager()
+                logger.info("✅ AnalystAgent инициализирован с менеджером стратегий")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось инициализировать менеджер стратегий: {e}")
+                self.use_strategy_manager = False
+                self.strategy_manager = None
+        else:
+            self.strategy_manager = None
+        
+        if not self.use_llm and not self.use_strategy_manager:
+            logger.info("✅ AnalystAgent инициализирован (базовый анализ)")
     
     def get_last_5_days_quotes(self, ticker: str) -> pd.DataFrame:
         """Выгружает последние 5 дней котировок для указанного тикера"""
@@ -155,9 +193,9 @@ class AnalystAgent:
         cutoff_time = datetime.now() - timedelta(hours=hours)
         
         with self.engine.connect() as conn:
-            # Ищем в knowledge_base (там есть sentiment_score)
+            # Ищем в knowledge_base (там есть sentiment_score и insight)
             query = text("""
-                SELECT id, ts, ticker, source, content, sentiment_score
+                SELECT id, ts, ticker, source, content, sentiment_score, insight
                 FROM knowledge_base
                 WHERE (ticker = :ticker OR ticker = 'MACRO' OR ticker = 'US_MACRO')
                   AND ts >= :cutoff_time
@@ -236,9 +274,15 @@ class AnalystAgent:
             logger.info(f"   [{row['ts']}] Weight={row['weight']:.1f}, Sentiment={row['sentiment_score']:.2f}, "
                        f"Ticker mentioned: {ticker_mentioned}")
         
-        logger.info(f"   Взвешенный средний sentiment: {weighted_sentiment:.3f}")
+        logger.info(f"   Взвешенный средний sentiment (0.0-1.0): {weighted_sentiment:.3f}")
         
-        return weighted_sentiment
+        # Конвертируем в центрированную шкалу (-1.0 до 1.0) для использования в стратегиях
+        if SENTIMENT_UTILS_AVAILABLE:
+            normalized_sentiment = normalize_sentiment(weighted_sentiment)
+            logger.info(f"   Нормализованный sentiment (-1.0 до 1.0): {normalized_sentiment:.3f}")
+            return normalized_sentiment
+        else:
+            return weighted_sentiment
     
     def get_decision(self, ticker: str) -> str:
         """Основной метод принятия решения на основе технического анализа и базы знаний"""
@@ -276,14 +320,83 @@ class AnalystAgent:
             logger.info(f"   Взвешенный sentiment: {weighted_sentiment:.3f}")
             
             # Используем взвешенный sentiment для принятия решения
-            sentiment_positive = weighted_sentiment > 0.5
-            logger.info(f"   Взвешенный sentiment > 0.5: {sentiment_positive}")
+            # weighted_sentiment теперь в центрированной шкале (-1.0 до 1.0)
+            sentiment_positive = weighted_sentiment > 0.0  # В центрированной шкале 0.0 = нейтральный
+            logger.info(f"   Взвешенный sentiment > 0.0 (положительный): {sentiment_positive}")
         else:
             logger.info("ℹ️  Новостей не найдено, sentiment анализ пропущен")
         
-        # Шаг 3: Финальное решение
-        logger.info("\n🎯 ШАГ 3: Принятие финального решения")
+        # Шаг 3: Выбор стратегии и принятие решения
+        logger.info("\n🎯 ШАГ 3: Выбор стратегии и принятие решения")
         
+        # Используем менеджер стратегий, если доступен
+        if self.use_strategy_manager and self.strategy_manager:
+            try:
+                # Подготавливаем данные для выбора стратегии
+                df = self.get_last_5_days_quotes(ticker)
+                latest = df.iloc[0] if not df.empty else None
+                avg_volatility_20 = self.get_average_volatility_20_days(ticker)
+                
+                # Получаем цену открытия для расчета гэпа
+                open_price = None
+                if latest is not None and 'open' in latest:
+                    open_price = float(latest['open'])
+                elif not df.empty and len(df) > 1:
+                    # Берем цену закрытия предыдущего дня как приближение открытия
+                    prev_close = float(df.iloc[1]['close'])
+                    open_price = prev_close
+                
+                technical_data_for_strategy = {
+                    "close": float(latest['close']) if latest is not None else None,
+                    "open_price": open_price,
+                    "sma_5": float(latest['sma_5']) if latest is not None else None,
+                    "volatility_5": float(latest['volatility_5']) if latest is not None else None,
+                    "avg_volatility_20": avg_volatility_20,
+                    "technical_signal": technical_signal
+                }
+                
+                news_list = news_df.to_dict('records') if not news_df.empty else []
+                
+                # Конвертируем sentiment в центрированную шкалу, если нужно
+                sentiment_for_strategy = weighted_sentiment
+                if not SENTIMENT_UTILS_AVAILABLE or weighted_sentiment > 1.0 or weighted_sentiment < -1.0:
+                    # Если sentiment еще не нормализован (0.0-1.0), нормализуем
+                    if 0.0 <= weighted_sentiment <= 1.0:
+                        sentiment_for_strategy = normalize_sentiment(weighted_sentiment)
+                
+                # Выбираем стратегию через менеджер
+                selected_strategy = self.strategy_manager.select_strategy(
+                    ticker=ticker,
+                    technical_data=technical_data_for_strategy,
+                    news_data=news_list,
+                    sentiment_score=sentiment_for_strategy
+                )
+                
+                if selected_strategy:
+                    logger.info(f"📋 Используется стратегия: {selected_strategy.name}")
+                    # Вычисляем сигнал через стратегию
+                    strategy_result = selected_strategy.calculate_signal(
+                        ticker=ticker,
+                        technical_data=technical_data_for_strategy,
+                        news_data=news_list,
+                        sentiment_score=sentiment_for_strategy
+                    )
+                    decision = strategy_result.get('signal', 'HOLD')
+                    logger.info(f"✅ РЕШЕНИЕ (через {selected_strategy.name}): {decision}")
+                    logger.info(f"   Уверенность: {strategy_result.get('confidence', 0):.2f}")
+                    logger.info(f"   Обоснование: {strategy_result.get('reasoning', 'N/A')}")
+                    if strategy_result.get('insight'):
+                        logger.info(f"   Insight: {strategy_result.get('insight')}")
+                    logger.info(f"=" * 60)
+                    return decision
+                else:
+                    logger.info("⚠️ Менеджер стратегий не выбрал стратегию, используем базовую логику")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при использовании менеджера стратегий: {e}, используем базовую логику")
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        # Базовая логика (fallback)
         if technical_signal == "BUY" and sentiment_positive:
             decision = "STRONG_BUY"
             logger.info(f"✅ РЕШЕНИЕ: {decision}")
@@ -299,6 +412,181 @@ class AnalystAgent:
         
         logger.info(f"=" * 60)
         return decision
+    
+    def get_decision_with_llm(self, ticker: str) -> dict:
+        """
+        Принятие решения с использованием LLM для улучшения анализа
+        
+        Returns:
+            dict с полным анализом, включая LLM рекомендации
+        """
+        logger.info(f"=" * 60)
+        logger.info(f"🎯 Расширенный анализ для тикера: {ticker} (с LLM)")
+        logger.info(f"=" * 60)
+        
+        # Базовый анализ
+        technical_signal = self.check_technical_signal(ticker)
+        if technical_signal == "NO_DATA":
+            return {
+                "decision": "NO_DATA",
+                "technical_signal": "NO_DATA",
+                "sentiment": 0.0,
+                "llm_analysis": None,
+                "reasoning": "Недостаточно данных"
+            }
+        
+        # Получаем данные для LLM
+        df = self.get_last_5_days_quotes(ticker)
+        latest = df.iloc[0] if not df.empty else None
+        avg_volatility_20 = self.get_average_volatility_20_days(ticker)
+        
+        technical_data = {
+            "close": float(latest['close']) if latest is not None else None,
+            "sma_5": float(latest['sma_5']) if latest is not None else None,
+            "volatility_5": float(latest['volatility_5']) if latest is not None else None,
+            "avg_volatility_20": avg_volatility_20,
+            "technical_signal": technical_signal
+        }
+        
+        news_df = self.get_recent_news(ticker)
+        weighted_sentiment = 0.0
+        news_list = []
+        
+        if not news_df.empty:
+            weighted_sentiment = self.calculate_weighted_sentiment(news_df, ticker)
+            news_list = news_df.to_dict('records')
+        
+        # Базовое решение (через менеджер стратегий или базовую логику)
+        base_decision = "HOLD"
+        strategy_result = None
+        selected_strategy = None
+        
+        # Конвертируем sentiment в центрированную шкалу, если нужно
+        sentiment_for_strategy = weighted_sentiment
+        if not SENTIMENT_UTILS_AVAILABLE or weighted_sentiment > 1.0 or weighted_sentiment < -1.0:
+            # Если sentiment еще не нормализован (0.0-1.0), нормализуем
+            if 0.0 <= weighted_sentiment <= 1.0:
+                sentiment_for_strategy = normalize_sentiment(weighted_sentiment)
+        
+        if self.use_strategy_manager and self.strategy_manager:
+            try:
+                # Добавляем open_price для расчета гэпа
+                open_price = technical_data.get('open_price')
+                if not open_price:
+                    # Пытаемся получить из последних котировок
+                    df = self.get_last_5_days_quotes(ticker)
+                    if not df.empty and len(df) > 1:
+                        open_price = float(df.iloc[1]['close'])  # Приближение
+                
+                technical_data_with_open = technical_data.copy()
+                technical_data_with_open['open_price'] = open_price
+                
+                selected_strategy = self.strategy_manager.select_strategy(
+                    ticker=ticker,
+                    technical_data=technical_data_with_open,
+                    news_data=news_list,
+                    sentiment_score=sentiment_for_strategy
+                )
+                
+                if selected_strategy:
+                    strategy_result = selected_strategy.calculate_signal(
+                        ticker=ticker,
+                        technical_data=technical_data_with_open,
+                        news_data=news_list,
+                        sentiment_score=sentiment_for_strategy
+                    )
+                    base_decision = strategy_result.get('signal', 'HOLD')
+                    logger.info(f"📋 Стратегия {selected_strategy.name}: {base_decision}")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при использовании менеджера стратегий: {e}")
+        
+        # Fallback к базовой логике
+        if not strategy_result:
+            # В центрированной шкале: > 0 = положительный
+            sentiment_positive = sentiment_for_strategy > 0.0
+            if technical_signal == "BUY" and sentiment_positive:
+                base_decision = "STRONG_BUY"
+            elif technical_signal == "BUY":
+                base_decision = "BUY"
+            else:
+                base_decision = "HOLD"
+        
+        # LLM анализ (если доступен)
+        llm_result = None
+        llm_guidance = None
+        
+        if self.use_llm and self.llm_service:
+            try:
+                logger.info("\n🤖 ШАГ 3: LLM анализ торговой ситуации")
+                
+                # Получаем LLM guidance для выбора стратегии
+                llm_guidance = self.get_llm_guidance(
+                    ticker=ticker,
+                    tech_data=technical_data,
+                    news_context=news_list
+                )
+                
+                # Для LLM используем sentiment в шкале 0.0-1.0 (конвертируем обратно)
+                sentiment_for_llm = denormalize_sentiment(weighted_sentiment) if SENTIMENT_UTILS_AVAILABLE else weighted_sentiment
+                if sentiment_for_llm < 0 or sentiment_for_llm > 1:
+                    sentiment_for_llm = 0.5  # Fallback
+                
+                # Получаем детальный LLM анализ
+                llm_result = self.llm_service.analyze_trading_situation(
+                    ticker=ticker,
+                    technical_data=technical_data,
+                    news_data=news_list,
+                    sentiment_score=sentiment_for_llm
+                )
+                logger.info(f"✅ LLM анализ завершен: {llm_result.get('llm_analysis', {}).get('decision', 'N/A')}")
+                logger.info(f"✅ LLM стратегия: {llm_guidance.get('strategy', 'N/A')}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка LLM анализа: {e}")
+                llm_result = None
+                llm_guidance = None
+        
+        # Финальное решение (приоритет LLM, если доступен)
+        if llm_result and llm_result.get('llm_analysis'):
+            llm_decision = llm_result['llm_analysis'].get('decision', base_decision)
+            # Маппинг LLM решений к нашим
+            if llm_decision in ['BUY', 'STRONG_BUY']:
+                final_decision = llm_decision
+            else:
+                final_decision = base_decision
+        else:
+            final_decision = base_decision
+        
+        # Конвертируем sentiment обратно в 0.0-1.0 для совместимости
+        sentiment_0_1 = denormalize_sentiment(weighted_sentiment) if SENTIMENT_UTILS_AVAILABLE else weighted_sentiment
+        
+        result = {
+            "decision": final_decision,
+            "technical_signal": technical_signal,
+            "sentiment": sentiment_0_1,  # Для совместимости возвращаем в шкале 0.0-1.0
+            "sentiment_normalized": weighted_sentiment,  # В центрированной шкале -1.0 до 1.0
+            "sentiment_positive": weighted_sentiment > 0.0,  # В центрированной шкале
+            "technical_data": technical_data,
+            "news_count": len(news_list),
+            "strategy_result": strategy_result,  # Результат от выбранной стратегии
+            "selected_strategy": selected_strategy.name if selected_strategy else None,
+            "llm_analysis": llm_result.get('llm_analysis') if llm_result else None,
+            "llm_guidance": llm_guidance,  # Добавляем LLM guidance со стратегией
+            "llm_usage": llm_result.get('usage', {}) if llm_result else None,
+            "base_decision": base_decision
+        }
+        
+        logger.info(f"\n🎯 ФИНАЛЬНОЕ РЕШЕНИЕ: {final_decision}")
+        if llm_result:
+            logger.info(f"   LLM рекомендация: {llm_result.get('llm_analysis', {}).get('decision', 'N/A')}")
+            logger.info(f"   Уверенность LLM: {llm_result.get('llm_analysis', {}).get('confidence', 0):.2f}")
+        if llm_guidance:
+            logger.info(f"   LLM стратегия: {llm_guidance.get('strategy', 'N/A')}")
+            logger.info(f"   Уверенность стратегии: {llm_guidance.get('confidence', 0):.2f}")
+        if strategy_result and strategy_result.get('insight'):
+            logger.info(f"   Insight: {strategy_result.get('insight')}")
+        logger.info(f"=" * 60)
+        
+        return result
 
 
 if __name__ == "__main__":

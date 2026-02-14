@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Визуализация - LSE Trading System{% endblock %}
+
+{% block content %}
+<h1>Визуализация данных</h1>
+
+<div class="card">
+    <h2>График котировок</h2>
+    <label>Тикер:</label>
+    <select id="tickerSelect">
+        <option value="">Выберите тикер</option>
+        {% for ticker in tickers %}
+        <option value="{{ ticker }}">{{ ticker }}</option>
+        {% endfor %}
+    </select>
+    
+    <canvas id="quotesChart" style="max-height: 400px; margin-top: 1rem;"></canvas>
+</div>
+
+<div class="card">
+    <h2>PnL по сделкам</h2>
+    <canvas id="pnlChart" style="max-height: 400px;"></canvas>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let quotesChart = null;
+let pnlChart = null;
+
+document.getElementById('tickerSelect').addEventListener('change', async (e) => {
+    const ticker = e.target.value;
+    if (!ticker) return;
+    
+    try {
+        const response = await fetch(`/api/quotes/${ticker}?days=30`);
+        const data = await response.json();
+        
+        const dates = data.data.map(d => d.date);
+        const closes = data.data.map(d => d.close);
+        const sma5 = data.data.map(d => d.sma_5);
+        
+        if (quotesChart) {
+            quotesChart.destroy();
+        }
+        
+        const ctx = document.getElementById('quotesChart').getContext('2d');
+        quotesChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: dates,
+                datasets: [{
+                    label: 'Цена закрытия',
+                    data: closes,
+                    borderColor: 'rgb(75, 192, 192)',
+                    tension: 0.1
+                }, {
+                    label: 'SMA 5',
+                    data: sma5,
+                    borderColor: 'rgb(255, 99, 132)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true
+            }
+        });
+    } catch (error) {
+        console.error('Ошибка загрузки данных:', error);
+    }
+});
+
+// Загрузка PnL данных
+(async () => {
+    try {
+        const response = await fetch('/api/pnl');
+        const data = await response.json();
+        
+        const trades = data.pnl;
+        const labels = trades.map(t => t.ts);
+        const pnl = trades.map(t => t.net_pnl);
+        
+        const ctx = document.getElementById('pnlChart').getContext('2d');
+        pnlChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'PnL',
+                    data: pnl,
+                    backgroundColor: pnl.map(p => p >= 0 ? 'rgba(75, 192, 192, 0.6)' : 'rgba(255, 99, 132, 0.6)')
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true
+            }
+        });
+    } catch (error) {
+        console.error('Ошибка загрузки PnL:', error);
+    }
+})();
+</script>
+{% endblock %}
+

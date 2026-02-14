@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}Торговля - LSE Trading System{% endblock %}
+
+{% block content %}
+<h1>Управление торговлей</h1>
+
+<div class="card">
+    <h2>Анализ тикера</h2>
+    <form id="analyzeForm">
+        <label>Тикер:</label>
+        <select name="ticker" id="tickerSelect" required>
+            <option value="">Выберите тикер</option>
+            {% for ticker in tickers %}
+            <option value="{{ ticker }}">{{ ticker }}</option>
+            {% endfor %}
+        </select>
+        
+        <label>
+            <input type="checkbox" name="use_llm" id="useLLM" checked> Использовать LLM анализ
+        </label>
+        
+        <button type="submit">Анализировать</button>
+    </form>
+    
+    <div id="analysisResult" style="margin-top: 2rem;"></div>
+</div>
+
+<div class="card">
+    <h2>Исполнение сделок</h2>
+    <form id="executeForm">
+        <label>Тикеры (через запятую):</label>
+        <input type="text" name="tickers" id="tickersInput" placeholder="MSFT, SNDK" required>
+        
+        <button type="submit">Запустить торговый цикл</button>
+    </form>
+    
+    <div id="executeResult" style="margin-top: 2rem;"></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('analyzeForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const resultDiv = document.getElementById('analysisResult');
+    resultDiv.innerHTML = '<div class="loading">Анализ...</div>';
+    
+    try {
+        const response = await fetch('/api/analyze', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+        
+        let html = '<h3>Результаты анализа</h3>';
+        html += `<p><strong>Решение:</strong> ${data.decision}</p>`;
+        html += `<p><strong>Технический сигнал:</strong> ${data.technical_signal}</p>`;
+        html += `<p><strong>Sentiment:</strong> ${data.sentiment?.toFixed(3) || 'N/A'}</p>`;
+        
+        // Информация о выбранной стратегии
+        if (data.selected_strategy) {
+            html += '<h4>📋 Выбранная стратегия:</h4>';
+            html += `<p><strong>Стратегия:</strong> <span style="color: #3498db; font-weight: bold;">${data.selected_strategy}</span></p>`;
+            
+            if (data.strategy_result) {
+                const strategy = data.strategy_result;
+                html += `<p><strong>Сигнал стратегии:</strong> ${strategy.signal || 'N/A'}</p>`;
+                html += `<p><strong>Уверенность:</strong> ${((strategy.confidence || 0) * 100).toFixed(1)}%</p>`;
+                html += `<p><strong>Обоснование:</strong> ${strategy.reasoning || 'N/A'}</p>`;
+                
+                if (strategy.stop_loss) {
+                    html += `<p><strong>Рекомендуемый стоп-лосс:</strong> ${parseFloat(strategy.stop_loss).toFixed(2)}%</p>`;
+                }
+                if (strategy.take_profit) {
+                    html += `<p><strong>Рекомендуемый тейк-профит:</strong> ${parseFloat(strategy.take_profit).toFixed(2)}%</p>`;
+                }
+                if (strategy.entry_price) {
+                    html += `<p><strong>Рекомендуемая цена входа:</strong> $${parseFloat(strategy.entry_price).toFixed(2)}</p>`;
+                }
+            }
+        }
+        
+        // LLM Guidance (стратегия)
+        if (data.llm_guidance) {
+            html += '<h4>🤖 LLM Стратегия:</h4>';
+            html += `<p><strong>Стратегия:</strong> <span style="color: #3498db; font-weight: bold;">${data.llm_guidance.strategy}</span></p>`;
+            html += `<p><strong>Уверенность:</strong> ${(data.llm_guidance.confidence * 100).toFixed(1)}%</p>`;
+            html += `<p><strong>Обоснование:</strong> ${data.llm_guidance.reasoning}</p>`;
+            
+            if (data.llm_guidance.entry_price) {
+                html += `<p><strong>Рекомендуемая цена входа:</strong> $${parseFloat(data.llm_guidance.entry_price).toFixed(2)}</p>`;
+            }
+            if (data.llm_guidance.stop_loss) {
+                html += `<p><strong>Рекомендуемый стоп-лосс:</strong> ${parseFloat(data.llm_guidance.stop_loss).toFixed(2)}%</p>`;
+            }
+            if (data.llm_guidance.take_profit) {
+                html += `<p><strong>Рекомендуемый тейк-профит:</strong> ${parseFloat(data.llm_guidance.take_profit).toFixed(2)}%</p>`;
+            }
+        }
+        
+        // Детальный LLM анализ
+        if (data.llm_analysis) {
+            html += '<h4>📈 Детальный LLM Анализ:</h4>';
+            html += `<p><strong>Рекомендация:</strong> ${data.llm_analysis.decision}</p>`;
+            html += `<p><strong>Уверенность:</strong> ${(data.llm_analysis.confidence * 100).toFixed(1)}%</p>`;
+            html += `<p><strong>Обоснование:</strong> ${data.llm_analysis.reasoning}</p>`;
+            
+            if (data.llm_analysis.risks && data.llm_analysis.risks.length > 0) {
+                html += `<p><strong>Риски:</strong> ${data.llm_analysis.risks.join(', ')}</p>`;
+            }
+            if (data.llm_analysis.key_factors && data.llm_analysis.key_factors.length > 0) {
+                html += `<p><strong>Ключевые факторы:</strong> ${data.llm_analysis.key_factors.join(', ')}</p>`;
+            }
+        }
+        
+        resultDiv.innerHTML = html;
+    } catch (error) {
+        resultDiv.innerHTML = `<div style="color: red;">Ошибка: ${error.message}</div>`;
+    }
+});
+
+document.getElementById('executeForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const resultDiv = document.getElementById('executeResult');
+    resultDiv.innerHTML = '<div class="loading">Исполнение...</div>';
+    
+    try {
+        const response = await fetch('/api/execute', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+        resultDiv.innerHTML = `<div style="color: green;">${data.message}</div>`;
+    } catch (error) {
+        resultDiv.innerHTML = `<div style="color: red;">Ошибка: ${error.message}</div>`;
+    }
+});
+</script>
+{% endblock %}
+

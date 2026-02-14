@@ -6,32 +6,20 @@ import re
 from pathlib import Path
 
 def load_config():
-    """Загружает конфигурацию из ../brats/config.env"""
-    config_path = Path(__file__).parent.parent / "brats" / "config.env"
+    """Загружает конфигурацию из локального config.env или ../brats/config.env"""
+    from config_loader import load_config as load_config_base, get_database_url
+    import re
     
-    if not config_path.exists():
-        raise FileNotFoundError(f"Конфигурационный файл не найден: {config_path}")
+    config = load_config_base()
+    db_url_lse = get_database_url(config)
     
-    config = {}
-    with open(config_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                key, value = line.split('=', 1)
-                config[key.strip()] = value.strip()
-    
-    # Извлекаем параметры из DATABASE_URL или используем значения по умолчанию
-    db_url = config.get('DATABASE_URL', 'postgresql://postgres:1234@localhost:5432/brats')
-    
-    # Парсим DATABASE_URL: postgresql://user:password@host:port/database
-    match = re.match(r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)', db_url)
+    # Парсим для получения параметров подключения
+    match = re.match(r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)', db_url_lse)
     if match:
         user, password, host, port, _ = match.groups()
-        # Используем базу данных lse_trading вместо brats
-        db_url_lse = f"postgresql://{user}:{password}@{host}:{port}/lse_trading"
         return db_url_lse, user, password, host, port
     else:
-        raise ValueError(f"Неверный формат DATABASE_URL: {db_url}")
+        raise ValueError(f"Неверный формат DATABASE_URL: {db_url_lse}")
 
 def create_database_if_not_exists():
     """Создает базу данных lse_trading если её нет"""
@@ -100,7 +88,8 @@ def init_db():
                 ticker VARCHAR(10),
                 source VARCHAR(100),
                 content TEXT,
-                sentiment_score DECIMAL(3,2)
+                sentiment_score DECIMAL(3,2),
+                insight TEXT
             );
         """))
         
@@ -127,7 +116,8 @@ def init_db():
                 commission DECIMAL,
                 signal_type VARCHAR(20), -- 'STRONG_BUY', 'STOP_LOSS' и т.д.
                 total_value DECIMAL,
-                sentiment_at_trade DECIMAL -- Сохраняем sentiment для анализа ошибок
+                sentiment_at_trade DECIMAL, -- Сохраняем sentiment для анализа ошибок
+                strategy_name VARCHAR(50) -- Название стратегии (Momentum, Mean Reversion, Volatile Gap)
             );
         """))
         

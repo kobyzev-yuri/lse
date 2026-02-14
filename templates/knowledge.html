@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}База знаний - LSE Trading System{% endblock %}
+
+{% block content %}
+<h1>База знаний</h1>
+
+<div class="card">
+    <h2>Добавить новость</h2>
+    <form id="addNewsForm">
+        <label>Тикер:</label>
+        <select name="ticker" required>
+            <option value="">Выберите тикер</option>
+            {% for ticker in tickers %}
+            <option value="{{ ticker }}">{{ ticker }}</option>
+            {% endfor %}
+            <option value="MACRO">MACRO</option>
+            <option value="US_MACRO">US_MACRO</option>
+        </select>
+        
+        <label>Источник:</label>
+        <input type="text" name="source" required>
+        
+        <label>Содержание:</label>
+        <textarea name="content" rows="5" required></textarea>
+        
+        <label>Sentiment Score (0.0-1.0, опционально):</label>
+        <input type="number" name="sentiment_score" min="0" max="1" step="0.01">
+        
+        <button type="submit">Добавить новость</button>
+    </form>
+    
+    <div id="addNewsResult" style="margin-top: 1rem;"></div>
+</div>
+
+<div class="card">
+    <h2>Последние новости</h2>
+    {% if news %}
+    <table>
+        <thead>
+            <tr>
+                <th>Время</th>
+                <th>Тикер</th>
+                <th>Источник</th>
+                <th>Содержание</th>
+                <th>Sentiment</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in news %}
+            <tr>
+                <td>{{ item.ts }}</td>
+                <td>{{ item.ticker }}</td>
+                <td>{{ item.source }}</td>
+                <td>{{ item.content[:100] }}{% if item.content|length > 100 %}...{% endif %}</td>
+                <td>{{ item.sentiment_score if item.sentiment_score else 'N/A' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>Новостей нет</p>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('addNewsForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const resultDiv = document.getElementById('addNewsResult');
+    resultDiv.innerHTML = '<div class="loading">Добавление...</div>';
+    
+    try {
+        const response = await fetch('/api/news/add', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+        resultDiv.innerHTML = `<div style="color: green;">${data.message}</div>`;
+        e.target.reset();
+        setTimeout(() => location.reload(), 1000);
+    } catch (error) {
+        resultDiv.innerHTML = `<div style="color: red;">Ошибка: ${error.message}</div>`;
+    }
+});
+</script>
+{% endblock %}
+

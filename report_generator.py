@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from analyst_agent import load_config
+from config_loader import get_database_url
 
 
 logging.basicConfig(
@@ -34,8 +34,7 @@ class TradePnL:
 
 
 def get_engine():
-    # load_config в текущей версии возвращает только db_url_lse
-    db_url = load_config()
+    db_url = get_database_url()
     return create_engine(db_url)
 
 

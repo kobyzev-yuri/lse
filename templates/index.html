@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Дашборд - LSE Trading System{% endblock %}
+
+{% block content %}
+<h1>Дашборд</h1>
+
+<div class="stats">
+    <div class="stat-card">
+        <h3>Денежные средства</h3>
+        <div class="value">${{ "{:,.2f}".format(cash) }}</div>
+    </div>
+    <div class="stat-card">
+        <h3>Общий PnL</h3>
+        <div class="value {% if total_pnl >= 0 %}positive{% else %}negative{% endif %}">
+            ${{ "{:,.2f}".format(total_pnl) }}
+        </div>
+    </div>
+    <div class="stat-card">
+        <h3>Win Rate</h3>
+        <div class="value">{{ "{:.1f}".format(win_rate) }}%</div>
+    </div>
+    <div class="stat-card">
+        <h3>Всего сделок</h3>
+        <div class="value">{{ total_trades }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Открытые позиции</h2>
+    {% if positions %}
+    <table>
+        <thead>
+            <tr>
+                <th>Тикер</th>
+                <th>Количество</th>
+                <th>Цена входа</th>
+                <th>Текущая цена</th>
+                <th>PnL</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for pos in positions %}
+            <tr>
+                <td>{{ pos.ticker }}</td>
+                <td>{{ "{:.2f}".format(pos.quantity) }}</td>
+                <td>${{ "{:.2f}".format(pos.avg_entry_price) }}</td>
+                <td>-</td>
+                <td>-</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>Нет открытых позиций</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Последние сделки</h2>
+    {% if trades %}
+    <table>
+        <thead>
+            <tr>
+                <th>Время</th>
+                <th>Тикер</th>
+                <th>Сторона</th>
+                <th>Количество</th>
+                <th>Цена</th>
+                <th>Сигнал</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for trade in trades %}
+            <tr>
+                <td>{{ trade.ts }}</td>
+                <td>{{ trade.ticker }}</td>
+                <td>{{ trade.side }}</td>
+                <td>{{ "{:.2f}".format(trade.quantity) }}</td>
+                <td>${{ "{:.2f}".format(trade.price) }}</td>
+                <td>{{ trade.signal_type }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>Нет сделок</p>
+    {% endif %}
+</div>
+{% endblock %}
+
