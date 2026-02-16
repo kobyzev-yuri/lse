@@ -70,17 +70,19 @@ def init_db():
         """))
         
         # Добавляем колонку RSI если таблица уже существует
-        conn.execute(text("""
-            DO $$ 
-            BEGIN 
-                IF NOT EXISTS (
-                    SELECT 1 FROM information_schema.columns 
-                    WHERE table_name='quotes' AND column_name='rsi'
-                ) THEN
-                    ALTER TABLE quotes ADD COLUMN rsi DECIMAL(5,2);
-                END IF;
-            END $$;
+        # Проверяем существование колонки и добавляем если нужно
+        result = conn.execute(text("""
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name='quotes' AND column_name='rsi'
         """))
+        if not result.fetchone():
+            try:
+                conn.execute(text("ALTER TABLE quotes ADD COLUMN rsi DECIMAL(5,2)"))
+                print("✅ Колонка rsi добавлена в таблицу quotes")
+            except Exception as e:
+                # Игнорируем ошибку если колонка уже существует
+                if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
+                    print(f"⚠️ Предупреждение при добавлении колонки rsi: {e}")
         
         # Таблица базы знаний (Knowledge Base) с векторными embeddings
         conn.execute(text("""
