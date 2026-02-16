@@ -76,6 +76,21 @@ def update_rsi_for_ticker(engine, ticker: str, rsi: Optional[float]) -> bool:
         return False
 
 
+def update_all_rsi(tickers: Optional[List[str]] = None, delay: float = 1.5) -> int:
+    """
+    Обновляет RSI для всех отслеживаемых тикеров или указанного списка.
+    Аналог update_all_prices() из update_prices.py
+    
+    Args:
+        tickers: Список тикеров для обновления (если None - обновляет все из БД)
+        delay: Задержка между запросами к Finviz (секунды)
+        
+    Returns:
+        Количество успешно обновленных тикеров
+    """
+    return update_rsi_for_all_tickers(tickers=tickers, delay=delay)
+
+
 def update_rsi_for_all_tickers(tickers: Optional[List[str]] = None, delay: float = 1.5) -> int:
     """
     Обновляет RSI для всех отслеживаемых тикеров или указанного списка
@@ -94,13 +109,18 @@ def update_rsi_for_all_tickers(tickers: Optional[List[str]] = None, delay: float
         tickers = get_tracked_tickers(engine)
         logger.info(f"📋 Найдено {len(tickers)} тикеров для обновления RSI: {', '.join(tickers)}")
     
+    # Finviz поддерживает только акции; пропускаем валютные пары (=X), индексы (^), фьючерсы (=F)
+    def is_finviz_supported(t: str) -> bool:
+        t = t.upper()
+        return '=X' not in t and '=F' not in t and not t.startswith('^') and '/' not in t
+    
+    tickers = [t for t in tickers if is_finviz_supported(t)]
     if not tickers:
-        logger.warning("⚠️ Нет тикеров для обновления")
+        logger.warning("⚠️ Нет тикеров для обновления (все отфильтрованы как неподдерживаемые Finviz)")
         engine.dispose()
         return 0
     
-    # Получаем RSI для всех тикеров
-    logger.info(f"📊 Получение RSI с Finviz для {len(tickers)} тикеров...")
+    logger.info(f"📊 Получение RSI с Finviz для {len(tickers)} тикеров (акции): {', '.join(tickers)}")
     rsi_data = get_rsi_for_tickers(tickers, delay=delay)
     
     # Обновляем в базе данных

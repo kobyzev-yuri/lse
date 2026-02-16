@@ -48,12 +48,23 @@ class FinvizParser:
         Returns:
             Значение RSI (0-100) или None если не найдено
         """
+        # Пропускаем валютные пары - Finviz их не поддерживает
+        if '=X' in ticker.upper() or '/' in ticker:
+            logger.info(f"   ⚠️ Пропуск валютной пары {ticker} - Finviz не поддерживает")
+            return None
+        
         try:
             # Переходим на страницу тикера
             url = f"{self.BASE_URL}/quote.ashx?t={ticker.upper()}"
             logger.info(f"📊 Получение RSI для {ticker} с {url}")
             
             response = self.session.get(url, timeout=10)
+            
+            # Проверяем на 404 - тикер не найден
+            if response.status_code == 404:
+                logger.warning(f"   ⚠️ Тикер {ticker} не найден на Finviz (404)")
+                return None
+            
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, 'html.parser')
@@ -64,35 +75,53 @@ class FinvizParser:
             
             # Также пробуем найти по другим селекторам
             if not tables:
-                tables = soup.find_all('table', {'class': lambda x: x and 'snapshot' in x.lower()})
+                tables = soup.find_all('table', {'class': lambda x: x and 'snapshot' in str(x).lower()})
+            
+            # Если не нашли по классу, ищем все таблицы
+            if not tables:
+                tables = soup.find_all('table')
             
             for table in tables:
                 rows = table.find_all('tr')
                 for row in rows:
                     cells = row.find_all('td')
-                    if len(cells) >= 2:
-                        label = cells[0].get_text(strip=True)
-                        value = cells[1].get_text(strip=True)
-                        
-                        # Ищем RSI в разных форматах
-                        if 'RSI' in label.upper() or 'RSI (14)' in label:
+                    # Широкая таблица: ищем ячейку с "RSI (14)" и берём значение из следующей
+                    for i, cell in enumerate(cells):
+                        label = cell.get_text(strip=True)
+                        if 'RSI' in label.upper() and '(' in label:
                             try:
-                                # Убираем возможные символы и пробелы
+                                if i + 1 < len(cells):
+                                    value = cells[i + 1].get_text(strip=True)
+                                else:
+                                    continue
                                 clean_value = value.replace('%', '').replace(',', '').strip()
                                 rsi_value = float(clean_value)
-                                # Проверяем разумность значения (0-100)
                                 if 0 <= rsi_value <= 100:
                                     logger.info(f"   ✅ RSI для {ticker}: {rsi_value}")
                                     return rsi_value
-                                else:
-                                    logger.warning(f"   ⚠️ RSI значение вне диапазона: {rsi_value}")
+                            except (ValueError, IndexError):
+                                pass
+                    # Классический вариант: две ячейки в строке (label, value)
+                    if len(cells) >= 2:
+                        label = cells[0].get_text(strip=True)
+                        value = cells[1].get_text(strip=True)
+                        if 'RSI' in label.upper():
+                            try:
+                                clean_value = value.replace('%', '').replace(',', '').strip()
+                                rsi_value = float(clean_value)
+                                if 0 <= rsi_value <= 100:
+                                    logger.info(f"   ✅ RSI для {ticker}: {rsi_value}")
+                                    return rsi_value
                             except ValueError:
-                                logger.warning(f"   ⚠️ Не удалось распарсить RSI значение: {value}")
+                                pass
             
-            # Альтернативный поиск: ищем все числа рядом с текстом "RSI"
+            # Альтернативный поиск: regex по тексту страницы (Finviz: "RSI (14) | 32.38")
             all_text = soup.get_text()
-            rsi_pattern = r'RSI[:\s]*(\d+\.?\d*)'
+            rsi_pattern = r'RSI\s*\(\s*14\s*\)\s*(\d+\.?\d*)'
             matches = re.findall(rsi_pattern, all_text, re.IGNORECASE)
+            if not matches:
+                rsi_pattern = r'RSI[:\s]*(\d+\.?\d*)'
+                matches = re.findall(rsi_pattern, all_text, re.IGNORECASE)
             if matches:
                 try:
                     rsi_value = float(matches[0])
