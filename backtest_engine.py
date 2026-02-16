@@ -187,7 +187,7 @@ class BacktestEngine:
             if self.current_date:
                 with analyst.engine.connect() as conn:
                     query = text("""
-                        SELECT date, ticker, close, volume, sma_5, volatility_5
+                        SELECT date, ticker, close, volume, sma_5, volatility_5, rsi
                         FROM quotes
                         WHERE ticker = :ticker AND date <= :date
                         ORDER BY date DESC

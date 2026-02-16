@@ -9,6 +9,8 @@ fastapi>=0.104.0  # Для веб-интерфейса
 uvicorn>=0.24.0  # ASGI сервер для FastAPI
 jinja2>=3.1.0  # Для шаблонов
 python-multipart>=0.0.6  # Для загрузки файлов
+requests>=2.31.0  # Для парсинга Finviz
+beautifulsoup4>=4.12.0  # Для парсинга HTML с Finviz
 
 # Будущие зависимости (для следующих этапов развития)
 # scipy>=1.10.0  # Для Visual Patterns Detection

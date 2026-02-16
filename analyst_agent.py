@@ -96,7 +96,7 @@ class AnalystAgent:
         
         with self.engine.connect() as conn:
             query = text("""
-                SELECT date, ticker, close, volume, sma_5, volatility_5
+                SELECT date, ticker, close, volume, sma_5, volatility_5, rsi
                 FROM quotes
                 WHERE ticker = :ticker
                 ORDER BY date DESC

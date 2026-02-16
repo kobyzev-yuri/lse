@@ -64,8 +64,22 @@ def init_db():
                 volume BIGINT,
                 sma_5 DECIMAL,
                 volatility_5 DECIMAL,
+                rsi DECIMAL(5,2),  -- RSI из Finviz (0-100)
                 UNIQUE(date, ticker)
             );
+        """))
+        
+        # Добавляем колонку RSI если таблица уже существует
+        conn.execute(text("""
+            DO $$ 
+            BEGIN 
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name='quotes' AND column_name='rsi'
+                ) THEN
+                    ALTER TABLE quotes ADD COLUMN rsi DECIMAL(5,2);
+                END IF;
+            END $$;
         """))
         
         # Таблица базы знаний (Knowledge Base) с векторными embeddings
@@ -152,14 +166,15 @@ def seed_data(tickers=["MSFT", "SNDK", "GBPUSD=X"]):
         with engine.begin() as conn:
             for _, row in df.iterrows():
                 conn.execute(text("""
-                    INSERT INTO quotes (date, ticker, close, volume, sma_5, volatility_5)
-                    VALUES (:date, :ticker, :close, :volume, :sma_5, :volatility_5)
+                    INSERT INTO quotes (date, ticker, close, volume, sma_5, volatility_5, rsi)
+                    VALUES (:date, :ticker, :close, :volume, :sma_5, :volatility_5, :rsi)
                     ON CONFLICT (date, ticker) DO NOTHING
                 """), {
                     "date": row['Date'], "ticker": ticker, "close": float(row['Close']),
                     "volume": int(row['Volume']) if pd.notna(row['Volume']) else None,
                     "sma_5": float(row['sma_5']) if pd.notna(row['sma_5']) else None,
-                    "volatility_5": float(row['volatility_5']) if pd.notna(row['volatility_5']) else None
+                    "volatility_5": float(row['volatility_5']) if pd.notna(row['volatility_5']) else None,
+                    "rsi": None  # RSI обновляется отдельно через update_finviz_data.py
                 })
         print(f"  ✅ {ticker} загружен ({len(df)} записей)")
     print("✅ Данные загружены")

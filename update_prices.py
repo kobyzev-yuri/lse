@@ -112,8 +112,8 @@ def update_ticker_prices(engine, ticker, days_back=30):
             for _, row in df.iterrows():
                 try:
                     conn.execute(text("""
-                        INSERT INTO quotes (date, ticker, close, volume, sma_5, volatility_5)
-                        VALUES (:date, :ticker, :close, :volume, :sma_5, :volatility_5)
+                        INSERT INTO quotes (date, ticker, close, volume, sma_5, volatility_5, rsi)
+                        VALUES (:date, :ticker, :close, :volume, :sma_5, :volatility_5, :rsi)
                         ON CONFLICT (date, ticker) DO NOTHING
                     """), {
                         "date": row['Date'], 
@@ -121,7 +121,8 @@ def update_ticker_prices(engine, ticker, days_back=30):
                         "close": float(row['Close']),
                         "volume": int(row['Volume']) if pd.notna(row['Volume']) else None,
                         "sma_5": float(row['sma_5']) if pd.notna(row['sma_5']) else None,
-                        "volatility_5": float(row['volatility_5']) if pd.notna(row['volatility_5']) else None
+                        "volatility_5": float(row['volatility_5']) if pd.notna(row['volatility_5']) else None,
+                        "rsi": None  # RSI обновляется отдельно через update_finviz_data.py
                     })
                     inserted_count += 1
                 except Exception as e:
