@@ -89,6 +89,59 @@ class AnalystAgent:
         
         if not self.use_llm and not self.use_strategy_manager:
             logger.info("✅ AnalystAgent инициализирован (базовый анализ)")
+
+    def get_vix_regime(self, as_of: datetime | None = None) -> dict:
+        """
+        Определяет режим волатильности рынка по индексу VIX.
+        
+        Режимы:
+        - HIGH_PANIC: высокий страх / паника на рынке
+        - LOW_FEAR: низкий уровень страха, спокойный рынок
+        - NEUTRAL: промежуточное состояние
+        
+        Args:
+            as_of: Дата, на которую нужно определить режим (если None — используется последняя доступная точка)
+        
+        Returns:
+            dict с ключами:
+            - regime: строка режима ('HIGH_PANIC' | 'LOW_FEAR' | 'NEUTRAL' | 'NO_DATA')
+            - vix_value: последнее значение VIX (float | None)
+            - ts: метка времени этой точки (datetime | None)
+        """
+        logger.info("🌡  Определение режима VIX")
+
+        query = """
+            SELECT date, close
+            FROM quotes
+            WHERE ticker = :ticker
+        """
+        params: Dict[str, Any] = {"ticker": "^VIX"}
+
+        if as_of is not None:
+            query += " AND date <= :as_of"
+            params["as_of"] = as_of
+
+        query += " ORDER BY date DESC LIMIT 1"
+
+        with self.engine.connect() as conn:
+            result = conn.execute(text(query), params).fetchone()
+
+        if not result:
+            logger.warning("⚠️  Нет данных VIX (^VIX) в таблице quotes")
+            return {"regime": "NO_DATA", "vix_value": None, "ts": None}
+
+        ts, vix_value = result[0], float(result[1])
+
+        # Простые пороговые значения для классификации
+        if vix_value >= 25:
+            regime = "HIGH_PANIC"
+        elif vix_value <= 15:
+            regime = "LOW_FEAR"
+        else:
+            regime = "NEUTRAL"
+
+        logger.info(f"🌡  VIX={vix_value:.2f} на {ts} → режим: {regime}")
+        return {"regime": regime, "vix_value": vix_value, "ts": ts}
     
     def get_last_5_days_quotes(self, ticker: str) -> pd.DataFrame:
         """Выгружает последние 5 дней котировок для указанного тикера"""
@@ -193,9 +246,9 @@ class AnalystAgent:
         cutoff_time = datetime.now() - timedelta(hours=hours)
         
         with self.engine.connect() as conn:
-            # Ищем в knowledge_base (там есть sentiment_score и insight)
+            # Ищем в knowledge_base (там есть sentiment_score; insight может отсутствовать в старых схемах)
             query = text("""
-                SELECT id, ts, ticker, source, content, sentiment_score, insight
+                SELECT id, ts, ticker, source, content, sentiment_score
                 FROM knowledge_base
                 WHERE (ticker = :ticker OR ticker = 'MACRO' OR ticker = 'US_MACRO')
                   AND ts >= :cutoff_time
@@ -289,6 +342,11 @@ class AnalystAgent:
         logger.info(f"=" * 60)
         logger.info(f"🎯 Анализ для тикера: {ticker}")
         logger.info(f"=" * 60)
+
+        # Режим рынка по VIX
+        vix_info = self.get_vix_regime()
+        vix_regime = vix_info.get("regime")
+        logger.info(f"🌡  Режим VIX для анализа {ticker}: {vix_regime}")
         
         # Шаг 1: Проверка технического сигнала
         logger.info("\n📊 ШАГ 1: Анализ технических индикаторов")
@@ -409,7 +467,14 @@ class AnalystAgent:
             decision = "HOLD"
             logger.info(f"⚠️  РЕШЕНИЕ: {decision}")
             logger.info(f"   Причина: Технический сигнал не BUY")
-        
+
+        # Уточнение стиля входа в сделку в зависимости от режима VIX
+        if vix_regime == "HIGH_PANIC":
+            logger.info("⚠️  Режим HIGH_PANIC: рекомендуется ИСПОЛЬЗОВАТЬ ТОЛЬКО ЛИМИТНЫЕ ОРДЕРА, "
+                        "избегать маркет-входов из-за высокой волатильности.")
+        elif vix_regime == "LOW_FEAR" and decision in ("BUY", "STRONG_BUY"):
+            logger.info("✅ Режим LOW_FEAR: разрешена агрессивная покупка на пробое максимумов (Breakout).")
+
         logger.info(f"=" * 60)
         return decision
     

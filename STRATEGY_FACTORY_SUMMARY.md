@@ -103,3 +103,5 @@ strategy = factory.select_strategy(technical_data, news_data, sentiment_score)
 3. Добавить метрики эффективности для каждой стратегии
 4. Интегрировать параметры стратегий в ExecutionAgent
 
+
+

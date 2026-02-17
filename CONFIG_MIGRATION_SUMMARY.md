@@ -114,3 +114,5 @@ print(f"Sentiment: {sentiment:.3f}")
 - [CONFIG_SETUP.md](CONFIG_SETUP.md) - Подробная инструкция по настройке
 - [docs/SENTIMENT_ANALYSIS.md](docs/SENTIMENT_ANALYSIS.md) - Документация по sentiment analysis
 
+
+

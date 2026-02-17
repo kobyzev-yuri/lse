@@ -132,3 +132,5 @@ TRADING_TICKERS=MSFT,SNDK,GBPUSD=X,AAPL
 - [update_prices.py](../update_prices.py) - логика обновления цен
 - [init_db.py](../init_db.py) - инициализация БД с начальными тикерами
 
+
+

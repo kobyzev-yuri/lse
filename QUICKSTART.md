@@ -129,3 +129,5 @@ python report_generator.py
 - [ROADMAP.md](ROADMAP.md) - План развития системы
 - [docs/VECTOR_KB_IMPLEMENTATION.md](docs/VECTOR_KB_IMPLEMENTATION.md) - Векторная база знаний
 
+
+

@@ -149,3 +149,5 @@ os.environ['TZ'] = 'Europe/Moscow'
 - [scripts/update_prices_cron.py](../scripts/update_prices_cron.py) - скрипт обновления цен
 - [Market Hours Guide](https://www.investopedia.com/articles/trading/05/021805.asp) - часы работы бирж
 
+
+

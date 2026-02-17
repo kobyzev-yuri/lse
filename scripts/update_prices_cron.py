@@ -29,3 +29,5 @@ if __name__ == "__main__":
         logging.error(f"Ошибка обновления цен: {e}")
         sys.exit(1)
 
+
+

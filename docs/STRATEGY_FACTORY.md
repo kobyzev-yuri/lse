@@ -255,3 +255,5 @@ if result['strategy_result']:
 - [LLM_GUIDANCE.md](LLM_GUIDANCE.md) - LLM анализ для выбора стратегии
 - [examples/strategy_example.py](../examples/strategy_example.py) - Примеры использования
 
+
+

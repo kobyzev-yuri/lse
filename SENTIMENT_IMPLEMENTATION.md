@@ -134,3 +134,5 @@ print(f"Sentiment positive: {result['sentiment_positive']}")
 - [docs/SENTIMENT_ANALYSIS.md](docs/SENTIMENT_ANALYSIS.md) - Подробная документация
 - [CONFIG_SETUP.md](CONFIG_SETUP.md) - Настройка конфигурации
 
+
+

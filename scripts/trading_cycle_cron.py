@@ -39,3 +39,5 @@ if __name__ == "__main__":
         logging.error(f"Ошибка торгового цикла: {e}")
         sys.exit(1)
 
+
+

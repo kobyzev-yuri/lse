@@ -254,3 +254,5 @@ with engine.connect() as conn:
 - [DEBUGGING_GUIDE.md](DEBUGGING_GUIDE.md) - руководство по отладке
 - [TRADING_GLOSSARY.md](TRADING_GLOSSARY.md) - терминология (Backtesting)
 
+
+

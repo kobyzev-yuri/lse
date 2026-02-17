@@ -98,3 +98,5 @@ confidence = result['llm_guidance']['confidence']
 3. Интеграция стратегий в ExecutionAgent
 4. Добавление метрик эффективности стратегий
 
+
+

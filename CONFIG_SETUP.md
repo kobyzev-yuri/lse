@@ -87,3 +87,5 @@ print(f"API Key: {api_key[:10]}...")
 - [SENTIMENT_ANALYSIS.md](docs/SENTIMENT_ANALYSIS.md) - Настройка sentiment analysis
 - [config.env.example](config.env.example) - Шаблон конфигурации
 
+
+

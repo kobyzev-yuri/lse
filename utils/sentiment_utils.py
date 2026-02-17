@@ -62,3 +62,5 @@ def apply_sentiment_to_signal(base_signal_strength: float, sentiment: float) -> 
     """
     return base_signal_strength * (1.0 + sentiment)
 
+
+

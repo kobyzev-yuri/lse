@@ -149,3 +149,5 @@ sentiment = calculate_sentiment(content)  # 0.0-1.0
 - [docs/SENTIMENT_ANALYSIS.md](docs/SENTIMENT_ANALYSIS.md) - Документация по sentiment analysis
 - [SENTIMENT_IMPLEMENTATION.md](SENTIMENT_IMPLEMENTATION.md) - Как реализован sentiment
 
+
+

@@ -207,3 +207,5 @@ OPENAI_MODEL=gpt-4o
 - [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md) - Бизнес-процессы системы
 - [examples/llm_guidance_example.py](../examples/llm_guidance_example.py) - Примеры использования
 
+
+

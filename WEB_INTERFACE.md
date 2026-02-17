@@ -141,3 +141,5 @@ LLM анализ включает:
 - Проверьте логи: `tail -f logs/cron_*.log`
 - Проверьте путь к Python в `setup_cron.sh`
 
+
+

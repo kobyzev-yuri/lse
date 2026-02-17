@@ -203,3 +203,5 @@ SENTIMENT_LLM_MODEL=gpt-4o  # Модель для расчета sentiment
 - [services/sentiment_analyzer.py](services/sentiment_analyzer.py) - Модуль расчета sentiment
 - [analyst_agent.py](analyst_agent.py) - Использование sentiment в анализе
 
+
+
