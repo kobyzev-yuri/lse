@@ -1,0 +1,562 @@
+# План подключения к Must-List источникам новостей
+
+## 🎯 Приоритеты подключения
+
+### Фаза 1: Быстрый старт (1-2 дня) - БЕСПЛАТНО
+**Приоритет:** Высокий  
+**Сложность:** Низкая  
+**Стоимость:** $0
+
+1. ✅ **RSS фиды центральных банков** (Fed, BoE, ECB, BoJ)
+   - Не требуют API ключей
+   - Стабильные источники
+   - Автоматический парсинг через `feedparser`
+
+2. ✅ **Economic Calendar через Investing.com** (web scraping)
+   - Бесплатно
+   - Уже есть опыт парсинга (Гидра для Telegram)
+   - Можно использовать существующий код
+
+### Фаза 2: Earnings и новости (2-3 дня) - БЕСПЛАТНЫЙ TIER
+**Приоритет:** Высокий  
+**Сложность:** Средняя  
+**Стоимость:** $0 (бесплатные лимиты)
+
+3. ✅ **Alpha Vantage API** (Earnings Calendar + News Sentiment)
+   - Бесплатный tier: 5 запросов/минуту, 500/день
+   - Требует регистрацию и API ключ
+
+4. ✅ **NewsAPI** (агрегатор новостей)
+   - Бесплатный tier: 100 запросов/день
+   - Требует регистрацию и API ключ
+
+### Фаза 3: Расширенная интеграция (3-5 дней) - ОПЦИОНАЛЬНО
+**Приоритет:** Средний  
+**Сложность:** Высокая  
+**Стоимость:** Зависит от источника
+
+5. ⚠️ **Trading Economics API** (экономический календарь)
+   - Платный (от $50/месяц)
+   - Альтернатива Investing.com scraping
+
+6. ⚠️ **Bloomberg Terminal API** (институциональные прогнозы)
+   - Очень дорого ($2000+/месяц)
+   - Альтернатива: парсинг публичных отчетов
+
+---
+
+## 🚀 Начинаем с Фазы 1: RSS фиды центральных банков
+
+### Шаг 1: Создаем модуль для RSS парсинга
+
+**Файл:** `services/rss_news_fetcher.py`
+
+```python
+"""
+Модуль для получения новостей из RSS фидов центральных банков
+"""
+
+import feedparser
+import logging
+from datetime import datetime
+from typing import List, Dict, Optional
+from sqlalchemy import create_engine, text
+
+from config_loader import get_database_url
+
+logger = logging.getLogger(__name__)
+
+
+# RSS фиды центральных банков
+RSS_FEEDS = {
+    'FOMC_STATEMENT': {
+        'url': 'https://www.federalreserve.gov/feeds/press_all.xml',
+        'region': 'USA',
+        'event_type': 'FOMC_STATEMENT',
+        'importance': 'HIGH'
+    },
+    'FOMC_SPEECH': {
+        'url': 'https://www.federalreserve.gov/feeds/press_speeches.xml',
+        'region': 'USA',
+        'event_type': 'FOMC_SPEECH',
+        'importance': 'HIGH'
+    },
+    'FOMC_MINUTES': {
+        'url': 'https://www.federalreserve.gov/feeds/fomcminutes.xml',
+        'region': 'USA',
+        'event_type': 'FOMC_MINUTES',
+        'importance': 'HIGH'
+    },
+    'BOE_STATEMENT': {
+        'url': 'https://www.bankofengland.co.uk/rss',
+        'region': 'UK',
+        'event_type': 'BOE_STATEMENT',
+        'importance': 'HIGH'
+    },
+    'ECB_STATEMENT': {
+        'url': 'https://www.ecb.europa.eu/rss/press.html',
+        'region': 'EU',
+        'event_type': 'ECB_STATEMENT',
+        'importance': 'HIGH'
+    },
+    'BOJ_STATEMENT': {
+        'url': 'https://www.boj.or.jp/en/announcements/press/index.htm/rss',
+        'region': 'Japan',
+        'event_type': 'BOJ_STATEMENT',
+        'importance': 'HIGH'
+    }
+}
+
+
+def parse_rss_feed(feed_config: Dict) -> List[Dict]:
+    """
+    Парсит RSS фид и возвращает список новостей
+    
+    Args:
+        feed_config: Конфигурация фида (url, region, event_type, importance)
+        
+    Returns:
+        Список словарей с новостями
+    """
+    url = feed_config['url']
+    region = feed_config['region']
+    event_type = feed_config['event_type']
+    importance = feed_config['importance']
+    
+    try:
+        feed = feedparser.parse(url)
+        
+        if feed.bozo:
+            logger.warning(f"⚠️ Ошибка парсинга RSS фида {url}: {feed.bozo_exception}")
+            return []
+        
+        items = []
+        for entry in feed.entries:
+            # Парсим дату публикации
+            published_time = None
+            if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                published_time = datetime(*entry.published_parsed[:6])
+            elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                published_time = datetime(*entry.updated_parsed[:6])
+            else:
+                published_time = datetime.now()
+            
+            item = {
+                'title': entry.title,
+                'link': entry.link,
+                'content': entry.summary if hasattr(entry, 'summary') else entry.title,
+                'published': published_time,
+                'ticker': 'US_MACRO' if region == 'USA' else 'MACRO',
+                'source': f"{region} Central Bank",
+                'event_type': event_type,
+                'region': region,
+                'importance': importance
+            }
+            items.append(item)
+        
+        logger.info(f"✅ Получено {len(items)} новостей из {event_type}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при получении RSS фида {url}: {e}")
+        return []
+
+
+def fetch_all_rss_feeds() -> List[Dict]:
+    """
+    Получает новости из всех RSS фидов
+    
+    Returns:
+        Список всех новостей
+    """
+    all_news = []
+    
+    for feed_name, feed_config in RSS_FEEDS.items():
+        logger.info(f"📡 Получение новостей из {feed_name}...")
+        news = parse_rss_feed(feed_config)
+        all_news.extend(news)
+    
+    logger.info(f"✅ Всего получено {len(all_news)} новостей из RSS фидов")
+    return all_news
+
+
+def save_news_to_db(news_items: List[Dict], check_duplicates: bool = True):
+    """
+    Сохраняет новости в базу данных
+    
+    Args:
+        news_items: Список новостей для сохранения
+        check_duplicates: Проверять дубликаты по link
+    """
+    if not news_items:
+        logger.info("ℹ️ Нет новостей для сохранения")
+        return
+    
+    db_url = get_database_url()
+    engine = create_engine(db_url)
+    
+    saved_count = 0
+    skipped_count = 0
+    
+    with engine.begin() as conn:
+        for item in news_items:
+            try:
+                # Проверка дубликатов по link (если включена)
+                if check_duplicates:
+                    existing = conn.execute(
+                        text("""
+                            SELECT id FROM knowledge_base 
+                            WHERE source = :source 
+                            AND link = :link
+                        """),
+                        {"source": item.get('source', ''), "link": item.get('link', '')}
+                    ).fetchone()
+                    
+                    if existing:
+                        skipped_count += 1
+                        continue
+                
+                # Вставляем новость
+                conn.execute(
+                    text("""
+                        INSERT INTO knowledge_base 
+                        (ts, ticker, source, content, event_type, region, importance)
+                        VALUES (:ts, :ticker, :source, :content, :event_type, :region, :importance)
+                    """),
+                    {
+                        "ts": item['published'],
+                        "ticker": item['ticker'],
+                        "source": item['source'],
+                        "content": f"{item['title']}\n\n{item['content']}\n\nLink: {item['link']}",
+                        "event_type": item.get('event_type'),
+                        "region": item.get('region'),
+                        "importance": item.get('importance')
+                    }
+                )
+                saved_count += 1
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка при сохранении новости '{item.get('title', '')[:50]}...': {e}")
+    
+    logger.info(f"✅ Сохранено {saved_count} новостей, пропущено дубликатов: {skipped_count}")
+    engine.dispose()
+
+
+def fetch_and_save_rss_news():
+    """
+    Главная функция: получает новости из RSS и сохраняет в БД
+    """
+    logger.info("🚀 Начало получения новостей из RSS фидов центральных банков")
+    
+    # Получаем новости
+    news_items = fetch_all_rss_feeds()
+    
+    # Сохраняем в БД
+    if news_items:
+        save_news_to_db(news_items)
+    
+    logger.info("✅ Завершено получение новостей из RSS фидов")
+
+
+if __name__ == "__main__":
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    
+    fetch_and_save_rss_news()
+```
+
+### Шаг 2: Обновляем requirements.txt
+
+```bash
+# Добавить в requirements.txt:
+feedparser>=6.0.10
+```
+
+### Шаг 3: Создаем миграцию БД для новых полей
+
+**Файл:** `scripts/migrate_add_news_fields.py`
+
+```python
+"""
+Миграция: добавление полей event_type, region, importance в knowledge_base
+"""
+
+from sqlalchemy import create_engine, text
+from config_loader import get_database_url
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def migrate():
+    """Добавляет новые поля в knowledge_base"""
+    db_url = get_database_url()
+    engine = create_engine(db_url)
+    
+    with engine.begin() as conn:
+        # Добавляем колонки если их нет
+        try:
+            conn.execute(text("""
+                ALTER TABLE knowledge_base 
+                ADD COLUMN IF NOT EXISTS event_type VARCHAR(50)
+            """))
+            logger.info("✅ Добавлена колонка event_type")
+        except Exception as e:
+            logger.warning(f"⚠️ Колонка event_type: {e}")
+        
+        try:
+            conn.execute(text("""
+                ALTER TABLE knowledge_base 
+                ADD COLUMN IF NOT EXISTS region VARCHAR(20)
+            """))
+            logger.info("✅ Добавлена колонка region")
+        except Exception as e:
+            logger.warning(f"⚠️ Колонка region: {e}")
+        
+        try:
+            conn.execute(text("""
+                ALTER TABLE knowledge_base 
+                ADD COLUMN IF NOT EXISTS importance VARCHAR(10)
+            """))
+            logger.info("✅ Добавлена колонка importance")
+        except Exception as e:
+            logger.warning(f"⚠️ Колонка importance: {e}")
+        
+        # Создаем индексы
+        try:
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_kb_event_type 
+                ON knowledge_base(event_type)
+            """))
+            logger.info("✅ Создан индекс idx_kb_event_type")
+        except Exception as e:
+            logger.warning(f"⚠️ Индекс event_type: {e}")
+        
+        try:
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_kb_region 
+                ON knowledge_base(region)
+            """))
+            logger.info("✅ Создан индекс idx_kb_region")
+        except Exception as e:
+            logger.warning(f"⚠️ Индекс region: {e}")
+    
+    logger.info("✅ Миграция завершена")
+    engine.dispose()
+
+
+if __name__ == "__main__":
+    migrate()
+```
+
+### Шаг 4: Тестируем подключение
+
+```bash
+# 1. Установить зависимости
+pip install feedparser>=6.0.10
+
+# 2. Запустить миграцию
+python scripts/migrate_add_news_fields.py
+
+# 3. Протестировать RSS парсер
+python services/rss_news_fetcher.py
+```
+
+---
+
+## 📅 Следующие шаги (Фаза 2)
+
+### Alpha Vantage API - Earnings Calendar
+
+**Регистрация:**
+1. Перейти на https://www.alphavantage.co/support/#api-key
+2. Заполнить форму (бесплатно)
+3. Получить API ключ
+
+**Использование:**
+```python
+# services/alphavantage_fetcher.py
+import requests
+import csv
+from io import StringIO
+
+def fetch_earnings_calendar(api_key: str, symbol: str = None):
+    """
+    Получает календарь earnings через Alpha Vantage
+    
+    Args:
+        api_key: API ключ Alpha Vantage
+        symbol: Тикер (опционально, если None - все)
+    """
+    url = "https://www.alphavantage.co/query"
+    params = {
+        'function': 'EARNINGS_CALENDAR',
+        'apikey': api_key
+    }
+    if symbol:
+        params['symbol'] = symbol
+    
+    response = requests.get(url, params=params)
+    
+    # Alpha Vantage возвращает CSV
+    csv_data = response.text
+    reader = csv.DictReader(StringIO(csv_data))
+    
+    earnings = []
+    for row in reader:
+        earnings.append({
+            'symbol': row.get('symbol'),
+            'reportDate': row.get('reportDate'),
+            'estimate': row.get('estimate'),
+            'currency': row.get('currency')
+        })
+    
+    return earnings
+```
+
+### NewsAPI - Агрегатор новостей
+
+**Регистрация:**
+1. Перейти на https://newsapi.org/register
+2. Заполнить форму (бесплатный tier: 100 запросов/день)
+3. Получить API ключ
+
+**Использование:**
+```python
+# services/newsapi_fetcher.py
+import requests
+from datetime import datetime, timedelta
+
+def fetch_newsapi_articles(api_key: str, query: str, sources: str = 'reuters,bloomberg'):
+    """
+    Получает новости через NewsAPI
+    
+    Args:
+        api_key: API ключ NewsAPI
+        query: Поисковый запрос (например, "Federal Reserve")
+        sources: Источники через запятую
+    """
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        'q': query,
+        'sources': sources,
+        'language': 'en',
+        'sortBy': 'publishedAt',
+        'apiKey': api_key,
+        'from': (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    }
+    
+    response = requests.get(url, params=params)
+    data = response.json()
+    
+    articles = []
+    for article in data.get('articles', []):
+        articles.append({
+            'title': article['title'],
+            'content': article.get('description', '') + '\n\n' + article.get('content', ''),
+            'source': article['source']['name'],
+            'published': datetime.fromisoformat(article['publishedAt'].replace('Z', '+00:00')),
+            'url': article['url']
+        })
+    
+    return articles
+```
+
+---
+
+## 🔄 Автоматизация через Cron
+
+**Скрипт:** `scripts/fetch_news_cron.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Cron скрипт для автоматического получения новостей
+"""
+
+import sys
+from pathlib import Path
+
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from services.rss_news_fetcher import fetch_and_save_rss_news
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(project_root / 'logs' / 'news_fetch.log'),
+        logging.StreamHandler()
+    ]
+)
+
+if __name__ == "__main__":
+    try:
+        # RSS фиды (бесплатно, каждый час)
+        fetch_and_save_rss_news()
+        
+        # TODO: Добавить другие источники (Alpha Vantage, NewsAPI)
+        # после получения API ключей
+        
+    except Exception as e:
+        logging.error(f"Ошибка получения новостей: {e}")
+        sys.exit(1)
+```
+
+**Добавить в cron:**
+```bash
+# Обновление новостей каждый час
+0 * * * * cd /home/cnn/lse && /usr/bin/python3 scripts/fetch_news_cron.py >> logs/news_cron.log 2>&1
+```
+
+---
+
+## ✅ Чеклист реализации
+
+### Фаза 1 (RSS фиды) - 1-2 дня
+- [ ] Создать `services/rss_news_fetcher.py`
+- [ ] Добавить `feedparser` в `requirements.txt`
+- [ ] Создать миграцию `scripts/migrate_add_news_fields.py`
+- [ ] Запустить миграцию
+- [ ] Протестировать парсинг RSS фидов
+- [ ] Сохранить тестовые новости в БД
+- [ ] Добавить cron задачу для автоматического обновления
+
+### Фаза 2 (API источники) - 2-3 дня
+- [ ] Зарегистрироваться в Alpha Vantage, получить API ключ
+- [ ] Создать `services/alphavantage_fetcher.py`
+- [ ] Протестировать получение Earnings Calendar
+- [ ] Зарегистрироваться в NewsAPI, получить API ключ
+- [ ] Создать `services/newsapi_fetcher.py`
+- [ ] Протестировать получение новостей
+- [ ] Интегрировать в `scripts/fetch_news_cron.py`
+
+### Фаза 3 (Investing.com scraping) - 2-3 дня
+- [ ] Изучить структуру Investing.com Economic Calendar
+- [ ] Создать `services/investing_calendar_parser.py`
+- [ ] Протестировать парсинг для всех регионов
+- [ ] Добавить обработку ошибок и retry логику
+- [ ] Интегрировать в cron
+
+---
+
+## 📊 Мониторинг
+
+**Логи:**
+- `logs/news_fetch.log` - общий лог получения новостей
+- `logs/news_cron.log` - лог cron задач
+
+**Метрики:**
+- Количество новостей в день по источникам
+- Количество дубликатов (показывает эффективность фильтрации)
+- Ошибки парсинга/API запросов
+
+---
+
+**Следующий шаг:** Начать с создания `services/rss_news_fetcher.py` и миграции БД.
