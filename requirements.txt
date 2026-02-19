@@ -22,6 +22,8 @@ requests>=2.31.0  # HTTP запросы (Finviz, Investing.com, NewsAPI, Alpha V
 beautifulsoup4>=4.12.0  # Парсинг HTML (Finviz, Investing.com)
 lxml>=4.9.0  # Быстрый парсинг XML/HTML (Investing.com)
 feedparser>=6.0.10  # Парсинг RSS фидов центральных банков (Fed, BoE, ECB, BoJ)
+# Примечание: если установка не работает из-за sgmllib3k, используйте:
+# pip install feedparser --no-deps
 
 # Будущие зависимости (для следующих этапов развития)
 # scipy>=1.10.0  # Для Visual Patterns Detection
