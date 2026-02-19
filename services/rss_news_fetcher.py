@@ -1,0 +1,224 @@
+"""
+Модуль для получения новостей из RSS фидов центральных банков
+"""
+
+import feedparser
+import logging
+from datetime import datetime
+from typing import List, Dict, Optional
+from sqlalchemy import create_engine, text
+
+from config_loader import get_database_url
+
+logger = logging.getLogger(__name__)
+
+
+# RSS фиды центральных банков
+RSS_FEEDS = {
+    'FOMC_STATEMENT': {
+        'url': 'https://www.federalreserve.gov/feeds/press_all.xml',
+        'region': 'USA',
+        'event_type': 'FOMC_STATEMENT',
+        'importance': 'HIGH'
+    },
+    'FOMC_SPEECH': {
+        'url': 'https://www.federalreserve.gov/feeds/press_speeches.xml',
+        'region': 'USA',
+        'event_type': 'FOMC_SPEECH',
+        'importance': 'HIGH'
+    },
+    'FOMC_MINUTES': {
+        'url': 'https://www.federalreserve.gov/feeds/fomcminutes.xml',
+        'region': 'USA',
+        'event_type': 'FOMC_MINUTES',
+        'importance': 'HIGH'
+    },
+    'BOE_STATEMENT': {
+        'url': 'https://www.bankofengland.co.uk/rss',
+        'region': 'UK',
+        'event_type': 'BOE_STATEMENT',
+        'importance': 'HIGH'
+    },
+    'ECB_STATEMENT': {
+        'url': 'https://www.ecb.europa.eu/rss/press.html',
+        'region': 'EU',
+        'event_type': 'ECB_STATEMENT',
+        'importance': 'HIGH'
+    },
+    'BOJ_STATEMENT': {
+        'url': 'https://www.boj.or.jp/en/announcements/press/index.htm/rss',
+        'region': 'Japan',
+        'event_type': 'BOJ_STATEMENT',
+        'importance': 'HIGH'
+    }
+}
+
+
+def parse_rss_feed(feed_config: Dict) -> List[Dict]:
+    """
+    Парсит RSS фид и возвращает список новостей
+    
+    Args:
+        feed_config: Конфигурация фида (url, region, event_type, importance)
+        
+    Returns:
+        Список словарей с новостями
+    """
+    url = feed_config['url']
+    region = feed_config['region']
+    event_type = feed_config['event_type']
+    importance = feed_config['importance']
+    
+    try:
+        feed = feedparser.parse(url)
+        
+        if feed.bozo:
+            logger.warning(f"⚠️ Ошибка парсинга RSS фида {url}: {feed.bozo_exception}")
+            return []
+        
+        items = []
+        for entry in feed.entries:
+            # Парсим дату публикации
+            published_time = None
+            if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                published_time = datetime(*entry.published_parsed[:6])
+            elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                published_time = datetime(*entry.updated_parsed[:6])
+            else:
+                published_time = datetime.now()
+            
+            # Формируем контент
+            content = entry.summary if hasattr(entry, 'summary') else entry.title
+            if hasattr(entry, 'content') and entry.content:
+                # Если есть content, используем его
+                if isinstance(entry.content, list) and len(entry.content) > 0:
+                    content = entry.content[0].get('value', content)
+            
+            item = {
+                'title': entry.title,
+                'link': entry.link if hasattr(entry, 'link') else '',
+                'content': content,
+                'published': published_time,
+                'ticker': 'US_MACRO' if region == 'USA' else 'MACRO',
+                'source': f"{region} Central Bank",
+                'event_type': event_type,
+                'region': region,
+                'importance': importance
+            }
+            items.append(item)
+        
+        logger.info(f"✅ Получено {len(items)} новостей из {event_type}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при получении RSS фида {url}: {e}")
+        return []
+
+
+def fetch_all_rss_feeds() -> List[Dict]:
+    """
+    Получает новости из всех RSS фидов
+    
+    Returns:
+        Список всех новостей
+    """
+    all_news = []
+    
+    for feed_name, feed_config in RSS_FEEDS.items():
+        logger.info(f"📡 Получение новостей из {feed_name}...")
+        try:
+            news = parse_rss_feed(feed_config)
+            all_news.extend(news)
+        except Exception as e:
+            logger.error(f"❌ Ошибка при получении {feed_name}: {e}")
+    
+    logger.info(f"✅ Всего получено {len(all_news)} новостей из RSS фидов")
+    return all_news
+
+
+def save_news_to_db(news_items: List[Dict], check_duplicates: bool = True):
+    """
+    Сохраняет новости в базу данных
+    
+    Args:
+        news_items: Список новостей для сохранения
+        check_duplicates: Проверять дубликаты по link
+    """
+    if not news_items:
+        logger.info("ℹ️ Нет новостей для сохранения")
+        return
+    
+    db_url = get_database_url()
+    engine = create_engine(db_url)
+    
+    saved_count = 0
+    skipped_count = 0
+    
+    with engine.begin() as conn:
+        for item in news_items:
+            try:
+                # Проверка дубликатов по link (если включена и link есть)
+                if check_duplicates and item.get('link'):
+                    existing = conn.execute(
+                        text("""
+                            SELECT id FROM knowledge_base 
+                            WHERE link = :link
+                        """),
+                        {"link": item['link']}
+                    ).fetchone()
+                    
+                    if existing:
+                        skipped_count += 1
+                        continue
+                
+                # Вставляем новость
+                conn.execute(
+                    text("""
+                        INSERT INTO knowledge_base 
+                        (ts, ticker, source, content, event_type, region, importance, link)
+                        VALUES (:ts, :ticker, :source, :content, :event_type, :region, :importance, :link)
+                    """),
+                    {
+                        "ts": item['published'],
+                        "ticker": item['ticker'],
+                        "source": item['source'],
+                        "content": f"{item['title']}\n\n{item['content']}\n\nLink: {item['link']}" if item.get('link') else f"{item['title']}\n\n{item['content']}",
+                        "event_type": item.get('event_type'),
+                        "region": item.get('region'),
+                        "importance": item.get('importance'),
+                        "link": item.get('link', '')
+                    }
+                )
+                saved_count += 1
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка при сохранении новости '{item.get('title', '')[:50]}...': {e}")
+    
+    logger.info(f"✅ Сохранено {saved_count} новостей, пропущено дубликатов: {skipped_count}")
+    engine.dispose()
+
+
+def fetch_and_save_rss_news():
+    """
+    Главная функция: получает новости из RSS и сохраняет в БД
+    """
+    logger.info("🚀 Начало получения новостей из RSS фидов центральных банков")
+    
+    # Получаем новости
+    news_items = fetch_all_rss_feeds()
+    
+    # Сохраняем в БД
+    if news_items:
+        save_news_to_db(news_items)
+    
+    logger.info("✅ Завершено получение новостей из RSS фидов")
+
+
+if __name__ == "__main__":
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    
+    fetch_and_save_rss_news()
