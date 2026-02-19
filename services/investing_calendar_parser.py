@@ -75,13 +75,41 @@ def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
         
         # Ищем таблицу с событиями
         # Структура может меняться, поэтому используем гибкий поиск
-        table = soup.find('table', {'id': 'economicCalendarData'})
-        if not table:
-            # Пробуем альтернативные селекторы
-            table = soup.find('table', class_='genTbl')
+        table = None
+        
+        # Пробуем разные варианты поиска таблицы
+        selectors = [
+            {'id': 'economicCalendarData'},
+            {'class': 'genTbl'},
+            {'class': 'js-ec-table'},
+            {'id': 'economicCalendar'},
+        ]
+        
+        for selector in selectors:
+            if 'id' in selector:
+                table = soup.find('table', id=selector['id'])
+            elif 'class' in selector:
+                table = soup.find('table', class_=selector['class'])
+            
+            if table:
+                logger.info(f"✅ Найдена таблица календаря для {region} (селектор: {selector})")
+                break
         
         if not table:
-            logger.warning(f"⚠️ Не найдена таблица календаря для {region}")
+            # Пробуем найти любую таблицу с классом, содержащим 'calendar' или 'economic'
+            all_tables = soup.find_all('table')
+            for t in all_tables:
+                classes = t.get('class', [])
+                if any('calendar' in str(c).lower() or 'economic' in str(c).lower() for c in classes):
+                    table = t
+                    logger.info(f"✅ Найдена таблица календаря для {region} (по классу)")
+                    break
+        
+        if not table:
+            logger.warning(f"⚠️ Не найдена таблица календаря для {region}. HTML структура могла измениться.")
+            # Сохраняем HTML для отладки (опционально)
+            # with open(f'/tmp/investing_{region}.html', 'w') as f:
+            #     f.write(str(soup))
             return []
         
         events = []
@@ -188,8 +216,9 @@ def fetch_all_regions_calendar() -> List[Dict]:
         events = fetch_investing_calendar(region)
         all_events.extend(events)
         
-        # Небольшая задержка между запросами
-        time.sleep(2)
+        # Увеличенная задержка между запросами (чтобы избежать 429 Too Many Requests)
+        if region != list(REGIONS.keys())[-1]:  # Не ждем после последнего региона
+            time.sleep(5)  # Увеличено с 2 до 5 секунд
     
     logger.info(f"✅ Всего получено {len(all_events)} событий из Investing.com")
     return all_events
