@@ -2,6 +2,13 @@
 Миграция: добавление полей event_type, region, importance в knowledge_base
 """
 
+import sys
+from pathlib import Path
+
+# Добавляем корневую директорию проекта в путь
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 from sqlalchemy import create_engine, text
 from config_loader import get_database_url
 import logging
