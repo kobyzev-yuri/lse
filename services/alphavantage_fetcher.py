@@ -706,6 +706,15 @@ def fetch_technical_indicator(api_key: str, symbol: str, function: str, interval
             logger.warning(f"⚠️ Alpha Vantage лимит для {function} ({symbol}): {data['Note']}")
             return {}
         
+        # Ответ только с ключом Information = лимит или премиум
+        if list(data.keys()) == ['Information'] or (len(data) == 1 and 'Information' in data):
+            msg = (data.get('Information') or '')[:200]
+            logger.warning(
+                f"⚠️ Alpha Vantage для {function} ({symbol}): ответ без данных. "
+                f"Information: {msg}. Возможно лимит бесплатного плана или премиум-эндпоинт."
+            )
+            return {}
+        
         # Извлекаем временной ряд (ключ может быть разным)
         time_series_key = None
         for key in data.keys():
@@ -714,7 +723,16 @@ def fetch_technical_indicator(api_key: str, symbol: str, function: str, interval
                 break
         
         if not time_series_key:
-            logger.warning(f"⚠️ Не найдена временная серия для {function} ({symbol})")
+            # Логируем структуру ответа для отладки
+            available_keys = list(data.keys())[:10]
+            logger.warning(
+                f"⚠️ Не найдена временная серия для {function} ({symbol}). "
+                f"Доступные ключи: {available_keys}. "
+                f"Проверьте документацию Alpha Vantage для {function}."
+            )
+            # Для отладки: логируем первые несколько символов ответа
+            if len(str(data)) < 500:
+                logger.debug(f"Структура ответа для {function} ({symbol}): {data}")
             return {}
         
         time_series = data[time_series_key]
@@ -973,30 +991,41 @@ def fetch_technical_indicators_for_tickers(api_key: str, tickers: List[str]) -> 
     # Пауза после таймаута/ошибки, чтобы не добивать API (секунды)
     delay_after_error = int(os.environ.get('ALPHAVANTAGE_DELAY_AFTER_ERROR', '15'))
     delay_between_tickers = int(os.environ.get('ALPHAVANTAGE_DELAY_BETWEEN_TICKERS', '15'))
+    # Задержка между индикаторами внутри одного тикера (лимит: 5 запросов/минуту = 12 сек минимум)
+    delay_between_indicators = int(os.environ.get('ALPHAVANTAGE_DELAY_BETWEEN_INDICATORS', '13'))
     
     for ticker in tickers:
         logger.info(f"📈 Получение технических индикаторов для {ticker}...")
         had_error = False
         
-        for name, func_name, period in [
+        indicators_list = [
             ('RSI', 'RSI', 14),
             ('MACD', 'MACD', None),
             ('BBANDS', 'BBANDS', 20),
             ('ADX', 'ADX', 14),
             ('STOCH', 'STOCH', None),
-        ]:
+        ]
+        
+        for idx, (name, func_name, period) in enumerate(indicators_list):
             try:
                 kwargs = {'time_period': period} if period else {}
                 data = fetch_technical_indicator(api_key, ticker, func_name, **kwargs)
                 if data:
                     all_indicators.append(data)
+                else:
+                    logger.debug(f"   {name} ({ticker}): данные не получены (пустой ответ или лимит)")
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
                 had_error = True
                 logger.warning(f"⚠️ Таймаут/ошибка для {name} ({ticker}), пропуск. Пауза {delay_after_error} с.")
                 time.sleep(delay_after_error)
+            
+            # Задержка между индикаторами (кроме последнего)
+            if idx < len(indicators_list) - 1:
+                time.sleep(delay_between_indicators)
         
         # Лимит бесплатного tier: 5 запросов/минуту — пауза между тикерами
-        time.sleep(delay_between_tickers)
+        if ticker != tickers[-1]:  # Не ждём после последнего тикера
+            time.sleep(delay_between_tickers)
     
     return all_indicators
 
