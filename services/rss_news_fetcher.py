@@ -11,6 +11,8 @@ sys.path.insert(0, str(project_root))
 
 import feedparser
 import logging
+import re
+import requests
 from datetime import datetime
 from typing import List, Dict, Optional
 from sqlalchemy import create_engine, text
@@ -61,6 +63,33 @@ RSS_FEEDS = {
 }
 
 
+def _fetch_rss_content(url: str) -> Optional[str]:
+    """
+    Загружает RSS по URL с исправлением кодировки (многие фиды объявляют
+    us-ascii, но отдают utf-8 — из-за этого падает парсер).
+    """
+    try:
+        r = requests.get(url, timeout=30, headers={
+            'User-Agent': 'Mozilla/5.0 (compatible; LSE-NewsBot/1.0)',
+            'Accept': 'application/rss+xml, application/xml, text/xml',
+        })
+        r.raise_for_status()
+        raw = r.content
+        # Пробуем utf-8, иначе cp1252/ascii с заменой ошибок
+        try:
+            text = raw.decode('utf-8', errors='replace')
+        except Exception:
+            text = raw.decode('cp1252', errors='replace')
+        # Убираем неверную декларацию кодировки, чтобы парсер не ругался
+        text = re.sub(r'encoding\s*=\s*["\']us-ascii["\']', 'encoding="utf-8"', text, flags=re.I)
+        # Убираем невалидные символы для XML (control chars)
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+        return text
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось загрузить {url}: {e}")
+        return None
+
+
 def parse_rss_feed(feed_config: Dict) -> List[Dict]:
     """
     Парсит RSS фид и возвращает список новостей
@@ -77,7 +106,10 @@ def parse_rss_feed(feed_config: Dict) -> List[Dict]:
     importance = feed_config['importance']
     
     try:
-        feed = feedparser.parse(url)
+        content = _fetch_rss_content(url)
+        if not content:
+            return []
+        feed = feedparser.parse(content)
         
         if feed.bozo:
             logger.warning(f"⚠️ Ошибка парсинга RSS фида {url}: {feed.bozo_exception}")
