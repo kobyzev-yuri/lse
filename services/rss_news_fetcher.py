@@ -31,15 +31,15 @@ RSS_FEEDS = {
         'importance': 'HIGH'
     },
     'FOMC_SPEECH': {
-        'url': 'https://www.federalreserve.gov/feeds/press_speeches.xml',
+        'url': 'https://www.federalreserve.gov/feeds/speeches.xml',
         'region': 'USA',
         'event_type': 'FOMC_SPEECH',
         'importance': 'HIGH'
     },
-    'FOMC_MINUTES': {
-        'url': 'https://www.federalreserve.gov/feeds/fomcminutes.xml',
+    'FOMC_MONETARY': {
+        'url': 'https://www.federalreserve.gov/feeds/press_monetary.xml',
         'region': 'USA',
-        'event_type': 'FOMC_MINUTES',
+        'event_type': 'FOMC_STATEMENT',
         'importance': 'HIGH'
     },
     'BOE_STATEMENT': {
@@ -55,7 +55,7 @@ RSS_FEEDS = {
         'importance': 'HIGH'
     },
     'BOJ_STATEMENT': {
-        'url': 'https://www.boj.or.jp/en/announcements/press/index.htm/rss',
+        'url': 'https://www.boj.or.jp/en/rss/whatsnew.xml',
         'region': 'Japan',
         'event_type': 'BOJ_STATEMENT',
         'importance': 'HIGH'
@@ -84,6 +84,8 @@ def _fetch_rss_content(url: str) -> Optional[str]:
         text = re.sub(r'encoding\s*=\s*["\']us-ascii["\']', 'encoding="utf-8"', text, flags=re.I)
         # Убираем невалидные символы для XML (control chars)
         text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+        # Исправляем некорректные XML-сущности (например, & без ;)
+        text = re.sub(r'&(?![a-zA-Z]+;)', '&amp;', text)
         return text
     except Exception as e:
         logger.warning(f"⚠️ Не удалось загрузить {url}: {e}")
@@ -112,8 +114,12 @@ def parse_rss_feed(feed_config: Dict) -> List[Dict]:
         feed = feedparser.parse(content)
         
         if feed.bozo:
-            logger.warning(f"⚠️ Ошибка парсинга RSS фида {url}: {feed.bozo_exception}")
-            return []
+            # Если есть bozo, но есть entries - все равно используем их
+            if not feed.entries:
+                logger.warning(f"⚠️ Ошибка парсинга RSS фида {url}: {feed.bozo_exception}")
+                return []
+            else:
+                logger.warning(f"⚠️ Предупреждение при парсинге {url}: {feed.bozo_exception}, но найдено {len(feed.entries)} записей")
         
         items = []
         for entry in feed.entries:
