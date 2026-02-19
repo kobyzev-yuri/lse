@@ -23,7 +23,7 @@ logging.basicConfig(
 )
 
 # Список тикеров для торговли (можно настроить)
-DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X"]
+DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X", "XAUUSD=X"]
 
 if __name__ == "__main__":
     try:

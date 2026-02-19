@@ -145,7 +145,7 @@ def init_db():
         """))
     print("✅ База данных инициализирована")
 
-def seed_data(tickers=["MSFT", "SNDK", "GBPUSD=X", "^VIX", "MU", "LITE", "ALAB", "TER"]):
+def seed_data(tickers=["MSFT", "SNDK", "GBPUSD=X", "XAUUSD=X", "^VIX", "MU", "LITE", "ALAB", "TER"]):
     for ticker in tickers:
         print(f"Загрузка {ticker}...")
         df = yf.download(ticker, period="2y", interval="1d")

@@ -41,6 +41,7 @@ AnalystAgent → Strategy Manager → ExecutionAgent → PostgreSQL
 - **MSFT** - стабильная акция (Mean Reversion)
 - **SNDK** - волатильная акция (Momentum/Volatile Gap)
 - **GBPUSD=X** - валютная пара (FX impact анализ)
+- **XAUUSD=X** - золото (драйвер risk-off/risk-on и инфляционных ожиданий)
 
 ## 🔧 Конфигурация
 
@@ -57,12 +58,13 @@ AnalystAgent → Strategy Manager → ExecutionAgent → PostgreSQL
 - [ROADMAP.md](ROADMAP.md) - план развития
 - [docs/BACKTESTING_GUIDE.md](docs/BACKTESTING_GUIDE.md) - руководство по бэктестингу
 - [docs/TRADING_GLOSSARY.md](docs/TRADING_GLOSSARY.md) - терминология
+- [docs/NEWS_INTEGRATION_PLAN.md](docs/NEWS_INTEGRATION_PLAN.md) - план интеграции новостных источников
 
 ## 🎯 Основные команды
 
 ```bash
 # Обновление цен
-python update_prices.py MSFT,SNDK,GBPUSD=X
+python update_prices.py MSFT,SNDK,GBPUSD=X,XAUUSD=X
 
 # Добавление новостей
 python news_importer.py add
