@@ -1,18 +1,27 @@
+# Основные зависимости для работы с данными
 pandas>=2.0.0
+numpy>=1.24.0
 yfinance>=0.2.0
+
+# База данных
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
-numpy>=1.24.0
 pgvector>=0.2.0
+
+# LLM и AI
 openai>=1.0.0  # Для работы с LLM через proxyapi.ru
-fastapi>=0.104.0  # Для веб-интерфейса
+
+# Веб-интерфейс
+fastapi>=0.104.0
 uvicorn>=0.24.0  # ASGI сервер для FastAPI
 jinja2>=3.1.0  # Для шаблонов
 python-multipart>=0.0.6  # Для загрузки файлов
-requests>=2.31.0  # Для парсинга Finviz
-beautifulsoup4>=4.12.0  # Для парсинга HTML с Finviz
-feedparser>=6.0.10  # Для парсинга RSS фидов центральных банков
-lxml>=4.9.0  # Для быстрого парсинга XML/HTML
+
+# Парсинг и веб-скрапинг
+requests>=2.31.0  # HTTP запросы (Finviz, Investing.com, NewsAPI, Alpha Vantage)
+beautifulsoup4>=4.12.0  # Парсинг HTML (Finviz, Investing.com)
+lxml>=4.9.0  # Быстрый парсинг XML/HTML (Investing.com)
+feedparser>=6.0.10  # Парсинг RSS фидов центральных банков (Fed, BoE, ECB, BoJ)
 
 # Будущие зависимости (для следующих этапов развития)
 # scipy>=1.10.0  # Для Visual Patterns Detection
