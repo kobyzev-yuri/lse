@@ -31,6 +31,8 @@ RSS_FEEDS = {
         'importance': 'HIGH'
     },
     'FOMC_SPEECH': {
+        # Официальный URL: https://www.federalreserve.gov/feeds/feeds.htm (All Speeches)
+        # Не press_speeches.xml — тот URL возвращает 404
         'url': 'https://www.federalreserve.gov/feeds/speeches.xml',
         'region': 'USA',
         'event_type': 'FOMC_SPEECH',
@@ -43,7 +45,8 @@ RSS_FEEDS = {
         'importance': 'HIGH'
     },
     'BOE_STATEMENT': {
-        'url': 'https://www.bankofengland.co.uk/rss',
+        # /rss — это HTML-страница со списком фидов; используем реальный RSS news
+        'url': 'https://www.bankofengland.co.uk/rss/news',
         'region': 'UK',
         'event_type': 'BOE_STATEMENT',
         'importance': 'HIGH'
@@ -63,10 +66,32 @@ RSS_FEEDS = {
 }
 
 
-def _fetch_rss_content(url: str) -> Optional[str]:
+def _sanitize_xml_for_parser(text: str, aggressive: bool = False) -> str:
+    """
+    Очистка XML для парсера. Если aggressive=True (для проблемных фидов вроде BOE),
+    дополнительно заменяем символы, которые часто ломают парсинг.
+    """
+    # Убираем неверную декларацию кодировки
+    text = re.sub(r'encoding\s*=\s*["\']us-ascii["\']', 'encoding="utf-8"', text, flags=re.I)
+    # Убираем невалидные для XML 1.0 символы (control chars + C1 range)
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
+    # Исправляем только «голый» & (не трогаем &amp; &#123; &#x1F; и т.д.)
+    text = re.sub(r'&(?!(?:#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);)', '&amp;', text)
+    text = re.sub(r'&#0+;', '', text)
+    if aggressive:
+        # Для BOE и подобных: символы, которые часто дают "invalid token"
+        text = text.replace('\u2018', "'").replace('\u2019', "'")  # smart quotes
+        text = text.replace('\u201c', '"').replace('\u201d', '"')
+        text = text.replace('\u2013', '-').replace('\u2014', '-')  # en/em dash
+        text = text.replace('\u00a0', ' ')  # nbsp
+    return text
+
+
+def _fetch_rss_content(url: str, aggressive_sanitize: bool = False) -> Optional[str]:
     """
     Загружает RSS по URL с исправлением кодировки (многие фиды объявляют
     us-ascii, но отдают utf-8 — из-за этого падает парсер).
+    aggressive_sanitize: для проблемных фидов (BOE) — дополнительная очистка.
     """
     try:
         r = requests.get(url, timeout=30, headers={
@@ -75,17 +100,11 @@ def _fetch_rss_content(url: str) -> Optional[str]:
         })
         r.raise_for_status()
         raw = r.content
-        # Пробуем utf-8, иначе cp1252/ascii с заменой ошибок
         try:
             text = raw.decode('utf-8', errors='replace')
         except Exception:
             text = raw.decode('cp1252', errors='replace')
-        # Убираем неверную декларацию кодировки, чтобы парсер не ругался
-        text = re.sub(r'encoding\s*=\s*["\']us-ascii["\']', 'encoding="utf-8"', text, flags=re.I)
-        # Убираем невалидные символы для XML (control chars)
-        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
-        # Исправляем некорректные XML-сущности (например, & без ;)
-        text = re.sub(r'&(?![a-zA-Z]+;)', '&amp;', text)
+        text = _sanitize_xml_for_parser(text, aggressive=aggressive_sanitize)
         return text
     except Exception as e:
         logger.warning(f"⚠️ Не удалось загрузить {url}: {e}")
@@ -108,7 +127,9 @@ def parse_rss_feed(feed_config: Dict) -> List[Dict]:
     importance = feed_config['importance']
     
     try:
-        content = _fetch_rss_content(url)
+        # BOE фид часто содержит символы, ломающие XML — включаем жёсткую санитизацию
+        aggressive = 'bankofengland' in url.lower()
+        content = _fetch_rss_content(url, aggressive_sanitize=aggressive)
         if not content:
             return []
         feed = feedparser.parse(content)

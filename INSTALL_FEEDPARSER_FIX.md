@@ -3,9 +3,22 @@
 ## Проблема
 Ошибка при установке `feedparser` из-за устаревшей зависимости `sgmllib3k`.
 
-## Решения
+## Рекомендуемое решение: Python 3.11 + conda env py11
 
-### Вариант 1: Установить без зависимостей (рекомендуется)
+```bash
+conda activate py11
+pip install feedparser
+# или
+pip install -r requirements.txt
+```
+
+Скрипт `test_all_news_sources.sh` автоматически активирует `py11` перед запуском.
+
+---
+
+## Альтернативные решения
+
+### Вариант 1: Установить без зависимостей (если остаётесь на py310)
 ```bash
 pip install feedparser --no-deps
 pip install sgmllib3k --no-deps || true  # Игнорируем ошибку если не установится

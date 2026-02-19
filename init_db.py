@@ -69,20 +69,34 @@ def init_db():
             );
         """))
         
-        # Добавляем колонку RSI если таблица уже существует
-        # Проверяем существование колонки и добавляем если нужно
-        result = conn.execute(text("""
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name='quotes' AND column_name='rsi'
-        """))
-        if not result.fetchone():
-            try:
-                conn.execute(text("ALTER TABLE quotes ADD COLUMN rsi DECIMAL(5,2)"))
-                print("✅ Колонка rsi добавлена в таблицу quotes")
-            except Exception as e:
-                # Игнорируем ошибку если колонка уже существует
-                if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
-                    print(f"⚠️ Предупреждение при добавлении колонки rsi: {e}")
+        # Добавляем колонки для технических индикаторов если таблица уже существует
+        technical_columns = [
+            ('rsi', 'DECIMAL(5,2)', 'RSI из Finviz/Alpha Vantage (0-100)'),
+            ('macd', 'DECIMAL(10,4)', 'MACD'),
+            ('macd_signal', 'DECIMAL(10,4)', 'MACD Signal'),
+            ('macd_hist', 'DECIMAL(10,4)', 'MACD Histogram'),
+            ('bbands_upper', 'DECIMAL(10,4)', 'Bollinger Bands Upper'),
+            ('bbands_middle', 'DECIMAL(10,4)', 'Bollinger Bands Middle'),
+            ('bbands_lower', 'DECIMAL(10,4)', 'Bollinger Bands Lower'),
+            ('adx', 'DECIMAL(5,2)', 'ADX (Average Directional Index)'),
+            ('stoch_k', 'DECIMAL(5,2)', 'Stochastic %K'),
+            ('stoch_d', 'DECIMAL(5,2)', 'Stochastic %D')
+        ]
+        
+        for col_name, col_type, col_comment in technical_columns:
+            result = conn.execute(text("""
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name='quotes' AND column_name=:col_name
+            """), {"col_name": col_name})
+            
+            if not result.fetchone():
+                try:
+                    conn.execute(text(f"ALTER TABLE quotes ADD COLUMN {col_name} {col_type}"))
+                    print(f"✅ Колонка {col_name} добавлена в таблицу quotes")
+                except Exception as e:
+                    # Игнорируем ошибку если колонка уже существует
+                    if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
+                        print(f"⚠️ Предупреждение при добавлении колонки {col_name}: {e}")
         
         # Таблица базы знаний (Knowledge Base) с векторными embeddings
         conn.execute(text("""
@@ -105,9 +119,33 @@ def init_db():
                 source VARCHAR(100),
                 content TEXT,
                 sentiment_score DECIMAL(3,2),
-                insight TEXT
+                insight TEXT,
+                event_type VARCHAR(50), -- 'NEWS', 'EARNINGS', 'ECONOMIC_INDICATOR'
+                importance VARCHAR(10), -- 'HIGH', 'MEDIUM', 'LOW'
+                link TEXT -- URL для новостей
             );
         """))
+        
+        # Добавляем колонки event_type, importance, link если таблица уже существует
+        kb_columns = [
+            ('event_type', 'VARCHAR(50)', 'Тип события'),
+            ('importance', 'VARCHAR(10)', 'Важность события'),
+            ('link', 'TEXT', 'Ссылка на источник')
+        ]
+        
+        for col_name, col_type, col_comment in kb_columns:
+            result = conn.execute(text("""
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name='knowledge_base' AND column_name=:col_name
+            """), {"col_name": col_name})
+            
+            if not result.fetchone():
+                try:
+                    conn.execute(text(f"ALTER TABLE knowledge_base ADD COLUMN {col_name} {col_type}"))
+                    print(f"✅ Колонка {col_name} добавлена в таблицу knowledge_base")
+                except Exception as e:
+                    if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
+                        print(f"⚠️ Предупреждение при добавлении колонки {col_name}: {e}")
         
         # Хранение текущего портфеля
         conn.execute(text("""
@@ -145,10 +183,20 @@ def init_db():
         """))
     print("✅ База данных инициализирована")
 
-def seed_data(tickers=["MSFT", "SNDK", "GBPUSD=X", "XAUUSD=X", "^VIX", "MU", "LITE", "ALAB", "TER"]):
+# Тикер золота: XAUUSD=X не поддерживается Yahoo Finance → используем GC=F (Gold Futures)
+DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X", "GC=F", "^VIX", "MU", "LITE", "ALAB", "TER"]
+
+
+def seed_data(tickers=None):
+    if tickers is None:
+        tickers = DEFAULT_TICKERS
     for ticker in tickers:
         print(f"Загрузка {ticker}...")
-        df = yf.download(ticker, period="2y", interval="1d")
+        df = yf.download(ticker, period="2y", interval="1d", progress=False)
+        
+        if df.empty or 'Close' not in df.columns:
+            print(f"  ⚠️ {ticker} пропущен (нет данных в Yahoo Finance)")
+            continue
         
         # Если MultiIndex колонки, упрощаем структуру
         if isinstance(df.columns, pd.MultiIndex):
@@ -160,6 +208,10 @@ def seed_data(tickers=["MSFT", "SNDK", "GBPUSD=X", "XAUUSD=X", "^VIX", "MU", "LI
         
         # Удаляем строки с NaN значениями (первые 5 строк, где нет SMA) до reset_index
         df = df.dropna(subset=['sma_5', 'volatility_5'])
+        
+        if df.empty:
+            print(f"  ⚠️ {ticker} пропущен (недостаточно данных для SMA)")
+            continue
         
         # Подготовка к вставке
         df = df.reset_index()

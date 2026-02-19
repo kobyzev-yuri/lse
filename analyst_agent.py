@@ -312,8 +312,11 @@ class AnalystAgent:
         news_df = news_df.copy()
         news_df['weight'] = news_df.apply(calculate_weight, axis=1)
         
+        # Новости без sentiment (RSS, NewsAPI) считаем нейтральными (0.5), чтобы не ломать расчёт
+        sentiment_series = news_df['sentiment_score'].fillna(0.5)
+        
         # Вычисляем взвешенный средний sentiment
-        weighted_sum = (news_df['sentiment_score'] * news_df['weight']).sum()
+        weighted_sum = (sentiment_series * news_df['weight']).sum()
         total_weight = news_df['weight'].sum()
         weighted_sentiment = weighted_sum / total_weight if total_weight > 0 else 0.0
         

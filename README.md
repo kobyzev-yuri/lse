@@ -41,7 +41,7 @@ AnalystAgent → Strategy Manager → ExecutionAgent → PostgreSQL
 - **MSFT** - стабильная акция (Mean Reversion)
 - **SNDK** - волатильная акция (Momentum/Volatile Gap)
 - **GBPUSD=X** - валютная пара (FX impact анализ)
-- **XAUUSD=X** - золото (драйвер risk-off/risk-on и инфляционных ожиданий)
+- **GC=F** - золото (фьючерс, Yahoo Finance; XAUUSD=X не поддерживается)
 
 ## 🔧 Конфигурация
 
@@ -60,12 +60,13 @@ AnalystAgent → Strategy Manager → ExecutionAgent → PostgreSQL
 - [docs/TRADING_GLOSSARY.md](docs/TRADING_GLOSSARY.md) - терминология
 - [docs/NEWS_INTEGRATION_PLAN.md](docs/NEWS_INTEGRATION_PLAN.md) - план интеграции новостных источников
 - [docs/RISK_MANAGEMENT.md](docs/RISK_MANAGEMENT.md) - управление рисками и лимиты компании
+- [docs/NEWS_AND_SENTIMENT_SUMMARY.md](docs/NEWS_AND_SENTIMENT_SUMMARY.md) - новости и sentiment: источники, когда тянется из API, когда нужна LLM-обработка
 
 ## 🎯 Основные команды
 
 ```bash
 # Обновление цен
-python update_prices.py MSFT,SNDK,GBPUSD=X,XAUUSD=X
+python update_prices.py MSFT,SNDK,GBPUSD=X,GC=F
 
 # Добавление новостей
 python news_importer.py add
@@ -78,6 +79,11 @@ python examples/backtest_example.py
 
 # Отчеты
 python report_generator.py
+
+# Тест источников новостей (рекомендуется conda env py11)
+conda activate py11
+bash test_all_news_sources.sh
+# или по одному: python3 services/rss_news_fetcher.py и т.д.
 ```
 
 ## ⚙️ Автоматизация (Cron)
@@ -89,6 +95,7 @@ python report_generator.py
 Установит:
 - **Обновление цен**: ежедневно в 22:00 MSK (после закрытия всех бирж)
 - **Торговый цикл**: в 9:00, 13:00, 17:00 MSK (пн-пт)
+- **Новости** (RSS, NewsAPI, Alpha Vantage): каждый час
 
 ## 🔬 Бэктестинг
 

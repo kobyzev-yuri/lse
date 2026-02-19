@@ -27,6 +27,9 @@ cat >> "$CRON_FILE" << EOF
 
 # LSE Trading System - торговый цикл (каждые 4 часа в рабочее время: 9:00, 13:00, 17:00)
 0 9,13,17 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/trading_cycle_cron.py >> logs/cron_trading_cycle.log 2>&1
+
+# LSE Trading System - получение новостей (RSS, NewsAPI, Alpha Vantage) каждый час
+0 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/fetch_news_cron.py >> logs/news_fetch.log 2>&1
 EOF
 
 # Устанавливаем новые cron задачи
@@ -36,6 +39,7 @@ rm "$CRON_FILE"
 echo "✅ Cron задачи установлены:"
 echo "  - Обновление цен: ежедневно в 22:00 MSK (после закрытия всех бирж)"
 echo "  - Торговый цикл: в 9:00, 13:00, 17:00 MSK (пн-пт)"
+echo "  - Новости (RSS, NewsAPI, Alpha Vantage): каждый час (в :00)"
 echo ""
 echo "⚠️  ВАЖНО: Убедитесь, что сервер в часовом поясе MSK (Europe/Moscow)"
 echo "   Проверка: timedatectl | grep 'Time zone'"

@@ -15,7 +15,7 @@ from datetime import datetime
 # Импорты модулей парсинга
 from services.rss_news_fetcher import fetch_and_save_rss_news
 from services.investing_calendar_parser import fetch_and_save_investing_calendar
-from services.alphavantage_fetcher import fetch_and_save_alphavantage_data
+from services.alphavantage_fetcher import fetch_all_alphavantage_data
 from services.newsapi_fetcher import fetch_and_save_newsapi_news
 
 # Настройка логирования
@@ -69,7 +69,16 @@ def fetch_all_news_sources():
         from config_loader import get_config_value
         tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
         tickers = [t.strip() for t in tickers_str.split(',')]
-        fetch_and_save_alphavantage_data(tickers)
+        
+        # Получаем настройки для индикаторов из конфига
+        include_economic = get_config_value('ALPHAVANTAGE_FETCH_ECONOMIC', 'true').lower() == 'true'
+        include_technical = get_config_value('ALPHAVANTAGE_FETCH_TECHNICAL', 'true').lower() == 'true'
+        
+        fetch_all_alphavantage_data(
+            tickers=tickers,
+            include_economic=include_economic,
+            include_technical=include_technical
+        )
         sources_status['Alpha Vantage'] = '✅ Успешно'
     except Exception as e:
         logger.error(f"❌ Ошибка Alpha Vantage: {e}")

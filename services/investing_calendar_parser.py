@@ -1,7 +1,12 @@
 """
-Модуль для парсинга экономического календаря Investing.com
+Модуль для парсинга экономического календаря Investing.com.
+
+Внимание: страница календаря может подгружать таблицу через JavaScript;
+если таблица не найдена, источник пропускается. Макро-данные дублируются
+через Alpha Vantage Economic Indicators (CPI, GDP, Fed Rate и т.д.).
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +26,8 @@ from config_loader import get_database_url
 
 logger = logging.getLogger(__name__)
 
+# Сохранять HTML при ненайденной таблице для отладки (INVESTING_CALENDAR_DEBUG_HTML=1)
+DEBUG_SAVE_HTML = os.environ.get('INVESTING_CALENDAR_DEBUG_HTML', '').strip().lower() in ('1', 'true', 'yes')
 
 # Регионы для экономического календаря
 REGIONS = {
@@ -31,6 +38,67 @@ REGIONS = {
     'China': {'code': '37', 'name': 'China'},
     'Switzerland': {'code': '39', 'name': 'Switzerland'}
 }
+
+
+def _find_calendar_table(soup: BeautifulSoup, region: str):
+    """Ищет таблицу календаря по разным селекторам (структура сайта может меняться)."""
+    # По ID и классам (исторические и возможные новые)
+    by_id = soup.find('table', id='economicCalendarData')
+    if by_id:
+        logger.info(f"✅ Найдена таблица календаря для {region} (id=economicCalendarData)")
+        return by_id
+
+    for tid in ('economicCalendar', 'ec-table', 'economic-calendar-table'):
+        t = soup.find('table', id=tid)
+        if t:
+            logger.info(f"✅ Найдена таблица календаря для {region} (id={tid})")
+            return t
+
+    # По классам (class может быть списком или строкой)
+    for cls in ('genTbl', 'js-ec-table', 'economic-calendar-table', 'calendar-table'):
+        def has_class(c):
+            if not c:
+                return False
+            parts = c if isinstance(c, list) else [c]
+            return any(cls in str(p) for p in parts)
+        t = soup.find('table', class_=has_class)
+        if t:
+            logger.info(f"✅ Найдена таблица календаря для {region} (class~{cls})")
+            return t
+
+    # Любая таблица с классом, содержащим 'calendar' или 'economic'
+    for t in soup.find_all('table'):
+        classes = t.get('class') or []
+        if isinstance(classes, str):
+            classes = [classes]
+        if any('calendar' in str(c).lower() or 'economic' in str(c).lower() for c in classes):
+            logger.info(f"✅ Найдена таблица календаря для {region} (по классу)")
+            return t
+
+    # Fallback: таблица с подходящей структурой (много строк, несколько колонок)
+    for t in soup.find_all('table'):
+        rows = t.find_all('tr')
+        if len(rows) < 3:
+            continue
+        first_data_row = next((r for r in rows if r.find_all('td')), None)
+        if not first_data_row:
+            continue
+        cols = len(first_data_row.find_all('td'))
+        if cols >= 4:
+            logger.info(f"✅ Найдена таблица календаря для {region} (fallback: таблица {len(rows)}x{cols})")
+            return t
+
+    return None
+
+
+def _debug_save_html(soup: BeautifulSoup, region: str) -> None:
+    """Сохраняет HTML в /tmp для отладки (если INVESTING_CALENDAR_DEBUG_HTML=1)."""
+    try:
+        path = Path('/tmp') / f'investing_calendar_{region}.html'
+        path.write_text(str(soup), encoding='utf-8')
+        logger.info(f"📁 HTML сохранён для отладки: {path}")
+    except Exception as e:
+        logger.warning(f"Не удалось сохранить HTML: {e}")
 
 
 def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
@@ -73,43 +141,16 @@ def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Ищем таблицу с событиями
-        # Структура может меняться, поэтому используем гибкий поиск
-        table = None
-        
-        # Пробуем разные варианты поиска таблицы
-        selectors = [
-            {'id': 'economicCalendarData'},
-            {'class': 'genTbl'},
-            {'class': 'js-ec-table'},
-            {'id': 'economicCalendar'},
-        ]
-        
-        for selector in selectors:
-            if 'id' in selector:
-                table = soup.find('table', id=selector['id'])
-            elif 'class' in selector:
-                table = soup.find('table', class_=selector['class'])
-            
-            if table:
-                logger.info(f"✅ Найдена таблица календаря для {region} (селектор: {selector})")
-                break
+        # Ищем таблицу с событиями (страница может подгружать данные через JS)
+        table = _find_calendar_table(soup, region)
         
         if not table:
-            # Пробуем найти любую таблицу с классом, содержащим 'calendar' или 'economic'
-            all_tables = soup.find_all('table')
-            for t in all_tables:
-                classes = t.get('class', [])
-                if any('calendar' in str(c).lower() or 'economic' in str(c).lower() for c in classes):
-                    table = t
-                    logger.info(f"✅ Найдена таблица календаря для {region} (по классу)")
-                    break
-        
-        if not table:
-            logger.warning(f"⚠️ Не найдена таблица календаря для {region}. HTML структура могла измениться.")
-            # Сохраняем HTML для отладки (опционально)
-            # with open(f'/tmp/investing_{region}.html', 'w') as f:
-            #     f.write(str(soup))
+            logger.warning(
+                f"⚠️ Не найдена таблица календаря для {region}. "
+                "HTML структура могла измениться или данные подгружаются через JS."
+            )
+            if DEBUG_SAVE_HTML:
+                _debug_save_html(soup, region)
             return []
         
         events = []
@@ -304,18 +345,22 @@ def save_events_to_db(events: List[Dict]):
 
 def fetch_and_save_investing_calendar():
     """
-    Главная функция: получает календарь из Investing.com и сохраняет в БД
+    Главная функция: получает календарь из Investing.com и сохраняет в БД.
+    Если таблица не найдена (структура страницы или JS), события не сохраняются.
+    Макро-данные дублируются через Alpha Vantage Economic Indicators.
     """
     logger.info("🚀 Начало получения экономического календаря из Investing.com")
     
-    # Получаем события для всех регионов
     events = fetch_all_regions_calendar()
     
-    # Сохраняем в БД
     if events:
         save_events_to_db(events)
-    
-    logger.info("✅ Завершено получение календаря из Investing.com")
+        logger.info("✅ Завершено получение календаря из Investing.com")
+    else:
+        logger.info(
+            "✅ Календарь Investing.com: событий нет (страница могла измениться или данные подгружаются через JS). "
+            "Макро-данные: используйте Alpha Vantage Economic Indicators в cron."
+        )
 
 
 if __name__ == "__main__":

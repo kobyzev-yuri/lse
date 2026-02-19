@@ -23,7 +23,7 @@ logging.basicConfig(
 )
 
 # Список тикеров для торговли (можно настроить)
-DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X", "XAUUSD=X"]
+DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X", "GC=F"]  # GC=F = gold futures (XAUUSD=X не поддерживается Yahoo)
 
 if __name__ == "__main__":
     try:

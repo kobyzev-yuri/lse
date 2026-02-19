@@ -2,8 +2,11 @@
 Модуль для получения данных через Alpha Vantage API
 - Earnings Calendar
 - News Sentiment
+- Economic Indicators (CPI, GDP, FEDERAL_FUNDS_RATE, TREASURY_YIELD, UNEMPLOYMENT)
+- Technical Indicators (RSI, MACD, BBANDS, ADX, STOCH)
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +16,7 @@ sys.path.insert(0, str(project_root))
 
 import requests
 import csv
+import time
 from io import StringIO
 import logging
 from datetime import datetime, timedelta
@@ -22,6 +26,34 @@ from sqlalchemy import create_engine, text
 from config_loader import get_database_url, get_config_value
 
 logger = logging.getLogger(__name__)
+
+# Таймаут и повторы для Alpha Vantage (часто даёт Read timed out)
+AV_REQUEST_TIMEOUT = int(os.environ.get('ALPHAVANTAGE_TIMEOUT', '90'))
+AV_MAX_RETRIES = int(os.environ.get('ALPHAVANTAGE_MAX_RETRIES', '3'))
+AV_RETRY_DELAY = float(os.environ.get('ALPHAVANTAGE_RETRY_DELAY', '10'))
+
+
+def _get_with_retry(url: str, params: Dict, timeout: int = None) -> Optional[requests.Response]:
+    """GET с повторными попытками при таймауте или 5xx."""
+    timeout = timeout or AV_REQUEST_TIMEOUT
+    last_error = None
+    for attempt in range(AV_MAX_RETRIES + 1):
+        try:
+            response = requests.get(url, params=params, timeout=timeout)
+            if response.status_code >= 500 and attempt < AV_MAX_RETRIES:
+                last_error = f"HTTP {response.status_code}"
+                logger.warning(f"⚠️ Alpha Vantage {last_error}, повтор через {AV_RETRY_DELAY} с...")
+                time.sleep(AV_RETRY_DELAY)
+                continue
+            return response
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_error = e
+            if attempt < AV_MAX_RETRIES:
+                logger.warning(f"⚠️ Alpha Vantage таймаут/ошибка соединения, повтор через {AV_RETRY_DELAY} с...")
+                time.sleep(AV_RETRY_DELAY)
+            else:
+                raise
+    return None
 
 
 def get_api_key() -> Optional[str]:
@@ -49,7 +81,9 @@ def fetch_earnings_calendar(api_key: str, symbol: str = None) -> List[Dict]:
         params['symbol'] = symbol
     
     try:
-        response = requests.get(url, params=params, timeout=30)
+        response = _get_with_retry(url, params)
+        if not response:
+            return []
         response.raise_for_status()
         
         # Alpha Vantage возвращает CSV
@@ -113,7 +147,9 @@ def fetch_news_sentiment(api_key: str, tickers: str) -> List[Dict]:
     }
     
     try:
-        response = requests.get(url, params=params, timeout=30)
+        response = _get_with_retry(url, params)
+        if not response:
+            return []
         response.raise_for_status()
         
         data = response.json()
@@ -183,11 +219,14 @@ def save_earnings_to_db(earnings: List[Dict]):
     engine = create_engine(db_url)
     
     saved_count = 0
+    skipped_count = 0
+    error_count = 0
     
     with engine.begin() as conn:
         for earning in earnings:
             try:
                 if not earning.get('symbol') or not earning.get('reportDate'):
+                    skipped_count += 1
                     continue
                 
                 # Формируем контент
@@ -195,13 +234,14 @@ def save_earnings_to_db(earnings: List[Dict]):
                 if earning.get('estimate'):
                     content += f"\nEstimate: {earning['estimate']} {earning.get('currency', 'USD')}"
                 
-                # Проверяем дубликаты
+                # Проверяем дубликаты (более гибкая проверка)
                 existing = conn.execute(
                     text("""
                         SELECT id FROM knowledge_base 
                         WHERE ticker = :ticker 
                         AND event_type = 'EARNINGS'
                         AND DATE(ts) = DATE(:report_date)
+                        AND source = 'Alpha Vantage Earnings Calendar'
                     """),
                     {
                         "ticker": earning['symbol'],
@@ -210,6 +250,7 @@ def save_earnings_to_db(earnings: List[Dict]):
                 ).fetchone()
                 
                 if existing:
+                    skipped_count += 1
                     continue
                 
                 # Вставляем
@@ -231,9 +272,13 @@ def save_earnings_to_db(earnings: List[Dict]):
                 saved_count += 1
                 
             except Exception as e:
+                error_count += 1
                 logger.error(f"❌ Ошибка при сохранении earnings для {earning.get('symbol')}: {e}")
     
-    logger.info(f"✅ Сохранено {saved_count} earnings в БД")
+    logger.info(
+        f"✅ Earnings: сохранено {saved_count}, пропущено дубликатов {skipped_count}, "
+        f"ошибок {error_count} из {len(earnings)} полученных"
+    )
     engine.dispose()
 
 
@@ -314,6 +359,516 @@ def save_news_to_db(news_items: List[Dict]):
     engine.dispose()
 
 
+def fetch_economic_indicator(api_key: str, function: str, interval: str = None) -> List[Dict]:
+    """
+    Получает экономический индикатор через Alpha Vantage
+    
+    Args:
+        api_key: API ключ Alpha Vantage
+        function: Название функции (CPI, GDP, FEDERAL_FUNDS_RATE, TREASURY_YIELD, UNEMPLOYMENT, INFLATION)
+        interval: Интервал (для некоторых индикаторов: monthly, quarterly, annual, daily, weekly)
+        
+    Returns:
+        Список словарей с данными индикатора
+    """
+    url = "https://www.alphavantage.co/query"
+    params = {
+        'function': function,
+        'apikey': api_key
+    }
+    
+    if interval:
+        params['interval'] = interval
+    
+    # Специфичные параметры для некоторых индикаторов
+    if function == 'TREASURY_YIELD':
+        if not interval:
+            params['interval'] = 'monthly'
+        params['maturity'] = '10year'  # По умолчанию 10-летние облигации
+    
+    try:
+        response = _get_with_retry(url, params)
+        if not response:
+            return []
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if 'Error Message' in data:
+            logger.error(f"❌ Alpha Vantage ошибка для {function}: {data['Error Message']}")
+            return []
+        
+        if 'Note' in data:
+            logger.warning(f"⚠️ Alpha Vantage лимит для {function}: {data['Note']}")
+            return []
+        
+        # Ответ только с ключом Information = лимит или премиум (часто у экономических индикаторов)
+        if list(data.keys()) == ['Information'] or (len(data) == 1 and 'Information' in data):
+            msg = (data.get('Information') or '')[:200]
+            logger.warning(
+                f"⚠️ Alpha Vantage для {function}: ответ без данных. "
+                f"Information: {msg}. Возможно лимит бесплатного плана или премиум-эндпоинт."
+            )
+            return []
+        
+        # Извлекаем временной ряд
+        time_series_key = None
+        for key in data.keys():
+            if 'Time Series' in key or (key.lower() == 'data' and isinstance(data.get(key), (dict, list))):
+                time_series_key = key
+                break
+        
+        if not time_series_key:
+            # Некоторые индикаторы возвращают данные напрямую как список
+            if 'data' in data:
+                data_list = data['data']
+                if isinstance(data_list, list):
+                    # Обрабатываем список данных
+                    indicators = []
+                    for item in data_list:
+                        if isinstance(item, dict):
+                            date_str = item.get('date') or item.get('timestamp')
+                            value = item.get('value') or item.get('close')
+                            if date_str and value is not None:
+                                try:
+                                    # Пробуем разные форматы даты
+                                    date_obj = None
+                                    for fmt in ['%Y-%m-%d', '%Y-%m', '%Y']:
+                                        try:
+                                            date_obj = datetime.strptime(date_str, fmt)
+                                            break
+                                        except:
+                                            continue
+                                    if date_obj:
+                                        indicators.append({
+                                            'date': date_obj,
+                                            'value': float(value),
+                                            'indicator': function
+                                        })
+                                except Exception as e:
+                                    logger.debug(f"Ошибка парсинга даты/значения для {function}: {e}")
+                                    pass
+                    if indicators:
+                        logger.info(f"✅ Получено {len(indicators)} записей для {function} (из data списка)")
+                        return indicators
+                return data_list if isinstance(data_list, list) else []
+            
+            # Пробуем найти другие ключи с данными
+            for key in ['data', 'values', 'series']:
+                if key in data and isinstance(data[key], list):
+                    logger.info(f"✅ Найдены данные для {function} в ключе '{key}' (список)")
+                    # Обрабатываем список аналогично выше
+                    indicators = []
+                    for item in data[key]:
+                        if isinstance(item, dict):
+                            date_str = item.get('date') or item.get('timestamp')
+                            value = item.get('value') or item.get('close')
+                            if date_str and value is not None:
+                                try:
+                                    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                                    indicators.append({
+                                        'date': date_obj,
+                                        'value': float(value),
+                                        'indicator': function
+                                    })
+                                except:
+                                    pass
+                    if indicators:
+                        return indicators
+            
+            # Логируем структуру ответа для отладки
+            available_keys = list(data.keys())[:10]
+            logger.warning(
+                f"⚠️ Не найдена временная серия для {function}. "
+                f"Доступные ключи: {available_keys}. "
+                f"Попробуйте проверить документацию Alpha Vantage для {function}."
+            )
+            # Для отладки: логируем первые несколько символов ответа
+            if len(str(data)) < 500:
+                logger.debug(f"Структура ответа для {function}: {data}")
+            return []
+        
+        time_series = data[time_series_key]
+        
+        # Проверяем тип: может быть список или словарь
+        if isinstance(time_series, list):
+            # Обрабатываем список
+            indicators = []
+            for item in time_series:
+                if isinstance(item, dict):
+                    date_str = item.get('date') or item.get('timestamp')
+                    value = item.get('value') or item.get('close')
+                    if date_str and value is not None:
+                        try:
+                            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                            indicators.append({
+                                'date': date_obj,
+                                'value': float(value),
+                                'indicator': function
+                            })
+                        except:
+                            pass
+            if indicators:
+                logger.info(f"✅ Получено {len(indicators)} записей для {function} (из списка)")
+                return indicators
+            return []
+        
+        indicators = []
+        
+        for date_str, values in time_series.items():
+            try:
+                # Парсим дату
+                date_obj = None
+                try:
+                    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                except:
+                    try:
+                        date_obj = datetime.strptime(date_str, '%Y-%m')
+                    except:
+                        pass
+                
+                if not date_obj:
+                    continue
+                
+                # Извлекаем значение (обычно это 'value' или первое числовое значение)
+                value = None
+                if isinstance(values, dict):
+                    value_key = None
+                    for k in ['value', 'Value', 'VALUE', '4. close', 'close']:
+                        if k in values:
+                            value_key = k
+                            break
+                    if value_key:
+                        try:
+                            value = float(values[value_key])
+                        except:
+                            pass
+                elif isinstance(values, (int, float)):
+                    value = float(values)
+                
+                if value is not None:
+                    indicators.append({
+                        'date': date_obj,
+                        'value': value,
+                        'indicator': function
+                    })
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка парсинга данных для {function} на дату {date_str}: {e}")
+                continue
+        
+        logger.info(f"✅ Получено {len(indicators)} записей для {function}")
+        return indicators
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Ошибка запроса к Alpha Vantage для {function}: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"❌ Неожиданная ошибка при получении {function}: {e}")
+        return []
+
+
+def save_economic_indicators_to_db(indicators: List[Dict]):
+    """
+    Сохраняет экономические индикаторы в БД
+    
+    Args:
+        indicators: Список индикаторов (каждый с полями: date, value, indicator)
+    """
+    if not indicators:
+        return
+    
+    db_url = get_database_url()
+    engine = create_engine(db_url)
+    
+    saved_count = 0
+    
+    with engine.begin() as conn:
+        for ind in indicators:
+            try:
+                if not ind.get('date') or ind.get('value') is None:
+                    continue
+                
+                indicator_name = ind.get('indicator', 'UNKNOWN')
+                
+                # Формируем контент
+                content = f"{indicator_name}: {ind['value']}"
+                
+                # Проверяем дубликаты
+                existing = conn.execute(
+                    text("""
+                        SELECT id FROM knowledge_base 
+                        WHERE ticker = 'US_MACRO'
+                        AND event_type = 'ECONOMIC_INDICATOR'
+                        AND source LIKE :source_pattern
+                        AND DATE(ts) = DATE(:ind_date)
+                    """),
+                    {
+                        "source_pattern": f"%{indicator_name}%",
+                        "ind_date": ind['date']
+                    }
+                ).fetchone()
+                
+                if existing:
+                    continue
+                
+                # Вставляем
+                conn.execute(
+                    text("""
+                        INSERT INTO knowledge_base 
+                        (ts, ticker, source, content, event_type, importance)
+                        VALUES (:ts, :ticker, :source, :content, :event_type, :importance)
+                    """),
+                    {
+                        "ts": ind['date'],
+                        "ticker": "US_MACRO",
+                        "source": f"Alpha Vantage {indicator_name}",
+                        "content": content,
+                        "event_type": "ECONOMIC_INDICATOR",
+                        "importance": "HIGH" if indicator_name in ['CPI', 'FEDERAL_FUNDS_RATE', 'GDP'] else "MEDIUM"
+                    }
+                )
+                saved_count += 1
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка при сохранении индикатора {ind.get('indicator')}: {e}")
+    
+    logger.info(f"✅ Сохранено {saved_count} экономических индикаторов в БД")
+    engine.dispose()
+
+
+def fetch_technical_indicator(api_key: str, symbol: str, function: str, interval: str = 'daily', 
+                              time_period: int = None, series_type: str = 'close', **kwargs) -> Dict:
+    """
+    Получает технический индикатор через Alpha Vantage
+    
+    Args:
+        api_key: API ключ Alpha Vantage
+        symbol: Тикер (например, 'IBM')
+        function: Название функции (RSI, MACD, BBANDS, ADX, STOCH)
+        interval: Интервал (daily, weekly, monthly)
+        time_period: Период для индикатора (например, 14 для RSI)
+        series_type: Тип серии (close, open, high, low)
+        **kwargs: Дополнительные параметры для конкретных индикаторов
+        
+    Returns:
+        Словарь с данными индикатора: {'date': datetime, 'value': float, ...}
+        Или пустой словарь при ошибке
+    """
+    url = "https://www.alphavantage.co/query"
+    params = {
+        'function': function,
+        'symbol': symbol,
+        'interval': interval,
+        'series_type': series_type,
+        'apikey': api_key
+    }
+    
+    if time_period:
+        params['time_period'] = time_period
+    
+    # Специфичные параметры для разных индикаторов
+    if function == 'RSI':
+        if not time_period:
+            params['time_period'] = 14
+    elif function == 'MACD':
+        params.setdefault('fastperiod', 12)
+        params.setdefault('slowperiod', 26)
+        params.setdefault('signalperiod', 9)
+    elif function == 'BBANDS':
+        if not time_period:
+            params['time_period'] = 20
+        params.setdefault('nbdevup', 2)
+        params.setdefault('nbdevdn', 2)
+    elif function == 'ADX':
+        if not time_period:
+            params['time_period'] = 14
+    elif function == 'STOCH':
+        params.setdefault('fastkperiod', 5)
+        params.setdefault('slowkperiod', 3)
+        params.setdefault('slowdperiod', 3)
+    
+    # Добавляем дополнительные параметры из kwargs
+    params.update(kwargs)
+    
+    try:
+        response = _get_with_retry(url, params)
+        if not response:
+            return {}
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if 'Error Message' in data:
+            logger.error(f"❌ Alpha Vantage ошибка для {function} ({symbol}): {data['Error Message']}")
+            return {}
+        
+        if 'Note' in data:
+            logger.warning(f"⚠️ Alpha Vantage лимит для {function} ({symbol}): {data['Note']}")
+            return {}
+        
+        # Извлекаем временной ряд (ключ может быть разным)
+        time_series_key = None
+        for key in data.keys():
+            if 'Technical Analysis' in key or 'Time Series' in key:
+                time_series_key = key
+                break
+        
+        if not time_series_key:
+            logger.warning(f"⚠️ Не найдена временная серия для {function} ({symbol})")
+            return {}
+        
+        time_series = data[time_series_key]
+        
+        # Берем последнее значение (самое свежее)
+        if not time_series:
+            return {}
+        
+        latest_date = max(time_series.keys())
+        latest_data = time_series[latest_date]
+        
+        # Парсим дату
+        date_obj = None
+        try:
+            date_obj = datetime.strptime(latest_date, '%Y-%m-%d')
+        except:
+            try:
+                date_obj = datetime.strptime(latest_date, '%Y-%m-%d %H:%M:%S')
+            except:
+                pass
+        
+        result = {
+            'date': date_obj or datetime.now(),
+            'symbol': symbol,
+            'indicator': function
+        }
+        
+        # Извлекаем значения в зависимости от типа индикатора
+        if function == 'RSI':
+            result['rsi'] = float(latest_data.get('RSI', 0))
+        elif function == 'MACD':
+            result['macd'] = float(latest_data.get('MACD', 0))
+            result['macd_signal'] = float(latest_data.get('MACD_Signal', 0))
+            result['macd_hist'] = float(latest_data.get('MACD_Hist', 0))
+        elif function == 'BBANDS':
+            result['bbands_upper'] = float(latest_data.get('Real Upper Band', 0))
+            result['bbands_middle'] = float(latest_data.get('Real Middle Band', 0))
+            result['bbands_lower'] = float(latest_data.get('Real Lower Band', 0))
+        elif function == 'ADX':
+            result['adx'] = float(latest_data.get('ADX', 0))
+        elif function == 'STOCH':
+            result['stoch_k'] = float(latest_data.get('SlowK', 0))
+            result['stoch_d'] = float(latest_data.get('SlowD', 0))
+        
+        logger.info(f"✅ Получен {function} для {symbol}: {latest_date}")
+        return result
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Ошибка запроса к Alpha Vantage для {function} ({symbol}): {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"❌ Неожиданная ошибка при получении {function} ({symbol}): {e}")
+        return {}
+
+
+def save_technical_indicators_to_db(indicators: List[Dict]):
+    """
+    Сохраняет технические индикаторы в таблицу quotes (обновляет существующие записи)
+    
+    Args:
+        indicators: Список индикаторов (каждый с полями: date, symbol, и значениями индикаторов)
+    """
+    if not indicators:
+        return
+    
+    db_url = get_database_url()
+    engine = create_engine(db_url)
+    
+    updated_count = 0
+    
+    with engine.begin() as conn:
+        for ind in indicators:
+            try:
+                symbol = ind.get('symbol')
+                ind_date = ind.get('date')
+                
+                if not symbol or not ind_date:
+                    continue
+                
+                # Формируем UPDATE запрос динамически на основе доступных полей
+                update_fields = []
+                update_values = {}
+                
+                if 'rsi' in ind:
+                    update_fields.append("rsi = :rsi")
+                    update_values['rsi'] = ind['rsi']
+                
+                if 'macd' in ind:
+                    update_fields.append("macd = :macd")
+                    update_values['macd'] = ind['macd']
+                    if 'macd_signal' in ind:
+                        update_fields.append("macd_signal = :macd_signal")
+                        update_values['macd_signal'] = ind['macd_signal']
+                    if 'macd_hist' in ind:
+                        update_fields.append("macd_hist = :macd_hist")
+                        update_values['macd_hist'] = ind['macd_hist']
+                
+                if 'bbands_upper' in ind:
+                    update_fields.append("bbands_upper = :bbands_upper")
+                    update_values['bbands_upper'] = ind['bbands_upper']
+                    if 'bbands_middle' in ind:
+                        update_fields.append("bbands_middle = :bbands_middle")
+                        update_values['bbands_middle'] = ind['bbands_middle']
+                    if 'bbands_lower' in ind:
+                        update_fields.append("bbands_lower = :bbands_lower")
+                        update_values['bbands_lower'] = ind['bbands_lower']
+                
+                if 'adx' in ind:
+                    update_fields.append("adx = :adx")
+                    update_values['adx'] = ind['adx']
+                
+                if 'stoch_k' in ind:
+                    update_fields.append("stoch_k = :stoch_k")
+                    update_values['stoch_k'] = ind['stoch_k']
+                    if 'stoch_d' in ind:
+                        update_fields.append("stoch_d = :stoch_d")
+                        update_values['stoch_d'] = ind['stoch_d']
+                
+                if not update_fields:
+                    continue
+                
+                update_values['symbol'] = symbol
+                update_values['ind_date'] = ind_date
+                
+                # Обновляем последнюю запись для этого тикера на эту дату или ближайшую
+                query = f"""
+                    UPDATE quotes 
+                    SET {', '.join(update_fields)}
+                    WHERE ticker = :symbol 
+                    AND DATE(date) = DATE(:ind_date)
+                """
+                
+                result = conn.execute(text(query), update_values)
+                if result.rowcount == 0:
+                    # Если записи нет на эту дату, пробуем обновить последнюю доступную
+                    query_latest = f"""
+                        UPDATE quotes 
+                        SET {', '.join(update_fields)}
+                        WHERE ticker = :symbol 
+                        AND date = (
+                            SELECT MAX(date) FROM quotes WHERE ticker = :symbol
+                        )
+                    """
+                    conn.execute(text(query_latest), update_values)
+                
+                updated_count += 1
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка при сохранении технического индикатора для {ind.get('symbol')}: {e}")
+    
+    logger.info(f"✅ Обновлено {updated_count} записей техническими индикаторами в БД")
+    engine.dispose()
+
+
 def fetch_and_save_alphavantage_data(tickers: List[str] = None):
     """
     Главная функция: получает данные из Alpha Vantage и сохраняет в БД
@@ -345,12 +900,166 @@ def fetch_and_save_alphavantage_data(tickers: List[str] = None):
     logger.info("✅ Завершено получение данных из Alpha Vantage")
 
 
+def fetch_economic_indicators(api_key: str) -> List[Dict]:
+    """
+    Получает основные экономические индикаторы США
+    
+    Returns:
+        Список всех индикаторов
+    """
+    indicators = []
+    
+    # CPI (Consumer Price Index) - monthly
+    logger.info("📊 Получение CPI...")
+    cpi_data = fetch_economic_indicator(api_key, 'CPI', interval='monthly')
+    if cpi_data:
+        indicators.extend(cpi_data)
+        logger.info(f"   ✅ CPI: получено {len(cpi_data)} записей")
+    else:
+        logger.warning("   ⚠️ CPI: данные не получены")
+    
+    # REAL_GDP - quarterly
+    logger.info("📊 Получение GDP...")
+    gdp_data = fetch_economic_indicator(api_key, 'REAL_GDP', interval='quarterly')
+    if gdp_data:
+        indicators.extend(gdp_data)
+        logger.info(f"   ✅ GDP: получено {len(gdp_data)} записей")
+    else:
+        logger.warning("   ⚠️ GDP: данные не получены")
+    
+    # Federal Funds Rate - monthly
+    logger.info("📊 Получение Federal Funds Rate...")
+    fed_rate_data = fetch_economic_indicator(api_key, 'FEDERAL_FUNDS_RATE', interval='monthly')
+    if fed_rate_data:
+        indicators.extend(fed_rate_data)
+        logger.info(f"   ✅ Fed Rate: получено {len(fed_rate_data)} записей")
+    else:
+        logger.warning("   ⚠️ Fed Rate: данные не получены")
+    
+    # Treasury Yield (10-year) - monthly
+    logger.info("📊 Получение Treasury Yield...")
+    treasury_data = fetch_economic_indicator(api_key, 'TREASURY_YIELD', interval='monthly')
+    if treasury_data:
+        indicators.extend(treasury_data)
+        logger.info(f"   ✅ Treasury Yield: получено {len(treasury_data)} записей")
+    else:
+        logger.warning("   ⚠️ Treasury Yield: данные не получены")
+    
+    # Unemployment - monthly
+    logger.info("📊 Получение Unemployment...")
+    unemployment_data = fetch_economic_indicator(api_key, 'UNEMPLOYMENT', interval='monthly')
+    if unemployment_data:
+        indicators.extend(unemployment_data)
+        logger.info(f"   ✅ Unemployment: получено {len(unemployment_data)} записей")
+    else:
+        logger.warning("   ⚠️ Unemployment: данные не получены")
+    
+    logger.info(f"📊 Всего получено экономических индикаторов: {len(indicators)}")
+    return indicators
+
+
+def fetch_technical_indicators_for_tickers(api_key: str, tickers: List[str]) -> List[Dict]:
+    """
+    Получает технические индикаторы для списка тикеров
+    
+    Args:
+        api_key: API ключ Alpha Vantage
+        tickers: Список тикеров
+        
+    Returns:
+        Список индикаторов
+    """
+    all_indicators = []
+    # Пауза после таймаута/ошибки, чтобы не добивать API (секунды)
+    delay_after_error = int(os.environ.get('ALPHAVANTAGE_DELAY_AFTER_ERROR', '15'))
+    delay_between_tickers = int(os.environ.get('ALPHAVANTAGE_DELAY_BETWEEN_TICKERS', '15'))
+    
+    for ticker in tickers:
+        logger.info(f"📈 Получение технических индикаторов для {ticker}...")
+        had_error = False
+        
+        for name, func_name, period in [
+            ('RSI', 'RSI', 14),
+            ('MACD', 'MACD', None),
+            ('BBANDS', 'BBANDS', 20),
+            ('ADX', 'ADX', 14),
+            ('STOCH', 'STOCH', None),
+        ]:
+            try:
+                kwargs = {'time_period': period} if period else {}
+                data = fetch_technical_indicator(api_key, ticker, func_name, **kwargs)
+                if data:
+                    all_indicators.append(data)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                had_error = True
+                logger.warning(f"⚠️ Таймаут/ошибка для {name} ({ticker}), пропуск. Пауза {delay_after_error} с.")
+                time.sleep(delay_after_error)
+        
+        # Лимит бесплатного tier: 5 запросов/минуту — пауза между тикерами
+        time.sleep(delay_between_tickers)
+    
+    return all_indicators
+
+
+def fetch_all_alphavantage_data(tickers: List[str] = None, include_economic: bool = True, 
+                                 include_technical: bool = True):
+    """
+    Расширенная функция: получает все данные из Alpha Vantage
+    
+    Args:
+        tickers: Список тикеров для отслеживания
+        include_economic: Включать ли экономические индикаторы
+        include_technical: Включать ли технические индикаторы
+    """
+    api_key = get_api_key()
+    if not api_key:
+        logger.warning("⚠️ ALPHAVANTAGE_KEY не настроен в config.env, пропускаем Alpha Vantage")
+        return
+    
+    logger.info("🚀 Начало получения всех данных из Alpha Vantage")
+    
+    # 1. Earnings Calendar
+    logger.info("📅 Получение Earnings Calendar...")
+    earnings = fetch_earnings_calendar(api_key)
+    if earnings:
+        save_earnings_to_db(earnings)
+    
+    # 2. Новости (если указаны тикеры)
+    if tickers:
+        tickers_str = ','.join(tickers[:5])
+        logger.info(f"📰 Получение новостей для тикеров: {tickers_str}...")
+        news = fetch_news_sentiment(api_key, tickers_str)
+        if news:
+            save_news_to_db(news)
+    
+    # 3. Экономические индикаторы
+    if include_economic:
+        logger.info("📊 Получение экономических индикаторов...")
+        economic_indicators = fetch_economic_indicators(api_key)
+        if economic_indicators:
+            save_economic_indicators_to_db(economic_indicators)
+    
+    # 4. Технические индикаторы (если указаны тикеры)
+    if include_technical and tickers:
+        logger.info("📈 Получение технических индикаторов...")
+        technical_indicators = fetch_technical_indicators_for_tickers(api_key, tickers[:3])  # Ограничиваем до 3 из-за лимитов
+        if technical_indicators:
+            save_technical_indicators_to_db(technical_indicators)
+    
+    logger.info("✅ Завершено получение всех данных из Alpha Vantage")
+
+
 if __name__ == "__main__":
     import logging
+    import os
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
-    
-    # Пример использования
-    fetch_and_save_alphavantage_data(['MSFT', 'AAPL', 'GOOGL'])
+    # Полный поток: earnings + новости + экономические + технические индикаторы
+    tickers = ['MSFT', 'SNDK', 'MU']
+    fetch_all_alphavantage_data(
+        tickers=tickers,
+        include_economic=True,
+        include_technical=True
+    )

@@ -13,6 +13,8 @@
 7. [Генерация отчетов](#7-генерация-отчетов)
 8. [Векторная база знаний](#8-векторная-база-знаний)
 9. [Диаграммы взаимодействия компонентов](#9-диаграммы-взаимодействия-компонентов)
+10. [Telegram бот-агент и вебхук](#10-telegram-бот-агент-и-вебхук)
+11. [Развёртывание (Cloud Run и сервер БД/КБ)](#11-развёртывание-cloud-run-и-сервер-бдкб)
 
 ---
 
@@ -692,6 +694,167 @@ flowchart TD
 
 ---
 
+## 10. Telegram бот-агент и вебхук
+
+### 10.1. Общий поток: пользователь → бот → сервисы LSE
+
+```mermaid
+flowchart TD
+    A[Пользователь в Telegram] --> B[Сообщение / команда]
+    B --> C[Telegram API → webhook URL]
+    C --> D[Cloud Run: LSE Bot Service]
+    
+    D --> E{Тип запроса}
+    E -->|Команда /status| F[Статус портфеля и рисков]
+    E -->|Команда /news| G[Запрос к knowledge_base]
+    E -->|Команда /signal| H[Анализ сигналов / Analyst Agent]
+    E -->|Команда /report| I[Генерация отчёта]
+    E -->|Текстовый запрос| J[Агент: поиск в КБ, ответ по контексту]
+    
+    F --> K[PostgreSQL: portfolio_state, trade_history]
+    G --> L[PostgreSQL: knowledge_base]
+    H --> M[Analyst Agent + quotes, sentiment]
+    I --> N[Report Generator]
+    J --> L
+    J --> O[trade_kb: векторный поиск]
+    
+    K --> P[Форматирование ответа]
+    L --> P
+    M --> P
+    N --> P
+    O --> P
+    
+    P --> Q[Ответ в Telegram]
+    Q --> A
+    
+    style A fill:#e1f5ff
+    style D fill:#fff9c4
+    style Q fill:#c8e6c9
+```
+
+**Комментарий**: Бот принимает входящие обновления через webhook (HTTPS), обрабатывает команды и свободный текст, обращается к БД и агентам LSE, возвращает ответ пользователю. Все сервисы бота и API разворачиваются на Google Cloud Run; БД и базы знаний — на отдельном сервере (см. раздел 11).
+
+### 10.2. Маршрутизация webhook и обработчики
+
+```mermaid
+flowchart LR
+    subgraph Telegram[Telegram]
+        A[Update]
+    end
+    
+    A -->|POST /webhook| B[Cloud Run: Bot API]
+    
+    subgraph BotAPI[LSE Bot Service]
+        B --> C{Тип update}
+        C -->|message| D[Router сообщений]
+        C -->|callback_query| E[Обработчик кнопок]
+        C -->|не message| F[Игнор / лог]
+        
+        D --> G{Команда или текст}
+        G -->|/start, /help| H[Приветствие и справка]
+        G -->|/status| I[Handler: статус портфеля]
+        G -->|/news| J[Handler: новости/календарь]
+        G -->|/signal| K[Handler: сигналы]
+        G -->|/report| L[Handler: отчёт]
+        G -->|Текст| M[Agent: КБ + trade_kb]
+    end
+    
+    I --> N[(PostgreSQL)]
+    J --> N
+    K --> N
+    L --> N
+    M --> N
+    
+    N --> O[Ответ в Telegram]
+    H --> O
+    E --> O
+    F --> O
+    
+    style B fill:#fff9c4
+    style N fill:#e1f5ff
+```
+
+**Комментарий**: Webhook получает все типы update; основная логика — в `message`. Команды маппятся на отдельные handler'ы; произвольный текст идёт в агента с доступом к knowledge_base и trade_kb.
+
+### 10.3. Размещение компонентов: Cloud Run и сервер БД
+
+```mermaid
+flowchart TB
+    subgraph External[Внешний мир]
+        TG[Telegram]
+        CRON[Cron / Scheduler]
+    end
+    
+    subgraph GCP[Google Cloud Run]
+        BOT[LSE Bot Service<br/>webhook + handlers]
+        API[LSE API Service<br/>отчёты, статус, данные]
+    end
+    
+    subgraph Server[Отдельный сервер<br/>когда будет готов]
+        PG[(PostgreSQL<br/>lse_trading)]
+        KB[(knowledge_base<br/>trade_kb)]
+    end
+    
+    TG -->|HTTPS webhook| BOT
+    CRON -->|Вызов API или скрипт| API
+    
+    BOT --> PG
+    BOT --> KB
+    API --> PG
+    API --> KB
+    
+    style BOT fill:#fff9c4
+    style API fill:#fff9c4
+    style PG fill:#c8e6c9
+    style KB fill:#c8e6c9
+```
+
+**Комментарий**: Telegram и cron обращаются только к сервисам на Cloud Run. Postgres и обе базы знаний (таблицы в той же БД) располагаются на отдельном сервере; подключение по строке подключения (переменные окружения). Деплой сервера выполняется по той же схеме, что в проекте sc (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`).
+
+---
+
+## 11. Развёртывание (Cloud Run и сервер БД/КБ)
+
+### 11.1. Схема деплоя (аналогично sc)
+
+Развёртывание выполняется по образцу проекта **sc**: сервисы приложения — в Google Cloud Run, PostgreSQL и базы знаний — на **отдельном сервере**. Когда сервер будет готов, подключение к БД задаётся переменными окружения (например, `DATABASE_URL`).
+
+```mermaid
+flowchart LR
+    subgraph Dev[Разработка]
+        CODE[Код LSE]
+        GIT[GitHub]
+    end
+    
+    CODE --> GIT
+    
+    subgraph Deploy[Деплой]
+        GIT --> BUILD[Cloud Build<br/>Docker образ]
+        BUILD --> RUN[Cloud Run<br/>Bot + API]
+        RUN --> SERVER[Сервер: Postgres + КБ]
+    end
+    
+    style RUN fill:#fff9c4
+    style SERVER fill:#c8e6c9
+```
+
+### 11.2. Шаги деплоя (кратко)
+
+1. **Код**: ветка `main` в GitHub, актуальный код.
+2. **Cloud Run** (на локальной машине с `gcloud`):
+   - Сборка образа: `gcloud builds submit --tag gcr.io/PROJECT_ID/SERVICE_NAME`
+   - Деплой: `gcloud run deploy SERVICE_NAME --image ... --set-env-vars DATABASE_URL=...`
+   - Для бота: указать URL сервиса как webhook в Telegram Bot API.
+3. **Сервер БД** (когда будет заведён):
+   - Установить PostgreSQL с расширением pgvector.
+   - Развернуть схему и миграции LSE, заполнить при необходимости.
+   - Выдать Cloud Run сервисам доступ к серверу (VPC/белый список или Cloud SQL Proxy по необходимости).
+   - В `DATABASE_URL` указать хост этого сервера.
+
+Подробные команды и переменные окружения см. в **docs/DEPLOY_INSTRUCTIONS.md**.
+
+---
+
 ## Примечания
 
 ### Использование диаграмм
@@ -708,13 +871,15 @@ flowchart TD
 ### Связь с кодом
 
 Эти диаграммы соответствуют:
-- `analyst_agent.py` - анализ торговых сигналов
-- `execution_agent.py` - исполнение сделок
-- `init_db.py` - инициализация БД
-- `update_prices.py` - обновление цен
-- `news_importer.py` - импорт новостей
-- `report_generator.py` - генерация отчетов
-- `vector_kb.py` - векторная БЗ (планируется)
+- `analyst_agent.py` — анализ торговых сигналов
+- `execution_agent.py` — исполнение сделок
+- `init_db.py` — инициализация БД
+- `update_prices.py` — обновление цен
+- `news_importer.py` — импорт новостей
+- `report_generator.py` — генерация отчетов
+- `vector_kb.py` — векторная БЗ (планируется)
+- Telegram бот: webhook, handlers, команды `/status`, `/news`, `/signal`, `/report` (см. раздел 10)
+- Деплой: Cloud Run для Bot/API, отдельный сервер для PostgreSQL и КБ (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`)
 
 ### Обновление диаграмм
 
@@ -722,8 +887,13 @@ flowchart TD
 
 ---
 
-**Последнее обновление**: 2026-02-14  
-**Версия системы**: 1.1.0
+**Последнее обновление**: 2026-02-18  
+**Версия системы**: 1.2.0
+
+### Изменения в версии 1.2.0:
+- ✅ Добавлен раздел 10: Telegram бот-агент с webhook и маршрутизацией команд
+- ✅ Добавлен раздел 11: развёртывание на Cloud Run и отдельном сервере (Postgres + КБ), по образцу sc
+- ✅ Ссылка на `docs/DEPLOY_INSTRUCTIONS.md` для пошагового деплоя
 
 ### Изменения в версии 1.1.0:
 - ✅ Добавлен Strategy Manager для автоматического выбора стратегий

@@ -24,11 +24,13 @@
 **Сложность:** Средняя  
 **Стоимость:** $0 (бесплатные лимиты)
 
-3. ✅ **Alpha Vantage API** (Earnings Calendar + News Sentiment) ✅ РЕАЛИЗОВАНО
+3. ✅ **Alpha Vantage API** (Earnings Calendar + News Sentiment + Economic Indicators + Technical Indicators) ✅ РЕАЛИЗОВАНО
    - Бесплатный tier: 5 запросов/минуту, 500/день
    - Требует регистрацию и API ключ
    - **Файл:** `services/alphavantage_fetcher.py`
    - **Требует:** `ALPHAVANTAGE_KEY` в config.env
+   - **Economic Indicators:** CPI, GDP, Federal Funds Rate, Treasury Yield, Unemployment (сохраняются в `knowledge_base` с `event_type='ECONOMIC_INDICATOR'`)
+   - **Technical Indicators:** RSI, MACD, Bollinger Bands, ADX, Stochastic (обновляют таблицу `quotes`)
 
 4. ✅ **NewsAPI** (агрегатор новостей) ✅ РЕАЛИЗОВАНО
    - Бесплатный tier: 100 запросов/день
@@ -82,7 +84,7 @@ RSS_FEEDS = {
         'importance': 'HIGH'
     },
     'FOMC_SPEECH': {
-        'url': 'https://www.federalreserve.gov/feeds/press_speeches.xml',
+        'url': 'https://www.federalreserve.gov/feeds/speeches.xml',
         'region': 'USA',
         'event_type': 'FOMC_SPEECH',
         'importance': 'HIGH'
@@ -474,52 +476,61 @@ def fetch_newsapi_articles(api_key: str, query: str, sources: str = 'reuters,blo
 
 ---
 
-## 🔄 Автоматизация через Cron
+## 🔄 План настройки Cron для новостей
 
-**Скрипт:** `scripts/fetch_news_cron.py`
+### Вариант 1: Через общий скрипт (рекомендуется)
 
-```python
-#!/usr/bin/env python3
-"""
-Cron скрипт для автоматического получения новостей
-"""
+Задача новостей уже добавлена в `setup_cron.sh`. Запустите один раз:
 
-import sys
-from pathlib import Path
-
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-from services.rss_news_fetcher import fetch_and_save_rss_news
-import logging
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(project_root / 'logs' / 'news_fetch.log'),
-        logging.StreamHandler()
-    ]
-)
-
-if __name__ == "__main__":
-    try:
-        # RSS фиды (бесплатно, каждый час)
-        fetch_and_save_rss_news()
-        
-        # TODO: Добавить другие источники (Alpha Vantage, NewsAPI)
-        # после получения API ключей
-        
-    except Exception as e:
-        logging.error(f"Ошибка получения новостей: {e}")
-        sys.exit(1)
-```
-
-**Добавить в cron:**
 ```bash
-# Обновление новостей каждый час
-0 * * * * cd /home/cnn/lse && /usr/bin/python3 scripts/fetch_news_cron.py >> logs/news_cron.log 2>&1
+cd /home/cnn/lse
+./setup_cron.sh
 ```
+
+Будет установлено:
+- **Обновление цен:** ежедневно в 22:00
+- **Торговый цикл:** 9:00, 13:00, 17:00 (пн–пт)
+- **Новости:** каждый час в :00 (RSS, NewsAPI, Alpha Vantage)
+
+Лог новостей: `logs/news_fetch.log`
+
+### Вариант 2: Добавить только новости вручную
+
+```bash
+crontab -e
+```
+
+Добавьте строку (подставьте свой путь к проекту и python):
+
+```bash
+# Новости LSE — каждый час
+0 * * * * cd /home/cnn/lse && /usr/bin/python3 scripts/fetch_news_cron.py >> /home/cnn/lse/logs/news_fetch.log 2>&1
+```
+
+Если используете conda env **py11** (для feedparser), укажите полный путь к python этого окружения:
+
+```bash
+0 * * * * cd /home/cnn/lse && /path/to/anaconda3/envs/py11/bin/python scripts/fetch_news_cron.py >> /home/cnn/lse/logs/news_fetch.log 2>&1
+```
+
+Узнать путь: `conda activate py11 && which python`
+
+### Проверка
+
+```bash
+# Список задач
+crontab -l
+
+# Ручной запуск (тест)
+cd /home/cnn/lse && python3 scripts/fetch_news_cron.py
+
+# Просмотр лога
+tail -f logs/news_fetch.log
+```
+
+### Скрипт
+
+**Файл:** `scripts/fetch_news_cron.py` — по очереди вызывает RSS, Investing.com, Alpha Vantage, NewsAPI и пишет результат в БД и в лог.
 
 ---
 
@@ -532,7 +543,7 @@ if __name__ == "__main__":
 - [ ] Запустить миграцию (требуется выполнение)
 - [ ] Протестировать парсинг RSS фидов (требуется тестирование)
 - [ ] Сохранить тестовые новости в БД (требуется тестирование)
-- [ ] Добавить cron задачу для автоматического обновления (требуется настройка)
+- [x] Добавить cron задачу для автоматического обновления ✅ (через ./setup_cron.sh)
 
 ### Фаза 2 (API источники) - 2-3 дня ✅ ВЫПОЛНЕНО
 - [ ] Зарегистрироваться в Alpha Vantage, получить API ключ (требуется регистрация)
@@ -585,8 +596,13 @@ if __name__ == "__main__":
 
 3. **Alpha Vantage API** ✅
    - Файл: `services/alphavantage_fetcher.py`
-   - Поддерживает: Earnings Calendar, News Sentiment
+   - Поддерживает: 
+     - Earnings Calendar (сохраняется в `knowledge_base`)
+     - News Sentiment (сохраняется в `knowledge_base` с sentiment_score)
+     - Economic Indicators: CPI, GDP, Federal Funds Rate, Treasury Yield, Unemployment (сохраняются в `knowledge_base` с `event_type='ECONOMIC_INDICATOR'`)
+     - Technical Indicators: RSI, MACD, Bollinger Bands, ADX, Stochastic (обновляют таблицу `quotes`)
    - Требует: `ALPHAVANTAGE_KEY` в config.env
+   - Настройки: `ALPHAVANTAGE_FETCH_ECONOMIC=true`, `ALPHAVANTAGE_FETCH_TECHNICAL=true` (в config.env)
 
 4. **NewsAPI** ✅
    - Файл: `services/newsapi_fetcher.py`
@@ -640,26 +656,68 @@ if __name__ == "__main__":
    python scripts/fetch_news_cron.py
    ```
 
-5. **Настроить cron (опционально):**
+5. **Настроить cron:**
    ```bash
-   # Добавить в crontab (каждый час)
-   0 * * * * cd /home/cnn/lse && /usr/bin/python3 scripts/fetch_news_cron.py >> logs/news_cron.log 2>&1
+   ./setup_cron.sh
    ```
+   Задача новостей (каждый час) входит в скрипт. См. раздел «План настройки Cron для новостей» выше.
 
 ### 📊 Что осталось сделать
 
 - [x] Настроить API ключ для NewsAPI ✅ (добавлен в config.env)
-- [ ] Протестировать все модули с реальными данными (см. [NEWS_TESTING_STATUS.md](NEWS_TESTING_STATUS.md))
-- [ ] Настроить API ключ для Alpha Vantage
+- [x] Протестировать модули (RSS, NewsAPI, Alpha Vantage работают) ✅
+- [x] Настроить API ключ для Alpha Vantage ✅
 - [ ] Добавить обработку ошибок и retry логику
-- [ ] Настроить cron для автоматического обновления
+- [x] Настроить cron: запустить `./setup_cron.sh` — задача новостей добавлена (каждый час)
 - [ ] Интегрировать с LLM для анализа impact (см. NEWS_INTEGRATION_PLAN.md)
 
 ### 🧪 Статус тестирования
 
 См. [NEWS_TESTING_STATUS.md](NEWS_TESTING_STATUS.md) для детального плана тестирования каждого скрипта.
 
+### 🧪 Как протестировать изменения (после правок)
+
+Из корня проекта (`~/lse`), с активированным окружением (например `conda activate py11`):
+
+1. **Всё сразу (как в cron):**
+   ```bash
+   python scripts/fetch_news_cron.py
+   ```
+   Логи пишутся в консоль и в `logs/news_fetch.log`.
+
+2. **Только Alpha Vantage** (earnings + новости + экономические + технические индикаторы):
+   ```bash
+   python services/alphavantage_fetcher.py
+   ```
+   Используются тикеры `MSFT`, `SNDK`, `MU`. Проверьте в логах: количество сохранённых earnings, полученные экономические индикаторы, обновление технических в `quotes`.
+
+3. **Только Investing.com календарь:**
+   ```bash
+   python services/investing_calendar_parser.py
+   ```
+   Если таблица не найдена, можно сохранить HTML для разбора:
+   ```bash
+   INVESTING_CALENDAR_DEBUG_HTML=1 python services/investing_calendar_parser.py
+   ```
+   Файлы появятся в `/tmp/investing_calendar_USA.html` и т.д.
+
+4. **По одному источнику через общий скрипт:**
+   ```bash
+   ./test_all_news_sources.sh
+   ```
+   По очереди запускает RSS, Investing.com, NewsAPI, Alpha Vantage.
+
+5. **Проверка БД после теста:**
+   ```bash
+   # Последние записи в knowledge_base (новости, earnings, экономические индикаторы)
+   psql $DATABASE_URL -c "SELECT ts, ticker, source, event_type, LEFT(content, 60) FROM knowledge_base ORDER BY ts DESC LIMIT 15;"
+   
+   # Технические индикаторы в quotes (RSI, MACD и т.д.)
+   psql $DATABASE_URL -c "SELECT date, ticker, rsi, macd, adx FROM quotes WHERE rsi IS NOT NULL ORDER BY date DESC LIMIT 10;"
+   ```
+   (Подставьте свою `DATABASE_URL` или используйте переменную из `config.env`.)
+
 ---
 
-**Статус:** Код реализован, готов к тестированию  
+**Статус:** Реализовано и протестировано; cron настраивается через `./setup_cron.sh`  
 **Последнее обновление:** 2026-02-19

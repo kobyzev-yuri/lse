@@ -338,7 +338,7 @@ def get_earnings_date(ticker):
 #### Federal Reserve RSS Feeds
 **URLs:**
 - FOMC Statements: `https://www.federalreserve.gov/feeds/press_all.xml`
-- Speeches: `https://www.federalreserve.gov/feeds/press_speeches.xml`
+- Speeches: `https://www.federalreserve.gov/feeds/speeches.xml`
 - Minutes: `https://www.federalreserve.gov/feeds/fomcminutes.xml`
 
 **Подключение:**
@@ -355,7 +355,7 @@ def fetch_fed_rss(feed_type='statements'):
     """
     feeds = {
         'statements': 'https://www.federalreserve.gov/feeds/press_all.xml',
-        'speeches': 'https://www.federalreserve.gov/feeds/press_speeches.xml',
+        'speeches': 'https://www.federalreserve.gov/feeds/speeches.xml',
         'minutes': 'https://www.federalreserve.gov/feeds/fomcminutes.xml'
     }
     
