@@ -1,0 +1,74 @@
+{
+  "_comment": "Пример конфигурации risk limits для компании. Скопируйте в risk_limits.json и заполните реальными значениями. Файл НЕ попадает в git.",
+  
+  "company_info": {
+    "name": "Your Company Name",
+    "broker": "Swiss Bank Name",
+    "exchange": "NYSE",
+    "account_type": "institutional",
+    "last_updated": "2026-02-19"
+  },
+  
+  "risk_capacity": {
+    "total_capital_usd": 1000000.0,
+    "max_position_size_usd": 100000.0,
+    "max_portfolio_exposure_percent": 80.0,
+    "max_single_ticker_exposure_percent": 20.0,
+    "max_daily_loss_usd": 50000.0,
+    "max_daily_loss_percent": 5.0,
+    "max_drawdown_percent": 15.0
+  },
+  
+  "position_limits": {
+    "max_positions_open": 10,
+    "min_position_size_usd": 1000.0,
+    "max_position_concentration_percent": 20.0,
+    "max_sector_exposure_percent": 30.0
+  },
+  
+  "risk_parameters": {
+    "stop_loss_percent": 5.0,
+    "take_profit_percent": 10.0,
+    "max_leverage": 1.0,
+    "max_correlation_exposure": 0.7,
+    "volatility_limit_percent": 30.0
+  },
+  
+  "broker_limits": {
+    "swiss_bank_name": {
+      "min_trade_size_usd": 1000.0,
+      "max_trade_size_usd": 500000.0,
+      "commission_rate": 0.001,
+      "margin_requirement_percent": 50.0,
+      "settlement_days": 2,
+      "currency": "USD"
+    }
+  },
+  
+  "exchange_requirements": {
+    "NYSE": {
+      "trading_hours_utc": {
+        "open": "13:30",
+        "close": "20:00"
+      },
+      "pre_market_open": "09:00",
+      "after_hours_close": "22:00",
+      "timezone": "America/New_York"
+    }
+  },
+  
+  "compliance_rules": {
+    "restricted_tickers": [],
+    "restricted_sectors": [],
+    "max_daily_trades": 50,
+    "wash_sale_window_days": 30,
+    "pattern_day_trader_limit": false
+  },
+  
+  "risk_monitoring": {
+    "check_risk_before_trade": true,
+    "alert_on_limit_breach": true,
+    "auto_reduce_on_limit": false,
+    "risk_check_frequency_minutes": 15
+  }
+}

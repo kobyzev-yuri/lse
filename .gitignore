@@ -2,7 +2,8 @@
 config.env
 
 # Локальные данные о risk limits и capacity (не публикуем в git)
-local/
+local/risk_limits.json
+local/*.risk.json
 risk_config/
 risk_limits.json
 risk_limits.env
