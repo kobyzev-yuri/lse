@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, text
 
 from analyst_agent import AnalystAgent
 from config_loader import get_database_url
+from utils.risk_manager import get_risk_manager
 
 
 logging.basicConfig(
@@ -43,8 +44,10 @@ class ExecutionAgent:
         self.db_url = get_database_url()
         self.engine = create_engine(self.db_url)
         self.analyst = AnalystAgent()
+        self.risk_manager = get_risk_manager()
 
         logger.info("✅ ExecutionAgent инициализирован, подключение к БД установлено")
+        logger.info(f"   Risk Manager: загружены лимиты из {self.risk_manager.config_path}")
         self._ensure_portfolio_initialized()
 
     # ---------- Инициализация БД ----------
@@ -115,6 +118,25 @@ class ExecutionAgent:
                 conn,
             )
         return df
+    
+    def _get_current_portfolio_exposure(self) -> float:
+        """
+        Вычисляет текущую экспозицию портфеля в USD
+        
+        Returns:
+            Текущая экспозиция в USD
+        """
+        positions = self._get_open_positions()
+        if positions.empty:
+            return 0.0
+        
+        total_exposure = 0.0
+        for _, pos in positions.iterrows():
+            current_price = self._get_current_price(pos['ticker'])
+            if current_price:
+                total_exposure += pos['quantity'] * current_price
+        
+        return total_exposure
 
     def _get_position(self, ticker: str) -> Position | None:
         """Получает информацию о позиции по тикеру."""
@@ -200,9 +222,20 @@ class ExecutionAgent:
             logger.warning("⚠️ Нет котировок для %s, покупка невозможна", ticker)
             return
 
-        # Размер позиции: 10% от доступного кэша
+        # Проверка торговых часов NYSE (если настроено)
+        if not self.risk_manager.is_trading_hours():
+            logger.warning("⚠️ Вне торговых часов NYSE, покупка %s пропущена", ticker)
+            return
+
         cash = self._get_cash()
-        allocation = cash * 0.10
+        
+        # Получаем максимальный размер позиции из risk limits
+        max_position_size = self.risk_manager.get_max_position_size(ticker)
+        
+        # Размер позиции: минимум из 10% кэша и максимального лимита
+        allocation_percent = min(0.10, self.risk_manager.get_max_single_ticker_exposure() / 100.0)
+        allocation = min(cash * allocation_percent, max_position_size)
+        
         if allocation <= 0:
             logger.warning("⚠️ Нет свободного кэша для покупки %s", ticker)
             return
@@ -220,6 +253,21 @@ class ExecutionAgent:
         notional = quantity * current_price
         commission = notional * COMMISSION_RATE
         total_cost = notional + commission
+
+        # Проверка risk limits перед покупкой
+        is_valid, error_msg = self.risk_manager.check_position_size(notional, ticker)
+        if not is_valid:
+            logger.warning(f"⚠️ Risk limit нарушен для {ticker}: {error_msg}")
+            return
+        
+        # Проверка экспозиции портфеля
+        current_exposure = self._get_current_portfolio_exposure()
+        is_valid_exposure, exposure_error = self.risk_manager.check_portfolio_exposure(
+            current_exposure, notional
+        )
+        if not is_valid_exposure:
+            logger.warning(f"⚠️ Экспозиция портфеля превышена: {exposure_error}")
+            return
 
         if total_cost > cash:
             logger.warning(

@@ -1,6 +1,14 @@
 # Конфигурационные файлы с секретами
 config.env
 
+# Локальные данные о risk limits и capacity (не публикуем в git)
+local/
+risk_config/
+risk_limits.json
+risk_limits.env
+*.risk.json
+*.risk.env
+
 # Python
 __pycache__/
 *.py[cod]
