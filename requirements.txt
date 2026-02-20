@@ -10,12 +10,16 @@ pgvector>=0.2.0
 
 # LLM и AI
 openai>=1.0.0  # Для работы с LLM через proxyapi.ru
+sentence-transformers>=2.2.0  # Для локальной генерации embeddings (бесплатно)
 
 # Веб-интерфейс
 fastapi>=0.104.0
 uvicorn>=0.24.0  # ASGI сервер для FastAPI
 jinja2>=3.1.0  # Для шаблонов
 python-multipart>=0.0.6  # Для загрузки файлов
+
+# Telegram Bot
+python-telegram-bot>=20.0  # Telegram Bot API
 
 # Парсинг и веб-скрапинг
 requests>=2.31.0  # HTTP запросы (Finviz, Investing.com, NewsAPI, Alpha Vantage)

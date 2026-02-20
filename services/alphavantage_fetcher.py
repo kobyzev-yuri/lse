@@ -920,12 +920,11 @@ def fetch_and_save_alphavantage_data(tickers: List[str] = None):
 
 def fetch_economic_indicators(api_key: str) -> List[Dict]:
     """
-    Получает основные экономические индикаторы США
-    
-    Returns:
-        Список всех индикаторов
+    Получает основные экономические индикаторы США.
+    Между запросами пауза 1 сек (лимит бесплатного плана: 1 запрос/сек).
     """
     indicators = []
+    delay = max(1.0, float(os.environ.get('ALPHAVANTAGE_MIN_DELAY_SEC', '1.0')))
     
     # CPI (Consumer Price Index) - monthly
     logger.info("📊 Получение CPI...")
@@ -936,6 +935,7 @@ def fetch_economic_indicators(api_key: str) -> List[Dict]:
     else:
         logger.warning("   ⚠️ CPI: данные не получены")
     
+    time.sleep(delay)
     # REAL_GDP - quarterly
     logger.info("📊 Получение GDP...")
     gdp_data = fetch_economic_indicator(api_key, 'REAL_GDP', interval='quarterly')
@@ -945,6 +945,7 @@ def fetch_economic_indicators(api_key: str) -> List[Dict]:
     else:
         logger.warning("   ⚠️ GDP: данные не получены")
     
+    time.sleep(delay)
     # Federal Funds Rate - monthly
     logger.info("📊 Получение Federal Funds Rate...")
     fed_rate_data = fetch_economic_indicator(api_key, 'FEDERAL_FUNDS_RATE', interval='monthly')
@@ -954,6 +955,7 @@ def fetch_economic_indicators(api_key: str) -> List[Dict]:
     else:
         logger.warning("   ⚠️ Fed Rate: данные не получены")
     
+    time.sleep(delay)
     # Treasury Yield (10-year) - monthly
     logger.info("📊 Получение Treasury Yield...")
     treasury_data = fetch_economic_indicator(api_key, 'TREASURY_YIELD', interval='monthly')
@@ -963,6 +965,7 @@ def fetch_economic_indicators(api_key: str) -> List[Dict]:
     else:
         logger.warning("   ⚠️ Treasury Yield: данные не получены")
     
+    time.sleep(delay)
     # Unemployment - monthly
     logger.info("📊 Получение Unemployment...")
     unemployment_data = fetch_economic_indicator(api_key, 'UNEMPLOYMENT', interval='monthly')
@@ -1047,7 +1050,14 @@ def fetch_all_alphavantage_data(tickers: List[str] = None, include_economic: boo
     
     logger.info("🚀 Начало получения всех данных из Alpha Vantage")
     
+    # Бесплатный план: 1 запрос/сек, 25 запросов/день. Часть эндпоинтов (напр. MACD) — премиум.
+    min_delay = float(os.environ.get('ALPHAVANTAGE_MIN_DELAY_SEC', '1.0'))
+    
+    def _rate_limit():
+        time.sleep(min_delay)
+    
     # 1. Earnings Calendar
+    _rate_limit()
     logger.info("📅 Получение Earnings Calendar...")
     earnings = fetch_earnings_calendar(api_key)
     if earnings:
@@ -1055,21 +1065,24 @@ def fetch_all_alphavantage_data(tickers: List[str] = None, include_economic: boo
     
     # 2. Новости (если указаны тикеры)
     if tickers:
+        _rate_limit()
         tickers_str = ','.join(tickers[:5])
         logger.info(f"📰 Получение новостей для тикеров: {tickers_str}...")
         news = fetch_news_sentiment(api_key, tickers_str)
         if news:
             save_news_to_db(news)
     
-    # 3. Экономические индикаторы
+    # 3. Экономические индикаторы (много запросов — на бесплатном плане лучше выключить)
     if include_economic:
+        _rate_limit()
         logger.info("📊 Получение экономических индикаторов...")
         economic_indicators = fetch_economic_indicators(api_key)
         if economic_indicators:
             save_economic_indicators_to_db(economic_indicators)
     
-    # 4. Технические индикаторы (если указаны тикеры)
+    # 4. Технические индикаторы (часть — премиум; на бесплатном плане лучше выключить)
     if include_technical and tickers:
+        _rate_limit()
         logger.info("📈 Получение технических индикаторов...")
         technical_indicators = fetch_technical_indicators_for_tickers(api_key, tickers[:3])  # Ограничиваем до 3 из-за лимитов
         if technical_indicators:

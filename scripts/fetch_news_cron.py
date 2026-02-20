@@ -70,9 +70,10 @@ def fetch_all_news_sources():
         tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
         tickers = [t.strip() for t in tickers_str.split(',')]
         
-        # Получаем настройки для индикаторов из конфига
-        include_economic = get_config_value('ALPHAVANTAGE_FETCH_ECONOMIC', 'true').lower() == 'true'
-        include_technical = get_config_value('ALPHAVANTAGE_FETCH_TECHNICAL', 'true').lower() == 'true'
+        # По умолчанию выключено: бесплатный план Alpha Vantage — 25 запросов/день и 1 запрос/сек;
+        # экономические и технические индикаторы быстро сжигают лимит. Включите в config.env при необходимости.
+        include_economic = get_config_value('ALPHAVANTAGE_FETCH_ECONOMIC', 'false').lower() == 'true'
+        include_technical = get_config_value('ALPHAVANTAGE_FETCH_TECHNICAL', 'false').lower() == 'true'
         
         fetch_all_alphavantage_data(
             tickers=tickers,

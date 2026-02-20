@@ -265,12 +265,27 @@ def fetch_all_regions_calendar() -> List[Dict]:
     return all_events
 
 
+def _is_calendar_content_worth_saving(content: str, event_name: str) -> bool:
+    """
+    Решает, имеет ли смысл сохранять запись календаря в knowledge_base.
+    Не сохраняем «шум»: только число (19.60M), без названия события или без текста.
+    """
+    if not content or not content.strip():
+        return False
+    text = content.strip()
+    if len(text) < 25:
+        return False
+    if not event_name or len(event_name.strip()) < 3:
+        return False
+    if " " not in text:
+        return False
+    return True
+
+
 def save_events_to_db(events: List[Dict]):
     """
-    Сохраняет события календаря в БД
-    
-    Args:
-        events: Список событий
+    Сохраняет события календаря в БД.
+    Записи без осмысленного текста (только число вроде 19.60M) не сохраняются.
     """
     if not events:
         return
@@ -280,6 +295,7 @@ def save_events_to_db(events: List[Dict]):
     
     saved_count = 0
     skipped_count = 0
+    skipped_noise = 0
     
     with engine.begin() as conn:
         for event in events:
@@ -292,6 +308,10 @@ def save_events_to_db(events: List[Dict]):
                     content += f"\nPrevious: {event['previous']}"
                 if event.get('actual'):
                     content += f"\nActual: {event['actual']}"
+                
+                if not _is_calendar_content_worth_saving(content, event.get('event') or ''):
+                    skipped_noise += 1
+                    continue
                 
                 # Определяем ticker
                 ticker = 'US_MACRO' if event['region'] == 'USA' else 'MACRO'
@@ -339,7 +359,10 @@ def save_events_to_db(events: List[Dict]):
             except Exception as e:
                 logger.error(f"❌ Ошибка при сохранении события: {e}")
     
-    logger.info(f"✅ Сохранено {saved_count} событий, пропущено дубликатов: {skipped_count}")
+    logger.info(
+        f"✅ Сохранено {saved_count} событий, пропущено дубликатов: {skipped_count}, "
+        f"пропущено без текста: {skipped_noise}"
+    )
     engine.dispose()
 
 

@@ -161,13 +161,29 @@ class LLMService:
             for news in news_data[:5]  # Берем топ-5 новостей
         ])
         
+        # Форматируем RSI с интерпретацией
+        rsi_value = technical_data.get('rsi')
+        rsi_text = ""
+        if rsi_value is not None:
+            if rsi_value >= 70:
+                rsi_status = "перекупленность"
+            elif rsi_value <= 30:
+                rsi_status = "перепроданность"
+            elif rsi_value >= 60:
+                rsi_status = "близко к перекупленности"
+            elif rsi_value <= 40:
+                rsi_status = "близко к перепроданности"
+            else:
+                rsi_status = "нейтральная зона"
+            rsi_text = f"\n- RSI: {rsi_value:.1f} ({rsi_status})"
+        
         user_message = f"""Анализ для тикера {ticker}:
 
 Технические данные:
 - Текущая цена: {technical_data.get('close', 'N/A')}
 - SMA_5: {technical_data.get('sma_5', 'N/A')}
 - Волатильность (5 дней): {technical_data.get('volatility_5', 'N/A')}
-- Средняя волатильность (20 дней): {technical_data.get('avg_volatility_20', 'N/A')}
+- Средняя волатильность (20 дней): {technical_data.get('avg_volatility_20', 'N/A')}{rsi_text}
 - Технический сигнал: {technical_data.get('technical_signal', 'N/A')}
 
 Sentiment анализ:

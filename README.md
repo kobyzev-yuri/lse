@@ -19,7 +19,7 @@ python web_app.py
 ## 📋 Основные возможности
 
 - ✅ **Автоматический анализ** - технические индикаторы + sentiment анализ новостей
-- ✅ **Strategy Manager** - автоматический выбор стратегии (Momentum, Mean Reversion, Volatile Gap)
+- ✅ **Strategy Manager** - автоматический выбор стратегии (Momentum, Mean Reversion, Volatile Gap, Neutral)
 - ✅ **LLM интеграция** - анализ через GPT-4o (proxyapi.ru)
 - ✅ **Бэктестинг** - симуляция торговли на исторических данных
 - ✅ **Веб-интерфейс** - управление торговлей, базой знаний, визуализация
@@ -30,10 +30,9 @@ python web_app.py
 ```
 AnalystAgent → Strategy Manager → ExecutionAgent → PostgreSQL
      ↓              ↓                    ↓
-  LLM Service  3 стратегии        trade_history
-  Sentiment    (Momentum,          portfolio_state
-  Analysis     MeanReversion,
-               VolatileGap)
+  LLM Service  4 стратегии        trade_history
+  Sentiment    (Momentum, Mean     portfolio_state
+  Analysis     Reversion, VolatileGap, Neutral)
 ```
 
 ## 📊 Тикеры по умолчанию

@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 from strategies.momentum_strategy import MomentumStrategy
 from strategies.mean_reversion_strategy import MeanReversionStrategy
 from strategies.volatile_gap_strategy import VolatileGapStrategy
+from strategies.neutral_strategy import NeutralStrategy
 from strategies.base_strategy import BaseStrategy
 
 logger = logging.getLogger(__name__)
@@ -109,8 +110,12 @@ class StrategyManager:
                 logger.info(f"✅ Выбрана стратегия: {strategy.name} (fallback)")
                 return strategy
         
-        logger.warning("⚠️ Ни одна стратегия не подходит для текущих условий")
-        return None
+        # 5. Нейтральный режим: ни одна стратегия не подошла — консервативный HOLD
+        default_strategy = NeutralStrategy()
+        logger.info(
+            f"📋 Условия не подходят ни под одну стратегию → используется {default_strategy.name} (удержание)"
+        )
+        return default_strategy
     
     def _get_strategy_by_name(self, name: str) -> Optional[BaseStrategy]:
         """Возвращает стратегию по имени"""

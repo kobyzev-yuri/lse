@@ -25,7 +25,7 @@
 **Стоимость:** $0 (бесплатные лимиты)
 
 3. ✅ **Alpha Vantage API** (Earnings Calendar + News Sentiment + Economic Indicators + Technical Indicators) ✅ РЕАЛИЗОВАНО
-   - Бесплатный tier: 5 запросов/минуту, 500/день
+   - Бесплатный tier: 1 запрос/сек, ~25 запросов/день (часть эндпоинтов — премиум)
    - Требует регистрацию и API ключ
    - **Файл:** `services/alphavantage_fetcher.py`
    - **Требует:** `ALPHAVANTAGE_KEY` в config.env
@@ -602,7 +602,8 @@ tail -f logs/news_fetch.log
      - Economic Indicators: CPI, GDP, Federal Funds Rate, Treasury Yield, Unemployment (сохраняются в `knowledge_base` с `event_type='ECONOMIC_INDICATOR'`)
      - Technical Indicators: RSI, MACD, Bollinger Bands, ADX, Stochastic (обновляют таблицу `quotes`)
    - Требует: `ALPHAVANTAGE_KEY` в config.env
-   - Настройки: `ALPHAVANTAGE_FETCH_ECONOMIC=true`, `ALPHAVANTAGE_FETCH_TECHNICAL=true` (в config.env)
+   - **Бесплатный план:** 1 запрос/сек, ~25 запросов/день. Часть эндпоинтов (например MACD) — только премиум. По умолчанию экономические и технические индикаторы в cron **выключены** (`ALPHAVANTAGE_FETCH_ECONOMIC=false`, `ALPHAVANTAGE_FETCH_TECHNICAL=false`), чтобы не сжигать лимит. Включите в config.env при необходимости или при премиум-подписке.
+   - Настройки: `ALPHAVANTAGE_FETCH_ECONOMIC`, `ALPHAVANTAGE_FETCH_TECHNICAL`, `ALPHAVANTAGE_MIN_DELAY_SEC=1.0`
 
 4. **NewsAPI** ✅
    - Файл: `services/newsapi_fetcher.py`
@@ -632,11 +633,28 @@ tail -f logs/news_fetch.log
 3. **Получить API ключи (опционально):**
    - Alpha Vantage: https://www.alphavantage.co/support/#api-key
    - NewsAPI: https://newsapi.org/register
-   - Добавить в `config.env`:
+   - Добавить в `config.env` (ключ не коммитить в репозиторий):
      ```env
      ALPHAVANTAGE_KEY=your_key_here
      NEWSAPI_KEY=your_key_here
      ```
+
+   **Alpha Vantage — полный пример настроек в config.env:**
+   - Бесплатный план: 1 запрос/сек, ~25 запросов/день. Часть эндпоинтов (MACD и др.) — премиум.
+   - Рекомендуется задать минимум задержки между запросами и при необходимости отключить экономические/технические индикаторы.
+   ```env
+   # Alpha Vantage (Earnings + News Sentiment; Economic/Technical — опционально, сжигают лимит)
+   ALPHAVANTAGE_KEY=your_key_here
+   ALPHAVANTAGE_FETCH_ECONOMIC=false
+   ALPHAVANTAGE_FETCH_TECHNICAL=false
+   ALPHAVANTAGE_MIN_DELAY_SEC=1.0
+   ALPHAVANTAGE_TIMEOUT=90
+   ALPHAVANTAGE_MAX_RETRIES=3
+   ALPHAVANTAGE_RETRY_DELAY=10
+   ALPHAVANTAGE_DELAY_AFTER_ERROR=15
+   ALPHAVANTAGE_DELAY_BETWEEN_TICKERS=15
+   ALPHAVANTAGE_DELAY_BETWEEN_INDICATORS=13
+   ```
 
 4. **Протестировать парсинг:**
    ```bash

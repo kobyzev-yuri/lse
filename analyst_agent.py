@@ -204,6 +204,7 @@ class AnalystAgent:
         close = float(latest['close'])
         sma_5 = float(latest['sma_5'])
         volatility_5 = float(latest['volatility_5'])
+        rsi = float(latest['rsi']) if pd.notna(latest.get('rsi')) else None
         
         avg_volatility_20 = self.get_average_volatility_20_days(ticker)
         
@@ -212,18 +213,34 @@ class AnalystAgent:
         logger.info(f"   SMA_5: {sma_5:.2f}")
         logger.info(f"   Volatility_5: {volatility_5:.4f}")
         logger.info(f"   Avg Volatility 20: {avg_volatility_20:.4f}")
+        if rsi is not None:
+            rsi_status = "перекупленность" if rsi >= 70 else ("перепроданность" if rsi <= 30 else "нейтральная зона")
+            logger.info(f"   RSI: {rsi:.1f} ({rsi_status})")
+        else:
+            logger.info(f"   RSI: N/A")
         
         # Проверка условий
         condition1 = close > sma_5
         condition2 = volatility_5 < avg_volatility_20 if avg_volatility_20 > 0 else False
         
+        # Учитываем RSI: перепроданность (RSI < 30) усиливает BUY, перекупленность (RSI > 70) ослабляет
+        rsi_factor = 1.0
+        if rsi is not None:
+            if rsi <= 30:
+                rsi_factor = 1.2  # Усиливаем сигнал при перепроданности
+                logger.info(f"   RSI указывает на перепроданность - усиление BUY сигнала")
+            elif rsi >= 70:
+                rsi_factor = 0.5  # Ослабляем сигнал при перекупленности
+                logger.info(f"   RSI указывает на перекупленность - ослабление BUY сигнала")
+        
         logger.info(f"🔍 Условия технического сигнала:")
         logger.info(f"   Close > SMA_5: {condition1} ({close:.2f} > {sma_5:.2f})")
         logger.info(f"   Volatility_5 < Avg_Vol_20: {condition2} ({volatility_5:.4f} < {avg_volatility_20:.4f})")
+        logger.info(f"   RSI фактор: {rsi_factor:.2f}")
         
         if condition1 and condition2:
             signal = "BUY"
-            logger.info(f"✅ Технический сигнал: {signal}")
+            logger.info(f"✅ Технический сигнал: {signal} (RSI фактор: {rsi_factor:.2f})")
         else:
             signal = "HOLD"
             logger.info(f"⚠️  Технический сигнал: {signal}")
@@ -248,7 +265,7 @@ class AnalystAgent:
         with self.engine.connect() as conn:
             # Ищем в knowledge_base (там есть sentiment_score; insight может отсутствовать в старых схемах)
             query = text("""
-                SELECT id, ts, ticker, source, content, sentiment_score
+                SELECT id, ts, ticker, source, content, sentiment_score, event_type, insight, link
                 FROM knowledge_base
                 WHERE (ticker = :ticker OR ticker = 'MACRO' OR ticker = 'US_MACRO')
                   AND ts >= :cutoff_time
@@ -276,6 +293,11 @@ class AnalystAgent:
             
             # Объединяем отфильтрованные результаты
             df = pd.concat([macro_filtered, ticker_filtered]).drop_duplicates(subset=['id']).reset_index(drop=True)
+            
+            # Сортируем: сначала NEWS и EARNINGS, потом остальное (ECONOMIC_INDICATOR в конец)
+            order_map = {'NEWS': 0, 'EARNINGS': 1}
+            df['_sort_order'] = df['event_type'].map(order_map).fillna(2).astype(int)
+            df = df.sort_values(by=['_sort_order', 'ts'], ascending=[True, False]).drop(columns=['_sort_order'], errors='ignore')
             
             logger.info(f"   После фильтрации по типу события: {len(df)} новостей")
             logger.info(f"   - Макро-новости (72ч): {len(macro_filtered)}")
@@ -313,7 +335,7 @@ class AnalystAgent:
         news_df['weight'] = news_df.apply(calculate_weight, axis=1)
         
         # Новости без sentiment (RSS, NewsAPI) считаем нейтральными (0.5), чтобы не ломать расчёт
-        sentiment_series = news_df['sentiment_score'].fillna(0.5)
+        sentiment_series = news_df['sentiment_score'].fillna(0.5).astype(float)
         
         # Вычисляем взвешенный средний sentiment
         weighted_sum = (sentiment_series * news_df['weight']).sum()
@@ -325,10 +347,25 @@ class AnalystAgent:
         logger.info(f"   Новостей с упоминанием тикера (weight=2.0): {len(news_df[news_df['weight'] == 2.0])}")
         logger.info(f"   Макро-новостей (weight=1.0): {len(news_df[news_df['weight'] == 1.0])}")
         
-        for idx, row in news_df.iterrows():
+        # Логируем только первые 10 новостей для краткости (или все, если их меньше 10)
+        max_log_news = min(10, len(news_df))
+        for idx, row in news_df.head(max_log_news).iterrows():
             ticker_mentioned = ticker.upper() in str(row['content']).upper() or row['ticker'] == ticker
-            logger.info(f"   [{row['ts']}] Weight={row['weight']:.1f}, Sentiment={row['sentiment_score']:.2f}, "
-                       f"Ticker mentioned: {ticker_mentioned}")
+            # Безопасная обработка sentiment_score (может быть None, NaN или числом)
+            sentiment_val = row['sentiment_score']
+            if pd.isna(sentiment_val) or sentiment_val is None:
+                sentiment_str = "None"
+            else:
+                try:
+                    sentiment_str = f"{float(sentiment_val):.2f}"
+                except (ValueError, TypeError):
+                    sentiment_str = "None"
+            content_preview = str(row['content'])[:50] + "..." if len(str(row['content'])) > 50 else str(row['content'])
+            logger.info(f"   [{row['ts']}] Weight={row['weight']:.1f}, Sentiment={sentiment_str}, "
+                       f"Ticker mentioned: {ticker_mentioned}, Content: {content_preview}")
+        
+        if len(news_df) > max_log_news:
+            logger.info(f"   ... и еще {len(news_df) - max_log_news} новостей (показаны только первые {max_log_news})")
         
         logger.info(f"   Взвешенный средний sentiment (0.0-1.0): {weighted_sentiment:.3f}")
         
@@ -507,12 +544,14 @@ class AnalystAgent:
         df = self.get_last_5_days_quotes(ticker)
         latest = df.iloc[0] if not df.empty else None
         avg_volatility_20 = self.get_average_volatility_20_days(ticker)
+        rsi_value = float(latest['rsi']) if latest is not None and pd.notna(latest.get('rsi')) else None
         
         technical_data = {
             "close": float(latest['close']) if latest is not None else None,
             "sma_5": float(latest['sma_5']) if latest is not None else None,
             "volatility_5": float(latest['volatility_5']) if latest is not None else None,
             "avg_volatility_20": avg_volatility_20,
+            "rsi": rsi_value,
             "technical_signal": technical_signal
         }
         
