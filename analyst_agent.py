@@ -529,6 +529,13 @@ class AnalystAgent:
         logger.info(f"🎯 Расширенный анализ для тикера: {ticker} (с LLM)")
         logger.info(f"=" * 60)
         
+        # При отсутствии RSI в БД — считаем локально по close (валюты/товары, без Finviz/Alpha Vantage)
+        try:
+            from services.rsi_calculator import get_or_compute_rsi
+            get_or_compute_rsi(self.engine, ticker)
+        except Exception as e:
+            logger.debug(f"Локальный RSI для {ticker}: {e}")
+        
         # Базовый анализ
         technical_signal = self.check_technical_signal(ticker)
         if technical_signal == "NO_DATA":
@@ -626,13 +633,6 @@ class AnalystAgent:
             try:
                 logger.info("\n🤖 ШАГ 3: LLM анализ торговой ситуации")
                 
-                # Получаем LLM guidance для выбора стратегии
-                llm_guidance = self.get_llm_guidance(
-                    ticker=ticker,
-                    tech_data=technical_data,
-                    news_context=news_list
-                )
-                
                 # Для LLM используем sentiment в шкале 0.0-1.0 (конвертируем обратно)
                 sentiment_for_llm = denormalize_sentiment(weighted_sentiment) if SENTIMENT_UTILS_AVAILABLE else weighted_sentiment
                 if sentiment_for_llm < 0 or sentiment_for_llm > 1:
@@ -646,7 +646,13 @@ class AnalystAgent:
                     sentiment_score=sentiment_for_llm
                 )
                 logger.info(f"✅ LLM анализ завершен: {llm_result.get('llm_analysis', {}).get('decision', 'N/A')}")
-                logger.info(f"✅ LLM стратегия: {llm_guidance.get('strategy', 'N/A')}")
+                
+                # LLM guidance теперь не используется, стратегия выбирается через StrategyManager
+                llm_guidance = None
+            except Exception as e:
+                logger.error(f"❌ Ошибка LLM анализа: {e}")
+                llm_result = None
+                llm_guidance = None
             except Exception as e:
                 logger.error(f"❌ Ошибка LLM анализа: {e}")
                 llm_result = None
@@ -686,9 +692,7 @@ class AnalystAgent:
         if llm_result:
             logger.info(f"   LLM рекомендация: {llm_result.get('llm_analysis', {}).get('decision', 'N/A')}")
             logger.info(f"   Уверенность LLM: {llm_result.get('llm_analysis', {}).get('confidence', 0):.2f}")
-        if llm_guidance:
-            logger.info(f"   LLM стратегия: {llm_guidance.get('strategy', 'N/A')}")
-            logger.info(f"   Уверенность стратегии: {llm_guidance.get('confidence', 0):.2f}")
+        # LLM guidance больше не используется, стратегия выбирается через StrategyManager
         if strategy_result and strategy_result.get('insight'):
             logger.info(f"   Insight: {strategy_result.get('insight')}")
         logger.info(f"=" * 60)
