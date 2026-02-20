@@ -409,6 +409,153 @@ class ExecutionAgent:
             strategy_name or "N/A",
         )
 
+    # ---------- Ручная торговля (песочница / Telegram) ----------
+
+    def execute_manual_buy(self, ticker: str, quantity: float, skip_trading_hours: bool = True) -> tuple[bool, str]:
+        """
+        Ручная покупка по последней цене из quotes (для песочницы в Telegram).
+        Returns: (success, message)
+        """
+        if self._has_open_position(ticker):
+            return False, f"По {ticker} уже есть открытая позиция. Закройте её через /sell."
+        price = self._get_current_price(ticker)
+        if price is None:
+            return False, f"Нет котировок для {ticker}. Дождитесь обновления цен (cron)."
+        if not skip_trading_hours and not self.risk_manager.is_trading_hours():
+            return False, "Вне торговых часов (для песочницы можно отключить проверку)."
+        quantity = floor(float(quantity))
+        if quantity <= 0:
+            return False, "Укажите количество > 0."
+        cash = self._get_cash()
+        notional = quantity * price
+        commission = notional * COMMISSION_RATE
+        total_cost = notional + commission
+        is_valid, err = self.risk_manager.check_position_size(notional, ticker)
+        if not is_valid:
+            return False, f"Лимит риска: {err}"
+        current_exposure = self._get_current_portfolio_exposure()
+        is_ok, err = self.risk_manager.check_portfolio_exposure(current_exposure, notional)
+        if not is_ok:
+            return False, f"Экспозиция портфеля: {err}"
+        if total_cost > cash:
+            return False, f"Недостаточно средств: нужно {total_cost:.2f} USD, доступно {cash:.2f} USD."
+        sentiment = self._get_weighted_sentiment(ticker)
+        with self.engine.begin() as conn:
+            self._update_cash(cash - total_cost)
+            conn.execute(
+                text("""
+                    INSERT INTO portfolio_state (ticker, quantity, avg_entry_price, last_updated)
+                    VALUES (:ticker, :quantity, :price, CURRENT_TIMESTAMP)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        quantity = portfolio_state.quantity + :quantity,
+                        avg_entry_price = (
+                            (portfolio_state.quantity * portfolio_state.avg_entry_price + :quantity * :price) /
+                            (portfolio_state.quantity + :quantity)
+                        ),
+                        last_updated = CURRENT_TIMESTAMP
+                """),
+                {"ticker": ticker, "quantity": float(quantity), "price": price},
+            )
+            conn.execute(
+                text("""
+                    INSERT INTO trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
+                    VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, 'MANUAL', :total_value, :sentiment, 'Manual')
+                """),
+                {"ticker": ticker, "qty": float(quantity), "price": price, "commission": commission, "total_value": total_cost, "sentiment": sentiment},
+            )
+        logger.info("🟢 MANUAL BUY %s x %.0f @ %.2f", ticker, quantity, price)
+        return True, f"Куплено {quantity:.0f} {ticker} @ ${price:.2f} (комиссия ${commission:.2f}). Сумма: ${total_cost:.2f}"
+
+    def execute_manual_sell(self, ticker: str, quantity: float | None = None, skip_trading_hours: bool = True) -> tuple[bool, str]:
+        """
+        Ручная продажа по последней цене. quantity=None — закрыть всю позицию.
+        Returns: (success, message)
+        """
+        position = self._get_position(ticker)
+        if not position:
+            return False, f"Нет открытой позиции по {ticker}."
+        price = self._get_current_price(ticker)
+        if price is None:
+            return False, f"Нет котировок для {ticker}."
+        if not skip_trading_hours and not self.risk_manager.is_trading_hours():
+            return False, "Вне торговых часов."
+        qty = floor(float(quantity)) if quantity is not None else float(position.quantity)
+        qty = min(qty, float(position.quantity))
+        if qty <= 0:
+            return False, "Укажите количество > 0."
+        notional = qty * price
+        commission = notional * COMMISSION_RATE
+        proceeds = notional - commission
+        entry_value = qty * position.entry_price
+        pnl = proceeds - entry_value
+        pnl_pct = 100.0 * (price - position.entry_price) / position.entry_price
+        cash = self._get_cash()
+        sentiment = self._get_weighted_sentiment(ticker)
+        with self.engine.begin() as conn:
+            self._update_cash(cash + proceeds)
+            if qty >= position.quantity:
+                conn.execute(text("DELETE FROM portfolio_state WHERE ticker = :ticker"), {"ticker": ticker})
+            else:
+                new_qty = float(position.quantity) - qty
+                conn.execute(
+                    text("UPDATE portfolio_state SET quantity = :qty, last_updated = CURRENT_TIMESTAMP WHERE ticker = :ticker"),
+                    {"qty": new_qty, "ticker": ticker},
+                )
+            conn.execute(
+                text("""
+                    INSERT INTO trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
+                    VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, 'MANUAL', :total_value, :sentiment, 'Manual')
+                """),
+                {"ticker": ticker, "qty": qty, "price": price, "commission": commission, "total_value": proceeds, "sentiment": sentiment},
+            )
+        logger.info("🔴 MANUAL SELL %s x %.0f @ %.2f P&L=%.2f", ticker, qty, price, pnl)
+        return True, f"Продано {qty:.0f} {ticker} @ ${price:.2f}. P&L: ${pnl:.2f} ({pnl_pct:+.2f}%)"
+
+    def get_portfolio_summary(self) -> dict:
+        """Сводка виртуального портфеля для бота: cash, позиции с текущей оценкой и P&L."""
+        cash = self._get_cash()
+        positions = self._get_open_positions()
+        lines = []
+        total_equity = cash
+        for _, pos in positions.iterrows():
+            ticker = pos["ticker"]
+            qty = float(pos["quantity"])
+            entry = float(pos["entry_price"])
+            current = self._get_current_price(ticker)
+            if current is None:
+                current = entry
+            value = qty * current
+            total_equity += value
+            pnl = (current - entry) * qty
+            pnl_pct = 100.0 * (current - entry) / entry
+            lines.append({
+                "ticker": ticker,
+                "quantity": qty,
+                "entry_price": entry,
+                "current_price": current,
+                "value": value,
+                "pnl": pnl,
+                "pnl_pct": pnl_pct,
+            })
+        return {"cash": cash, "positions": lines, "total_equity": total_equity}
+
+    def get_trade_history(self, limit: int = 20) -> list[dict]:
+        """Последние сделки для бота."""
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT ts, ticker, side, quantity, price, signal_type, total_value
+                    FROM trade_history
+                    ORDER BY ts DESC
+                    LIMIT :limit
+                """),
+                {"limit": limit},
+            ).fetchall()
+        return [
+            {"ts": r[0], "ticker": r[1], "side": r[2], "quantity": float(r[3]), "price": float(r[4]), "signal_type": r[5], "total_value": float(r[6])}
+            for r in rows
+        ]
+
     # ---------- Публичные методы ----------
 
     def run_for_tickers(self, tickers: list[str], use_llm: bool = True) -> None:

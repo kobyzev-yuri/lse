@@ -133,6 +133,11 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("chart", self._handle_chart))
         self.application.add_handler(CommandHandler("tickers", self._handle_tickers))
         self.application.add_handler(CommandHandler("ask", self._handle_ask))
+        self.application.add_handler(CommandHandler("portfolio", self._handle_portfolio))
+        self.application.add_handler(CommandHandler("buy", self._handle_buy))
+        self.application.add_handler(CommandHandler("sell", self._handle_sell))
+        self.application.add_handler(CommandHandler("history", self._handle_history))
+        self.application.add_handler(CommandHandler("recommend", self._handle_recommend))
         
         # Обработка текстовых сообщений (для произвольных запросов)
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
@@ -157,26 +162,25 @@ class LSETelegramBot:
         welcome_text = """
 🤖 **LSE Trading Bot**
 
-Анализ независимых инструментов:
-• Золото (GC=F)
-• Валютные пары (GBPUSD=X, EURUSD=X)
-• Акции (MSFT, SNDK и т.д.)
+Анализ и виртуальная торговля (песочница):
+• Золото (GC=F), валюты (GBPUSD=X), акции (MSFT, SNDK)
 
-**Доступные команды:**
-/signal — справка и список тикеров; /signal <ticker> — анализ
-/news <ticker> [N] - Новости (N — сколько показать, по умолч. 10)
-/price <ticker> - Текущая цена
-/chart <ticker> [days] - График цены (по умолч. 1 день)
-/ask <вопрос> - Задать вопрос (работает в группах!)
-/tickers - Список отслеживаемых инструментов
-/help - Справка
+**Команды:**
+/signal <ticker> — анализ
+/news <ticker> [N] — новости
+/price <ticker> — цена
+/chart <ticker> [days] — график
+/ask <вопрос> — вопрос (работает в группах!)
+/tickers — список инструментов
 
-**Примеры команд:**
-/signal GC=F
-/news MSFT 15
-/price MSFT
-/chart GC=F 7
-/ask какая цена золота
+**Песочница (вход/выход, P&L):**
+/portfolio — портфель и P&L
+/buy <ticker> <кол-во> — купить
+/sell <ticker> [кол-во] — продать (без кол-ва — вся позиция)
+/history [N] — последние сделки
+/recommend [ticker] — рекомендация: когда открыть позицию и параметры управления
+
+/help — справка
         """
         
         await update.message.reply_text(welcome_text, parse_mode='Markdown')
@@ -223,6 +227,15 @@ class LSETelegramBot:
 • `/ask анализ GBPUSD`
 • `/ask сколько стоит золото`
 • `/ask что с фунтом`
+
+**Песочница (виртуальная торговля):**
+`/portfolio` — кэш, позиции и P&L по последним ценам
+`/buy <ticker> <кол-во>` — купить по последней цене из БД
+`/sell <ticker>` — закрыть всю позицию; `/sell <ticker> <кол-во>` — частичная продажа
+`/history [N]` — последние N сделок (по умолч. 15)
+`/recommend <ticker>` — рекомендация: когда открыть позицию, стоп-лосс, размер позиции
+  В /ask можно спросить: _когда можно открыть позицию по SNDK и какие параметры советуешь?_
+  Пример: `/recommend SNDK`, `/buy GC=F 5`, `/sell MSFT`
         """
         
         await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -766,6 +779,264 @@ class LSETelegramBot:
             logger.error(f"Ошибка получения списка тикеров: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
     
+    def _get_recommendation_data(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Собирает данные для рекомендации: сигнал, цена, риск-параметры, позиция по тикеру."""
+        try:
+            result = self.analyst.get_decision_with_llm(ticker)
+            decision = result.get("decision", "HOLD")
+            strategy = result.get("selected_strategy") or "—"
+            technical = result.get("technical_data") or {}
+            sentiment = result.get("sentiment_normalized") or result.get("sentiment") or 0.0
+            if isinstance(sentiment, (int, float)) and 0 <= sentiment <= 1:
+                sentiment = (sentiment - 0.5) * 2.0
+            from sqlalchemy import create_engine, text
+            from config_loader import get_database_url
+            engine = create_engine(get_database_url())
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT close, rsi FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 1"),
+                    {"ticker": ticker},
+                ).fetchone()
+            price = float(row[0]) if row and row[0] is not None else None
+            rsi = float(row[1]) if row and row[1] is not None else technical.get("rsi")
+            try:
+                from utils.risk_manager import get_risk_manager
+                rm = get_risk_manager()
+                stop_loss_pct = rm.get_stop_loss_percent()
+                take_profit_pct = rm.get_take_profit_percent()
+                max_pos_usd = rm.get_max_position_size(ticker)
+                max_ticker_pct = rm.get_max_single_ticker_exposure()
+            except Exception:
+                stop_loss_pct = 5.0
+                take_profit_pct = 10.0
+                max_pos_usd = 10000.0
+                max_ticker_pct = 20.0
+            has_position = False
+            position_info = None
+            ex = self._get_execution_agent()
+            if ex:
+                summary = ex.get_portfolio_summary()
+                for p in summary.get("positions") or []:
+                    if p["ticker"] == ticker:
+                        has_position = True
+                        position_info = p
+                        break
+            return {
+                "ticker": ticker,
+                "decision": decision,
+                "strategy": strategy,
+                "price": price,
+                "rsi": rsi,
+                "sentiment": sentiment,
+                "stop_loss_pct": stop_loss_pct,
+                "take_profit_pct": take_profit_pct,
+                "max_position_usd": max_pos_usd,
+                "max_ticker_pct": max_ticker_pct,
+                "has_position": has_position,
+                "position": position_info,
+                "reasoning": result.get("reasoning", ""),
+            }
+        except Exception as e:
+            logger.warning(f"Ошибка сбора рекомендации для {ticker}: {e}")
+            return None
+
+    def _format_recommendation(self, data: Dict[str, Any]) -> str:
+        """Форматирует текст рекомендации по данным из _get_recommendation_data."""
+        t = _escape_markdown(data["ticker"])
+        decision = data["decision"]
+        strategy = data["strategy"]
+        price = data["price"]
+        price_str = f"${price:.2f}" if price is not None else "—"
+        rsi = data["rsi"]
+        rsi_str = f"{rsi:.1f}" if rsi is not None else "—"
+        sl = data["stop_loss_pct"]
+        tp = data["take_profit_pct"]
+        max_usd = data["max_position_usd"]
+        max_pct = data["max_ticker_pct"]
+        has_pos = data["has_position"]
+        pos = data.get("position")
+        if decision in ("BUY", "STRONG_BUY"):
+            action = "можно открывать длинную позицию" if not has_pos else "позиция уже открыта — можно держать или докупать по своей тактике"
+            emoji = "🟢"
+        elif decision == "SELL":
+            action = "рекомендуется закрыть или не открывать длинную позицию" if has_pos else "вход не рекомендую; можно рассмотреть короткую или ждать разворота"
+            emoji = "🔴"
+        else:
+            action = "сигнал нейтральный — лучше подождать более чёткого сигнала перед входом"
+            emoji = "⚪"
+        lines = [
+            f"{emoji} **Рекомендация по {t}**",
+            "",
+            f"**Сигнал:** {decision} (стратегия: {strategy})",
+            f"**Цена:** {price_str}  ·  **RSI:** {rsi_str}",
+            "",
+            f"**Действие:** {action}",
+            "",
+            "**Параметры управления (песочница):**",
+            f"• Стоп-лосс: −{sl:.0f}% от цены входа",
+            f"• Тейк-профит (ориентир): +{tp:.0f}%",
+            f"• Размер позиции: до ${max_usd:,.0f} или до {max_pct:.0f}% портфеля",
+        ]
+        if has_pos and pos:
+            pnl = pos.get("pnl") or 0
+            pnl_pct = pos.get("pnl_pct") or 0
+            lines.append(f"\n_Текущая позиция: P&L ${pnl:,.2f} ({pnl_pct:+.2f}%)_")
+        if data.get("reasoning"):
+            lines.append(f"\n💭 _{_escape_markdown(str(data['reasoning'])[:180])}..._")
+        return "\n".join(lines)
+
+    def _get_execution_agent(self):
+        """Ленивая инициализация ExecutionAgent для песочницы."""
+        if getattr(self, "_execution_agent", None) is None:
+            try:
+                from execution_agent import ExecutionAgent
+                self._execution_agent = ExecutionAgent()
+            except Exception as e:
+                logger.warning(f"ExecutionAgent недоступен: {e}")
+                self._execution_agent = False
+        return self._execution_agent if self._execution_agent else None
+
+    async def _handle_portfolio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Портфель: cash, позиции, текущая оценка и P&L."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        agent = self._get_execution_agent()
+        if not agent:
+            await update.message.reply_text("❌ Песочница недоступна (не инициализирован ExecutionAgent).")
+            return
+        try:
+            summary = agent.get_portfolio_summary()
+            cash = summary["cash"]
+            total = summary["total_equity"]
+            lines = [f"💵 **Кэш:** ${cash:,.2f}", f"📊 **Итого (оценка):** ${total:,.2f}"]
+            for p in summary["positions"]:
+                pnl_emoji = "🟢" if p["pnl"] >= 0 else "🔴"
+                lines.append(
+                    f"\n{pnl_emoji} **{_escape_markdown(p['ticker'])}** — {p['quantity']:.0f} шт.\n"
+                    f"  Вход: ${p['entry_price']:.2f} → Сейчас: ${p['current_price']:.2f}\n"
+                    f"  P&L: ${p['pnl']:,.2f} ({p['pnl_pct']:+.2f}%)"
+                )
+            if not summary["positions"]:
+                lines.append("\n_Позиций нет. /buy <ticker> <кол-во>_")
+            await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Ошибка портфеля: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+    async def _handle_buy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Виртуальная покупка: /buy <ticker> <кол-во>."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        agent = self._get_execution_agent()
+        if not agent:
+            await update.message.reply_text("❌ Песочница недоступна.")
+            return
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "❌ Формат: `/buy <ticker> <кол-во>`\nПример: `/buy GC=F 5` или `/buy MSFT 10`",
+                parse_mode='Markdown',
+            )
+            return
+        ticker = _normalize_ticker(context.args[0])
+        try:
+            qty = float(context.args[1])
+        except ValueError:
+            await update.message.reply_text("❌ Укажите число в качестве количества.")
+            return
+        ok, msg = agent.execute_manual_buy(ticker, qty)
+        await update.message.reply_text(msg if ok else f"❌ {msg}")
+
+    async def _handle_sell(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Виртуальная продажа: /sell <ticker> [кол-во]. Без кол-ва — закрыть всю позицию."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        agent = self._get_execution_agent()
+        if not agent:
+            await update.message.reply_text("❌ Песочница недоступна.")
+            return
+        if not context.args or len(context.args) < 1:
+            await update.message.reply_text(
+                "❌ Формат: `/sell <ticker>` или `/sell <ticker> <кол-во>`\nПример: `/sell GC=F` или `/sell MSFT 5`",
+                parse_mode='Markdown',
+            )
+            return
+        ticker = _normalize_ticker(context.args[0])
+        qty = None
+        if len(context.args) >= 2:
+            try:
+                qty = float(context.args[1])
+            except ValueError:
+                await update.message.reply_text("❌ Укажите число в качестве количества.")
+                return
+        ok, msg = agent.execute_manual_sell(ticker, qty)
+        await update.message.reply_text(msg if ok else f"❌ {msg}")
+
+    async def _handle_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Последние сделки: /history [N]."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        agent = self._get_execution_agent()
+        if not agent:
+            await update.message.reply_text("❌ Песочница недоступна.")
+            return
+        limit = 15
+        if context.args and len(context.args) >= 1:
+            try:
+                limit = min(int(context.args[0]), 50)
+            except ValueError:
+                pass
+        try:
+            rows = agent.get_trade_history(limit=limit)
+            if not rows:
+                await update.message.reply_text("История сделок пуста.")
+                return
+            lines = ["📜 **Последние сделки:**"]
+            for r in rows:
+                ts = r["ts"].strftime("%Y-%m-%d %H:%M") if hasattr(r["ts"], "strftime") else str(r["ts"])
+                side = "🟢" if r["side"] == "BUY" else "🔴"
+                lines.append(f"{side} {ts} — {r['side']} {r['ticker']} x{r['quantity']:.0f} @ ${r['price']:.2f} ({r['signal_type']})")
+            await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Ошибка history: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+    async def _handle_recommend(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Рекомендация: когда открыть позицию и какие параметры управления (стоп-лосс, размер)."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        ticker = None
+        if context.args and len(context.args) >= 1:
+            ticker = _normalize_ticker(context.args[0])
+        if not ticker:
+            await update.message.reply_text(
+                "Укажите тикер для рекомендации.\n"
+                "Пример: `/recommend SNDK` или `/recommend GC=F`\n\n"
+                "Можно спросить текстом: _когда можно открыть позицию по SNDK и какие параметры советуешь?_",
+                parse_mode="Markdown",
+            )
+            return
+        await update.message.reply_text("🔍 Готовлю рекомендацию...")
+        data = self._get_recommendation_data(ticker)
+        if not data:
+            await update.message.reply_text(f"❌ Не удалось получить рекомендацию для {ticker}. Проверьте тикер и данные в БД.")
+            return
+        try:
+            text = self._format_recommendation(data)
+            await update.message.reply_text(text, parse_mode="Markdown")
+        except Exception as e:
+            logger.exception("Ошибка форматирования рекомендации")
+            await update.message.reply_text(f"❌ Ошибка: {e}")
+    
     async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик произвольных текстовых сообщений"""
         # В группах игнорируем текстовые сообщения без упоминания
@@ -822,12 +1093,60 @@ class LSETelegramBot:
                 'анализ', 'analysis', 'сигнал', 'signal', 'прогноз', 'forecast',
                 'что с', 'как дела', 'ситуация', 'тренд', 'trend', 'рекомендация'
             ])
+            is_recommendation_query = any(phrase in text_lower for phrase in [
+                'когда можно открыть', 'когда открыть позицию', 'когда купить', 'когда войти',
+                'какие параметры', 'параметры управления', 'что советуешь', 'какой стоп',
+                'стоп-лосс', 'стейк-лосс', 'рекомендуй вход', 'можно ли открыть позицию'
+            ])
             
-            logger.info(f"Тип запроса: news={is_news_query}, price={is_price_query}, analysis={is_analysis_query}")
+            logger.info(f"Тип запроса: news={is_news_query}, price={is_price_query}, analysis={is_analysis_query}, recommend={is_recommendation_query}")
             
             # Пытаемся извлечь все тикеры из текста (может быть несколько)
             tickers = self._extract_all_tickers_from_text(text)
             logger.info(f"Извлечённые тикеры из текста '{text}': {tickers}")
+            
+            # Вопрос про вход в позицию и параметры управления — даём рекомендацию по тикеру
+            if is_recommendation_query:
+                rec_ticker = _normalize_ticker(tickers[0]) if tickers else None
+                if not rec_ticker:
+                    await update.message.reply_text(
+                        "Укажите инструмент в вопросе, например:\n"
+                        "• _когда можно открыть позицию по SNDK и какие параметры советуешь?_\n"
+                        "• _рекомендуй параметры управления для GC=F_",
+                        parse_mode="Markdown",
+                    )
+                    return
+                await update.message.reply_text(f"🔍 Готовлю рекомендацию по {rec_ticker}...")
+                data = self._get_recommendation_data(rec_ticker)
+                if not data:
+                    await update.message.reply_text(f"❌ Не удалось получить данные для {rec_ticker}.")
+                    return
+                recommendation_text = self._format_recommendation(data)
+                if self.llm_service and recommendation_text:
+                    try:
+                        system_prompt = (
+                            "Ты помощник по виртуальной торговле. Пользователь задаёт вопрос о том, когда открыть позицию и какие параметры управления использовать. "
+                            "Ответь кратко и по делу на русском, опираясь ТОЛЬКО на приведённые данные. Упомяни: стоит ли открывать позицию сейчас, стоп-лосс, размер позиции. "
+                            "Не придумывай цифры — используй только данные из контекста."
+                        )
+                        ctx = (
+                            f"Данные для ответа:\n{recommendation_text}\n\n"
+                            f"Вопрос пользователя: {text}"
+                        )
+                        result = self.llm_service.generate_response(
+                            messages=[{"role": "user", "content": ctx}],
+                            system_prompt=system_prompt,
+                            temperature=0.3,
+                            max_tokens=400,
+                        )
+                        answer = (result.get("response") or "").strip()
+                        if answer:
+                            await update.message.reply_text(answer, parse_mode="Markdown")
+                            return
+                    except Exception as e:
+                        logger.warning(f"LLM для рекомендации не сработал: {e}")
+                await update.message.reply_text(recommendation_text, parse_mode="Markdown")
+                return
             
             if tickers:
                 # Если найдено несколько тикеров и это запрос новостей - собираем все новости и выбираем топ N

@@ -711,6 +711,8 @@ flowchart TD
     E -->|Команда /chart| C[График цены (matplotlib)]
     E -->|Команда /ask| A[Вопросы (LLM + анализ)]
     E -->|Команда /tickers| T[Список тикеров]
+    E -->|/portfolio, /buy, /sell, /history| EX[ExecutionAgent: портфель и сделки]
+    E -->|Команда /recommend| REC[Рекомендация: сигнал + параметры управления]
     
     G --> L[PostgreSQL: knowledge_base]
     H --> M[Analyst Agent + quotes, sentiment]
@@ -720,11 +722,17 @@ flowchart TD
     A --> LLM[LLM Service]
     A --> M
     T --> Q
+    EX --> Q
+    EX --> PS[portfolio_state + trade_history]
+    REC --> M
+    REC --> RM[risk_limits: стоп-лосс, размер позиции]
     
     L --> P[Форматирование ответа]
     M --> P
     Q --> P
     LLM --> P
+    PS --> P
+    RM --> P
     
     P --> Q[Ответ в Telegram]
     Q --> A
@@ -743,12 +751,17 @@ flowchart TD
 - `/chart <ticker> [days]` - график цены за период (дневные данные)
 - `/ask <вопрос>` - задать вопрос боту (LLM для понимания естественного языка)
 - `/tickers` - список отслеживаемых инструментов
+- **Песочница (виртуальные сделки):** `/portfolio` - портфель и P&L; `/buy <ticker> <кол-во>` - покупка по последней цене из `quotes`; `/sell <ticker> [кол-во]` - продажа (полная или частичная); `/history [N]` - последние сделки; `/recommend <ticker>` - рекомендация по входу и параметрам управления (стоп-лосс, размер позиции).
+
+**Где хранятся сделки:**
+- `portfolio_state` - текущий кэш (CASH) и открытые позиции (ticker, quantity, avg_entry_price).
+- `trade_history` - каждая сделка: ts, ticker, side (BUY/SELL), quantity, price, commission (0.1%), signal_type (MANUAL / STOP_LOSS / BUY / SELL), total_value, sentiment_at_trade, strategy_name. Пример цепочки изменений в БД: см. `docs/SANDBOX_TRADE_EXAMPLE.md`.
 
 **Особенности:**
 - Автоматическая нормализация тикеров (GC-F → GC=F)
 - Распознавание естественных названий (золото → GC=F, фунт → GBPUSD=X)
 - Поддержка множественных тикеров в одном запросе
-- LLM используется только для команды `/ask` (понимание вопросов)
+- LLM используется для `/ask` и для ответов на вопросы вида «когда открыть позицию и какие параметры советуешь»
 - Работа в группах через команду `/ask`
 
 Все сервисы бота и API разворачиваются на Google Cloud Run; БД и базы знаний — на отдельном сервере (см. раздел 11).
@@ -777,6 +790,8 @@ flowchart LR
         G -->|/chart| C[Handler: график цены]
         G -->|/ask| A[Handler: вопросы (LLM)]
         G -->|/tickers| T[Handler: список тикеров]
+        G -->|/portfolio, /buy, /sell, /history| EX[Handler: ExecutionAgent]
+        G -->|/recommend| REC[Handler: рекомендация по тикеру]
         G -->|Текст (в группах игнорируется)| M[Используйте /ask]
     end
     
@@ -787,6 +802,9 @@ flowchart LR
     A --> N
     A --> LLM[LLM Service]
     T --> N
+    EX --> N
+    EX --> PS[portfolio_state, trade_history]
+    REC --> N
     
     N --> O[Ответ в Telegram]
     LLM --> O
@@ -902,7 +920,8 @@ flowchart LR
 - `news_importer.py` — импорт новостей
 - `report_generator.py` — генерация отчетов
 - `vector_kb.py` — векторная БЗ (планируется)
-- Telegram бот: webhook, handlers, команды `/signal`, `/news`, `/price`, `/chart`, `/ask`, `/tickers` (см. раздел 10)
+- Telegram бот: webhook, handlers, команды `/signal`, `/news`, `/price`, `/chart`, `/ask`, `/tickers`, песочница: `/portfolio`, `/buy`, `/sell`, `/history`, `/recommend` (см. раздел 10)
+- Документация по сделкам: `docs/SANDBOX_TRADE_EXAMPLE.md` — пример цепочки изменений в `portfolio_state` и `trade_history`
 - Деплой: Cloud Run для Bot/API, отдельный сервер для PostgreSQL и КБ (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`)
 
 ### Обновление диаграмм
@@ -912,7 +931,14 @@ flowchart LR
 ---
 
 **Последнее обновление**: 2026-02-20  
-**Версия системы**: 1.3.0
+**Версия системы**: 1.4.0
+
+### Изменения в версии 1.4.0:
+- ✅ Песочница в Telegram: `/portfolio`, `/buy`, `/sell`, `/history` — виртуальные сделки через ExecutionAgent
+- ✅ `/recommend <ticker>` — рекомендация по входу и параметрам управления (стоп-лосс, размер позиции)
+- ✅ В `/ask` — ответы на вопросы «когда открыть позицию», «какие параметры советуешь» с учётом сигнала и risk_limits
+- ✅ Документация: `docs/SANDBOX_TRADE_EXAMPLE.md` — пример цепочки изменений в БД при сделках
+- ✅ Обновлены диаграммы раздела 10 (поток запросов и маршрутизация)
 
 ### Изменения в версии 1.3.0:
 - ✅ Добавлена команда `/chart` - график цены за период (дневные данные)
