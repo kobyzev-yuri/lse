@@ -26,6 +26,38 @@
 3. **Проверка после прогона:**  
    `psql $DATABASE_URL -c "SELECT ts, ticker, source, event_type FROM knowledge_base ORDER BY ts DESC LIMIT 20;"`
 
+---
+
+### Частые вопросы: MANUAL, NewsAPI в списке, чего не хватает
+
+**1. Откуда берётся источник MANUAL? Я не загружал своих новостей.**
+
+В поле `source` значение **MANUAL** появляется в двух случаях:
+
+- **Миграция из старой таблицы `trade_kb`.** Скрипт `scripts/migrate_trade_kb_to_knowledge_base.py` переносит все строки из `trade_kb` в `knowledge_base` и проставляет им `source = 'MANUAL'`. Если этот скрипт запускали, то тысячи записей с MANUAL — это как раз перенесённые старые данные (сделки, заметки, события из trade_kb), а не загруженные вручную новости.
+- **Добавление событий через код без указания источника.** В `services/vector_kb.py` при вызове `add_event()` без параметра `source` по умолчанию подставляется `'MANUAL'`.
+
+Итого: если вы не вызывали вручную добавление новостей, то MANUAL в вашей выборке почти наверняка из миграции `trade_kb` → `knowledge_base`.
+
+**2. Почему в списке источников нет NewsAPI?**
+
+NewsAPI **используется** в cron (`fetch_news_cron.py`), но в БД в поле `source` сохраняется **название издания** из ответа API (Reuters, Bloomberg, The Globe and Mail, Yahoo Finance, Business Wire и т.д.), а не строка «NewsAPI». Код: `services/newsapi_fetcher.py` — при сохранении берётся `item.get('source', 'NewsAPI')`, где `item['source']` приходит от NewsAPI как имя источника. Поэтому в запросе по `source` вы видите Bloomberg, The Globe and Mail и др. — это и есть новости, полученные через NewsAPI.
+
+**3. Каких существенных источников не хватает для работы?**
+
+Кратко по «достаточности»:
+
+| Нужно для работы | Есть у нас | Комментарий |
+|------------------|------------|-------------|
+| Новости ЦБ (Fed, ECB, BoE, BoJ) | ✅ RSS | EU Central Bank, USA Central Bank, UK Central Bank, Japan Central Bank в выборке — это они. |
+| Макро-новости (аггрегаторы) | ✅ NewsAPI | У вас в списке как Bloomberg, The Globe and Mail, Yahoo Finance, Business Wire, Mint, BNY, The Motley Fool, FinancialContent. |
+| Календарь отчётов (earnings) | ✅ Alpha Vantage | «Alpha Vantage Earnings Calendar» в выборке. |
+| Новости + sentiment по тикерам | ✅ Alpha Vantage | При наличии ключа; лимит ~25 запросов/день. |
+| Экономический календарь (даты CPI, NFP, ставки и т.д.) | ❌ Нет стабильно | Investing.com не отдаёт данные (JS); Alpha Vantage Economic в cron выключен, на free tier часто пусто. |
+| Числовые макро-ряды (CPI, GDP, ставки) по регионам | ⚠️ Частично | Только при включённом Alpha Vantage Economic и плане, где API отдаёт данные; в основном США. |
+
+**Для базовой работы** (новости ЦБ, макро-новости, earnings, опционально sentiment) **достаточно** того, что уже есть: RSS + NewsAPI + Alpha Vantage (Earnings + News Sentiment). Не хватает в первую очередь **стабильного экономического календаря** (даты релизов) и **числовых макро-индикаторов** по разным регионам — это либо платный Alpha Vantage / Trading Economics, либо доработка парсера Investing.com (например, через headless browser).
+
 Единый скрипт запуска: `scripts/fetch_news_cron.py`. Отдельные модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`.
 
 ### Какие важные финансовые индикаторы отсутствуют в knowledge_base
