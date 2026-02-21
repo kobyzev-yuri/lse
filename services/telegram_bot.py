@@ -10,7 +10,9 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import asyncio
 import logging
+import math
 import re
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -150,6 +152,17 @@ class LSETelegramBot:
         if self.allowed_users is None:
             return True
         return user_id in self.allowed_users
+    
+    async def _get_recent_news_async(self, ticker: str, timeout: int = 30):
+        """
+        Получает новости для тикера в executor с таймаутом.
+        Не блокирует event loop. При таймауте выбрасывает asyncio.TimeoutError.
+        """
+        loop = asyncio.get_event_loop()
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, self.analyst.get_recent_news, ticker),
+            timeout=timeout,
+        )
     
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -395,8 +408,16 @@ class LSETelegramBot:
         try:
             await update.message.reply_text(f"📰 Поиск новостей для {ticker}...")
             
-            # Получаем новости через AnalystAgent
-            news_df = self.analyst.get_recent_news(ticker)
+            news_timeout = 30
+            try:
+                news_df = await self._get_recent_news_async(ticker, timeout=news_timeout)
+            except asyncio.TimeoutError:
+                logger.error(f"Таймаут получения новостей для {ticker} ({news_timeout} с)")
+                await update.message.reply_text(
+                    f"❌ Получение новостей для {ticker} заняло больше {news_timeout} с. "
+                    "Попробуйте позже или проверьте доступность БД."
+                )
+                return
             
             if news_df.empty:
                 await update.message.reply_text(
@@ -425,10 +446,20 @@ class LSETelegramBot:
                 await _send_news_part(response)
             
         except Exception as e:
-            logger.error(f"Ошибка получения новостей для {ticker}: {e}", exc_info=True)
-            await update.message.reply_text(
-                f"❌ Ошибка получения новостей для {ticker}: {str(e)}"
+            err_type = type(e).__name__
+            err_msg = str(e)
+            logger.error(
+                f"Ошибка получения новостей для {ticker}: [{err_type}] {err_msg}",
+                exc_info=True,
             )
+            if "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
+                reply = (
+                    f"❌ Запрос новостей для {ticker} завершился по таймауту. "
+                    "Возможны перегрузка БД или медленный запрос к knowledge_base. Попробуйте позже."
+                )
+            else:
+                reply = f"❌ Ошибка получения новостей для {ticker}: {err_msg}"
+            await update.message.reply_text(reply)
     
     async def _handle_price_by_ticker(self, update: Update, ticker: str, ticker_raw: str = None):
         """Вспомогательная функция для получения цены по тикеру"""
@@ -1163,10 +1194,15 @@ class LSETelegramBot:
                     all_news = []
                     ticker_names = []
                     
+                    news_timeout_per_ticker = max(20, 60 // max(1, len(tickers)))
                     for ticker in tickers:
                         ticker = _normalize_ticker(ticker)
                         ticker_names.append(ticker)
-                        news_df = self.analyst.get_recent_news(ticker)
+                        try:
+                            news_df = await self._get_recent_news_async(ticker, timeout=news_timeout_per_ticker)
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Таймаут новостей для {ticker}, пропускаем")
+                            continue
                         if not news_df.empty:
                             # Добавляем колонку с тикером для идентификации
                             news_df = news_df.copy()
@@ -1228,8 +1264,9 @@ class LSETelegramBot:
                                     sentiment_str = " 📉"
                             
                             date_str = ts.strftime('%Y-%m-%d %H:%M') if hasattr(ts, 'strftime') else str(ts)
+                            prefix = "Ожидается отчёт:" if event_type == "EARNINGS" else ""
                             type_str = f" [{event_type}]" if event_type else ""
-                            response += f"**{ticker}** - {date_str}{sentiment_str}\n🔹 {source}{type_str}\n{preview}\n\n"
+                            response += f"**{ticker}** - {prefix}{date_str}{sentiment_str}\n🔹 {source}{type_str}\n{preview}\n\n"
                         
                         try:
                             await update.message.reply_text(response, parse_mode='Markdown')
@@ -1249,7 +1286,13 @@ class LSETelegramBot:
                         
                         # Запрос новостей
                         await update.message.reply_text(f"📰 Поиск новостей для {ticker}...")
-                        news_df = self.analyst.get_recent_news(ticker)
+                        try:
+                            news_df = await self._get_recent_news_async(ticker, timeout=30)
+                        except asyncio.TimeoutError:
+                            await update.message.reply_text(
+                                f"❌ Таймаут при получении новостей для {ticker}. Попробуйте позже."
+                            )
+                            return
                         response = self._format_news_response(ticker, news_df, top_n=top_n)
                         try:
                             await update.message.reply_text(response, parse_mode='Markdown')
@@ -1490,7 +1533,10 @@ class LSETelegramBot:
                 f"📰 **Новости для {_escape_markdown(ticker)}** (последние 7 дней)\n\n"
                 "Нет новостей с текстом. В выборке только записи календаря без описания."
             )
-        response = f"📰 **Новости для {_escape_markdown(ticker)}** (последние 7 дней, топ {top_n}):\n\n"
+        response = (
+            f"📰 **Новости для {_escape_markdown(ticker)}** (последние 7 дней, топ {top_n})\n"
+            "_sentiment: 0–1 (0=негатив, 0.5=нейтр., 1=позитив)_\n\n"
+        )
 
         def _content_preview(row) -> str:
             raw = (row.get('content') or row.get('insight') or '')
@@ -1515,14 +1561,25 @@ class LSETelegramBot:
                 preview = "(без текста)"
             sentiment = row.get('sentiment_score')
             sentiment_str = ""
-            if sentiment is not None:
+            if sentiment is not None and not (isinstance(sentiment, float) and math.isnan(sentiment)):
                 if sentiment > 0.6:
                     sentiment_str = " 📈"
                 elif sentiment < 0.4:
                     sentiment_str = " 📉"
+                # Числовое значение для проверки (сетка 0.0–1.0: 0=негатив, 0.5=нейтр., 1=позитив)
+                sentiment_str += f" ({float(sentiment):.2f})"
             date_str = ts.strftime('%Y-%m-%d %H:%M') if hasattr(ts, 'strftime') else str(ts)
-            type_str = f" [{event_type}]" if event_type else ""  # event_type уже экранирован
-            response += f"📅 {date_str}{sentiment_str}\n🔹 **{source}**{type_str}\n{preview}\n\n"
+            # EARNINGS: ts = дата отчёта (ожидаемая), не дата публикации
+            prefix = "Ожидается отчёт:" if event_type == "EARNINGS" else "📅"
+            type_str = f" [{event_type}]" if event_type else ""
+            response += f"{prefix} {date_str}{sentiment_str}\n🔹 **{source}**{type_str}\n{preview}\n"
+            # Insight от LLM (начало) — для проверки в боте
+            insight_val = row.get('insight')
+            if insight_val and isinstance(insight_val, str) and insight_val.strip():
+                insight_esc = _escape_markdown(insight_val.strip()[:100])
+                if insight_esc:
+                    response += f"💭 _{insight_esc}_\n"
+            response += "\n"
             shown += 1
 
         if total_display > shown:
@@ -1787,3 +1844,11 @@ class LSETelegramBot:
             await self.application.process_update(update)
         
         return webhook_handler
+
+
+if __name__ == "__main__":
+    """Единая точка запуска: scripts/run_telegram_bot.py (без дублирования логики)."""
+    import subprocess
+    root = Path(__file__).resolve().parent.parent
+    script = root / "scripts" / "run_telegram_bot.py"
+    raise SystemExit(subprocess.run([sys.executable, str(script)], cwd=str(root)).returncode)

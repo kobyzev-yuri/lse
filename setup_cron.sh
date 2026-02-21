@@ -34,8 +34,8 @@ mkdir -p "$PROJECT_DIR/logs"
 CRON_FILE=$(mktemp)
 
 # Удаляем из текущего crontab ВСЕ задачи и комментарии LSE, чтобы не оставались дубликаты или старые пути.
-REMOVE_PATTERNS="LSE Trading System|========== LSE|Проект:.*lse|update_prices_cron\.py|trading_cycle_cron\.py|fetch_news_cron\.py|update_rsi_local\.py|update_finviz_data\.py|update_finviz\.py"
-REMOVE_COMMENTS="Проект:|Обновление цен:|Локальный RSI|валюты/товары|вечернего обновления цен|RSI с Finviz|после дневной сессии|Торговый цикл|9:00, 13:00, 17:00|Новости \(RSS|Alpha Vantage\).*каждый час|Обновление RSI ежедневно|после обновления цен|после закрытия всех бирж|NYSE \(00:00 MSK\)|измените время|Если сервер не в MSK"
+REMOVE_PATTERNS="LSE Trading System|========== LSE|Проект:.*lse|update_prices_cron\.py|trading_cycle_cron\.py|fetch_news_cron\.py|sync_vector_kb_cron\.py|add_sentiment_to_news_cron\.py|analyze_event_outcomes_cron\.py|update_rsi_local\.py|update_finviz_data\.py|update_finviz\.py"
+REMOVE_COMMENTS="Проект:|Обновление цен:|Локальный RSI|валюты/товары|вечернего обновления цен|RSI с Finviz|после дневной сессии|Торговый цикл|9:00, 13:00, 17:00|Новости \(RSS|Alpha Vantage\).*каждый час|Backfill embedding|Sentiment к новостям|Анализ исходов событий|Обновление RSI ежедневно|после обновления цен|после закрытия всех бирж|NYSE \(00:00 MSK\)|измените время|Если сервер не в MSK"
 crontab -l 2>/dev/null | grep -vE "$REMOVE_PATTERNS|$REMOVE_COMMENTS" | grep -v "$PROJECT_DIR" | grep -v "/mnt/ai/cnn/lse" > "$CRON_FILE" || true
 # Если crontab был пустой или только наши задачи — файл может быть пустым; тогда начинаем с пустого
 if ! grep -q . "$CRON_FILE" 2>/dev/null; then
@@ -64,6 +64,15 @@ cat >> "$CRON_FILE" << EOF
 
 # Новости (RSS, NewsAPI, Alpha Vantage): каждый час
 0 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/fetch_news_cron.py >> logs/news_fetch.log 2>&1
+
+# Backfill embedding в knowledge_base (после сбора новостей; без прокси внутри скрипта)
+10 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/sync_vector_kb_cron.py >> logs/sync_vector_kb.log 2>&1
+
+# Sentiment и insight для новостей без sentiment (нужен USE_LLM=true в config.env)
+20 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/add_sentiment_to_news_cron.py >> logs/add_sentiment_to_news.log 2>&1
+
+# Анализ исходов событий (outcome_json): раз в день, событиям нужно 7+ дней истории котировок
+0 4 * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/analyze_event_outcomes_cron.py >> logs/analyze_event_outcomes.log 2>&1
 EOF
 
 # Устанавливаем новый crontab
@@ -76,6 +85,9 @@ echo "  - RSI локальный: 22:10 (после обновления цен)
 echo "  - RSI Finviz: пн-пт 19:00"
 echo "  - Торговый цикл: пн-пт 9:00, 13:00, 17:00"
 echo "  - Новости: каждый час (:00)"
+echo "  - Backfill embedding: каждый час в :10 (после новостей)"
+echo "  - Sentiment к новостям: каждый час в :20 (при USE_LLM=true)"
+echo "  - Анализ исходов событий (outcome_json): ежедневно в 4:00"
 echo ""
 echo "⚠️  Часовой пояс: cron использует системный (проверка: timedatectl | grep 'Time zone')."
 echo "   Для MSK убедитесь, что сервер в Europe/Moscow или подстройте часы в crontab -e"

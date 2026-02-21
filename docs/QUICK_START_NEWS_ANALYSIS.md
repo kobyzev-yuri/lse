@@ -10,7 +10,7 @@ python scripts/analyze_event_outcomes_cron.py
 ```
 
 **Что делает:**
-- Находит события в `trade_kb`, которым прошло 7+ дней
+- Находит события в `knowledge_base`, которым прошло 7+ дней
 - Анализирует изменение цены после события
 - Сохраняет результаты в `outcome_json`
 
@@ -79,7 +79,7 @@ engine = create_engine(get_database_url())
 with engine.connect() as conn:
     result = conn.execute(text('''
         SELECT COUNT(*) 
-        FROM trade_kb 
+        FROM knowledge_base 
         WHERE outcome_json IS NOT NULL
           AND outcome_json::text != 'null'::text
     '''))

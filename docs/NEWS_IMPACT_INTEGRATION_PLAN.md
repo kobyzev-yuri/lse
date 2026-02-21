@@ -4,6 +4,8 @@
 **Версия:** 1.0  
 **Статус:** Планирование
 
+> **Архитектура (актуально):** векторный поиск и исходы событий реализованы в одной таблице **knowledge_base** (колонки embedding, outcome_json). Таблица trade_kb удалена. См. [KNOWLEDGE_BASE_SINGLE_TABLE.md](KNOWLEDGE_BASE_SINGLE_TABLE.md).
+
 ---
 
 ## 📊 Анализ достаточности текущих источников новостей
@@ -88,7 +90,7 @@
 
 ### 1.1. Генерация эмбеддингов для новостей
 
-**Задача:** Автоматически генерировать embeddings для всех новостей из `knowledge_base` и сохранять в `trade_kb`.
+**Задача:** Проставлять embedding в `knowledge_base` для записей без вектора (backfill через sync_vector_kb_cron.py).
 
 **Реализация:**
 
@@ -107,10 +109,10 @@ class VectorKB:
         # или sentence-transformers: all-MiniLM-L6-v2 (384 dim)
         
     def sync_from_knowledge_base(self, limit: int = None):
-        """Синхронизирует новости из knowledge_base в trade_kb"""
+        """Backfill embedding в knowledge_base (WHERE embedding IS NULL)"""
         # Для каждой новости с NULL embedding:
         # 1. Генерируем embedding
-        # 2. Вставляем в trade_kb
+        # 2. UPDATE knowledge_base SET embedding = ...
 ```
 
 **Зависимости:**
@@ -142,7 +144,7 @@ def search_similar(
     time_window_days: int = 365
 ) -> pd.DataFrame:
     """
-    Ищет похожие события через векторный поиск в trade_kb
+    Ищет похожие события через векторный поиск в knowledge_base
     
     Returns:
         DataFrame с колонками: id, ticker, content, ts, similarity, event_type
@@ -151,7 +153,7 @@ def search_similar(
     query_embedding = self.generate_embedding(query)
     
     # 2. Векторный поиск через pgvector
-    # SELECT ... FROM trade_kb
+    # SELECT ... FROM knowledge_base WHERE embedding IS NOT NULL
     # WHERE embedding <=> :query_embedding < threshold
     # ORDER BY similarity LIMIT :limit
 ```
@@ -162,7 +164,7 @@ def search_similar(
 SELECT 
     id, ticker, event_type, content, ts,
     1 - (embedding <=> :query_embedding) as similarity
-FROM trade_kb
+FROM knowledge_base
 WHERE (ticker = :ticker OR ticker IN ('MACRO', 'US_MACRO'))
   AND ts >= NOW() - INTERVAL ':time_window_days days'
 ORDER BY embedding <=> :query_embedding
@@ -172,8 +174,8 @@ LIMIT :limit;
 **Индексы для производительности:**
 
 ```sql
-CREATE INDEX IF NOT EXISTS trade_kb_embedding_idx 
-ON trade_kb 
+CREATE INDEX IF NOT EXISTS kb_embedding_idx 
+ON knowledge_base 
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 ```
@@ -186,7 +188,7 @@ WITH (lists = 100);
 
 ### 2.1. Связь новостей с движениями цены
 
-**Задача:** Для каждой новости/события в `trade_kb` анализировать, как рынок отреагировал в последующие N дней.
+**Задача:** Для каждой новости/события в `knowledge_base` анализировать, как рынок отреагировал в последующие N дней.
 
 **Реализация:**
 
@@ -213,21 +215,21 @@ class NewsImpactAnalyzer:
                 'outcome': 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL'
             }
         """
-        # 1. Получаем событие из trade_kb
+        # 1. Получаем событие из knowledge_base
         # 2. Получаем котировки за N дней после события
         # 3. Рассчитываем метрики
-        # 4. Сохраняем в trade_kb (новое поле outcome_json)
+        # 4. Сохраняем в knowledge_base (поле outcome_json)
 ```
 
-**Расширение таблицы `trade_kb`:**
+**Колонка в `knowledge_base`:**
 
 ```sql
-ALTER TABLE trade_kb 
+ALTER TABLE knowledge_base 
 ADD COLUMN IF NOT EXISTS outcome_json JSONB;
 
 -- Индекс для быстрого поиска по исходу
-CREATE INDEX IF NOT EXISTS trade_kb_outcome_idx 
-ON trade_kb USING GIN (outcome_json);
+CREATE INDEX IF NOT EXISTS kb_outcome_json_idx 
+ON knowledge_base USING GIN (outcome_json);
 ```
 
 **Время:** 2-3 дня
@@ -439,7 +441,7 @@ def select_strategy(
 
 ### 4.1. Автоматическая синхронизация
 
-**Задача:** Автоматически добавлять новые новости в `trade_kb` с embeddings.
+**Задача:** Проставлять embedding в `knowledge_base` для новых записей (backfill).
 
 **Реализация:**
 
@@ -447,7 +449,7 @@ def select_strategy(
 # scripts/sync_vector_kb_cron.py
 
 def sync_vector_kb():
-    """Синхронизирует новые новости из knowledge_base в trade_kb"""
+    """Backfill embedding в knowledge_base"""
     vector_kb = VectorKB()
     
     # Получаем новости без embeddings
@@ -551,14 +553,14 @@ def track_decision_quality(
 
 1. ✅ **Создать `services/vector_kb.py`**
    - Генерация embeddings (OpenAI или sentence-transformers)
-   - Добавление событий в `trade_kb`
+   - Добавление событий в `knowledge_base` (с embedding)
    - Векторный поиск похожих событий
 
 2. ✅ **Создать `services/news_impact_analyzer.py`**
    - Анализ исходов событий (движение цены после новости)
    - Агрегация паттернов
 
-3. ✅ **Расширить `trade_kb`**
+3. ✅ **Колонки embedding, outcome_json в knowledge_base**
    - Добавить поле `outcome_json` для хранения исходов
    - Создать индексы для производительности
 
@@ -617,7 +619,7 @@ def track_decision_quality(
 
 ## 🎯 Метрики успеха
 
-1. ✅ **Все новости из `knowledge_base` автоматически попадают в `trade_kb`**
+1. ✅ **Backfill embedding в `knowledge_base` (sync_vector_kb_cron.py)**
 2. ✅ **Векторный поиск возвращает релевантные результаты (< 1 секунды)**
 3. ✅ **Исторический контекст улучшает качество решений (Win Rate +2-5%)**
 4. ✅ **Стоимость OpenAI API < $1/месяц при текущем объеме данных**

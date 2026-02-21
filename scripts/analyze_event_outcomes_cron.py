@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Cron скрипт для анализа исходов событий в trade_kb
-Анализирует события, которым уже прошло N дней, и обновляет outcome_json
+Cron скрипт для анализа исходов событий в knowledge_base.
+Анализирует события, которым уже прошло N дней, и обновляет outcome_json.
 """
 
 import sys
@@ -10,6 +10,7 @@ from pathlib import Path
 # Добавляем корневую директорию проекта в путь
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+Path(project_root / "logs").mkdir(parents=True, exist_ok=True)
 
 import logging
 import os
@@ -39,7 +40,7 @@ def analyze_existing_events(
     batch_size: int = 50
 ):
     """
-    Анализирует исходы существующих событий в trade_kb
+    Анализирует исходы существующих событий в knowledge_base
     
     Args:
         days_after: Минимальное количество дней после события для анализа
@@ -69,19 +70,19 @@ def analyze_existing_events(
         with engine.connect() as conn:
             query = text("""
                 SELECT id, ticker, ts, event_type, content
-                FROM trade_kb
+                FROM knowledge_base
                 WHERE ts <= :cutoff_date
                   AND ticker IS NOT NULL
                   AND content IS NOT NULL
-                  AND LENGTH(content) > 10
+                  AND LENGTH(TRIM(content)) > 10
                   AND (outcome_json IS NULL OR outcome_json::text = 'null'::text)
                 ORDER BY ts DESC
-                LIMIT :limit
+                LIMIT :lim
             """)
             
             params = {
                 "cutoff_date": cutoff_date,
-                "limit": limit if limit else 10000
+                "lim": limit
             }
             
             events_df = pd.read_sql(query, conn, params=params)
@@ -90,7 +91,7 @@ def analyze_existing_events(
                 logger.info("ℹ️ Нет событий для анализа исходов")
                 return
             
-            logger.info(f"📊 Найдено {len(events_df)} событий для анализа исходов")
+            logger.info(f"📊 Найдено {len(events_df)} событий для анализа исходов (события старше {days_after} дн., без outcome_json)")
             
             # Обрабатываем батчами
             for i in range(0, len(events_df), batch_size):

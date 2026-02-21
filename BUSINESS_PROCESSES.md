@@ -36,13 +36,11 @@ flowchart TD
     H --> I
     
     I --> J[quotes: котировки с метриками]
-    I --> K[trade_kb: векторная БЗ]
-    I --> L[knowledge_base: новости с sentiment]
+    I --> L[knowledge_base: новости, sentiment, embedding, outcome_json]
     I --> M[portfolio_state: состояние портфеля]
     I --> N[trade_history: история сделок]
     
     J --> O[Инициализация стартового капитала]
-    K --> O
     L --> O
     M --> O
     N --> O
@@ -505,12 +503,12 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     A[Новость добавлена в knowledge_base] --> B[Автоматическая синхронизация]
-    B --> C[Генерация embedding через OpenAI API]
-    C --> D[Сохранение в trade_kb с embedding]
+    B --> C[Генерация embedding (sentence-transformers или API)]
+    C --> D[Сохранение в knowledge_base: колонка embedding]
     
     E[AnalystAgent.get_decision] --> F[Формирование запроса]
     F --> G[Генерация embedding для запроса]
-    G --> H[Векторный поиск в trade_kb]
+    G --> H[Векторный поиск в knowledge_base WHERE embedding IS NOT NULL]
     
     H --> I[Поиск топ-5 похожих событий]
     I --> J[Анализ исходов похожих событий]
@@ -521,7 +519,7 @@ flowchart TD
     style C fill:#fff9c4
 ```
 
-**Комментарий**: Векторная база знаний (`trade_kb`) предназначена для семантического поиска похожих исторических событий. Это позволит улучшить качество решений через анализ того, как рынок реагировал на похожие ситуации в прошлом. **Статус**: Планируется, см. [VECTOR_KB_IMPLEMENTATION.md](docs/VECTOR_KB_IMPLEMENTATION.md)
+**Комментарий**: Векторный поиск реализован в той же таблице **knowledge_base** (колонка embedding). Семантический поиск похожих событий и анализ исходов (outcome_json) — см. [KNOWLEDGE_BASE_SINGLE_TABLE.md](docs/KNOWLEDGE_BASE_SINGLE_TABLE.md).
 
 ### 8.2. Интеграция векторного поиска в анализ
 
@@ -530,7 +528,7 @@ sequenceDiagram
     participant AA as AnalystAgent
     participant VKB as VectorKB
     participant OpenAI as OpenAI API
-    participant DB as PostgreSQL (trade_kb)
+    participant DB as PostgreSQL (knowledge_base)
     
     AA->>AA: Формирование контекста текущей ситуации
     Note over AA: "MSFT: close=350, sentiment=0.7, новость о продукте"
@@ -540,7 +538,7 @@ sequenceDiagram
     OpenAI-->>VKB: embedding[1536]
     
     VKB->>DB: Векторный поиск через pgvector
-    Note over DB: SELECT * FROM trade_kb<br/>WHERE embedding <=> :query_embedding<br/>ORDER BY similarity LIMIT 5
+    Note over DB: SELECT * FROM knowledge_base<br/>WHERE embedding IS NOT NULL<br/>ORDER BY embedding <=> :query LIMIT 5
     
     DB-->>VKB: Топ-5 похожих событий
     VKB->>VKB: Анализ исходов событий
@@ -579,8 +577,7 @@ graph TB
     
     subgraph "База данных PostgreSQL"
         I[quotes]
-        J[knowledge_base]
-        K[trade_kb - векторная БЗ]
+        J[knowledge_base: новости, embedding, outcome_json]
         L[portfolio_state]
         M[trade_history]
     end
@@ -589,12 +586,11 @@ graph TB
     F --> I
     B --> G
     G --> J
-    J -.->|Синхронизация| K
-    C -.->|Генерация embeddings| K
+    C -.->|Backfill embeddings| J
     
     I --> D
     J --> D
-    K -.->|Векторный поиск| D
+    J -.->|Векторный поиск| D
     
     D --> E
     E --> L
@@ -606,7 +602,6 @@ graph TB
     
     style D fill:#e1f5ff
     style E fill:#e1f5ff
-    style K fill:#fff9c4
     style I fill:#c8e6c9
     style J fill:#c8e6c9
     style L fill:#c8e6c9
@@ -816,7 +811,7 @@ flowchart LR
     style N fill:#e1f5ff
 ```
 
-**Комментарий**: Webhook получает все типы update; основная логика — в `message`. Команды маппятся на отдельные handler'ы; произвольный текст идёт в агента с доступом к knowledge_base и trade_kb.
+**Комментарий**: Webhook получает все типы update; основная логика — в `message`. Команды маппятся на отдельные handler'ы; произвольный текст идёт в агента с доступом к knowledge_base (новости и векторный поиск по embedding).
 
 ### 10.3. Размещение компонентов: Cloud Run и сервер БД
 
@@ -834,7 +829,7 @@ flowchart TB
     
     subgraph Server[Отдельный сервер<br/>когда будет готов]
         PG[(PostgreSQL<br/>lse_trading)]
-        KB[(knowledge_base<br/>trade_kb)]
+        KB[(knowledge_base)]
     end
     
     TG -->|HTTPS webhook| BOT
@@ -851,7 +846,7 @@ flowchart TB
     style KB fill:#c8e6c9
 ```
 
-**Комментарий**: Telegram и cron обращаются только к сервисам на Cloud Run. Postgres и обе базы знаний (таблицы в той же БД) располагаются на отдельном сервере; подключение по строке подключения (переменные окружения). Деплой сервера выполняется по той же схеме, что в проекте sc (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`).
+**Комментарий**: Telegram и cron обращаются только к сервисам на Cloud Run. Postgres и база знаний (таблица knowledge_base в той же БД) располагаются на отдельном сервере; подключение по строке подключения (переменные окружения). Деплой сервера выполняется по той же схеме, что в проекте sc (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`).
 
 ---
 

@@ -158,7 +158,7 @@ class NewsImpactTrace:
 
 Поиск похожих событий выполняется через:
 - `analyze_news_impact_pattern()` - использует последнюю новость как контекст
-- `vector_kb.search_similar()` - семантический поиск в `trade_kb`
+- `vector_kb.search_similar()` - семантический поиск в `knowledge_base` (WHERE embedding IS NOT NULL)
 - `news_impact_analyzer.aggregate_patterns()` - анализ исходов похожих событий
 
 ### Пороги влияния
@@ -177,7 +177,7 @@ class NewsImpactTrace:
 
 ## Ограничения
 
-1. **Требуются данные об исходах:** Для анализа паттернов нужны данные в `outcome_json` колонке `trade_kb`
+1. **Требуются данные об исходах:** Для анализа паттернов нужны данные в колонке `knowledge_base.outcome_json`
 2. **Минимальная выборка:** Для надежных выводов рекомендуется минимум 5-10 похожих событий
 3. **Контекст поиска:** Используется последняя новость из `knowledge_base`
 

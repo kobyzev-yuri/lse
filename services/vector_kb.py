@@ -11,7 +11,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime, timedelta
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -46,10 +46,16 @@ class VectorKB:
         logger.info(f"✅ VectorKB инициализирован (модель: {EMBEDDING_MODEL_NAME}, размерность: {EMBEDDING_DIMENSION})")
     
     def _load_model(self):
-        """Загружает модель sentence-transformers (ленивая загрузка)"""
+        """Загружает модель sentence-transformers (ленивая загрузка). Прокси отключается на время загрузки."""
         if self._model_loaded:
             return
         
+        import os
+        proxy_vars = (
+            "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+            "ALL_PROXY", "all_proxy", "SOCKS_PROXY", "socks_proxy", "NO_PROXY", "no_proxy"
+        )
+        saved = {k: os.environ.pop(k, None) for k in proxy_vars}
         try:
             from sentence_transformers import SentenceTransformer
             logger.info(f"📥 Загрузка модели {EMBEDDING_MODEL_NAME}...")
@@ -62,6 +68,10 @@ class VectorKB:
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки модели: {e}")
             raise
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
     
     def generate_embedding(self, text: str) -> List[float]:
         """
@@ -101,50 +111,51 @@ class VectorKB:
         event_type: str,
         content: str,
         ts: datetime,
-        source: Optional[str] = None
+        source: Optional[str] = None,
+        knowledge_base_id: Optional[int] = None,
     ) -> Optional[int]:
         """
-        Добавляет событие в trade_kb с embedding
+        Добавляет событие в knowledge_base с embedding (одна таблица для новостей и векторов).
         
         Args:
             ticker: Тикер инструмента
             event_type: Тип события ('NEWS', 'EARNINGS', 'ECONOMIC_INDICATOR', 'TRADE_SIGNAL')
             content: Текст события
             ts: Временная метка
-            source: Источник (опционально)
+            source: Источник (сохраняется в БД; по умолчанию 'MANUAL')
+            knowledge_base_id: Не используется (оставлен для совместимости API)
             
         Returns:
-            ID добавленной записи или None при ошибке
+            ID записи в knowledge_base или None при ошибке
         """
         if not content or not content.strip():
             logger.warning(f"⚠️ Пустой контент для события {ticker}, пропуск")
             return None
         
         try:
-            # Генерируем embedding
             embedding = self.generate_embedding(content)
-            
-            # Вставляем в БД
+            src = (source or "MANUAL").strip() or "MANUAL"
             with self.engine.begin() as conn:
                 result = conn.execute(
                     text("""
-                        INSERT INTO trade_kb (ts, ticker, event_type, content, embedding)
-                        VALUES (:ts, :ticker, :event_type, :content, :embedding)
+                        INSERT INTO knowledge_base (ts, ticker, source, content, event_type, embedding)
+                        VALUES (:ts, :ticker, :source, :content, :event_type, :embedding)
                         RETURNING id
                     """),
                     {
                         "ts": ts,
                         "ticker": ticker,
-                        "event_type": event_type,
+                        "source": src,
                         "content": content,
-                        "embedding": f"[{','.join(map(str, embedding))}]"  # pgvector формат: [1,2,3,...]
-                    }
+                        "event_type": event_type,
+                        "embedding": f"[{','.join(map(str, embedding))}]",
+                    },
                 )
                 event_id = result.fetchone()[0]
-                logger.debug(f"✅ Событие добавлено в trade_kb: ID={event_id}, ticker={ticker}, type={event_type}")
+                logger.debug(f"✅ Событие добавлено в knowledge_base: id={event_id}, ticker={ticker}")
                 return event_id
         except Exception as e:
-            logger.error(f"❌ Ошибка добавления события в trade_kb: {e}")
+            logger.error(f"❌ Ошибка добавления события в knowledge_base: {e}")
             return None
     
     def search_similar(
@@ -211,8 +222,8 @@ class VectorKB:
                 SELECT 
                     id, ticker, event_type, content, ts,
                     1 - (embedding <=> CAST(:query_embedding AS vector)) as similarity
-                FROM trade_kb
-                WHERE {where_sql}
+                FROM knowledge_base
+                WHERE embedding IS NOT NULL AND {where_sql}
                   AND (1 - (embedding <=> CAST(:query_embedding AS vector))) >= :min_similarity
                 ORDER BY embedding <=> CAST(:query_embedding AS vector)
                 LIMIT :limit
@@ -232,113 +243,132 @@ class VectorKB:
             logger.error(f"❌ Ошибка векторного поиска: {e}")
             return pd.DataFrame()
     
+    def count_without_embedding(self) -> int:
+        """Возвращает число записей без embedding с подходящим content (для backfill)."""
+        try:
+            with self.engine.connect() as conn:
+                row = conn.execute(
+                    text("""
+                        SELECT COUNT(*) FROM knowledge_base
+                        WHERE embedding IS NULL
+                          AND content IS NOT NULL
+                          AND TRIM(content) != ''
+                          AND LENGTH(TRIM(content)) > 10
+                    """)
+                ).fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"❌ Ошибка подсчёта записей без embedding: {e}")
+            return 0
+
+    def count_total_without_embedding(self) -> int:
+        """Возвращает общее число записей без embedding (без фильтра по content)."""
+        try:
+            with self.engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT COUNT(*) FROM knowledge_base WHERE embedding IS NULL")
+                ).fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"❌ Ошибка подсчёта: {e}")
+            return 0
+
     def sync_from_knowledge_base(self, limit: Optional[int] = None, batch_size: int = 100):
         """
-        Синхронизирует новости из knowledge_base в trade_kb
-        
-        Для каждой новости из knowledge_base, которой нет в trade_kb,
-        генерирует embedding и добавляет в trade_kb.
+        Проставляет embedding в knowledge_base для записей, у которых он ещё не заполнен.
+        Сначала проверяет, сколько таких записей есть; затем обрабатывает батчами.
         
         Args:
-            limit: Максимальное количество новостей для синхронизации (если None - все новые)
-            batch_size: Размер батча для обработки
+            limit: Максимум записей за запуск (None — обработать все без лимита)
+            batch_size: Размер батча
         """
-        logger.info("🔄 Начало синхронизации knowledge_base → trade_kb")
-        
-        synced_count = 0
-        skipped_count = 0
-        error_count = 0
-        
+        logger.info("🔄 Backfill embedding: проверка записей без embedding...")
+
         try:
+            # 1. Явная проверка: сколько записей без embedding
+            total_without = self.count_total_without_embedding()
+            need_count = self.count_without_embedding()
+            skipped_content = total_without - need_count
+            logger.info(f"📊 Всего без embedding: {total_without}. К обработке (content не пустой, длина > 10): {need_count}")
+            if skipped_content > 0:
+                logger.info(f"   Пропущено из-за пустого или короткого content (≤10 символов): {skipped_content}")
+            if need_count == 0:
+                logger.info("ℹ️ Нечего обрабатывать. Завершение.")
+                return
+
+            # 2. Выборка для обработки (без лимита по умолчанию; LIMIT NULL в PostgreSQL = все строки)
             with self.engine.connect() as conn:
-                # Находим новости из knowledge_base, которых нет в trade_kb
-                # Сопоставляем по ticker, event_type, content и ts (примерно)
                 query = text("""
-                    SELECT DISTINCT ON (kb.id) 
-                           kb.id, kb.ts, kb.ticker, kb.source, kb.content,
-                           kb.event_type, kb.importance
-                    FROM knowledge_base kb
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM trade_kb tk
-                        WHERE tk.ticker = kb.ticker 
-                          AND COALESCE(tk.event_type, 'NEWS') = COALESCE(kb.event_type, 'NEWS')
-                          AND ABS(EXTRACT(EPOCH FROM (kb.ts - tk.ts))) < 3600  -- В пределах часа
-                          AND LEFT(kb.content, 100) = LEFT(tk.content, 100)  -- Первые 100 символов совпадают
-                    )
-                      AND kb.content IS NOT NULL
-                      AND LENGTH(kb.content) > 10
-                    ORDER BY kb.id, kb.ts DESC
-                    LIMIT :limit
+                    SELECT id, ticker, content, event_type
+                    FROM knowledge_base
+                    WHERE embedding IS NULL
+                      AND content IS NOT NULL
+                      AND TRIM(content) != ''
+                      AND LENGTH(TRIM(content)) > 10
+                    ORDER BY id
+                    LIMIT :lim
                 """)
-                
-                params = {"limit": limit if limit else 10000}
-                news_df = pd.read_sql(query, conn, params=params)
-                
-                if news_df.empty:
-                    logger.info("ℹ️ Нет новых новостей для синхронизации")
-                    return
-                
-                logger.info(f"📊 Найдено {len(news_df)} новостей для синхронизации")
-                
-                # Обрабатываем батчами
-                for i in range(0, len(news_df), batch_size):
-                    batch = news_df.iloc[i:i+batch_size]
-                    
-                    for _, row in batch.iterrows():
-                        try:
-                            event_type = row.get('event_type') or 'NEWS'
-                            
-                            event_id = self.add_event(
-                                ticker=row['ticker'],
-                                event_type=event_type,
-                                content=row['content'],
-                                ts=row['ts'],
-                                source=row.get('source')
+                df = pd.read_sql(query, conn, params={"lim": limit})
+            
+            to_process = len(df)
+            logger.info(f"📊 К обработке в этом запуске: {to_process}" + (f" (лимит {limit})" if limit is not None else " (без лимита)"))
+            if to_process == 0:
+                return
+
+            updated_count = 0
+            error_count = 0
+            first_error = None
+
+            for i in range(0, to_process, batch_size):
+                batch = df.iloc[i : i + batch_size]
+                for _, row in batch.iterrows():
+                    try:
+                        emb = self.generate_embedding(row["content"])
+                        emb_str = f"[{','.join(map(str, emb))}]"
+                        with self.engine.begin() as conn:
+                            conn.execute(
+                                text("UPDATE knowledge_base SET embedding = CAST(:emb AS vector) WHERE id = :id"),
+                                {"emb": emb_str, "id": int(row["id"])},
                             )
-                            
-                            if event_id:
-                                synced_count += 1
-                            else:
-                                skipped_count += 1
-                        except Exception as e:
-                            error_count += 1
-                            logger.warning(f"⚠️ Ошибка синхронизации новости ID={row['id']}: {e}")
-                    
-                    logger.info(f"   Обработано {min(i+batch_size, len(news_df))}/{len(news_df)} новостей")
-                
+                        updated_count += 1
+                    except Exception as e:
+                        error_count += 1
+                        if first_error is None:
+                            first_error = e
+                        logger.warning(f"⚠️ Ошибка backfill id={row['id']}: {e}")
+                logger.info(f"   Обработано {min(i + batch_size, to_process)}/{to_process}")
+            
+            if first_error is not None and error_count > 0:
+                logger.warning(f"⚠️ Первая ошибка (для отладки): {first_error}", exc_info=False)
+            logger.info(f"✅ Backfill завершён: обновлено {updated_count}, ошибок {error_count}")
         except Exception as e:
-            logger.error(f"❌ Ошибка синхронизации: {e}")
-        
-        logger.info(
-            f"✅ Синхронизация завершена: добавлено {synced_count}, "
-            f"пропущено {skipped_count}, ошибок {error_count}"
-        )
+            logger.error(f"❌ Ошибка backfill: {e}", exc_info=True)
     
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> Dict[str, Any]:
         """
-        Возвращает статистику по trade_kb
-        
-        Returns:
-            Словарь с метриками
+        Возвращает статистику по записям с embedding в knowledge_base.
         """
         try:
             with self.engine.connect() as conn:
-                total = conn.execute(text("SELECT COUNT(*) FROM trade_kb")).fetchone()[0]
+                total = conn.execute(text("SELECT COUNT(*) FROM knowledge_base")).fetchone()[0]
                 with_embedding = conn.execute(
-                    text("SELECT COUNT(*) FROM trade_kb WHERE embedding IS NOT NULL")
+                    text("SELECT COUNT(*) FROM knowledge_base WHERE embedding IS NOT NULL")
                 ).fetchone()[0]
-                
+                without_total = self.count_total_without_embedding()
+                without_ready = self.count_without_embedding()
                 by_type = {}
                 result = conn.execute(
-                    text("SELECT event_type, COUNT(*) FROM trade_kb GROUP BY event_type")
+                    text("SELECT event_type, COUNT(*) FROM knowledge_base WHERE embedding IS NOT NULL GROUP BY event_type")
                 )
                 for row in result:
-                    by_type[row[0] or 'NULL'] = row[1]
-                
+                    by_type[row[0] or "NULL"] = row[1]
                 return {
-                    'total_events': total,
-                    'with_embedding': with_embedding,
-                    'by_event_type': by_type
+                    "total_events": total,
+                    "with_embedding": with_embedding,
+                    "without_embedding": without_total,
+                    "without_embedding_ready": without_ready,
+                    "without_embedding_skipped_content": without_total - without_ready,
+                    "by_event_type": by_type,
                 }
         except Exception as e:
             logger.error(f"❌ Ошибка получения статистики: {e}")

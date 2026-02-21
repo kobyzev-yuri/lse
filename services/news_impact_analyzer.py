@@ -44,7 +44,7 @@ class NewsImpactAnalyzer:
         Анализирует исход события: как изменилась цена после новости
         
         Args:
-            event_id: ID события из trade_kb
+            event_id: ID события (knowledge_base.id)
             ticker: Тикер инструмента
             days_after: Количество дней для анализа после события
             event_ts: Временная метка события (если None - берется из БД)
@@ -66,8 +66,8 @@ class NewsImpactAnalyzer:
             if not event_ts:
                 with self.engine.connect() as conn:
                     result = conn.execute(
-                        text("SELECT ts FROM trade_kb WHERE id = :event_id"),
-                        {"event_id": int(event_id)}  # Преобразуем в int для совместимости
+                        text("SELECT ts FROM knowledge_base WHERE id = :event_id"),
+                        {"event_id": int(event_id)}
                     )
                     row = result.fetchone()
                     if not row:
@@ -243,12 +243,12 @@ class NewsImpactAnalyzer:
                 result = conn.execute(text("""
                     SELECT column_name 
                     FROM information_schema.columns 
-                    WHERE table_name='trade_kb' AND column_name='outcome_json'
+                    WHERE table_name='knowledge_base' AND column_name='outcome_json'
                 """))
                 has_outcome_json = result.fetchone() is not None
                 
                 if not has_outcome_json:
-                    logger.warning("⚠️ Колонка outcome_json отсутствует в trade_kb, анализ исходов невозможен")
+                    logger.warning("⚠️ Колонка outcome_json отсутствует в knowledge_base, анализ исходов невозможен")
                     return {
                         'avg_price_change': 0.0,
                         'success_rate': 0.0,
@@ -262,7 +262,7 @@ class NewsImpactAnalyzer:
                 # Получаем исходы
                 outcomes_query = text("""
                     SELECT outcome_json
-                    FROM trade_kb
+                    FROM knowledge_base
                     WHERE id = ANY(:event_ids)
                       AND outcome_json IS NOT NULL
                 """)
@@ -338,7 +338,7 @@ class NewsImpactAnalyzer:
         outcome: Dict[str, Any]
     ) -> bool:
         """
-        Обновляет outcome_json для события в trade_kb
+        Обновляет outcome_json для события в knowledge_base
         
         Args:
             event_id: ID события
@@ -355,17 +355,15 @@ class NewsImpactAnalyzer:
                 result = conn.execute(text("""
                     SELECT column_name 
                     FROM information_schema.columns 
-                    WHERE table_name='trade_kb' AND column_name='outcome_json'
+                    WHERE table_name='knowledge_base' AND column_name='outcome_json'
                 """))
                 if not result.fetchone():
-                    # Создаем колонку если её нет
-                    conn.execute(text("ALTER TABLE trade_kb ADD COLUMN outcome_json JSONB"))
-                    logger.info("✅ Колонка outcome_json добавлена в trade_kb")
+                    conn.execute(text("ALTER TABLE knowledge_base ADD COLUMN outcome_json JSONB"))
+                    logger.info("✅ Колонка outcome_json добавлена в knowledge_base")
                 
-                # Обновляем outcome_json
                 conn.execute(
                     text("""
-                        UPDATE trade_kb
+                        UPDATE knowledge_base
                         SET outcome_json = :outcome_json
                         WHERE id = :event_id
                     """),
@@ -394,6 +392,6 @@ if __name__ == "__main__":
     analyzer = NewsImpactAnalyzer()
     
     # Пример анализа исхода события
-    # (требует существующее событие в trade_kb и котировки в quotes)
+    # (требует существующее событие в knowledge_base и котировки в quotes)
     # outcome = analyzer.analyze_event_outcome(event_id=1, ticker="MSFT", days_after=7)
     # print(f"Исход события: {outcome}")

@@ -98,72 +98,7 @@ def init_db():
                     if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
                         print(f"⚠️ Предупреждение при добавлении колонки {col_name}: {e}")
         
-        # Таблица базы знаний (Knowledge Base) с векторными embeddings
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS trade_kb (
-                id SERIAL PRIMARY KEY,
-                ts TIMESTAMP,
-                ticker VARCHAR(10),
-                event_type VARCHAR(50), -- 'NEWS', 'TRADE_SIGNAL', 'EARNINGS', 'ECONOMIC_INDICATOR'
-                content TEXT,
-                embedding vector(768), -- Для sentence-transformers (all-mpnet-base-v2)
-                outcome_json JSONB -- Результаты анализа исхода события (цена через N дней, sentiment match и т.д.)
-            );
-        """))
-        
-        # Добавляем колонку outcome_json если её нет (миграция)
-        try:
-            conn.execute(text("ALTER TABLE trade_kb ADD COLUMN IF NOT EXISTS outcome_json JSONB"))
-        except Exception as e:
-            if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
-                print(f"⚠️ Предупреждение при добавлении outcome_json: {e}")
-        
-        # Миграция: изменяем размерность embedding с 1536 на 768 (если таблица уже существует)
-        # Проверяем текущую размерность
-        result = conn.execute(text("""
-            SELECT COUNT(*) as cnt FROM information_schema.columns 
-            WHERE table_name='trade_kb' AND column_name='embedding'
-        """))
-        if result.fetchone()[0] > 0:
-            # Пробуем изменить размерность (если она была 1536)
-            try:
-                # Сначала удаляем старую колонку если она была 1536 (данные потеряются, но таблица скорее всего пустая)
-                conn.execute(text("ALTER TABLE trade_kb DROP COLUMN IF EXISTS embedding"))
-                conn.execute(text("ALTER TABLE trade_kb ADD COLUMN embedding vector(768)"))
-                print("✅ Колонка embedding обновлена до 768 измерений")
-            except Exception as e:
-                # Если не удалось, пробуем просто изменить тип (может не работать в pgvector)
-                try:
-                    conn.execute(text("ALTER TABLE trade_kb ALTER COLUMN embedding TYPE vector(768)"))
-                    print("✅ Размерность embedding изменена на 768")
-                except Exception as e2:
-                    if 'already exists' not in str(e2).lower() and 'duplicate' not in str(e2).lower():
-                        print(f"⚠️ Предупреждение при изменении embedding: {e2}")
-        
-        # Создаем индекс для быстрого векторного поиска (ivfflat для cosine distance)
-        # Примечание: ivfflat требует минимум несколько записей для создания
-        # Создадим индекс позже, когда будет достаточно данных
-        try:
-            # Проверяем количество записей
-            count_result = conn.execute(text("SELECT COUNT(*) FROM trade_kb"))
-            record_count = count_result.fetchone()[0]
-            
-            if record_count >= 10:  # Минимум для ivfflat
-                conn.execute(text("""
-                    CREATE INDEX IF NOT EXISTS trade_kb_embedding_idx 
-                    ON trade_kb 
-                    USING ivfflat (embedding vector_cosine_ops)
-                    WITH (lists = 100)
-                """))
-                print("✅ Индекс для векторного поиска создан")
-            else:
-                print(f"ℹ️ Индекс будет создан позже (нужно минимум 10 записей, сейчас {record_count})")
-        except Exception as e:
-            if 'already exists' not in str(e).lower() and 'does not exist' not in str(e).lower():
-                print(f"⚠️ Предупреждение при создании индекса: {e}")
-                print("   Индекс можно создать позже вручную или автоматически при достаточном количестве данных")
-        
-        # Таблица базы знаний для новостей с sentiment анализом
+        # Таблица базы знаний для новостей с sentiment анализом (включая embedding и outcome_json — одна таблица)
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS knowledge_base (
                 id SERIAL PRIMARY KEY,
@@ -200,6 +135,33 @@ def init_db():
                 except Exception as e:
                     if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
                         print(f"⚠️ Предупреждение при добавлении колонки {col_name}: {e}")
+        
+        # Векторный поиск и исходы событий — в той же таблице (одна сущность «новость/событие»)
+        try:
+            conn.execute(text("ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS embedding vector(768)"))
+            conn.execute(text("ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS outcome_json JSONB"))
+            print("✅ Колонки knowledge_base.embedding и outcome_json добавлены/проверены")
+        except Exception as e:
+            if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
+                print(f"⚠️ Предупреждение при добавлении embedding/outcome_json: {e}")
+        
+        # Индекс для векторного поиска по knowledge_base (ivfflat, только строки с embedding)
+        try:
+            count_result = conn.execute(text("SELECT COUNT(*) FROM knowledge_base WHERE embedding IS NOT NULL"))
+            record_count = count_result.fetchone()[0]
+            if record_count >= 10:
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS kb_embedding_idx
+                    ON knowledge_base USING ivfflat (embedding vector_cosine_ops)
+                    WITH (lists = 100)
+                    WHERE embedding IS NOT NULL
+                """))
+                print("✅ Индекс kb_embedding_idx создан")
+            else:
+                print(f"ℹ️ Индекс kb_embedding_idx будет создан при наличии ≥10 записей с embedding (сейчас {record_count})")
+        except Exception as e:
+            if 'already exists' not in str(e).lower() and 'does not exist' not in str(e).lower():
+                print(f"⚠️ Предупреждение при создании kb_embedding_idx: {e}")
         
         # Хранение текущего портфеля
         conn.execute(text("""

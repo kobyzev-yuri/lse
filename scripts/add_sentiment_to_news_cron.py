@@ -10,6 +10,7 @@ from pathlib import Path
 # Добавляем корневую директорию проекта в путь
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+Path(project_root / "logs").mkdir(parents=True, exist_ok=True)
 
 import logging
 import os
@@ -67,7 +68,7 @@ def add_sentiment_to_news(
     error_count = 0
     
     try:
-        # Находим новости без sentiment за последние N дней
+        # Находим новости без sentiment за последние N дней (исключаем EARNINGS/ECONOMIC_INDICATOR — там нет смысла в LLM sentiment)
         cutoff_date = datetime.now() - timedelta(days=days_back)
         
         with engine.connect() as conn:
@@ -78,15 +79,15 @@ def add_sentiment_to_news(
                   AND sentiment_score IS NULL
                   AND content IS NOT NULL
                   AND LENGTH(content) >= :min_length
-                  AND source IN ('RSS', 'NEWSAPI', 'MANUAL')
+                  AND (event_type IS NULL OR event_type NOT IN ('EARNINGS', 'ECONOMIC_INDICATOR'))
                 ORDER BY ts DESC
-                LIMIT :limit
+                LIMIT :lim
             """)
             
             params = {
                 "cutoff_date": cutoff_date,
                 "min_length": min_content_length,
-                "limit": limit if limit else 1000
+                "lim": limit if limit else 1000
             }
             
             news_df = pd.read_sql(query, conn, params=params)
@@ -111,29 +112,27 @@ def add_sentiment_to_news(
                         sentiment_score, insight = calculate_sentiment(content)
                         
                         if sentiment_score is not None:
-                            # Обновляем sentiment_score в БД
+                            # Обновляем sentiment_score и insight в БД
                             with engine.begin() as conn:
                                 update_query = text("""
                                     UPDATE knowledge_base
-                                    SET sentiment_score = :sentiment_score
+                                    SET sentiment_score = :sentiment_score, insight = :insight
                                     WHERE id = :news_id
                                 """)
                                 conn.execute(
                                     update_query,
                                     {
                                         "news_id": news_id,
-                                        "sentiment_score": sentiment_score
+                                        "sentiment_score": sentiment_score,
+                                        "insight": insight if insight and insight.strip() else None
                                     }
                                 )
                             
                             updated_count += 1
-                            logger.debug(
-                                f"✅ Новость ID={news_id} ({ticker}): "
-                                f"sentiment={sentiment_score:.3f}"
+                            insight_preview = (insight[:80] + "…") if insight and len(insight) > 80 else (insight or "—")
+                            logger.info(
+                                f"✅ ID={news_id} ({ticker}): sentiment={sentiment_score:.3f}, insight={insight_preview}"
                             )
-                            
-                            if insight:
-                                logger.debug(f"   Insight: {insight[:100]}...")
                         else:
                             skipped_count += 1
                         

@@ -14,7 +14,7 @@
 
 ### Описание
 
-Анализирует события из `trade_kb`, которым уже прошло N дней, и обновляет `outcome_json` с результатами:
+Анализирует события из `knowledge_base`, которым уже прошло N дней, и обновляет `outcome_json` с результатами:
 - Изменение цены через N дней (%)
 - Максимальный рост/падение
 - Изменение волатильности
@@ -102,7 +102,7 @@ SENTIMENT_DAYS_BACK=3 SENTIMENT_LIMIT=50 python scripts/add_sentiment_to_news_cr
 
 ### Описание
 
-Синхронизирует новости из `knowledge_base` в `trade_kb` с генерацией embeddings.
+Проставляет embedding в `knowledge_base` для записей с `embedding IS NULL` (backfill).
 
 ### Запуск
 
@@ -152,7 +152,7 @@ python scripts/sync_vector_kb_cron.py
 EVENT_OUTCOME_DAYS_AFTER=7 python scripts/analyze_event_outcomes_cron.py
 ```
 
-Это заполнит `outcome_json` для существующих событий в `trade_kb`.
+Это заполнит `outcome_json` для существующих событий в `knowledge_base`.
 
 ### Шаг 2: Добавление sentiment к недавним новостям
 
@@ -174,7 +174,7 @@ with engine.connect() as conn:
     # Проверяем события с исходами
     result = conn.execute(text("""
         SELECT COUNT(*) 
-        FROM trade_kb 
+        FROM knowledge_base 
         WHERE outcome_json IS NOT NULL
     """))
     print(f"Событий с исходами: {result.fetchone()[0]}")
@@ -211,7 +211,7 @@ from config_loader import get_database_url
 # Статистика Vector KB
 vector_kb = VectorKB()
 stats = vector_kb.get_stats()
-print(f"Событий в trade_kb: {stats.get('total_events', 0)}")
+print(f"Событий в knowledge_base (с embedding): {stats.get('with_embedding', 0)}")
 print(f"С событиями с исходами: {stats.get('with_outcome', 0)}")
 
 # Статистика sentiment
@@ -247,7 +247,7 @@ with engine.connect() as conn:
 Если `analyze_event_outcomes_cron.py` пропускает события:
 1. Убедитесь, что есть котировки в `quotes` для тикеров
 2. Проверьте, что события произошли достаточно давно (минимум `EVENT_OUTCOME_DAYS_AFTER` дней)
-3. Проверьте соответствие тикеров между `trade_kb` и `quotes`
+3. Проверьте соответствие тикеров между `knowledge_base` и `quotes`
 
 ### Медленная работа
 

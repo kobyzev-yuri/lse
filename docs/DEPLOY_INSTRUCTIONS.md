@@ -1,6 +1,6 @@
 # Инструкция по развёртыванию LSE (Cloud Run + отдельный сервер БД/КБ)
 
-Схема развёртывания **аналогична проекту sc**: сервисы приложения (Telegram-бот и API) разворачиваются в **Google Cloud Run**, база данных **PostgreSQL** и базы знаний (**knowledge_base**, **trade_kb**) — на **отдельном сервере**. Когда сервер будет заведён, в переменных окружения Cloud Run указывается строка подключения к этому серверу.
+Схема развёртывания **аналогична проекту sc**: сервисы приложения (Telegram-бот и API) разворачиваются в **Google Cloud Run**, база данных **PostgreSQL** и база знаний (**knowledge_base**, одна таблица с embedding и outcome_json) — на **отдельном сервере**. Когда сервер будет заведён, в переменных окружения Cloud Run указывается строка подключения к этому серверу.
 
 ## Архитектура
 
@@ -97,7 +97,7 @@ gcloud run deploy $SERVICE_NAME \
 
 1. Установить PostgreSQL, включить расширение **pgvector**.
 2. Создать БД `lse_trading`, пользователя с правами на неё.
-3. Применить миграции LSE (схема таблиц: `quotes`, `knowledge_base`, `trade_kb`, `portfolio_state`, `trade_history` и т.д.).
+3. Применить миграции LSE (схема: `quotes`, `knowledge_base` (в т.ч. embedding, outcome_json), `portfolio_state`, `trade_history` и т.д.).
 4. При необходимости выполнить `init_db.py` и скрипты загрузки новостей/котировок.
 5. Обеспечить сетевой доступ с Cloud Run к этому серверу (VPC / Cloud SQL Proxy / firewall с IP Cloud Run).
 6. В переменной `DATABASE_URL` на Cloud Run указать хост этого сервера.

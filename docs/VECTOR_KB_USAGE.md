@@ -94,29 +94,22 @@ patterns = analyzer.aggregate_patterns(similar_events_df)
 
 ## Структура БД
 
-### Таблица `trade_kb`
+Векторный поиск и исходы событий хранятся в той же таблице **knowledge_base** (одна таблица для новостей и эмбеддингов). В ней есть колонки:
 
-```sql
-CREATE TABLE trade_kb (
-    id SERIAL PRIMARY KEY,
-    ts TIMESTAMP,
-    ticker VARCHAR(10),
-    event_type VARCHAR(50),  -- 'NEWS', 'EARNINGS', 'ECONOMIC_INDICATOR', 'TRADE_SIGNAL'
-    content TEXT,
-    embedding vector(768),   -- sentence-transformers embeddings
-    outcome_json JSONB       -- Результаты анализа исхода события
-);
-```
+- **embedding** `vector(768)` — для семантического поиска (sentence-transformers); NULL, пока не посчитан
+- **outcome_json** `JSONB` — результат анализа исхода события (цена через N дней и т.д.)
+
+Остальные колонки: id, ts, ticker, source, content, sentiment_score, event_type, insight, link, importance. Создание таблицы и добавление колонок — в `init_db.py`.
 
 ### Индекс для векторного поиска
 
-Индекс `ivfflat` создается автоматически при наличии минимум 10 записей:
+Индекс **kb_embedding_idx** создаётся в init_db при наличии минимум 10 записей с `embedding IS NOT NULL`:
 
 ```sql
-CREATE INDEX trade_kb_embedding_idx 
-ON trade_kb 
-USING ivfflat (embedding vector_cosine_ops)
-WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS kb_embedding_idx
+ON knowledge_base USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100)
+WHERE embedding IS NOT NULL;
 ```
 
 ## API методы
@@ -126,8 +119,8 @@ WITH (lists = 100);
 - `generate_embedding(text: str) -> List[float]` - Генерация embedding для текста
 - `add_event(ticker, event_type, content, ts, source=None) -> int` - Добавление события
 - `search_similar(query, ticker=None, limit=5, min_similarity=0.5, ...) -> pd.DataFrame` - Поиск похожих событий
-- `sync_from_knowledge_base(limit=None, batch_size=100)` - Синхронизация из knowledge_base
-- `get_stats() -> Dict` - Статистика по trade_kb
+- `sync_from_knowledge_base(limit=None, batch_size=100)` - Backfill embedding в knowledge_base (UPDATE для записей с embedding IS NULL)
+- `get_stats() -> Dict` - Статистика по knowledge_base (всего записей, с embedding, по типам)
 
 ### NewsImpactAnalyzer
 
@@ -181,9 +174,8 @@ if not similar_events.empty:
 
 Если ранее использовались OpenAI embeddings (1536 dim):
 
-1. Таблица `trade_kb` автоматически мигрируется при запуске `init_db.py`
-2. Старые embeddings будут потеряны (но таблица обычно пустая на старте)
-3. Новые embeddings будут генерироваться локально через sentence-transformers
+1. В **knowledge_base** колонка `embedding` имеет размерность 768 (init_db / миграция).
+2. Новые embeddings генерируются локально через sentence-transformers; backfill — скрипт `sync_vector_kb_cron.py`.
 
 ## Отладка
 

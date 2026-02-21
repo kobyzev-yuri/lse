@@ -63,7 +63,7 @@
 - ✅ **PostgreSQL с pgvector:**
   - `quotes` - котировки с метриками
   - `knowledge_base` - новости с sentiment
-  - `trade_kb` - векторная база знаний
+  - `knowledge_base` (колонки embedding, outcome_json) - векторный поиск и исходы событий
   - `portfolio_state` - состояние портфеля
   - `trade_history` - история сделок
 
@@ -206,7 +206,7 @@
 
 4. **Текстовые запросы:**
    - Обработка произвольного текста
-   - Поиск в Vector KB (`trade_kb`)
+   - Поиск в Vector KB (`knowledge_base` WHERE embedding IS NOT NULL)
    - Контекстные ответы через LLM
 
 5. **Уведомления:**

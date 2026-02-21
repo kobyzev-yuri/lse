@@ -1,23 +1,20 @@
 # Реализация векторной базы знаний (Vector Knowledge Base)
 
+> **Актуальная архитектура:** одна таблица **knowledge_base** с колонками `embedding` и `outcome_json`. Таблица trade_kb удалена. См. [KNOWLEDGE_BASE_SINGLE_TABLE.md](KNOWLEDGE_BASE_SINGLE_TABLE.md) и [VECTOR_KB_USAGE.md](VECTOR_KB_USAGE.md).
+
 ## Текущее состояние
 
 ### Что есть
-- ✅ Таблица `trade_kb` в PostgreSQL с полем `embedding vector(1536)`
-- ✅ Расширение `pgvector` установлено
-- ✅ Структура таблицы готова для хранения векторных embeddings
-
-### Что отсутствует
-- ❌ Генерация embeddings для новостей/событий
-- ❌ Вставка данных в `trade_kb`
-- ❌ Векторный поиск похожих событий
-- ❌ Интеграция с `AnalystAgent` для улучшения решений
+- ✅ Таблица **knowledge_base** с колонками `embedding vector(768)` и `outcome_json`
+- ✅ Расширение `pgvector`, индекс `kb_embedding_idx`
+- ✅ VectorKB пишет/читает knowledge_base; backfill через `sync_vector_kb_cron.py`
+- ✅ Векторный поиск и анализ исходов (NewsImpactAnalyzer) работают с knowledge_base
 
 ---
 
 ## Назначение векторной базы знаний
 
-Векторная БЗ (`trade_kb`) предназначена для:
+Векторный поиск (колонка `embedding` в **knowledge_base**) предназначен для:
 
 1. **Семантический поиск исторических паттернов**
    - Поиск похожих ситуаций из прошлого
@@ -29,7 +26,7 @@
    - Комбинирование технических индикаторов + sentiment + исторические паттерны
 
 3. **Обогащение новостей**
-   - Автоматическое добавление новостей из `knowledge_base` в `trade_kb` с embeddings
+   - Backfill embedding в `knowledge_base` для записей без вектора (sync_vector_kb_cron.py)
    - Поиск связанных новостей по смыслу, а не только по тикеру
 
 ---
@@ -41,7 +38,7 @@
 ```mermaid
 flowchart TD
     A[Новость/Событие] --> B[Генерация embedding через OpenAI]
-    B --> C[Сохранение в trade_kb]
+    B --> C[Сохранение в knowledge_base (колонка embedding)]
     C --> D[Векторный поиск похожих событий]
     D --> E[Использование в AnalystAgent]
     
@@ -57,7 +54,7 @@ flowchart TD
 | Таблица | Назначение | Использование |
 |---------|-----------|---------------|
 | `knowledge_base` | Новости с sentiment анализом | Временной поиск по тикеру, расчет sentiment |
-| `trade_kb` | Семантический поиск через embeddings | Поиск похожих событий по смыслу, RAG |
+| knowledge_base (embedding) | Семантический поиск через embeddings | Поиск похожих событий по смыслу, RAG |
 
 ---
 
@@ -97,13 +94,13 @@ class VectorKB:
         """Генерирует embedding для текста"""
     
     def add_event(self, ticker: str, event_type: str, content: str, ts: datetime):
-        """Добавляет событие в trade_kb с embedding"""
+        """Добавляет событие в knowledge_base с embedding"""
     
     def search_similar(self, query: str, ticker: str = None, limit: int = 5) -> pd.DataFrame:
         """Ищет похожие события через векторный поиск"""
     
     def sync_from_knowledge_base(self):
-        """Синхронизирует новости из knowledge_base в trade_kb"""
+        """Backfill embedding в knowledge_base (WHERE embedding IS NULL)"""
 ```
 
 ### 4. Интеграция с AnalystAgent
@@ -133,12 +130,12 @@ sequenceDiagram
     participant News as Новость (knowledge_base)
     participant VectorKB as VectorKB
     participant OpenAI as OpenAI API
-    participant DB as PostgreSQL (trade_kb)
+    participant DB as PostgreSQL (knowledge_base)
     
     News->>VectorKB: Новость добавлена
     VectorKB->>OpenAI: Генерация embedding
     OpenAI-->>VectorKB: embedding[1536]
-    VectorKB->>DB: INSERT в trade_kb
+    VectorKB->>DB: INSERT в knowledge_base
 ```
 
 ### Шаг 2: Использование в анализе
@@ -149,7 +146,7 @@ flowchart TD
     A --> C[Sentiment анализ]
     A --> D[Векторный поиск похожих событий]
     
-    D --> E[Поиск в trade_kb через pgvector]
+    D --> E[Поиск в knowledge_base через pgvector]
     E --> F[Получение топ-5 похожих событий]
     F --> G[Анализ исходов этих событий]
     G --> H[Улучшение решения]
@@ -228,7 +225,7 @@ def get_decision(self, ticker: str) -> str:
 SELECT 
     id, ticker, event_type, content, ts,
     1 - (embedding <=> :query_embedding) as similarity
-FROM trade_kb
+FROM knowledge_base
 WHERE ticker = :ticker OR ticker IN ('MACRO', 'US_MACRO')
 ORDER BY embedding <=> :query_embedding
 LIMIT 5;
@@ -240,8 +237,8 @@ LIMIT 5;
 
 ```sql
 -- Создать индекс для быстрого поиска
-CREATE INDEX IF NOT EXISTS trade_kb_embedding_idx 
-ON trade_kb 
+CREATE INDEX IF NOT EXISTS kb_embedding_idx 
+ON knowledge_base 
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 ```
@@ -253,11 +250,11 @@ WITH (lists = 100);
 ### Этап 1: Базовая функциональность (1-2 дня)
 1. ✅ Создать модуль `vector_kb.py`
 2. ✅ Реализовать генерацию embeddings через OpenAI
-3. ✅ Реализовать добавление событий в `trade_kb`
+3. ✅ Реализовать добавление событий в `knowledge_base`
 4. ✅ Реализовать векторный поиск
 
 ### Этап 2: Интеграция (1 день)
-1. ✅ Синхронизация из `knowledge_base` в `trade_kb`
+1. ✅ Backfill embedding в `knowledge_base`
 2. ✅ Добавить метод `get_historical_context()` в `AnalystAgent`
 3. ✅ Использовать контекст при принятии решений
 
@@ -270,7 +267,7 @@ WITH (lists = 100);
 
 ## Метрики успеха
 
-- ✅ Все новости из `knowledge_base` автоматически попадают в `trade_kb`
+- ✅ Embedding проставляется в `knowledge_base` (backfill или при добавлении)
 - ✅ Векторный поиск возвращает релевантные результаты (< 1 секунды)
 - ✅ Исторический контекст улучшает качество решений (Win Rate +2-5%)
 - ✅ Стоимость OpenAI API < $10/месяц при текущем объеме данных
