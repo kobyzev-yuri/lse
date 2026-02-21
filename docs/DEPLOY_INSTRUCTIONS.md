@@ -1,137 +1,107 @@
-# Инструкция по развёртыванию LSE (Cloud Run + отдельный сервер БД/КБ)
+# Развёртывание LSE на Google Cloud
 
-Схема развёртывания **аналогична проекту sc**: сервисы приложения (Telegram-бот и API) разворачиваются в **Google Cloud Run**, база данных **PostgreSQL** и база знаний (**knowledge_base**, одна таблица с embedding и outcome_json) — на **отдельном сервере**. Когда сервер будет заведён, в переменных окружения Cloud Run указывается строка подключения к этому серверу.
-
-## Архитектура
-
-| Компонент | Где разворачивается |
-|-----------|---------------------|
-| Telegram Bot (webhook + handlers) | Google Cloud Run |
-| LSE API (отчёты, статус, данные) | Google Cloud Run |
-| PostgreSQL (lse_trading) | Отдельный сервер |
-| Базы знаний (таблицы в той же БД) | Тот же сервер |
-
-Подробные диаграммы — в [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md) (разделы 10 и 11).
+Два варианта: **одна VM** (всё на одном сервере) или **Cloud Run + VM** (бот на Cloud Run, БД и cron на VM).
 
 ---
 
-## Предусловия
+## Вариант A: Одна VM (всё в одном)
 
-1. Код в ветке `main` запушен в GitHub.
-2. На машине, с которой деплоите, установлен **gcloud** CLI и выполнен вход:
-   ```bash
-   gcloud auth login
-   gcloud config set project YOUR_PROJECT_ID
-   ```
-3. **Сервер с PostgreSQL** (когда будет готов):
-   - Установлен PostgreSQL с расширением **pgvector**.
-   - Выполнены миграции LSE, при необходимости загружены начальные данные.
-   - Доступ с Cloud Run обеспечен (например, через VPC connector, Cloud SQL Proxy или белый список IP).
+Подходит для малой нагрузки: PostgreSQL (с pgvector), cron (цены, новости, торговый цикл, RSI), Telegram-бот (polling или webhook).
 
----
+**Оценка стоимости:** ~$20–40/мес (e2-small / e2-medium + диск 30–50 GB в регионе europe-west1 или us-central1).
 
-## Деплой на Google Cloud Run
-
-Выполнять на **локальной машине** (или CI), где настроен `gcloud`.
-
-### Вариант 1: Автоматический деплой через скрипт
-
-Когда в репозитории появятся `Dockerfile` и скрипт деплоя (например, `api/deploy_lse.sh` или `deploy_bot.sh`):
+### 1. Создание VM
 
 ```bash
-cd /path/to/lse
-# Указать при необходимости:
-# export PROJECT_ID=your-gcp-project
-# export REGION=europe-west1
-# export SERVICE_NAME=lse-bot
-./api/deploy_lse.sh   # или путь к скрипту по факту
+export PROJECT_ID=your-gcp-project
+export ZONE=europe-west1-b
+export VM_NAME=lse-server
+
+gcloud compute instances create $VM_NAME \
+  --project=$PROJECT_ID --zone=$ZONE \
+  --machine-type=e2-small \
+  --image-family=ubuntu-2204-lts --image-project=ubuntu-os-cloud \
+  --boot-disk-size=30GB --boot-disk-type=pd-balanced
 ```
 
-В скрипте должны быть: сборка образа через `gcloud builds submit` и деплой через `gcloud run deploy` с портом 8080 и переменными окружения (`DATABASE_URL`, `TELEGRAM_BOT_TOKEN` и т.д.).
+При webhook — открыть порт 8080 (firewall rule на tcp:8080).
 
-### Вариант 2: Ручной деплой
+### 2. На VM: установка
+
+- **PostgreSQL + pgvector:** установить Postgres, создать БД `lse_trading`, пользователя, `CREATE EXTENSION vector;`
+- **Python 3.11:** conda или venv
+- **Код:** `git clone` репозитория в `/opt/lse`, `pip install -r requirements.txt`
+- **Конфиг:** `config.env` с `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, при необходимости ключи API (NewsAPI, Alpha Vantage)
+- **Инициализация:** `python init_db.py`, `./setup_cron.sh`
+- **Бот:** polling — `python scripts/run_telegram_bot.py` (systemd/screen) или webhook — запуск `api/bot_app.py` на 8080 и настройка webhook на `https://VM_IP:8080/webhook` (нужен HTTPS: reverse proxy или load balancer)
+
+Подробный порядок установки Postgres/pgvector и cron — в [CRON_TICKERS_EXPLANATION.md](CRON_TICKERS_EXPLANATION.md) и [setup_cron.sh](../setup_cron.sh).
+
+---
+
+## Вариант B: Cloud Run (бот) + VM (БД и cron)
+
+Бот и API — в Cloud Run (scale-to-zero, управляемый HTTPS). БД и cron — на одной VM.
+
+**Оценка:** VM ~$20–35/мес + Cloud Run по запросам (при малом трафике несколько $/мес).
+
+### 1. VM для БД и cron
+
+Как в варианте A: создать VM, установить PostgreSQL с pgvector, Python, клонировать репозиторий, `config.env`, `init_db.py`, `setup_cron.sh`. Бот на этой VM не запускать. Обеспечить доступ к БД с Cloud Run (статический IP + firewall или VPC connector).
+
+### 2. Деплой на Cloud Run
+
+На машине с установленным `gcloud`:
 
 ```bash
-cd /path/to/lse
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
 
 export PROJECT_ID=your-gcp-project
 export REGION=us-central1
 export SERVICE_NAME=lse-bot
 
-# Сборка образа (из директории с Dockerfile)
+# Сборка (в корне репозитория, при наличии Dockerfile)
 gcloud builds submit --tag gcr.io/$PROJECT_ID/$SERVICE_NAME --project=$PROJECT_ID
 
-# Развёртывание в Cloud Run
+# Деплой
 gcloud run deploy $SERVICE_NAME \
   --image gcr.io/$PROJECT_ID/$SERVICE_NAME \
-  --platform managed \
-  --region $REGION \
-  --allow-unauthenticated \
-  --memory 1Gi \
-  --cpu 1 \
-  --max-instances 10 \
-  --min-instances 0 \
-  --port 8080 \
-  --timeout 60 \
+  --platform managed --region $REGION --allow-unauthenticated \
+  --memory 1Gi --cpu 1 --max-instances 10 --min-instances 0 \
+  --port 8080 --timeout 60 \
   --set-env-vars "DATABASE_URL=postgresql://user:pass@YOUR_DB_HOST:5432/lse_trading" \
-  --set-env-vars "TELEGRAM_BOT_TOKEN=your_bot_token" \
+  --set-env-vars "TELEGRAM_BOT_TOKEN=..." \
   --project=$PROJECT_ID
 ```
 
-После деплоя:
+URL сервиса: `gcloud run services describe $SERVICE_NAME --region=$REGION --format="value(status.url)"`. Webhook: `https://api.telegram.org/bot<TOKEN>/setWebhook?url=<SERVICE_URL>/webhook`.
 
-- Узнать URL сервиса:
-  ```bash
-  gcloud run services describe $SERVICE_NAME --region=$REGION --format="value(status.url)" --project=$PROJECT_ID
-  ```
-- Установить webhook для бота (HTTPS):
-  ```bash
-  curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<SERVICE_URL>/webhook"
-  ```
+Секреты предпочтительно задавать через Secret Manager и подключать к Cloud Run через `--set-secrets`.
 
----
-
-## Сервер БД (отдельный сервер)
-
-Развёртывание **на другом сервере** (не в том же GCP-проекте, что и sc) — по той же логике, что и в sc:
-
-1. Установить PostgreSQL, включить расширение **pgvector**.
-2. Создать БД `lse_trading`, пользователя с правами на неё.
-3. Применить миграции LSE (схема: `quotes`, `knowledge_base` (в т.ч. embedding, outcome_json), `portfolio_state`, `trade_history` и т.д.).
-4. При необходимости выполнить `init_db.py` и скрипты загрузки новостей/котировок.
-5. Обеспечить сетевой доступ с Cloud Run к этому серверу (VPC / Cloud SQL Proxy / firewall с IP Cloud Run).
-6. В переменной `DATABASE_URL` на Cloud Run указать хост этого сервера.
-
-Когда сервер будет заведён, можно дополнить этот раздел конкретными командами (например, установка через Docker или пакеты ОС).
-
----
-
-## Проверка после деплоя
-
-1. **Логи Cloud Run:**
-   ```bash
-   gcloud run services logs read $SERVICE_NAME --region=$REGION --project=$PROJECT_ID --limit=50
-   ```
-2. **Проверка webhook:** отправить боту сообщение в Telegram и убедиться, что в логах есть обработка запроса.
-3. **Проверка БД:** команды бота, требующие БД (например, `/status`, `/news`), должны возвращать данные без ошибок подключения.
-
----
-
-## Переменные окружения (ориентир)
+### 3. Переменные окружения (ориентир)
 
 | Переменная | Описание |
 |------------|----------|
-| `DATABASE_URL` | Строка подключения к PostgreSQL (хост сервера БД). |
+| `DATABASE_URL` | Строка подключения к PostgreSQL (хост VM или Cloud SQL). |
 | `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather. |
-| При необходимости | Ключи для новостей/API (NewsAPI, Alpha Vantage и т.д.) — если бот/API их использует. |
-
-Секреты лучше задавать через Secret Manager и подключать к Cloud Run через `--set-secrets`.
+| При необходимости | Ключи NewsAPI, Alpha Vantage и т.д. |
 
 ---
 
-## Связь с другими документами
+## Проверка
 
-- **BUSINESS_PROCESSES.md** — разделы 10 (Telegram бот, webhook) и 11 (схема развёртывания).
-- **../sc/DEPLOY_INSTRUCTIONS.md** — образец пошагового деплоя API в Cloud Run в проекте sc.
+- **Cloud Run:** `gcloud run services logs read $SERVICE_NAME --region=$REGION --limit=50`
+- **Бот:** отправить сообщение в Telegram, проверить логи; команды `/status`, `/news` должны работать без ошибок БД.
 
-Деплой на отдельный сервер (Postgres + КБ) будет выполнен, когда сервер будет готов; инструкцию при необходимости дополним.
+---
+
+## Сравнение вариантов
+
+| Вариант | Оценка стоимости | Заметки |
+|---------|-------------------|--------|
+| Одна VM (e2-small) | ~$20–25/мес | Postgres + cron + бот (polling). Проще всего. |
+| Одна VM (e2-medium) | ~$30–40/мес | Запас по памяти под embedding/LLM. |
+| Cloud Run + VM | ~$25–45/мес | Бот на Run, БД и cron на VM; нужен доступ Run → БД. |
+
+Схемы потоков и размещение компонентов — в [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md) (разделы 10–11).

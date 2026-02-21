@@ -58,9 +58,8 @@ AnalystAgent → Strategy Manager → ExecutionAgent → PostgreSQL
 - [ROADMAP.md](ROADMAP.md) - план развития
 - [docs/BACKTESTING_GUIDE.md](docs/BACKTESTING_GUIDE.md) - руководство по бэктестингу
 - [docs/TRADING_GLOSSARY.md](docs/TRADING_GLOSSARY.md) - терминология
-- [docs/NEWS_INTEGRATION_PLAN.md](docs/NEWS_INTEGRATION_PLAN.md) - план интеграции новостных источников
+- [docs/NEWS.md](docs/NEWS.md) - новости: источники, knowledge_base, скрипты
 - [docs/RISK_MANAGEMENT.md](docs/RISK_MANAGEMENT.md) - управление рисками и лимиты компании
-- [docs/NEWS_AND_SENTIMENT_SUMMARY.md](docs/NEWS_AND_SENTIMENT_SUMMARY.md) - новости и sentiment: источники, когда тянется из API, когда нужна LLM-обработка
 
 ## 🎯 Основные команды
 

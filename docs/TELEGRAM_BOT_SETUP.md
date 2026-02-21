@@ -222,7 +222,7 @@ python scripts/run_telegram_bot.py
 
 **Настройка:**
 
-1. Развернуть `api/bot_app.py` на Cloud Run (см. `docs/DEPLOY_INSTRUCTIONS.md`)
+1. Развернуть `api/bot_app.py` на Cloud Run или на VM (см. `docs/DEPLOY_INSTRUCTIONS.md`)
 
 2. Настроить webhook:
 ```bash
@@ -407,16 +407,9 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 
 ---
 
-## Развертывание на Cloud Run
+## Развёртывание
 
-См. `docs/DEPLOY_INSTRUCTIONS.md` для подробных инструкций по развертыванию.
-
-**Кратко:**
-
-1. Создать `Dockerfile` для `api/bot_app.py`
-2. Собрать образ: `gcloud builds submit --tag gcr.io/PROJECT_ID/lse-bot`
-3. Развернуть: `gcloud run deploy lse-bot --image ...`
-4. Настроить webhook: `python scripts/setup_webhook.py --url <SERVICE_URL>/webhook`
+Инструкции по развёртыванию (одна VM или Cloud Run + VM): **docs/DEPLOY_INSTRUCTIONS.md**. После деплоя на Cloud Run — настроить webhook: `python scripts/setup_webhook.py --url <SERVICE_URL>/webhook`.
 
 ---
 

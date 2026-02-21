@@ -519,7 +519,7 @@ flowchart TD
     style C fill:#fff9c4
 ```
 
-**Комментарий**: Векторный поиск реализован в той же таблице **knowledge_base** (колонка embedding). Семантический поиск похожих событий и анализ исходов (outcome_json) — см. [KNOWLEDGE_BASE_SINGLE_TABLE.md](docs/KNOWLEDGE_BASE_SINGLE_TABLE.md).
+**Комментарий**: Векторный поиск реализован в той же таблице **knowledge_base** (колонка embedding). Семантический поиск и анализ исходов (outcome_json) — см. [docs/NEWS.md](docs/NEWS.md), [docs/VECTOR_KB_IMPLEMENTATION.md](docs/VECTOR_KB_IMPLEMENTATION.md).
 
 ### 8.2. Интеграция векторного поиска в анализ
 
@@ -759,7 +759,7 @@ flowchart TD
 - LLM используется для `/ask` и для ответов на вопросы вида «когда открыть позицию и какие параметры советуешь»
 - Работа в группах через команду `/ask`
 
-Все сервисы бота и API разворачиваются на Google Cloud Run; БД и базы знаний — на отдельном сервере (см. раздел 11).
+При деплое «Cloud Run + VM» бот и API — на Cloud Run, БД и cron — на VM; возможен вариант «всё на одной VM» (см. раздел 11).
 
 ### 10.2. Маршрутизация webhook и обработчики
 
@@ -813,7 +813,7 @@ flowchart LR
 
 **Комментарий**: Webhook получает все типы update; основная логика — в `message`. Команды маппятся на отдельные handler'ы; произвольный текст идёт в агента с доступом к knowledge_base (новости и векторный поиск по embedding).
 
-### 10.3. Размещение компонентов: Cloud Run и сервер БД
+### 10.3. Размещение компонентов (Cloud Run + VM)
 
 ```mermaid
 flowchart TB
@@ -822,7 +822,7 @@ flowchart TB
         CRON[Cron / Scheduler]
     end
     
-    subgraph GCP[Google Cloud Run]
+    subgraph GCP[Cloud Run]
         BOT[LSE Bot Service<br/>webhook + handlers]
         API[LSE API Service<br/>отчёты, статус, данные]
     end
@@ -846,49 +846,24 @@ flowchart TB
     style KB fill:#c8e6c9
 ```
 
-**Комментарий**: Telegram и cron обращаются только к сервисам на Cloud Run. Postgres и база знаний (таблица knowledge_base в той же БД) располагаются на отдельном сервере; подключение по строке подключения (переменные окружения). Деплой сервера выполняется по той же схеме, что в проекте sc (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`).
+**Комментарий**: При варианте «Cloud Run + VM» Telegram и API работают на Cloud Run, Postgres и knowledge_base — на VM; подключение по `DATABASE_URL`. Альтернатива — всё на одной VM (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`).
 
 ---
 
-## 11. Развёртывание (Cloud Run и сервер БД/КБ)
+## 11. Развёртывание
 
-### 11.1. Схема деплоя (аналогично sc)
-
-Развёртывание выполняется по образцу проекта **sc**: сервисы приложения — в Google Cloud Run, PostgreSQL и базы знаний — на **отдельном сервере**. Когда сервер будет готов, подключение к БД задаётся переменными окружения (например, `DATABASE_URL`).
+Два варианта: **одна VM** (Postgres + cron + бот) или **Cloud Run** (бот/API) + **VM** (БД + cron). Команды, переменные окружения и сравнение стоимости — в **docs/DEPLOY_INSTRUCTIONS.md**.
 
 ```mermaid
 flowchart LR
-    subgraph Dev[Разработка]
-        CODE[Код LSE]
-        GIT[GitHub]
-    end
-    
-    CODE --> GIT
-    
     subgraph Deploy[Деплой]
-        GIT --> BUILD[Cloud Build<br/>Docker образ]
-        BUILD --> RUN[Cloud Run<br/>Bot + API]
-        RUN --> SERVER[Сервер: Postgres + КБ]
+        GIT[GitHub] --> BUILD[Cloud Build]
+        BUILD --> RUN[Cloud Run: Bot + API]
+        RUN --> SERVER[VM: Postgres + cron]
     end
-    
     style RUN fill:#fff9c4
     style SERVER fill:#c8e6c9
 ```
-
-### 11.2. Шаги деплоя (кратко)
-
-1. **Код**: ветка `main` в GitHub, актуальный код.
-2. **Cloud Run** (на локальной машине с `gcloud`):
-   - Сборка образа: `gcloud builds submit --tag gcr.io/PROJECT_ID/SERVICE_NAME`
-   - Деплой: `gcloud run deploy SERVICE_NAME --image ... --set-env-vars DATABASE_URL=...`
-   - Для бота: указать URL сервиса как webhook в Telegram Bot API.
-3. **Сервер БД** (когда будет заведён):
-   - Установить PostgreSQL с расширением pgvector.
-   - Развернуть схему и миграции LSE, заполнить при необходимости.
-   - Выдать Cloud Run сервисам доступ к серверу (VPC/белый список или Cloud SQL Proxy по необходимости).
-   - В `DATABASE_URL` указать хост этого сервера.
-
-Подробные команды и переменные окружения см. в **docs/DEPLOY_INSTRUCTIONS.md**.
 
 ---
 
@@ -917,7 +892,7 @@ flowchart LR
 - `vector_kb.py` — векторная БЗ (планируется)
 - Telegram бот: webhook, handlers, команды `/signal`, `/news`, `/price`, `/chart`, `/ask`, `/tickers`, песочница: `/portfolio`, `/buy`, `/sell`, `/history`, `/recommend` (см. раздел 10)
 - Документация по сделкам: `docs/SANDBOX_TRADE_EXAMPLE.md` — пример цепочки изменений в `portfolio_state` и `trade_history`
-- Деплой: Cloud Run для Bot/API, отдельный сервер для PostgreSQL и КБ (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`)
+- Деплой: варианты «одна VM» или «Cloud Run + VM» (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`)
 
 ### Обновление диаграмм
 

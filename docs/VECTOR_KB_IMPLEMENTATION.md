@@ -1,6 +1,6 @@
 # Реализация векторной базы знаний (Vector Knowledge Base)
 
-> **Актуальная архитектура:** одна таблица **knowledge_base** с колонками `embedding` и `outcome_json`. Таблица trade_kb удалена. См. [KNOWLEDGE_BASE_SINGLE_TABLE.md](KNOWLEDGE_BASE_SINGLE_TABLE.md) и [VECTOR_KB_USAGE.md](VECTOR_KB_USAGE.md).
+> **Архитектура:** одна таблица **knowledge_base** с колонками `embedding` и `outcome_json`. См. [NEWS.md](NEWS.md), [VECTOR_KB_USAGE.md](VECTOR_KB_USAGE.md).
 
 ## Текущее состояние
 

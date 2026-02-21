@@ -285,7 +285,7 @@ api/bot_app.py
 - FastAPI приложение
 - Webhook endpoint
 - Тестирование локально
-- Деплой на Cloud Run (опционально)
+- Деплой (одна VM или Cloud Run + VM — см. docs/DEPLOY_INSTRUCTIONS.md)
 
 ### Шаг 4: Добавить уведомления (1-2 дня)
 
