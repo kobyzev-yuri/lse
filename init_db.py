@@ -54,12 +54,15 @@ def init_db():
         # Включаем расширение для векторов
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         
-        # Таблица котировок
+        # Таблица котировок (open, high, low, close — дневные свечи)
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS quotes (
                 id SERIAL PRIMARY KEY,
                 date TIMESTAMP,
                 ticker VARCHAR(10),
+                open DECIMAL,
+                high DECIMAL,
+                low DECIMAL,
                 close DECIMAL,
                 volume BIGINT,
                 sma_5 DECIMAL,
@@ -68,6 +71,20 @@ def init_db():
                 UNIQUE(date, ticker)
             );
         """))
+        
+        # Добавляем колонки open, high, low если таблица создана раньше (без них)
+        for col_name, col_type in [('open', 'DECIMAL'), ('high', 'DECIMAL'), ('low', 'DECIMAL')]:
+            result = conn.execute(text("""
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name='quotes' AND column_name=:col_name
+            """), {"col_name": col_name})
+            if not result.fetchone():
+                try:
+                    conn.execute(text(f"ALTER TABLE quotes ADD COLUMN {col_name} {col_type}"))
+                    print(f"✅ Колонка {col_name} добавлена в таблицу quotes")
+                except Exception as e:
+                    if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
+                        print(f"⚠️ Предупреждение при добавлении колонки {col_name}: {e}")
         
         # Добавляем колонки для технических индикаторов если таблица уже существует
         technical_columns = [
@@ -236,11 +253,15 @@ def seed_data(tickers=None):
         with engine.begin() as conn:
             for _, row in df.iterrows():
                 conn.execute(text("""
-                    INSERT INTO quotes (date, ticker, close, volume, sma_5, volatility_5, rsi)
-                    VALUES (:date, :ticker, :close, :volume, :sma_5, :volatility_5, :rsi)
+                    INSERT INTO quotes (date, ticker, open, high, low, close, volume, sma_5, volatility_5, rsi)
+                    VALUES (:date, :ticker, :open, :high, :low, :close, :volume, :sma_5, :volatility_5, :rsi)
                     ON CONFLICT (date, ticker) DO NOTHING
                 """), {
-                    "date": row['Date'], "ticker": ticker, "close": float(row['Close']),
+                    "date": row['Date'], "ticker": ticker,
+                    "open": float(row['Open']) if pd.notna(row.get('Open')) else None,
+                    "high": float(row['High']) if pd.notna(row.get('High')) else None,
+                    "low": float(row['Low']) if pd.notna(row.get('Low')) else None,
+                    "close": float(row['Close']),
                     "volume": int(row['Volume']) if pd.notna(row['Volume']) else None,
                     "sma_5": float(row['sma_5']) if pd.notna(row['sma_5']) else None,
                     "volatility_5": float(row['volatility_5']) if pd.notna(row['volatility_5']) else None,

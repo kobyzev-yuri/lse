@@ -133,6 +133,8 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("news", self._handle_news))
         self.application.add_handler(CommandHandler("price", self._handle_price))
         self.application.add_handler(CommandHandler("chart", self._handle_chart))
+        self.application.add_handler(CommandHandler("chart5m", self._handle_chart5m))
+        self.application.add_handler(CommandHandler("table5m", self._handle_table5m))
         self.application.add_handler(CommandHandler("tickers", self._handle_tickers))
         self.application.add_handler(CommandHandler("ask", self._handle_ask))
         self.application.add_handler(CommandHandler("portfolio", self._handle_portfolio))
@@ -182,7 +184,9 @@ class LSETelegramBot:
 /signal <ticker> — анализ
 /news <ticker> [N] — новости
 /price <ticker> — цена
-/chart <ticker> [days] — график
+/chart <ticker> [days] — график дневной
+/chart5m <ticker> [days] — график 5 мин (по требованию)
+/table5m <ticker> [days] — таблица 5m свечей
 /ask <вопрос> — вопрос (работает в группах!)
 /tickers — список инструментов
 
@@ -227,6 +231,8 @@ class LSETelegramBot:
 **График:**
 `/chart <ticker> [days]` - График цены за период (по умолч. 1 день, макс. 30)
   Пример: `/chart GC=F` или `/chart GC=F 7`
+`/chart5m <ticker> [days]` - Внутридневной график 5 мин (по требованию, макс. 7 дней)
+`/table5m <ticker> [days]` - Таблица последних 5-минутных свечей (макс. 7 дней)
 
 **Список инструментов:**
 `/tickers` - Показать все отслеживаемые инструменты
@@ -606,35 +612,36 @@ class LSETelegramBot:
             )
             return
         
-        ticker_raw = context.args[0].upper()
+        ticker_raw = context.args[0].strip().upper()
         ticker = _normalize_ticker(ticker_raw)
         days = 1  # По умолчанию текущий день
-        
-        if len(context.args) >= 2:
+        for i in range(1, len(context.args)):
             try:
-                days = int(context.args[1])
-                days = max(1, min(30, days))  # Ограничиваем от 1 до 30 дней
-            except ValueError:
-                pass
-        
+                d = int(context.args[i].strip())
+                days = max(1, min(30, d))
+                break
+            except (ValueError, IndexError):
+                continue
+
         try:
             await update.message.reply_text(f"📈 Построение графика для {ticker}...")
-            
+
             # Получаем данные из БД
             from sqlalchemy import create_engine, text
             from config_loader import get_database_url
             from datetime import datetime, timedelta
             import pandas as pd
-            
+
             engine = create_engine(get_database_url())
-            cutoff_date = datetime.now() - timedelta(days=days)
+            # Начало дня (00:00), чтобы не отсечь дневные свечи с date в полночь
+            cutoff_date = (datetime.now() - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
             
             logger.info(f"Запрос данных для {ticker} с {cutoff_date} (последние {days} дней)")
             
             with engine.connect() as conn:
                 df = pd.read_sql(
                     text("""
-                        SELECT date, close, sma_5, volatility_5, rsi
+                        SELECT date, open, high, low, close, sma_5, volatility_5, rsi
                         FROM quotes
                         WHERE ticker = :ticker AND date >= :cutoff_date
                         ORDER BY date ASC
@@ -670,74 +677,116 @@ class LSETelegramBot:
             # Строим график
             try:
                 import matplotlib
-                matplotlib.use('Agg')  # Используем backend без GUI
+                matplotlib.use('Agg')
                 import matplotlib.pyplot as plt
                 import matplotlib.dates as mdates
+                from matplotlib.patches import Rectangle
+                from matplotlib.lines import Line2D
                 from io import BytesIO
-                
+
                 logger.info("Инициализация matplotlib...")
-                
+                try:
+                    plt.style.use('seaborn-v0_8-whitegrid')
+                except Exception:
+                    pass
+                plt.rcParams['font.size'] = 9
+
                 df['date'] = pd.to_datetime(df['date'])
-                
-                # Если данных мало (1-2 точки), используем один график
-                if len(df) <= 2:
-                    fig, ax1 = plt.subplots(1, 1, figsize=(10, 6))
-                    ax1.plot(df['date'], df['close'], marker='o', label='Цена закрытия', linewidth=2, color='#2E86AB')
-                    ax1.set_ylabel('Цена', fontsize=10)
-                    ax1.set_xlabel('Дата', fontsize=10)
-                    ax1.legend(loc='best')
-                    ax1.grid(True, alpha=0.3)
-                    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
-                    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha='right')
-                    fig.suptitle(f'{ticker} - График цены', fontsize=14, fontweight='bold')
+                n_points = len(df)
+                has_ohlc = all(c in df.columns and df[c].notna().any() for c in ('open', 'high', 'low'))
+
+                # Интервал подписей дат: все точки рисуем, подписи реже
+                if n_points <= 7:
+                    day_interval = 1
+                elif n_points <= 14:
+                    day_interval = 2
                 else:
-                    # Два графика: цена и RSI
-                    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-                    fig.suptitle(f'{ticker} - График цены', fontsize=14, fontweight='bold')
-                    
-                    # График цены и SMA
-                    ax1.plot(df['date'], df['close'], label='Цена закрытия', linewidth=2, color='#2E86AB')
-                    if 'sma_5' in df.columns and df['sma_5'].notna().any():
-                        ax1.plot(df['date'], df['sma_5'], label='SMA(5)', linewidth=1.5, color='#A23B72', linestyle='--')
-                    ax1.set_ylabel('Цена', fontsize=10)
-                    ax1.legend(loc='best')
-                    ax1.grid(True, alpha=0.3)
-                    
-                    # График RSI (если есть)
-                    if 'rsi' in df.columns and df['rsi'].notna().any():
-                        ax2.plot(df['date'], df['rsi'], label='RSI', linewidth=2, color='#F18F01')
-                        ax2.axhline(y=70, color='r', linestyle='--', alpha=0.5, label='Перекупленность')
-                        ax2.axhline(y=30, color='g', linestyle='--', alpha=0.5, label='Перепроданность')
-                        ax2.set_ylabel('RSI', fontsize=10)
-                        ax2.set_ylim(0, 100)
-                        ax2.legend(loc='best')
-                        ax2.grid(True, alpha=0.3)
-                    
-                    # Форматируем даты на оси X
-                    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-                    if days > 7:
-                        ax2.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, days // 7)))
+                    day_interval = max(1, n_points // 10)
+
+                def draw_price_axes(ax1, use_ohlc):
+                    ax1.set_facecolor('#ffffff')
+                    if use_ohlc:
+                        width = 0.7
+                        half = width / 2
+                        hr = df['high'].max() - df['low'].min()
+                        hr = hr if hr and hr > 0 else float(df['close'].max() - df['close'].min() or 1)
+                        min_body = max(0.005 * hr, 0.01)
+                        for _, row in df.iterrows():
+                            x = mdates.date2num(row['date'])
+                            o = row.get('open') if pd.notna(row.get('open')) else row['close']
+                            h = row.get('high') if pd.notna(row.get('high')) else max(o, row['close'])
+                            l = row.get('low') if pd.notna(row.get('low')) else min(o, row['close'])
+                            c = float(row['close'])
+                            o, h, l = float(o), float(h), float(l)
+                            # Тени (тонкие)
+                            ax1.vlines(x, l, h, color='#444', linewidth=0.6, alpha=0.9)
+                            top, bot = max(o, c), min(o, c)
+                            body_h = (top - bot) if top > bot else min_body
+                            if top == bot:
+                                bot -= min_body / 2
+                                body_h = min_body
+                            color = '#26a69a' if c >= o else '#ef5350'  # зелёный / красный
+                            rect = Rectangle((x - half, bot), width, body_h, facecolor=color, edgecolor=color, linewidth=0.5)
+                            ax1.add_patch(rect)
+                        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
+                        ax1.xaxis.set_major_locator(mdates.DayLocator(interval=day_interval))
+                        leg_up = Line2D([0], [0], color='#26a69a', linewidth=6, label='Рост')
+                        leg_dn = Line2D([0], [0], color='#ef5350', linewidth=6, label='Падение')
+                        legend_handles = [leg_up, leg_dn]
                     else:
-                        ax2.xaxis.set_major_locator(mdates.DayLocator(interval=1))
-                    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
-                
-                plt.tight_layout()
-                
-                logger.info("Сохранение графика в буфер...")
-                # Сохраняем в BytesIO
+                        ax1.plot(df['date'], df['close'], color='#1565c0', linewidth=2, label='Close')
+                        legend_handles = []
+                    if 'sma_5' in df.columns and df['sma_5'].notna().any():
+                        ax1.plot(df['date'], df['sma_5'], color='#7e57c2', linewidth=1.2, linestyle='--', label='SMA(5)')
+                    ax1.set_ylabel('Цена', fontsize=10)
+                    h = list(legend_handles) + [l for l in ax1.get_lines() if (l.get_label() or '').startswith('SMA')]
+                    ax1.legend(handles=h if h else None, loc='upper left', framealpha=0.9)
+                    ax1.grid(True, linestyle='--', alpha=0.4)
+                    ax1.tick_params(axis='both', labelsize=9)
+
+                has_rsi = 'rsi' in df.columns and df['rsi'].notna().any()
+                if n_points <= 2 or not has_rsi:
+                    fig, ax1 = plt.subplots(1, 1, figsize=(11, 5), facecolor='white')
+                    draw_price_axes(ax1, has_ohlc)
+                    ax1.set_xlabel('Дата', fontsize=10)
+                    ax1.set_title(f'{ticker}  —  {n_points} дн.', fontsize=11, fontweight='bold', pad=6)
+                    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
+                    ax1.xaxis.set_major_locator(mdates.DayLocator(interval=day_interval))
+                    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=30, ha='right')
+                else:
+                    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), facecolor='white', sharex=True,
+                                                    gridspec_kw={'height_ratios': [1.4, 0.8], 'hspace': 0.08})
+                    draw_price_axes(ax1, has_ohlc)
+                    ax1.set_title(f'{ticker}  —  {n_points} дн.', fontsize=11, fontweight='bold', pad=6)
+                    ax2.set_facecolor('#ffffff')
+                    ax2.plot(df['date'], df['rsi'], color='#ff9800', linewidth=1.8, label='RSI')
+                    ax2.axhline(y=70, color='#c62828', linestyle='--', alpha=0.6, linewidth=0.8)
+                    ax2.axhline(y=30, color='#2e7d32', linestyle='--', alpha=0.6, linewidth=0.8)
+                    ax2.set_ylabel('RSI', fontsize=10)
+                    ax2.set_ylim(0, 100)
+                    ax2.legend(loc='upper left', framealpha=0.9)
+                    ax2.grid(True, linestyle='--', alpha=0.4)
+                    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
+                    ax2.xaxis.set_major_locator(mdates.DayLocator(interval=day_interval))
+                    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=30, ha='right')
+                    ax2.tick_params(axis='both', labelsize=9)
+
+                plt.tight_layout(pad=1.2)
                 img_buffer = BytesIO()
-                plt.savefig(img_buffer, format='png', dpi=100, bbox_inches='tight')
+                plt.savefig(img_buffer, format='png', dpi=120, bbox_inches='tight', facecolor='white')
                 img_buffer.seek(0)
                 plt.close()
                 
                 logger.info(f"Отправка графика для {ticker} ({len(df)} точек данных)")
                 
-                # Формируем подпись с объяснением формата данных
+                # Формируем подпись
                 caption = f"📈 {ticker} - {days} дней ({len(df)} точек)"
-                if days == 1:
+                if has_ohlc:
+                    caption += "\n\nℹ️ Свечи: open, high, low, close (дневные)"
+                elif days == 1:
                     caption += "\n\nℹ️ Данные: дневные (цена закрытия за день)"
                 elif len(df) < 5:
-                    caption += f"\n\nℹ️ Данные: дневные (цена закрытия). Для более детального графика используйте больше дней."
+                    caption += "\n\nℹ️ Данные: дневные (цена закрытия). Для свечей загрузите OHLC: python update_prices.py --backfill 30"
                 
                 # Отправляем изображение
                 await update.message.reply_photo(photo=img_buffer, caption=caption)
@@ -755,6 +804,130 @@ class LSETelegramBot:
         except Exception as e:
             logger.error(f"Ошибка построения графика для {ticker}: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка построения графика: {str(e)}")
+
+    def _fetch_5m_data_sync(self, ticker: str, days: int = 5):
+        """Синхронная загрузка 5-минутных данных через yfinance (вызывать из executor)."""
+        import yfinance as yf
+        import pandas as pd
+        t = yf.Ticker(ticker)
+        df = t.history(period=f"{min(days, 7)}d", interval="5m", auto_adjust=False)
+        if df is None or df.empty:
+            return None
+        df = df.rename_axis("datetime").reset_index()
+        for c in ("Open", "High", "Low", "Close"):
+            if c not in df.columns:
+                return None
+        return df
+
+    async def _handle_chart5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """График 5-минутных данных по требованию."""
+        if not self._check_access(update.effective_user.id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Укажите тикер. Пример: `/chart5m SNDK` или `/chart5m GBPUSD=X 3`",
+                parse_mode="Markdown"
+            )
+            return
+        ticker_raw = context.args[0].strip().upper()
+        ticker = _normalize_ticker(ticker_raw)
+        days = 5
+        for i in range(1, len(context.args)):
+            try:
+                days = max(1, min(7, int(context.args[i].strip())))
+                break
+            except (ValueError, IndexError):
+                continue
+        await update.message.reply_text(f"📥 Загрузка 5m данных для {ticker} за {days} дн....")
+        loop = asyncio.get_event_loop()
+        try:
+            df = await loop.run_in_executor(None, self._fetch_5m_data_sync, ticker, days)
+        except Exception as e:
+            logger.exception("Ошибка загрузки 5m")
+            await update.message.reply_text(f"❌ Ошибка загрузки: {e}")
+            return
+        if df is None or df.empty:
+            await update.message.reply_text(f"❌ Нет 5m данных для {ticker}. Yahoo даёт 5m обычно за 1–7 дней.")
+            return
+        try:
+            import pandas as pd
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            import matplotlib.dates as mdates
+            from io import BytesIO
+            df["datetime"] = pd.to_datetime(df["datetime"])
+            fig, ax = plt.subplots(1, 1, figsize=(11, 5), facecolor="white")
+            ax.set_facecolor("#ffffff")
+            ax.plot(df["datetime"], df["Close"], color="#1565c0", linewidth=1.2, label="Close")
+            if "Open" in df.columns:
+                ax.fill_between(df["datetime"], df["Low"], df["High"], alpha=0.15, color="#1565c0")
+            ax.set_ylabel("Цена", fontsize=10)
+            ax.set_xlabel("Дата, время", fontsize=10)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M"))
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=12))
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
+            ax.legend(loc="upper left")
+            ax.grid(True, linestyle="--", alpha=0.4)
+            ax.set_title(f"{ticker} — 5m ({len(df)} точек, {days} дн.)", fontsize=11, fontweight="bold")
+            plt.tight_layout()
+            buf = BytesIO()
+            plt.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="white")
+            buf.seek(0)
+            plt.close()
+            await update.message.reply_photo(photo=buf, caption=f"📈 {ticker} — 5 мин, {len(df)} свечей")
+        except Exception as e:
+            logger.exception("Ошибка графика 5m")
+            await update.message.reply_text(f"❌ Ошибка графика: {e}")
+
+    async def _handle_table5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Таблица последних 5-минутных свечей."""
+        if not self._check_access(update.effective_user.id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Укажите тикер. Пример: `/table5m SNDK` или `/table5m GC=F 2`",
+                parse_mode="Markdown"
+            )
+            return
+        ticker_raw = context.args[0].strip().upper()
+        ticker = _normalize_ticker(ticker_raw)
+        days = 3
+        for i in range(1, len(context.args)):
+            try:
+                days = max(1, min(7, int(context.args[i].strip())))
+                break
+            except (ValueError, IndexError):
+                continue
+        await update.message.reply_text(f"📥 Загрузка 5m для {ticker}...")
+        loop = asyncio.get_event_loop()
+        try:
+            df = await loop.run_in_executor(None, self._fetch_5m_data_sync, ticker, days)
+        except Exception as e:
+            logger.exception("Ошибка загрузки 5m")
+            await update.message.reply_text(f"❌ Ошибка загрузки: {e}")
+            return
+        if df is None or df.empty:
+            await update.message.reply_text(f"❌ Нет 5m данных для {ticker}.")
+            return
+        import pandas as pd
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        total = len(df)
+        df = df.sort_values("datetime", ascending=False).head(25)
+        lines = [f"`{'Дата':<16} {'O':>10} {'H':>10} {'L':>10} {'C':>10}`"]
+        for _, row in df.iterrows():
+            ts = row["datetime"].strftime("%d.%m %H:%M")
+            o = float(row["Open"]) if pd.notna(row["Open"]) else 0.0
+            h = float(row["High"]) if pd.notna(row["High"]) else 0.0
+            lo = float(row["Low"]) if pd.notna(row["Low"]) else 0.0
+            c = float(row["Close"]) if pd.notna(row["Close"]) else 0.0
+            lines.append(f"`{ts:<16} {o:>10.4f} {h:>10.4f} {lo:>10.4f} {c:>10.4f}`")
+        msg = f"📋 **{ticker}** — 5m свечи (последние {len(df)} из {total})\n\n" + "\n".join(lines)
+        if len(msg) > 4000:
+            msg = msg[:3970] + "\n…"
+        await update.message.reply_text(msg, parse_mode="Markdown")
     
     async def _handle_tickers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /tickers"""

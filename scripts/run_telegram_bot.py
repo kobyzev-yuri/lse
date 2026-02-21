@@ -4,8 +4,16 @@
 Для разработки и тестирования
 """
 
+import os
 import sys
 from pathlib import Path
+
+# httpx (используется python-telegram-bot) не поддерживает прокси socks:// без httpx[socks].
+# Убираем socks-прокси из окружения, чтобы избежать ValueError: Unknown scheme for proxy URL.
+for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
+    val = os.environ.pop(key, None)
+    if val and "socks" not in val.lower():
+        os.environ[key] = val  # восстанавливаем не-socks прокси
 
 # Добавляем корневую директорию проекта в путь
 project_root = Path(__file__).parent.parent
