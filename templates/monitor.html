@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}Мониторинг — LSE Trading System{% endblock %}
+
+{% block content %}
+<h1>Мониторинг тикеров</h1>
+<p class="muted">Тот же дашборд, что и /dashboard в Telegram. Автообновление каждые 5 минут.</p>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <label>Режим:</label>
+        <select id="modeSelect">
+            <option value="all" selected>Все (цены, 5m, новости)</option>
+            <option value="5m">5m (интрадей)</option>
+            <option value="daily">Дневной (новости)</option>
+        </select>
+        <span id="updatedAt" class="muted"></span>
+        <button type="button" id="refreshBtn">Обновить сейчас</button>
+    </div>
+    <div id="dashboardContent" class="dashboard-text">
+        <div class="loading">Загрузка дашборда...</div>
+    </div>
+    <p id="nextRefresh" class="muted" style="margin-top: 1rem;"></p>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.dashboard-text { line-height: 1.5; }
+.dashboard-text strong { color: #2c3e50; }
+.dashboard-text em { color: #7f8c8d; }
+.muted { color: #7f8c8d; font-size: 0.9rem; }
+#dashboardContent.dashboard-text br { display: block; content: ""; margin-top: 0.25rem; }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 минут
+
+function escapeHtml(s) {
+    if (s == null) return '';
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
+
+function textToHtml(text) {
+    if (!text) return '';
+    return text
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/_(.+?)_/g, '<em>$1</em>')
+        .replace(/\n/g, '<br>\n');
+}
+
+function formatTime(iso) {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso);
+        return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (e) { return iso; }
+}
+
+let refreshTimer = null;
+
+function scheduleNextRefresh() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(loadDashboard, REFRESH_INTERVAL_MS);
+    const nextAt = new Date(Date.now() + REFRESH_INTERVAL_MS);
+    const el = document.getElementById('nextRefresh');
+    if (el) el.textContent = 'Следующее обновление в ' + nextAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadDashboard() {
+    const mode = document.getElementById('modeSelect').value;
+    const contentEl = document.getElementById('dashboardContent');
+    const updatedEl = document.getElementById('updatedAt');
+    contentEl.innerHTML = '<div class="loading">Загрузка дашборда...</div>';
+    try {
+        const response = await fetch('/api/dashboard?mode=' + encodeURIComponent(mode));
+        if (!response.ok) {
+            contentEl.innerHTML = '<div style="color: red;">Ошибка: ' + (await response.json().catch(() => ({}))).detail || response.statusText + '</div>';
+            scheduleNextRefresh();
+            return;
+        }
+        const data = await response.json();
+        contentEl.innerHTML = textToHtml(data.text || '');
+        contentEl.classList.add('dashboard-text');
+        updatedEl.textContent = 'Обновлено в ' + formatTime(data.updated_at);
+    } catch (err) {
+        contentEl.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(err.message) + '</div>';
+    }
+    scheduleNextRefresh();
+}
+
+document.getElementById('modeSelect').addEventListener('change', loadDashboard);
+document.getElementById('refreshBtn').addEventListener('click', function() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    loadDashboard();
+});
+
+loadDashboard();
+</script>
+{% endblock %}

@@ -193,6 +193,18 @@ python scripts/run_telegram_bot.py
 
 **Вопросы в /ask:** можно спросить текстом: *«когда можно открыть позицию по SNDK и какие параметры советуешь?»* — бот вернёт рекомендацию с учётом текущего сигнала и лимитов.
 
+### `/dashboard [5m|daily|all]` - Дашборд по тикерам (проактивный мониторинг)
+Сводка по всем отслеживаемым тикерам для смены курса и принятия решений.
+
+**Режимы:**
+- `all` (по умолчанию) — цена, RSI, решение (BUY/HOLD/SELL), кол-во новостей за 7 дн., блок 5m по SNDK
+- `5m` — акцент на 5-минутных данных (интрадей, SNDK)
+- `daily` — акцент на новостях (удобно, когда цены обновляются раз в день)
+
+**Что показывает:** VIX и режим рынка, по каждому тикеру из списка (SNDK, MU, LITE, ALAB, TER, MSFT или `DASHBOARD_WATCHLIST` в config) — цена, RSI, сигнал, число новостей; блок 5m по SNDK (импульс 2ч, RSI 5m, решение). В конце — подсказки: /recommend, /recommend5m, /chart5m.
+
+**Проактивная рассылка по расписанию:** см. раздел ниже.
+
 **Цепочка изменений в БД:** пошаговый пример (покупка → продажа → частичная продажа → стоп-лосс) и вид таблиц `portfolio_state` и `trade_history` описан в [docs/SANDBOX_TRADE_EXAMPLE.md](SANDBOX_TRADE_EXAMPLE.md).
 
 ---
@@ -407,6 +419,27 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 
 ---
 
+## Проактивная рассылка дашборда
+
+Чтобы получать сводку по тикерам по расписанию (без запроса командой), настройте cron на запуск скрипта:
+
+1. В `config.env` задайте чат, куда слать дашборд:
+   ```bash
+   TELEGRAM_DASHBOARD_CHAT_ID=123456789
+   ```
+   (или будет использован первый `TELEGRAM_ALLOWED_USERS`, если `TELEGRAM_DASHBOARD_CHAT_ID` не задан)
+
+2. Добавьте в crontab (пример — 3 раза в день в торговые часы, пн–пт):
+   ```bash
+   0 10,14,18 * * 1-5 cd /path/to/lse && python scripts/send_dashboard_cron.py
+   ```
+
+3. Режимы: `python scripts/send_dashboard_cron.py 5m` или `daily` (по умолчанию `all`).
+
+Скрипт собирает тот же текст, что и команда `/dashboard`, и отправляет его в указанный чат через Bot API.
+
+---
+
 ## Развёртывание
 
 Инструкции по развёртыванию (одна VM или Cloud Run + VM): **docs/DEPLOY_INSTRUCTIONS.md**. После деплоя на Cloud Run — настроить webhook: `python scripts/setup_webhook.py --url <SERVICE_URL>/webhook`.
@@ -434,6 +467,8 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 - `execution_agent.py` - Исполнение сделок (ручные и по сигналу), портфель
 - `api/bot_app.py` - FastAPI приложение для webhook
 - `scripts/run_telegram_bot.py` - Локальный запуск
+- `scripts/send_dashboard_cron.py` - Проактивная рассылка дашборда по расписанию (cron)
+- `services/dashboard_builder.py` - Сборка текста дашборда (общий код для /dashboard и cron)
 - `scripts/update_rsi_local.py` - Обновление RSI для всех тикеров
 - `scripts/setup_webhook.py` - Настройка webhook
 - `docs/SANDBOX_TRADE_EXAMPLE.md` - Пример цепочки сделок и изменений в БД (portfolio_state, trade_history)

@@ -6,7 +6,56 @@
 <h1>Управление торговлей</h1>
 
 <div class="card">
-    <h2>Анализ тикера</h2>
+    <h2>Цена тикера</h2>
+    <p class="muted">Аналог /price в Telegram</p>
+    <form id="priceForm">
+        <label>Тикер:</label>
+        <select name="ticker" id="priceTicker">
+            <option value="">Выберите тикер</option>
+            {% for ticker in tickers %}
+            <option value="{{ ticker }}">{{ ticker }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit">Показать цену</button>
+    </form>
+    <div id="priceResult" style="margin-top: 1rem;"></div>
+</div>
+
+<div class="card">
+    <h2>Рекомендация (дневные данные)</h2>
+    <p class="muted">Аналог /recommend в Telegram: сигнал, стоп-лосс, тейк-профит</p>
+    <form id="recommendForm">
+        <label>Тикер:</label>
+        <select name="ticker" id="recommendTicker">
+            <option value="">Выберите тикер</option>
+            {% for ticker in tickers %}
+            <option value="{{ ticker }}">{{ ticker }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit">Рекомендация</button>
+    </form>
+    <div id="recommendResult" style="margin-top: 1rem;"></div>
+</div>
+
+<div class="card">
+    <h2>Рекомендация 5m (интрадей + 5д статистика)</h2>
+    <p class="muted">Аналог /recommend5m в Telegram (по умолч. SNDK)</p>
+    <form id="recommend5mForm">
+        <label>Тикер:</label>
+        <select name="ticker" id="recommend5mTicker">
+            {% for ticker in tickers %}
+            <option value="{{ ticker }}" {% if ticker == 'SNDK' %}selected{% endif %}>{{ ticker }}</option>
+            {% endfor %}
+        </select>
+        <label>Дней данных (1–7):</label>
+        <input type="number" name="days" value="5" min="1" max="7" style="width: 5rem;">
+        <button type="submit">Рекомендация 5m</button>
+    </form>
+    <div id="recommend5mResult" style="margin-top: 1rem;"></div>
+</div>
+
+<div class="card">
+    <h2>Анализ тикера (сигнал + стратегия)</h2>
     <form id="analyzeForm">
         <label>Тикер:</label>
         <select name="ticker" id="tickerSelect" required>
@@ -15,129 +64,281 @@
             <option value="{{ ticker }}">{{ ticker }}</option>
             {% endfor %}
         </select>
-        
         <label>
             <input type="checkbox" name="use_llm" id="useLLM" checked> Использовать LLM анализ
         </label>
-        
         <button type="submit">Анализировать</button>
     </form>
-    
     <div id="analysisResult" style="margin-top: 2rem;"></div>
 </div>
 
 <div class="card">
-    <h2>Исполнение сделок</h2>
+    <h2>Ручная покупка / продажа</h2>
+    <p class="muted">Аналог /buy и /sell в Telegram (песочница)</p>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+        <div>
+            <h3>Купить</h3>
+            <form id="buyForm">
+                <label>Тикер:</label>
+                <select name="ticker" id="buyTicker" required>
+                    <option value="">Выберите</option>
+                    {% for ticker in tickers %}
+                    <option value="{{ ticker }}">{{ ticker }}</option>
+                    {% endfor %}
+                </select>
+                <label>Количество:</label>
+                <input type="number" name="quantity" step="any" min="0.0001" required>
+                <button type="submit">Купить</button>
+            </form>
+            <div id="buyResult" style="margin-top: 0.5rem;"></div>
+        </div>
+        <div>
+            <h3>Продать</h3>
+            <form id="sellForm">
+                <label>Тикер:</label>
+                <select name="ticker" id="sellTicker" required>
+                    <option value="">Выберите</option>
+                    {% for ticker in tickers %}
+                    <option value="{{ ticker }}">{{ ticker }}</option>
+                    {% endfor %}
+                </select>
+                <label>Количество (пусто = закрыть всю позицию):</label>
+                <input type="number" name="quantity" step="any" min="0" placeholder="вся позиция">
+                <button type="submit">Продать</button>
+            </form>
+            <div id="sellResult" style="margin-top: 0.5rem;"></div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>История сделок</h2>
+    <p class="muted">Аналог /history в Telegram</p>
+    <button type="button" id="loadHistoryBtn">Загрузить историю</button>
+    <div id="historyResult" style="margin-top: 1rem;"></div>
+</div>
+
+<div class="card">
+    <h2>Исполнение торгового цикла</h2>
     <form id="executeForm">
         <label>Тикеры (через запятую):</label>
         <input type="text" name="tickers" id="tickersInput" placeholder="MSFT, SNDK" required>
-        
         <button type="submit">Запустить торговый цикл</button>
     </form>
-    
     <div id="executeResult" style="margin-top: 2rem;"></div>
 </div>
 {% endblock %}
 
+{% block extra_css %}
+<style>
+.muted { color: #7f8c8d; font-size: 0.9rem; margin-bottom: 0.5rem; }
+.recommend-block { margin: 0.5rem 0; padding: 0.75rem; background: #f8f9fa; border-radius: 4px; }
+.recommend-block .positive { color: #27ae60; }
+.recommend-block .negative { color: #e74c3c; }
+</style>
+{% endblock %}
+
 {% block extra_js %}
 <script>
+function escapeHtml(s) {
+    if (s == null) return '';
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
+
+// Цена
+document.getElementById('priceForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const ticker = document.getElementById('priceTicker').value;
+    if (!ticker) return;
+    const resultDiv = document.getElementById('priceResult');
+    resultDiv.innerHTML = '<div class="loading">Загрузка...</div>';
+    try {
+        const response = await fetch('/api/price/' + encodeURIComponent(ticker));
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            resultDiv.innerHTML = '<div style="color: red;">' + (err.detail || response.statusText) + '</div>';
+            return;
+        }
+        const data = await response.json();
+        resultDiv.innerHTML = '<p><strong>' + escapeHtml(data.ticker) + '</strong>: $' + parseFloat(data.price).toFixed(2) + ' <span class="muted">(' + escapeHtml(data.date) + ')</span></p>';
+    } catch (err) {
+        resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(err.message) + '</div>';
+    }
+});
+
+// Рекомендация (дневная)
+document.getElementById('recommendForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const ticker = document.getElementById('recommendTicker').value;
+    if (!ticker) return;
+    const resultDiv = document.getElementById('recommendResult');
+    resultDiv.innerHTML = '<div class="loading">Загрузка...</div>';
+    try {
+        const response = await fetch('/api/recommend/' + encodeURIComponent(ticker));
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            resultDiv.innerHTML = '<div style="color: red;">' + (err.detail || response.statusText) + '</div>';
+            return;
+        }
+        const d = await response.json();
+        let html = '<div class="recommend-block">';
+        html += '<p><strong>Сигнал:</strong> ' + escapeHtml(d.decision) + ' (стратегия: ' + escapeHtml(d.strategy) + ')</p>';
+        html += '<p><strong>Цена:</strong> $' + (d.price != null ? parseFloat(d.price).toFixed(2) : '—') + ' &nbsp; <strong>RSI:</strong> ' + (d.rsi != null ? d.rsi.toFixed(1) : '—') + '</p>';
+        html += '<p>Стоп-лосс: −' + parseFloat(d.stop_loss_pct).toFixed(0) + '% &nbsp; Тейк-профит: +' + parseFloat(d.take_profit_pct).toFixed(0) + '% &nbsp; Размер позиции: до $' + (d.max_position_usd != null ? d.max_position_usd.toLocaleString() : '0') + '</p>';
+        if (d.reasoning) html += '<p class="muted">' + escapeHtml(d.reasoning.substring(0, 200)) + (d.reasoning.length > 200 ? '…' : '') + '</p>';
+        html += '</div>';
+        resultDiv.innerHTML = html;
+    } catch (err) {
+        resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(err.message) + '</div>';
+    }
+});
+
+// Рекомендация 5m
+document.getElementById('recommend5mForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const ticker = document.getElementById('recommend5mTicker').value;
+    const days = document.querySelector('#recommend5mForm input[name="days"]').value || 5;
+    const resultDiv = document.getElementById('recommend5mResult');
+    resultDiv.innerHTML = '<div class="loading">Загрузка 5m...</div>';
+    try {
+        const response = await fetch('/api/recommend5m?ticker=' + encodeURIComponent(ticker) + '&days=' + encodeURIComponent(days));
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            resultDiv.innerHTML = '<div style="color: red;">' + (err.detail || response.statusText) + '</div>';
+            return;
+        }
+        const d = await response.json();
+        let html = '<div class="recommend-block">';
+        html += '<p><strong>Сигнал:</strong> ' + escapeHtml(d.decision) + ' &nbsp; Цена: $' + (d.price != null ? parseFloat(d.price).toFixed(2) : '—') + '</p>';
+        html += '<p>RSI(5m): ' + (d.rsi_5m != null ? d.rsi_5m.toFixed(1) : '—') + ' &nbsp; Импульс 2ч: ' + (d.momentum_2h_pct != null ? (d.momentum_2h_pct >= 0 ? '+' : '') + d.momentum_2h_pct.toFixed(2) + '%' : '—') + ' &nbsp; Волатильность 5m: ' + (d.volatility_5m_pct != null ? d.volatility_5m_pct.toFixed(2) + '%' : '—') + '</p>';
+        if (d.period_str) html += '<p class="muted">Период: ' + escapeHtml(d.period_str) + '</p>';
+        html += '<p>Стоп: −' + parseFloat(d.stop_loss_pct).toFixed(1) + '% &nbsp; Тейк: +' + parseFloat(d.take_profit_pct).toFixed(1) + '%</p>';
+        if (d.reasoning) html += '<p class="muted">' + escapeHtml(d.reasoning.substring(0, 180)) + (d.reasoning.length > 180 ? '…' : '') + '</p>';
+        html += '</div>';
+        resultDiv.innerHTML = html;
+    } catch (err) {
+        resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(err.message) + '</div>';
+    }
+});
+
+// Анализ
 document.getElementById('analyzeForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
     const resultDiv = document.getElementById('analysisResult');
     resultDiv.innerHTML = '<div class="loading">Анализ...</div>';
-    
     try {
-        const response = await fetch('/api/analyze', {
-            method: 'POST',
-            body: formData
-        });
-        const data = await response.json();
-        
+        const response = await fetch('/api/analyze', { method: 'POST', body: formData });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            resultDiv.innerHTML = '<div style="color: red;">' + (data.detail || response.statusText) + '</div>';
+            return;
+        }
         let html = '<h3>Результаты анализа</h3>';
-        html += `<p><strong>Решение:</strong> ${data.decision}</p>`;
-        html += `<p><strong>Технический сигнал:</strong> ${data.technical_signal}</p>`;
-        html += `<p><strong>Sentiment:</strong> ${data.sentiment?.toFixed(3) || 'N/A'}</p>`;
-        
-        // Информация о выбранной стратегии
+        html += '<p><strong>Решение:</strong> ' + escapeHtml(data.decision) + '</p>';
+        html += '<p><strong>Технический сигнал:</strong> ' + escapeHtml(data.technical_signal) + '</p>';
+        html += '<p><strong>Sentiment:</strong> ' + (data.sentiment != null ? data.sentiment.toFixed(3) : 'N/A') + '</p>';
         if (data.selected_strategy) {
-            html += '<h4>📋 Выбранная стратегия:</h4>';
-            html += `<p><strong>Стратегия:</strong> <span style="color: #3498db; font-weight: bold;">${data.selected_strategy}</span></p>`;
-            
+            html += '<h4>Выбранная стратегия:</h4>';
+            html += '<p><strong>Стратегия:</strong> ' + escapeHtml(data.selected_strategy) + '</p>';
             if (data.strategy_result) {
-                const strategy = data.strategy_result;
-                html += `<p><strong>Сигнал стратегии:</strong> ${strategy.signal || 'N/A'}</p>`;
-                html += `<p><strong>Уверенность:</strong> ${((strategy.confidence || 0) * 100).toFixed(1)}%</p>`;
-                html += `<p><strong>Обоснование:</strong> ${strategy.reasoning || 'N/A'}</p>`;
-                
-                if (strategy.stop_loss) {
-                    html += `<p><strong>Рекомендуемый стоп-лосс:</strong> ${parseFloat(strategy.stop_loss).toFixed(2)}%</p>`;
-                }
-                if (strategy.take_profit) {
-                    html += `<p><strong>Рекомендуемый тейк-профит:</strong> ${parseFloat(strategy.take_profit).toFixed(2)}%</p>`;
-                }
-                if (strategy.entry_price) {
-                    html += `<p><strong>Рекомендуемая цена входа:</strong> $${parseFloat(strategy.entry_price).toFixed(2)}</p>`;
-                }
+                const s = data.strategy_result;
+                html += '<p><strong>Сигнал:</strong> ' + (s.signal || 'N/A') + ' &nbsp; <strong>Уверенность:</strong> ' + ((s.confidence || 0) * 100).toFixed(1) + '%</p>';
+                if (s.reasoning) html += '<p>' + escapeHtml(s.reasoning) + '</p>';
+                if (s.stop_loss != null) html += '<p>Стоп-лосс: ' + parseFloat(s.stop_loss).toFixed(2) + '%</p>';
+                if (s.take_profit != null) html += '<p>Тейк-профит: ' + parseFloat(s.take_profit).toFixed(2) + '%</p>';
             }
         }
-        
-        // LLM Guidance (стратегия)
-        if (data.llm_guidance) {
-            html += '<h4>🤖 LLM Стратегия:</h4>';
-            html += `<p><strong>Стратегия:</strong> <span style="color: #3498db; font-weight: bold;">${data.llm_guidance.strategy}</span></p>`;
-            html += `<p><strong>Уверенность:</strong> ${(data.llm_guidance.confidence * 100).toFixed(1)}%</p>`;
-            html += `<p><strong>Обоснование:</strong> ${data.llm_guidance.reasoning}</p>`;
-            
-            if (data.llm_guidance.entry_price) {
-                html += `<p><strong>Рекомендуемая цена входа:</strong> $${parseFloat(data.llm_guidance.entry_price).toFixed(2)}</p>`;
-            }
-            if (data.llm_guidance.stop_loss) {
-                html += `<p><strong>Рекомендуемый стоп-лосс:</strong> ${parseFloat(data.llm_guidance.stop_loss).toFixed(2)}%</p>`;
-            }
-            if (data.llm_guidance.take_profit) {
-                html += `<p><strong>Рекомендуемый тейк-профит:</strong> ${parseFloat(data.llm_guidance.take_profit).toFixed(2)}%</p>`;
-            }
-        }
-        
-        // Детальный LLM анализ
+        if (data.reasoning) html += '<p class="muted">' + escapeHtml(data.reasoning) + '</p>';
         if (data.llm_analysis) {
-            html += '<h4>📈 Детальный LLM Анализ:</h4>';
-            html += `<p><strong>Рекомендация:</strong> ${data.llm_analysis.decision}</p>`;
-            html += `<p><strong>Уверенность:</strong> ${(data.llm_analysis.confidence * 100).toFixed(1)}%</p>`;
-            html += `<p><strong>Обоснование:</strong> ${data.llm_analysis.reasoning}</p>`;
-            
-            if (data.llm_analysis.risks && data.llm_analysis.risks.length > 0) {
-                html += `<p><strong>Риски:</strong> ${data.llm_analysis.risks.join(', ')}</p>`;
-            }
-            if (data.llm_analysis.key_factors && data.llm_analysis.key_factors.length > 0) {
-                html += `<p><strong>Ключевые факторы:</strong> ${data.llm_analysis.key_factors.join(', ')}</p>`;
-            }
+            html += '<h4>LLM анализ:</h4>';
+            html += '<p><strong>Рекомендация:</strong> ' + escapeHtml(data.llm_analysis.decision) + ' &nbsp; <strong>Уверенность:</strong> ' + ((data.llm_analysis.confidence || 0) * 100).toFixed(1) + '%</p>';
+            if (data.llm_analysis.reasoning) html += '<p>' + escapeHtml(data.llm_analysis.reasoning) + '</p>';
         }
-        
         resultDiv.innerHTML = html;
     } catch (error) {
-        resultDiv.innerHTML = `<div style="color: red;">Ошибка: ${error.message}</div>`;
+        resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(error.message) + '</div>';
     }
 });
 
+// Покупка
+document.getElementById('buyForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const resultDiv = document.getElementById('buyResult');
+    resultDiv.innerHTML = '<span class="loading">...</span>';
+    try {
+        const response = await fetch('/api/buy', { method: 'POST', body: formData });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            resultDiv.innerHTML = '<span style="color: red;">' + (data.detail || response.statusText) + '</span>';
+            return;
+        }
+        resultDiv.innerHTML = '<span style="color: green;">' + escapeHtml(data.message) + '</span>';
+    } catch (err) {
+        resultDiv.innerHTML = '<span style="color: red;">' + escapeHtml(err.message) + '</span>';
+    }
+});
+
+// Продажа
+document.getElementById('sellForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const q = formData.get('quantity');
+    if (q === '' || q === null) formData.delete('quantity');
+    const resultDiv = document.getElementById('sellResult');
+    resultDiv.innerHTML = '<span class="loading">...</span>';
+    try {
+        const response = await fetch('/api/sell', { method: 'POST', body: formData });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            resultDiv.innerHTML = '<span style="color: red;">' + (data.detail || response.statusText) + '</span>';
+            return;
+        }
+        resultDiv.innerHTML = '<span style="color: green;">' + escapeHtml(data.message) + '</span>';
+    } catch (err) {
+        resultDiv.innerHTML = '<span style="color: red;">' + escapeHtml(err.message) + '</span>';
+    }
+});
+
+// История сделок
+document.getElementById('loadHistoryBtn').addEventListener('click', async () => {
+    const resultDiv = document.getElementById('historyResult');
+    resultDiv.innerHTML = '<div class="loading">Загрузка...</div>';
+    try {
+        const response = await fetch('/api/trades?limit=30');
+        const data = await response.json();
+        if (!data.trades || data.trades.length === 0) {
+            resultDiv.innerHTML = '<p>Сделок нет</p>';
+            return;
+        }
+        let html = '<table><thead><tr><th>Время</th><th>Тикер</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th>Сигнал</th></tr></thead><tbody>';
+        data.trades.forEach(function(t) {
+            const ts = t.ts && (typeof t.ts === 'string' ? t.ts.replace('T', ' ').substring(0, 16) : t.ts);
+            html += '<tr><td>' + escapeHtml(ts) + '</td><td>' + escapeHtml(t.ticker) + '</td><td>' + escapeHtml(t.side) + '</td><td>' + parseFloat(t.quantity) + '</td><td>$' + parseFloat(t.price).toFixed(2) + '</td><td>' + escapeHtml(t.signal_type || '') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+        resultDiv.innerHTML = html;
+    } catch (err) {
+        resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(err.message) + '</div>';
+    }
+});
+
+// Исполнение цикла
 document.getElementById('executeForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
     const resultDiv = document.getElementById('executeResult');
     resultDiv.innerHTML = '<div class="loading">Исполнение...</div>';
-    
     try {
-        const response = await fetch('/api/execute', {
-            method: 'POST',
-            body: formData
-        });
+        const response = await fetch('/api/execute', { method: 'POST', body: formData });
         const data = await response.json();
-        resultDiv.innerHTML = `<div style="color: green;">${data.message}</div>`;
+        resultDiv.innerHTML = '<div style="color: green;">' + escapeHtml(data.message) + '</div>';
     } catch (error) {
-        resultDiv.innerHTML = `<div style="color: red;">Ошибка: ${error.message}</div>`;
+        resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(error.message) + '</div>';
     }
 });
 </script>
 {% endblock %}
-

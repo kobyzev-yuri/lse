@@ -35,8 +35,17 @@
 
 <div class="card">
     <h2>Последние новости</h2>
+    <label>Фильтр по тикеру:</label>
+    <select id="newsTickerFilter">
+        <option value="">Все</option>
+        {% for t in tickers %}
+        <option value="{{ t }}">{{ t }}</option>
+        {% endfor %}
+        <option value="MACRO">MACRO</option>
+        <option value="US_MACRO">US_MACRO</option>
+    </select>
     {% if news %}
-    <table>
+    <table id="newsTable">
         <thead>
             <tr>
                 <th>Время</th>
@@ -66,6 +75,15 @@
 
 {% block extra_js %}
 <script>
+document.getElementById('newsTickerFilter').addEventListener('change', function() {
+    const filter = this.value;
+    document.querySelectorAll('#newsTable tbody tr').forEach(function(tr) {
+        const tickerCell = tr.querySelector('td:nth-child(2)');
+        const ticker = tickerCell ? tickerCell.textContent.trim() : '';
+        tr.style.display = (!filter || ticker === filter) ? '' : 'none';
+    });
+});
+
 document.getElementById('addNewsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);

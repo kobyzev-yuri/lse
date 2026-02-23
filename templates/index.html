@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Дашборд - LSE Trading System{% endblock %}
+{% block title %}Портфель - LSE Trading System{% endblock %}
 
 {% block content %}
-<h1>Дашборд</h1>
+<h1>Портфель</h1>
 
 <div class="stats">
     <div class="stat-card">
@@ -45,8 +45,8 @@
                 <td>{{ pos.ticker }}</td>
                 <td>{{ "{:.2f}".format(pos.quantity) }}</td>
                 <td>${{ "{:.2f}".format(pos.avg_entry_price) }}</td>
-                <td>-</td>
-                <td>-</td>
+                <td>${{ "{:.2f}".format(pos.current_price) }}</td>
+                <td class="{% if pos.pnl >= 0 %}positive{% else %}negative{% endif %}">${{ "{:,.2f}".format(pos.pnl) }} ({{ "{:+.2f}".format(pos.pnl_pct) }}%)</td>
             </tr>
             {% endfor %}
         </tbody>

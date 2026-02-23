@@ -143,6 +143,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("history", self._handle_history))
         self.application.add_handler(CommandHandler("recommend", self._handle_recommend))
         self.application.add_handler(CommandHandler("recommend5m", self._handle_recommend5m))
+        self.application.add_handler(CommandHandler("dashboard", self._handle_dashboard))
         
         # Обработка текстовых сообщений (для произвольных запросов)
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
@@ -189,6 +190,7 @@ class LSETelegramBot:
 /chart5m <ticker> [days] — график 5 мин (по требованию)
 /table5m <ticker> [days] — таблица 5m свечей
 /recommend5m [ticker] [days] — рекомендация по 5m + 5д статистике (по умолч. SNDK, 5 дн.)
+/dashboard [5m|daily|all] — дашборд по тикерам: решения, 5m, новости (проактивный мониторинг)
 /ask <вопрос> — вопрос (работает в группах!)
 /tickers — список инструментов
 
@@ -256,6 +258,7 @@ class LSETelegramBot:
 `/history [N]` — последние N сделок (по умолч. 15)
 `/recommend <ticker>` — рекомендация: когда открыть позицию, стоп-лосс, размер позиции
 `/recommend5m [ticker] [days]` — рекомендация по 5m и 5д статистике (интрадей, по умолч. SNDK 5д)
+`/dashboard [5m|daily|all]` — дашборд: все тикеры, сигналы, 5m (SNDK), новости за 7 дн. Для смены курса и решений.
   В /ask можно спросить: _когда можно открыть позицию по SNDK и какие параметры советуешь?_
   Пример: `/recommend SNDK`, `/buy GC=F 5`, `/sell MSFT`
         """
@@ -953,6 +956,36 @@ class LSETelegramBot:
         if len(msg) > 4000:
             msg = msg[:3970] + "\n…"
         await update.message.reply_text(msg, parse_mode="Markdown")
+
+    def _build_dashboard_sync(self, mode: str = "all") -> str:
+        """Строит сводку дашборда (делегирует в services.dashboard_builder)."""
+        from services.dashboard_builder import build_dashboard_text
+        return build_dashboard_text(mode)
+
+    async def _handle_dashboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Дашборд по отслеживаемым тикерам для проактивного мониторинга (решения, 5m, новости)."""
+        if not self._check_access(update.effective_user.id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        mode = "all"
+        if context.args:
+            a = context.args[0].strip().lower()
+            if a in ("5m", "daily", "all"):
+                mode = a
+        await update.message.reply_text("📥 Сбор дашборда...")
+        loop = asyncio.get_event_loop()
+        try:
+            text = await loop.run_in_executor(None, self._build_dashboard_sync, mode)
+        except Exception as e:
+            logger.exception("Ошибка дашборда")
+            await update.message.reply_text(f"❌ Ошибка: {e}")
+            return
+        if len(text) > 4000:
+            parts = [text[i : i + 4000] for i in range(0, len(text), 4000)]
+            for p in parts:
+                await update.message.reply_text(p, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(text, parse_mode="Markdown")
     
     async def _handle_tickers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /tickers"""
