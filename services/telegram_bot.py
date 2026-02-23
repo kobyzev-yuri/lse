@@ -15,7 +15,7 @@ import logging
 import math
 import re
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -142,6 +142,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("sell", self._handle_sell))
         self.application.add_handler(CommandHandler("history", self._handle_history))
         self.application.add_handler(CommandHandler("recommend", self._handle_recommend))
+        self.application.add_handler(CommandHandler("recommend5m", self._handle_recommend5m))
         
         # Обработка текстовых сообщений (для произвольных запросов)
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
@@ -187,6 +188,7 @@ class LSETelegramBot:
 /chart <ticker> [days] — график дневной
 /chart5m <ticker> [days] — график 5 мин (по требованию)
 /table5m <ticker> [days] — таблица 5m свечей
+/recommend5m [ticker] [days] — рекомендация по 5m + 5д статистике (по умолч. SNDK, 5 дн.)
 /ask <вопрос> — вопрос (работает в группах!)
 /tickers — список инструментов
 
@@ -253,6 +255,7 @@ class LSETelegramBot:
 `/sell <ticker>` — закрыть всю позицию; `/sell <ticker> <кол-во>` — частичная продажа
 `/history [N]` — последние N сделок (по умолч. 15)
 `/recommend <ticker>` — рекомендация: когда открыть позицию, стоп-лосс, размер позиции
+`/recommend5m [ticker] [days]` — рекомендация по 5m и 5д статистике (интрадей, по умолч. SNDK 5д)
   В /ask можно спросить: _когда можно открыть позицию по SNDK и какие параметры советуешь?_
   Пример: `/recommend SNDK`, `/buy GC=F 5`, `/sell MSFT`
         """
@@ -806,11 +809,21 @@ class LSETelegramBot:
             await update.message.reply_text(f"❌ Ошибка построения графика: {str(e)}")
 
     def _fetch_5m_data_sync(self, ticker: str, days: int = 5):
-        """Синхронная загрузка 5-минутных данных через yfinance (вызывать из executor)."""
+        """Синхронная загрузка 5-минутных данных через yfinance (вызывать из executor).
+
+        Запрашивает явный диапазон дат [сегодня − days .. сегодня], чтобы получать
+        самые свежие данные. Yahoo при period='1d' отдаёт «последний торговый день»
+        с задержкой, поэтому без start/end данные могут быть за прошлые дни.
+        """
         import yfinance as yf
         import pandas as pd
         t = yf.Ticker(ticker)
-        df = t.history(period=f"{min(days, 7)}d", interval="5m", auto_adjust=False)
+        days = min(max(1, days), 7)
+        end_date = datetime.utcnow() + timedelta(days=1)  # end exclusive
+        start_date = datetime.utcnow() - timedelta(days=days)
+        start_str = start_date.strftime("%Y-%m-%d")
+        end_str = end_date.strftime("%Y-%m-%d")
+        df = t.history(start=start_str, end=end_str, interval="5m", auto_adjust=False)
         if df is None or df.empty:
             return None
         df = df.rename_axis("datetime").reset_index()
@@ -870,13 +883,19 @@ class LSETelegramBot:
             plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
             ax.legend(loc="upper left")
             ax.grid(True, linestyle="--", alpha=0.4)
-            ax.set_title(f"{ticker} — 5m ({len(df)} точек, {days} дн.)", fontsize=11, fontweight="bold")
+            dt_min = df["datetime"].min()
+            dt_max = df["datetime"].max()
+            range_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}"
+            ax.set_title(f"{ticker} — 5m ({len(df)} точек)", fontsize=11, fontweight="bold")
             plt.tight_layout()
             buf = BytesIO()
             plt.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="white")
             buf.seek(0)
             plt.close()
-            await update.message.reply_photo(photo=buf, caption=f"📈 {ticker} — 5 мин, {len(df)} свечей")
+            await update.message.reply_photo(
+                photo=buf,
+                caption=f"📈 {ticker} — 5 мин, {len(df)} свечей. Данные за: {range_str}",
+            )
         except Exception as e:
             logger.exception("Ошибка графика 5m")
             await update.message.reply_text(f"❌ Ошибка графика: {e}")
@@ -915,16 +934,22 @@ class LSETelegramBot:
         import pandas as pd
         df["datetime"] = pd.to_datetime(df["datetime"])
         total = len(df)
-        df = df.sort_values("datetime", ascending=False).head(25)
+        df_sorted = df.sort_values("datetime", ascending=False)
+        range_str = ""
+        if not df_sorted.empty:
+            dt_min = df_sorted["datetime"].min()
+            dt_max = df_sorted["datetime"].max()
+            range_str = f"\n_Период в данных: {dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}_"
+        df_head = df_sorted.head(25)
         lines = [f"`{'Дата':<16} {'O':>10} {'H':>10} {'L':>10} {'C':>10}`"]
-        for _, row in df.iterrows():
+        for _, row in df_head.iterrows():
             ts = row["datetime"].strftime("%d.%m %H:%M")
             o = float(row["Open"]) if pd.notna(row["Open"]) else 0.0
             h = float(row["High"]) if pd.notna(row["High"]) else 0.0
             lo = float(row["Low"]) if pd.notna(row["Low"]) else 0.0
             c = float(row["Close"]) if pd.notna(row["Close"]) else 0.0
             lines.append(f"`{ts:<16} {o:>10.4f} {h:>10.4f} {lo:>10.4f} {c:>10.4f}`")
-        msg = f"📋 **{ticker}** — 5m свечи (последние {len(df)} из {total})\n\n" + "\n".join(lines)
+        msg = f"📋 **{ticker}** — 5m свечи (последние {len(df_head)} из {total}){range_str}\n\n" + "\n".join(lines)
         if len(msg) > 4000:
             msg = msg[:3970] + "\n…"
         await update.message.reply_text(msg, parse_mode="Markdown")
@@ -1089,6 +1114,92 @@ class LSETelegramBot:
             lines.append(f"\n💭 _{_escape_markdown(str(data['reasoning'])[:180])}..._")
         return "\n".join(lines)
 
+    def _get_recommendation_data_5m(self, ticker: str, days: int = 5) -> Optional[Dict[str, Any]]:
+        """Собирает данные для рекомендации по 5m (интрадей + 5-дневная статистика)."""
+        try:
+            from services.recommend_5m import get_decision_5m
+            data_5m = get_decision_5m(ticker, days=days)
+            if not data_5m:
+                return None
+            has_position = False
+            position_info = None
+            ex = self._get_execution_agent()
+            if ex:
+                summary = ex.get_portfolio_summary()
+                for p in summary.get("positions") or []:
+                    if p["ticker"] == ticker:
+                        has_position = True
+                        position_info = p
+                        break
+            return {
+                "ticker": ticker,
+                "decision": data_5m["decision"],
+                "strategy": "5m (интрадей + 5д статистика)",
+                "price": data_5m["price"],
+                "rsi": data_5m.get("rsi_5m"),
+                "reasoning": data_5m.get("reasoning", ""),
+                "period_str": data_5m.get("period_str", ""),
+                "momentum_2h_pct": data_5m.get("momentum_2h_pct"),
+                "volatility_5m_pct": data_5m.get("volatility_5m_pct"),
+                "stop_loss_pct": data_5m.get("stop_loss_pct", 2.5),
+                "take_profit_pct": data_5m.get("take_profit_pct", 5.0),
+                "bars_count": data_5m.get("bars_count"),
+                "has_position": has_position,
+                "position": position_info,
+                "max_position_usd": 0,
+                "max_ticker_pct": 0,
+            }
+        except Exception as e:
+            logger.warning(f"Ошибка рекомендации 5m для {ticker}: {e}")
+            return None
+
+    def _format_recommendation_5m(self, data: Dict[str, Any]) -> str:
+        """Форматирует текст рекомендации по 5m данным."""
+        t = _escape_markdown(data["ticker"])
+        decision = data["decision"]
+        price = data["price"]
+        price_str = f"${price:.2f}" if price is not None else "—"
+        rsi = data.get("rsi")
+        rsi_str = f"{rsi:.1f}" if rsi is not None else "—"
+        sl = data.get("stop_loss_pct", 2.5)
+        tp = data.get("take_profit_pct", 5.0)
+        period_str = data.get("period_str") or ""
+        mom = data.get("momentum_2h_pct")
+        mom_str = f"{mom:+.2f}%" if mom is not None else "—"
+        vol = data.get("volatility_5m_pct")
+        vol_str = f"{vol:.2f}%" if vol is not None else "—"
+        has_pos = data.get("has_position", False)
+        pos = data.get("position")
+        if decision in ("BUY", "STRONG_BUY"):
+            action = "можно открывать длинную позицию (по 5m)" if not has_pos else "позиция открыта — держать или докупать по тактике"
+            emoji = "🟢"
+        elif decision == "SELL":
+            action = "рекомендуется закрыть или не входить" if has_pos else "вход не рекомендую по 5m"
+            emoji = "🔴"
+        else:
+            action = "сигнал нейтральный — ждать более чёткого сигнала по 5m"
+            emoji = "⚪"
+        lines = [
+            f"{emoji} **Рекомендация 5m по {t}**",
+            "",
+            f"**Сигнал:** {decision} (стратегия: 5m + 5д статистика)",
+            f"**Цена:** {price_str}  ·  **RSI(5m):** {rsi_str}  ·  **Импульс 2ч:** {mom_str}  ·  **Волатильность 5m:** {vol_str}",
+            "",
+            f"**Период данных:** {period_str}" if period_str else "",
+            "",
+            f"**Действие:** {action}",
+            "",
+            "**Параметры (интрадей):**",
+            f"• Стоп-лосс: −{sl:.1f}%  ·  Тейк-профит: +{tp:.1f}%",
+        ]
+        if has_pos and pos:
+            pnl = pos.get("pnl") or 0
+            pnl_pct = pos.get("pnl_pct") or 0
+            lines.append(f"\n_Позиция: P&L ${pnl:,.2f} ({pnl_pct:+.2f}%)_")
+        if data.get("reasoning"):
+            lines.append(f"\n💭 _{_escape_markdown(str(data['reasoning'])[:220])}_")
+        return "\n".join([s for s in lines if s])
+
     def _get_execution_agent(self):
         """Ленивая инициализация ExecutionAgent для песочницы."""
         if getattr(self, "_execution_agent", None) is None:
@@ -1239,6 +1350,42 @@ class LSETelegramBot:
             await update.message.reply_text(text, parse_mode="Markdown")
         except Exception as e:
             logger.exception("Ошибка форматирования рекомендации")
+            await update.message.reply_text(f"❌ Ошибка: {e}")
+
+    async def _handle_recommend5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Рекомендация по 5-минутным данным с учётом 5-дневной статистики (агрессивный интрадей, напр. SNDK)."""
+        if not self._check_access(update.effective_user.id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        ticker = "SNDK"
+        days = 5
+        if context.args and len(context.args) >= 1:
+            ticker = _normalize_ticker(context.args[0])
+        if len(context.args) >= 2:
+            try:
+                days = max(1, min(7, int(context.args[1].strip())))
+            except (ValueError, IndexError):
+                pass
+        await update.message.reply_text(f"📥 Загрузка 5m данных для {ticker} за {days} дн....")
+        loop = asyncio.get_event_loop()
+        try:
+            data = await loop.run_in_executor(
+                None, self._get_recommendation_data_5m, ticker, days
+            )
+        except Exception as e:
+            logger.exception("Ошибка рекомендации 5m")
+            await update.message.reply_text(f"❌ Ошибка: {e}")
+            return
+        if not data:
+            await update.message.reply_text(
+                f"❌ Нет 5m данных для {ticker} за {days} дн. Yahoo даёт 5m обычно за 1–7 дней."
+            )
+            return
+        try:
+            text = self._format_recommendation_5m(data)
+            await update.message.reply_text(text, parse_mode="Markdown")
+        except Exception as e:
+            logger.exception("Ошибка форматирования рекомендации 5m")
             await update.message.reply_text(f"❌ Ошибка: {e}")
     
     async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
