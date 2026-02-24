@@ -438,6 +438,32 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 
 Скрипт собирает тот же текст, что и команда `/dashboard`, и отправляет его в указанный чат через Bot API.
 
+### Сигнал о входе SNDK (поллинг 5m) — нотификация списка людей
+
+Чтобы бот **сам присылал** сообщение «стоит входить», когда 5m-анализ по SNDK даёт BUY/STRONG_BUY (без ожидания /recommend5m или /dashboard):
+
+1. В `config.env` задайте, **кого нотифицировать**:
+
+   **Вариант A — несколько получателей (каждому в личку):** укажите chat_id каждого через запятую. Узнать свой id: [@userinfobot](https://t.me/userinfobot) или логи при `/start`.
+   ```bash
+   TELEGRAM_SIGNAL_CHAT_IDS=123456789,987654321,555555555
+   ```
+
+   **Вариант B — один чат (например группа) и упоминания:** тогда в начале сообщения будут @username — они получат уведомление. Укажите группу и список ников:
+   ```bash
+   TELEGRAM_SIGNAL_CHAT_ID=-1001234567890
+   TELEGRAM_SIGNAL_MENTIONS=@yurikobyzev,@alpiotr,@secretkoala
+   ```
+
+   Если не задано `TELEGRAM_SIGNAL_CHAT_IDS` / `TELEGRAM_SIGNAL_CHAT_ID`, используется `TELEGRAM_DASHBOARD_CHAT_ID` или первый id из `TELEGRAM_ALLOWED_USERS`.
+
+2. Добавьте в crontab поллинг каждые 5–15 мин в торговые часы (пн–пт):
+   ```bash
+   */15 10-18 * * 1-5  cd /path/to/lse && python scripts/send_sndk_signal_cron.py
+   ```
+
+3. При сигнале BUY/STRONG_BUY скрипт отправит сообщение во все чаты из `TELEGRAM_SIGNAL_CHAT_IDS` (или в один из `TELEGRAM_SIGNAL_CHAT_ID`). Если задан `TELEGRAM_SIGNAL_MENTIONS`, в начало текста добавится строка с упоминаниями (для группы). Повторный сигнал не шлётся чаще чем раз в 2 часа (cooldown).
+
 ---
 
 ## Развёртывание
@@ -468,6 +494,7 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 - `api/bot_app.py` - FastAPI приложение для webhook
 - `scripts/run_telegram_bot.py` - Локальный запуск
 - `scripts/send_dashboard_cron.py` - Проактивная рассылка дашборда по расписанию (cron)
+- `scripts/send_sndk_signal_cron.py` - Поллинг SNDK 5m и отправка сигнала о входе в личку при BUY/STRONG_BUY
 - `services/dashboard_builder.py` - Сборка текста дашборда (общий код для /dashboard и cron)
 - `scripts/update_rsi_local.py` - Обновление RSI для всех тикеров
 - `scripts/setup_webhook.py` - Настройка webhook

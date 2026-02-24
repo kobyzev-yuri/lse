@@ -1,0 +1,127 @@
+# Game SNDK — симуляция по 5m сигналам
+
+Сценарий: при рассылке сигнала на **вход** (BUY/STRONG_BUY) фиксируем **бумажный вход** по SNDK; при **выходе** (сигнал SELL или истечение 2 дней) — бумажный выход и расчёт PnL. Используются **универсальные таблицы**: все сделки пишутся в **trade_history** с `strategy_name='GAME_5M'` и `ticker='SNDK'` (отдельная таблица не нужна).
+
+## Данные для прогноза входа/выхода
+
+Для решения агенту нужны **все доступные 5m-отметки** от текущего момента назад на **7 дней** (или сколько отдаёт Yahoo) — без порога по числу баров. Эти данные вместе с контекстом из KB и запросом о свежих новостях используются для принятия решения BUY/HOLD/SELL.
+
+- **Свечи 5m:** полное окно до 7 дней (yfinance). По ним считаются RSI(5m), волатильность, импульс за 2ч, high/low за окно, откат от хая сессии. При малом числе баров RSI может быть недоступен — решение всё равно возвращается (например HOLD с указанием «мало баров»).
+- **База знаний (KB):** новости/события из KB за **тот же период**, что и 5m (минимум 7 дней). Агент видит и ценовую динамику, и новости за один и тот же интервал — можно оценить влияние или отсутствие влияния новостей на движение и учесть это при решении.
+- **LLM перед решением:** при `USE_LLM_NEWS` перед формированием сигнала — запрос к LLM о текущих/ожидаемых новостях и настроениях по бумаге. Ответ (обзор + sentiment + insight) передаётся агенту вместе с 5m-данными и KB.
+- **Открытие и закрытие биржи, праздники:** рассматриваются **отдельно** (модуль `services/market_session.py`). В контекст решения попадает фаза сессии NYSE: первый час после открытия, последний час перед закрытием, день праздника, день до/после праздника. В эти моменты очевидны особые процессы новостей и ликвидности — агент может учитывать это при принятии решения (в ответе поле `market_session`: `session_phase`, `session_note_ru`, флаги `is_near_open`, `is_near_close`, `is_holiday` и т.д.).
+
+## Как работает
+
+1. **Cron** `scripts/send_sndk_signal_cron.py` — **пока раз в час** (пн–пт, в начале каждого часа). Так можно оценить эффективность по времени суток: в часы работы биржи и вне их. При необходимости расписание меняется в `setup_cron.sh` (например, снова каждые 15 мин в 10:00–18:00).
+   - получает 5m-решение по каждому быстрому тикеру (окно 7 дн., KB за тот же период, при USE_LLM_NEWS — запрос к LLM);
+   - если есть **открытая позиция** и (сигнал SELL или позиция старше **2 дней**) — записывает **SELL** в trade_history;
+   - если сигнал **BUY/STRONG_BUY** и открытой позиции нет — отправляет уведомление и записывает **BUY** в trade_history.
+
+2. **trade_history**: обычные строки BUY/SELL с `strategy_name='GAME_5M'`, `ticker='SNDK'`. PnL по закрытым парам считаем по лог-доходности (минус комиссия). Портфель и история в одной схеме; фильтр по strategy_name отделяет игру от ручных/других стратегий.
+
+3. **Размер позиции**: фиксированный номинал 10 000 USD (`GAME_NOTIONAL_USD` в `services/game_sndk.py`).
+
+## Модуль
+
+- **`services/game_sndk.py`**:
+  - `get_open_position()` — текущая открытая позиция или None;
+  - `record_entry(price, signal_type, reasoning)` — записать вход (если нет открытой);
+  - `close_position(exit_price, exit_signal_type)` — закрыть позицию, проставить PnL;
+  - `get_recent_results(limit=20)` — последние закрытые сделки для анализа.
+
+## Просмотр результатов
+
+```sql
+-- Все игровые сделки по SNDK (GAME_5M)
+SELECT id, ts, ticker, side, quantity, price, signal_type, strategy_name
+FROM trade_history
+WHERE ticker = 'SNDK' AND strategy_name = 'GAME_5M'
+ORDER BY ts DESC
+LIMIT 30;
+
+-- Открытая позиция = последний BUY без SELL после него (видно по порядку ts)
+```
+
+В коде: `from services.game_sndk import get_recent_results; get_recent_results("SNDK", 20)` — список закрытых пар (entry_ts, exit_ts, pnl_pct и т.д.). Для других тикеров (NDK, LITE) тот же модуль: `record_entry(..., ticker="NDK")`, `get_open_position("NDK")` и т.д.
+
+## Завершение игры и анализ результатов
+
+### Как завершить игру
+
+- **Остановка бота:** в терминале, где запущен `run_telegram_bot.py`, нажмите **Ctrl+C**. Игра при этом не «закрывается» — данные уже в `trade_history`.
+- **Отключение рассылки и авто-входов/выходов:** отключите задачу cron для сигналов 5m:
+  ```bash
+  crontab -e
+  ```
+  Закомментируйте или удалите строку с `send_sndk_signal_cron.py`. Чтобы снова включить — раскомментируйте или выполните `./setup_cron.sh`.
+- **Позиции в игре** закрываются автоматически: по сигналу **SELL** от 5m или через **2 дня** (TIME_EXIT). Вручную ничего закрывать не нужно; при остановке cron просто не будет новых входов и новых авто-выходов.
+
+### Анализ результатов для улучшения стратегии
+
+**1. Сводка по закрытым сделкам (SQL)**
+
+```sql
+-- Все сделки GAME_5M по SNDK (для ручного разбора пар BUY→SELL по порядку ts)
+SELECT id, ts, side, quantity, price, signal_type
+FROM trade_history
+WHERE ticker = 'SNDK' AND strategy_name = 'GAME_5M'
+ORDER BY ts ASC;
+
+-- Упрощённая сводка: число BUY и SELL (число закрытых круглых сделок = минимум из двух)
+SELECT side, COUNT(*), MIN(ts), MAX(ts)
+FROM trade_history
+WHERE ticker = 'SNDK' AND strategy_name = 'GAME_5M'
+GROUP BY side;
+```
+
+Точные пары BUY→SELL и PnL по каждой сделке удобнее получать через **get_recent_results** в Python (см. ниже).
+
+**2. Через Python (get_recent_results)**
+
+```python
+from services.game_5m import get_recent_results
+
+results = get_recent_results("SNDK", limit=50)
+if not results:
+    print("Нет закрытых сделок")
+else:
+    pnls = [r["pnl_pct"] for r in results if r.get("pnl_pct") is not None]
+    wins = sum(1 for p in pnls if p > 0)
+    print(f"Сделок: {len(results)}, Win rate: {wins}/{len(pnls)} ({100*wins/len(pnls):.1f}%)")
+    print(f"Средний PnL %: {sum(pnls)/len(pnls):.2f}")
+    for r in results[:10]:
+        print(f"  {r['entry_ts']} → {r['exit_ts']} {r['exit_signal_type']} PnL={r.get('pnl_pct')}%")
+```
+
+**3. Что смотреть и что менять для улучшения**
+
+| Что смотреть | Где менять | Идея |
+|--------------|------------|------|
+| Win rate и средний PnL по типу выхода (SELL vs TIME_EXIT) | `services/recommend_5m.py` | Если много убыточных TIME_EXIT — ужесточить правила SELL или уменьшить `MAX_POSITION_DAYS` в `game_5m.py` |
+| Доля прибыльных сделок | `recommend_5m.py` — пороги RSI (32, 38, 68, 76), условия BUY/STRONG_BUY | Ослабить/ужесточить вход (например, BUY только при RSI < 35) |
+| Средний PnL и просадки | `game_5m.py`: `MAX_POSITION_DAYS`, `GAME_NOTIONAL_USD` | Укоротить удержание (1 день) или оставить 2 |
+| Влияние новостей/LLM | Включить `USE_LLM_NEWS`, сравнить результаты до/после | Учитывать insight LLM в порогах или в логе для ручного разбора |
+
+После изменений в `recommend_5m.py` или `game_5m.py` перезапускать бота не обязательно для cron (cron подхватывает код при следующем запуске); бот перезапускается только если нужно подхватить изменения в коде.
+
+## Запуск сервисов (пока только SNDK)
+
+Подготовка и запуск бота, cron и БД для игры только по SNDK:
+
+```bash
+# 1. config.env: DATABASE_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_SIGNAL_CHAT_ID, TICKERS_FAST=SNDK
+# 2. Один запуск: подготовка БД + cron + бот
+./scripts/run_game_services.sh
+
+# Только бот (cron уже установлен): ./scripts/run_game_services.sh --bot-only
+# Только подготовка + cron, без бота: ./scripts/run_game_services.sh --no-bot
+```
+
+Подробно: [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md).
+
+## См. также
+
+- [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md) — пошаговый запуск всех сервисов игры (SNDK)
+- [TELEGRAM_BOT_SETUP.md](TELEGRAM_BOT_SETUP.md) — настройка рассылки сигналов и cron
+- [TICKER_GROUPS.md](TICKER_GROUPS.md) — быстрые/средние/долгие тикеры

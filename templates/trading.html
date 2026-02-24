@@ -216,6 +216,7 @@ document.getElementById('recommend5mForm').addEventListener('submit', async (e) 
         if (d.period_str) html += '<p class="muted">Период: ' + escapeHtml(d.period_str) + '</p>';
         html += '<p>Стоп: −' + parseFloat(d.stop_loss_pct).toFixed(1) + '% &nbsp; Тейк: +' + parseFloat(d.take_profit_pct).toFixed(1) + '%</p>';
         if (d.reasoning) html += '<p class="muted">' + escapeHtml(d.reasoning.substring(0, 180)) + (d.reasoning.length > 180 ? '…' : '') + '</p>';
+        if (d.alex_rule && d.alex_rule.message) html += '<p><strong>Правило Алекса (дневное):</strong> ' + escapeHtml(d.alex_rule.message) + '</p>';
         html += '</div>';
         resultDiv.innerHTML = html;
     } catch (err) {

@@ -13,8 +13,9 @@
 | **Alpha Vantage** (Earnings + News Sentiment) | Да | Да (ключ) | ~25 запросов/день |
 | **Alpha Vantage** (Economic) | Код есть | Нет | В cron выключено; free tier часто пусто |
 | **Investing.com** | Код есть | Нет | Таблица через JS, парсер получает пустой HTML |
+| **LLM (GPT/Gemini и т.д.)** | Да | Опционально | Прямой запрос к LLM: «какие новости влияют на тикер»; при `USE_LLM_NEWS=true` и настроенном `OPENAI_API_KEY` cron сохраняет ответ в knowledge_base как одна запись с `source='LLM (model)'`. По умолчанию тикер SNDK; список задаётся `LLM_NEWS_TICKERS=SNDK,MU`. |
 
-**Запуск сбора:** `python scripts/fetch_news_cron.py`. В `config.env`: `ALPHAVANTAGE_KEY`, `NEWSAPI_KEY`.
+**Запуск сбора:** `python scripts/fetch_news_cron.py`. В `config.env`: `ALPHAVANTAGE_KEY`, `NEWSAPI_KEY`. Для LLM-новостей: `USE_LLM_NEWS=true`, `OPENAI_API_KEY` (и при необходимости `OPENAI_BASE_URL`, `OPENAI_MODEL`); опционально `LLM_NEWS_TICKERS=SNDK`.
 
 **Проверка:**  
 `SELECT source, COUNT(*), MIN(ts), MAX(ts) FROM knowledge_base GROUP BY source ORDER BY 2 DESC;`
@@ -33,14 +34,14 @@
 
 | Скрипт | Назначение |
 |--------|------------|
-| `scripts/fetch_news_cron.py` | Сбор из RSS, NewsAPI, Alpha Vantage (и при включении — Investing.com). |
+| `scripts/fetch_news_cron.py` | Сбор из RSS, NewsAPI, Alpha Vantage, при `USE_LLM_NEWS=true` — LLM-запрос по тикерам из `LLM_NEWS_TICKERS` (по умолч. SNDK). |
 | `scripts/sync_vector_kb_cron.py` | Backfill `embedding` для записей с `embedding IS NULL`. |
 | `scripts/add_sentiment_to_news_cron.py` | LLM: заполнение `sentiment_score` и `insight` для новостей без sentiment. |
 | `scripts/analyze_event_outcomes_cron.py` | Заполнение `outcome_json` (изменение цены после события). |
 | `scripts/cleanup_calendar_noise.py` | Удаление мусорных записей календаря (только число без текста). |
 | `scripts/cleanup_manual_duplicates.py` | Удаление записей с `source='MANUAL'`, дублирующих другую запись по (ts, ticker, content). `--dry-run` затем `--execute`. |
 
-Модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`.
+Модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`, `services/llm_news_fetcher.py` (запрос к LLM за новостями по тикеру).
 
 ---
 

@@ -27,6 +27,9 @@ dist/
 logs/
 *.log
 
+# Cooldown для проактивных сигналов (cron)
+.last_sndk_signal_sent
+
 # IDE
 .vscode/
 .idea/

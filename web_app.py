@@ -248,7 +248,7 @@ async def get_recommend5m(ticker: str = "SNDK", days: int = 5):
         from services.recommend_5m import get_decision_5m
     except ImportError:
         raise HTTPException(status_code=501, detail="Модуль recommend_5m недоступен")
-    data_5m = get_decision_5m(ticker, days=min(max(1, days), 7))
+    data_5m = get_decision_5m(ticker, days=min(max(1, days), 7), use_llm_news=True)
     if not data_5m:
         raise HTTPException(status_code=404, detail="Нет 5m данных для тикера за указанный период")
     has_position = False
@@ -263,7 +263,14 @@ async def get_recommend5m(ticker: str = "SNDK", days: int = 5):
                 break
     except Exception:
         pass
-    return _to_jsonable({
+    alex_rule = None
+    if ticker.upper() == "SNDK":
+        try:
+            from services.alex_rule import get_alex_rule_status
+            alex_rule = get_alex_rule_status(ticker, data_5m.get("price"))
+        except Exception:
+            pass
+    out = {
         "ticker": ticker,
         "decision": data_5m["decision"],
         "strategy": "5m (интрадей + 5д статистика)",
@@ -278,7 +285,11 @@ async def get_recommend5m(ticker: str = "SNDK", days: int = 5):
         "bars_count": data_5m.get("bars_count"),
         "has_position": has_position,
         "position": position_info,
-    })
+        "alex_rule": alex_rule,
+        "llm_insight": data_5m.get("llm_insight"),
+        "llm_news_content": data_5m.get("llm_news_content"),
+    }
+    return _to_jsonable(out)
 
 
 @app.post("/api/buy", response_class=JSONResponse)

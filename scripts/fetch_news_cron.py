@@ -46,7 +46,7 @@ def fetch_all_news_sources():
     
     # 1. RSS фиды центральных банков (всегда работает, бесплатно)
     try:
-        logger.info("\n📡 Источник 1/4: RSS фиды центральных банков")
+        logger.info("\n📡 Источник 1/5: RSS фиды центральных банков")
         fetch_and_save_rss_news()
         sources_status['RSS'] = '✅ Успешно'
     except Exception as e:
@@ -55,7 +55,7 @@ def fetch_all_news_sources():
     
     # 2. Investing.com Economic Calendar (web scraping)
     try:
-        logger.info("\n📅 Источник 2/4: Investing.com Economic Calendar")
+        logger.info("\n📅 Источник 2/5: Investing.com Economic Calendar")
         fetch_and_save_investing_calendar()
         sources_status['Investing.com'] = '✅ Успешно'
     except Exception as e:
@@ -64,7 +64,7 @@ def fetch_all_news_sources():
     
     # 3. Alpha Vantage (требует API ключ)
     try:
-        logger.info("\n📊 Источник 3/4: Alpha Vantage API")
+        logger.info("\n📊 Источник 3/5: Alpha Vantage API")
         # Получаем тикеры из конфига или используем дефолтные
         from config_loader import get_config_value
         tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
@@ -87,12 +87,30 @@ def fetch_all_news_sources():
     
     # 4. NewsAPI (требует API ключ)
     try:
-        logger.info("\n📰 Источник 4/4: NewsAPI")
+        logger.info("\n📰 Источник 4/5: NewsAPI")
         fetch_and_save_newsapi_news()
         sources_status['NewsAPI'] = '✅ Успешно'
     except Exception as e:
         logger.error(f"❌ Ошибка NewsAPI: {e}")
         sources_status['NewsAPI'] = f'❌ Ошибка: {e}'
+
+    # 5. LLM (GPT/Gemini и т.д.) — прямой запрос «новости по SNDK» (при USE_LLM_NEWS=true)
+    try:
+        logger.info("\n🤖 Источник 5/5: LLM (новости по тикеру)")
+        from services.llm_news_fetcher import fetch_and_save_llm_news
+        from config_loader import get_config_value
+        llm_tickers = get_config_value("LLM_NEWS_TICKERS", "SNDK").strip()
+        for t in [x.strip() for x in llm_tickers.split(",") if x.strip()]:
+            nid = fetch_and_save_llm_news(t)
+            if nid is not None:
+                sources_status[f'LLM({t})'] = '✅ Успешно'
+            else:
+                sources_status[f'LLM({t})'] = '⏭️ Пропущено (выкл. или ошибка)'
+        if 'LLM(SNDK)' not in sources_status and 'LLM' not in str(sources_status):
+            sources_status['LLM'] = '⏭️ Пропущено (USE_LLM_NEWS не включён или нет ключа)'
+    except Exception as e:
+        logger.error(f"❌ Ошибка LLM-новостей: {e}")
+        sources_status['LLM'] = f'❌ Ошибка: {e}'
     
     # Итоговый отчет
     logger.info("\n" + "=" * 60)

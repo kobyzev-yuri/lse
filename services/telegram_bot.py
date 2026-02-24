@@ -1148,10 +1148,10 @@ class LSETelegramBot:
         return "\n".join(lines)
 
     def _get_recommendation_data_5m(self, ticker: str, days: int = 5) -> Optional[Dict[str, Any]]:
-        """Собирает данные для рекомендации по 5m (интрадей + 5-дневная статистика)."""
+        """Собирает данные для рекомендации по 5m (свечи за 5–7 дн. + опционально LLM перед решением)."""
         try:
             from services.recommend_5m import get_decision_5m
-            data_5m = get_decision_5m(ticker, days=days)
+            data_5m = get_decision_5m(ticker, days=days, use_llm_news=True)
             if not data_5m:
                 return None
             has_position = False
@@ -1164,10 +1164,17 @@ class LSETelegramBot:
                         has_position = True
                         position_info = p
                         break
+            alex_rule = None
+            if ticker.upper() == "SNDK":
+                try:
+                    from services.alex_rule import get_alex_rule_status
+                    alex_rule = get_alex_rule_status(ticker, data_5m.get("price"))
+                except Exception:
+                    pass
             return {
                 "ticker": ticker,
                 "decision": data_5m["decision"],
-                "strategy": "5m (интрадей + 5д статистика)",
+                "strategy": "5m (интрадей + 5–7д статистика)",
                 "price": data_5m["price"],
                 "rsi": data_5m.get("rsi_5m"),
                 "reasoning": data_5m.get("reasoning", ""),
@@ -1179,6 +1186,9 @@ class LSETelegramBot:
                 "bars_count": data_5m.get("bars_count"),
                 "has_position": has_position,
                 "position": position_info,
+                "alex_rule": alex_rule,
+                "llm_insight": data_5m.get("llm_insight"),
+                "llm_news_content": data_5m.get("llm_news_content"),
                 "max_position_usd": 0,
                 "max_ticker_pct": 0,
             }
@@ -1231,6 +1241,18 @@ class LSETelegramBot:
             lines.append(f"\n_Позиция: P&L ${pnl:,.2f} ({pnl_pct:+.2f}%)_")
         if data.get("reasoning"):
             lines.append(f"\n💭 _{_escape_markdown(str(data['reasoning'])[:220])}_")
+        llm_insight = data.get("llm_insight")
+        llm_content = (data.get("llm_news_content") or "").strip()[:350]
+        if llm_insight:
+            lines.append("")
+            lines.append(f"📰 **LLM (свежие новости/настроения):** _{_escape_markdown(llm_insight)}_")
+        elif llm_content:
+            lines.append("")
+            lines.append(f"📰 **LLM:** _{_escape_markdown(llm_content)}…_")
+        alex = data.get("alex_rule")
+        if alex and alex.get("message"):
+            lines.append("")
+            lines.append(f"📋 _{_escape_markdown(alex['message'])}_")
         return "\n".join([s for s in lines if s])
 
     def _get_execution_agent(self):

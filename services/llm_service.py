@@ -1,23 +1,59 @@
 """
-LLM сервис для работы с GPT-4o через proxyapi.ru
-Упрощенная версия для LSE Trading System
+LLM сервис для работы с GPT-4o и другими моделями через proxyapi.ru.
+Поддержка сравнения нескольких моделей (LLM_COMPARE_MODELS).
 """
 
 import os
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 import re
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
+# Базовые URL ProxyAPI по провайдерам (см. proxyapi.ru/docs)
+PROXYAPI_OPENAI_BASE = "https://api.proxyapi.ru/openai/v1"
+PROXYAPI_ANTHROPIC_BASE = "https://api.proxyapi.ru/anthropic/v1"
+PROXYAPI_GOOGLE_BASE = "https://api.proxyapi.ru/google/v1"
+
 
 def load_config():
     """Загружает конфигурацию из локального config.env или ../brats/config.env"""
     from config_loader import load_config as load_config_base
     return load_config_base()
+
+
+def parse_compare_models(config: Dict[str, str]) -> List[Tuple[str, str]]:
+    """
+    Парсит LLM_COMPARE_MODELS в список (base_url, model).
+    Формат: через запятую, каждый элемент — "model" (используется OPENAI_BASE_URL) или "provider|model".
+    provider: openai, anthropic, google (базовые URL из ProxyAPI).
+    Пример: gpt-4o,openai|gpt-5.2,anthropic|claude-opus-4-6,google|gemini-3.1-pro-preview
+    """
+    raw = config.get("LLM_COMPARE_MODELS", "").strip()
+    if not raw:
+        return []
+    base_default = config.get("OPENAI_BASE_URL", PROXYAPI_OPENAI_BASE)
+    provider_bases = {
+        "openai": PROXYAPI_OPENAI_BASE,
+        "anthropic": PROXYAPI_ANTHROPIC_BASE,
+        "google": PROXYAPI_GOOGLE_BASE,
+    }
+    result = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "|" in part:
+            left, model = part.split("|", 1)
+            left, model = left.strip(), model.strip()
+            base = provider_bases.get(left.lower()) or left  # если не provider, считаем полным URL
+            result.append((base, model))
+        else:
+            result.append((base_default, part))
+    return result
 
 
 class LLMService:
@@ -116,7 +152,52 @@ class LLMService:
             import traceback
             logger.error(traceback.format_exc())
             raise
-    
+
+    def generate_response_with_model(
+        self,
+        base_url: str,
+        model: str,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        **kwargs
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Один запрос к указанному (base_url, model). Для сравнения моделей.
+        Возвращает тот же формат что generate_response или None при ошибке.
+        """
+        if not self.api_key:
+            return None
+        try:
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=base_url,
+                timeout=kwargs.get("timeout", self.timeout),
+            )
+            formatted_messages = []
+            if system_prompt:
+                formatted_messages.append({"role": "system", "content": system_prompt})
+            formatted_messages.extend(messages)
+            response = client.chat.completions.create(
+                model=model,
+                messages=formatted_messages,
+                temperature=kwargs.get("temperature", self.temperature),
+                max_tokens=kwargs.get("max_tokens", 2000),
+            )
+            msg = response.choices[0].message.content
+            return {
+                "response": msg,
+                "model": getattr(response, "model", model),
+                "usage": getattr(response, "usage", None) and {
+                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(response.usage, "completion_tokens", 0),
+                    "total_tokens": getattr(response.usage, "total_tokens", 0),
+                } or {},
+                "finish_reason": getattr(response.choices[0], "finish_reason", None),
+            }
+        except Exception as e:
+            logger.warning("Сравнение моделей: ошибка для %s: %s", model, e)
+            return None
+
     def analyze_trading_situation(
         self,
         ticker: str,
@@ -242,6 +323,109 @@ Sentiment анализ:
                 },
                 "usage": {}
             }
+
+    def fetch_news_for_ticker(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """
+        Прямой запрос к LLM: какие новости/события могут влиять на тикер (например SNDK).
+        Используется как один из источников новостей наряду с RSS, NewsAPI, KB.
+
+        Returns:
+            dict с ключами content, sentiment_score (0–1 или None), insight, source_label
+            или None при ошибке / отсутствии API key.
+        """
+        if not self.client:
+            logger.warning("LLM не инициализирован, пропуск fetch_news_for_ticker")
+            return None
+
+        ticker_upper = ticker.upper()
+        name_hint = {"SNDK": "Western Digital / SanDisk, память, полупроводники"}.get(
+            ticker_upper, ticker_upper
+        )
+
+        system_prompt = """Ты финансовый обзор. Задача: кратко перечисли последние новости и события, которые могут влиять на цену указанной бумаги в ближайшие дни.
+Формат ответа:
+1. Краткий список фактов (дата/источник по возможности, 2–5 пунктов).
+2. Строка "SENTIMENT: положительный|негативный|нейтральный" — общая тональность для цены.
+3. Строка "INSIGHT: один короткий вывод в одну фразу."
+Пиши по-русски, без лишнего вступления."""
+
+        user_message = f"""Какие последние новости и события могут влиять на {ticker_upper} ({name_hint})? Укажи только релевантные факты за последние 1–2 недели."""
+
+        def _parse_llm_news_text(text: str) -> tuple:
+            sentiment_score = None
+            insight = None
+            for line in (text or "").split("\n"):
+                line = line.strip()
+                if line.upper().startswith("SENTIMENT:"):
+                    part = line.split(":", 1)[-1].strip().lower()
+                    if "положительн" in part or "позитив" in part:
+                        sentiment_score = 0.65
+                    elif "негатив" in part or "негативн" in part:
+                        sentiment_score = 0.35
+                    else:
+                        sentiment_score = 0.5
+                elif line.upper().startswith("INSIGHT:"):
+                    insight = line.split(":", 1)[-1].strip()[:500]
+            return sentiment_score, insight
+
+        try:
+            result = self.generate_response(
+                [{"role": "user", "content": user_message}],
+                system_prompt=system_prompt,
+                max_tokens=800,
+            )
+            text = result.get("response", "").strip()
+            if not text:
+                return None
+
+            sentiment_score, insight = _parse_llm_news_text(text)
+            content = text
+            source_label = f"LLM ({self.model})"
+            out = {
+                "content": content[:8000],
+                "sentiment_score": sentiment_score,
+                "insight": insight,
+                "source_label": source_label,
+            }
+
+            # Сравнение с другими моделями (LLM_COMPARE_MODELS)
+            config = load_config()
+            compare_list = parse_compare_models(config)
+            if compare_list:
+                llm_comparison = []
+                for base_url, model in compare_list:
+                    if base_url == self.base_url and model == self.model:
+                        llm_comparison.append({
+                            "model": model,
+                            "content": content[:2000],
+                            "sentiment_score": sentiment_score,
+                            "insight": insight,
+                            "source": "primary",
+                        })
+                        continue
+                    res = self.generate_response_with_model(
+                        base_url, model,
+                        [{"role": "user", "content": user_message}],
+                        system_prompt=system_prompt,
+                        max_tokens=800,
+                    )
+                    if not res:
+                        llm_comparison.append({"model": model, "error": "no response"})
+                        continue
+                    text_other = (res.get("response") or "").strip()
+                    sent_other, insight_other = _parse_llm_news_text(text_other)
+                    llm_comparison.append({
+                        "model": model,
+                        "content": text_other[:2000],
+                        "sentiment_score": sent_other,
+                        "insight": insight_other,
+                    })
+                out["llm_comparison"] = llm_comparison
+
+            return out
+        except Exception as e:
+            logger.exception("Ошибка fetch_news_for_ticker %s: %s", ticker, e)
+            return None
 
 
 # Глобальный экземпляр сервиса

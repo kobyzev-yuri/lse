@@ -102,7 +102,7 @@ def build_dashboard_text(mode: str = "all") -> str:
         lines.append("⏱ **5m (интрадей):**")
         try:
             from services.recommend_5m import get_decision_5m
-            d5 = get_decision_5m("SNDK", days=2)
+            d5 = get_decision_5m("SNDK")  # полное окно 7 дн. для решения
             if d5:
                 lines.append(
                     f"  SNDK: ${d5['price']:.2f}  RSI(5m) {d5.get('rsi_5m') or '—'}  "
