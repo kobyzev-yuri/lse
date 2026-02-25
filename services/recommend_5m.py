@@ -271,9 +271,16 @@ def get_decision_5m(
 
     reasoning = " ".join(reasons)
 
-    # Параметры под интрадей (уже стоп/тейк)
-    stop_loss_pct = 2.5
-    take_profit_pct = 5.0
+    # Параметры стратегии 5m из конфига (config.env: GAME_5M_STOP_LOSS_PCT, GAME_5M_TAKE_PROFIT_PCT)
+    from config_loader import get_config_value
+    try:
+        stop_loss_pct = float(get_config_value("GAME_5M_STOP_LOSS_PCT", "2.5"))
+    except (ValueError, TypeError):
+        stop_loss_pct = 2.5
+    try:
+        take_profit_pct = float(get_config_value("GAME_5M_TAKE_PROFIT_PCT", "5.0"))
+    except (ValueError, TypeError):
+        take_profit_pct = 5.0
 
     # KB уже загружены выше для учёта негатива в решении; передаём в контекст
     # Открытие/закрытие биржи и праздники — отдельно (особые процессы новостей в эти моменты)

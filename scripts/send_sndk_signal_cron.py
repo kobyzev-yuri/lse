@@ -117,7 +117,7 @@ def process_ticker(
 ) -> bool:
     """Обрабатывает один тикер: игра (закрытие/вход) и при BUY/STRONG_BUY — рассылка. Возвращает True если хотя бы одно сообщение отправлено."""
     from services.recommend_5m import get_decision_5m
-    from services.game_5m import get_open_position, close_position, should_close_position, record_entry
+    from services.game_5m import get_open_position, close_position, should_close_position, record_entry, _effective_take_profit_pct, _effective_stop_loss_pct
 
     # Свечи за текущий и 5–7 предыдущих дней для анализа входа/выхода; опционально LLM перед решением
     d5 = get_decision_5m(ticker, use_llm_news=True)  # полное окно 7 дн. + KB + LLM новости
@@ -128,11 +128,12 @@ def process_ticker(
     decision = d5.get("decision", "HOLD")
     price = d5.get("price")
 
-    # Игра: закрыть позицию по SELL или по истечении 2 дней
+    # Игра: закрыть позицию по тейку/стопу (тейк = импульс 2ч, который видит модель), SELL или по истечении 2 дней
+    momentum_2h_pct = d5.get("momentum_2h_pct")
     try:
         open_pos = get_open_position(ticker)
         if open_pos and price is not None:
-            should_close, exit_type = should_close_position(open_pos, decision, price)
+            should_close, exit_type = should_close_position(open_pos, decision, price, momentum_2h_pct=momentum_2h_pct)
             if should_close and exit_type:
                 close_position(ticker, price, exit_type)
     except Exception as e:
@@ -169,7 +170,7 @@ def process_ticker(
         f"Волатильность 5m: {vol:.2f}%" if vol is not None else "",
         f"_Период данных: {period}_" if period else "",
         "",
-        "Параметры (интрадей): стоп −2.5%, тейк +5%.",
+        "Параметры (интрадей): стоп −%.1f%%, тейк +%.1f%% (стоп < тейк, оба от импульса 2ч)." % (_effective_stop_loss_pct(momentum_2h_pct), _effective_take_profit_pct(momentum_2h_pct)),
         "",
         f"Подробнее: /recommend5m {ticker}",
     ]

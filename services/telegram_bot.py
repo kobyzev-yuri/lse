@@ -1462,20 +1462,23 @@ class LSETelegramBot:
                 pass
 
         def _fetch_game5m():
-            from services.game_5m import get_open_position, get_recent_results
+            from services.game_5m import get_open_position, get_recent_results, get_strategy_params
             pos = get_open_position(ticker)
             results = get_recent_results(ticker, limit=limit)
-            return pos, results
+            params = get_strategy_params()
+            return pos, results, params
 
         loop = asyncio.get_event_loop()
         try:
-            pos, results = await loop.run_in_executor(None, _fetch_game5m)
+            pos, results, params = await loop.run_in_executor(None, _fetch_game5m)
         except Exception as e:
             logger.exception("Ошибка загрузки игры 5m")
             await update.message.reply_text(f"❌ Ошибка: {e}")
             return
 
         lines = [f"📊 **Игра 5m — {_escape_markdown(ticker)}** (мониторинг)", ""]
+        lines.append(f"Параметры: стоп −{params['stop_loss_pct']}%, тейк +{params['take_profit_pct']}%, макс. {params['max_position_days']} дн. _(config.env)_")
+        lines.append("")
         if pos:
             entry_ts = pos.get("entry_ts")
             ts_str = str(entry_ts)[:16] if entry_ts else "—"

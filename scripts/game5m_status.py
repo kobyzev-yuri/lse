@@ -16,7 +16,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from services.ticker_groups import get_tickers_fast
-from services.game_5m import get_open_position, get_recent_results
+from services.game_5m import get_open_position, get_recent_results, get_strategy_params
 
 
 def main():
@@ -33,10 +33,12 @@ def main():
         print("Нет тикеров. Задайте TICKERS_FAST в config.env или: game5m_status.py SNDK")
         return
 
+    params = get_strategy_params()
     for ticker in tickers:
         pos = get_open_position(ticker)
         results = get_recent_results(ticker, limit=limit)
         print(f"\n--- Игра 5m: {ticker} ---")
+        print(f"Параметры (config.env): стоп −{params['stop_loss_pct']}%, тейк +{params['take_profit_pct']}%, макс. {params['max_position_days']} дн.")
         if pos:
             ts = pos.get("entry_ts")
             ts_str = str(ts)[:19] if ts else "—"

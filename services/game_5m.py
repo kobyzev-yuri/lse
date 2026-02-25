@@ -14,14 +14,55 @@ from typing import Any, Optional
 
 from sqlalchemy import create_engine, text
 
-from config_loader import get_database_url
+from config_loader import get_database_url, get_config_value
 
 logger = logging.getLogger(__name__)
 
 GAME_5M_STRATEGY = "GAME_5M"
 GAME_NOTIONAL_USD = 10_000.0
 COMMISSION_RATE = 0.001
-MAX_POSITION_DAYS = 2
+
+
+def _max_position_days() -> int:
+    """Макс. срок удержания позиции (дней) из конфига GAME_5M_MAX_POSITION_DAYS."""
+    try:
+        return max(1, int(get_config_value("GAME_5M_MAX_POSITION_DAYS", "2")))
+    except (ValueError, TypeError):
+        return 2
+
+
+def get_strategy_params() -> dict[str, Any]:
+    """Текущие параметры стратегии 5m из config.env (для мониторинга и варьирования)."""
+    try:
+        stop = float(get_config_value("GAME_5M_STOP_LOSS_PCT", "2.5"))
+    except (ValueError, TypeError):
+        stop = 2.5
+    try:
+        take = float(get_config_value("GAME_5M_TAKE_PROFIT_PCT", "5.0"))
+    except (ValueError, TypeError):
+        take = 5.0
+    try:
+        take_min = float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "1.0"))
+    except (ValueError, TypeError):
+        take_min = 1.0
+    try:
+        stop_to_take_ratio = float(get_config_value("GAME_5M_STOP_TO_TAKE_RATIO", "0.5"))
+    except (ValueError, TypeError):
+        stop_to_take_ratio = 0.5
+    try:
+        stop_min = float(get_config_value("GAME_5M_STOP_LOSS_MIN_PCT", "0.5"))
+    except (ValueError, TypeError):
+        stop_min = 0.5
+    return {
+        "stop_loss_pct": stop,
+        "take_profit_pct": take,
+        "take_profit_min_pct": take_min,
+        "take_profit_rule": "по импульсу 2ч (если ≥ take_profit_min_pct), иначе take_profit_pct",
+        "stop_to_take_ratio": stop_to_take_ratio,
+        "stop_loss_min_pct": stop_min,
+        "stop_loss_rule": "min(config, тейк×ratio), не меньше stop_loss_min_pct — стоп всегда меньше тейка",
+        "max_position_days": _max_position_days(),
+    }
 
 
 def _engine():
@@ -199,17 +240,65 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
     return result[:limit]
 
 
-def should_close_position(open_position: dict, current_decision: str, current_price: Optional[float]) -> tuple[bool, str]:
-    """Закрывать ли позицию: по сигналу SELL или по истечении MAX_POSITION_DAYS."""
+def _effective_take_profit_pct(momentum_2h_pct: Optional[float]) -> float:
+    """Тейк-профит: импульс 2ч, который видит модель, или порог из конфига (если импульс мал/отсутствует)."""
+    params = get_strategy_params()
+    config_take = params["take_profit_pct"]
+    try:
+        min_take = float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "1.0"))
+    except (ValueError, TypeError):
+        min_take = 1.0
+    if momentum_2h_pct is not None and momentum_2h_pct >= min_take:
+        return float(momentum_2h_pct)
+    return config_take
+
+
+def _effective_stop_loss_pct(momentum_2h_pct: Optional[float]) -> float:
+    """Стоп-лосс: меньше тейка, прогнозируется как доля от эффективного тейка (тейк от импульса 2ч)."""
+    params = get_strategy_params()
+    config_stop = params["stop_loss_pct"]
+    take_pct = _effective_take_profit_pct(momentum_2h_pct)
+    try:
+        ratio = float(get_config_value("GAME_5M_STOP_TO_TAKE_RATIO", "0.5"))
+    except (ValueError, TypeError):
+        ratio = 0.5
+    try:
+        min_stop = float(get_config_value("GAME_5M_STOP_LOSS_MIN_PCT", "0.5"))
+    except (ValueError, TypeError):
+        min_stop = 0.5
+    # стоп = min(config, тейк×ratio), не меньше min_stop — всегда меньше тейка
+    from_ratio = take_pct * ratio
+    effective = min(config_stop, from_ratio)
+    return max(min_stop, effective)
+
+
+def should_close_position(
+    open_position: dict,
+    current_decision: str,
+    current_price: Optional[float],
+    momentum_2h_pct: Optional[float] = None,
+) -> tuple[bool, str]:
+    """Закрывать ли позицию: по тейку/стопу (цена), по сигналу SELL или по истечении GAME_5M_MAX_POSITION_DAYS.
+    Тейк считается от импульса 2ч (как у модели), если он >= GAME_5M_TAKE_PROFIT_MIN_PCT, иначе из конфига."""
     if current_price is None or current_price <= 0:
         return False, ""
+
+    entry_price = open_position.get("entry_price")
+    if isinstance(entry_price, (int, float)) and entry_price > 0:
+        simple_pnl_pct = (current_price - entry_price) / entry_price * 100.0
+        take_pct = _effective_take_profit_pct(momentum_2h_pct)
+        stop_pct = _effective_stop_loss_pct(momentum_2h_pct)
+        if simple_pnl_pct >= take_pct:
+            return True, "TAKE_PROFIT"
+        if simple_pnl_pct <= -stop_pct:
+            return True, "STOP_LOSS"
 
     entry_ts = open_position.get("entry_ts")
     if isinstance(entry_ts, datetime):
         age = datetime.now() - entry_ts
     else:
         age = timedelta(0)
-    if age > timedelta(days=MAX_POSITION_DAYS):
+    if age > timedelta(days=_max_position_days()):
         return True, "TIME_EXIT"
     if current_decision == "SELL":
         return True, "SELL"

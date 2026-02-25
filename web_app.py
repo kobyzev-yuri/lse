@@ -599,8 +599,9 @@ async def get_trades(limit: int = 100):
 async def get_game5m(ticker: str = "SNDK", limit: int = 20):
     """API: Мониторинг игры 5m — открытая позиция и закрытые сделки по тикеру (strategy_name=GAME_5M)."""
     try:
-        from services.game_5m import get_open_position, get_recent_results
+        from services.game_5m import get_open_position, get_recent_results, get_strategy_params
         pos = get_open_position(ticker)
+        strategy_params = get_strategy_params()
         results = get_recent_results(ticker, limit=min(50, max(5, limit)))
         closed = []
         for r in results:
@@ -617,6 +618,7 @@ async def get_game5m(ticker: str = "SNDK", limit: int = 20):
         wins = sum(1 for p in pnls if p > 0)
         return {
             "ticker": ticker,
+            "strategy_params": strategy_params,
             "open_position": {
                 "entry_ts": pos["entry_ts"].isoformat() if pos and hasattr(pos.get("entry_ts"), "isoformat") else None,
                 "entry_price": pos["entry_price"] if pos else None,
