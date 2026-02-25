@@ -38,19 +38,21 @@ def get_engine():
     return create_engine(db_url)
 
 
-def load_trade_history(engine) -> pd.DataFrame:
+def load_trade_history(engine, strategy_name: Optional[str] = None) -> pd.DataFrame:
+    """Загружает историю сделок. strategy_name — опциональный фильтр (например 'GAME_5M')."""
+    query = """
+        SELECT id, ts, ticker, side, quantity, price,
+               commission, signal_type, total_value, sentiment_at_trade, strategy_name
+        FROM public.trade_history
+    """
+    if strategy_name:
+        query += " WHERE strategy_name = :strategy_name"
+    query += " ORDER BY ts ASC, id ASC"
     with engine.connect() as conn:
-        df = pd.read_sql(
-            text(
-                """
-                SELECT id, ts, ticker, side, quantity, price,
-                       commission, signal_type, total_value, sentiment_at_trade
-                FROM trade_history
-                ORDER BY ts ASC, id ASC
-                """
-            ),
-            conn,
-        )
+        if strategy_name:
+            df = pd.read_sql(text(query), conn, params={"strategy_name": strategy_name})
+        else:
+            df = pd.read_sql(text(query), conn)
     return df
 
 

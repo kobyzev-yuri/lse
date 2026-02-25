@@ -329,6 +329,12 @@ Sentiment анализ:
         Прямой запрос к LLM: какие новости/события могут влиять на тикер (например SNDK).
         Используется как один из источников новостей наряду с RSS, NewsAPI, KB.
 
+        Важно: LLM не выполняет поиск в интернете в реальном времени — только знание из обучения.
+        Свежие breaking news (например шорт от Citron в день публикации) могут не попасть в ответ.
+        Чтобы агент реагировал на такие новости, они должны быть уже в knowledge_base:
+        cron fetch_news_cron (Investing.com News, NewsAPI, Alpha Vantage и т.д.) и/или
+        разовая вставка через scripts/add_manual_news.py.
+
         Returns:
             dict с ключами content, sentiment_score (0–1 или None), insight, source_label
             или None при ошибке / отсутствии API key.

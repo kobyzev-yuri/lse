@@ -62,7 +62,7 @@ cat >> "$CRON_FILE" << EOF
 # Торговый цикл: 9:00, 13:00, 17:00 MSK (пн-пт)
 0 9,13,17 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/trading_cycle_cron.py >> logs/cron_trading_cycle.log 2>&1
 
-# Игра 5m (сигнал SNDK и др. быстрые тикеры): пока раз в час (пн-пт) — смотрим эффективность по времени суток и в/вне торговых часов
+# Игра 5m (сигнал SNDK и др.): раз в час пн-пт круглосуточно — в т.ч. ночью (важные новости могут выйти до открытия биржи)
 0 * * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/send_sndk_signal_cron.py >> logs/cron_sndk_signal.log 2>&1
 
 # Новости (RSS, NewsAPI, Alpha Vantage): каждый час

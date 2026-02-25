@@ -143,6 +143,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("history", self._handle_history))
         self.application.add_handler(CommandHandler("recommend", self._handle_recommend))
         self.application.add_handler(CommandHandler("recommend5m", self._handle_recommend5m))
+        self.application.add_handler(CommandHandler("game5m", self._handle_game5m))
         self.application.add_handler(CommandHandler("dashboard", self._handle_dashboard))
         
         # Обработка текстовых сообщений (для произвольных запросов)
@@ -190,6 +191,7 @@ class LSETelegramBot:
 /chart5m <ticker> [days] — график 5 мин (по требованию)
 /table5m <ticker> [days] — таблица 5m свечей
 /recommend5m [ticker] [days] — рекомендация по 5m + 5д статистике (по умолч. SNDK, 5 дн.)
+/game5m [ticker] — мониторинг игры 5m: позиция, сделки, win rate и PnL (по умолч. SNDK)
 /dashboard [5m|daily|all] — дашборд по тикерам: решения, 5m, новости (проактивный мониторинг)
 /ask <вопрос> — вопрос (работает в группах!)
 /tickers — список инструментов
@@ -258,6 +260,7 @@ class LSETelegramBot:
 `/history [N]` — последние N сделок (по умолч. 15)
 `/recommend <ticker>` — рекомендация: когда открыть позицию, стоп-лосс, размер позиции
 `/recommend5m [ticker] [days]` — рекомендация по 5m и 5д статистике (интрадей, по умолч. SNDK 5д)
+`/game5m [ticker]` — мониторинг игры 5m: открытая позиция, последние сделки, win rate и PnL (по умолч. SNDK)
 `/dashboard [5m|daily|all]` — дашборд: все тикеры, сигналы, 5m (SNDK), новости за 7 дн. Для смены курса и решений.
   В /ask можно спросить: _когда можно открыть позицию по SNDK и какие параметры советуешь?_
   Пример: `/recommend SNDK`, `/buy GC=F 5`, `/sell MSFT`
@@ -1442,7 +1445,69 @@ class LSETelegramBot:
         except Exception as e:
             logger.exception("Ошибка форматирования рекомендации 5m")
             await update.message.reply_text(f"❌ Ошибка: {e}")
-    
+
+    async def _handle_game5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Мониторинг игры 5m: открытая позиция, закрытые сделки, win rate и PnL (только просмотр, сделками управляет send_sndk_signal_cron)."""
+        if not self._check_access(update.effective_user.id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        ticker = "SNDK"
+        if context.args and len(context.args) >= 1:
+            ticker = _normalize_ticker(context.args[0])
+        limit = 15
+        if len(context.args) >= 2:
+            try:
+                limit = max(5, min(30, int(context.args[1].strip())))
+            except (ValueError, IndexError):
+                pass
+
+        def _fetch_game5m():
+            from services.game_5m import get_open_position, get_recent_results
+            pos = get_open_position(ticker)
+            results = get_recent_results(ticker, limit=limit)
+            return pos, results
+
+        loop = asyncio.get_event_loop()
+        try:
+            pos, results = await loop.run_in_executor(None, _fetch_game5m)
+        except Exception as e:
+            logger.exception("Ошибка загрузки игры 5m")
+            await update.message.reply_text(f"❌ Ошибка: {e}")
+            return
+
+        lines = [f"📊 **Игра 5m — {_escape_markdown(ticker)}** (мониторинг)", ""]
+        if pos:
+            entry_ts = pos.get("entry_ts")
+            ts_str = str(entry_ts)[:16] if entry_ts else "—"
+            lines.append(f"🟢 **Открытая позиция**")
+            lines.append(f"Вход: {ts_str} @ ${pos['entry_price']:.2f} · {pos['quantity']:.0f} шт. · сигнал {pos.get('entry_signal_type', '—')}")
+            lines.append("")
+        else:
+            lines.append("_Нет открытой позиции_")
+            lines.append("")
+
+        if not results:
+            lines.append("_Закрытых сделок пока нет._")
+        else:
+            pnls = [r["pnl_pct"] for r in results if r.get("pnl_pct") is not None]
+            wins = sum(1 for p in pnls if p > 0)
+            total = len(pnls)
+            win_rate = (100.0 * wins / total) if total else 0
+            avg_pnl = (sum(pnls) / total) if total else 0
+            lines.append(f"**Закрытые сделки (последние {len(results)}):**")
+            lines.append(f"Win rate: {wins}/{total} ({win_rate:.1f}%) · Средний PnL: {avg_pnl:+.2f}%")
+            lines.append("")
+            for r in results[:8]:
+                exit_ts = r.get("exit_ts") or "—"
+                exit_str = str(exit_ts)[:16] if exit_ts != "—" else "—"
+                pct = r.get("pnl_pct")
+                pct_str = f"{pct:+.2f}%" if pct is not None else "—"
+                lines.append(f"• {exit_str} {r.get('exit_signal_type', '—')} PnL {pct_str}")
+            if len(results) > 8:
+                lines.append(f"_… и ещё {len(results) - 8} сделок_")
+        text = "\n".join(lines)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
     async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик произвольных текстовых сообщений"""
         # В группах игнорируем текстовые сообщения без упоминания

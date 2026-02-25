@@ -204,10 +204,15 @@ def init_db():
                 signal_type VARCHAR(20), -- 'STRONG_BUY', 'STOP_LOSS' и т.д.
                 total_value DECIMAL,
                 sentiment_at_trade DECIMAL, -- Сохраняем sentiment для анализа ошибок
-                strategy_name VARCHAR(50) -- Название стратегии (Momentum, Mean Reversion, Volatile Gap)
+                strategy_name VARCHAR(50) -- Название стратегии (Momentum, Mean Reversion, GAME_5M)
             );
         """))
-        
+        # Миграция: добавить strategy_name если таблица создана по старой схеме
+        try:
+            conn.execute(text("ALTER TABLE trade_history ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50);"))
+        except Exception:
+            pass
+
         # Инициализируем стартовый капитал
         conn.execute(text("""
             INSERT INTO portfolio_state (ticker, quantity) 

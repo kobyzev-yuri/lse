@@ -409,6 +409,12 @@ def fetch_economic_indicator(api_key: str, function: str, interval: str = None) 
                 f"⚠️ Alpha Vantage для {function}: ответ без данных. "
                 f"Information: {msg}. Возможно лимит бесплатного плана или премиум-эндпоинт."
             )
+            if "25 requests per day" in msg or "rate limit" in msg.lower():
+                logger.warning(
+                    "💡 На бесплатном плане (25 запросов/день) в config.env установите "
+                    "ALPHAVANTAGE_FETCH_ECONOMIC=false и ALPHAVANTAGE_FETCH_TECHNICAL=false, "
+                    "чтобы тратить лимит только на Earnings и News."
+                )
             return []
         
         # Извлекаем временной ряд
@@ -713,6 +719,10 @@ def fetch_technical_indicator(api_key: str, symbol: str, function: str, interval
                 f"⚠️ Alpha Vantage для {function} ({symbol}): ответ без данных. "
                 f"Information: {msg}. Возможно лимит бесплатного плана или премиум-эндпоинт."
             )
+            if "25 requests per day" in msg or "rate limit" in msg.lower():
+                logger.warning(
+                    "💡 На бесплатном плане в config.env установите ALPHAVANTAGE_FETCH_ECONOMIC=false и ALPHAVANTAGE_FETCH_TECHNICAL=false."
+                )
             return {}
         
         # Извлекаем временной ряд (ключ может быть разным)

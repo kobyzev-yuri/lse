@@ -63,35 +63,41 @@ def analyze_existing_events(
     try:
         # Находим события, которые:
         # 1. Произошли не менее N дней назад
-        # 2. Еще не имеют outcome_json или outcome_json пуст
+        # 2. Ещё не имеют outcome_json
         # 3. Имеют ticker и content
+        # 4. Только тикеры, по которым есть котировки в quotes (иначе «Нет котировок» по GOOGL, LOGI и т.д.)
+        # 5. Не старше 5 лет
         cutoff_date = datetime.now() - timedelta(days=days_after)
+        min_date = datetime.now() - timedelta(days=365 * 5)
         
         with engine.connect() as conn:
             query = text("""
-                SELECT id, ticker, ts, event_type, content
-                FROM knowledge_base
-                WHERE ts <= :cutoff_date
-                  AND ticker IS NOT NULL
-                  AND content IS NOT NULL
-                  AND LENGTH(TRIM(content)) > 10
-                  AND (outcome_json IS NULL OR outcome_json::text = 'null'::text)
-                ORDER BY ts DESC
+                SELECT kb.id, kb.ticker, kb.ts, kb.event_type, kb.content
+                FROM knowledge_base kb
+                INNER JOIN (SELECT DISTINCT ticker FROM quotes) q ON q.ticker = kb.ticker
+                WHERE kb.ts <= :cutoff_date
+                  AND kb.ts >= :min_date
+                  AND kb.ticker IS NOT NULL
+                  AND kb.content IS NOT NULL
+                  AND LENGTH(TRIM(kb.content)) > 10
+                  AND (kb.outcome_json IS NULL OR kb.outcome_json::text = 'null'::text)
+                ORDER BY kb.ts DESC
                 LIMIT :lim
             """)
             
             params = {
                 "cutoff_date": cutoff_date,
+                "min_date": min_date,
                 "lim": limit
             }
             
             events_df = pd.read_sql(query, conn, params=params)
             
             if events_df.empty:
-                logger.info("ℹ️ Нет событий для анализа исходов")
+                logger.info("ℹ️ Нет событий для анализа исходов (только тикеры из quotes, события за последние 5 лет, старше %s дн.)", days_after)
                 return
             
-            logger.info(f"📊 Найдено {len(events_df)} событий для анализа исходов (события старше {days_after} дн., без outcome_json)")
+            logger.info(f"📊 Найдено {len(events_df)} событий для анализа исходов (тикеры есть в quotes, события старше {days_after} дн., не старше 5 лет)")
             
             # Обрабатываем батчами
             for i in range(0, len(events_df), batch_size):

@@ -55,16 +55,26 @@ def fetch_all_news_sources():
     
     # 2. Investing.com Economic Calendar (web scraping)
     try:
-        logger.info("\n📅 Источник 2/5: Investing.com Economic Calendar")
+        logger.info("\n📅 Источник 2/6: Investing.com Economic Calendar")
         fetch_and_save_investing_calendar()
-        sources_status['Investing.com'] = '✅ Успешно'
+        sources_status['Investing.com Calendar'] = '✅ Успешно'
     except Exception as e:
-        logger.error(f"❌ Ошибка Investing.com: {e}")
-        sources_status['Investing.com'] = f'❌ Ошибка: {e}'
+        logger.error(f"❌ Ошибка Investing.com Calendar: {e}")
+        sources_status['Investing.com Calendar'] = f'❌ Ошибка: {e}'
+
+    # 2b. Investing.com News (лента stock-market-news, по тикерам из ключевых слов)
+    try:
+        logger.info("\n📰 Источник 2b/6: Investing.com News")
+        from services.investing_news_fetcher import fetch_and_save_investing_news
+        n = fetch_and_save_investing_news(max_articles=25)
+        sources_status['Investing.com News'] = f'✅ Успешно (добавлено {n})' if n else '✅ Нет новых'
+    except Exception as e:
+        logger.error(f"❌ Ошибка Investing.com News: {e}")
+        sources_status['Investing.com News'] = f'❌ Ошибка: {e}'
     
     # 3. Alpha Vantage (требует API ключ)
     try:
-        logger.info("\n📊 Источник 3/5: Alpha Vantage API")
+        logger.info("\n📊 Источник 3/6: Alpha Vantage API")
         # Получаем тикеры из конфига или используем дефолтные
         from config_loader import get_config_value
         tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
@@ -87,7 +97,7 @@ def fetch_all_news_sources():
     
     # 4. NewsAPI (требует API ключ)
     try:
-        logger.info("\n📰 Источник 4/5: NewsAPI")
+        logger.info("\n📰 Источник 4/6: NewsAPI")
         fetch_and_save_newsapi_news()
         sources_status['NewsAPI'] = '✅ Успешно'
     except Exception as e:
@@ -96,7 +106,7 @@ def fetch_all_news_sources():
 
     # 5. LLM (GPT/Gemini и т.д.) — прямой запрос «новости по SNDK» (при USE_LLM_NEWS=true)
     try:
-        logger.info("\n🤖 Источник 5/5: LLM (новости по тикеру)")
+        logger.info("\n🤖 Источник 5/6: LLM (новости по тикеру)")
         from services.llm_news_fetcher import fetch_and_save_llm_news
         from config_loader import get_config_value
         llm_tickers = get_config_value("LLM_NEWS_TICKERS", "SNDK").strip()

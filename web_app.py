@@ -595,6 +595,43 @@ async def get_trades(limit: int = 100):
     return {"trades": trades}
 
 
+@app.get("/api/game5m", response_class=JSONResponse)
+async def get_game5m(ticker: str = "SNDK", limit: int = 20):
+    """API: Мониторинг игры 5m — открытая позиция и закрытые сделки по тикеру (strategy_name=GAME_5M)."""
+    try:
+        from services.game_5m import get_open_position, get_recent_results
+        pos = get_open_position(ticker)
+        results = get_recent_results(ticker, limit=min(50, max(5, limit)))
+        closed = []
+        for r in results:
+            entry_ts = r.get("entry_ts")
+            exit_ts = r.get("exit_ts")
+            closed.append({
+                "entry_ts": entry_ts.isoformat() if hasattr(entry_ts, "isoformat") else str(entry_ts),
+                "exit_ts": exit_ts.isoformat() if hasattr(exit_ts, "isoformat") else str(exit_ts),
+                "exit_signal_type": r.get("exit_signal_type"),
+                "pnl_pct": r.get("pnl_pct"),
+            })
+        pnls = [r["pnl_pct"] for r in results if r.get("pnl_pct") is not None]
+        total = len(pnls)
+        wins = sum(1 for p in pnls if p > 0)
+        return {
+            "ticker": ticker,
+            "open_position": {
+                "entry_ts": pos["entry_ts"].isoformat() if pos and hasattr(pos.get("entry_ts"), "isoformat") else None,
+                "entry_price": pos["entry_price"] if pos else None,
+                "quantity": pos["quantity"] if pos else None,
+                "entry_signal_type": pos.get("entry_signal_type") if pos else None,
+            } if pos else None,
+            "closed_trades": closed,
+            "win_rate_pct": (100.0 * wins / total) if total else 0.0,
+            "avg_pnl_pct": (sum(pnls) / total) if total else None,
+            "total_closed": total,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/pnl", response_class=JSONResponse)
 async def get_pnl():
     """API: Получить PnL по закрытым сделкам"""

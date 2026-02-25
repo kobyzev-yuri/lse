@@ -61,9 +61,13 @@ def mark_signal_sent(ticker: str) -> None:
 
 
 def get_signal_chat_ids() -> list[str]:
+    """Список chat_id для рассылки сигналов. Без дубликатов — один чат получает сообщение один раз."""
     ids_raw = get_config_value("TELEGRAM_SIGNAL_CHAT_IDS", "").strip()
     if ids_raw:
-        return [x.strip() for x in ids_raw.split(",") if x.strip()]
+        raw_list = [x.strip() for x in ids_raw.split(",") if x.strip()]
+        # убираем дубликаты (один и тот же чат не должен получать сообщение несколько раз)
+        seen = set()
+        return [x for x in raw_list if x not in seen and not seen.add(x)]
     single = get_config_value("TELEGRAM_SIGNAL_CHAT_ID", "").strip()
     if single:
         return [single]
@@ -141,6 +145,14 @@ def process_ticker(
         logger.info("%s: cooldown, пропуск рассылки", ticker)
         return False
 
+    # Не слать «Сигнал на вход», если уже в позиции — это не новый вход, ждём закрытия
+    try:
+        if get_open_position(ticker) is not None:
+            logger.info("%s: уже в позиции, пропуск рассылки (ожидаем закрытия)", ticker)
+            return False
+    except Exception as e:
+        logger.warning("game_5m: проверка открытой позиции %s: %s", ticker, e)
+
     rsi = d5.get("rsi_5m")
     mom = d5.get("momentum_2h_pct")
     vol = d5.get("volatility_5m_pct")
@@ -163,6 +175,27 @@ def process_ticker(
     ]
     if reasoning:
         lines.insert(-2, f"💭 {reasoning}")
+
+    # Влияние новостей на решение (явно учитывается в короткой игре 5m)
+    news_impact = d5.get("kb_news_impact") or "нейтрально"
+    lines.append("")
+    lines.append(f"📰 **Учёт новостей:** {news_impact}")
+
+    # Новости из базы за период 5m (показываем в алерте)
+    kb_news = d5.get("kb_news") or []
+    if kb_news:
+        recent = [n for n in kb_news[:3]]  # последние 3
+        parts = []
+        for n in recent:
+            sent = n.get("sentiment_score")
+            sent_str = f" (тон {sent:.2f})" if sent is not None else ""
+            content = (n.get("content") or "").strip()[:80]
+            if content:
+                parts.append(f"• {content}{sent_str}")
+        if parts:
+            lines.append("")
+            lines.append("📰 **Новости из базы (за период 5m):**")
+            lines.extend(parts)
 
     # Свежие новости/настроения от LLM (запрос непосредственно перед решением)
     llm_insight = d5.get("llm_insight")
@@ -189,12 +222,18 @@ def process_ticker(
     if mentions:
         text = mentions + "\n\n" + text
 
-    # Игра: записать вход
+    # Игра: сначала записать вход в public.trade_history — без записи алерт не слать
+    if price is None:
+        logger.warning("game_5m: нет цены для %s, рассылка отменена", ticker)
+        return False
     try:
-        if get_open_position(ticker) is None and price is not None:
-            record_entry(ticker, price, decision, reasoning)
+        entry_id = record_entry(ticker, price, decision, reasoning)
+        if entry_id is None:
+            logger.error("game_5m: запись входа %s не создана (record_entry вернул None), рассылка отменена", ticker)
+            return False
     except Exception as e:
-        logger.warning("game_5m: запись входа %s: %s", ticker, e)
+        logger.exception("game_5m: ошибка записи входа %s в trade_history: %s — рассылка отменена", ticker, e)
+        return False
 
     ok = 0
     for cid in chat_ids:
@@ -216,11 +255,10 @@ def main():
 
     chat_ids = get_signal_chat_ids()
     if not chat_ids:
-        logger.error(
-            "Задайте TELEGRAM_SIGNAL_CHAT_IDS или TELEGRAM_SIGNAL_CHAT_ID "
-            "(или TELEGRAM_DASHBOARD_CHAT_ID / TELEGRAM_ALLOWED_USERS) в config.env"
+        logger.warning(
+            "TELEGRAM_SIGNAL_CHAT_IDS / TELEGRAM_SIGNAL_CHAT_ID не заданы — рассылка в Telegram отключена, "
+            "игра (вход/выход в trade_history) продолжает работать."
         )
-        sys.exit(1)
     mentions = get_signal_mentions()
 
     try:

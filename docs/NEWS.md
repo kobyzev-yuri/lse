@@ -9,16 +9,39 @@
 | Источник | Реализовано | Работает | Ограничения |
 |----------|-------------|----------|-------------|
 | **RSS ЦБ** (Fed, BoE, ECB, BoJ) | Да | Да | — |
+| **Investing.com Economic Calendar** | Да | Да | Страница может подгружать данные через JS |
+| **Investing.com News** | Да | Да | Лента stock-market-news; тикеры из TICKERS_FAST, ключевые слова встроенные + опционально из конфига (см. ниже) |
 | **NewsAPI** | Да | Да (ключ) | 100 запросов/день |
 | **Alpha Vantage** (Earnings + News Sentiment) | Да | Да (ключ) | ~25 запросов/день |
 | **Alpha Vantage** (Economic) | Код есть | Нет | В cron выключено; free tier часто пусто |
-| **Investing.com** | Код есть | Нет | Таблица через JS, парсер получает пустой HTML |
-| **LLM (GPT/Gemini и т.д.)** | Да | Опционально | Прямой запрос к LLM: «какие новости влияют на тикер»; при `USE_LLM_NEWS=true` и настроенном `OPENAI_API_KEY` cron сохраняет ответ в knowledge_base как одна запись с `source='LLM (model)'`. По умолчанию тикер SNDK; список задаётся `LLM_NEWS_TICKERS=SNDK,MU`. |
+| **LLM (GPT/Gemini и т.д.)** | Да | Опционально | Прямой запрос к LLM: «какие новости влияют на тикер»; при `USE_LLM_NEWS=true` и настроенном `OPENAI_API_KEY` cron сохраняет ответ в knowledge_base. Список тикеров: `LLM_NEWS_TICKERS=SNDK,MU`. **LLM не ищет в интернете** — только знание из обучения; breaking news должны попадать в KB через другие источники (Investing.com News, NewsAPI и т.д.). |
 
-**Запуск сбора:** `python scripts/fetch_news_cron.py`. В `config.env`: `ALPHAVANTAGE_KEY`, `NEWSAPI_KEY`. Для LLM-новостей: `USE_LLM_NEWS=true`, `OPENAI_API_KEY` (и при необходимости `OPENAI_BASE_URL`, `OPENAI_MODEL`); опционально `LLM_NEWS_TICKERS=SNDK`.
+**Запуск сбора:** `python scripts/fetch_news_cron.py`. В `config.env`: при необходимости `ALPHAVANTAGE_KEY`, `NEWSAPI_KEY`; для LLM-новостей — `USE_LLM_NEWS=true`, `OPENAI_API_KEY`; опционально `LLM_NEWS_TICKERS=SNDK`, `INVESTING_NEWS_TICKER_KEYWORDS` (см. ниже).
 
 **Проверка:**  
 `SELECT source, COUNT(*), MIN(ts), MAX(ts) FROM knowledge_base GROUP BY source ORDER BY 2 DESC;`
+
+### 1.1. Investing.com News — как реализовано
+
+- **Тикеры:** только из **TICKERS_FAST** (config.env). Других источников тикеров для этого модуля нет.
+- **Ключевые слова:** для сопоставления заголовка новости с тикером используется встроенный словарь в коде (`services/investing_news_fetcher.py`, константа `BUILTIN_KEYWORDS`):
+
+  | Тикер | Встроенные ключевые слова |
+  |-------|----------------------------|
+  | SNDK  | SanDisk, Western Digital, WDC, SNDK |
+  | NDK   | NDK |
+  | LITE  | LITE, Lumentum |
+  | NBIS  | NBIS |
+
+  Для тикера из TICKERS_FAST, которого нет в этом списке, используется одно слово — сам тикер.
+
+- **Дополнение из конфига (необязательно):** в `config.env` можно задать переменную  
+  `INVESTING_NEWS_TICKER_KEYWORDS` — она **дополняет** встроенные ключевые слова, не заменяет их. Формат: `ТИКЕР:слово1,слово2;ДРУГОЙ:слово3`.  
+  Пример: `INVESTING_NEWS_TICKER_KEYWORDS=SNDK:Citron,short;LITE:opto` — для SNDK добавятся «Citron» и «short», для LITE — «opto».
+
+- **Логика сбора:** cron вызывает `fetch_and_save_investing_news()`: загружается лента https://www.investing.com/news/stock-market-news , по заголовкам статей сопоставление с тикерами по ключевым словам, новые записи (без дубликата по `link`) пишутся в knowledge_base с `source='Investing.com News'`, `event_type='NEWS'`.
+
+- **403 Forbidden:** сайт может отдавать 403 на запросы без браузера. В коде используются заголовки, похожие на Chrome, и предзапрос на главную страницу (cookies). Если 403 сохраняется, задайте в `config.env` прокси: `INVESTING_NEWS_PROXY=http://user:pass@host:port` или `INVESTING_NEWS_PROXY=socks5://127.0.0.1:1080`. Тогда запросы к Investing.com пойдут через прокси; остальные источники новостей не используют эту переменную.
 
 ---
 
@@ -34,14 +57,15 @@
 
 | Скрипт | Назначение |
 |--------|------------|
-| `scripts/fetch_news_cron.py` | Сбор из RSS, NewsAPI, Alpha Vantage, при `USE_LLM_NEWS=true` — LLM-запрос по тикерам из `LLM_NEWS_TICKERS` (по умолч. SNDK). |
+| `scripts/fetch_news_cron.py` | Сбор из RSS, Investing.com (календарь + лента новостей), NewsAPI, Alpha Vantage; при `USE_LLM_NEWS=true` — LLM-запрос по тикерам из `LLM_NEWS_TICKERS`. |
+| `scripts/add_manual_news.py` | Разовая вставка новости в knowledge_base: `python scripts/add_manual_news.py "Заголовок или текст" "https://..." [SNDK]`. Полезно для важной breaking news, которая ещё не попала в автоматический сбор. |
 | `scripts/sync_vector_kb_cron.py` | Backfill `embedding` для записей с `embedding IS NULL`. |
 | `scripts/add_sentiment_to_news_cron.py` | LLM: заполнение `sentiment_score` и `insight` для новостей без sentiment. |
 | `scripts/analyze_event_outcomes_cron.py` | Заполнение `outcome_json` (изменение цены после события). |
 | `scripts/cleanup_calendar_noise.py` | Удаление мусорных записей календаря (только число без текста). |
 | `scripts/cleanup_manual_duplicates.py` | Удаление записей с `source='MANUAL'`, дублирующих другую запись по (ts, ticker, content). `--dry-run` затем `--execute`. |
 
-Модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`, `services/llm_news_fetcher.py` (запрос к LLM за новостями по тикеру).
+Модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`, `services/investing_news_fetcher.py` (лента Investing.com News, тикеры из TICKERS_FAST и встроенные ключевые слова), `services/llm_news_fetcher.py` (запрос к LLM за новостями по тикеру).
 
 ---
 
@@ -73,3 +97,72 @@ SELECT ts, ticker, source, event_type, LEFT(content, 60) FROM knowledge_base ORD
 -- Заполненность полей
 SELECT COUNT(*) AS total, COUNT(embedding) AS with_emb, COUNT(sentiment_score) AS with_sent, COUNT(outcome_json) AS with_outcome FROM knowledge_base;
 ```
+
+---
+
+## 6. Проверка влияния новостей на тикеры (в т.ч. SNDK)
+
+Влияние оценивается в два шага: (1) какие новости есть по тикеру и какой у них sentiment, (2) как изменилась цена после события — поле **outcome_json**.
+
+### 6.1. Какие новости по тикеру
+
+Все новости/события по тикеру лежат в `knowledge_base` с `ticker = 'SNDK'` (или другим). Можно смотреть список, источник, тон и исход:
+
+```sql
+-- Последние новости по SNDK за 30 дней (с sentiment и исходом, если есть)
+SELECT id, ts, source, event_type,
+       LEFT(content, 80) AS content_preview,
+       sentiment_score,
+       outcome_json->>'outcome' AS outcome,
+       (outcome_json->>'price_change_pct')::float AS price_change_pct
+FROM knowledge_base
+WHERE ticker = 'SNDK'
+  AND ts >= CURRENT_DATE - INTERVAL '30 days'
+ORDER BY ts DESC
+LIMIT 50;
+```
+
+- **sentiment_score** — заполняется Alpha Vantage при сборе или позже скриптом `add_sentiment_to_news_cron.py` (LLM). Чем ниже значение, тем негативнее тон.
+- **outcome_json** — заполняется скриптом **analyze_event_outcomes_cron.py** не сразу, а когда событию «исполнилось» N дней (по умолчанию 7), чтобы можно было посмотреть изменение цены после новости.
+
+### 6.2. Как считается исход (влияние на цену)
+
+- **Скрипт:** `scripts/analyze_event_outcomes_cron.py` (в cron обычно раз в день, например в 4:00).
+- **Логика:** для записей в `knowledge_base` без `outcome_json`, у которых дата события старше N дней (переменная окружения `EVENT_OUTCOME_DAYS_AFTER`, по умолч. 7), берётся цена тикера из `quotes` на дату события и через N дней. По изменению цены в % формируется исход: `outcome` (POSITIVE / NEGATIVE / NEUTRAL), `price_change_pct`, при необходимости `sentiment_match` (совпал ли sentiment с направлением движения).
+- **Запуск вручную:**  
+  `EVENT_OUTCOME_DAYS_AFTER=7 python scripts/analyze_event_outcomes_cron.py`  
+  (для SNDK нужны дневные котировки в `quotes` на дату события и через 7 дней.)
+
+После выполнения у событий по SNDK появится или обновится `outcome_json` — по нему и смотрите влияние.
+
+### 6.3. Сводка по тикеру (SQL)
+
+```sql
+-- По SNDK: сколько новостей, у скольких есть sentiment и исход
+SELECT
+  COUNT(*) AS total,
+  COUNT(sentiment_score) AS with_sentiment,
+  COUNT(outcome_json) AS with_outcome
+FROM knowledge_base
+WHERE ticker = 'SNDK' AND ts >= CURRENT_DATE - INTERVAL '90 days';
+
+-- Новости с заполненным исходом — удобно для разбора
+SELECT ts, source, LEFT(content, 60),
+       sentiment_score,
+       outcome_json->>'outcome' AS outcome,
+       outcome_json->>'price_change_pct' AS change_pct
+FROM knowledge_base
+WHERE ticker = 'SNDK' AND outcome_json IS NOT NULL
+ORDER BY ts DESC
+LIMIT 20;
+```
+
+### 6.4. Скрипт для быстрой сводки
+
+Из корня проекта:
+
+```bash
+python scripts/check_news_impact.py SNDK
+```
+
+Скрипт выводит: число новостей по тикеру за последние 90 дней, число с sentiment и с outcome, последние несколько записей с исходом (outcome, price_change_pct). Без аргумента используется тикер SNDK.

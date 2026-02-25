@@ -37,7 +37,7 @@ def get_open_position(ticker: str) -> Optional[dict[str, Any]]:
         last_buy = conn.execute(
             text("""
                 SELECT id, ts, quantity, price, signal_type
-                FROM trade_history
+                FROM public.trade_history
                 WHERE ticker = :ticker AND strategy_name = :strategy AND side = 'BUY'
                 ORDER BY ts DESC
                 LIMIT 1
@@ -49,7 +49,7 @@ def get_open_position(ticker: str) -> Optional[dict[str, Any]]:
         buy_id, buy_ts, qty, price, signal_type = last_buy
         sell_after = conn.execute(
             text("""
-                SELECT 1 FROM trade_history
+                SELECT 1 FROM public.trade_history
                 WHERE ticker = :ticker AND strategy_name = :strategy AND side = 'SELL' AND ts > :after_ts
                 LIMIT 1
             """),
@@ -87,7 +87,7 @@ def record_entry(
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
+                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
                 VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy)
             """),
             {
@@ -127,7 +127,7 @@ def close_position(ticker: str, exit_price: float, exit_signal_type: str) -> Opt
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
+                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
                 VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy)
             """),
             {
@@ -151,7 +151,7 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
         rows = conn.execute(
             text("""
                 SELECT id, ts, side, quantity, price, signal_type
-                FROM trade_history
+                FROM public.trade_history
                 WHERE ticker = :ticker AND strategy_name = :strategy
                 ORDER BY ts ASC, id ASC
             """),

@@ -139,12 +139,14 @@ def get_decision_5m(
     use_llm_news: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
-    Решение по 5m для агента: все доступные 5m-отметки от текущего момента назад на
-    days дней (по умолчанию 7 — полное окно Yahoo). Результат вместе с контекстом KB
-    и запросом о свежих новостях (use_llm_news) используется агентом для BUY/HOLD/SELL.
+    Решение по 5m для короткой игры: 5m-свечи + новости из KB за тот же период.
+    Влияние новостей на решение явное: сильный негатив (sentiment < 0.35) откладывает
+    вход (BUY→HOLD), негатив (0.35–0.4) ослабляет (STRONG_BUY→BUY); позитив (> 0.65)
+    при пограничном RSI может поддержать вход (HOLD→BUY). Результат возвращает
+    kb_news_impact для отображения в алерте.
 
-    use_llm_news: при True и USE_LLM_NEWS — запрос к LLM о свежих новостях/настроениях
-    непосредственно перед ответом (дополняет KB).
+    use_llm_news: при True и USE_LLM_NEWS — запрос к LLM о свежих новостях (дополняет KB).
+    LLM не ищет в интернете; breaking news должны быть в KB (cron: Investing.com News и т.д.).
 
     Returns:
         dict: decision, reasoning, price, rsi_5m, volatility_5m_pct, momentum_2h_pct,
@@ -230,6 +232,37 @@ def get_decision_5m(
         if decision == "HOLD":
             reasons.append(f"волатильность 5m {volatility_5m_pct:.2f}% — выжидать")
 
+    # Влияние новостей из KB на короткую игру 5m: явный учёт в решении BUY/HOLD/SELL
+    kb_news = fetch_kb_news_for_period(ticker, days)
+    news_with_sentiment = [(n, float(n["sentiment_score"])) for n in kb_news[:10] if n.get("sentiment_score") is not None]
+    recent_negative = [n for n, s in news_with_sentiment if s < 0.4]
+    very_negative = [n for n, s in news_with_sentiment if s < 0.35]
+    recent_positive = [n for n, s in news_with_sentiment if s > 0.65]
+    kb_news_impact = "нейтрально"  # для вывода в алерт
+
+    if very_negative:
+        # Сильный негатив (шорт, скандал и т.п.) — не входим
+        if decision in ("BUY", "STRONG_BUY"):
+            decision = "HOLD"
+            reasons.append("сильный негатив в новостях — вход отложен")
+            kb_news_impact = "негатив (вход отложен)"
+    elif recent_negative:
+        # Негатив — смягчаем вход
+        if decision == "STRONG_BUY":
+            decision = "BUY"
+            reasons.append("негативные новости в базе — вход без STRONG_BUY")
+            kb_news_impact = "негатив (вход ослаблен)"
+        elif decision == "BUY":
+            reasons.append("негативные новости в базе — осторожность")
+            kb_news_impact = "негатив (осторожность)"
+    elif recent_positive and decision == "HOLD" and rsi_5m is not None and 38 <= rsi_5m <= 52 and momentum_2h_pct >= -0.5:
+        # Позитив в новостях при пограничном RSI — разрешаем осторожный BUY
+        decision = "BUY"
+        reasons.append("позитив в новостях поддерживает вход при нейтральном RSI")
+        kb_news_impact = "позитив (поддержка входа)"
+    elif recent_positive and decision in ("BUY", "STRONG_BUY"):
+        kb_news_impact = "позитив"
+
     if not reasons:
         rsi_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "— (мало баров)"
         reasons.append(
@@ -242,9 +275,7 @@ def get_decision_5m(
     stop_loss_pct = 2.5
     take_profit_pct = 5.0
 
-    # KB за тот же период, что и 5m — чтобы агент мог сопоставить влияние новостей на динамику
-    kb_news = fetch_kb_news_for_period(ticker, days)
-
+    # KB уже загружены выше для учёта негатива в решении; передаём в контекст
     # Открытие/закрытие биржи и праздники — отдельно (особые процессы новостей в эти моменты)
     market_session = {}
     try:
@@ -270,6 +301,7 @@ def get_decision_5m(
         "bars_count": len(df),
         "kb_news_days": days,
         "kb_news": kb_news,
+        "kb_news_impact": kb_news_impact,
         "market_session": market_session,
     }
 
