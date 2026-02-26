@@ -15,11 +15,31 @@ Vector Knowledge Base (VectorKB) использует локальные embeddi
 
 ## Установка
 
+**Локальная модель (по умолчанию):**
+
 ```bash
-pip install sentence-transformers>=2.2.0
+pip install "transformers>=4.45.0" sentence-transformers>=2.2.0
 ```
 
-Модель автоматически загрузится при первом использовании (~420 MB).
+Модель автоматически загрузится при первом использовании (~420 MB). Если при загрузке возникает **Bus error (core dumped)** во всех окружениях — используйте эмбеддинги через Gemini (см. ниже).
+
+**Эмбеддинги через API (без sentence-transformers):**
+
+- **OpenAI (рекомендуется при уже настроенном GPT-4o):** в `config.env` задайте `USE_OPENAI_EMBEDDINGS=true`. Используются тот же `OPENAI_API_KEY` и `OPENAI_BASE_URL` (proxyapi), модель `text-embedding-3-small` с `dimensions=768`.
+- **Gemini:** `USE_GEMINI_EMBEDDINGS=true` и `GEMINI_API_KEY=...`. Тогда локальная модель не загружается.
+
+### Окружение (conda) и Bus error / core dumped
+
+Если при загрузке модели (`Load pretrained SentenceTransformer: ...`) во **всех** conda-окружениях возникает **Bus error (core dumped)** или **Segmentation fault**, локальная модель на этой машине не подходит (часто из‑за бинарных расширений PyTorch/tokenizers и CPU).
+
+**Решение без локальной модели — эмбеддинги через API:**
+
+1. **OpenAI (тот же ключ что для GPT-4o):** в `config.env` задайте `USE_OPENAI_EMBEDDINGS=true`. Дополнительный ключ не нужен — используются `OPENAI_API_KEY` и `OPENAI_BASE_URL`.
+2. **Или Gemini:** `USE_GEMINI_EMBEDDINGS=true` и `GEMINI_API_KEY=...` ([Google AI Studio](https://aistudio.google.com/apikey)).
+3. Перезапустите синхронизацию (`sync_vector_kb_cron.py`). Модель sentence-transformers **не загружается**, эмбеддинги считаются в облаке (768 dim).
+
+- **Python 3.11:** на части машин при загрузке модели возможен *core dumped*. Либо используйте Python 3.10, либо включите `USE_GEMINI_EMBEDDINGS=true`.
+- **Python 3.10:** при ошибке `EncoderDecoderCache` обновите transformers: `pip install -U "transformers>=4.45.0"`. Если всё равно Bus error — переходите на Gemini (см. выше).
 
 ## Использование
 

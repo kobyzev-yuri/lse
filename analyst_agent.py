@@ -625,6 +625,26 @@ class AnalystAgent:
             else:
                 base_decision = "HOLD"
         
+        # Контекст премаркета для LLM (этап 3.1): при PRE_MARKET добавляем цену премаркета, гэп, минуты до открытия
+        try:
+            from services.market_session import get_market_session_context
+            from services.premarket import get_premarket_context
+            session_ctx = get_market_session_context()
+            if (session_ctx.get("session_phase") or "").strip() == "PRE_MARKET":
+                pm = get_premarket_context(ticker)
+                if not pm.get("error"):
+                    mins = pm.get("minutes_until_open") or session_ctx.get("minutes_until_open")
+                    parts = [
+                        "Сейчас премаркет NYSE.",
+                        f"До открытия US: {mins} мин." if mins is not None else "",
+                        f"Цена премаркета: {pm.get('premarket_last')}" if pm.get("premarket_last") is not None else "",
+                        f"Гэп к вчерашнему закрытию: {pm.get('premarket_gap_pct'):+.2f}%" if pm.get("premarket_gap_pct") is not None else "",
+                        f"Закрытие вчера: {pm.get('prev_close')}" if pm.get("prev_close") is not None else "",
+                    ]
+                    technical_data["premarket_note"] = " ".join(p for p in parts if p).strip()
+        except Exception as e:
+            logger.debug("Премаркет-контекст для LLM: %s", e)
+
         # LLM анализ (если доступен)
         llm_result = None
         llm_guidance = None
@@ -648,10 +668,6 @@ class AnalystAgent:
                 logger.info(f"✅ LLM анализ завершен: {llm_result.get('llm_analysis', {}).get('decision', 'N/A')}")
                 
                 # LLM guidance теперь не используется, стратегия выбирается через StrategyManager
-                llm_guidance = None
-            except Exception as e:
-                logger.error(f"❌ Ошибка LLM анализа: {e}")
-                llm_result = None
                 llm_guidance = None
             except Exception as e:
                 logger.error(f"❌ Ошибка LLM анализа: {e}")

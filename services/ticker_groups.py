@@ -1,14 +1,11 @@
 """
-Группы тикеров по стилю игры.
+Группы тикеров по стилю игры (совпадают с зарегистрированными в БД /tickers).
 
-- Быстрая игра (интрадей, 5m): SNDK, NDK, LITE, NBIS — короткие интервалы, 5-минутные индикаторы.
-- Средние дистанции (смешанный вариант): AMD — среднесрочный горизонт.
-- Вдолгую (свинг, дневные): MSFT, ORCL — дневные/недельные решения.
+- Быстрая игра (5m, интрадей): тикеры с 5m данными, короткие интервалы.
+- Средние дистанции: среднесрочный горизонт.
+- Вдолгую: свинг, дневные/недельные решения (акции, forex, товары).
 
-Конфиг (config.env):
-  TICKERS_FAST=SNDK,NDK,LITE,NBIS
-  TICKERS_MEDIUM=AMD
-  TICKERS_LONG=MSFT,ORCL
+Конфиг (config.env): TICKERS_FAST, TICKERS_MEDIUM, TICKERS_LONG.
 """
 
 from __future__ import annotations
@@ -17,9 +14,10 @@ from typing import List
 
 from config_loader import get_config_value
 
-DEFAULT_TICKERS_FAST = "SNDK,NDK,LITE,NBIS"
-DEFAULT_TICKERS_MEDIUM = "AMD"
-DEFAULT_TICKERS_LONG = "MSFT,ORCL"
+# Дефолты: распределение по группам (ваши зарегистрированные тикеры)
+DEFAULT_TICKERS_FAST = "SNDK,LITE"
+DEFAULT_TICKERS_MEDIUM = "ALAB,MU,TER,AMD"
+DEFAULT_TICKERS_LONG = "MSFT,GBPUSD=X,GC=F,^VIX"
 
 
 def get_tickers_fast() -> List[str]:
@@ -48,6 +46,23 @@ def get_all_ticker_groups() -> List[str]:
     seen = set()
     result = []
     for t in fast + medium + long_:
+        if t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result
+
+
+def get_tickers_for_portfolio_game() -> List[str]:
+    """Тикеры для портфельной игры (trading_cycle_cron).
+    Если задан TRADING_CYCLE_TICKERS в config.env — используем его; иначе MEDIUM + LONG."""
+    raw = get_config_value("TRADING_CYCLE_TICKERS", "").strip()
+    if raw:
+        return [t.strip() for t in raw.split(",") if t.strip()]
+    medium = get_tickers_medium()
+    long_ = get_tickers_long()
+    seen = set()
+    result = []
+    for t in medium + long_:
         if t not in seen:
             seen.add(t)
             result.append(t)

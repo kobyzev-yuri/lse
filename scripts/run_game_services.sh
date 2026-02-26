@@ -40,7 +40,7 @@ python scripts/check_fast_tickers_5m.py || true
 # 4. Cron (пропуск при --bot-only)
 if [[ " $* " != *" --bot-only "* ]]; then
     echo ""
-    echo "Установка cron (рассылка сигналов каждые 15 мин в торговые часы)..."
+    echo "Установка cron (рассылка сигналов каждые 5 мин в торговые часы)..."
     if [ -f setup_cron.sh ]; then
         ./setup_cron.sh
         echo "✅ Cron установлен"

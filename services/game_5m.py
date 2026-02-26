@@ -185,6 +185,31 @@ def close_position(ticker: str, exit_price: float, exit_signal_type: str) -> Opt
     return pnl_pct
 
 
+def get_trades_for_chart(
+    ticker: str,
+    dt_min: datetime,
+    dt_max: datetime,
+) -> list[dict[str, Any]]:
+    """Сделки GAME_5M по тикеру в заданном диапазоне времени (для нанесения на график 5m).
+    Возвращает список dict: ts, price, side ('BUY'|'SELL'), signal_type."""
+    engine = _engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT ts, side, price, signal_type
+                FROM public.trade_history
+                WHERE ticker = :ticker AND strategy_name = :strategy
+                  AND ts >= :dt_min AND ts <= :dt_max
+                ORDER BY ts ASC
+            """),
+            {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "dt_min": dt_min, "dt_max": dt_max},
+        ).fetchall()
+    return [
+        {"ts": r[0], "price": float(r[2]), "side": r[1], "signal_type": r[3] or ""}
+        for r in rows
+    ]
+
+
 def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
     """Последние закрытые пары BUY→SELL по тикеру."""
     engine = _engine()
@@ -277,20 +302,29 @@ def should_close_position(
     current_decision: str,
     current_price: Optional[float],
     momentum_2h_pct: Optional[float] = None,
+    bar_high: Optional[float] = None,
+    bar_low: Optional[float] = None,
 ) -> tuple[bool, str]:
     """Закрывать ли позицию: по тейку/стопу (цена), по сигналу SELL или по истечении GAME_5M_MAX_POSITION_DAYS.
-    Тейк считается от импульса 2ч (как у модели), если он >= GAME_5M_TAKE_PROFIT_MIN_PCT, иначе из конфига."""
+    Тейк считается от импульса 2ч (как у модели), если он >= GAME_5M_TAKE_PROFIT_MIN_PCT, иначе из конфига.
+    bar_high/bar_low — макс. High / мин. Low по последним свечам (до 30 мин): не пропускаем фазу подъёма
+    при запуске крона каждые 5 мин (отскок в начале сессии и т.п.)."""
     if current_price is None or current_price <= 0:
         return False, ""
 
     entry_price = open_position.get("entry_price")
     if isinstance(entry_price, (int, float)) and entry_price > 0:
-        simple_pnl_pct = (current_price - entry_price) / entry_price * 100.0
         take_pct = _effective_take_profit_pct(momentum_2h_pct)
         stop_pct = _effective_stop_loss_pct(momentum_2h_pct)
-        if simple_pnl_pct >= take_pct:
+        # Для тейка учитываем High последней свечи (отскок вверх при открытии сессии)
+        price_for_take = max(current_price, bar_high) if bar_high is not None and bar_high > 0 else current_price
+        # Для стопа учитываем Low последней свечи
+        price_for_stop = min(current_price, bar_low) if bar_low is not None and bar_low > 0 else current_price
+        pnl_take_pct = (price_for_take - entry_price) / entry_price * 100.0
+        pnl_stop_pct = (price_for_stop - entry_price) / entry_price * 100.0
+        if pnl_take_pct >= take_pct:
             return True, "TAKE_PROFIT"
-        if simple_pnl_pct <= -stop_pct:
+        if pnl_stop_pct <= -stop_pct:
             return True, "STOP_LOSS"
 
     entry_ts = open_position.get("entry_ts")

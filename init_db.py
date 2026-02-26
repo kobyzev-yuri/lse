@@ -222,7 +222,7 @@ def init_db():
     print("✅ База данных инициализирована")
 
 # Тикер золота: XAUUSD=X не поддерживается Yahoo Finance → используем GC=F (Gold Futures)
-DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X", "GC=F", "^VIX", "MU", "LITE", "ALAB", "TER"]
+DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X", "GC=F", "^VIX", "MU", "LITE", "ALAB", "TER", "AMD"]
 
 
 def seed_data(tickers=None):

@@ -1,6 +1,7 @@
 """
 Модуль для работы с векторной базой знаний (Vector Knowledge Base)
-Использует sentence-transformers для генерации embeddings локально (бесплатно)
+Embeddings: локально (sentence-transformers), через OpenAI (тот же ключ/proxy что GPT-4o) или Gemini.
+При Bus error / core dumped используйте USE_OPENAI_EMBEDDINGS=true (рекомендуется при уже настроенном GPT-4o).
 """
 
 import sys
@@ -17,39 +18,152 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import numpy as np
 
-from config_loader import get_database_url
+from config_loader import get_database_url, get_config_value
 
 logger = logging.getLogger(__name__)
 
-# Модель для embeddings (all-mpnet-base-v2: 768 dim, популярная, качественная)
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
+# Модель для локальных embeddings (768 dim). Переопределяется через HF_MODEL_NAME в config.env.
+DEFAULT_EMBEDDING_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 EMBEDDING_DIMENSION = 768
+
+
+def _get_local_embedding_model_name() -> str:
+    """Модель для локальных эмбеддингов: из HF_MODEL_NAME или значение по умолчанию."""
+    name = (get_config_value("HF_MODEL_NAME") or "").strip()
+    return name or DEFAULT_EMBEDDING_MODEL_NAME
+
+# OpenAI: тот же OPENAI_API_KEY и OPENAI_BASE_URL, что для LLM (proxyapi). dimensions=768 для совместимости с БД.
+OPENAI_EMBED_MODEL = "text-embedding-3-small"
+
+# Gemini (альтернатива)
+GEMINI_EMBED_MODEL = "text-embedding-004"
+GEMINI_EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
+
+
+def _use_openai_embeddings() -> bool:
+    v = get_config_value("USE_OPENAI_EMBEDDINGS") or ""
+    return v.strip().lower() in ("1", "true", "yes")
+
+
+def _use_gemini_embeddings() -> bool:
+    v = get_config_value("USE_GEMINI_EMBEDDINGS") or ""
+    return v.strip().lower() in ("1", "true", "yes")
+
+
+def _get_openai_embed_config() -> Tuple[Optional[str], Optional[str]]:
+    key = (get_config_value("OPENAI_API_KEY") or "").strip()
+    base = (get_config_value("OPENAI_BASE_URL") or "https://api.proxyapi.ru/openai/v1").strip().rstrip("/")
+    return (key or None, base or None)
+
+
+def _get_gemini_api_key() -> Optional[str]:
+    key = get_config_value("GEMINI_API_KEY") or ""
+    return key.strip() or None
 
 
 class VectorKB:
     """
-    Класс для работы с векторной базой знаний
-    
-    Использует sentence-transformers для генерации embeddings локально (бесплатно).
-    Модель: all-mpnet-base-v2 (768 измерений) - популярная модель с хорошим качеством.
+    Класс для работы с векторной базой знаний.
+    Embeddings: OpenAI (тот же ключ что GPT-4o), Gemini или локально (sentence-transformers).
     """
-    
+
     def __init__(self):
         """Инициализация VectorKB"""
         self.db_url = get_database_url()
         self.engine = create_engine(self.db_url)
-        
-        # Ленивая загрузка модели (загружается при первом использовании)
+
+        self._use_openai = _use_openai_embeddings()
+        self._openai_key, self._openai_base = _get_openai_embed_config() if self._use_openai else (None, None)
+        self._use_gemini = _use_gemini_embeddings()
+        self._gemini_key = _get_gemini_api_key() if self._use_gemini else None
+
+        if self._use_openai and not self._openai_key:
+            logger.warning("⚠️ USE_OPENAI_EMBEDDINGS=true, но OPENAI_API_KEY не задан — эмбеддинги будут нулевыми")
+        if self._use_gemini and not self._gemini_key:
+            logger.warning("⚠️ USE_GEMINI_EMBEDDINGS=true, но GEMINI_API_KEY не задан — эмбеддинги будут нулевыми")
+
         self._model = None
         self._model_loaded = False
-        
-        logger.info(f"✅ VectorKB инициализирован (модель: {EMBEDDING_MODEL_NAME}, размерность: {EMBEDDING_DIMENSION})")
-    
+        self._local_model_name = _get_local_embedding_model_name()
+
+        if self._use_openai and self._openai_key:
+            logger.info(f"✅ VectorKB инициализирован (провайдер: OpenAI, размерность: {EMBEDDING_DIMENSION})")
+        elif self._use_gemini and self._gemini_key:
+            logger.info(f"✅ VectorKB инициализирован (провайдер: Gemini API, размерность: {EMBEDDING_DIMENSION})")
+        else:
+            logger.info(f"✅ VectorKB инициализирован (модель: {self._local_model_name}, размерность: {EMBEDDING_DIMENSION})")
+
+    def _embed_openai(self, text: str) -> List[float]:
+        """Эмбеддинг через OpenAI API (тот же ключ и base URL что для GPT-4o). dimensions=768 под колонку БД."""
+        import requests
+        url = f"{self._openai_base}/embeddings"
+        payload = {
+            "model": OPENAI_EMBED_MODEL,
+            "input": text[:8000],  # лимит по токенам
+            "dimensions": EMBEDDING_DIMENSION,
+        }
+        try:
+            r = requests.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self._openai_key}",
+                },
+                json=payload,
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+            emb = data.get("data", [{}])[0].get("embedding")
+            if not emb or len(emb) != EMBEDDING_DIMENSION:
+                logger.error(f"❌ OpenAI вернул неверный embedding: {len(emb or [])} dim")
+                return [0.0] * EMBEDDING_DIMENSION
+            arr = np.array(emb, dtype=np.float64)
+            norm = np.linalg.norm(arr)
+            if norm > 1e-9:
+                arr = arr / norm
+            return arr.tolist()
+        except Exception as e:
+            logger.error(f"❌ Ошибка OpenAI Embedding API: {e}")
+            return [0.0] * EMBEDDING_DIMENSION
+
+    def _embed_gemini(self, text: str) -> List[float]:
+        """Эмбеддинг через Gemini REST API (outputDimensionality=768)."""
+        import requests
+        url = GEMINI_EMBED_URL.format(model=GEMINI_EMBED_MODEL)
+        payload = {
+            "content": {"parts": [{"text": text[:20000]}]},  # лимит по длине
+            "outputDimensionality": EMBEDDING_DIMENSION,
+        }
+        try:
+            r = requests.post(
+                url,
+                params={"key": self._gemini_key},
+                json=payload,
+                timeout=30,
+                headers={"Content-Type": "application/json"},
+            )
+            r.raise_for_status()
+            data = r.json()
+            values = data.get("embedding", {}).get("values")
+            if not values or len(values) != EMBEDDING_DIMENSION:
+                logger.error(f"❌ Gemini вернул неверный embedding: {len(values or [])} dim")
+                return [0.0] * EMBEDDING_DIMENSION
+            # Нормализация как у sentence-transformers (L2)
+            arr = np.array(values, dtype=np.float64)
+            norm = np.linalg.norm(arr)
+            if norm > 1e-9:
+                arr = arr / norm
+            return arr.tolist()
+        except Exception as e:
+            logger.error(f"❌ Ошибка Gemini Embedding API: {e}")
+            return [0.0] * EMBEDDING_DIMENSION
+
     def _load_model(self):
         """Загружает модель sentence-transformers (ленивая загрузка). Прокси отключается на время загрузки."""
         if self._model_loaded:
             return
-        
+
         import os
         proxy_vars = (
             "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
@@ -58,10 +172,10 @@ class VectorKB:
         saved = {k: os.environ.pop(k, None) for k in proxy_vars}
         try:
             from sentence_transformers import SentenceTransformer
-            logger.info(f"📥 Загрузка модели {EMBEDDING_MODEL_NAME}...")
-            self._model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+            logger.info(f"📥 Загрузка модели {self._local_model_name}...")
+            self._model = SentenceTransformer(self._local_model_name)
             self._model_loaded = True
-            logger.info(f"✅ Модель {EMBEDDING_MODEL_NAME} загружена")
+            logger.info(f"✅ Модель {self._local_model_name} загружена")
         except ImportError:
             logger.error("❌ sentence-transformers не установлен. Установите: pip install sentence-transformers")
             raise
@@ -72,34 +186,39 @@ class VectorKB:
             for k, v in saved.items():
                 if v is not None:
                     os.environ[k] = v
-    
-    def generate_embedding(self, text: str) -> List[float]:
+
+    def _maybe_e5_prefix(self, text: str, for_query: bool) -> str:
+        """Для моделей E5 (multilingual-e5-base и др.) добавляет префикс query: / passage:."""
+        if "e5" in self._local_model_name.lower():
+            prefix = "query: " if for_query else "passage: "
+            return prefix + text if text else text
+        return text
+
+    def generate_embedding(self, text: str, for_query: bool = False) -> List[float]:
         """
-        Генерирует embedding для текста
-        
-        Args:
-            text: Текст для векторизации
-            
+        Генерирует embedding для текста (OpenAI, Gemini или локальная модель).
+        for_query: True для поискового запроса (у E5 — префикс "query: "), False для документов ("passage: ").
         Returns:
-            Список из 768 чисел (embedding)
+            Список из 768 чисел (embedding).
         """
         if not text or not text.strip():
             logger.warning("⚠️ Пустой текст для генерации embedding, возвращаю нулевой вектор")
             return [0.0] * EMBEDDING_DIMENSION
-        
+
+        if self._use_openai and self._openai_key:
+            return self._embed_openai(text)
+        if self._use_gemini and self._gemini_key:
+            return self._embed_gemini(text)
+
         self._load_model()
-        
+        text_to_encode = self._maybe_e5_prefix(text, for_query)
+
         try:
-            # Генерируем embedding
-            embedding = self._model.encode(text, normalize_embeddings=True)
-            
-            # Преобразуем numpy array в список
+            embedding = self._model.encode(text_to_encode, normalize_embeddings=True)
             embedding_list = embedding.tolist()
-            
             if len(embedding_list) != EMBEDDING_DIMENSION:
                 logger.error(f"❌ Неверная размерность embedding: {len(embedding_list)}, ожидается {EMBEDDING_DIMENSION}")
                 return [0.0] * EMBEDDING_DIMENSION
-            
             return embedding_list
         except Exception as e:
             logger.error(f"❌ Ошибка генерации embedding: {e}")
@@ -186,8 +305,8 @@ class VectorKB:
             return pd.DataFrame()
         
         try:
-            # Генерируем embedding для запроса
-            query_embedding = self.generate_embedding(query)
+            # Генерируем embedding для запроса (for_query=True для E5)
+            query_embedding = self.generate_embedding(query, for_query=True)
             
             # Формируем SQL запрос
             where_clauses = []

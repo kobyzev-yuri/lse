@@ -122,7 +122,7 @@
     <h2>Исполнение торгового цикла</h2>
     <form id="executeForm">
         <label>Тикеры (через запятую):</label>
-        <input type="text" name="tickers" id="tickersInput" placeholder="MSFT, SNDK" required>
+        <input type="text" name="tickers" id="tickersInput" placeholder="MSFT, SNDK" value="SNDK" autocomplete="off">
         <button type="submit">Запустить торговый цикл</button>
     </form>
     <div id="executeResult" style="margin-top: 2rem;"></div>
@@ -330,12 +330,22 @@ document.getElementById('loadHistoryBtn').addEventListener('click', async () => 
 // Исполнение цикла
 document.getElementById('executeForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const formData = new FormData(e.target);
+    const raw = (document.getElementById('tickersInput').value || '').trim();
     const resultDiv = document.getElementById('executeResult');
+    if (!raw) {
+        resultDiv.innerHTML = '<div style="color: #c62828;">Укажите хотя бы один тикер (например: MSFT, SNDK)</div>';
+        return;
+    }
     resultDiv.innerHTML = '<div class="loading">Исполнение...</div>';
+    const formData = new FormData();
+    formData.append('tickers', raw);
     try {
         const response = await fetch('/api/execute', { method: 'POST', body: formData });
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            resultDiv.innerHTML = '<div style="color: red;">' + escapeHtml(data.detail || response.statusText) + '</div>';
+            return;
+        }
         resultDiv.innerHTML = '<div style="color: green;">' + escapeHtml(data.message) + '</div>';
     } catch (error) {
         resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(error.message) + '</div>';

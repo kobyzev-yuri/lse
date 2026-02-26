@@ -97,8 +97,19 @@ class LSETelegramBot:
             logger.warning(f"⚠️ LLM сервис недоступен для вопросов: {e}")
             self.llm_service = None
         
-        # Создаем приложение
-        self.application = Application.builder().token(token).build()
+        # Создаем приложение (увеличенные таймауты — при медленной сети отправка графика/фото иначе даёт TimedOut)
+        builder = (
+            Application.builder()
+            .token(token)
+            .read_timeout(30.0)
+            .write_timeout(30.0)
+            .connect_timeout(15.0)
+        )
+        try:
+            builder.media_write_timeout(60.0)  # отправка фото (chart5m и т.д.)
+        except AttributeError:
+            pass  # старые версии PTB без media_write_timeout
+        self.application = builder.build()
         
         # Получаем информацию о боте для логирования
         async def get_bot_info():
@@ -867,8 +878,38 @@ class LSETelegramBot:
             await update.message.reply_text(f"❌ Ошибка загрузки: {e}")
             return
         if df is None or df.empty:
-            await update.message.reply_text(f"❌ Нет 5m данных для {ticker}. Yahoo даёт 5m обычно за 1–7 дней.")
+            await update.message.reply_text(
+                f"❌ Нет 5m данных для {ticker}. Yahoo даёт 5m за 1–7 дней. "
+                "Попробуйте /chart5m SNDK 1 или 7. В выходные биржа закрыта."
+            )
             return
+        # Открытая позиция для отметки на графике (игра 5m или портфель)
+        entry_price = None
+        try:
+            from services.game_5m import get_open_position as get_game_position
+            pos = get_game_position(ticker)
+            if pos and isinstance(pos.get("entry_price"), (int, float)):
+                entry_price = float(pos["entry_price"])
+        except Exception:
+            pass
+        if entry_price is None:
+            try:
+                from execution_agent import ExecutionAgent
+                ex = ExecutionAgent()
+                summary = ex.get_portfolio_summary()
+                for p in (summary.get("positions") or []):
+                    if p.get("ticker") == ticker and isinstance(p.get("entry_price"), (int, float)):
+                        entry_price = float(p["entry_price"])
+                        break
+            except Exception:
+                pass
+        # Прогноз для графика: хай сессии, оценка подъёма по кривизне, тейк при открытой позиции
+        d5_chart = None
+        try:
+            from services.recommend_5m import get_decision_5m
+            d5_chart = await loop.run_in_executor(None, lambda: get_decision_5m(ticker, days=days, use_llm_news=False))
+        except Exception:
+            pass
         try:
             import pandas as pd
             import matplotlib
@@ -877,30 +918,161 @@ class LSETelegramBot:
             import matplotlib.dates as mdates
             from io import BytesIO
             df["datetime"] = pd.to_datetime(df["datetime"])
+            # Шкала в времени американской биржи (Eastern): для отображения — naive Eastern
+            if hasattr(df["datetime"].dtype, "tz") and df["datetime"].dtype.tz is not None:
+                dt_plot = df["datetime"].dt.tz_convert("America/New_York").dt.tz_localize(None)
+            else:
+                dt_plot = df["datetime"]
+            dt_min = dt_plot.min()
+            dt_max = dt_plot.max()
+            last_close = float(df["Close"].iloc[-1])
+            extend_hours = 2
+            dt_max_ext = dt_max + pd.Timedelta(hours=extend_hours)
             fig, ax = plt.subplots(1, 1, figsize=(11, 5), facecolor="white")
             ax.set_facecolor("#ffffff")
-            ax.plot(df["datetime"], df["Close"], color="#1565c0", linewidth=1.2, label="Close")
+            ax.set_xlim(dt_min, dt_max_ext)
+            ax.plot(dt_plot, df["Close"], color="#1565c0", linewidth=1.2, label="Close")
             if "Open" in df.columns:
-                ax.fill_between(df["datetime"], df["Low"], df["High"], alpha=0.15, color="#1565c0")
+                ax.fill_between(dt_plot, df["Low"], df["High"], alpha=0.15, color="#1565c0")
+            if entry_price is not None:
+                ax.axhline(
+                    entry_price,
+                    color="#2e7d32",
+                    linestyle="--",
+                    linewidth=1.2,
+                    alpha=0.9,
+                    label=f"Вход @ {entry_price:.2f}",
+                )
+            # Прогноз на графике: хай сессии, оценка подъёма по кривизне, тейк при открытой позиции
+            if d5_chart:
+                price_cur = d5_chart.get("price")
+                session_high = d5_chart.get("session_high")
+                est_bounce = d5_chart.get("estimated_bounce_pct")
+                if session_high is not None and session_high > 0:
+                    ax.axhline(
+                        session_high,
+                        color="#f57c00",
+                        linestyle=":",
+                        linewidth=1.0,
+                        alpha=0.85,
+                        label=f"Хай сессии {session_high:.2f}",
+                    )
+                if price_cur is not None and price_cur > 0 and est_bounce is not None and est_bounce > 0:
+                    forecast_price = price_cur * (1 + est_bounce / 100.0)
+                    ax.axhline(
+                        forecast_price,
+                        color="#00897b",
+                        linestyle="-.",
+                        linewidth=1.0,
+                        alpha=0.85,
+                        label=f"Прогноз подъёма ~{forecast_price:.2f}",
+                    )
+                if entry_price is not None and entry_price > 0:
+                    try:
+                        from services.game_5m import _effective_take_profit_pct
+                        mom = d5_chart.get("momentum_2h_pct")
+                        take_pct = _effective_take_profit_pct(mom)
+                        take_level = entry_price * (1 + take_pct / 100.0)
+                        ax.axhline(
+                            take_level,
+                            color="#2e7d32",
+                            linestyle=":",
+                            linewidth=1.0,
+                            alpha=0.7,
+                            label=f"Тейк +{take_pct:.1f}%",
+                        )
+                    except Exception:
+                        pass
+            # Зона прогноза: аппроксимация хвоста (linear/quadratic) и пролонгация при тренде ≥5 свечей
+            ax.axvline(dt_max, color="#c62828", linestyle="-", linewidth=0.9, alpha=0.8)
+            ax.axvspan(dt_max, dt_max_ext, alpha=0.08, color="#c62828", zorder=0)
+            min_bars_trend = 5
+            prolong_bars = 12  # баров 5m в зону прогноза (~1 ч)
+            prolongation_method = "ema"  # ema — для волатильных (рекомендация Gemini); linear, quadratic — альтернативы
+            forecast_defined = False
+            if len(df) >= min_bars_trend and last_close > 0:
+                from services.chart_prolongation import fit_and_prolong
+                closes_tail = df["Close"].astype(float).iloc[-min_bars_trend:].values
+                res = fit_and_prolong(closes_tail, method=prolongation_method, prolong_bars=prolong_bars)
+                slope_per_bar = res["slope_per_bar"]
+                min_slope_pct = 0.01
+                min_slope = last_close * (min_slope_pct / 100.0)
+                if slope_per_bar >= min_slope or slope_per_bar <= -min_slope:
+                    # Якорь: первая точка кривой = last_close (без скачка)
+                    curve_prices = res["curve_prices"]
+                    anchor_shift = last_close - (curve_prices[0] if curve_prices else last_close)
+                    curve_prices = [p + anchor_shift for p in curve_prices]
+                    end_price = curve_prices[-1]
+                    bar_offsets = res["curve_bar_offsets"]
+                    prolong_dts = [dt_max + pd.Timedelta(minutes=5 * k) for k in bar_offsets]
+                    label = "Прогноз ↑" if slope_per_bar >= min_slope else "Прогноз ↓"
+                    ax.plot(prolong_dts, curve_prices, color="#c62828", linewidth=1.2, linestyle="-", alpha=0.9, label=label)
+                    forecast_defined = True
+            if not forecast_defined:
+                ax.plot([dt_max, dt_max_ext], [last_close, last_close], color="#c62828", linewidth=0.8, linestyle=":", alpha=0.4, label="Текущая цена")
+                ax.text(0.985, 0.5, "…\nпрогноз\nне определён", transform=ax.transAxes, fontsize=9, color="#c62828", ha="right", va="center", style="italic")
+            # Сделки игры 5m за период графика
+            try:
+                from services.game_5m import get_trades_for_chart
+                trades = get_trades_for_chart(ticker, dt_min, dt_max)
+                buy_ts, buy_p = [], []
+                take_ts, take_p = [], []
+                stop_ts, stop_p = [], []
+                other_ts, other_p = [], []
+                for t in trades:
+                    ts = t["ts"]
+                    try:
+                        if ts is not None and hasattr(ts, "tzinfo") and getattr(ts, "tzinfo", None) is not None:
+                            ts_pd = pd.Timestamp(ts)
+                            if ts_pd.tzinfo is not None:
+                                ts = ts_pd.tz_convert("America/New_York").tz_localize(None).to_pydatetime()
+                    except Exception:
+                        pass
+                    p = float(t["price"])
+                    if t["side"] == "BUY":
+                        buy_ts.append(ts)
+                        buy_p.append(p)
+                    elif t["side"] == "SELL":
+                        sig = (t.get("signal_type") or "").upper()
+                        if sig == "TAKE_PROFIT":
+                            take_ts.append(ts)
+                            take_p.append(p)
+                        elif sig == "STOP_LOSS":
+                            stop_ts.append(ts)
+                            stop_p.append(p)
+                        else:
+                            other_ts.append(ts)
+                            other_p.append(p)
+                if buy_ts:
+                    ax.scatter(buy_ts, buy_p, color="#2e7d32", marker="^", s=70, zorder=5, label="Вход (BUY)", edgecolors="darkgreen", linewidths=1)
+                if take_ts:
+                    ax.scatter(take_ts, take_p, color="#1b5e20", marker="v", s=70, zorder=5, label="Тейк (хорошо)", edgecolors="darkgreen", linewidths=1)
+                if stop_ts:
+                    ax.scatter(stop_ts, stop_p, color="#c62828", marker="v", s=70, zorder=5, label="Стоп (плохо)", edgecolors="darkred", linewidths=1)
+                if other_ts:
+                    ax.scatter(other_ts, other_p, color="#757575", marker="v", s=50, zorder=4, label="Выход (SELL/время)", edgecolors="gray", linewidths=0.8)
+            except Exception:
+                pass
             ax.set_ylabel("Цена", fontsize=10)
             ax.set_xlabel("Дата, время", fontsize=10)
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M"))
             ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=12))
             plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
-            ax.legend(loc="upper left")
+            ax.legend(loc="upper left", fontsize=8)
             ax.grid(True, linestyle="--", alpha=0.4)
-            dt_min = df["datetime"].min()
-            dt_max = df["datetime"].max()
             range_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}"
-            ax.set_title(f"{ticker} — 5m ({len(df)} точек)", fontsize=11, fontweight="bold")
+            ax.set_title(f"{ticker} — 5m ({len(df)} точек) · время US Eastern", fontsize=11, fontweight="bold")
             plt.tight_layout()
             buf = BytesIO()
             plt.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="white")
             buf.seek(0)
             plt.close()
+            caption = f"📈 {ticker} — 5 мин, {len(df)} свечей. Данные за: {range_str}"
+            if entry_price is not None:
+                caption += f"\n📌 Позиция открыта @ ${entry_price:.2f}"
             await update.message.reply_photo(
                 photo=buf,
-                caption=f"📈 {ticker} — 5 мин, {len(df)} свечей. Данные за: {range_str}",
+                caption=caption,
             )
         except Exception as e:
             logger.exception("Ошибка графика 5m")
@@ -1192,6 +1364,19 @@ class LSETelegramBot:
                 "alex_rule": alex_rule,
                 "llm_insight": data_5m.get("llm_insight"),
                 "llm_news_content": data_5m.get("llm_news_content"),
+                "curvature_5m_pct": data_5m.get("curvature_5m_pct"),
+                "possible_bounce_to_high_pct": data_5m.get("possible_bounce_to_high_pct"),
+                "estimated_bounce_pct": data_5m.get("estimated_bounce_pct"),
+                "session_high": data_5m.get("session_high"),
+                "entry_advice": data_5m.get("entry_advice"),
+                "entry_advice_reason": data_5m.get("entry_advice_reason"),
+                "estimated_upside_pct_day": data_5m.get("estimated_upside_pct_day"),
+                "suggested_take_profit_price": data_5m.get("suggested_take_profit_price"),
+                "premarket_entry_recommendation": data_5m.get("premarket_entry_recommendation"),
+                "premarket_suggested_limit_price": data_5m.get("premarket_suggested_limit_price"),
+                "premarket_last": data_5m.get("premarket_last"),
+                "premarket_gap_pct": data_5m.get("premarket_gap_pct"),
+                "minutes_until_open": data_5m.get("minutes_until_open"),
                 "max_position_usd": 0,
                 "max_ticker_pct": 0,
             }
@@ -1238,6 +1423,37 @@ class LSETelegramBot:
             "**Параметры (интрадей):**",
             f"• Стоп-лосс: −{sl:.1f}%  ·  Тейк-профит: +{tp:.1f}%",
         ]
+        upside = data.get("estimated_upside_pct_day")
+        take_price = data.get("suggested_take_profit_price")
+        if upside is not None or take_price is not None:
+            parts = []
+            if upside is not None:
+                parts.append(f"Оценка апсайда на день: +{upside:.1f}%")
+            if take_price is not None:
+                parts.append(f"Цель (close-ордер): ${take_price:.2f}")
+            lines.append("• " + "  ·  ".join(parts))
+        advice = data.get("entry_advice")
+        advice_reason = data.get("entry_advice_reason")
+        if advice in ("CAUTION", "AVOID") and advice_reason:
+            lines.append("")
+            lines.append(f"⚠️ **Вход:** {advice} — _{_escape_markdown(advice_reason)}_")
+        pm_rec = data.get("premarket_entry_recommendation")
+        if pm_rec:
+            lines.append("")
+            lines.append(f"📋 **Премаркет:** _{_escape_markdown(pm_rec[:200])}_")
+        curv = data.get("curvature_5m_pct")
+        bounce_to_high = data.get("possible_bounce_to_high_pct")
+        est_bounce = data.get("estimated_bounce_pct")
+        if curv is not None or bounce_to_high is not None:
+            parts = []
+            if curv is not None:
+                parts.append(f"Кривизна 5m: {curv:+.3f}%" + (" (разворот вверх)" if curv > 0 else ""))
+            if bounce_to_high is not None:
+                parts.append(f"До хая сессии: +{bounce_to_high:.2f}%")
+            if est_bounce is not None:
+                parts.append(f"Оценка подъёма (по кривизне): ~+{est_bounce:.2f}%")
+            lines.append("")
+            lines.append("**График / возможный подъём:** " + "  ·  ".join(parts))
         if has_pos and pos:
             pnl = pos.get("pnl") or 0
             pnl_pct = pos.get("pnl_pct") or 0
@@ -1436,7 +1652,8 @@ class LSETelegramBot:
             return
         if not data:
             await update.message.reply_text(
-                f"❌ Нет 5m данных для {ticker} за {days} дн. Yahoo даёт 5m обычно за 1–7 дней."
+                f"❌ Нет 5m данных для {ticker} за {days} дн. Yahoo даёт 5m обычно за 1–7 дней. "
+                "Попробуйте: /recommend5m SNDK 1 или /recommend5m SNDK 7. В выходные биржа закрыта — данных может не быть."
             )
             return
         try:

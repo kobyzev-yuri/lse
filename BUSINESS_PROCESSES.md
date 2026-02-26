@@ -893,6 +893,7 @@ flowchart LR
 - Telegram бот: webhook, handlers, команды `/signal`, `/news`, `/price`, `/chart`, `/ask`, `/tickers`, песочница: `/portfolio`, `/buy`, `/sell`, `/history`, `/recommend` (см. раздел 10)
 - Документация по сделкам: `docs/SANDBOX_TRADE_EXAMPLE.md` — пример цепочки изменений в `portfolio_state` и `trade_history`
 - Деплой: варианты «одна VM» или «Cloud Run + VM» (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`)
+- Премаркет и игры: `setup_cron.sh` — расписание (5m каждые 5 мин, портфельная 9/13/17, премаркет 16:30 MSK). Премаркет: `scripts/premarket_cron.py`, `services/premarket.py`; план и резюме — `docs/PREMARKET_PLAN.md`, `docs/RESUME_PREMARKET_AND_RECENT.md`
 
 ### Обновление диаграмм
 

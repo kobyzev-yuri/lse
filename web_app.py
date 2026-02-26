@@ -28,6 +28,27 @@ from report_generator import compute_closed_trade_pnls, load_trade_history, get_
 app = FastAPI(title="LSE Trading System", version="1.0.0")
 
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Любая необработанная ошибка возвращает JSON с текстом (чтобы не показывать Internal Server Error без деталей)."""
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc!s}"},
+    )
+
+
+@app.middleware("http")
+async def catch_all_errors(request: Request, call_next):
+    """При любой ошибке в обработке запроса возвращаем JSON 500 с текстом (не HTML)."""
+    try:
+        return await call_next(request)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"{type(e).__name__}: {e!s}"},
+        )
+
+
 def _to_jsonable(obj: Any) -> Any:
     """Приводит numpy/pandas типы к нативным Python для JSON-сериализации."""
     if obj is None:
@@ -248,7 +269,10 @@ async def get_recommend5m(ticker: str = "SNDK", days: int = 5):
         from services.recommend_5m import get_decision_5m
     except ImportError:
         raise HTTPException(status_code=501, detail="Модуль recommend_5m недоступен")
-    data_5m = get_decision_5m(ticker, days=min(max(1, days), 7), use_llm_news=True)
+    try:
+        data_5m = get_decision_5m(ticker, days=min(max(1, days), 7), use_llm_news=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка расчёта 5m: {e!s}")
     if not data_5m:
         raise HTTPException(status_code=404, detail="Нет 5m данных для тикера за указанный период")
     has_position = False
@@ -270,26 +294,42 @@ async def get_recommend5m(ticker: str = "SNDK", days: int = 5):
             alex_rule = get_alex_rule_status(ticker, data_5m.get("price"))
         except Exception:
             pass
-    out = {
-        "ticker": ticker,
-        "decision": data_5m["decision"],
-        "strategy": "5m (интрадей + 5д статистика)",
-        "price": data_5m["price"],
-        "rsi_5m": data_5m.get("rsi_5m"),
-        "reasoning": data_5m.get("reasoning", ""),
-        "period_str": data_5m.get("period_str", ""),
-        "momentum_2h_pct": data_5m.get("momentum_2h_pct"),
-        "volatility_5m_pct": data_5m.get("volatility_5m_pct"),
-        "stop_loss_pct": data_5m.get("stop_loss_pct", 2.5),
-        "take_profit_pct": data_5m.get("take_profit_pct", 5.0),
-        "bars_count": data_5m.get("bars_count"),
-        "has_position": has_position,
-        "position": position_info,
-        "alex_rule": alex_rule,
-        "llm_insight": data_5m.get("llm_insight"),
-        "llm_news_content": data_5m.get("llm_news_content"),
-    }
-    return _to_jsonable(out)
+    try:
+        out = {
+            "ticker": ticker,
+            "decision": data_5m["decision"],
+            "strategy": "5m (интрадей + 5д статистика)",
+            "price": data_5m["price"],
+            "rsi_5m": data_5m.get("rsi_5m"),
+            "reasoning": data_5m.get("reasoning", ""),
+            "period_str": data_5m.get("period_str", ""),
+            "momentum_2h_pct": data_5m.get("momentum_2h_pct"),
+            "volatility_5m_pct": data_5m.get("volatility_5m_pct"),
+            "stop_loss_pct": data_5m.get("stop_loss_pct", 2.5),
+            "take_profit_pct": data_5m.get("take_profit_pct", 5.0),
+            "bars_count": data_5m.get("bars_count"),
+            "has_position": has_position,
+            "position": position_info,
+            "alex_rule": alex_rule,
+            "llm_insight": data_5m.get("llm_insight"),
+            "llm_news_content": data_5m.get("llm_news_content"),
+            "curvature_5m_pct": data_5m.get("curvature_5m_pct"),
+            "possible_bounce_to_high_pct": data_5m.get("possible_bounce_to_high_pct"),
+            "estimated_bounce_pct": data_5m.get("estimated_bounce_pct"),
+            "session_high": data_5m.get("session_high"),
+            "entry_advice": data_5m.get("entry_advice"),
+            "entry_advice_reason": data_5m.get("entry_advice_reason"),
+            "estimated_upside_pct_day": data_5m.get("estimated_upside_pct_day"),
+            "suggested_take_profit_price": data_5m.get("suggested_take_profit_price"),
+            "premarket_entry_recommendation": data_5m.get("premarket_entry_recommendation"),
+            "premarket_suggested_limit_price": data_5m.get("premarket_suggested_limit_price"),
+            "premarket_last": data_5m.get("premarket_last"),
+            "premarket_gap_pct": data_5m.get("premarket_gap_pct"),
+            "minutes_until_open": data_5m.get("minutes_until_open"),
+        }
+        return _to_jsonable(out)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка сериализации ответа: {e!s}")
 
 
 @app.post("/api/buy", response_class=JSONResponse)
@@ -488,13 +528,17 @@ async def analyze_ticker(ticker: str = Form(...), use_llm: bool = Form(True)):
 
 
 @app.post("/api/execute", response_class=JSONResponse)
-async def execute_trade(tickers: str = Form(...)):
+async def execute_trade(tickers: str = Form(..., description="Тикеры через запятую")):
     """API: Исполнить торговый цикл для тикеров"""
     try:
-        ticker_list = [t.strip() for t in tickers.split(',')]
+        ticker_list = [t.strip().upper() for t in tickers.split(",") if t and t.strip()]
+        if not ticker_list:
+            raise HTTPException(status_code=400, detail="Укажите хотя бы один тикер (через запятую)")
         exec_agent = ExecutionAgent()
         exec_agent.run_for_tickers(ticker_list)
         return {"status": "success", "message": f"Торговый цикл выполнен для {len(ticker_list)} тикеров"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -556,19 +600,203 @@ async def add_news_api(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
+    """Строит данные для графика 5m с пролонгацией (те же функции, что в Telegram)."""
+    try:
+        from services.recommend_5m import fetch_5m_ohlc, get_decision_5m
+        from services.chart_prolongation import fit_and_prolong
+        from services.game_5m import get_open_position, get_trades_for_chart
+    except ImportError:
+        return None
+    try:
+        df = fetch_5m_ohlc(ticker, days=days)
+    except Exception:
+        return None
+    if df is None or df.empty or "Close" not in df.columns:
+        for fallback_days in (7, 5, 2, 1):
+            if fallback_days == days:
+                continue
+            try:
+                df = fetch_5m_ohlc(ticker, days=fallback_days)
+            except Exception:
+                continue
+            if df is not None and not df.empty and "Close" in df.columns:
+                days = fallback_days
+                break
+        else:
+            return None
+    try:
+        df["datetime"] = pd.to_datetime(df["datetime"])
+    except Exception:
+        return None
+    dt_min = df["datetime"].min()
+    dt_max = df["datetime"].max()
+    last_close = float(df["Close"].iloc[-1])
+    extend_hours = 2
+    dt_max_ext = dt_max + pd.Timedelta(hours=extend_hours)
+
+    def _ts_str(t):
+        if hasattr(t, "isoformat"):
+            s = t.isoformat()
+            return s if isinstance(s, str) else str(s)
+        return str(t)
+
+    times = [_ts_str(t) for t in df["datetime"].tolist()]
+    close = [float(x) for x in df["Close"].astype(float).tolist()]
+
+    entry_price = None
+    try:
+        pos = get_open_position(ticker)
+        if pos and pos.get("entry_price") is not None:
+            entry_price = float(pos["entry_price"])
+    except Exception:
+        pass
+
+    try:
+        d5_chart = get_decision_5m(ticker, days=days, use_llm_news=False)
+    except Exception:
+        d5_chart = None
+    session_high = None
+    take_level = None
+    if d5_chart and entry_price and entry_price > 0:
+        sh = d5_chart.get("session_high")
+        session_high = float(sh) if sh is not None and (isinstance(sh, (int, float)) or hasattr(sh, "__float__")) else None
+        try:
+            from services.game_5m import _effective_take_profit_pct
+            mom = d5_chart.get("momentum_2h_pct")
+            take_pct = _effective_take_profit_pct(mom)
+            take_level = float(entry_price * (1 + take_pct / 100.0))
+        except Exception:
+            pass
+
+    min_bars_trend = 5
+    prolong_bars = 12
+    prolongation_method = "ema"
+    prolongation_times = []
+    prolongation_prices = []
+    forecast_defined = False
+    forecast_label = None
+    if len(df) >= min_bars_trend and last_close > 0:
+        closes_tail = df["Close"].astype(float).iloc[-min_bars_trend:].values
+        res = fit_and_prolong(closes_tail, method=prolongation_method, prolong_bars=prolong_bars)
+        slope_per_bar = res["slope_per_bar"]
+        min_slope_pct = 0.01
+        min_slope = last_close * (min_slope_pct / 100.0)
+        if slope_per_bar >= min_slope or slope_per_bar <= -min_slope:
+            curve_prices = res["curve_prices"]
+            anchor_shift = last_close - (curve_prices[0] if curve_prices else last_close)
+            curve_prices = [p + anchor_shift for p in curve_prices]
+            bar_offsets = res["curve_bar_offsets"]
+            prolongation_times = [
+                _ts_str(dt_max + pd.Timedelta(minutes=5 * k)) for k in bar_offsets
+            ]
+            prolongation_prices = [float(p) for p in curve_prices]
+            forecast_defined = True
+            forecast_label = "Прогноз ↑" if slope_per_bar >= min_slope else "Прогноз ↓"
+        else:
+            prolongation_times = [_ts_str(dt_max), _ts_str(dt_max_ext)]
+            prolongation_prices = [float(last_close), float(last_close)]
+            forecast_label = None
+    else:
+        prolongation_times = [_ts_str(dt_max), _ts_str(dt_max_ext)]
+        prolongation_prices = [float(last_close), float(last_close)]
+
+    trades = []
+    try:
+        for t in get_trades_for_chart(ticker, dt_min, dt_max):
+            ts = t.get("ts")
+            if hasattr(ts, "isoformat"):
+                ts = ts.isoformat()
+            trades.append({
+                "ts": ts,
+                "price": float(t.get("price", 0)),
+                "side": t.get("side"),
+                "signal_type": t.get("signal_type"),
+            })
+    except Exception:
+        pass
+
+    def _f(x):
+        if x is None:
+            return None
+        if isinstance(x, (int, float)):
+            return float(x)
+        if hasattr(x, "item"):
+            try:
+                return float(x.item())
+            except (ValueError, TypeError):
+                return None
+        return x
+
+    return {
+        "ticker": str(ticker),
+        "days": int(days),
+        "times": list(times),
+        "close": [float(c) for c in close],
+        "dt_max": _ts_str(dt_max),
+        "dt_max_ext": _ts_str(dt_max_ext),
+        "prolongation": {
+            "times": list(prolongation_times),
+            "prices": [float(p) for p in prolongation_prices],
+            "forecast_defined": bool(forecast_defined),
+            "label": str(forecast_label) if forecast_label else None,
+        },
+        "entry_price": _f(entry_price),
+        "session_high": _f(session_high),
+        "take_level": _f(take_level),
+        "trades": [
+            {
+                "ts": t["ts"],
+                "price": _f(t.get("price")),
+                "side": t.get("side"),
+                "signal_type": t.get("signal_type"),
+            }
+            for t in trades
+        ],
+    }
+
+
+@app.get("/api/chart5m/{ticker}")
+async def get_chart5m(ticker: str, days: int = 5):
+    """API: Данные для графика 5m с зоной пролонгации (EMA, тренд при ≥5 свечах)."""
+    err_404 = "Нет 5m данных: Yahoo не вернул свечи. Обычно 5m доступны в торговые часы США. Попробуйте 5 или 7 дней."
+    days = min(max(1, days), 7)
+    try:
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, _build_chart5m_data, ticker, days)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Ошибка загрузки 5m: {type(e).__name__}: {e!s}"},
+        )
+    if data is None:
+        return JSONResponse(status_code=404, content={"detail": err_404})
+    try:
+        body = _to_jsonable(data)
+        return JSONResponse(content=body)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Ошибка формирования ответа: {type(e).__name__}: {e!s}"},
+        )
+
+
 @app.get("/visualization", response_class=HTMLResponse)
 async def visualization_page(request: Request):
     """Страница визуализации данных"""
-    # Получаем список тикеров
+    # Получаем список тикеров для дневного графика (из БД) и тикеры для 5m (те же + быстрые)
     with engine.connect() as conn:
         tickers_df = pd.read_sql(
             text("SELECT DISTINCT ticker FROM quotes ORDER BY ticker"),
             conn
         )
         tickers = tickers_df['ticker'].tolist() if not tickers_df.empty else []
-    
+    tickers_5m = list(tickers)
+    if "SNDK" not in tickers_5m:
+        tickers_5m = ["SNDK"] + tickers_5m
     return HTMLResponse(render_template("visualization.html", {
-        "tickers": tickers
+        "tickers": tickers,
+        "tickers_5m": tickers_5m,
     }))
 
 

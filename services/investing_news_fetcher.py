@@ -21,7 +21,7 @@ from bs4 import BeautifulSoup
 from sqlalchemy import create_engine, text
 
 from config_loader import get_config_value, get_database_url
-from services.ticker_groups import get_tickers_fast
+from services.ticker_groups import get_all_ticker_groups
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +44,17 @@ HEADERS = {
     "Cache-Control": "max-age=0",
 }
 
-# Встроенные ключевые слова для сопоставления заголовка новости с тикером (TICKERS_FAST).
+# Встроенные ключевые слова для сопоставления заголовка новости с тикером.
 # Для тикера не из списка используется сам тикер как единственное слово.
 BUILTIN_KEYWORDS: Dict[str, List[str]] = {
     "SNDK": ["SanDisk", "Western Digital", "WDC", "SNDK"],
-    "NDK": ["NDK"],
     "LITE": ["LITE", "Lumentum"],
+    "ALAB": ["ALAB", "Astera Labs"],
+    "MU": ["MU", "Micron"],
+    "TER": ["TER", "Teradyne"],
+    "AMD": ["AMD", "Advanced Micro Devices"],
+    "MSFT": ["MSFT", "Microsoft"],
+    "NDK": ["NDK"],
     "NBIS": ["NBIS"],
 }
 
@@ -58,11 +63,10 @@ LINK_PATTERN = re.compile(r"^/news/[^/]+/.+", re.I)
 
 
 def _ticker_keywords() -> Dict[str, List[str]]:
-    """Тикеры из TICKERS_FAST и ключевые слова: встроенные + опционально из config."""
-    tickers = get_tickers_fast()
+    """Тикеры из всех групп (FAST + MEDIUM + LONG) и ключевые слова: встроенные + опционально из config."""
+    tickers = get_all_ticker_groups()
     if not tickers:
         return {t: BUILTIN_KEYWORDS.get(t, [t]) for t in BUILTIN_KEYWORDS}
-    # Базово: встроенные ключевые слова для каждого тикера из TICKERS_FAST
     out = {t: list(BUILTIN_KEYWORDS.get(t, [t])) for t in tickers}
     # Опционально: дополнение из config (формат SNDK:слово1,слово2;LITE:слово3)
     raw = get_config_value("INVESTING_NEWS_TICKER_KEYWORDS", "").strip()

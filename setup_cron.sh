@@ -34,7 +34,7 @@ mkdir -p "$PROJECT_DIR/logs"
 CRON_FILE=$(mktemp)
 
 # Удаляем из текущего crontab ВСЕ задачи и комментарии LSE, чтобы не оставались дубликаты или старые пути.
-REMOVE_PATTERNS="LSE Trading System|========== LSE|Проект:.*lse|update_prices_cron\.py|trading_cycle_cron\.py|fetch_news_cron\.py|sync_vector_kb_cron\.py|add_sentiment_to_news_cron\.py|analyze_event_outcomes_cron\.py|update_rsi_local\.py|update_finviz_data\.py|update_finviz\.py|send_sndk_signal_cron\.py"
+REMOVE_PATTERNS="LSE Trading System|========== LSE|Проект:.*lse|update_prices_cron\.py|trading_cycle_cron\.py|fetch_news_cron\.py|sync_vector_kb_cron\.py|add_sentiment_to_news_cron\.py|analyze_event_outcomes_cron\.py|update_rsi_local\.py|update_finviz_data\.py|update_finviz\.py|send_sndk_signal_cron\.py|premarket_cron\.py"
 REMOVE_COMMENTS="Проект:|Обновление цен:|Локальный RSI|валюты/товары|вечернего обновления цен|RSI с Finviz|после дневной сессии|Торговый цикл|9:00, 13:00, 17:00|Новости \(RSS|Alpha Vantage\).*каждый час|Backfill embedding|Sentiment к новостям|Анализ исходов событий|Обновление RSI ежедневно|после обновления цен|после закрытия всех бирж|NYSE \(00:00 MSK\)|измените время|Если сервер не в MSK"
 crontab -l 2>/dev/null | grep -vE "$REMOVE_PATTERNS|$REMOVE_COMMENTS" | grep -v "$PROJECT_DIR" | grep -v "/mnt/ai/cnn/lse" > "$CRON_FILE" || true
 # Если crontab был пустой или только наши задачи — файл может быть пустым; тогда начинаем с пустого
@@ -59,11 +59,14 @@ cat >> "$CRON_FILE" << EOF
 # RSI с Finviz (акции): пн-пт в 19:00 (после дневной сессии)
 0 19 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH update_finviz_data.py >> logs/update_finviz.log 2>&1
 
-# Торговый цикл: 9:00, 13:00, 17:00 MSK (пн-пт)
+# Портфельная игра: тикеры из config.env (TRADING_CYCLE_TICKERS или TICKERS_MEDIUM+TICKERS_LONG). Аргумент переопределяет: ... trading_cycle_cron.py "MSFT,ORCL"
 0 9,13,17 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/trading_cycle_cron.py >> logs/cron_trading_cycle.log 2>&1
 
-# Игра 5m (сигнал SNDK и др.): раз в час пн-пт круглосуточно — в т.ч. ночью (важные новости могут выйти до открытия биржи)
-0 * * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/send_sndk_signal_cron.py >> logs/cron_sndk_signal.log 2>&1
+# Игра 5m: тикеры из config.env TICKERS_FAST. Аргумент переопределяет: ... send_sndk_signal_cron.py "SNDK,NDK"
+*/5 * * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/send_sndk_signal_cron.py >> logs/cron_sndk_signal.log 2>&1
+
+# Премаркет: за ~30–60 мин до открытия US (8:30 ET). Москва: 16:30 MSK. При PREMARKET_ALERT_TELEGRAM=true — алерт в Telegram
+30 16 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/premarket_cron.py >> logs/premarket_cron.log 2>&1
 
 # Новости (RSS, NewsAPI, Alpha Vantage): каждый час
 0 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/fetch_news_cron.py >> logs/news_fetch.log 2>&1
@@ -87,7 +90,8 @@ echo "  - Обновление цен: ежедневно 22:00; в сессию
 echo "  - RSI локальный: 22:10 (после обновления цен)"
 echo "  - RSI Finviz: пн-пт 19:00"
 echo "  - Торговый цикл: пн-пт 9:00, 13:00, 17:00"
-echo "  - Игра 5m (сигнал): раз в час пн-пт (оценка эффективности по времени суток)"
+echo "  - Игра 5m (сигнал): каждые 5 мин пн-пт (при закрытой бирже — выход без 5m)"
+echo "  - Премаркет: пн-пт 16:30 MSK (алерт при PREMARKET_ALERT_TELEGRAM=true)"
 echo "  - Новости: каждый час (:00)"
 echo "  - Backfill embedding: каждый час в :10 (после новостей)"
 echo "  - Sentiment к новостям: каждый час в :20 (при USE_LLM=true)"

@@ -10,6 +10,9 @@ pgvector>=0.2.0
 
 # LLM и AI
 openai>=1.0.0  # Для работы с LLM через proxyapi.ru
+# Для Vector KB (sync_vector_kb_cron): sentence-transformers тянет transformers;
+# EncoderDecoderCache нужен с transformers>=4.45, иначе "cannot import name 'EncoderDecoderCache'"
+transformers>=4.45.0
 sentence-transformers>=2.2.0  # Для локальной генерации embeddings (бесплатно)
 
 # Веб-интерфейс

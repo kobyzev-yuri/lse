@@ -20,8 +20,14 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import logging
-from services.telegram_bot import LSETelegramBot
 from config_loader import get_config_value
+from services.telegram_bot import LSETelegramBot
+
+# Прокси для Telegram API (если api.telegram.org недоступен напрямую)
+_telegram_proxy = get_config_value("TELEGRAM_PROXY_URL", "").strip()
+if _telegram_proxy:
+    os.environ["HTTPS_PROXY"] = _telegram_proxy
+    os.environ["HTTP_PROXY"] = _telegram_proxy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,12 +62,20 @@ def main():
     logger.info("   Для остановки нажмите Ctrl+C")
     logger.info("=" * 60)
     
+    if _telegram_proxy:
+        logger.info("Прокси для Telegram: %s", _telegram_proxy.split("@")[-1] if "@" in _telegram_proxy else _telegram_proxy)
     try:
         bot.run_polling()
     except KeyboardInterrupt:
         logger.info("\n👋 Остановка бота...")
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}", exc_info=True)
+        err_str = str(e).lower()
+        if "connect" in err_str or "connection" in err_str or "network" in err_str:
+            logger.error("❌ Нет соединения с api.telegram.org: %s", e)
+            logger.info("   Проверьте интернет и файрвол. Если Telegram заблокирован, задайте в config.env:")
+            logger.info("   TELEGRAM_PROXY_URL=http://proxy:port  (или https://...)")
+        else:
+            logger.error("❌ Критическая ошибка: %s", e, exc_info=True)
         sys.exit(1)
 
 

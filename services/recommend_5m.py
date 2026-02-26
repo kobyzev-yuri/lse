@@ -54,14 +54,53 @@ def fetch_5m_ohlc(ticker: str, days: int = None) -> Optional[pd.DataFrame]:
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = end_date.strftime("%Y-%m-%d")
     t = yf.Ticker(ticker)
-    df = t.history(start=start_str, end=end_str, interval="5m", auto_adjust=False)
-    if df is None or df.empty:
-        return None
-    df = df.rename_axis("datetime").reset_index()
-    for c in ("Open", "High", "Low", "Close"):
-        if c not in df.columns:
+
+    def _normalize(df_in):
+        if df_in is None or df_in.empty:
             return None
-    return df
+        df_in = df_in.rename_axis("datetime").reset_index()
+        for c in ("Open", "High", "Low", "Close"):
+            if c not in df_in.columns:
+                return None
+        return df_in
+
+    def _to_us_eastern(df_in):
+        """Приводит datetime к времени американской биржи (NYSE/NASDAQ) для единой шкалы в Telegram и вебе."""
+        if df_in is None or "datetime" not in df_in.columns:
+            return df_in
+        try:
+            d = pd.to_datetime(df_in["datetime"])
+            if d.dt.tz is None:
+                # Yahoo для US-акций часто отдаёт naive в Eastern; иначе пробуем UTC
+                try:
+                    d = d.dt.tz_localize("America/New_York", ambiguous="infer")
+                except Exception:
+                    d = d.dt.tz_localize("UTC", ambiguous="infer").dt.tz_convert("America/New_York")
+            else:
+                d = d.dt.tz_convert("America/New_York")
+            df_in = df_in.copy()
+            df_in["datetime"] = d
+            return df_in
+        except Exception as e:
+            logger.debug("Приведение 5m к US/Eastern: %s", e)
+            return df_in
+
+    df = t.history(start=start_str, end=end_str, interval="5m", auto_adjust=False)
+    df = _normalize(df)
+    if df is not None:
+        return _to_us_eastern(df)
+    # Fallback: Yahoo иногда отдаёт 5m только через period (или при выходных/вне сессии пусто)
+    for period in ("7d", "5d", "2d", "1d"):
+        try:
+            df = t.history(period=period, interval="5m", auto_adjust=False)
+            df = _normalize(df)
+            if df is not None and not df.empty:
+                logger.info("5m данные %s получены через period=%s (start/end вернули пусто)", ticker, period)
+                return _to_us_eastern(df)
+        except Exception as e:
+            logger.debug("yfinance period=%s для %s: %s", period, ticker, e)
+    logger.warning("Нет 5m данных для %s за %d дн. (Yahoo пустой ответ или биржа закрыта)", ticker, days)
+    return None
 
 
 def has_5m_data(ticker: str, days: int = None, min_bars: int = 1) -> bool:
@@ -167,6 +206,41 @@ def get_decision_5m(
     high_5d = float(df["High"].max())
     low_5d = float(df["Low"].min())
     price = float(closes.iloc[-1])
+    last_bar_high = float(df["High"].iloc[-1])
+    last_bar_low = float(df["Low"].iloc[-1])
+    # Макс. High и мин. Low за последние 6 свечей (30 мин) — чтобы при кроне каждые 5 мин не пропустить отскок/просадку
+    n_tail = min(6, len(df))
+    recent_bars_high_max = float(df["High"].iloc[-n_tail:].max()) if n_tail else last_bar_high
+    recent_bars_low_min = float(df["Low"].iloc[-n_tail:].min()) if n_tail else last_bar_low
+
+    # Хай сессии (последний торговый день в данных) — нужен до possible_bounce/estimated_bounce
+    session_high = high_5d
+    try:
+        dts = pd.to_datetime(df["datetime"])
+        last_date = dts.max().date()
+        session_mask = dts.dt.date == last_date
+        session_high_val = float(df.loc[session_mask, "High"].max())
+    except Exception:
+        session_high_val = high_5d
+    if session_high_val > 0 and price < session_high_val:
+        session_high = session_high_val
+
+    # Кривизна графика (ускорение цены): вторая разность последних закрытий, в % от цены. >0 = разворот вверх
+    curvature_5m_pct = None
+    if len(closes) >= 3 and price > 0:
+        d1 = float(closes.iloc[-1] - closes.iloc[-2])
+        d0 = float(closes.iloc[-2] - closes.iloc[-3])
+        curvature_5m_pct = (d1 - d0) / price * 100.0
+
+    # Высота возможного подъёма: до хая сессии (макс. разумная цель) и оценка по кривизне (50% от глубины отката)
+    possible_bounce_to_high_pct = None
+    estimated_bounce_pct = None
+    if session_high > 0 and price > 0 and session_high >= price:
+        possible_bounce_to_high_pct = (session_high - price) / price * 100.0
+    if session_high > 0 and recent_bars_low_min > 0 and price > 0:
+        depth_pct = (session_high - recent_bars_low_min) / session_high * 100.0
+        if curvature_5m_pct is not None and curvature_5m_pct > 0:
+            estimated_bounce_pct = 0.5 * (session_high - recent_bars_low_min) / price * 100.0
 
     # Лог-доходности за весь период
     log_ret = _log_returns(closes)
@@ -190,19 +264,10 @@ def get_decision_5m(
     else:
         period_str = f"{dt_min} – {dt_max}"
 
-    # Хай сессии (последний торговый день в данных) и откат от него — чтобы видеть моменты "съехал от хая, вход на откате"
-    session_high = high_5d
+    # Откат от хая сессии (session_high уже вычислен выше)
     pullback_from_high_pct = 0.0
-    try:
-        dts = pd.to_datetime(df["datetime"])
-        last_date = dts.max().date()
-        session_mask = dts.dt.date == last_date
-        session_high_val = float(df.loc[session_mask, "High"].max())
-        if session_high_val > 0 and price < session_high_val:
-            session_high = session_high_val
-            pullback_from_high_pct = (session_high - price) / session_high * 100.0
-    except Exception:
-        pass
+    if session_high > 0 and price < session_high:
+        pullback_from_high_pct = (session_high - price) / session_high * 100.0
 
     # Правила решения (агрессивные под интрадей)
     decision = "HOLD"
@@ -291,6 +356,62 @@ def get_decision_5m(
     except Exception as e:
         logger.debug("Контекст сессии биржи для 5m: %s", e)
 
+    # Вход только в регулярную сессию NYSE (9:30–16:00 ET). Вне сессии — «торговля не началась», не входим.
+    session_phase = (market_session.get("session_phase") or "").strip()
+    premarket_context = None
+    if session_phase == "PRE_MARKET":
+        try:
+            from services.premarket import get_premarket_context
+            premarket_context = get_premarket_context(ticker)
+            if premarket_context.get("error"):
+                reasoning = reasoning + f" [Премаркет: нет данных]"
+            else:
+                pm_last = premarket_context.get("premarket_last")
+                gap = premarket_context.get("premarket_gap_pct")
+                mins = premarket_context.get("minutes_until_open") or market_session.get("minutes_until_open")
+                parts = []
+                if pm_last is not None:
+                    parts.append(f"премаркет {pm_last:.2f}")
+                if gap is not None:
+                    parts.append(f"гэп к закрытию {gap:+.2f}%")
+                if mins is not None:
+                    parts.append(f"до открытия {mins} мин")
+                if parts:
+                    reasoning = reasoning + f" [{' | '.join(parts)}. Ликвидность ниже.]"
+        except Exception as e:
+            logger.debug("Премаркет для %s: %s", ticker, e)
+    if session_phase in ("PRE_MARKET", "AFTER_HOURS", "WEEKEND", "HOLIDAY") and decision in ("BUY", "STRONG_BUY"):
+        reasoning = reasoning + f" [Вход отложен: сессия {session_phase} — ждём открытия биржи 9:30 ET]"
+        decision = "HOLD"
+
+    # Рекомендация по входу в премаркете (2.2, 2.3): войти сейчас / ждать открытия / лимит ниже
+    premarket_entry_recommendation = None
+    premarket_suggested_limit_price = None
+    if session_phase == "PRE_MARKET" and premarket_context and not premarket_context.get("error"):
+        gap = premarket_context.get("premarket_gap_pct")
+        pm_last = premarket_context.get("premarket_last")
+        prev_cl = premarket_context.get("prev_close")
+        if gap is not None and pm_last is not None:
+            if gap < -1.5 and ((momentum_2h_pct is not None and momentum_2h_pct < 0) or very_negative):
+                limit_pct = 0.5
+                premarket_suggested_limit_price = round(pm_last * (1 - limit_pct / 100.0), 2) if pm_last else None
+                limit_str = f"${premarket_suggested_limit_price:.2f}" if premarket_suggested_limit_price is not None else "—"
+                premarket_entry_recommendation = (
+                    f"Цена идёт вниз (гэп {gap:+.2f}%, импульс 2ч отрицательный или негатив). "
+                    f"Рекомендация: войти после открытия 9:30 ET или лимит ниже {limit_str}."
+                )
+            elif gap >= -0.5:
+                premarket_entry_recommendation = (
+                    "Можно рассмотреть вход по текущей цене премаркета (ликвидность ниже обычной)."
+                )
+            else:
+                limit_pct = 0.5
+                premarket_suggested_limit_price = round(pm_last * (1 - limit_pct / 100.0), 2) if pm_last else None
+                limit_str = f"${premarket_suggested_limit_price:.2f}" if premarket_suggested_limit_price is not None else "—"
+                premarket_entry_recommendation = (
+                    f"Рекомендация: войти после открытия 9:30 ET или лимит ниже {limit_str}."
+                )
+
     out = {
         "decision": decision,
         "reasoning": reasoning,
@@ -302,6 +423,13 @@ def get_decision_5m(
         "low_5d": low_5d,
         "session_high": session_high,
         "pullback_from_high_pct": pullback_from_high_pct,
+        "last_bar_high": last_bar_high,
+        "last_bar_low": last_bar_low,
+        "recent_bars_high_max": recent_bars_high_max,
+        "recent_bars_low_min": recent_bars_low_min,
+        "curvature_5m_pct": curvature_5m_pct,
+        "possible_bounce_to_high_pct": possible_bounce_to_high_pct,
+        "estimated_bounce_pct": estimated_bounce_pct,
         "period_str": period_str,
         "stop_loss_pct": stop_loss_pct,
         "take_profit_pct": take_profit_pct,
@@ -311,6 +439,56 @@ def get_decision_5m(
         "kb_news_impact": kb_news_impact,
         "market_session": market_session,
     }
+    if premarket_context is not None:
+        out["premarket_context"] = premarket_context
+        out["premarket_last"] = premarket_context.get("premarket_last")
+        out["premarket_gap_pct"] = premarket_context.get("premarket_gap_pct")
+        out["prev_close"] = premarket_context.get("prev_close")
+        if premarket_context.get("minutes_until_open") is not None:
+            out["minutes_until_open"] = premarket_context.get("minutes_until_open")
+        elif market_session.get("minutes_until_open") is not None:
+            out["minutes_until_open"] = market_session.get("minutes_until_open")
+        # В премаркете показываем текущую цену премаркета как price (5m баров ещё нет)
+        if premarket_context.get("premarket_last") is not None:
+            out["price"] = premarket_context["premarket_last"]
+        if premarket_entry_recommendation is not None:
+            out["premarket_entry_recommendation"] = premarket_entry_recommendation
+        if premarket_suggested_limit_price is not None:
+            out["premarket_suggested_limit_price"] = premarket_suggested_limit_price
+
+    # Оценка апсайда на день и рекомендуемый тейк (4.1)
+    try:
+        from services.game_5m import _effective_take_profit_pct
+        effective_take_pct = _effective_take_profit_pct(momentum_2h_pct)
+        out["estimated_upside_pct_day"] = effective_take_pct
+        p = out.get("price") or price
+        if p is not None and p > 0:
+            out["suggested_take_profit_price"] = round(p * (1 + effective_take_pct / 100.0), 2)
+    except Exception as e:
+        logger.debug("estimated_upside для 5m: %s", e)
+
+    # Совет по входу: ALLOW / CAUTION / AVOID (4.2)
+    entry_advice = "ALLOW"
+    entry_advice_reason = ""
+    if very_negative:
+        entry_advice = "AVOID"
+        entry_advice_reason = "Сильный негатив в новостях — вход отложен"
+    elif volatility_5m_pct is not None and volatility_5m_pct > 1.0:
+        entry_advice = "AVOID"
+        entry_advice_reason = f"Высокая волатильность 5m ({volatility_5m_pct:.2f}%) — вход рискован"
+    elif recent_negative or (volatility_5m_pct is not None and volatility_5m_pct > 0.6):
+        entry_advice = "CAUTION"
+        if recent_negative:
+            entry_advice_reason = "Негативные новости в базе — осторожность"
+        else:
+            entry_advice_reason = f"Волатильность 5m {volatility_5m_pct:.2f}% — осторожность"
+    elif session_phase == "PRE_MARKET" and premarket_context and premarket_context.get("premarket_gap_pct") is not None and premarket_context["premarket_gap_pct"] < -2:
+        entry_advice = "CAUTION"
+        entry_advice_reason = f"Премаркет: гэп {premarket_context['premarket_gap_pct']:+.2f}% — лучше войти после открытия или лимитом"
+    if not entry_advice_reason and entry_advice == "ALLOW":
+        entry_advice_reason = "Нет явных ограничений на вход"
+    out["entry_advice"] = entry_advice
+    out["entry_advice_reason"] = entry_advice_reason
 
     # Свежие новости/настроения от LLM непосредственно перед решением (дополнение к KB)
     if use_llm_news:

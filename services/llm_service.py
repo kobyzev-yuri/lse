@@ -273,8 +273,11 @@ Sentiment анализ:
 
 Новости:
 {news_summary if news_summary else "Новостей не найдено"}
-
-Дай рекомендацию на основе этих данных."""
+"""
+        premarket_note = technical_data.get("premarket_note")
+        if premarket_note:
+            user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
+        user_message += "\n\nДай рекомендацию на основе этих данных."
         
         messages = [{"role": "user", "content": user_message}]
         

@@ -139,7 +139,7 @@ def get_market_session_context(dt_utc: datetime | None = None) -> Dict[str, Any]
     is_day_before_holiday = _is_holiday(date_et + timedelta(days=1)) or _is_weekend(date_et + timedelta(days=1))
     is_day_after_holiday = _is_holiday(date_et - timedelta(days=1)) or _is_weekend(date_et - timedelta(days=1))
 
-    time_et_only = et_now.time() if hasattr(et_now, "time") else time_only
+    time_et_only = et_now.time() if hasattr(et_now, "time") else time(0, 0)
     if getattr(time_et_only, "tzinfo", None):
         time_et_only = time_et_only.replace(tzinfo=None)  # type: ignore[union-attr]
     open_naive = datetime.combine(date_et, NYSE_OPEN_TIME)
@@ -187,7 +187,14 @@ def get_market_session_context(dt_utc: datetime | None = None) -> Dict[str, Any]
 
     session_note_ru = " ".join(notes) if notes else "Обычная сессия"
 
-    return {
+    # Минуты до открытия (9:30 ET): только в PRE_MARKET
+    minutes_until_open = None
+    if session_phase == "PRE_MARKET" and NYSE_TZ is not None:
+        open_et = datetime.combine(date_et, NYSE_OPEN_TIME, tzinfo=NYSE_TZ)
+        delta = open_et - et_now
+        minutes_until_open = max(0, int(delta.total_seconds() / 60))
+
+    result = {
         "market_tz": "America/New_York",
         "et_now": et_now.strftime("%Y-%m-%d %H:%M"),
         "date_et": date_et.isoformat(),
@@ -199,3 +206,49 @@ def get_market_session_context(dt_utc: datetime | None = None) -> Dict[str, Any]
         "session_phase": session_phase,
         "session_note_ru": session_note_ru,
     }
+    if minutes_until_open is not None:
+        result["minutes_until_open"] = minutes_until_open
+    return result
+
+
+def session_phase_for_dt(dt_utc: datetime) -> str:
+    """Фаза сессии NYSE для заданного момента (dt — UTC, naive или aware)."""
+    ctx = get_market_session_context(dt_utc)
+    return ctx.get("session_phase", "REGULAR")
+
+
+def clamp_ts_to_session(dt_utc: datetime, to_start: bool = True) -> datetime:
+    """
+    Перенос времени вне сессии на границу сессии NYSE.
+    dt_utc: момент времени (naive UTC или aware).
+    to_start: True — в начало ближайшей сессии (9:30 ET), False — в конец предыдущей (16:00 ET).
+    Возвращает naive UTC.
+    """
+    from datetime import timezone
+    if NYSE_TZ is None:
+        return dt_utc
+    if dt_utc.tzinfo is None:
+        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+    et = dt_utc.astimezone(NYSE_TZ)
+    date_et = et.date()
+    phase = session_phase_for_dt(dt_utc)
+    if phase not in ("PRE_MARKET", "AFTER_HOURS", "WEEKEND", "HOLIDAY"):
+        return dt_utc.astimezone(timezone.utc).replace(tzinfo=None)
+    if to_start:
+        # В начало сессии: PRE_MARKET -> сегодня 9:30; AFTER_HOURS/WEEKEND/HOLIDAY -> следующий торговый день 9:30
+        d = date_et
+        if phase != "PRE_MARKET":
+            d += timedelta(days=1)
+        while _is_weekend(d) or _is_holiday(d):
+            d += timedelta(days=1)
+        open_et = datetime.combine(d, NYSE_OPEN_TIME, tzinfo=NYSE_TZ)
+        return open_et.astimezone(timezone.utc).replace(tzinfo=None)
+    else:
+        # В конец предыдущей сессии: 16:00 ET последнего торгового дня до этого момента
+        d = date_et
+        if phase == "PRE_MARKET":
+            d -= timedelta(days=1)
+        while _is_weekend(d) or _is_holiday(d):
+            d -= timedelta(days=1)
+        close_et = datetime.combine(d, NYSE_CLOSE_TIME, tzinfo=NYSE_TZ)
+        return close_et.astimezone(timezone.utc).replace(tzinfo=None)

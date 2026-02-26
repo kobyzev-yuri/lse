@@ -6,7 +6,7 @@
 <h1>Визуализация данных</h1>
 
 <div class="card">
-    <h2>График котировок</h2>
+    <h2>График котировок (дневной)</h2>
     <label>Тикер:</label>
     <select id="tickerSelect">
         <option value="">Выберите тикер</option>
@@ -19,6 +19,27 @@
 </div>
 
 <div class="card">
+    <h2>График 5m (интрадей + пролонгация)</h2>
+    <p style="color:#666; font-size:0.9rem; margin-bottom:0.5rem;">Те же функции, что в Telegram: зона прогноза, аппроксимация EMA, тренд при ≥5 свечах. Ось времени — US Eastern (NYSE/NASDAQ).</p>
+    <label>Тикер:</label>
+    <select id="ticker5mSelect">
+        <option value="">Выберите тикер</option>
+        {% for ticker in (tickers_5m or tickers or ['SNDK']) %}
+        <option value="{{ ticker }}" {% if ticker == 'SNDK' %}selected{% endif %}>{{ ticker }}</option>
+        {% endfor %}
+    </select>
+    <label style="margin-left:1rem;">Дней:</label>
+    <select id="days5mSelect">
+        <option value="1">1</option>
+        <option value="3">3</option>
+        <option value="5" selected>5</option>
+        <option value="7">7</option>
+    </select>
+    <canvas id="chart5m" style="max-height: 400px; margin-top: 1rem;"></canvas>
+    <div id="chart5mLegend" style="margin-top:0.5rem; font-size:0.85rem; color:#666;"></div>
+</div>
+
+<div class="card">
     <h2>PnL по сделкам</h2>
     <canvas id="pnlChart" style="max-height: 400px;"></canvas>
 </div>
@@ -28,6 +49,124 @@
 <script>
 let quotesChart = null;
 let pnlChart = null;
+let chart5m = null;
+
+function formatChart5mTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' });
+}
+
+async function loadChart5m() {
+    const ticker = document.getElementById('ticker5mSelect').value;
+    const days = parseInt(document.getElementById('days5mSelect').value, 10);
+    if (!ticker) {
+        if (chart5m) { chart5m.destroy(); chart5m = null; }
+        document.getElementById('chart5mLegend').textContent = '';
+        return;
+    }
+    try {
+        const response = await fetch(`/api/chart5m/${encodeURIComponent(ticker)}?days=${days}`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const msg = (data.detail || response.statusText || 'Нет 5m данных');
+            throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+        }
+        const labels = data.times.concat(data.prolongation.times);
+        const nMain = data.times.length;
+        const nProlong = data.prolongation.times.length;
+        const closeData = data.close.concat(Array(nProlong).fill(null));
+        const prolongData = Array(nMain).fill(null).concat(data.prolongation.prices);
+
+        const datasets = [
+            {
+                label: 'Close',
+                data: closeData,
+                borderColor: '#1565c0',
+                backgroundColor: 'rgba(21, 101, 192, 0.05)',
+                fill: false,
+                tension: 0.1,
+                pointRadius: 0,
+                borderWidth: 1.2
+            },
+            {
+                label: data.prolongation.label || (data.prolongation.forecast_defined ? 'Прогноз' : '… прогноз не определён'),
+                data: prolongData,
+                borderColor: '#c62828',
+                borderDash: data.prolongation.forecast_defined ? [] : [4, 4],
+                borderWidth: data.prolongation.forecast_defined ? 1.2 : 0.8,
+                fill: false,
+                tension: 0,
+                pointRadius: 0
+            }
+        ];
+        if (data.entry_price != null) {
+            datasets.push({
+                label: 'Вход @ ' + data.entry_price.toFixed(2),
+                data: labels.map(() => data.entry_price),
+                borderColor: '#2e7d32',
+                borderDash: [6, 4],
+                borderWidth: 1,
+                fill: false,
+                pointRadius: 0
+            });
+        }
+        if (data.session_high != null) {
+            datasets.push({
+                label: 'Хай сессии ' + data.session_high.toFixed(2),
+                data: labels.map(() => data.session_high),
+                borderColor: '#f57c00',
+                borderDash: [2, 4],
+                borderWidth: 1,
+                fill: false,
+                pointRadius: 0
+            });
+        }
+        if (data.take_level != null) {
+            datasets.push({
+                label: 'Тейк ' + data.take_level.toFixed(2),
+                data: labels.map(() => data.take_level),
+                borderColor: '#2e7d32',
+                borderDash: [2, 2],
+                borderWidth: 1,
+                fill: false,
+                pointRadius: 0
+            });
+        }
+
+        if (chart5m) chart5m.destroy();
+        const ctx = document.getElementById('chart5m').getContext('2d');
+        chart5m = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    x: { ticks: { maxTicksLimit: 14, callback: (v, i) => formatChart5mTime(labels[i]) } },
+                    y: { title: { display: true, text: 'Цена' } }
+                },
+                plugins: {
+                    legend: { position: 'top' }
+                }
+            }
+        });
+        document.getElementById('chart5mLegend').textContent =
+            data.prolongation.forecast_defined
+                ? 'Пролонгация: ' + (data.prolongation.label || '')
+                : 'Пролонгация: тренд не определён (нужно ≥5 свечей в одном направлении)';
+    } catch (err) {
+        if (chart5m) { chart5m.destroy(); chart5m = null; }
+        document.getElementById('chart5mLegend').textContent = 'Ошибка: ' + (err.message || 'нет данных');
+    }
+}
+
+document.getElementById('ticker5mSelect').addEventListener('change', loadChart5m);
+document.getElementById('days5mSelect').addEventListener('change', loadChart5m);
+// Автозагрузка графика 5m при открытии страницы (если выбран тикер)
+if (document.getElementById('ticker5mSelect').value) {
+    loadChart5m();
+}
 
 document.getElementById('tickerSelect').addEventListener('change', async (e) => {
     const ticker = e.target.value;

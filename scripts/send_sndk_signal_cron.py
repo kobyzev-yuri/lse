@@ -7,13 +7,12 @@
 - при открытой позиции и (SELL или >2 дней) — закрытие позиции в игре.
 
 Настройка config.env:
-  TELEGRAM_BOT_TOKEN=...
-  TELEGRAM_SIGNAL_CHAT_IDS=123,456  или TELEGRAM_SIGNAL_CHAT_ID=123
-  TELEGRAM_SIGNAL_MENTIONS=@user1,@user2
-  TICKERS_FAST=SNDK,NDK,LITE,NBIS
+  TELEGRAM_BOT_TOKEN=..., TELEGRAM_SIGNAL_CHAT_IDS, TICKERS_FAST, GAME_5M_COOLDOWN_MINUTES (и др. GAME_5M_*).
 
-Cron: */15 10-18 * * 1-5  cd /path/to/lse && python scripts/send_sndk_signal_cron.py
-Cooldown: по каждому тикеру отдельно (по умолч. 120 мин).
+Аргументы: [тикеры] — если заданы, используются вместо TICKERS_FAST (через запятую).
+
+Cron: */5 * * * 1-5  cd /path/to/lse && python scripts/send_sndk_signal_cron.py
+  или с тикерами: ... send_sndk_signal_cron.py SNDK,NDK
 """
 
 import os
@@ -35,7 +34,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 TELEGRAM_SEND_URL = "https://api.telegram.org/bot{token}/sendMessage"
-COOLDOWN_MINUTES = 120
+
+
+def get_cooldown_minutes() -> int:
+    """Cooldown между рассылками по одному тикеру (минуты). config.env: GAME_5M_COOLDOWN_MINUTES."""
+    try:
+        return int(get_config_value("GAME_5M_COOLDOWN_MINUTES", "120").strip())
+    except (ValueError, TypeError):
+        return 120
 
 
 def cooldown_file(ticker: str) -> Path:
@@ -128,12 +134,18 @@ def process_ticker(
     decision = d5.get("decision", "HOLD")
     price = d5.get("price")
 
-    # Игра: закрыть позицию по тейку/стопу (тейк = импульс 2ч, который видит модель), SELL или по истечении 2 дней
+    # Игра: закрыть позицию по тейку/стопу. Учитываем макс. High и мин. Low за последние ~30 мин (6 свечей),
+    # чтобы при кроне каждые 5 мин не проскочить фазу подъёма и фиксации прибыли (как при отскоке в начале сессии).
     momentum_2h_pct = d5.get("momentum_2h_pct")
+    bar_high = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
+    bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
     try:
         open_pos = get_open_position(ticker)
         if open_pos and price is not None:
-            should_close, exit_type = should_close_position(open_pos, decision, price, momentum_2h_pct=momentum_2h_pct)
+            should_close, exit_type = should_close_position(
+                open_pos, decision, price, momentum_2h_pct=momentum_2h_pct,
+                bar_high=bar_high, bar_low=bar_low,
+            )
             if should_close and exit_type:
                 close_position(ticker, price, exit_type)
     except Exception as e:
@@ -142,7 +154,14 @@ def process_ticker(
     if decision not in ("BUY", "STRONG_BUY"):
         return False
 
-    if last_signal_sent_at(ticker) and (datetime.now() - last_signal_sent_at(ticker)).total_seconds() < COOLDOWN_MINUTES * 60:
+    # Вход только в регулярную сессию NYSE (9:30–16:00 ET). В премаркете/после закрытия торговля «плоская», ликвидность низкая.
+    session_phase = (d5.get("market_session") or {}).get("session_phase") or ""
+    if session_phase in ("PRE_MARKET", "AFTER_HOURS", "WEEKEND", "HOLIDAY"):
+        logger.info("%s: решение BUY, но сессия=%s — вход отложен до открытия биржи", ticker, session_phase)
+        return False
+
+    cooldown_min = get_cooldown_minutes()
+    if last_signal_sent_at(ticker) and (datetime.now() - last_signal_sent_at(ticker)).total_seconds() < cooldown_min * 60:
         logger.info("%s: cooldown, пропуск рассылки", ticker)
         return False
 
@@ -262,15 +281,30 @@ def main():
         )
     mentions = get_signal_mentions()
 
+    # При закрытой бирже не дергаем 5m (Yahoo пустой, вход/выход невозможны). Новости — отдельный крон.
+    try:
+        from services.market_session import get_market_session_context
+        ctx = get_market_session_context()
+        phase = (ctx.get("session_phase") or "").strip()
+        if phase in ("PRE_MARKET", "AFTER_HOURS", "WEEKEND", "HOLIDAY"):
+            logger.info("Биржа закрыта (сессия=%s), пропуск поллинга 5m до 9:30 ET", phase)
+            sys.exit(0)
+    except Exception as e:
+        logger.debug("Проверка сессии биржи: %s", e)
+
     try:
         from services.recommend_5m import get_decision_5m, has_5m_data
     except ImportError as e:
         logger.error("Модуль recommend_5m недоступен: %s", e)
         sys.exit(1)
 
-    tickers_all = get_tickers_fast()
+    # Тикеры: из аргумента (через запятую) или из config.env TICKERS_FAST
+    if len(sys.argv) > 1 and sys.argv[1].strip():
+        tickers_all = [t.strip() for t in sys.argv[1].strip().split(",") if t.strip()]
+    else:
+        tickers_all = get_tickers_fast()
     if not tickers_all:
-        logger.warning("TICKERS_FAST пуст, нечего обрабатывать")
+        logger.warning("Тикеры не заданы (TICKERS_FAST в config.env или аргумент скрипта)")
         sys.exit(0)
 
     # Только тикеры с доступными 5m данными (/chart5m, игра 5m)
