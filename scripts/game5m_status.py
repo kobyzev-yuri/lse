@@ -49,17 +49,21 @@ def main():
             print("Закрытых сделок пока нет.")
         else:
             pnls = [r["pnl_pct"] for r in results if r.get("pnl_pct") is not None]
+            pnls_usd = [r["pnl_usd"] for r in results if r.get("pnl_usd") is not None]
             total = len(pnls)
             wins = sum(1 for p in pnls if p > 0)
             win_rate = (100.0 * wins / total) if total else 0
             avg_pnl = (sum(pnls) / total) if total else 0
-            print(f"Закрытых сделок: {total}, Win rate: {wins}/{total} ({win_rate:.1f}%), Средний PnL: {avg_pnl:+.2f}%")
+            sum_usd = sum(pnls_usd) if pnls_usd else 0
+            print(f"Закрытых сделок: {total}, Win rate: {wins}/{total} ({win_rate:.1f}%), Средний PnL: {avg_pnl:+.2f}%, Сумма: ${sum_usd:+.2f}")
             for r in results[:5]:
                 exit_ts = r.get("exit_ts") or "—"
                 exit_str = str(exit_ts)[:16] if exit_ts != "—" else "—"
                 pct = r.get("pnl_pct")
                 pct_str = f"{pct:+.2f}%" if pct is not None else "—"
-                print(f"  {exit_str} {r.get('exit_signal_type', '—')} PnL {pct_str}")
+                usd = r.get("pnl_usd")
+                usd_str = f" ${usd:+.2f}" if usd is not None else ""
+                print(f"  {exit_str} {r.get('exit_signal_type', '—')} PnL {pct_str}{usd_str}")
             if len(results) > 5:
                 print(f"  ... и ещё {len(results) - 5}")
     print()

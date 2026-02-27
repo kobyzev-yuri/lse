@@ -2,8 +2,58 @@
 
 {% block title %}Портфель - LSE Trading System{% endblock %}
 
+{% block extra_css %}
+<style>
+.muted { color: #7f8c8d; font-size: 0.9rem; }
+.table-responsive { overflow-x: auto; }
+</style>
+{% endblock %}
+
 {% block content %}
 <h1>Портфель</h1>
+
+<div class="card">
+    <h2>Закрытые позиции (Positions)</h2>
+    <p class="muted">Все закрытые сделки (без фильтра по дате). Даты в MSK. Как в команде /closed.</p>
+    {% if closed_positions %}
+    <div class="table-responsive">
+    <table>
+        <thead>
+            <tr>
+                <th>Instrument</th>
+                <th>Dir</th>
+                <th>Open</th>
+                <th>Close</th>
+                <th>Pips</th>
+                <th>Profit</th>
+                <th>Units</th>
+                <th>Выход</th>
+                <th>Open (MSK)</th>
+                <th>Close (MSK)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in closed_positions %}
+            <tr>
+                <td>{{ row.instrument }}</td>
+                <td>{{ row.direction }}</td>
+                <td>${{ "%.2f"|format(row.open) }}</td>
+                <td>${{ "%.2f"|format(row.close) }}</td>
+                <td>{{ row.profit_pips }}</td>
+                <td class="{% if row.profit_usd >= 0 %}positive{% else %}negative{% endif %}">${{ "%+.2f"|format(row.profit_usd) }}</td>
+                <td>{{ row.units }}</td>
+                <td>{{ row.exit_reason or '—' }}</td>
+                <td>{{ row.open_msk }}</td>
+                <td>{{ row.close_msk }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p>Закрытых позиций пока нет.</p>
+    {% endif %}
+</div>
 
 <div class="stats">
     <div class="stat-card">
@@ -58,6 +108,7 @@
 
 <div class="card">
     <h2>Последние сделки</h2>
+    <p class="muted">Превью последних 5 записей. Полная история — на странице <a href="/trading">Торги</a> (кнопка «Загрузить историю»).</p>
     {% if trades %}
     <table>
         <thead>
@@ -65,7 +116,7 @@
                 <th>Время</th>
                 <th>Тикер</th>
                 <th>Сторона</th>
-                <th>Количество</th>
+                <th>Кол-во</th>
                 <th>Цена</th>
                 <th>Сигнал</th>
             </tr>

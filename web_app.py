@@ -17,7 +17,7 @@ except ImportError:
     DISPLAY_TZ = None  # fallback: показываем как есть, без конвертации
 
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import pandas as pd
@@ -161,12 +161,13 @@ async def index(request: Request):
                 "last_updated": _format_ts(row.get("last_updated")),
             })
 
+        # Краткий превью последних сделок (полная история — на странице Торги → «Загрузить историю»)
         trades_df = pd.read_sql(
             text("""
                 SELECT ts, ticker, side, quantity, price, signal_type
                 FROM trade_history
                 ORDER BY ts DESC
-                LIMIT 10
+                LIMIT 5
             """),
             conn
         )
@@ -174,19 +175,71 @@ async def index(request: Request):
         for t in trades:
             t["ts"] = _format_ts(t.get("ts"))
 
-        all_trades = load_trade_history(engine)
+        # Закрытые сделки — тот же источник, что и /closed: вся история, без фильтра по дате
+        report_engine = get_engine()
+        all_trades = load_trade_history(report_engine)
         trade_pnls = compute_closed_trade_pnls(all_trades)
         total_pnl = sum(t.net_pnl for t in trade_pnls) if trade_pnls else 0.0
         win_rate = (sum(1 for t in trade_pnls if t.net_pnl > 0) / len(trade_pnls) * 100) if trade_pnls else 0.0
 
+        # Таблица закрытых позиций (как /closed): все закрытые сделки, новые сверху
+        closed_positions = []
+        if trade_pnls:
+            def _sort_key(x):
+                try:
+                    ts = getattr(x, "ts", None)
+                    if ts is None or (hasattr(pd, "isna") and pd.isna(ts)):
+                        return pd.Timestamp.min
+                    return pd.Timestamp(ts)
+                except Exception:
+                    return pd.Timestamp.min
+            try:
+                sorted_pnls = sorted(trade_pnls, key=_sort_key, reverse=True)[:50]
+            except Exception:
+                sorted_pnls = list(trade_pnls)[:50]
+            for t in sorted_pnls:
+                try:
+                    pts = t.exit_price - t.entry_price
+                    pips = round(pts * 10000) if "=X" in t.ticker or "USD" in t.ticker or "EUR" in t.ticker else round(pts, 2)
+                    if hasattr(t, "entry_ts") and t.entry_ts is not None and hasattr(t.entry_ts, "strftime"):
+                        open_msk = t.entry_ts.strftime("%d.%m.%Y %H:%M")
+                    else:
+                        open_msk = str(getattr(t, "entry_ts", None))[:16] if getattr(t, "entry_ts", None) else "—"
+                    if hasattr(t, "ts") and t.ts is not None and hasattr(t.ts, "strftime"):
+                        close_msk = t.ts.strftime("%d.%m.%Y %H:%M")
+                    else:
+                        close_msk = str(getattr(t, "ts", None))[:16] if getattr(t, "ts", None) else "—"
+                    direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
+                    raw = getattr(t, "signal_type", None)
+                    if raw is None or (hasattr(pd, "isna") and pd.isna(raw)) or str(raw).strip() == "":
+                        exit_reason = "—"
+                    else:
+                        exit_reason = str(raw).strip()
+                    closed_positions.append({
+                        "instrument": t.ticker,
+                        "direction": direction,
+                        "open": float(t.entry_price),
+                        "close": float(t.exit_price),
+                        "profit_pips": pips,
+                        "profit_usd": float(t.net_pnl),
+                        "units": int(t.quantity),
+                        "open_msk": open_msk,
+                        "close_msk": close_msk,
+                        "exit_reason": exit_reason,
+                    })
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning("Пропуск строки закрытой позиции: %s", e)
+
     return HTMLResponse(render_template("index.html", {
         "request": request,
+        "closed_positions": closed_positions,
         "cash": cash,
         "positions": positions,
         "trades": trades,
         "total_pnl": total_pnl,
         "win_rate": win_rate,
-        "total_trades": len(trade_pnls)
+        "total_trades": len(trade_pnls) if trade_pnls else 0
     }))
 
 
@@ -543,14 +596,25 @@ async def analyze_ticker(ticker: str = Form(...), use_llm: bool = Form(True)):
 
 @app.post("/api/execute", response_class=JSONResponse)
 async def execute_trade(tickers: str = Form(..., description="Тикеры через запятую")):
-    """API: Исполнить торговый цикл для тикеров"""
+    """API: Исполнить торговый цикл для тикеров (портфельная игра: сигнал → BUY при наличии, проверка стоп-лоссов)."""
     try:
         ticker_list = [t.strip().upper() for t in tickers.split(",") if t and t.strip()]
         if not ticker_list:
             raise HTTPException(status_code=400, detail="Укажите хотя бы один тикер (через запятую)")
         exec_agent = ExecutionAgent()
         exec_agent.run_for_tickers(ticker_list)
-        return {"status": "success", "message": f"Торговый цикл выполнен для {len(ticker_list)} тикеров"}
+        # Показать, какие сделки произошли за этот запуск (исключаем GAME_5M)
+        recent = exec_agent.get_recent_trades(minutes_ago=2, exclude_strategy_name="GAME_5M")
+        summary_lines = [f"Цикл выполнен для {len(ticker_list)} тикеров: {', '.join(ticker_list)}."]
+        if recent:
+            summary_lines.append("За цикл исполнено сделок: " + str(len(recent)))
+            for r in recent[:10]:
+                ts = r.get("ts")
+                ts_str = ts.strftime("%H:%M") if hasattr(ts, "strftime") else str(ts)
+                summary_lines.append(f"  {ts_str} {r.get('side')} {r.get('ticker')} x{r.get('quantity', 0):.0f} @ ${r.get('price', 0):.2f} ({r.get('signal_type', '')})")
+        else:
+            summary_lines.append("Новых сделок за цикл нет (сигналы HOLD/SELL или позиции уже открыты).")
+        return {"status": "success", "message": "\n".join(summary_lines), "trades_count": len(recent)}
     except HTTPException:
         raise
     except Exception as e:
@@ -717,9 +781,15 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
 
     trades = []
     try:
+        from services.game_5m import trade_ts_to_et
         for t in get_trades_for_chart(ticker, dt_min, dt_max):
             ts = t.get("ts")
-            if hasattr(ts, "isoformat"):
+            # График в ET; используем ts_timezone из строки (в БД храним явно)
+            stored_tz = t.get("ts_timezone")
+            ts_et = trade_ts_to_et(ts, source_tz=stored_tz)
+            if ts_et is not None and hasattr(ts_et, "isoformat"):
+                ts = ts_et.isoformat()
+            elif hasattr(ts, "isoformat"):
                 ts = ts.isoformat()
             trades.append({
                 "ts": ts,
@@ -814,27 +884,163 @@ async def visualization_page(request: Request):
     }))
 
 
+def _json_safe_default(obj):
+    """Для json.dumps: несериализуемые типы (numpy, datetime) → None или строка."""
+    if obj is None:
+        return None
+    try:
+        if hasattr(pd, "isna") and pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(obj, "isoformat"):
+        try:
+            return obj.isoformat()
+        except (ValueError, TypeError):
+            return None
+    if hasattr(obj, "item"):
+        try:
+            x = obj.item()
+            if isinstance(x, float) and (x != x or x == float("inf") or x == float("-inf")):
+                return None
+            return int(x) if isinstance(x, (np.integer, int)) else x
+        except (ValueError, TypeError):
+            return None
+    return str(obj)
+
+
+def _make_json_safe(obj: Any) -> Any:
+    """Рекурсивно заменяет nan/inf и несериализуемые значения на None. Результат безопасен для json.dumps."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return {k: _make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_make_json_safe(v) for v in obj]
+    if isinstance(obj, float):
+        if obj != obj or obj == float("inf") or obj == float("-inf"):
+            return None
+        return obj
+    try:
+        if hasattr(pd, "isna") and pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(obj, "isoformat"):
+        try:
+            return obj.isoformat()
+        except (ValueError, TypeError):
+            return None
+    if hasattr(obj, "item"):
+        try:
+            x = obj.item()
+            if isinstance(x, float) and (x != x or x == float("inf") or x == float("-inf")):
+                return None
+            return int(x) if isinstance(x, (np.integer, int)) else x
+        except (ValueError, TypeError):
+            return None
+    if isinstance(obj, (int, str)):
+        return obj
+    return str(obj)
+
+
 @app.get("/api/trades", response_class=JSONResponse)
 async def get_trades(limit: int = 100):
-    """API: Получить историю сделок"""
-    with engine.connect() as conn:
-        df = pd.read_sql(
-            text("""
-                SELECT ts, ticker, side, quantity, price, commission, 
-                       signal_type, total_value, sentiment_at_trade
-                FROM trade_history
-                ORDER BY ts DESC
-                LIMIT :limit
-            """),
-            conn,
-            params={"limit": limit}
-        )
-    
-    trades = df.to_dict("records") if not df.empty else []
-    for t in trades:
-        if t.get("ts") is not None and hasattr(t["ts"], "isoformat"):
-            t["ts"] = t["ts"].isoformat()
-    return {"trades": trades}
+    """API: Получить историю сделок (аналог /history в Telegram)."""
+    limit = max(1, min(500, int(limit)))
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(
+                text("""
+                    SELECT ts, ticker, side, quantity, price, commission,
+                           signal_type, total_value, sentiment_at_trade, strategy_name
+                    FROM public.trade_history
+                    ORDER BY ts DESC
+                    LIMIT :lim
+                """),
+                conn,
+                params={"lim": limit}
+            )
+    except Exception as e:
+        body = json.dumps({"trades": [], "error": str(e)}, default=_json_safe_default, ensure_ascii=False)
+        return Response(content=body.encode("utf-8"), media_type="application/json")
+
+    def _safe_float(x):
+        if x is None:
+            return None
+        try:
+            if pd.isna(x):
+                return None
+        except (TypeError, ValueError):
+            pass
+        try:
+            f = float(x)
+            if f != f or f == float("inf") or f == float("-inf"):
+                return None
+            return f
+        except (TypeError, ValueError):
+            return None
+
+    def _to_native(val):
+        if val is None:
+            return None
+        try:
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        if hasattr(val, "isoformat") and not (hasattr(pd, "isna") and pd.isna(val)):
+            try:
+                return val.isoformat()
+            except (ValueError, TypeError):
+                return None
+        if hasattr(val, "item"):
+            try:
+                x = val.item()
+                if pd.isna(x):
+                    return None
+                if isinstance(x, (np.integer,)):
+                    return int(x)
+                if isinstance(x, (np.floating, float)):
+                    return _safe_float(x)
+                if isinstance(x, (int, str)):
+                    return x
+                return _safe_float(x) if isinstance(x, (int, float)) else str(x)
+            except (ValueError, TypeError):
+                return None
+        if isinstance(val, (np.integer, np.int64, np.int32)):
+            return int(val)
+        if isinstance(val, (np.floating, np.float64, np.float32, float)):
+            return _safe_float(val)
+        if isinstance(val, (int, str)):
+            return val
+        if isinstance(val, (int, float)):
+            return _safe_float(val) if isinstance(val, float) else int(val)
+        return str(val) if val is not None else None
+
+    trades = []
+    for _, row in df.iterrows():
+        t = {
+            "ts": _to_native(row.get("ts")),
+            "ticker": _to_native(row.get("ticker")),
+            "side": _to_native(row.get("side")),
+            "quantity": _to_native(row.get("quantity")),
+            "price": _to_native(row.get("price")),
+            "commission": _to_native(row.get("commission")),
+            "signal_type": _to_native(row.get("signal_type")),
+            "total_value": _to_native(row.get("total_value")),
+            "sentiment_at_trade": _to_native(row.get("sentiment_at_trade")),
+            "strategy_name": _to_native(row.get("strategy_name")),
+        }
+        for k, v in list(t.items()):
+            if isinstance(v, float) and (v != v or v == float("inf") or v == float("-inf")):
+                t[k] = None
+        trades.append(t)
+
+    # Сериализуем сами с default=…, чтобы nan/inf и numpy-типы не ломали json.dumps у Starlette
+    payload = _make_json_safe({"trades": trades})
+    body = json.dumps(payload, default=_json_safe_default, ensure_ascii=False)
+    return Response(content=body.encode("utf-8"), media_type="application/json")
 
 
 @app.get("/api/game5m", response_class=JSONResponse)
@@ -854,10 +1060,13 @@ async def get_game5m(ticker: str = "SNDK", limit: int = 20):
                 "exit_ts": exit_ts.isoformat() if hasattr(exit_ts, "isoformat") else str(exit_ts),
                 "exit_signal_type": r.get("exit_signal_type"),
                 "pnl_pct": r.get("pnl_pct"),
+                "pnl_usd": r.get("pnl_usd"),
             })
         pnls = [r["pnl_pct"] for r in results if r.get("pnl_pct") is not None]
+        pnls_usd = [r["pnl_usd"] for r in results if r.get("pnl_usd") is not None]
         total = len(pnls)
         wins = sum(1 for p in pnls if p > 0)
+        sum_usd = sum(pnls_usd) if pnls_usd else None
         return {
             "ticker": ticker,
             "strategy_params": strategy_params,
@@ -870,6 +1079,7 @@ async def get_game5m(ticker: str = "SNDK", limit: int = 20):
             "closed_trades": closed,
             "win_rate_pct": (100.0 * wins / total) if total else 0.0,
             "avg_pnl_pct": (sum(pnls) / total) if total else None,
+            "total_pnl_usd": sum_usd,
             "total_closed": total,
         }
     except Exception as e:

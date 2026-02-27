@@ -71,8 +71,8 @@ def get_database_url(config: Optional[Dict[str, str]] = None) -> str:
     if match:
         user, password, host, port, _ = match.groups()
         db_url_lse = f"postgresql://{user}:{password}@{host}:{port}/lse_trading"
-        # Время биржи (ET): CURRENT_TIMESTAMP в trade_history и др. будет в America/New_York для сравнения с 5m
-        db_url_lse += "?options=-c%20timezone%3DAmerica%2FNew_York"
+        # В БД храним московское время; при отображении конвертируем в ET (см. trade_ts_to_et, docs/TIMEZONES.md)
+        db_url_lse += "?options=-c%20timezone%3DEurope%2FMoscow"
         return db_url_lse
     else:
         raise ValueError(f"Неверный формат DATABASE_URL: {db_url}")

@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
 Скрипт для удаления мусорных записей календаря из knowledge_base.
-Удаляет записи ECONOMIC_INDICATOR с контентом в виде только числа (без текста).
+
+1) ECONOMIC_INDICATOR с контентом в виде только числа (без текста).
+2) Alpha Vantage Earnings Calendar: записи вида «Earnings report for TICKER» или
+   «Earnings report for TICKER Estimate: X USD» — не несут пользы для решений, засоряют новости.
+
+Рекомендуется запускать по cron раз в 1–7 дней, например:
+  0 4 * * * cd /path/to/lse && python scripts/cleanup_calendar_noise.py --execute
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -16,6 +23,22 @@ from config_loader import get_database_url
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Шаблон мусорной записи Earnings: "Earnings report for SYMBOL" или с одной строкой "Estimate: ..."
+AV_EARNINGS_NOISE_PATTERN = re.compile(
+    r"^Earnings report for [A-Z0-9\.\-]+(\s+Estimate:.*)?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def is_av_earnings_noise(content: str) -> bool:
+    """True, если content — типичная бесполезная запись Alpha Vantage Earnings (только шаблон)."""
+    if not content or not content.strip():
+        return True
+    text = content.strip()
+    if len(text) > 200:
+        return False
+    return bool(AV_EARNINGS_NOISE_PATTERN.match(text))
 
 
 def is_noise_content(content: str, event_name: str = None) -> bool:
@@ -38,16 +61,16 @@ def is_noise_content(content: str, event_name: str = None) -> bool:
 
 def cleanup_calendar_noise(dry_run: bool = True):
     """
-    Удаляет мусорные записи календаря из knowledge_base.
-    
-    Args:
-        dry_run: Если True, только показывает что будет удалено, не удаляет
+    Удаляет мусорные записи календаря из knowledge_base:
+    - ECONOMIC_INDICATOR с контентом «только число»;
+    - Alpha Vantage Earnings Calendar вида «Earnings report for TICKER» (без пользы).
     """
     db_url = get_database_url()
     engine = create_engine(db_url)
-    
+    total_deleted = 0
+
     with engine.connect() as conn:
-        # Находим все ECONOMIC_INDICATOR записи
+        # 1) ECONOMIC_INDICATOR — только число без текста
         result = conn.execute(
             text("""
                 SELECT id, source, content, event_type, ts
@@ -57,20 +80,17 @@ def cleanup_calendar_noise(dry_run: bool = True):
             """)
         )
         rows = result.fetchall()
-        
         logger.info(f"📊 Найдено {len(rows)} записей ECONOMIC_INDICATOR")
-        
+
         to_delete = []
         for row in rows:
             content = row[2] or ''
             source = row[1] or ''
-            # Извлекаем название события из content (первая строка)
             event_name = ''
             if content:
                 first_line = content.split('\n')[0].strip()
                 if first_line and len(first_line) > 3:
                     event_name = first_line
-            
             if is_noise_content(content, event_name):
                 to_delete.append({
                     'id': row[0],
@@ -78,30 +98,63 @@ def cleanup_calendar_noise(dry_run: bool = True):
                     'content': content[:50] + '...' if len(content) > 50 else content,
                     'ts': row[4]
                 })
-        
-        logger.info(f"🗑️  Найдено {len(to_delete)} мусорных записей для удаления")
-        
+
         if to_delete:
-            logger.info("\nПримеры записей для удаления:")
-            for i, item in enumerate(to_delete[:5], 1):
-                logger.info(f"  {i}. ID={item['id']}, {item['ts']}, {item['source']}: {item['content']}")
-            if len(to_delete) > 5:
-                logger.info(f"  ... и еще {len(to_delete) - 5} записей")
-        
-        if not dry_run and to_delete:
-            with engine.begin() as trans_conn:
-                deleted_count = trans_conn.execute(
-                    text("""
-                        DELETE FROM knowledge_base
-                        WHERE id = ANY(:ids)
-                    """),
-                    {"ids": [item['id'] for item in to_delete]}
-                ).rowcount
-            logger.info(f"\n✅ Удалено {deleted_count} мусорных записей из knowledge_base")
-        elif dry_run:
-            logger.info("\n⚠️  Режим DRY RUN - записи не удалены")
-            logger.info("   Запустите с --execute для реального удаления")
-    
+            logger.info(f"🗑️  ECONOMIC_INDICATOR: {len(to_delete)} мусорных записей для удаления")
+            for i, item in enumerate(to_delete[:3], 1):
+                logger.info(f"  {i}. ID={item['id']}, {item['ts']}: {item['content']}")
+            if len(to_delete) > 3:
+                logger.info(f"  ... и еще {len(to_delete) - 3} записей")
+            if not dry_run:
+                with engine.begin() as trans_conn:
+                    n = trans_conn.execute(
+                        text("DELETE FROM knowledge_base WHERE id = ANY(:ids)"),
+                        {"ids": [item['id'] for item in to_delete]}
+                    ).rowcount
+                total_deleted += n
+                logger.info(f"  Удалено {n} записей ECONOMIC_INDICATOR")
+
+        # 2) Alpha Vantage Earnings Calendar — «Earnings report for TICKER» (и с Estimate)
+        av_rows = conn.execute(
+            text("""
+                SELECT id, ticker, content, ts
+                FROM knowledge_base
+                WHERE source = 'Alpha Vantage Earnings Calendar'
+                ORDER BY ts DESC
+            """)
+        ).fetchall()
+
+        av_to_delete = []
+        for row in av_rows:
+            content = row[2] or ''
+            if is_av_earnings_noise(content):
+                av_to_delete.append({
+                    'id': row[0],
+                    'ticker': row[1],
+                    'content': (content[:60] + '...') if len(content) > 60 else content,
+                    'ts': row[3]
+                })
+
+        if av_to_delete:
+            logger.info(f"🗑️  Alpha Vantage Earnings: {len(av_to_delete)} мусорных записей для удаления")
+            for i, item in enumerate(av_to_delete[:5], 1):
+                logger.info(f"  {i}. ID={item['id']}, {item['ts']} {item['ticker']}: {item['content']}")
+            if len(av_to_delete) > 5:
+                logger.info(f"  ... и еще {len(av_to_delete) - 5} записей")
+            if not dry_run:
+                with engine.begin() as trans_conn:
+                    n = trans_conn.execute(
+                        text("DELETE FROM knowledge_base WHERE id = ANY(:ids)"),
+                        {"ids": [item['id'] for item in av_to_delete]}
+                    ).rowcount
+                total_deleted += n
+                logger.info(f"  Удалено {n} записей Alpha Vantage Earnings")
+
+    if dry_run and (to_delete or av_to_delete):
+        logger.info("\n⚠️  Режим DRY RUN - записи не удалены. Запустите с --execute для удаления.")
+    if total_deleted:
+        logger.info(f"\n✅ Всего удалено {total_deleted} мусорных записей из knowledge_base")
+
     engine.dispose()
 
 

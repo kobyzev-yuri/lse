@@ -212,6 +212,17 @@ def init_db():
             conn.execute(text("ALTER TABLE trade_history ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50);"))
         except Exception:
             pass
+        # Миграция: таймзона метки ts (чтобы однозначно интерпретировать при отображении в ET)
+        try:
+            conn.execute(text("""
+                ALTER TABLE trade_history
+                ADD COLUMN IF NOT EXISTS ts_timezone VARCHAR(50) DEFAULT 'Europe/Moscow';
+            """))
+            conn.execute(text("""
+                UPDATE trade_history SET ts_timezone = 'Europe/Moscow' WHERE ts_timezone IS NULL;
+            """))
+        except Exception:
+            pass
 
         # Инициализируем стартовый капитал
         conn.execute(text("""

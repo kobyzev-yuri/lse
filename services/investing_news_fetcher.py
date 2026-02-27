@@ -21,7 +21,7 @@ from bs4 import BeautifulSoup
 from sqlalchemy import create_engine, text
 
 from config_loader import get_config_value, get_database_url
-from services.ticker_groups import get_all_ticker_groups
+from services.ticker_groups import get_all_ticker_groups, get_tracked_tickers_for_kb
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +180,10 @@ def fetch_and_save_investing_news(max_articles: int = 25) -> int:
     if not items:
         return 0
 
+    try:
+        tracked = set(get_tracked_tickers_for_kb())
+    except Exception:
+        tracked = None
     engine = create_engine(get_database_url())
     added = 0
     with engine.begin() as conn:
@@ -189,6 +193,8 @@ def fetch_and_save_investing_news(max_articles: int = 25) -> int:
             ticker = _match_ticker(title, keyword_map)
             if not ticker:
                 ticker = "MACRO"
+            if tracked is not None and ticker not in tracked:
+                continue
             content = title
             try:
                 conn.execute(

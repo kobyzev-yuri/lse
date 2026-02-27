@@ -106,7 +106,7 @@ class LSETelegramBot:
             .connect_timeout(15.0)
         )
         try:
-            builder.media_write_timeout(60.0)  # отправка фото (chart5m и т.д.)
+            builder.media_write_timeout(300.0)  # отправка фото (chart5m и т.д.) — 5 мин при медленной сети
         except AttributeError:
             pass  # старые версии PTB без media_write_timeout
         self.application = builder.build()
@@ -152,6 +152,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("buy", self._handle_buy))
         self.application.add_handler(CommandHandler("sell", self._handle_sell))
         self.application.add_handler(CommandHandler("history", self._handle_history))
+        self.application.add_handler(CommandHandler("closed", self._handle_closed))
         self.application.add_handler(CommandHandler("recommend", self._handle_recommend))
         self.application.add_handler(CommandHandler("recommend5m", self._handle_recommend5m))
         self.application.add_handler(CommandHandler("game5m", self._handle_game5m))
@@ -232,6 +233,7 @@ class LSETelegramBot:
 /buy <ticker> <кол-во> — купить
 /sell <ticker> [кол-во] — продать (без кол-ва — вся позиция)
 /history [тикер] [N] — последние сделки (с тикером — фильтр по тикеру)
+/closed [N] — таблица закрытых позиций (PnL, даты MSK)
 /recommend [ticker] — рекомендация: когда открыть позицию и параметры управления
 
 /help — справка
@@ -289,6 +291,7 @@ class LSETelegramBot:
 `/buy <ticker> <кол-во>` — купить по последней цене из БД
 `/sell <ticker>` — закрыть всю позицию; `/sell <ticker> <кол-во>` — частичная продажа
 `/history [тикер] [N]` — последние сделки (по умолч. 15); с тикером — только по нему. В ответе — стратегия [GAME_5M / Portfolio / Manual]
+`/closed [N]` — таблица закрытых позиций: Instrument, Open/Close, Profit (%), Profit ($), Units, даты MSK (по умолч. 25)
 `/recommend <ticker>` — рекомендация: когда открыть позицию, стоп-лосс, размер позиции
 `/recommend5m [ticker] [days]` — рекомендация по 5m и 5д статистике (интрадей, по умолч. SNDK 5д)
 `/game5m [ticker]` — мониторинг игры 5m: открытая позиция, последние сделки, win rate и PnL (по умолч. SNDK)
@@ -830,11 +833,11 @@ class LSETelegramBot:
                     if trades_buy_ts:
                         ax.scatter(trades_buy_ts, trades_buy_p, color='#2e7d32', marker='^', s=80, zorder=5, label='Вход (BUY)', edgecolors='darkgreen', linewidths=1)
                     if trades_take_ts:
-                        ax.scatter(trades_take_ts, trades_take_p, color='#1b5e20', marker='v', s=80, zorder=5, label='Тейк', edgecolors='darkgreen', linewidths=1)
+                        ax.scatter(trades_take_ts, trades_take_p, color='#0277bd', marker='v', s=80, zorder=5, label='Тейк (прибыль)', edgecolors='#01579b', linewidths=1)
                     if trades_stop_ts:
-                        ax.scatter(trades_stop_ts, trades_stop_p, color='#c62828', marker='v', s=80, zorder=5, label='Стоп', edgecolors='darkred', linewidths=1)
+                        ax.scatter(trades_stop_ts, trades_stop_p, color='#c62828', marker='v', s=80, zorder=5, label='Стоп (убыток)', edgecolors='#b71c1c', linewidths=1)
                     if trades_other_ts:
-                        ax.scatter(trades_other_ts, trades_other_p, color='#757575', marker='v', s=60, zorder=4, label='Выход', edgecolors='gray', linewidths=0.8)
+                        ax.scatter(trades_other_ts, trades_other_p, color='#757575', marker='v', s=60, zorder=4, label='Выход (другое)', edgecolors='#616161', linewidths=0.8)
 
                 has_rsi = 'rsi' in df.columns and df['rsi'].notna().any()
                 if n_points <= 2 or not has_rsi:
@@ -879,7 +882,16 @@ class LSETelegramBot:
                 n_trades = len(trades_buy_ts) + len(trades_take_ts) + len(trades_stop_ts) + len(trades_other_ts)
                 caption = f"📈 {ticker} - {days} дней ({len(df)} точек)"
                 if n_trades > 0:
-                    caption += f"\n📌 Сделки на графике: вход (▲), тейк/стоп/выход (▼) — {n_trades} шт. (те же, что в /history)"
+                    parts = []
+                    if trades_buy_ts:
+                        parts.append("▲ вход (зел.)")
+                    if trades_take_ts:
+                        parts.append("▼ тейк (голуб.)")
+                    if trades_stop_ts:
+                        parts.append("▼ стоп (красн.)")
+                    if trades_other_ts:
+                        parts.append("▼ выход (син.)")
+                    caption += f"\n📌 Сделки: {', '.join(parts)} — {n_trades} шт."
                 if has_ohlc:
                     caption += "\n\nℹ️ Свечи: open, high, low, close (дневные)"
                 elif days == 1:
@@ -948,18 +960,26 @@ class LSETelegramBot:
                 break
             except (ValueError, IndexError):
                 continue
-        await update.message.reply_text(f"📥 Загрузка 5m данных для {ticker} за {days} дн....")
+        await update.message.reply_text(
+            f"📥 Загрузка 5m для {ticker}: последние {days} амер. сессий (9:30–16:00 ET)…"
+        )
         loop = asyncio.get_event_loop()
         try:
-            df = await loop.run_in_executor(None, self._fetch_5m_data_sync, ticker, days)
+            from services.recommend_5m import fetch_5m_ohlc, filter_to_last_n_us_sessions
+            # Загружаем с запасом по календарным дням, потом оставляем только полные сессии
+            df = await loop.run_in_executor(
+                None, lambda: fetch_5m_ohlc(ticker, days=min(days + 2, 7))
+            )
+            if df is not None and not df.empty:
+                df = filter_to_last_n_us_sessions(df, n=days)
         except Exception as e:
             logger.exception("Ошибка загрузки 5m")
             await update.message.reply_text(f"❌ Ошибка загрузки: {e}")
             return
         if df is None or df.empty:
             await update.message.reply_text(
-                f"❌ Нет 5m данных для {ticker}. Yahoo даёт 5m за 1–7 дней. "
-                "Попробуйте /chart5m SNDK 1 или 7. В выходные биржа закрыта."
+                f"❌ Нет 5m данных для {ticker} за последние {days} сессий (9:30–16:00 ET). "
+                "Попробуйте /chart5m SNDK 1 или 3. В выходные биржа закрыта."
             )
             return
         # Открытая позиция для отметки на графике (игра 5m или портфель)
@@ -997,117 +1017,66 @@ class LSETelegramBot:
             import matplotlib.dates as mdates
             from io import BytesIO
             df["datetime"] = pd.to_datetime(df["datetime"])
-            # Шкала в времени американской биржи (Eastern): для отображения — naive Eastern
+            # Шкала в времени американской биржи (Eastern): маркеры сделок (ET) совпадают с свечами
             if hasattr(df["datetime"].dtype, "tz") and df["datetime"].dtype.tz is not None:
                 dt_plot = df["datetime"].dt.tz_convert("America/New_York").dt.tz_localize(None)
             else:
-                dt_plot = df["datetime"]
+                d = df["datetime"]
+                try:
+                    d = d.dt.tz_localize("America/New_York", ambiguous=True)
+                except Exception:
+                    d = d.dt.tz_localize("UTC", ambiguous=True).dt.tz_convert("America/New_York")
+                dt_plot = d.dt.tz_localize(None)
+            df["_dt_plot"] = dt_plot
+            # Ключ сессии всегда из dt_plot (ET), чтобы не зависеть от типа _session из фильтра
+            df["_session_key"] = dt_plot.dt.strftime("%Y-%m-%d")
             dt_min = dt_plot.min()
             dt_max = dt_plot.max()
-            last_close = float(df["Close"].iloc[-1])
-            extend_hours = 2
-            dt_max_ext = dt_max + pd.Timedelta(hours=extend_hours)
-            fig, ax = plt.subplots(1, 1, figsize=(11, 5), facecolor="white")
-            ax.set_facecolor("#ffffff")
-            ax.set_xlim(dt_min, dt_max_ext)
-            ax.plot(dt_plot, df["Close"], color="#1565c0", linewidth=1.2, label="Close")
-            if "Open" in df.columns:
-                ax.fill_between(dt_plot, df["Low"], df["High"], alpha=0.15, color="#1565c0")
-            if entry_price is not None:
-                ax.axhline(
-                    entry_price,
-                    color="#2e7d32",
-                    linestyle="--",
-                    linewidth=1.2,
-                    alpha=0.9,
-                    label=f"Вход @ {entry_price:.2f}",
+            # Сессии по убыванию даты (сверху — самая новая). Для каждой сессии — своё окно 09:30–16:00 ET по дате.
+            MIN_BARS_PER_SESSION = 3
+            unique_keys = sorted(df["_session_key"].unique(), reverse=True)
+            session_dates = [sk for sk in unique_keys if (df["_session_key"] == sk).sum() >= MIN_BARS_PER_SESSION]
+            if not session_dates:
+                session_dates = unique_keys
+            if not session_dates:
+                await update.message.reply_text(
+                    f"❌ Нет данных по сессиям 9:30–16:00 ET для {ticker}. Попробуйте позже или другой тикер."
                 )
-            # Прогноз на графике: хай сессии, оценка подъёма по кривизне, тейк при открытой позиции
-            if d5_chart:
-                price_cur = d5_chart.get("price")
-                session_high = d5_chart.get("session_high")
-                est_bounce = d5_chart.get("estimated_bounce_pct")
-                if session_high is not None and session_high > 0:
-                    ax.axhline(
-                        session_high,
-                        color="#f57c00",
-                        linestyle=":",
-                        linewidth=1.0,
-                        alpha=0.85,
-                        label=f"Хай сессии {session_high:.2f}",
-                    )
-                if price_cur is not None and price_cur > 0 and est_bounce is not None and est_bounce > 0:
-                    forecast_price = price_cur * (1 + est_bounce / 100.0)
-                    ax.axhline(
-                        forecast_price,
-                        color="#00897b",
-                        linestyle="-.",
-                        linewidth=1.0,
-                        alpha=0.85,
-                        label=f"Прогноз подъёма ~{forecast_price:.2f}",
-                    )
-                if entry_price is not None and entry_price > 0:
-                    try:
-                        from services.game_5m import _effective_take_profit_pct
-                        mom = d5_chart.get("momentum_2h_pct")
-                        take_pct = _effective_take_profit_pct(mom)
-                        take_level = entry_price * (1 + take_pct / 100.0)
-                        ax.axhline(
-                            take_level,
-                            color="#2e7d32",
-                            linestyle=":",
-                            linewidth=1.0,
-                            alpha=0.7,
-                            label=f"Тейк +{take_pct:.1f}%",
-                        )
-                    except Exception:
-                        pass
-            # Зона прогноза: аппроксимация хвоста (linear/quadratic) и пролонгация при тренде ≥5 свечей
-            ax.axvline(dt_max, color="#c62828", linestyle="-", linewidth=0.9, alpha=0.8)
-            ax.axvspan(dt_max, dt_max_ext, alpha=0.08, color="#c62828", zorder=0)
-            min_bars_trend = 5
-            prolong_bars = 12  # баров 5m в зону прогноза (~1 ч)
-            prolongation_method = "ema"  # ema — для волатильных (рекомендация Gemini); linear, quadratic — альтернативы
-            forecast_defined = False
-            if len(df) >= min_bars_trend and last_close > 0:
-                from services.chart_prolongation import fit_and_prolong
-                closes_tail = df["Close"].astype(float).iloc[-min_bars_trend:].values
-                res = fit_and_prolong(closes_tail, method=prolongation_method, prolong_bars=prolong_bars)
-                slope_per_bar = res["slope_per_bar"]
-                min_slope_pct = 0.01
-                min_slope = last_close * (min_slope_pct / 100.0)
-                if slope_per_bar >= min_slope or slope_per_bar <= -min_slope:
-                    # Якорь: первая точка кривой = last_close (без скачка)
-                    curve_prices = res["curve_prices"]
-                    anchor_shift = last_close - (curve_prices[0] if curve_prices else last_close)
-                    curve_prices = [p + anchor_shift for p in curve_prices]
-                    end_price = curve_prices[-1]
-                    bar_offsets = res["curve_bar_offsets"]
-                    prolong_dts = [dt_max + pd.Timedelta(minutes=5 * k) for k in bar_offsets]
-                    label = "Прогноз ↑" if slope_per_bar >= min_slope else "Прогноз ↓"
-                    ax.plot(prolong_dts, curve_prices, color="#c62828", linewidth=1.2, linestyle="-", alpha=0.9, label=label)
-                    forecast_defined = True
-            if not forecast_defined:
-                ax.plot([dt_max, dt_max_ext], [last_close, last_close], color="#c62828", linewidth=0.8, linestyle=":", alpha=0.4, label="Текущая цена")
-                ax.text(0.985, 0.5, "…\nпрогноз\nне определён", transform=ax.transAxes, fontsize=9, color="#c62828", ha="right", va="center", style="italic")
-            # Сделки игры 5m за период графика (те же, что в /history)
+                return
+            # Для каждой даты — явное окно торговли ET (09:30–16:00), чтобы ось и данные всегда по своей дате
+            def session_window(session_key: str):
+                t = pd.Timestamp(session_key)
+                start = t.replace(hour=9, minute=30, second=0, microsecond=0)
+                end = t.replace(hour=16, minute=0, second=0, microsecond=0)
+                return start, end
+            n_sessions = len(session_dates)
+            if n_sessions == 1:
+                fig, axes = plt.subplots(1, 1, figsize=(11, 5), facecolor="white")
+                axes = [axes]
+            else:
+                # Без sharex: у каждой сессии свой диапазон по X, иначе верхний график «подхватывает» пределы нижнего и данные не видны
+                fig, axes = plt.subplots(
+                    n_sessions, 1, figsize=(10, 3.2 * n_sessions), sharex=False, facecolor="white"
+                )
+            # Сделки за период (один раз), потом по сессиям отфильтруем
             buy_ts, buy_p = [], []
             take_ts, take_p = [], []
             stop_ts, stop_p = [], []
             other_ts, other_p = [], []
             try:
-                from services.game_5m import get_trades_for_chart
-                # Берём сделки за весь календарный день (чтобы не терять из-за TZ: список в /history = те же точки на графике)
-                dt_min_day = pd.Timestamp(dt_min).replace(hour=0, minute=0, second=0, microsecond=0)
-                dt_max_end = pd.Timestamp(dt_max) + pd.Timedelta(days=1)
-                trades = get_trades_for_chart(ticker, dt_min_day.to_pydatetime(), dt_max_end.to_pydatetime())
+                from services.game_5m import get_trades_for_chart, trade_ts_to_et, TRADE_HISTORY_TZ
+                # Широкий диапазон: в БД ts в Москве, на графике ET — берём с запасом, фильтр по окну сессии в Python
+                dt_query_start = (pd.Timestamp(dt_min) - pd.Timedelta(days=5)).to_pydatetime()
+                dt_query_end = (pd.Timestamp(dt_max) + pd.Timedelta(days=2)).to_pydatetime()
+                trades = get_trades_for_chart(ticker, dt_query_start, dt_query_end)
                 for t in trades:
                     ts = t["ts"]
                     try:
-                        if ts is not None and hasattr(ts, "tzinfo") and getattr(ts, "tzinfo", None) is not None:
-                            ts_pd = pd.Timestamp(ts)
-                            if ts_pd.tzinfo is not None:
-                                ts = ts_pd.tz_convert("America/New_York").tz_localize(None).to_pydatetime()
+                        stored_tz = t.get("ts_timezone") or TRADE_HISTORY_TZ
+                        ts_et = trade_ts_to_et(ts, source_tz=stored_tz)
+                        if ts_et is not None:
+                            dt = ts_et.to_pydatetime() if hasattr(ts_et, "to_pydatetime") else ts_et
+                            ts = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
                     except Exception:
                         pass
                     p = float(t["price"])
@@ -1125,50 +1094,162 @@ class LSETelegramBot:
                         else:
                             other_ts.append(ts)
                             other_p.append(p)
-                if buy_ts:
-                    ax.scatter(buy_ts, buy_p, color="#2e7d32", marker="^", s=70, zorder=5, label="Вход (BUY)", edgecolors="darkgreen", linewidths=1)
-                if take_ts:
-                    ax.scatter(take_ts, take_p, color="#1b5e20", marker="v", s=70, zorder=5, label="Тейк (хорошо)", edgecolors="darkgreen", linewidths=1)
-                if stop_ts:
-                    ax.scatter(stop_ts, stop_p, color="#c62828", marker="v", s=70, zorder=5, label="Стоп (плохо)", edgecolors="darkred", linewidths=1)
-                if other_ts:
-                    ax.scatter(other_ts, other_p, color="#757575", marker="v", s=50, zorder=4, label="Выход (SELL/время)", edgecolors="gray", linewidths=0.8)
-                # Расширяем ось X, чтобы сделки после 16:00 (или в другом TZ) были видны
-                all_ts = buy_ts + take_ts + stop_ts + other_ts
-                if all_ts:
-                    x_max_cur = ax.get_xlim()[1]
-                    x_max_trades = max(mdates.date2num(t) for t in all_ts if t is not None)
-                    if x_max_trades > x_max_cur:
-                        ax.set_xlim(right=x_max_trades + 0.002)
             except Exception:
                 pass
-            ax.set_ylabel("Цена", fontsize=10)
-            ax.set_xlabel("Дата, время", fontsize=10)
-            ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M"))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=12))
-            plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
-            ax.legend(loc="upper left", fontsize=8)
-            ax.grid(True, linestyle="--", alpha=0.4)
-            range_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}"
-            ax.set_title(f"{ticker} — 5m ({len(df)} точек) · время US Eastern", fontsize=11, fontweight="bold")
+            for idx, sd in enumerate(session_dates):
+                ax = axes[idx]
+                ax.set_facecolor("#ffffff")
+                # Окно торговли для этой даты (09:30–16:00 ET) — только сессия, без зоны после 16:00
+                window_start, window_end = session_window(sd)
+                df_i = df[(df["_dt_plot"] >= window_start) & (df["_dt_plot"] <= window_end)].copy()
+                ax.set_xlim(window_start, window_end)
+                ax.autoscale(enable=False, axis="x")
+                if df_i.empty:
+                    ax.text(0.5, 0.5, f"Нет данных за {sd}", ha="center", va="center", transform=ax.transAxes)
+                    try:
+                        sd_str = pd.Timestamp(sd).strftime("%d.%m.%Y")
+                    except Exception:
+                        sd_str = str(sd)
+                    ax.set_title(f"{ticker} — 5m · {sd_str} (9:30–16:00 ET)", fontsize=10, fontweight="bold")
+                    ax.set_ylabel("Цена", fontsize=10)
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M"))
+                    ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=10))
+                    plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
+                    ax.grid(True, linestyle="--", alpha=0.4)
+                    continue
+                dt_i = df_i["_dt_plot"]
+                dt_i_min = window_start
+                dt_i_max = window_end
+                ax.plot(dt_i, df_i["Close"], color="#1565c0", linewidth=1.2, label="Close")
+                if "Open" in df_i.columns:
+                    ax.fill_between(dt_i, df_i["Low"], df_i["High"], alpha=0.15, color="#1565c0")
+                if entry_price is not None:
+                    ax.axhline(
+                        entry_price,
+                        color="#2e7d32",
+                        linestyle="--",
+                        linewidth=1.2,
+                        alpha=0.9,
+                        label=f"Вход @ {entry_price:.2f}",
+                    )
+                is_last_session = idx == 0
+                if is_last_session and d5_chart:
+                    price_cur = d5_chart.get("price")
+                    session_high = d5_chart.get("session_high")
+                    est_bounce = d5_chart.get("estimated_bounce_pct")
+                    if session_high is not None and session_high > 0:
+                        ax.axhline(
+                            session_high,
+                            color="#f57c00",
+                            linestyle=":",
+                            linewidth=1.0,
+                            alpha=0.85,
+                            label=f"Хай сессии {session_high:.2f}",
+                        )
+                    if price_cur is not None and price_cur > 0 and est_bounce is not None and est_bounce > 0:
+                        forecast_price = price_cur * (1 + est_bounce / 100.0)
+                        ax.axhline(
+                            forecast_price,
+                            color="#00897b",
+                            linestyle="-.",
+                            linewidth=1.0,
+                            alpha=0.85,
+                            label=f"Прогноз подъёма ~{forecast_price:.2f}",
+                        )
+                    if entry_price is not None and entry_price > 0:
+                        try:
+                            from services.game_5m import _effective_take_profit_pct
+                            mom = d5_chart.get("momentum_2h_pct")
+                            take_pct = _effective_take_profit_pct(mom)
+                            take_level = entry_price * (1 + take_pct / 100.0)
+                            ax.axhline(
+                                take_level,
+                                color="#2e7d32",
+                                linestyle=":",
+                                linewidth=1.0,
+                                alpha=0.7,
+                                label=f"Тейк +{take_pct:.1f}%",
+                            )
+                        except Exception:
+                            pass
+                # Маркеры сделок: показываем все сделки, попадающие в окно сессии [dt_i_min, dt_i_max]
+                def _in_range(ts, lo, hi):
+                    try:
+                        t = pd.Timestamp(ts)
+                        if t.tzinfo is not None:
+                            t = t.tz_convert("America/New_York").tz_localize(None)
+                        return lo <= t <= hi
+                    except Exception:
+                        return False
+                buy_i = [(t, p) for t, p in zip(buy_ts, buy_p) if _in_range(t, dt_i_min, dt_i_max)]
+                take_i = [(t, p) for t, p in zip(take_ts, take_p) if _in_range(t, dt_i_min, dt_i_max)]
+                stop_i = [(t, p) for t, p in zip(stop_ts, stop_p) if _in_range(t, dt_i_min, dt_i_max)]
+                other_i = [(t, p) for t, p in zip(other_ts, other_p) if _in_range(t, dt_i_min, dt_i_max)]
+                if buy_i:
+                    ax.scatter([x[0] for x in buy_i], [x[1] for x in buy_i], color="#2e7d32", marker="^", s=70, zorder=5, label="Вход (BUY)", edgecolors="darkgreen", linewidths=1)
+                if take_i:
+                    ax.scatter([x[0] for x in take_i], [x[1] for x in take_i], color="#0277bd", marker="v", s=70, zorder=5, label="Тейк (прибыль)", edgecolors="#01579b", linewidths=1)
+                if stop_i:
+                    ax.scatter([x[0] for x in stop_i], [x[1] for x in stop_i], color="#c62828", marker="v", s=70, zorder=5, label="Стоп (убыток)", edgecolors="#b71c1c", linewidths=1)
+                if other_i:
+                    ax.scatter([x[0] for x in other_i], [x[1] for x in other_i], color="#757575", marker="v", s=60, zorder=4, label="Выход (другое)", edgecolors="#616161", linewidths=0.8)
+                ax.set_ylabel("Цена", fontsize=10)
+                ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M"))
+                ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=10))
+                plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
+                # Легенда справа от графика, чтобы не закрывать цену
+                ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=7, framealpha=0.95)
+                ax.grid(True, linestyle="--", alpha=0.4)
+                try:
+                    sd_str = pd.Timestamp(sd).strftime("%d.%m.%Y")
+                except Exception:
+                    sd_str = str(sd)
+                ax.set_title(f"{ticker} — 5m · {sd_str} (9:30–16:00 ET)", fontsize=10, fontweight="bold")
+            axes[-1].set_xlabel("Дата, время", fontsize=10)
             plt.tight_layout()
             buf = BytesIO()
-            plt.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="white")
+            plt.savefig(buf, format="png", dpi=72, bbox_inches="tight", facecolor="white")
             buf.seek(0)
             plt.close()
             n_markers = len(buy_ts) + len(take_ts) + len(stop_ts) + len(other_ts)
-            caption = f"📈 {ticker} — 5 мин, {len(df)} свечей. Данные за: {range_str}"
+            range_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}"
+            if n_sessions > 1:
+                caption = f"📈 {ticker} — 5 мин, {n_sessions} сессий (9:30–16:00 ET), {len(df)} свечей."
+            else:
+                caption = f"📈 {ticker} — 5 мин, {len(df)} свечей. {range_str}"
             if n_markers > 0:
-                caption += f"\n📌 Сделки на графике: ▲ вход, ▼ тейк/стоп/выход ({n_markers} шт.) — те же, что в /history. Время — ET."
+                parts = []
+                if buy_ts:
+                    parts.append("▲ вход (зел.)")
+                if take_ts:
+                    parts.append("▼ тейк (голуб.)")
+                if stop_ts:
+                    parts.append("▼ стоп (красн.)")
+                if other_ts:
+                    parts.append("▼ выход (син.)")
+                caption += f"\n📌 Сделки: {', '.join(parts)} — {n_markers} шт. Время ET."
             if entry_price is not None:
                 caption += f"\n📌 Позиция открыта @ ${entry_price:.2f}"
-            await update.message.reply_photo(
-                photo=buf,
-                caption=caption,
-            )
+            try:
+                await update.message.reply_photo(
+                    photo=buf,
+                    caption=caption,
+                )
+            except Exception as send_err:
+                if "timeout" in str(send_err).lower() or "timed" in str(send_err).lower():
+                    await update.message.reply_text(
+                        "⏱ График построен, но отправка не успела (таймаут). "
+                        "Попробуйте /chart5m SNDK 1 или повторите позже."
+                    )
+                else:
+                    raise
         except Exception as e:
             logger.exception("Ошибка графика 5m")
-            await update.message.reply_text(f"❌ Ошибка графика: {e}")
+            err_msg = str(e)[:400] if str(e) else repr(e)[:400]
+            try:
+                await update.message.reply_text(f"❌ Ошибка графика 5m: {err_msg}")
+            except Exception:
+                pass
 
     async def _handle_table5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Таблица последних 5-минутных свечей."""
@@ -1716,10 +1797,19 @@ class LSETelegramBot:
                 msg = "История сделок пуста." if not ticker else f"По тикеру {ticker} сделок нет."
                 await update.message.reply_text(msg)
                 return
+            from services.game_5m import trade_ts_to_et
             title = f"📜 **Последние сделки**" + (f" ({ticker})" if ticker else "") + ":"
             lines = [title]
             for r in rows:
-                ts = r["ts"].strftime("%Y-%m-%d %H:%M") if hasattr(r["ts"], "strftime") else str(r["ts"])
+                ts_raw = r["ts"]
+                stored_tz = r.get("ts_timezone")  # в БД храним таймзону метки (Europe/Moscow и т.д.)
+                ts_et = trade_ts_to_et(ts_raw, source_tz=stored_tz)
+                if ts_et is not None and hasattr(ts_et, "strftime"):
+                    ts = ts_et.strftime("%Y-%m-%d %H:%M") + " ET"
+                elif hasattr(ts_raw, "strftime"):
+                    ts = ts_raw.strftime("%Y-%m-%d %H:%M")
+                else:
+                    ts = str(ts_raw)
                 side = "🟢" if r["side"] == "BUY" else "🔴"
                 strat = r.get("strategy_name", "—")
                 lines.append(f"{side} {ts} — {r['side']} {r['ticker']} x{r['quantity']:.0f} @ ${r['price']:.2f} ({r['signal_type']}) [{strat}]")
@@ -1729,6 +1819,92 @@ class LSETelegramBot:
             await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
         except Exception as e:
             logger.error(f"Ошибка history: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+    async def _handle_closed(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Таблица закрытых позиций: Instrument, Direction, Open, Close, Profit(pips), Profit, Units, Open Date (MSK), Close Date (MSK)."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        limit = 25
+        if context.args and len(context.args) >= 1:
+            try:
+                limit = min(int(context.args[0].strip()), 50)
+            except ValueError:
+                pass
+        try:
+            import pandas as pd
+            from report_generator import get_engine, load_trade_history, compute_closed_trade_pnls
+
+            engine = get_engine()
+            trades = load_trade_history(engine)
+            closed = compute_closed_trade_pnls(trades)
+            if not closed:
+                await update.message.reply_text("📋 Закрытых позиций пока нет.")
+                return
+            # сортируем по дате закрытия (новые сверху), берём последние limit
+            closed = sorted(closed, key=lambda t: t.ts, reverse=True)[:limit]
+
+            def _fmt_ts_msk(ts) -> str:
+                if ts is None:
+                    return "—"
+                try:
+                    t = pd.Timestamp(ts)
+                    if t.tzinfo is not None:
+                        t = t.tz_convert("Europe/Moscow")
+                    # наивное время считаем уже MSK (как в БД)
+                    return t.strftime("%d.%m.%Y %H:%M")
+                except Exception:
+                    return str(ts)[:16] if ts else "—"
+
+            # Колонки с выравниванием и разделителями для читаемости в Telegram (моноширинный блок)
+            sep = "  "
+            w_inst = 10
+            w_dir = 6
+            w_open = 8
+            w_close = 8
+            w_pips = 8
+            w_profit = 10
+            w_units = 6
+            w_date = 16
+
+            def _cell(s: str, w: int) -> str:
+                return str(s)[:w].ljust(w)
+
+            header = (
+                _cell("Instrument", w_inst) + sep + _cell("Dir", w_dir) + sep
+                + _cell("Open", w_open) + sep + _cell("Close", w_close) + sep
+                + _cell("Pips", w_pips) + sep + _cell("Profit", w_profit) + sep
+                + _cell("Units", w_units) + sep + _cell("Open (MSK)", w_date) + sep + "Close (MSK)"
+            )
+            rows = [header]
+            for t in closed:
+                direction = "Long" if t.side == "SELL" else "Short"
+                pts = t.exit_price - t.entry_price
+                if "=X" in t.ticker or "USD" in t.ticker or "EUR" in t.ticker:
+                    try:
+                        pips_val = round(pts * 10000) if abs(pts) < 1 else round(pts, 2)
+                    except Exception:
+                        pips_val = round(pts, 2)
+                else:
+                    pips_val = round(pts, 2)
+                row = (
+                    _cell(str(t.ticker), w_inst) + sep + _cell(direction, w_dir) + sep
+                    + _cell(f"{t.entry_price:.2f}", w_open) + sep + _cell(f"{t.exit_price:.2f}", w_close) + sep
+                    + _cell(str(pips_val), w_pips) + sep + _cell(f"{t.net_pnl:+.2f}", w_profit) + sep
+                    + _cell(str(int(t.quantity)), w_units) + sep
+                    + _cell(_fmt_ts_msk(t.entry_ts), w_date) + sep + _fmt_ts_msk(t.ts)
+                )
+                rows.append(row)
+            table = "\n".join(rows)
+            caption = f"📋 **Positions** (последние {len(closed)})\nДаты в MSK."
+            await update.message.reply_text(
+                caption + "\n\n```\n" + table + "\n```",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.error(f"Ошибка closed: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
     async def _handle_recommend(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1844,19 +2020,23 @@ class LSETelegramBot:
             lines.append("_Закрытых сделок пока нет._")
         else:
             pnls = [r["pnl_pct"] for r in results if r.get("pnl_pct") is not None]
+            pnls_usd = [r["pnl_usd"] for r in results if r.get("pnl_usd") is not None]
             wins = sum(1 for p in pnls if p > 0)
             total = len(pnls)
             win_rate = (100.0 * wins / total) if total else 0
             avg_pnl = (sum(pnls) / total) if total else 0
+            sum_usd = sum(pnls_usd) if pnls_usd else 0
             lines.append(f"**Закрытые сделки (последние {len(results)}):**")
-            lines.append(f"Win rate: {wins}/{total} ({win_rate:.1f}%) · Средний PnL: {avg_pnl:+.2f}%")
+            lines.append(f"Win rate: {wins}/{total} ({win_rate:.1f}%) · Средний PnL: {avg_pnl:+.2f}% · Сумма: ${sum_usd:+.2f}")
             lines.append("")
             for r in results[:8]:
                 exit_ts = r.get("exit_ts") or "—"
                 exit_str = str(exit_ts)[:16] if exit_ts != "—" else "—"
                 pct = r.get("pnl_pct")
                 pct_str = f"{pct:+.2f}%" if pct is not None else "—"
-                lines.append(f"• {exit_str} {r.get('exit_signal_type', '—')} PnL {pct_str}")
+                usd = r.get("pnl_usd")
+                usd_str = f" ${usd:+.2f}" if usd is not None else ""
+                lines.append(f"• {exit_str} {r.get('exit_signal_type', '—')} PnL {pct_str}{usd_str}")
             if len(results) > 8:
                 lines.append(f"_… и ещё {len(results) - 8} сделок_")
         text = "\n".join(lines)

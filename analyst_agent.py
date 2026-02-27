@@ -444,13 +444,27 @@ class AnalystAgent:
                     prev_close = float(df.iloc[1]['close'])
                     open_price = prev_close
                 
+                # Доходность предыдущей сессии (для геополитического отскока: падение ≥2%)
+                prev_day_return_pct = None
+                if len(df) >= 3:
+                    prev_close = float(df.iloc[1]['close'])
+                    prev_prev_close = float(df.iloc[2]['close'])
+                    if prev_prev_close and prev_prev_close > 0:
+                        prev_day_return_pct = (prev_close - prev_prev_close) / prev_prev_close * 100
+                # Текущая сессия: доходность от открытия до текущего close (если есть open_price)
+                current_day_return_pct = None
+                if open_price and open_price > 0 and latest is not None:
+                    current_day_return_pct = (float(latest['close']) - open_price) / open_price * 100
+
                 technical_data_for_strategy = {
                     "close": float(latest['close']) if latest is not None else None,
                     "open_price": open_price,
                     "sma_5": float(latest['sma_5']) if latest is not None else None,
                     "volatility_5": float(latest['volatility_5']) if latest is not None else None,
                     "avg_volatility_20": avg_volatility_20,
-                    "technical_signal": technical_signal
+                    "technical_signal": technical_signal,
+                    "prev_day_return_pct": prev_day_return_pct,
+                    "current_day_return_pct": current_day_return_pct,
                 }
                 
                 news_list = news_df.to_dict('records') if not news_df.empty else []

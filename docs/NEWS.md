@@ -50,6 +50,7 @@
 - **MANUAL** — записи, добавленные через `VectorKB.add_event()` без указания `source` (по умолчанию `'MANUAL'`). Не «ручной импорт новостей», а события из кода/бота.
 - **Почему нет строки «NewsAPI» в списке source?** В БД сохраняется название издания из API (Bloomberg, Reuters, The Globe and Mail и т.д.) — это и есть новости из NewsAPI.
 - **Чего не хватает:** стабильного экономического календаря (даты CPI, NFP и т.д.) и числовых макро-рядов по регионам. Для базовой работы (новости ЦБ, макро-новости, earnings) текущих источников достаточно.
+- **Мусор в новостях (Alpha Vantage Earnings):** записи вида «Earnings report for TICKER» почти не несут пользы. По умолчанию они **больше не сохраняются** (в cron Alpha Vantage не пишет Earnings Calendar, если не задано `EARNINGS_CALENDAR_SAVE=true` в config.env). Уже попавшие в БД удаляются скриптом `scripts/cleanup_calendar_noise.py --execute`. Рекомендуется запускать его по cron раз в 1–7 дней (например `0 4 * * *`).
 
 ---
 
@@ -62,7 +63,7 @@
 | `scripts/sync_vector_kb_cron.py` | Backfill `embedding` для записей с `embedding IS NULL`. |
 | `scripts/add_sentiment_to_news_cron.py` | LLM: заполнение `sentiment_score` и `insight` для новостей без sentiment. |
 | `scripts/analyze_event_outcomes_cron.py` | Заполнение `outcome_json` (изменение цены после события). |
-| `scripts/cleanup_calendar_noise.py` | Удаление мусорных записей календаря (только число без текста). |
+| `scripts/cleanup_calendar_noise.py` | Удаление мусора: ECONOMIC_INDICATOR «только число»; **Alpha Vantage Earnings Calendar** вида «Earnings report for TICKER» (без пользы). Запуск: `python scripts/cleanup_calendar_noise.py` (dry-run), `--execute` для удаления. Рекомендуется в cron раз в 1–7 дней. |
 | `scripts/cleanup_manual_duplicates.py` | Удаление записей с `source='MANUAL'`, дублирующих другую запись по (ts, ticker, content). `--dry-run` затем `--execute`. |
 
 Модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`, `services/investing_news_fetcher.py` (лента Investing.com News, тикеры из TICKERS_FAST и встроенные ключевые слова), `services/llm_news_fetcher.py` (запрос к LLM за новостями по тикеру).

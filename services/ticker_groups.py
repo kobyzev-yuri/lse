@@ -15,15 +15,25 @@ from typing import List
 from config_loader import get_config_value
 
 # Дефолты: распределение по группам (ваши зарегистрированные тикеры)
-DEFAULT_TICKERS_FAST = "SNDK,LITE"
+DEFAULT_TICKERS_FAST = "SNDK,MU,LITE"
 DEFAULT_TICKERS_MEDIUM = "ALAB,MU,TER,AMD"
 DEFAULT_TICKERS_LONG = "MSFT,GBPUSD=X,GC=F,^VIX"
 
 
 def get_tickers_fast() -> List[str]:
-    """Тикеры для быстрой игры (5m, интрадей)."""
+    """Тикеры для быстрой игры (5m, интрадей). Используются для /chart5m, /recommend5m, списков."""
     raw = get_config_value("TICKERS_FAST", DEFAULT_TICKERS_FAST) or ""
     return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def get_tickers_game_5m() -> List[str]:
+    """Тикеры, по которым крон запускает игру 5m (вход/выход, GAME_5M).
+    Если задан GAME_5M_TICKERS в config.env — только они; иначе TICKERS_FAST.
+    Позволяет исключить тикер из игры (например LITE), оставив его в TICKERS_FAST для графиков."""
+    raw = get_config_value("GAME_5M_TICKERS", "").strip()
+    if raw:
+        return [t.strip() for t in raw.split(",") if t.strip()]
+    return get_tickers_fast()
 
 
 def get_tickers_medium() -> List[str]:
@@ -50,6 +60,15 @@ def get_all_ticker_groups() -> List[str]:
             seen.add(t)
             result.append(t)
     return result
+
+
+def get_tracked_tickers_for_kb() -> List[str]:
+    """Тикеры, по которым храним новости/события в knowledge_base. Остальные — не сохраняем и можно удалить.
+    Всегда включаются MACRO и US_MACRO (макро-новости). Остальное — из TICKERS_FAST + TICKERS_MEDIUM + TICKERS_LONG."""
+    allowed = {"MACRO", "US_MACRO"}
+    for t in get_all_ticker_groups():
+        allowed.add(t.strip())
+    return list(allowed)
 
 
 def get_tickers_for_portfolio_game() -> List[str]:

@@ -222,13 +222,22 @@ def save_earnings_to_db(earnings: List[Dict]):
     skipped_count = 0
     error_count = 0
     
+    try:
+        from services.ticker_groups import get_tracked_tickers_for_kb
+        tracked = set(get_tracked_tickers_for_kb())
+    except Exception:
+        tracked = None  # если модуль недоступен — сохраняем всех (как раньше)
+
     with engine.begin() as conn:
         for earning in earnings:
             try:
                 if not earning.get('symbol') or not earning.get('reportDate'):
                     skipped_count += 1
                     continue
-                
+                if tracked is not None and earning['symbol'] not in tracked:
+                    skipped_count += 1
+                    continue
+
                 # Формируем контент
                 content = f"Earnings report for {earning['symbol']}"
                 if earning.get('estimate'):
@@ -284,28 +293,33 @@ def save_earnings_to_db(earnings: List[Dict]):
 
 def save_news_to_db(news_items: List[Dict]):
     """
-    Сохраняет новости из Alpha Vantage в БД
-    
-    Args:
-        news_items: Список новостей
+    Сохраняет новости из Alpha Vantage в БД.
+    Сохраняются только тикеры из списка «наших» (TICKERS_FAST/MEDIUM/LONG + MACRO, US_MACRO).
     """
     if not news_items:
         return
-    
+
+    try:
+        from services.ticker_groups import get_tracked_tickers_for_kb
+        tracked = set(get_tracked_tickers_for_kb())
+    except Exception:
+        tracked = None
+
     db_url = get_database_url()
     engine = create_engine(db_url)
-    
+
     saved_count = 0
-    
+
     with engine.begin() as conn:
         for item in news_items:
             try:
-                # Сохраняем для каждого тикера отдельно
                 tickers = item.get('tickers', [])
                 if not tickers:
-                    tickers = ['MACRO']  # Если тикеров нет, сохраняем как макро
-                
+                    tickers = ['MACRO']
+
                 for ticker in tickers:
+                    if tracked is not None and ticker not in tracked:
+                        continue
                     # Проверяем дубликаты по URL
                     if item.get('url'):
                         existing = conn.execute(
@@ -911,11 +925,15 @@ def fetch_and_save_alphavantage_data(tickers: List[str] = None):
     
     logger.info("🚀 Начало получения данных из Alpha Vantage")
     
-    # Получаем earnings calendar
-    logger.info("📅 Получение Earnings Calendar...")
-    earnings = fetch_earnings_calendar(api_key)
-    if earnings:
-        save_earnings_to_db(earnings)
+    # Получаем earnings calendar (по умолчанию не сохраняем — записи «Earnings report for X» дают мало пользы, см. cleanup_calendar_noise.py)
+    save_earnings = get_config_value("EARNINGS_CALENDAR_SAVE", "false").strip().lower() == "true"
+    if save_earnings:
+        logger.info("📅 Получение Earnings Calendar...")
+        earnings = fetch_earnings_calendar(api_key)
+        if earnings:
+            save_earnings_to_db(earnings)
+    else:
+        logger.info("📅 Earnings Calendar пропущен (EARNINGS_CALENDAR_SAVE != true)")
     
     # Получаем новости (если указаны тикеры)
     if tickers:
@@ -1066,12 +1084,16 @@ def fetch_all_alphavantage_data(tickers: List[str] = None, include_economic: boo
     def _rate_limit():
         time.sleep(min_delay)
     
-    # 1. Earnings Calendar
-    _rate_limit()
-    logger.info("📅 Получение Earnings Calendar...")
-    earnings = fetch_earnings_calendar(api_key)
-    if earnings:
-        save_earnings_to_db(earnings)
+    # 1. Earnings Calendar (по умолчанию не сохраняем — шум в knowledge_base)
+    save_earnings = get_config_value("EARNINGS_CALENDAR_SAVE", "false").strip().lower() == "true"
+    if save_earnings:
+        _rate_limit()
+        logger.info("📅 Получение Earnings Calendar...")
+        earnings = fetch_earnings_calendar(api_key)
+        if earnings:
+            save_earnings_to_db(earnings)
+    else:
+        logger.info("📅 Earnings Calendar пропущен (EARNINGS_CALENDAR_SAVE != true)")
     
     # 2. Новости (если указаны тикеры)
     if tickers:

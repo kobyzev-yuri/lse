@@ -26,7 +26,7 @@ sys.path.insert(0, str(project_root))
 import logging
 
 from config_loader import get_config_value
-from services.ticker_groups import get_tickers_fast
+from services.ticker_groups import get_tickers_fast, get_tickers_game_5m
 from services.telegram_signal import get_signal_chat_ids, send_telegram_message
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -255,9 +255,8 @@ def main():
             logger.info("Биржа закрыта (сессия=%s), пропуск поллинга 5m до 9:30 ET", phase)
             sys.exit(0)
         if phase == "AFTER_HOURS":
-            from services.ticker_groups import get_tickers_fast
-            # Тикеры для проверки: из аргумента или config
-            tickers_ah = [t.strip() for t in (sys.argv[1].strip().split(",") if len(sys.argv) > 1 and sys.argv[1].strip() else get_tickers_fast()) if t.strip()]
+            # Тикеры для проверки: из аргумента или config (get_tickers_game_5m импортирован вверху)
+            tickers_ah = [t.strip() for t in (sys.argv[1].strip().split(",") if len(sys.argv) > 1 and sys.argv[1].strip() else get_tickers_game_5m()) if t.strip()]
             tickers_ah = [t for t in tickers_ah if has_5m_data(t)]
             for ticker in tickers_ah:
                 try:
@@ -295,9 +294,9 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1].strip():
         tickers_all = [t.strip() for t in sys.argv[1].strip().split(",") if t.strip()]
     else:
-        tickers_all = get_tickers_fast()
+        tickers_all = get_tickers_game_5m()
     if not tickers_all:
-        logger.warning("Тикеры не заданы (TICKERS_FAST в config.env или аргумент скрипта)")
+        logger.warning("Тикеры не заданы (GAME_5M_TICKERS или TICKERS_FAST в config.env, или аргумент скрипта)")
         sys.exit(0)
 
     # Только тикеры с доступными 5m данными (/chart5m, игра 5m)

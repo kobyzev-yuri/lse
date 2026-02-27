@@ -23,6 +23,9 @@ INITIAL_CASH_USD = 100_000.0
 COMMISSION_RATE = 0.0  # 0% — оплаты брокеру нет
 STOP_LOSS_LEVEL = 0.95   # 5% падение от цены входа
 
+# Таймзона меток ts в trade_history (храним явно, конвертируем в ET при отображении)
+TRADE_HISTORY_TZ = "Europe/Moscow"
+
 
 def _get_slippage_sell_pct() -> float:
     """Проскальзывание при продаже (%), 0 = отключено. Учитывает, что реальная цена исполнения может быть хуже последней котировки."""
@@ -318,11 +321,11 @@ class ExecutionAgent:
                 text("""
                     INSERT INTO trade_history (
                         ts, ticker, side, quantity, price, commission,
-                        signal_type, total_value, sentiment_at_trade, strategy_name
+                        signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone
                     )
                     VALUES (
                         CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission,
-                        :signal, :total_value, :sentiment, :strategy_name
+                        :signal, :total_value, :sentiment, :strategy_name, :ts_tz
                     )
                 """),
                 {
@@ -334,6 +337,7 @@ class ExecutionAgent:
                     "total_value": total_cost,
                     "sentiment": sentiment,
                     "strategy_name": strategy_name,
+                    "ts_tz": TRADE_HISTORY_TZ,
                 },
             )
 
@@ -389,11 +393,11 @@ class ExecutionAgent:
                 text("""
                     INSERT INTO trade_history (
                         ts, ticker, side, quantity, price, commission,
-                        signal_type, total_value, sentiment_at_trade, strategy_name
+                        signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone
                     )
                     VALUES (
                         CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission,
-                        :signal, :total_value, :sentiment, :strategy_name
+                        :signal, :total_value, :sentiment, :strategy_name, :ts_tz
                     )
                 """),
                 {
@@ -405,6 +409,7 @@ class ExecutionAgent:
                     "total_value": total_proceeds,
                     "sentiment": sentiment,
                     "strategy_name": strategy_name,
+                    "ts_tz": TRADE_HISTORY_TZ,
                 },
             )
 
@@ -470,10 +475,10 @@ class ExecutionAgent:
             )
             conn.execute(
                 text("""
-                    INSERT INTO trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
-                    VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, 'MANUAL', :total_value, :sentiment, 'Manual')
+                    INSERT INTO trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone)
+                    VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, 'MANUAL', :total_value, :sentiment, 'Manual', :ts_tz)
                 """),
-                {"ticker": ticker, "qty": float(quantity), "price": price, "commission": commission, "total_value": total_cost, "sentiment": sentiment},
+                {"ticker": ticker, "qty": float(quantity), "price": price, "commission": commission, "total_value": total_cost, "sentiment": sentiment, "ts_tz": TRADE_HISTORY_TZ},
             )
         logger.info("🟢 MANUAL BUY %s x %.0f @ %.2f", ticker, quantity, price)
         return True, f"Куплено {quantity:.0f} {ticker} @ ${price:.2f} (комиссия ${commission:.2f}). Сумма: ${total_cost:.2f}"
@@ -518,10 +523,10 @@ class ExecutionAgent:
                 )
             conn.execute(
                 text("""
-                    INSERT INTO trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
-                    VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, 'MANUAL', :total_value, :sentiment, 'Manual')
+                    INSERT INTO trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone)
+                    VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, 'MANUAL', :total_value, :sentiment, 'Manual', :ts_tz)
                 """),
-                {"ticker": ticker, "qty": qty, "price": price, "commission": commission, "total_value": proceeds, "sentiment": sentiment},
+                {"ticker": ticker, "qty": qty, "price": price, "commission": commission, "total_value": proceeds, "sentiment": sentiment, "ts_tz": TRADE_HISTORY_TZ},
             )
         logger.info("🔴 MANUAL SELL %s x %.0f @ %.2f P&L=%.2f", ticker, qty, price, pnl)
         return True, f"Продано {qty:.0f} {ticker} @ ${price:.2f}. P&L: ${pnl:.2f} ({pnl_pct:+.2f}%)"
@@ -561,10 +566,6 @@ class ExecutionAgent:
         strategy_name: str | None = None,
     ) -> list[dict]:
         """Последние сделки для бота. ticker/strategy_name — опциональные фильтры."""
-        query = """
-            SELECT ts, ticker, side, quantity, price, signal_type, total_value, strategy_name
-            FROM trade_history
-        """
         params: dict = {"limit": limit}
         conditions = []
         if ticker:
@@ -573,11 +574,30 @@ class ExecutionAgent:
         if strategy_name:
             conditions.append("strategy_name = :strategy_name")
             params["strategy_name"] = strategy_name
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY ts DESC LIMIT :limit"
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+        query_with_tz = f"""
+            SELECT ts, ticker, side, quantity, price, signal_type, total_value, strategy_name,
+                   COALESCE(ts_timezone, 'Europe/Moscow') AS ts_timezone
+            FROM trade_history
+            {where_clause}
+            ORDER BY ts DESC LIMIT :limit
+        """
+        query_without_tz = f"""
+            SELECT ts, ticker, side, quantity, price, signal_type, total_value, strategy_name
+            FROM trade_history
+            {where_clause}
+            ORDER BY ts DESC LIMIT :limit
+        """
         with self.engine.connect() as conn:
-            rows = conn.execute(text(query), params).fetchall()
+            try:
+                rows = conn.execute(text(query_with_tz), params).fetchall()
+                has_ts_tz = True
+            except Exception as e:
+                if "ts_timezone" in str(e) or "undefined_column" in str(e).lower():
+                    rows = conn.execute(text(query_without_tz), params).fetchall()
+                    has_ts_tz = False
+                else:
+                    raise
         return [
             {
                 "ts": r[0],
@@ -588,6 +608,7 @@ class ExecutionAgent:
                 "signal_type": r[5],
                 "total_value": float(r[6]),
                 "strategy_name": r[7] or "—",
+                "ts_timezone": r[8] if has_ts_tz and len(r) > 8 else TRADE_HISTORY_TZ,
             }
             for r in rows
         ]

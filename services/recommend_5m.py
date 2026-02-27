@@ -32,6 +32,48 @@ RSI_PERIOD_5M = 14
 # Баров в «2 часа» для импульса
 BARS_2H = 24
 
+# Регулярная сессия US (NYSE/NASDAQ) в ET
+US_SESSION_START = (9, 30)  # 9:30
+US_SESSION_END = (16, 0)    # 16:00
+
+
+def filter_to_last_n_us_sessions(
+    df: Optional[pd.DataFrame],
+    n: int,
+) -> Optional[pd.DataFrame]:
+    """
+    Оставляет только бары внутри американской регулярной сессии (9:30–16:00 ET)
+    за последние n сессий. Убирает календарные «хвосты» и смену дат по Москве.
+
+    df должен иметь колонку datetime (желательно уже в ET).
+    """
+    if df is None or df.empty or "datetime" not in df.columns:
+        return df
+    from datetime import time as dt_time
+    df = df.copy()
+    dt = pd.to_datetime(df["datetime"])
+    if dt.dt.tz is None:
+        try:
+            dt = dt.dt.tz_localize("America/New_York", ambiguous=True)
+        except Exception:
+            dt = dt.dt.tz_localize("UTC", ambiguous=True).dt.tz_convert("America/New_York")
+    else:
+        dt = dt.dt.tz_convert("America/New_York")
+    start = dt_time(*US_SESSION_START)
+    end = dt_time(*US_SESSION_END)
+    mask = (dt.dt.time >= start) & (dt.dt.time <= end)
+    df = df.loc[mask].copy()
+    if df.empty:
+        return df
+    # Даты сессий по ET (присваиваем по позиции, чтобы индексы не ломали выравнивание)
+    session_dates_et = dt.loc[mask].dt.date
+    df = df.copy()
+    df["_session"] = session_dates_et.values
+    # Последние n уникальных дат
+    unique_dates = sorted(df["_session"].unique(), reverse=True)[:n]
+    df = df[df["_session"].isin(unique_dates)].copy()
+    return df.sort_values("datetime").reset_index(drop=True)
+
 
 def fetch_5m_ohlc(ticker: str, days: int = None) -> Optional[pd.DataFrame]:
     """

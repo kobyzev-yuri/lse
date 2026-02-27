@@ -18,6 +18,32 @@ from config_loader import get_database_url, get_config_value
 
 logger = logging.getLogger(__name__)
 
+# Таймзона, в которой хранятся ts в trade_history (если naive — считаем Москвой)
+TRADE_HISTORY_TZ = "Europe/Moscow"
+CHART_DISPLAY_TZ = "America/New_York"
+
+
+def trade_ts_to_et(ts: Any, source_tz: Optional[str] = None) -> Any:
+    """
+    Переводит метку времени сделки в ET для отрисовки на графике.
+    source_tz — таймзона, в которой хранится ts (например 'Europe/Moscow'); если None, используется TRADE_HISTORY_TZ.
+    Возвращает timezone-aware pd.Timestamp в America/New_York или исходный ts при ошибке.
+    """
+    if ts is None:
+        return None
+    tz_name = source_tz or TRADE_HISTORY_TZ
+    try:
+        import pandas as pd
+        t = pd.Timestamp(ts)
+        if t.tzinfo is None:
+            # ambiguous: True = DST, False = non-DST; "infer" не везде поддерживается
+            t = t.tz_localize(tz_name, ambiguous=True)
+        else:
+            t = t.tz_convert(tz_name)
+        return t.tz_convert(CHART_DISPLAY_TZ)
+    except Exception:
+        return ts
+
 GAME_5M_STRATEGY = "GAME_5M"
 GAME_NOTIONAL_USD = 10_000.0
 COMMISSION_RATE = 0.0  # 0% — оплаты брокеру нет
@@ -128,8 +154,8 @@ def record_entry(
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
-                VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy)
+                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone)
+                VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz)
             """),
             {
                 "ticker": ticker,
@@ -139,6 +165,7 @@ def record_entry(
                 "signal_type": signal_type,
                 "total_value": notional,
                 "strategy": GAME_5M_STRATEGY,
+                "ts_tz": TRADE_HISTORY_TZ,
             },
         )
         row = conn.execute(text("SELECT LASTVAL()")).fetchone()
@@ -168,8 +195,8 @@ def close_position(ticker: str, exit_price: float, exit_signal_type: str) -> Opt
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name)
-                VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy)
+                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone)
+                VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz)
             """),
             {
                 "ticker": ticker,
@@ -179,6 +206,7 @@ def close_position(ticker: str, exit_price: float, exit_signal_type: str) -> Opt
                 "signal_type": exit_signal_type,
                 "total_value": notional,
                 "strategy": GAME_5M_STRATEGY,
+                "ts_tz": TRADE_HISTORY_TZ,
             },
         )
     logger.info("game_5m: %s закрыта @ %.2f %s, PnL=%.2f%%", ticker, exit_price, exit_signal_type, pnl_pct)
@@ -191,23 +219,41 @@ def get_trades_for_chart(
     dt_max: datetime,
 ) -> list[dict[str, Any]]:
     """Сделки GAME_5M по тикеру в заданном диапазоне времени (для нанесения на график 5m).
-    Возвращает список dict: ts, price, side ('BUY'|'SELL'), signal_type."""
+    Возвращает список dict: ts, price, side ('BUY'|'SELL'), signal_type, ts_timezone (если есть в таблице)."""
     engine = _engine()
+    params = {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "dt_min": dt_min, "dt_max": dt_max}
     with engine.connect() as conn:
-        rows = conn.execute(
-            text("""
-                SELECT ts, side, price, signal_type
-                FROM public.trade_history
-                WHERE ticker = :ticker AND strategy_name = :strategy
-                  AND ts >= :dt_min AND ts <= :dt_max
-                ORDER BY ts ASC
-            """),
-            {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "dt_min": dt_min, "dt_max": dt_max},
-        ).fetchall()
-    return [
-        {"ts": r[0], "price": float(r[2]), "side": r[1], "signal_type": r[3] or ""}
-        for r in rows
-    ]
+        try:
+            rows = conn.execute(
+                text("""
+                    SELECT ts, side, price, signal_type, ts_timezone
+                    FROM public.trade_history
+                    WHERE ticker = :ticker AND strategy_name = :strategy
+                      AND ts >= :dt_min AND ts <= :dt_max
+                    ORDER BY ts ASC
+                """),
+                params,
+            ).fetchall()
+            return [
+                {"ts": r[0], "price": float(r[2]), "side": r[1], "signal_type": r[3] or "", "ts_timezone": r[4]}
+                for r in rows
+            ]
+        except Exception:
+            # До миграции ts_timezone колонки может не быть
+            rows = conn.execute(
+                text("""
+                    SELECT ts, side, price, signal_type
+                    FROM public.trade_history
+                    WHERE ticker = :ticker AND strategy_name = :strategy
+                      AND ts >= :dt_min AND ts <= :dt_max
+                    ORDER BY ts ASC
+                """),
+                params,
+            ).fetchall()
+            return [
+                {"ts": r[0], "price": float(r[2]), "side": r[1], "signal_type": r[3] or "", "ts_timezone": None}
+                for r in rows
+            ]
 
 
 def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -248,6 +294,10 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
             pnl_pct = float(log_ret * 100.0 - 2 * COMMISSION_RATE * 100.0)
         except Exception:
             pnl_pct = None
+        try:
+            pnl_usd = (exit_price - entry_price) * qty - 2 * COMMISSION_RATE * (entry_price + exit_price) * qty / 2
+        except Exception:
+            pnl_usd = None
         result.append({
             "id": buy_id,
             "entry_ts": buy_ts,
@@ -258,6 +308,7 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
             "exit_price": exit_price,
             "exit_signal_type": exit_signal,
             "pnl_pct": pnl_pct,
+            "pnl_usd": pnl_usd,
         })
         i = j + 1
 

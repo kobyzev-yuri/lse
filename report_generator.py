@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class TradePnL:
     trade_id: int
     ticker: str
-    ts: pd.Timestamp
+    ts: pd.Timestamp  # exit (close) time
     side: str
     quantity: float
     entry_price: float
@@ -31,6 +31,7 @@ class TradePnL:
     commission: float
     signal_type: str
     sentiment_at_trade: Optional[float]
+    entry_ts: Optional[pd.Timestamp] = None  # open time (MSK) for table /closed
 
 
 def get_engine():
@@ -75,6 +76,7 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
     # Состояние по тикерам
     position_qty: Dict[str, float] = {}
     position_cost: Dict[str, float] = {}  # суммарный cost basis (включая комиссии)
+    position_open_ts: Dict[str, Optional[pd.Timestamp]] = {}  # дата открытия текущей позиции (для /closed)
 
     for _, row in trades.iterrows():
         ticker = row["ticker"]
@@ -94,9 +96,12 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
         if ticker not in position_qty:
             position_qty[ticker] = 0.0
             position_cost[ticker] = 0.0
+            position_open_ts[ticker] = None
 
         if side == "BUY":
-            # Покупка: увеличиваем позицию и cost basis
+            # Покупка: увеличиваем позицию и cost basis; при открытии позиции — запоминаем дату
+            if position_qty[ticker] == 0:
+                position_open_ts[ticker] = pd.to_datetime(ts)
             position_qty[ticker] += qty
             position_cost[ticker] += qty * price + commission
         elif side == "SELL":
@@ -123,8 +128,11 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
                 log_ret = 0.0
 
             # Обновляем состояние позиции
+            entry_ts = position_open_ts.get(ticker)
             position_qty[ticker] -= qty
             position_cost[ticker] -= cost_for_sold
+            if position_qty[ticker] <= 0:
+                position_open_ts[ticker] = None
 
             results.append(
                 TradePnL(
@@ -141,6 +149,7 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
                     commission=commission,
                     signal_type=signal_type,
                     sentiment_at_trade=sentiment,
+                    entry_ts=entry_ts,
                 )
             )
 

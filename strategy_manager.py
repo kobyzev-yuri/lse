@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 from strategies.momentum_strategy import MomentumStrategy
 from strategies.mean_reversion_strategy import MeanReversionStrategy
 from strategies.volatile_gap_strategy import VolatileGapStrategy
+from strategies.geopolitical_bounce_strategy import GeopoliticalBounceStrategy
 from strategies.neutral_strategy import NeutralStrategy
 from strategies.base_strategy import BaseStrategy
 
@@ -23,9 +24,10 @@ class StrategyManager:
     def __init__(self):
         """Инициализация всех доступных стратегий"""
         self.strategies = [
+            GeopoliticalBounceStrategy(),
             MomentumStrategy(),
             MeanReversionStrategy(),
-            VolatileGapStrategy()
+            VolatileGapStrategy(),
         ]
         
         # Пороги для принятия решений
@@ -73,10 +75,22 @@ class StrategyManager:
         logger.info(f"   Волатильность: {volatility_ratio:.2f}x (порог: {self.high_volatility_threshold})")
         logger.info(f"   Sentiment: {sentiment_score:.2f} (порог: ±{self.extreme_sentiment_threshold})")
         logger.info(f"   Гэп: {gap_percent:.2f}% (порог: {self.gap_threshold}%)")
+        prev_day_return_pct = technical_data.get("prev_day_return_pct")
+        if prev_day_return_pct is not None:
+            logger.info(f"   Падение пред. сессии: {prev_day_return_pct:.2f}%")
         
         # Логика выбора стратегии (The Switch)
         
-        # 1. VolatileGapStrategy: очень высокая волатильность + гэп или экстремальный sentiment
+        # 1. GeopoliticalBounceStrategy: вчера падение ≥2% — ловим отскок long
+        if prev_day_return_pct is not None and prev_day_return_pct <= -2.0:
+            selected = self._get_strategy_by_name("Geopolitical Bounce")
+            if selected and selected.is_suitable(technical_data, news_data, sentiment_score):
+                logger.info(
+                    f"🔄 Резкое падение пред. сессии ({prev_day_return_pct:.2f}%) → GeopoliticalBounceStrategy для {ticker}"
+                )
+                return selected
+        
+        # 2. VolatileGapStrategy: очень высокая волатильность + гэп или экстремальный sentiment
         if volatility_ratio > self.high_volatility_threshold:
             if gap_percent > self.gap_threshold or abs(sentiment_score) > self.extreme_sentiment_threshold:
                 selected = self._get_strategy_by_name("Volatile Gap")
@@ -86,7 +100,7 @@ class StrategyManager:
                 else:
                     logger.info(f"   ⚠️ VolatileGap не подходит для {ticker} (is_suitable вернул False)")
         
-        # 2. MomentumStrategy: низкая волатильность + положительный sentiment
+        # 3. MomentumStrategy: низкая волатильность + положительный sentiment
         if volatility_ratio < 1.0 and sentiment_score > 0.3:
             selected = self._get_strategy_by_name("Momentum")
             if selected and selected.is_suitable(technical_data, news_data, sentiment_score):
@@ -95,7 +109,7 @@ class StrategyManager:
             else:
                 logger.info(f"   ⚠️ Momentum не подходит для {ticker} (is_suitable вернул False)")
         
-        # 3. MeanReversionStrategy: высокая волатильность + нейтральный sentiment
+        # 4. MeanReversionStrategy: высокая волатильность + нейтральный sentiment
         if volatility_ratio > 1.2 and abs(sentiment_score) < 0.4:
             selected = self._get_strategy_by_name("Mean Reversion")
             if selected and selected.is_suitable(technical_data, news_data, sentiment_score):
@@ -104,13 +118,13 @@ class StrategyManager:
             else:
                 logger.info(f"   ⚠️ MeanReversion не подходит для {ticker} (is_suitable вернул False)")
         
-        # 4. Fallback: проверяем все стратегии и выбираем первую подходящую
+        # 5. Fallback: проверяем все стратегии и выбираем первую подходящую
         for strategy in self.strategies:
             if strategy.is_suitable(technical_data, news_data, sentiment_score):
                 logger.info(f"✅ Выбрана стратегия: {strategy.name} (fallback)")
                 return strategy
         
-        # 5. Нейтральный режим: ни одна стратегия не подошла — консервативный HOLD
+        # 6. Нейтральный режим: ни одна стратегия не подошла — консервативный HOLD
         default_strategy = NeutralStrategy()
         logger.info(
             f"📋 Условия не подходят ни под одну стратегию → используется {default_strategy.name} (удержание)"

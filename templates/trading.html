@@ -120,6 +120,7 @@
 
 <div class="card">
     <h2>Исполнение торгового цикла</h2>
+    <p class="muted">Портфельная игра по дневным стратегиям: для каждого тикера запрашивается сигнал (AnalystAgent + LLM). При BUY/STRONG_BUY открывается позиция (если её ещё нет), затем проверяются стоп-лоссы по всем открытым позициям. То же самое делает крон <code>trading_cycle_cron.py</code> по расписанию (9:00, 13:00, 17:00). Запуск вручную — чтобы «прогнать» цикл сейчас по выбранным тикерам.</p>
     <form id="executeForm">
         <label>Тикеры (через запятую):</label>
         <input type="text" name="tickers" id="tickersInput" placeholder="MSFT, SNDK" value="SNDK" autocomplete="off">
@@ -310,15 +311,24 @@ document.getElementById('loadHistoryBtn').addEventListener('click', async () => 
     resultDiv.innerHTML = '<div class="loading">Загрузка...</div>';
     try {
         const response = await fetch('/api/trades?limit=30');
-        const data = await response.json();
-        if (!data.trades || data.trades.length === 0) {
-            resultDiv.innerHTML = '<p>Сделок нет</p>';
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            resultDiv.innerHTML = '<p style="color: red;">Ошибка ' + response.status + ': ' + escapeHtml(data.detail || response.statusText) + '</p>';
             return;
         }
-        let html = '<table><thead><tr><th>Время</th><th>Тикер</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th>Сигнал</th></tr></thead><tbody>';
+        if (data.error) {
+            resultDiv.innerHTML = '<p style="color: red;">Ошибка: ' + escapeHtml(data.error) + '</p>';
+            return;
+        }
+        if (!data.trades || data.trades.length === 0) {
+            resultDiv.innerHTML = '<p>Сделок нет. Проверьте, что в БД есть записи в <code>trade_history</code> (сделки из Telegram/крона).</p>';
+            return;
+        }
+        let html = '<table><thead><tr><th>Время</th><th>Тикер</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th>Сигнал</th><th>Стратегия</th></tr></thead><tbody>';
         data.trades.forEach(function(t) {
             const ts = t.ts && (typeof t.ts === 'string' ? t.ts.replace('T', ' ').substring(0, 16) : t.ts);
-            html += '<tr><td>' + escapeHtml(ts) + '</td><td>' + escapeHtml(t.ticker) + '</td><td>' + escapeHtml(t.side) + '</td><td>' + parseFloat(t.quantity) + '</td><td>$' + parseFloat(t.price).toFixed(2) + '</td><td>' + escapeHtml(t.signal_type || '') + '</td></tr>';
+            const strat = (t.strategy_name != null && t.strategy_name !== '') ? t.strategy_name : '—';
+            html += '<tr><td>' + escapeHtml(ts) + '</td><td>' + escapeHtml(t.ticker) + '</td><td>' + escapeHtml(t.side) + '</td><td>' + parseFloat(t.quantity) + '</td><td>$' + parseFloat(t.price).toFixed(2) + '</td><td>' + escapeHtml(t.signal_type || '') + '</td><td>' + escapeHtml(strat) + '</td></tr>';
         });
         html += '</tbody></table>';
         resultDiv.innerHTML = html;
@@ -346,7 +356,8 @@ document.getElementById('executeForm').addEventListener('submit', async (e) => {
             resultDiv.innerHTML = '<div style="color: red;">' + escapeHtml(data.detail || response.statusText) + '</div>';
             return;
         }
-        resultDiv.innerHTML = '<div style="color: green;">' + escapeHtml(data.message) + '</div>';
+        const msg = (data.message || '').replace(/\n/g, '<br>');
+        resultDiv.innerHTML = '<div style="color: green;">' + msg + '</div>';
     } catch (error) {
         resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(error.message) + '</div>';
     }
