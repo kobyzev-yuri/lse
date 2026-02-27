@@ -24,6 +24,13 @@
 
 ---
 
+## История сделок и уведомления
+
+- **Команда `/history`:** поддержка фильтра по тикеру: `/history` — последние 15 сделок по всем тикерам; `/history SNDK` — только по SNDK; `/history SNDK 30` — по SNDK, лимит 30. В ответе для каждой сделки выводится стратегия: `[GAME_5M]`, `[Portfolio]`, `[Manual]`. Реализация: `execution_agent.get_trade_history(limit, ticker=None, strategy_name=None)`.
+- **Уведомления в Telegram:** сигналы 5m (BUY/STRONG_BUY) шлёт `send_sndk_signal_cron.py` в чаты из `TELEGRAM_SIGNAL_CHAT_IDS`. Сделки портфельной игры (BUY/SELL по тикерам MEDIUM+LONG) после каждого запуска `trading_cycle_cron.py` тоже отправляются в те же чаты с пометкой «Портфель» и названием стратегии. Общая отправка вынесена в `services/telegram_signal.py` (get_signal_chat_ids, send_telegram_message). В crontab ничего дополнительно настраивать не нужно.
+
+---
+
 ## Прочие последние доработки
 
 - **Группы тикеров:** TICKERS_FAST / TICKERS_MEDIUM / TICKERS_LONG в config.env; портфельная игра использует MEDIUM+LONG (или TRADING_CYCLE_TICKERS). GAME_5m — только TICKERS_FAST. [docs/TICKER_GROUPS.md](TICKER_GROUPS.md)

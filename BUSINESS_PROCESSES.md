@@ -894,6 +894,7 @@ flowchart LR
 - Документация по сделкам: `docs/SANDBOX_TRADE_EXAMPLE.md` — пример цепочки изменений в `portfolio_state` и `trade_history`
 - Деплой: варианты «одна VM» или «Cloud Run + VM» (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`)
 - Премаркет и игры: `setup_cron.sh` — расписание (5m каждые 5 мин, портфельная 9/13/17, премаркет 16:30 MSK). Премаркет: `scripts/premarket_cron.py`, `services/premarket.py`; план и резюме — `docs/PREMARKET_PLAN.md`, `docs/RESUME_PREMARKET_AND_RECENT.md`
+- Уведомления в Telegram: `services/telegram_signal.py` — общая рассылка (get_signal_chat_ids, send_telegram_message). Сигналы 5m — `send_sndk_signal_cron.py`; сделки портфельной игры — `trading_cycle_cron.py` после run_for_tickers (те же TELEGRAM_SIGNAL_CHAT_IDS). В боте `/history [тикер] [N]` — фильтр по тикеру, в ответе стратегия (GAME_5M / Portfolio / Manual).
 
 ### Обновление диаграмм
 
@@ -905,7 +906,8 @@ flowchart LR
 **Версия системы**: 1.4.0
 
 ### Изменения в версии 1.4.0:
-- ✅ Песочница в Telegram: `/portfolio`, `/buy`, `/sell`, `/history` — виртуальные сделки через ExecutionAgent
+- ✅ Песочница в Telegram: `/portfolio`, `/buy`, `/sell`, `/history [тикер] [N]` — виртуальные сделки через ExecutionAgent; в `/history` — фильтр по тикеру и отображение стратегии
+- ✅ Уведомления о сделках портфельной игры в те же чаты (trading_cycle_cron → telegram_signal); общий модуль `services/telegram_signal.py`
 - ✅ `/recommend <ticker>` — рекомендация по входу и параметрам управления (стоп-лосс, размер позиции)
 - ✅ В `/ask` — ответы на вопросы «когда открыть позицию», «какие параметры советуешь» с учётом сигнала и risk_limits
 - ✅ Документация: `docs/SANDBOX_TRADE_EXAMPLE.md` — пример цепочки изменений в БД при сделках

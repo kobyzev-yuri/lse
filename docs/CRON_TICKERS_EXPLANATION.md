@@ -35,23 +35,15 @@ update_all_prices()  # Без параметров
 
 ### 2. Скрипт торгового цикла (`trading_cycle_cron.py`)
 
-```python
-# scripts/trading_cycle_cron.py
-DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X"]
-
-if len(sys.argv) > 1:
-    tickers = [t.strip() for t in sys.argv[1].split(',')]
-else:
-    tickers = DEFAULT_TICKERS
-```
+Тикеры берутся из `config.env`: `TRADING_CYCLE_TICKERS` (если задан) или `TICKERS_MEDIUM` + `TICKERS_LONG` через `get_tickers_for_portfolio_game()`. Аргумент командной строки переопределяет список.
 
 **Логика:**
-- Использует **жестко заданный список** `DEFAULT_TICKERS`
-- Можно переопределить через аргументы командной строки
+- По умолчанию — тикеры портфельной игры (MEDIUM + LONG), не GAME_5m (те в `send_sndk_signal_cron.py` по TICKERS_FAST).
+- Можно переопределить через аргумент: `python scripts/trading_cycle_cron.py "MSFT,ORCL,AMD"`.
 
 **После установки cron:**
-- ✅ `trading_cycle_cron.py` будет торговать только MSFT, SNDK, GBPUSD=X
-- ❌ Даже если в БД есть другие тикеры, они **НЕ будут** использоваться для торговли
+- ✅ `trading_cycle_cron.py` торгует по списку из config или аргумента.
+- ✅ После каждого запуска скрипт отправляет в Telegram (те же `TELEGRAM_SIGNAL_CHAT_IDS`) уведомления о сделках портфельной игры за последние 5 минут (BUY/SELL с пометкой «Портфель» и стратегией). Отдельная запись в crontab не нужна.
 
 ---
 
@@ -63,24 +55,20 @@ else:
    - Изначально: MSFT, SNDK, GBPUSD=X
    - Можно добавить другие через `update_prices.py`
 
-2. **Торговый цикл**: Торгует только MSFT, SNDK, GBPUSD=X (жестко задано)
-   - Не зависит от того, какие тикеры есть в БД
+2. **Торговый цикл**: Тикеры из config.env (`TRADING_CYCLE_TICKERS` или `TICKERS_MEDIUM` + `TICKERS_LONG`). См. [docs/TICKER_GROUPS.md](TICKER_GROUPS.md).
 
 ### Если нужно изменить список тикеров для торговли:
 
-**Вариант 1: Изменить DEFAULT_TICKERS в коде**
-```python
-# scripts/trading_cycle_cron.py
-DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X", "AAPL"]  # Добавить новые
+**Вариант 1: config.env**
+```bash
+# Порядок: TRADING_CYCLE_TICKERS (если задан) иначе TICKERS_MEDIUM + TICKERS_LONG
+TRADING_CYCLE_TICKERS=MSFT,SNDK,GBPUSD=X,AAPL
+# или
+TICKERS_MEDIUM=ALAB,MU,TER,AMD
+TICKERS_LONG=MSFT,GBPUSD=X,GC=F,^VIX
 ```
 
-**Вариант 2: Использовать конфигурационный файл**
-```python
-# Можно добавить в config.env:
-TRADING_TICKERS=MSFT,SNDK,GBPUSD=X,AAPL
-```
-
-**Вариант 3: Переопределить через cron**
+**Вариант 2: Переопределить через cron**
 ```bash
 # В crontab можно указать аргументы:
 0 9,13,17 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/trading_cycle_cron.py MSFT,SNDK,GBPUSD=X,AAPL
@@ -102,9 +90,7 @@ TRADING_TICKERS=MSFT,SNDK,GBPUSD=X,AAPL
    python update_prices.py AAPL,TSLA,GOOGL
    ```
 
-2. **Добавить в торговый цикл:**
-   - Изменить `DEFAULT_TICKERS` в `trading_cycle_cron.py`
-   - Или использовать конфигурационный файл
+2. **Добавить в торговый цикл:** задать в config.env `TRADING_CYCLE_TICKERS` или добавить тикер в `TICKERS_MEDIUM` / `TICKERS_LONG` (см. [TICKER_GROUPS.md](TICKER_GROUPS.md)).
 
 3. **Переустановить cron:**
    ```bash

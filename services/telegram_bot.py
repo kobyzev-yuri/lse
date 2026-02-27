@@ -211,7 +211,7 @@ class LSETelegramBot:
 /portfolio — портфель и P&L
 /buy <ticker> <кол-во> — купить
 /sell <ticker> [кол-во] — продать (без кол-ва — вся позиция)
-/history [N] — последние сделки
+/history [тикер] [N] — последние сделки (с тикером — фильтр по тикеру)
 /recommend [ticker] — рекомендация: когда открыть позицию и параметры управления
 
 /help — справка
@@ -268,7 +268,7 @@ class LSETelegramBot:
 `/portfolio` — кэш, позиции и P&L по последним ценам
 `/buy <ticker> <кол-во>` — купить по последней цене из БД
 `/sell <ticker>` — закрыть всю позицию; `/sell <ticker> <кол-во>` — частичная продажа
-`/history [N]` — последние N сделок (по умолч. 15)
+`/history [тикер] [N]` — последние сделки (по умолч. 15); с тикером — только по нему. В ответе — стратегия [GAME_5M / Portfolio / Manual]
 `/recommend <ticker>` — рекомендация: когда открыть позицию, стоп-лосс, размер позиции
 `/recommend5m [ticker] [days]` — рекомендация по 5m и 5д статистике (интрадей, по умолч. SNDK 5д)
 `/game5m [ticker]` — мониторинг игры 5m: открытая позиция, последние сделки, win rate и PnL (по умолч. SNDK)
@@ -1567,7 +1567,7 @@ class LSETelegramBot:
         await update.message.reply_text(msg if ok else f"❌ {msg}")
 
     async def _handle_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Последние сделки: /history [N]."""
+        """Последние сделки: /history [тикер] [N] — без аргументов все сделки; с тикером только по этому тикеру."""
         user_id = update.effective_user.id
         if not self._check_access(user_id):
             await update.message.reply_text("❌ Доступ запрещен")
@@ -1577,21 +1577,33 @@ class LSETelegramBot:
             await update.message.reply_text("❌ Песочница недоступна.")
             return
         limit = 15
-        if context.args and len(context.args) >= 1:
+        ticker = None
+        args = (context.args or [])[:2]
+        if args:
+            first = args[0].strip().upper()
             try:
-                limit = min(int(context.args[0]), 50)
+                n = int(first)
+                limit = min(n, 50)
             except ValueError:
-                pass
+                ticker = _normalize_ticker(first)
+                if len(args) >= 2:
+                    try:
+                        limit = min(int(args[1].strip()), 50)
+                    except ValueError:
+                        pass
         try:
-            rows = agent.get_trade_history(limit=limit)
+            rows = agent.get_trade_history(limit=limit, ticker=ticker)
             if not rows:
-                await update.message.reply_text("История сделок пуста.")
+                msg = "История сделок пуста." if not ticker else f"По тикеру {ticker} сделок нет."
+                await update.message.reply_text(msg)
                 return
-            lines = ["📜 **Последние сделки:**"]
+            title = f"📜 **Последние сделки**" + (f" ({ticker})" if ticker else "") + ":"
+            lines = [title]
             for r in rows:
                 ts = r["ts"].strftime("%Y-%m-%d %H:%M") if hasattr(r["ts"], "strftime") else str(r["ts"])
                 side = "🟢" if r["side"] == "BUY" else "🔴"
-                lines.append(f"{side} {ts} — {r['side']} {r['ticker']} x{r['quantity']:.0f} @ ${r['price']:.2f} ({r['signal_type']})")
+                strat = r.get("strategy_name", "—")
+                lines.append(f"{side} {ts} — {r['side']} {r['ticker']} x{r['quantity']:.0f} @ ${r['price']:.2f} ({r['signal_type']}) [{strat}]")
             await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
         except Exception as e:
             logger.error(f"Ошибка history: {e}", exc_info=True)

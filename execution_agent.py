@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import floor
 
 import numpy as np
@@ -539,20 +539,74 @@ class ExecutionAgent:
             })
         return {"cash": cash, "positions": lines, "total_equity": total_equity}
 
-    def get_trade_history(self, limit: int = 20) -> list[dict]:
-        """Последние сделки для бота."""
+    def get_trade_history(
+        self,
+        limit: int = 20,
+        ticker: str | None = None,
+        strategy_name: str | None = None,
+    ) -> list[dict]:
+        """Последние сделки для бота. ticker/strategy_name — опциональные фильтры."""
+        query = """
+            SELECT ts, ticker, side, quantity, price, signal_type, total_value, strategy_name
+            FROM trade_history
+        """
+        params: dict = {"limit": limit}
+        conditions = []
+        if ticker:
+            conditions.append("ticker = :ticker")
+            params["ticker"] = ticker
+        if strategy_name:
+            conditions.append("strategy_name = :strategy_name")
+            params["strategy_name"] = strategy_name
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY ts DESC LIMIT :limit"
         with self.engine.connect() as conn:
-            rows = conn.execute(
-                text("""
-                    SELECT ts, ticker, side, quantity, price, signal_type, total_value
-                    FROM trade_history
-                    ORDER BY ts DESC
-                    LIMIT :limit
-                """),
-                {"limit": limit},
-            ).fetchall()
+            rows = conn.execute(text(query), params).fetchall()
         return [
-            {"ts": r[0], "ticker": r[1], "side": r[2], "quantity": float(r[3]), "price": float(r[4]), "signal_type": r[5], "total_value": float(r[6])}
+            {
+                "ts": r[0],
+                "ticker": r[1],
+                "side": r[2],
+                "quantity": float(r[3]),
+                "price": float(r[4]),
+                "signal_type": r[5],
+                "total_value": float(r[6]),
+                "strategy_name": r[7] or "—",
+            }
+            for r in rows
+        ]
+
+    def get_recent_trades(
+        self,
+        minutes_ago: int = 5,
+        exclude_strategy_name: str | None = "GAME_5M",
+    ) -> list[dict]:
+        """Сделки за последние N минут, опционально исключая стратегию (например GAME_5M). Для уведомлений в Telegram по портфельной игре."""
+        since = datetime.now() - timedelta(minutes=minutes_ago)
+        query = """
+            SELECT ts, ticker, side, quantity, price, signal_type, total_value, strategy_name
+            FROM trade_history
+            WHERE ts >= :since
+        """
+        params: dict = {"since": since, "limit": 100}
+        if exclude_strategy_name:
+            query += " AND (strategy_name IS NULL OR strategy_name != :exclude)"
+            params["exclude"] = exclude_strategy_name
+        query += " ORDER BY ts DESC LIMIT :limit"
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(query), params).fetchall()
+        return [
+            {
+                "ts": r[0],
+                "ticker": r[1],
+                "side": r[2],
+                "quantity": float(r[3]),
+                "price": float(r[4]),
+                "signal_type": r[5],
+                "total_value": float(r[6]),
+                "strategy_name": r[7] or "—",
+            }
             for r in rows
         ]
 

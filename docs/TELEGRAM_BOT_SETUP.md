@@ -185,8 +185,8 @@ python scripts/run_telegram_bot.py
 ### `/sell <ticker>` или `/sell <ticker> <кол-во>` - Продажа
 Закрытие позиции полностью или частично. В ответе показывается P&L по сделке.
 
-### `/history [N]` - История сделок
-Последние N сделок из `trade_history` (по умолчанию 15).
+### `/history [тикер] [N]` - История сделок
+Последние сделки из `trade_history`. Без аргументов — последние 15 по всем тикерам; с тикером (например `/history SNDK`) — только по этому тикеру; второй аргумент — лимит (например `/history SNDK 30`). В каждой строке отображается стратегия: `[GAME_5M]`, `[Portfolio]`, `[Manual]` и т.д.
 
 ### `/recommend <ticker>` - Рекомендация по входу
 Сигнал аналитика (BUY/HOLD/SELL), рекомендация (открыть/держать/не входить), параметры управления: стоп-лосс %, тейк-профит %, макс. размер позиции. Данные из `risk_limits.json` и AnalystAgent.
@@ -464,6 +464,8 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 
 3. При сигнале BUY/STRONG_BUY скрипт отправит сообщение во все чаты из `TELEGRAM_SIGNAL_CHAT_IDS` (или в один из `TELEGRAM_SIGNAL_CHAT_ID`). Если задан `TELEGRAM_SIGNAL_MENTIONS`, в начало текста добавится строка с упоминаниями (для группы). Повторный сигнал не шлётся чаще чем раз в 2 часа (cooldown).
 
+**Уведомления о сделках портфельной игры:** скрипт `trading_cycle_cron.py` (cron 9:00, 13:00, 17:00) после исполнения сделок по тикерам MEDIUM/LONG отправляет в те же чаты (`TELEGRAM_SIGNAL_CHAT_IDS` / `TELEGRAM_SIGNAL_CHAT_ID`) сообщения о каждой сделке (BUY/SELL) с пометкой «Портфель» и названием стратегии. Отдельная настройка не требуется — используется общий модуль `services/telegram_signal.py` (там же `get_signal_chat_ids`, `send_telegram_message` для рассылки 5m и портфеля).
+
 ---
 
 ## Развёртывание
@@ -479,7 +481,7 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 3. ✅ Команда `/ask` для вопросов с LLM
 4. ✅ Нормализация тикеров и распознавание естественных названий
 5. ✅ Локальный расчет RSI для валют и товаров
-6. ⏳ Добавить уведомления о важных событиях
+6. ✅ Уведомления: сигналы 5m (send_sndk_signal_cron) и сделки портфельной игры (trading_cycle_cron) уходят в TELEGRAM_SIGNAL_CHAT_IDS
 7. ⏳ Добавить интерактивные кнопки (inline keyboard)
 8. ⏳ Добавить управление позициями (когда будет нужно)
 9. ⏳ Интеграция с реальным брокером (опционально)
@@ -490,7 +492,8 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 
 - `services/telegram_bot.py` - Основной класс бота
 - `services/rsi_calculator.py` - Локальный расчет RSI из истории close
-- `execution_agent.py` - Исполнение сделок (ручные и по сигналу), портфель
+- `execution_agent.py` - Исполнение сделок (ручные и по сигналу), портфель, `get_trade_history(limit, ticker, strategy_name)`, `get_recent_trades()` для уведомлений
+- `services/telegram_signal.py` - Общая рассылка в Telegram (get_signal_chat_ids, send_telegram_message) для 5m и портфельных уведомлений
 - `api/bot_app.py` - FastAPI приложение для webhook
 - `scripts/run_telegram_bot.py` - Локальный запуск
 - `scripts/send_dashboard_cron.py` - Проактивная рассылка дашборда по расписанию (cron)
