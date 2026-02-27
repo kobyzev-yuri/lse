@@ -168,7 +168,27 @@ class LSETelegramBot:
         if self.allowed_users is None:
             return True
         return user_id in self.allowed_users
-    
+
+    async def _reply_to_update(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        text: str,
+        parse_mode: str | None = "Markdown",
+    ) -> None:
+        """Отправляет ответ в чат: через message.reply_text или bot.send_message, если message отсутствует."""
+        if update.message is not None:
+            await update.message.reply_text(text, parse_mode=parse_mode)
+            return
+        if update.effective_chat is not None and context.bot is not None:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=text,
+                parse_mode=parse_mode,
+            )
+            return
+        logger.warning("Не удалось отправить ответ: нет update.message и effective_chat")
+
     async def _get_recent_news_async(self, ticker: str, timeout: int = 30):
         """
         Получает новости для тикера в executor с таймаутом.
@@ -1164,57 +1184,84 @@ class LSETelegramBot:
     
     async def _handle_tickers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /tickers"""
-        user_id = update.effective_user.id
-        
-        if not self._check_access(user_id):
-            await update.message.reply_text("❌ Доступ запрещен")
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id is None or not self._check_access(user_id):
+            await self._reply_to_update(update, context, "❌ Доступ запрещен")
             return
-        
+
+        async def _send(text: str, parse_mode: str = "Markdown") -> None:
+            await self._reply_to_update(update, context, text, parse_mode=parse_mode)
+
         try:
             # Получаем список тикеров из БД
             from sqlalchemy import create_engine, text
             from config_loader import get_database_url
-            
+            from services.ticker_groups import (
+                get_tickers_fast,
+                get_tickers_for_portfolio_game,
+            )
+
             engine = create_engine(get_database_url())
             with engine.connect() as conn:
                 result = conn.execute(
                     text("SELECT DISTINCT ticker FROM quotes ORDER BY ticker")
                 )
                 tickers = [row[0] for row in result]
-            
+
             if not tickers:
-                await update.message.reply_text("ℹ️ Нет отслеживаемых инструментов")
+                await _send("ℹ️ Нет отслеживаемых инструментов")
                 return
-            
+
+            # Игры: в каких группах используется тикер
+            fast_set = set(get_tickers_fast())
+            portfolio_set = set(get_tickers_for_portfolio_game())
+
+            def _game_label(t: str) -> str:
+                in_fast = t in fast_set
+                in_port = t in portfolio_set
+                if in_fast and in_port:
+                    return " (5m, Портфель)"
+                if in_fast:
+                    return " (5m)"
+                if in_port:
+                    return " (Портфель)"
+                return ""
+
             # Группируем по типам
             commodities = [t for t in tickers if '=' in t or t.startswith('GC')]
             currencies = [t for t in tickers if 'USD' in t or 'EUR' in t or 'GBP' in t]
             stocks = [t for t in tickers if t not in commodities and t not in currencies]
-            
+
             response = "📊 **Отслеживаемые инструменты:**\n\n"
-            
+
+            def _line(t: str) -> str:
+                return f"  • {_escape_markdown(t)}{_game_label(t)}"
+
             if commodities:
                 response += "🥇 **Товары:**\n"
-                response += "\n".join([f"  • {t}" for t in commodities[:10]])
+                response += "\n".join([_line(t) for t in commodities[:10]])
                 response += "\n\n"
-            
+
             if currencies:
                 response += "💱 **Валютные пары:**\n"
-                response += "\n".join([f"  • {t}" for t in currencies[:10]])
+                response += "\n".join([_line(t) for t in currencies[:10]])
                 response += "\n\n"
-            
+
             if stocks:
                 response += "📈 **Акции:**\n"
-                response += "\n".join([f"  • {t}" for t in stocks[:10]])
-            
+                response += "\n".join([_line(t) for t in stocks[:10]])
+
             if len(tickers) > 30:
-                response += f"\n\n... и еще {len(tickers) - 30} инструментов"
-            
-            await update.message.reply_text(response, parse_mode='Markdown')
-            
+                response += "\n\n... и еще " + _escape_markdown(str(len(tickers) - 30)) + " инструментов"
+
+            legend = "5m — быстрая игра; Портфель — trading_cycle (MEDIUM/LONG)."
+            response += "\n\n" + _escape_markdown(legend)
+
+            await _send(response)
+
         except Exception as e:
             logger.error(f"Ошибка получения списка тикеров: {e}", exc_info=True)
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await _send(f"❌ Ошибка: {str(e)}")
     
     def _get_recommendation_data(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Собирает данные для рекомендации: сигнал, цена, риск-параметры, позиция по тикеру."""
