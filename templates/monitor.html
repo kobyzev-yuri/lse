@@ -4,7 +4,7 @@
 
 {% block content %}
 <h1>Мониторинг тикеров</h1>
-<p class="muted">Тот же дашборд, что и /dashboard в Telegram. Автообновление каждые 5 минут.</p>
+<p class="muted">Тот же дашборд, что и /dashboard в Telegram. Автообновление каждые 5 минут. <em>Время отображается в Eastern Time (ET).</em></p>
 
 <div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
@@ -86,7 +86,7 @@ async function loadDashboard() {
         const data = await response.json();
         contentEl.innerHTML = textToHtml(data.text || '');
         contentEl.classList.add('dashboard-text');
-        updatedEl.textContent = 'Обновлено в ' + formatTime(data.updated_at);
+        updatedEl.textContent = 'Обновлено в ' + formatTime(data.updated_at) + ' ET';
     } catch (err) {
         contentEl.innerHTML = '<div style="color: red;">Ошибка: ' + escapeHtml(err.message) + '</div>';
     }

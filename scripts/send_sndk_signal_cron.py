@@ -243,13 +243,44 @@ def main():
         )
     mentions = get_signal_mentions()
 
-    # При закрытой бирже не дергаем 5m (Yahoo пустой, вход/выход невозможны). Новости — отдельный крон.
+    # При закрытой бирже: в AFTER_HOURS всё равно проверяем открытые позиции (тейк/стоп по последним барам),
+    # чтобы не пропустить фиксацию, если цена ушла выше тейка в конце сессии (16:00 ET). Остальные фазы — пропуск.
     try:
         from services.market_session import get_market_session_context
+        from services.game_5m import get_open_position, close_position, should_close_position
+        from services.recommend_5m import get_decision_5m, has_5m_data
         ctx = get_market_session_context()
         phase = (ctx.get("session_phase") or "").strip()
-        if phase in ("PRE_MARKET", "AFTER_HOURS", "WEEKEND", "HOLIDAY"):
+        if phase in ("PRE_MARKET", "WEEKEND", "HOLIDAY"):
             logger.info("Биржа закрыта (сессия=%s), пропуск поллинга 5m до 9:30 ET", phase)
+            sys.exit(0)
+        if phase == "AFTER_HOURS":
+            from services.ticker_groups import get_tickers_fast
+            # Тикеры для проверки: из аргумента или config
+            tickers_ah = [t.strip() for t in (sys.argv[1].strip().split(",") if len(sys.argv) > 1 and sys.argv[1].strip() else get_tickers_fast()) if t.strip()]
+            tickers_ah = [t for t in tickers_ah if has_5m_data(t)]
+            for ticker in tickers_ah:
+                try:
+                    open_pos = get_open_position(ticker)
+                    if not open_pos:
+                        continue
+                    d5 = get_decision_5m(ticker, use_llm_news=False)
+                    if not d5 or d5.get("price") is None:
+                        continue
+                    price = d5.get("price")
+                    bar_high = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
+                    bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
+                    should_close, exit_type = should_close_position(
+                        open_pos, d5.get("decision", "HOLD"), price,
+                        momentum_2h_pct=d5.get("momentum_2h_pct"),
+                        bar_high=bar_high, bar_low=bar_low,
+                    )
+                    if should_close and exit_type:
+                        close_position(ticker, price, exit_type)
+                        logger.info("AFTER_HOURS: закрыта позиция %s @ %.2f (%s)", ticker, price, exit_type)
+                except Exception as e:
+                    logger.warning("AFTER_HOURS проверка %s: %s", ticker, e)
+            logger.info("Биржа закрыта (AFTER_HOURS), проверка открытых позиций выполнена, выход")
             sys.exit(0)
     except Exception as e:
         logger.debug("Проверка сессии биржи: %s", e)

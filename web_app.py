@@ -7,8 +7,14 @@ import asyncio
 import os
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
+
+try:
+    from zoneinfo import ZoneInfo
+    DISPLAY_TZ = ZoneInfo("America/New_York")
+except ImportError:
+    DISPLAY_TZ = None  # fallback: показываем как есть, без конвертации
 
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -96,13 +102,21 @@ db_url = get_database_url()
 engine = create_engine(db_url)
 
 
+def _now_et() -> datetime:
+    """Текущее время в Eastern Time для отображения в интерфейсе."""
+    if DISPLAY_TZ is not None:
+        return datetime.now(DISPLAY_TZ)
+    return datetime.now()
+
+
 def _format_ts(ts) -> str:
-    """Форматирование времени для отображения в шаблонах."""
+    """Форматирование времени для отображения в шаблонах. Все даты в интерфейсе показываются в ET."""
     if ts is None:
         return "—"
     if hasattr(ts, "strftime"):
-        return ts.strftime("%Y-%m-%d %H:%M")
-    return str(ts)
+        return ts.strftime("%Y-%m-%d %H:%M") + " ET"
+    s = str(ts)
+    return (s + " ET") if s and s != "—" else s
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -463,7 +477,7 @@ async def get_dashboard_api(mode: str = "all"):
         raise HTTPException(status_code=501, detail="Модуль dashboard_builder недоступен")
     loop = asyncio.get_event_loop()
     text = await loop.run_in_executor(None, lambda: build_dashboard_text(mode))
-    return {"text": text, "updated_at": datetime.now().isoformat()}
+    return {"text": text, "updated_at": _now_et().isoformat(), "timezone": "America/New_York"}
 
 
 @app.get("/monitor", response_class=HTMLResponse)

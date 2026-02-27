@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 GAME_5M_STRATEGY = "GAME_5M"
 GAME_NOTIONAL_USD = 10_000.0
-COMMISSION_RATE = 0.001
+COMMISSION_RATE = 0.0  # 0% — оплаты брокеру нет
 
 
 def _max_position_days() -> int:

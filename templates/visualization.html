@@ -134,6 +134,53 @@ async function loadChart5m() {
             });
         }
 
+        // Отметки сделок: вход (BUY), тейк, стоп, прочий выход
+        function findClosestLabelIndex(labels, ts) {
+            const t = new Date(ts).getTime();
+            let best = 0;
+            let bestDiff = Infinity;
+            labels.forEach((l, i) => {
+                const d = Math.abs(new Date(l).getTime() - t);
+                if (d < bestDiff) { bestDiff = d; best = i; }
+            });
+            return best;
+        }
+        function makeTradeDataset(trades, label, color, pointStyle) {
+            const arr = labels.map(() => null);
+            trades.forEach(tr => {
+                const i = findClosestLabelIndex(labels, tr.ts);
+                arr[i] = tr.price;
+            });
+            if (arr.every(v => v == null)) return null;
+            return {
+                label: label,
+                data: arr,
+                borderColor: color,
+                backgroundColor: color,
+                pointRadius: 5,
+                pointHoverRadius: 7,
+                pointStyle: pointStyle,
+                fill: false,
+                tension: 0,
+                borderWidth: 0
+            };
+        }
+        const trades = data.trades || [];
+        const buyTrades = trades.filter(t => t.side === 'BUY');
+        const takeTrades = trades.filter(t => t.side === 'SELL' && (t.signal_type || '').toUpperCase() === 'TAKE_PROFIT');
+        const stopTrades = trades.filter(t => t.side === 'SELL' && (t.signal_type || '').toUpperCase() === 'STOP_LOSS');
+        const otherTrades = trades.filter(t => t.side === 'SELL' && (t.signal_type || '').toUpperCase() !== 'TAKE_PROFIT' && (t.signal_type || '').toUpperCase() !== 'STOP_LOSS');
+        [buyTrades, takeTrades, stopTrades, otherTrades].forEach((arr, idx) => {
+            const cfg = [
+                { label: 'Вход (BUY)', color: '#2e7d32', pointStyle: 'triangle' },
+                { label: 'Тейк', color: '#1b5e20', pointStyle: 'circle' },
+                { label: 'Стоп', color: '#c62828', pointStyle: 'circle' },
+                { label: 'Выход', color: '#757575', pointStyle: 'circle' }
+            ][idx];
+            const ds = makeTradeDataset(arr, cfg.label, cfg.color, cfg.pointStyle);
+            if (ds) datasets.push(ds);
+        });
+
         if (chart5m) chart5m.destroy();
         const ctx = document.getElementById('chart5m').getContext('2d');
         chart5m = new Chart(ctx, {

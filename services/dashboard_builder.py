@@ -13,6 +13,12 @@ from analyst_agent import AnalystAgent
 
 logger = logging.getLogger(__name__)
 
+try:
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+except ImportError:
+    _ET = None
+
 
 def build_dashboard_text(mode: str = "all") -> str:
     """
@@ -33,7 +39,9 @@ def build_dashboard_text(mode: str = "all") -> str:
     vix_info = analyst.get_vix_regime()
     vix_val = vix_info.get("vix_value")
     vix_regime = vix_info.get("regime") or "N/A"
-    now_str = datetime.now().strftime("%d.%m %H:%M")
+    # В интерфейсе время всегда показываем в ET (Eastern Time)
+    now_dt = datetime.now(_ET) if _ET else datetime.now()
+    now_str = now_dt.strftime("%d.%m %H:%M")
 
     # Режим рынка один на всех — по индексу VIX (не по тикерам). Пороги: <15 LOW_FEAR, 15–25 NEUTRAL, >25 HIGH_PANIC
     regime_hint = ""
@@ -46,7 +54,7 @@ def build_dashboard_text(mode: str = "all") -> str:
             regime_hint = " (VIX >25)"
     lines = [
         "📊 **Дашборд** (мониторинг)",
-        f"🕐 {now_str}  ·  VIX: {vix_val:.1f}" if vix_val is not None else f"🕐 {now_str}  ·  VIX: —",
+        f"🕐 {now_str} ET  ·  VIX: {vix_val:.1f}" if vix_val is not None else f"🕐 {now_str} ET  ·  VIX: —",
         f"Режим рынка (по VIX, один для всех тикеров): {vix_regime}{regime_hint}",
         "",
     ]

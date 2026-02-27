@@ -689,6 +689,17 @@ class LSETelegramBot:
                     conn,
                     params={"ticker": ticker, "cutoff_date": cutoff_date}
                 )
+                # Сделки за период графика — для отметок входа/выхода (фиксация прибыли/убытков)
+                end_date = (pd.Timestamp(df["date"].max()) + pd.Timedelta(days=1)) if not df.empty else datetime.now()
+                trades_rows = conn.execute(
+                    text("""
+                        SELECT ts, price, side, signal_type
+                        FROM trade_history
+                        WHERE ticker = :ticker AND ts >= :cutoff_date AND ts < :end_date
+                        ORDER BY ts ASC
+                    """),
+                    {"ticker": ticker, "cutoff_date": cutoff_date, "end_date": end_date},
+                ).fetchall()
             
             logger.info(f"Получено {len(df)} записей для {ticker}")
             
@@ -734,6 +745,36 @@ class LSETelegramBot:
                 df['date'] = pd.to_datetime(df['date'])
                 n_points = len(df)
                 has_ohlc = all(c in df.columns and df[c].notna().any() for c in ('open', 'high', 'low'))
+
+                # Разбор сделок для отметок на графике (вход / тейк / стоп / выход)
+                trades_buy_ts, trades_buy_p = [], []
+                trades_take_ts, trades_take_p = [], []
+                trades_stop_ts, trades_stop_p = [], []
+                trades_other_ts, trades_other_p = [], []
+                for row in trades_rows:
+                    ts, price, side, signal_type = row[0], float(row[1]), row[2], (row[3] or "")
+                    if ts is None:
+                        continue
+                    ts = pd.Timestamp(ts)
+                    if getattr(ts, "tzinfo", None) is not None:
+                        try:
+                            ts = ts.tz_localize(None)
+                        except Exception:
+                            ts = ts.tz_convert(None) if ts.tzinfo else ts
+                    if side == "BUY":
+                        trades_buy_ts.append(ts)
+                        trades_buy_p.append(price)
+                    elif side == "SELL":
+                        sig = (signal_type or "").upper()
+                        if sig == "TAKE_PROFIT":
+                            trades_take_ts.append(ts)
+                            trades_take_p.append(price)
+                        elif sig == "STOP_LOSS":
+                            trades_stop_ts.append(ts)
+                            trades_stop_p.append(price)
+                        else:
+                            trades_other_ts.append(ts)
+                            trades_other_p.append(price)
 
                 # Интервал подписей дат: все точки рисуем, подписи реже
                 if n_points <= 7:
@@ -784,10 +825,23 @@ class LSETelegramBot:
                     ax1.grid(True, linestyle='--', alpha=0.4)
                     ax1.tick_params(axis='both', labelsize=9)
 
+                def draw_trade_markers(ax):
+                    """Отметки сделок: вход (BUY), тейк, стоп, прочий выход."""
+                    if trades_buy_ts:
+                        ax.scatter(trades_buy_ts, trades_buy_p, color='#2e7d32', marker='^', s=80, zorder=5, label='Вход (BUY)', edgecolors='darkgreen', linewidths=1)
+                    if trades_take_ts:
+                        ax.scatter(trades_take_ts, trades_take_p, color='#1b5e20', marker='v', s=80, zorder=5, label='Тейк', edgecolors='darkgreen', linewidths=1)
+                    if trades_stop_ts:
+                        ax.scatter(trades_stop_ts, trades_stop_p, color='#c62828', marker='v', s=80, zorder=5, label='Стоп', edgecolors='darkred', linewidths=1)
+                    if trades_other_ts:
+                        ax.scatter(trades_other_ts, trades_other_p, color='#757575', marker='v', s=60, zorder=4, label='Выход', edgecolors='gray', linewidths=0.8)
+
                 has_rsi = 'rsi' in df.columns and df['rsi'].notna().any()
                 if n_points <= 2 or not has_rsi:
                     fig, ax1 = plt.subplots(1, 1, figsize=(11, 5), facecolor='white')
                     draw_price_axes(ax1, has_ohlc)
+                    draw_trade_markers(ax1)
+                    ax1.legend(loc='upper left', framealpha=0.9)
                     ax1.set_xlabel('Дата', fontsize=10)
                     ax1.set_title(f'{ticker}  —  {n_points} дн.', fontsize=11, fontweight='bold', pad=6)
                     ax1.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
@@ -797,6 +851,8 @@ class LSETelegramBot:
                     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), facecolor='white', sharex=True,
                                                     gridspec_kw={'height_ratios': [1.4, 0.8], 'hspace': 0.08})
                     draw_price_axes(ax1, has_ohlc)
+                    draw_trade_markers(ax1)
+                    ax1.legend(loc='upper left', framealpha=0.9)
                     ax1.set_title(f'{ticker}  —  {n_points} дн.', fontsize=11, fontweight='bold', pad=6)
                     ax2.set_facecolor('#ffffff')
                     ax2.plot(df['date'], df['rsi'], color='#ff9800', linewidth=1.8, label='RSI')
@@ -820,7 +876,10 @@ class LSETelegramBot:
                 logger.info(f"Отправка графика для {ticker} ({len(df)} точек данных)")
                 
                 # Формируем подпись
+                n_trades = len(trades_buy_ts) + len(trades_take_ts) + len(trades_stop_ts) + len(trades_other_ts)
                 caption = f"📈 {ticker} - {days} дней ({len(df)} точек)"
+                if n_trades > 0:
+                    caption += f"\n📌 Сделки на графике: вход (▲), тейк/стоп/выход (▼) — {n_trades} шт. (те же, что в /history)"
                 if has_ohlc:
                     caption += "\n\nℹ️ Свечи: open, high, low, close (дневные)"
                 elif days == 1:
@@ -1031,14 +1090,17 @@ class LSETelegramBot:
             if not forecast_defined:
                 ax.plot([dt_max, dt_max_ext], [last_close, last_close], color="#c62828", linewidth=0.8, linestyle=":", alpha=0.4, label="Текущая цена")
                 ax.text(0.985, 0.5, "…\nпрогноз\nне определён", transform=ax.transAxes, fontsize=9, color="#c62828", ha="right", va="center", style="italic")
-            # Сделки игры 5m за период графика
+            # Сделки игры 5m за период графика (те же, что в /history)
+            buy_ts, buy_p = [], []
+            take_ts, take_p = [], []
+            stop_ts, stop_p = [], []
+            other_ts, other_p = [], []
             try:
                 from services.game_5m import get_trades_for_chart
-                trades = get_trades_for_chart(ticker, dt_min, dt_max)
-                buy_ts, buy_p = [], []
-                take_ts, take_p = [], []
-                stop_ts, stop_p = [], []
-                other_ts, other_p = [], []
+                # Берём сделки за весь календарный день (чтобы не терять из-за TZ: список в /history = те же точки на графике)
+                dt_min_day = pd.Timestamp(dt_min).replace(hour=0, minute=0, second=0, microsecond=0)
+                dt_max_end = pd.Timestamp(dt_max) + pd.Timedelta(days=1)
+                trades = get_trades_for_chart(ticker, dt_min_day.to_pydatetime(), dt_max_end.to_pydatetime())
                 for t in trades:
                     ts = t["ts"]
                     try:
@@ -1071,6 +1133,13 @@ class LSETelegramBot:
                     ax.scatter(stop_ts, stop_p, color="#c62828", marker="v", s=70, zorder=5, label="Стоп (плохо)", edgecolors="darkred", linewidths=1)
                 if other_ts:
                     ax.scatter(other_ts, other_p, color="#757575", marker="v", s=50, zorder=4, label="Выход (SELL/время)", edgecolors="gray", linewidths=0.8)
+                # Расширяем ось X, чтобы сделки после 16:00 (или в другом TZ) были видны
+                all_ts = buy_ts + take_ts + stop_ts + other_ts
+                if all_ts:
+                    x_max_cur = ax.get_xlim()[1]
+                    x_max_trades = max(mdates.date2num(t) for t in all_ts if t is not None)
+                    if x_max_trades > x_max_cur:
+                        ax.set_xlim(right=x_max_trades + 0.002)
             except Exception:
                 pass
             ax.set_ylabel("Цена", fontsize=10)
@@ -1087,7 +1156,10 @@ class LSETelegramBot:
             plt.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="white")
             buf.seek(0)
             plt.close()
+            n_markers = len(buy_ts) + len(take_ts) + len(stop_ts) + len(other_ts)
             caption = f"📈 {ticker} — 5 мин, {len(df)} свечей. Данные за: {range_str}"
+            if n_markers > 0:
+                caption += f"\n📌 Сделки на графике: ▲ вход, ▼ тейк/стоп/выход ({n_markers} шт.) — те же, что в /history. Время — ET."
             if entry_price is not None:
                 caption += f"\n📌 Позиция открыта @ ${entry_price:.2f}"
             await update.message.reply_photo(
@@ -1651,6 +1723,9 @@ class LSETelegramBot:
                 side = "🟢" if r["side"] == "BUY" else "🔴"
                 strat = r.get("strategy_name", "—")
                 lines.append(f"{side} {ts} — {r['side']} {r['ticker']} x{r['quantity']:.0f} @ ${r['price']:.2f} ({r['signal_type']}) [{strat}]")
+            if rows and ticker:
+                lines.append("")
+                lines.append(f"📈 _Сделки на графике:_ `/chart5m {ticker} 7` или `/chart {ticker} 7`")
             await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
         except Exception as e:
             logger.error(f"Ошибка history: {e}", exc_info=True)

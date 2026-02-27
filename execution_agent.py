@@ -8,7 +8,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from analyst_agent import AnalystAgent
-from config_loader import get_database_url
+from config_loader import get_database_url, get_config_value
 from utils.risk_manager import get_risk_manager
 
 
@@ -20,8 +20,16 @@ logger = logging.getLogger(__name__)
 
 
 INITIAL_CASH_USD = 100_000.0
-COMMISSION_RATE = 0.001  # 0.1%
+COMMISSION_RATE = 0.0  # 0% — оплаты брокеру нет
 STOP_LOSS_LEVEL = 0.95   # 5% падение от цены входа
+
+
+def _get_slippage_sell_pct() -> float:
+    """Проскальзывание при продаже (%), 0 = отключено. Учитывает, что реальная цена исполнения может быть хуже последней котировки."""
+    try:
+        return max(0.0, min(5.0, float(get_config_value("SANDBOX_SLIPPAGE_SELL_PCT", "0").strip() or "0")))
+    except (ValueError, TypeError):
+        return 0.0
 
 
 @dataclass
@@ -342,13 +350,17 @@ class ExecutionAgent:
         )
 
     def _execute_sell(self, ticker: str, position: Position, reason: str, strategy_name: str = None) -> None:
-        """Закрытие позиции по текущей цене (например, по стоп‑лоссу)."""
+        """Закрытие позиции по текущей цене (например, по стоп‑лоссу). При SANDBOX_SLIPPAGE_SELL_PCT > 0 цена исполнения занижается (консервативная оценка)."""
         current_price = self._get_current_price(ticker)
         if current_price is None:
             logger.warning(
-                "⚠️ Нет котировок для %s, закрытие позиции невозможно", ticker
+                "⚠️ Нет котировок для %s, закрытие позиции невозможна", ticker
             )
             return
+        slippage_pct = _get_slippage_sell_pct()
+        if slippage_pct > 0:
+            current_price = current_price * (1 - slippage_pct / 100.0)
+            logger.debug("Продажа %s: учтено проскальзывание %.2f%%, цена исполнения %.2f", ticker, slippage_pct, current_price)
 
         quantity = float(position.quantity)
         notional = quantity * current_price
@@ -477,6 +489,9 @@ class ExecutionAgent:
         price = self._get_current_price(ticker)
         if price is None:
             return False, f"Нет котировок для {ticker}."
+        slippage_pct = _get_slippage_sell_pct()
+        if slippage_pct > 0:
+            price = price * (1 - slippage_pct / 100.0)
         if not skip_trading_hours and not self.risk_manager.is_trading_hours():
             return False, "Вне торговых часов."
         qty = floor(float(quantity)) if quantity is not None else float(position.quantity)
