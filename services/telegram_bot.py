@@ -2049,37 +2049,40 @@ class LSETelegramBot:
         """Переназначить стратегию у открытой позиции (для тикеров «вне игры»): /set_strategy TICKER STRATEGY."""
         user_id = update.effective_user.id
         if not self._check_access(user_id):
-            await update.message.reply_text("❌ Доступ запрещен")
+            await self._reply_to_update(update, context, "❌ Доступ запрещен")
             return
         if not context.args or len(context.args) < 2:
-            await update.message.reply_text(
+            await self._reply_to_update(
+                update, context,
                 "Укажите тикер и стратегию.\n"
-                "Пример: `/set_strategy GC=F Manual` или `/set_strategy GC=F Portfolio`\n\n"
+                "Пример: `/set_strategy GC=F Manual` или `/set_strategy GC=F Geopolitical Bounce`\n\n"
                 "Нужно для позиций «5m вне»: после переназначения в /pending будет новая стратегия.",
                 parse_mode="Markdown",
             )
             return
         ticker = _normalize_ticker(context.args[0])
-        strategy = (context.args[1] or "Manual").strip() or "Manual"
+        strategy = (" ".join(context.args[1:]) or "Manual").strip().strip('"\'') or "Manual"
         agent = self._get_execution_agent()
         if not agent:
-            await update.message.reply_text("❌ Песочница недоступна.")
+            await self._reply_to_update(update, context, "❌ Песочница недоступна.")
             return
         try:
             ok = agent.set_open_position_strategy(ticker, strategy)
             if ok:
-                await update.message.reply_text(
+                await self._reply_to_update(
+                    update, context,
                     f"✅ Стратегия последнего BUY по **{ticker}** изменена на «{strategy}». "
                     "В `/pending` будет отображаться новая стратегия.",
                     parse_mode="Markdown",
                 )
             else:
-                await update.message.reply_text(
+                await self._reply_to_update(
+                    update, context,
                     f"По {ticker} не найден BUY в истории (нет открытой позиции по этому тикеру)."
                 )
         except Exception as e:
             logger.exception("Ошибка set_strategy")
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await self._reply_to_update(update, context, f"❌ Ошибка: {str(e)}")
 
     async def _handle_prompt_entry(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Выдать промпт к LLM для принятия решения по входу (BUY/STRONG_BUY/HOLD)."""
