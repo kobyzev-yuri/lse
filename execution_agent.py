@@ -316,7 +316,8 @@ class ExecutionAgent:
                 },
             )
 
-            # Записываем сделку в trade_history
+            # Записываем сделку в trade_history (strategy_name не должен быть NULL)
+            strategy_name = (strategy_name or "").strip() or "Portfolio"
             conn.execute(
                 text("""
                     INSERT INTO trade_history (
@@ -387,7 +388,8 @@ class ExecutionAgent:
                 {"ticker": ticker},
             )
 
-            # Записываем сделку в trade_history
+            # Записываем сделку в trade_history (strategy_name не должен быть NULL)
+            strategy_name = (strategy_name or "").strip() or "Portfolio"
             signal_type = "STOP_LOSS" if "Stop-loss" in reason else "SELL"
             conn.execute(
                 text("""
@@ -645,6 +647,28 @@ class ExecutionAgent:
             }
             for r in rows
         ]
+
+    def set_open_position_strategy(self, ticker: str, strategy_name: str) -> bool:
+        """
+        Меняет стратегию у открытой позиции: обновляет strategy_name у последнего BUY по тикеру.
+        Используйте для позиций «вне игры» (например GC=F после вывода из GAME_5M): переназначьте на Manual или Portfolio.
+        Возвращает True, если обновлена одна строка.
+        """
+        strategy_name = (strategy_name or "").strip() or "Manual"
+        with self.engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    UPDATE trade_history SET strategy_name = :strategy_name
+                    WHERE id = (
+                        SELECT id FROM trade_history
+                        WHERE ticker = :ticker AND side = 'BUY'
+                        ORDER BY ts DESC, id DESC LIMIT 1
+                    )
+                """),
+                {"ticker": ticker, "strategy_name": strategy_name},
+            )
+            conn.commit()
+        return result.rowcount == 1
 
     # ---------- Публичные методы ----------
 

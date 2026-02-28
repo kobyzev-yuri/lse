@@ -153,6 +153,10 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("sell", self._handle_sell))
         self.application.add_handler(CommandHandler("history", self._handle_history))
         self.application.add_handler(CommandHandler("closed", self._handle_closed))
+        self.application.add_handler(CommandHandler("pending", self._handle_pending))
+        self.application.add_handler(CommandHandler("set_strategy", self._handle_set_strategy))
+        self.application.add_handler(CommandHandler("prompt_entry", self._handle_prompt_entry))
+        self.application.add_handler(CommandHandler("strategies", self._handle_strategies))
         self.application.add_handler(CommandHandler("recommend", self._handle_recommend))
         self.application.add_handler(CommandHandler("recommend5m", self._handle_recommend5m))
         self.application.add_handler(CommandHandler("game5m", self._handle_game5m))
@@ -234,6 +238,10 @@ class LSETelegramBot:
 /sell <ticker> [кол-во] — продать (без кол-ва — вся позиция)
 /history [тикер] [N] — последние сделки (с тикером — фильтр по тикеру)
 /closed [N] — таблица закрытых позиций (PnL, даты MSK)
+/pending [N] — таблица открытых позиций (ещё не закрытые)
+/set_strategy <ticker> <стратегия> — переназначить стратегию у открытой позиции (напр. «5m вне» → Manual)
+/strategies — описание стратегий (GAME_5M, Portfolio, Manual, Momentum и др.)
+/prompt_entry — выдать промпт к LLM для решения о входе (BUY/STRONG_BUY/HOLD)
 /recommend [ticker] — рекомендация: когда открыть позицию и параметры управления
 
 /help — справка
@@ -290,14 +298,24 @@ class LSETelegramBot:
 `/portfolio` — кэш, позиции и P&L по последним ценам
 `/buy <ticker> <кол-во>` — купить по последней цене из БД
 `/sell <ticker>` — закрыть всю позицию; `/sell <ticker> <кол-во>` — частичная продажа
-`/history [тикер] [N]` — последние сделки (по умолч. 15); с тикером — только по нему. В ответе — стратегия [GAME_5M / Portfolio / Manual]
-`/closed [N]` — таблица закрытых позиций: Instrument, Open/Close, Profit (%), Profit ($), Units, даты MSK (по умолч. 25)
+`/history [тикер] [N]` — последние сделки (по умолч. 15); с тикером — только по нему. В ответе — стратегия [GAME\_5M / Portfolio / Manual]
+`/closed [N]` — таблица закрытых позиций: Instrument, Open/Close, Profit, Units, даты MSK (по умолч. 25)
+`/pending [N]` — таблица открытых позиций (по умолч. 25). «5m вне» — тикер убран из игры 5m.
+`/set\_strategy <ticker> <стратегия>` — переназначить стратегию у открытой позиции (Manual, Portfolio)
+`/strategies` — описание стратегий (GAME\_5M, Portfolio, Manual, Momentum и др.)
 `/recommend <ticker>` — рекомендация: когда открыть позицию, стоп-лосс, размер позиции
 `/recommend5m [ticker] [days]` — рекомендация по 5m и 5д статистике (интрадей, по умолч. SNDK 5д)
 `/game5m [ticker]` — мониторинг игры 5m: открытая позиция, последние сделки, win rate и PnL (по умолч. SNDK)
 `/dashboard [5m|daily|all]` — дашборд: все тикеры, сигналы, 5m (SNDK), новости за 7 дн. Для смены курса и решений.
-  В /ask можно спросить: _когда можно открыть позицию по SNDK и какие параметры советуешь?_
+  В /ask можно спросить: когда можно открыть позицию по SNDK и какие параметры советуешь.
   Пример: `/recommend SNDK`, `/buy GC=F 5`, `/sell MSFT`
+
+**Стратегии** (колонка в /history, /pending, /closed):
+  • **GAME\_5M** — игра 5m (крон, интрадей). «5m вне» — тикер убран из списка, крон не управляет.
+  • **Portfolio** — портфельный цикл (trading\_cycle), дефолт при отсутствии имени стратегии. SELL по стоп-лоссу выполняется.
+  • **Manual** — ручные команды `/buy`, `/sell`.
+  • **Momentum, Mean Reversion, Neutral** и др. — стратегии из StrategyManager при портфельном цикле.
+  Подробнее: `/strategies`
         """
         
         await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -749,11 +767,12 @@ class LSETelegramBot:
                 n_points = len(df)
                 has_ohlc = all(c in df.columns and df[c].notna().any() for c in ('open', 'high', 'low'))
 
-                # Разбор сделок для отметок на графике (вход / тейк / стоп / выход)
+                # Разбор сделок: маркер выхода по фактическому PnL (выход >= вход → тейк, иначе стоп)
                 trades_buy_ts, trades_buy_p = [], []
                 trades_take_ts, trades_take_p = [], []
                 trades_stop_ts, trades_stop_p = [], []
                 trades_other_ts, trades_other_p = [], []
+                last_buy_price = None
                 for row in trades_rows:
                     ts, price, side, signal_type = row[0], float(row[1]), row[2], (row[3] or "")
                     if ts is None:
@@ -767,14 +786,15 @@ class LSETelegramBot:
                     if side == "BUY":
                         trades_buy_ts.append(ts)
                         trades_buy_p.append(price)
+                        last_buy_price = price
                     elif side == "SELL":
-                        sig = (signal_type or "").upper()
-                        if sig == "TAKE_PROFIT":
-                            trades_take_ts.append(ts)
-                            trades_take_p.append(price)
-                        elif sig == "STOP_LOSS":
-                            trades_stop_ts.append(ts)
-                            trades_stop_p.append(price)
+                        if last_buy_price is not None:
+                            if price >= last_buy_price:
+                                trades_take_ts.append(ts)
+                                trades_take_p.append(price)
+                            else:
+                                trades_stop_ts.append(ts)
+                                trades_stop_p.append(price)
                         else:
                             trades_other_ts.append(ts)
                             trades_other_p.append(price)
@@ -953,6 +973,7 @@ class LSETelegramBot:
             return
         ticker_raw = context.args[0].strip().upper()
         ticker = _normalize_ticker(ticker_raw)
+        logger.info("chart5m: тикер=%s (args[0]=%s)", ticker, ticker_raw)
         days = 5
         for i in range(1, len(context.args)):
             try:
@@ -977,12 +998,33 @@ class LSETelegramBot:
             await update.message.reply_text(f"❌ Ошибка загрузки: {e}")
             return
         if df is None or df.empty:
-            await update.message.reply_text(
+            msg = (
                 f"❌ Нет 5m данных для {ticker} за последние {days} сессий (9:30–16:00 ET). "
                 "Попробуйте /chart5m SNDK 1 или 3. В выходные биржа закрыта."
             )
+            try:
+                from datetime import datetime, timedelta
+                from services.game_5m import get_trades_for_chart, trade_ts_to_et, TRADE_HISTORY_TZ
+                now = datetime.utcnow()
+                dt_start = now - timedelta(days=min(days + 2, 14))
+                trades = get_trades_for_chart(ticker, dt_start, now)
+                if trades:
+                    lines = ["📋 **Сделки GAME_5M по %s** (без свечей):" % ticker]
+                    for t in trades[-10:]:
+                        ts = t.get("ts")
+                        tz = t.get("ts_timezone") or TRADE_HISTORY_TZ
+                        try:
+                            ts_et = trade_ts_to_et(ts, source_tz=tz)
+                            ts_str = ts_et.strftime("%d.%m %H:%M") if hasattr(ts_et, "strftime") else str(ts)
+                        except Exception:
+                            ts_str = str(ts)
+                        lines.append("  %s @ %.2f — %s" % (t.get("side", ""), float(t.get("price", 0)), ts_str))
+                    msg = msg + "\n\n" + "\n".join(lines)
+            except Exception:
+                pass
+            await update.message.reply_text(msg, parse_mode="Markdown")
             return
-        # Открытая позиция для отметки на графике (игра 5m или портфель)
+        # Открытая позиция только из игры 5m (GAME_5M); портфель ExecutionAgent на график 5m не тянем
         entry_price = None
         try:
             from services.game_5m import get_open_position as get_game_position
@@ -991,17 +1033,6 @@ class LSETelegramBot:
                 entry_price = float(pos["entry_price"])
         except Exception:
             pass
-        if entry_price is None:
-            try:
-                from execution_agent import ExecutionAgent
-                ex = ExecutionAgent()
-                summary = ex.get_portfolio_summary()
-                for p in (summary.get("positions") or []):
-                    if p.get("ticker") == ticker and isinstance(p.get("entry_price"), (int, float)):
-                        entry_price = float(p["entry_price"])
-                        break
-            except Exception:
-                pass
         # Прогноз для графика: хай сессии, оценка подъёма по кривизне, тейк при открытой позиции
         d5_chart = None
         try:
@@ -1058,17 +1089,15 @@ class LSETelegramBot:
                 fig, axes = plt.subplots(
                     n_sessions, 1, figsize=(10, 3.2 * n_sessions), sharex=False, facecolor="white"
                 )
-            # Сделки за период (один раз), потом по сессиям отфильтруем
+            # Сделки за период (один раз); маркер выхода — по фактическому PnL (цена выхода vs входа), а не по signal_type
             buy_ts, buy_p = [], []
             take_ts, take_p = [], []
             stop_ts, stop_p = [], []
             other_ts, other_p = [], []
             try:
                 from services.game_5m import get_trades_for_chart, trade_ts_to_et, TRADE_HISTORY_TZ
-                # Широкий диапазон: в БД ts в Москве, на графике ET — берём с запасом, фильтр по окну сессии в Python
-                dt_query_start = (pd.Timestamp(dt_min) - pd.Timedelta(days=5)).to_pydatetime()
-                dt_query_end = (pd.Timestamp(dt_max) + pd.Timedelta(days=2)).to_pydatetime()
-                trades = get_trades_for_chart(ticker, dt_query_start, dt_query_end)
+                trades = get_trades_for_chart(ticker, dt_min, dt_max)
+                last_buy_price = None
                 for t in trades:
                     ts = t["ts"]
                     try:
@@ -1083,14 +1112,16 @@ class LSETelegramBot:
                     if t["side"] == "BUY":
                         buy_ts.append(ts)
                         buy_p.append(p)
+                        last_buy_price = p
                     elif t["side"] == "SELL":
-                        sig = (t.get("signal_type") or "").upper()
-                        if sig == "TAKE_PROFIT":
-                            take_ts.append(ts)
-                            take_p.append(p)
-                        elif sig == "STOP_LOSS":
-                            stop_ts.append(ts)
-                            stop_p.append(p)
+                        # Прибыль/убыток по факту: выход >= входа → тейк (зел.), иначе → стоп (красн.)
+                        if last_buy_price is not None:
+                            if p >= last_buy_price:
+                                take_ts.append(ts)
+                                take_p.append(p)
+                            else:
+                                stop_ts.append(ts)
+                                stop_p.append(p)
                         else:
                             other_ts.append(ts)
                             other_p.append(p)
@@ -1798,11 +1829,21 @@ class LSETelegramBot:
                 await update.message.reply_text(msg)
                 return
             from services.game_5m import trade_ts_to_et
+            # По фактическому PnL: выход в плюс → 🔵, в минус → 🔴 (не по signal_type)
+            rows_asc = sorted(rows, key=lambda x: (x["ts"], x.get("ticker", "")))
+            last_buy_price = {}
+            for r in rows_asc:
+                tkr = r.get("ticker", "")
+                if r["side"] == "BUY":
+                    last_buy_price[tkr] = float(r.get("price") or 0)
+                elif r["side"] == "SELL":
+                    entry = last_buy_price.get(tkr)
+                    r["_is_profit"] = (entry is not None and float(r.get("price") or 0) >= entry)
             title = f"📜 **Последние сделки**" + (f" ({ticker})" if ticker else "") + ":"
             lines = [title]
             for r in rows:
                 ts_raw = r["ts"]
-                stored_tz = r.get("ts_timezone")  # в БД храним таймзону метки (Europe/Moscow и т.д.)
+                stored_tz = r.get("ts_timezone")
                 ts_et = trade_ts_to_et(ts_raw, source_tz=stored_tz)
                 if ts_et is not None and hasattr(ts_et, "strftime"):
                     ts = ts_et.strftime("%Y-%m-%d %H:%M") + " ET"
@@ -1810,12 +1851,17 @@ class LSETelegramBot:
                     ts = ts_raw.strftime("%Y-%m-%d %H:%M")
                 else:
                     ts = str(ts_raw)
-                side = "🟢" if r["side"] == "BUY" else "🔴"
+                if r["side"] == "BUY":
+                    side = "🟢"
+                else:
+                    side = "🔵" if r.get("_is_profit") else "🔴"  # тейк / стоп по факту
                 strat = r.get("strategy_name", "—")
                 lines.append(f"{side} {ts} — {r['side']} {r['ticker']} x{r['quantity']:.0f} @ ${r['price']:.2f} ({r['signal_type']}) [{strat}]")
-            if rows and ticker:
+            if rows:
                 lines.append("")
-                lines.append(f"📈 _Сделки на графике:_ `/chart5m {ticker} 7` или `/chart {ticker} 7`")
+                lines.append("_🟢 Вход · 🔵 Выход в плюс · 🔴 Выход в минус_")
+            if rows and ticker:
+                lines.append(f"📈 _График:_ `/chart5m {ticker} 7` или `/chart {ticker} 7`")
             await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
         except Exception as e:
             logger.error(f"Ошибка history: {e}", exc_info=True)
@@ -1858,7 +1904,7 @@ class LSETelegramBot:
                 except Exception:
                     return str(ts)[:16] if ts else "—"
 
-            # Колонки с выравниванием и разделителями для читаемости в Telegram (моноширинный блок)
+            # Колонки с выравниванием; стратегия: открытие (Entry) / закрытие (Exit), чтобы не путать
             sep = "  "
             w_inst = 10
             w_dir = 6
@@ -1867,6 +1913,7 @@ class LSETelegramBot:
             w_pips = 8
             w_profit = 10
             w_units = 6
+            w_strat = 8
             w_date = 16
 
             def _cell(s: str, w: int) -> str:
@@ -1876,7 +1923,8 @@ class LSETelegramBot:
                 _cell("Instrument", w_inst) + sep + _cell("Dir", w_dir) + sep
                 + _cell("Open", w_open) + sep + _cell("Close", w_close) + sep
                 + _cell("Pips", w_pips) + sep + _cell("Profit", w_profit) + sep
-                + _cell("Units", w_units) + sep + _cell("Open (MSK)", w_date) + sep + "Close (MSK)"
+                + _cell("Units", w_units) + sep + _cell("Entry", w_strat) + sep + _cell("Exit", w_strat) + sep
+                + _cell("Open (MSK)", w_date) + sep + "Close (MSK)"
             )
             rows = [header]
             for t in closed:
@@ -1889,16 +1937,19 @@ class LSETelegramBot:
                         pips_val = round(pts, 2)
                 else:
                     pips_val = round(pts, 2)
+                entry_s = getattr(t, "entry_strategy", None) or "—"
+                exit_s = getattr(t, "exit_strategy", None) or "—"
                 row = (
                     _cell(str(t.ticker), w_inst) + sep + _cell(direction, w_dir) + sep
                     + _cell(f"{t.entry_price:.2f}", w_open) + sep + _cell(f"{t.exit_price:.2f}", w_close) + sep
                     + _cell(str(pips_val), w_pips) + sep + _cell(f"{t.net_pnl:+.2f}", w_profit) + sep
                     + _cell(str(int(t.quantity)), w_units) + sep
+                    + _cell(entry_s, w_strat) + sep + _cell(exit_s, w_strat) + sep
                     + _cell(_fmt_ts_msk(t.entry_ts), w_date) + sep + _fmt_ts_msk(t.ts)
                 )
                 rows.append(row)
             table = "\n".join(rows)
-            caption = f"📋 **Positions** (последние {len(closed)})\nДаты в MSK."
+            caption = f"📋 **Positions** (последние {len(closed)})\nEntry/Exit — стратегия открытия/закрытия. Даты в MSK."
             await update.message.reply_text(
                 caption + "\n\n```\n" + table + "\n```",
                 parse_mode="Markdown",
@@ -1906,6 +1957,178 @@ class LSETelegramBot:
         except Exception as e:
             logger.error(f"Ошибка closed: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+    async def _handle_pending(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Таблица открытых позиций: Instrument, Open, Units, Strategy, Open (MSK)."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        limit = 25
+        if context.args and len(context.args) >= 1:
+            try:
+                limit = min(int(context.args[0].strip()), 50)
+            except ValueError:
+                pass
+        try:
+            import pandas as pd
+            from report_generator import get_engine, load_trade_history, compute_open_positions, get_latest_prices
+            from services.ticker_groups import get_tickers_game_5m
+
+            engine = get_engine()
+            trades = load_trade_history(engine)
+            pending = compute_open_positions(trades)
+            if not pending:
+                await update.message.reply_text("📋 Открытых позиций нет.")
+                return
+            pending = pending[:limit]
+            tickers_in_game_5m = set(get_tickers_game_5m())
+            latest_prices = get_latest_prices(engine, [p.ticker for p in pending])
+
+            def _fmt_ts_msk(ts) -> str:
+                if ts is None:
+                    return "—"
+                try:
+                    t = pd.Timestamp(ts)
+                    if t.tzinfo is not None:
+                        t = t.tz_convert("Europe/Moscow")
+                    return t.strftime("%d.%m.%Y %H:%M")
+                except Exception:
+                    return str(ts)[:16] if ts else "—"
+
+            sep = "  "
+            w_inst = 10
+            w_dir = 6
+            w_open = 8
+            w_now = 8
+            w_units = 6
+            w_pl = 14
+            w_strat = 10
+            w_date = 16
+
+            def _cell(s: str, w: int) -> str:
+                return str(s)[:w].ljust(w)
+
+            header = (
+                _cell("Instrument", w_inst) + sep + _cell("Dir", w_dir) + sep
+                + _cell("Open", w_open) + sep + _cell("Now", w_now) + sep + _cell("Units", w_units) + sep
+                + _cell("P/L", w_pl) + sep + _cell("Strategy", w_strat) + sep + "Open (MSK)"
+            )
+            rows = [header]
+            for p in pending:
+                strat = p.strategy_name or "—"
+                if strat == "GAME_5M" and p.ticker not in tickers_in_game_5m:
+                    strat = "5m вне"
+                now_price = latest_prices.get(p.ticker)
+                if now_price is not None and p.entry_price and p.entry_price > 0:
+                    pct = (now_price - p.entry_price) / p.entry_price * 100.0
+                    usd = (now_price - p.entry_price) * p.quantity
+                    pl_str = f"{pct:+.1f}% {usd:+.0f}$"
+                else:
+                    pl_str = "—"
+                    now_price = None
+                now_str = f"{now_price:.2f}" if now_price is not None else "—"
+                row = (
+                    _cell(str(p.ticker), w_inst) + sep + _cell("Long", w_dir) + sep
+                    + _cell(f"{p.entry_price:.2f}", w_open) + sep + _cell(now_str, w_now) + sep
+                    + _cell(str(int(p.quantity)), w_units) + sep + _cell(pl_str, w_pl) + sep
+                    + _cell(strat, w_strat) + sep + _fmt_ts_msk(p.entry_ts)
+                )
+                rows.append(row)
+            table = "\n".join(rows)
+            caption = "📋 **Открытые позиции** (показано {})\nNow и P/L — по последней close из quotes. Даты в MSK. _«5m вне» — тикер убран из игры 5m._".format(len(pending))
+            await update.message.reply_text(
+                caption + "\n\n```\n" + table + "\n```",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.error(f"Ошибка pending: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+    async def _handle_set_strategy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Переназначить стратегию у открытой позиции (для тикеров «вне игры»): /set_strategy TICKER STRATEGY."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "Укажите тикер и стратегию.\n"
+                "Пример: `/set_strategy GC=F Manual` или `/set_strategy GC=F Portfolio`\n\n"
+                "Нужно для позиций «5m вне»: после переназначения в /pending будет новая стратегия.",
+                parse_mode="Markdown",
+            )
+            return
+        ticker = _normalize_ticker(context.args[0])
+        strategy = (context.args[1] or "Manual").strip() or "Manual"
+        agent = self._get_execution_agent()
+        if not agent:
+            await update.message.reply_text("❌ Песочница недоступна.")
+            return
+        try:
+            ok = agent.set_open_position_strategy(ticker, strategy)
+            if ok:
+                await update.message.reply_text(
+                    f"✅ Стратегия последнего BUY по **{ticker}** изменена на «{strategy}». "
+                    "В `/pending` будет отображаться новая стратегия.",
+                    parse_mode="Markdown",
+                )
+            else:
+                await update.message.reply_text(
+                    f"По {ticker} не найден BUY в истории (нет открытой позиции по этому тикеру)."
+                )
+        except Exception as e:
+            logger.exception("Ошибка set_strategy")
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+    async def _handle_prompt_entry(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Выдать промпт к LLM для принятия решения по входу (BUY/STRONG_BUY/HOLD)."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        try:
+            from services.llm_service import LLMService
+            t = LLMService.get_entry_decision_prompt_template()
+            msg = (
+                "📋 **Промпт для решения о входе в рынок**\n\n"
+                "**System:**\n```\n" + t["system"].strip() + "\n```\n\n"
+                "**User (шаблон, подставляются данные по тикеру):**\n```\n" + t["user_template"].strip() + "\n```\n\n"
+                "_Используется в AnalystAgent → get_decision_with_llm → LLMService.analyze_trading_situation (services/llm_service.py)_"
+            )
+            await update.message.reply_text(msg, parse_mode="Markdown")
+        except Exception as e:
+            logger.exception("Ошибка prompt_entry")
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+    async def _handle_strategies(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Описание стратегий (отображаются в /history, /pending, /closed)."""
+        user_id = update.effective_user.id
+        if not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        text = """
+📋 **Стратегии**
+
+**Источники сделок (кто открыл/закрыл):**
+
+• **GAME\_5M** — игра 5m: крон по тикерам из GAME\_5M\_TICKERS, интрадей (вход/выход по 5m, тейк/стоп). В /pending для тикеров, убранных из списка, показывается «5m вне» — крон по ним больше не управляет.
+
+• **Portfolio** — портфельный цикл (trading\_cycle\_cron, ExecutionAgent). Сделки по сигналу AnalystAgent по списку MEDIUM/LONG тикеров. Если StrategyManager не вернул имя стратегии, в БД пишется «Portfolio». Стоп-лосс по таким позициям проверяется при каждом запуске крона — SELL выполняется автоматически при срабатывании.
+
+• **Manual** — ручные команды `/buy` и `/sell` в боте.
+
+**Стратегии из StrategyManager** (при портфельном цикле выбирается одна по режиму рынка):
+
+• **Momentum** — низкая волатильность + положительный sentiment.
+• **Mean Reversion** — высокая волатильность + нейтральный sentiment.
+• **Volatile Gap** — очень высокая волатильность + гэп или экстремальный sentiment.
+• **Geopolitical Bounce** — резкое падение предыдущей сессии (≥2%), отскок long.
+• **Neutral** — fallback, когда ни одна стратегия не подошла; консервативный HOLD (режим не определён).
+
+Переназначить стратегию у открытой позиции: `/set\_strategy <ticker> <стратегия>` (например для «5m вне» → Manual или Portfolio).
+        """
+        await update.message.reply_text(text.strip(), parse_mode="Markdown")
 
     async def _handle_recommend(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Рекомендация: когда открыть позицию и какие параметры управления (стоп-лосс, размер)."""

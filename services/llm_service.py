@@ -153,6 +153,56 @@ class LLMService:
             logger.error(traceback.format_exc())
             raise
 
+    @staticmethod
+    def get_entry_decision_system_prompt() -> str:
+        """Системный промпт для принятия решения о входе (BUY/STRONG_BUY/HOLD). Единый источник текста."""
+        return """Ты опытный финансовый аналитик, специализирующийся на техническом анализе и анализе новостей.
+Твоя задача - проанализировать торговую ситуацию и дать рекомендацию: BUY, STRONG_BUY или HOLD.
+
+Учитывай:
+1. Технические индикаторы (тренд, волатильность)
+2. Sentiment новостей
+3. Контекст новостей
+4. Риски
+
+Отвечай в формате JSON:
+{
+    "decision": "BUY|STRONG_BUY|HOLD",
+    "confidence": 0.0-1.0,
+    "reasoning": "объяснение решения",
+    "risks": ["список рисков"],
+    "key_factors": ["ключевые факторы"]
+}
+"""
+
+    @staticmethod
+    def get_entry_decision_prompt_template() -> Dict[str, str]:
+        """Шаблон промпта для решения о входе: system + user (с плейсхолдерами). Для отображения по /prompt_entry."""
+        return {
+            "system": LLMService.get_entry_decision_system_prompt(),
+            "user_template": """Анализ для тикера {ticker}:
+
+Технические данные:
+- Текущая цена: {close}
+- SMA_5: {sma_5}
+- Волатильность (5 дней): {volatility_5}
+- Средняя волатильность (20 дней): {avg_volatility_20}
+- RSI: {rsi} ({rsi_status})
+- Технический сигнал: {technical_signal}
+
+Sentiment анализ:
+- Взвешенный sentiment: {sentiment_score:.3f}
+- Количество новостей: {len_news}
+
+Новости:
+{news_summary}
+
+(Опционально: Контекст сессии: {premarket_note} — учти при рекомендации входа, в премаркете ликвидность ниже.)
+(Опционально: Контекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Учти при итоговой рекомендации.)
+
+Дай рекомендацию на основе этих данных.""",
+        }
+
     def generate_response_with_model(
         self,
         base_url: str,
@@ -203,7 +253,10 @@ class LLMService:
         ticker: str,
         technical_data: Dict[str, Any],
         news_data: List[Dict[str, Any]],
-        sentiment_score: float
+        sentiment_score: float,
+        strategy_name: Optional[str] = None,
+        strategy_signal: Optional[str] = None,
+        strategy_outcome_stats: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Анализ торговой ситуации с помощью LLM
@@ -213,28 +266,14 @@ class LLMService:
             technical_data: Технические данные (цена, SMA, волатильность)
             news_data: Список новостей
             sentiment_score: Взвешенный sentiment score
+            strategy_name: Имя выбранной стратегии (Momentum, Mean Reversion и т.д.), если есть
+            strategy_signal: Сигнал стратегии (BUY/HOLD/SELL), если есть
+            strategy_outcome_stats: Текст со статистикой исходов по стратегиям (закрытые сделки), если есть
             
         Returns:
             Анализ от LLM с рекомендацией
         """
-        system_prompt = """Ты опытный финансовый аналитик, специализирующийся на техническом анализе и анализе новостей.
-Твоя задача - проанализировать торговую ситуацию и дать рекомендацию: BUY, STRONG_BUY или HOLD.
-
-Учитывай:
-1. Технические индикаторы (тренд, волатильность)
-2. Sentiment новостей
-3. Контекст новостей
-4. Риски
-
-Отвечай в формате JSON:
-{
-    "decision": "BUY|STRONG_BUY|HOLD",
-    "confidence": 0.0-1.0,
-    "reasoning": "объяснение решения",
-    "risks": ["список рисков"],
-    "key_factors": ["ключевые факторы"]
-}
-"""
+        system_prompt = self.get_entry_decision_system_prompt()
         
         # Формируем контекст
         news_summary = "\n".join([
@@ -277,6 +316,10 @@ Sentiment анализ:
         premarket_note = technical_data.get("premarket_note")
         if premarket_note:
             user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
+        if strategy_name and strategy_signal:
+            user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Учти при итоговой рекомендации (можешь согласиться или скорректировать)."
+        if strategy_outcome_stats:
+            user_message += f"\n\n{strategy_outcome_stats} Учти исходы в похожих ситуациях при рекомендации."
         user_message += "\n\nДай рекомендацию на основе этих данных."
         
         messages = [{"role": "user", "content": user_message}]

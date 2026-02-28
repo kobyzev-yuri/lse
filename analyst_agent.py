@@ -672,12 +672,23 @@ class AnalystAgent:
                 if sentiment_for_llm < 0 or sentiment_for_llm > 1:
                     sentiment_for_llm = 0.5  # Fallback
                 
-                # Получаем детальный LLM анализ
+                # Статистика исходов по стратегиям (закрытые сделки за 180 дн.) — LLM учитывает при рекомендации
+                strategy_outcome_stats = ""
+                try:
+                    from report_generator import get_engine, get_strategy_outcome_stats
+                    strategy_outcome_stats = get_strategy_outcome_stats(get_engine(), limit_days=180)
+                except Exception as e:
+                    logger.debug("Статистика по стратегиям для LLM недоступна: %s", e)
+                
+                # Получаем детальный LLM анализ (стратегия, её сигнал и история исходов в промпт)
                 llm_result = self.llm_service.analyze_trading_situation(
                     ticker=ticker,
                     technical_data=technical_data,
                     news_data=news_list,
-                    sentiment_score=sentiment_for_llm
+                    sentiment_score=sentiment_for_llm,
+                    strategy_name=selected_strategy.name if selected_strategy else None,
+                    strategy_signal=base_decision if base_decision else None,
+                    strategy_outcome_stats=strategy_outcome_stats if strategy_outcome_stats else None,
                 )
                 logger.info(f"✅ LLM анализ завершен: {llm_result.get('llm_analysis', {}).get('decision', 'N/A')}")
                 

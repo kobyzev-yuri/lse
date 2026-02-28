@@ -32,6 +32,18 @@ class TradePnL:
     signal_type: str
     sentiment_at_trade: Optional[float]
     entry_ts: Optional[pd.Timestamp] = None  # open time (MSK) for table /closed
+    entry_strategy: Optional[str] = None  # стратегия открытия (первый BUY)
+    exit_strategy: Optional[str] = None  # стратегия закрытия (SELL)
+
+
+@dataclass
+class OpenPosition:
+    """Открытая (не закрытая) позиция для отчёта /pending."""
+    ticker: str
+    quantity: float
+    entry_price: float
+    entry_ts: Optional[pd.Timestamp]
+    strategy_name: Optional[str] = None  # стратегия последнего BUY по этой позиции
 
 
 def get_engine():
@@ -77,6 +89,7 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
     position_qty: Dict[str, float] = {}
     position_cost: Dict[str, float] = {}  # суммарный cost basis (включая комиссии)
     position_open_ts: Dict[str, Optional[pd.Timestamp]] = {}  # дата открытия текущей позиции (для /closed)
+    position_open_strategy: Dict[str, str] = {}  # стратегия открытия (первый BUY по позиции)
 
     for _, row in trades.iterrows():
         ticker = row["ticker"]
@@ -87,6 +100,7 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
         ts = row["ts"]
         trade_id = int(row["id"])
         signal_type = row.get("signal_type") or ""
+        strategy = (row.get("strategy_name") or "").strip() or "—"
         sentiment = (
             float(row["sentiment_at_trade"])
             if row["sentiment_at_trade"] is not None
@@ -97,11 +111,13 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
             position_qty[ticker] = 0.0
             position_cost[ticker] = 0.0
             position_open_ts[ticker] = None
+            position_open_strategy[ticker] = "—"
 
         if side == "BUY":
-            # Покупка: увеличиваем позицию и cost basis; при открытии позиции — запоминаем дату
+            # Покупка: при открытии позиции (с 0) запоминаем дату и стратегию
             if position_qty[ticker] == 0:
                 position_open_ts[ticker] = pd.to_datetime(ts)
+                position_open_strategy[ticker] = strategy
             position_qty[ticker] += qty
             position_cost[ticker] += qty * price + commission
         elif side == "SELL":
@@ -129,10 +145,12 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
 
             # Обновляем состояние позиции
             entry_ts = position_open_ts.get(ticker)
+            entry_strat = position_open_strategy.get(ticker) or "—"
             position_qty[ticker] -= qty
             position_cost[ticker] -= cost_for_sold
             if position_qty[ticker] <= 0:
                 position_open_ts[ticker] = None
+                position_open_strategy[ticker] = "—"
 
             results.append(
                 TradePnL(
@@ -150,10 +168,78 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
                     signal_type=signal_type,
                     sentiment_at_trade=sentiment,
                     entry_ts=entry_ts,
+                    entry_strategy=entry_strat,
+                    exit_strategy=strategy,
                 )
             )
 
     return results
+
+
+def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
+    """
+    Список открытых позиций (есть BUY без полного SELL).
+    Использует ту же модель средневзвешенной цены входа.
+    """
+    result: List[OpenPosition] = []
+
+    if trades.empty:
+        return result
+
+    trades = trades.copy()
+    trades["quantity"] = trades["quantity"].astype(float)
+    trades["price"] = trades["price"].astype(float)
+    trades["commission"] = trades["commission"].astype(float)
+
+    position_qty: Dict[str, float] = {}
+    position_cost: Dict[str, float] = {}
+    position_open_ts: Dict[str, Optional[pd.Timestamp]] = {}
+    position_last_strategy: Dict[str, str] = {}
+
+    for _, row in trades.iterrows():
+        ticker = row["ticker"]
+        side = row["side"].upper()
+        qty = float(row["quantity"])
+        price = float(row["price"])
+        commission = float(row["commission"]) if row["commission"] is not None else 0.0
+        ts = row["ts"]
+        strategy = (row.get("strategy_name") or "").strip() or "—"
+
+        if ticker not in position_qty:
+            position_qty[ticker] = 0.0
+            position_cost[ticker] = 0.0
+            position_open_ts[ticker] = None
+            position_last_strategy[ticker] = "—"
+
+        if side == "BUY":
+            if position_qty[ticker] == 0:
+                position_open_ts[ticker] = pd.to_datetime(ts)
+            position_qty[ticker] += qty
+            position_cost[ticker] += qty * price + commission
+            position_last_strategy[ticker] = strategy
+        elif side == "SELL":
+            if position_qty[ticker] <= 0:
+                continue
+            avg_entry = position_cost[ticker] / position_qty[ticker]
+            cost_for_sold = avg_entry * qty
+            position_qty[ticker] -= qty
+            position_cost[ticker] -= cost_for_sold
+            if position_qty[ticker] <= 0:
+                position_open_ts[ticker] = None
+
+    for ticker, qty in position_qty.items():
+        if qty > 0 and position_cost.get(ticker, 0) > 0:
+            result.append(
+                OpenPosition(
+                    ticker=ticker,
+                    quantity=qty,
+                    entry_price=position_cost[ticker] / qty,
+                    entry_ts=position_open_ts.get(ticker),
+                    strategy_name=position_last_strategy.get(ticker) or "—",
+                )
+            )
+
+    return sorted(result, key=lambda p: (p.entry_ts or pd.Timestamp.min), reverse=True)
 
 
 def compute_win_rate(trade_pnls: List[TradePnL]) -> float:
@@ -161,6 +247,48 @@ def compute_win_rate(trade_pnls: List[TradePnL]) -> float:
         return 0.0
     wins = sum(1 for t in trade_pnls if t.net_pnl > 0)
     return wins / len(trade_pnls)
+
+
+def get_strategy_outcome_stats(engine, limit_days: Optional[int] = None) -> str:
+    """
+    Статистика по исходам закрытых сделок по стратегиям (entry_strategy).
+    Для контекста LLM: «в похожих ситуациях стратегия X давала N сделок, K в плюс».
+    limit_days: учитывать только сделки за последние N дней; None — вся история.
+    """
+    trades = load_trade_history(engine)
+    if trades.empty:
+        return ""
+    closed = compute_closed_trade_pnls(trades)
+    if not closed:
+        return ""
+
+    if limit_days is not None and limit_days > 0:
+        try:
+            cutoff = pd.Timestamp.now(tz=closed[0].ts.tzinfo if closed[0].ts.tzinfo else None) - pd.Timedelta(days=limit_days)
+            closed = [t for t in closed if t.ts >= cutoff]
+        except Exception:
+            pass
+    if not closed:
+        return ""
+
+    stats: Dict[str, Dict[str, float]] = {}
+    for t in closed:
+        name = (t.entry_strategy or "").strip() or "—"
+        if name not in stats:
+            stats[name] = {"count": 0, "wins": 0, "pnl_sum": 0.0}
+        stats[name]["count"] += 1
+        if t.net_pnl > 0:
+            stats[name]["wins"] += 1
+        stats[name]["pnl_sum"] += t.net_pnl
+
+    lines = []
+    for name in sorted(stats.keys(), key=lambda x: -stats[x]["count"]):
+        c = int(stats[name]["count"])
+        w = int(stats[name]["wins"])
+        pct = (100.0 * w / c) if c else 0
+        total_pnl = stats[name]["pnl_sum"]
+        lines.append(f"{name}: {c} сделок, {w} в плюс ({pct:.0f}%), суммарный PnL ${total_pnl:+.2f}")
+    return "История по стратегиям (закрытые сделки): " + "; ".join(lines)
 
 
 def load_quotes(engine, tickers: List[str]) -> pd.DataFrame:
@@ -182,6 +310,29 @@ def load_quotes(engine, tickers: List[str]) -> pd.DataFrame:
             params=params,
         )
     return df
+
+
+def get_latest_prices(engine, tickers: List[str]) -> Dict[str, float]:
+    """Последняя цена (close) по каждому тикеру из quotes. Нет данных → тикер не в словаре."""
+    if not tickers:
+        return {}
+    with engine.connect() as conn:
+        placeholders = ", ".join([f":t{i}" for i in range(len(tickers))])
+        params = {f"t{i}": t for i, t in enumerate(tickers)}
+        # PostgreSQL: последняя по date строка по каждому тикеру
+        df = pd.read_sql(
+            text(
+                f"""
+                SELECT DISTINCT ON (ticker) ticker, close
+                FROM quotes
+                WHERE ticker IN ({placeholders})
+                ORDER BY ticker, date DESC
+                """
+            ),
+            conn,
+            params=params,
+        )
+    return dict(zip(df["ticker"], df["close"].astype(float))) if not df.empty else {}
 
 
 def compute_correlation_impact(engine, trade_pnls: List[TradePnL]) -> None:

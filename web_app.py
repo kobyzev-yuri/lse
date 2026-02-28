@@ -678,6 +678,50 @@ async def add_news_api(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
+    """Минимальный ответ для chart5m при отсутствии OHLC: только сделки GAME_5M за последние days дней."""
+    from datetime import datetime, timedelta
+    try:
+        from services.game_5m import get_trades_for_chart, trade_ts_to_et
+    except ImportError:
+        return {"ticker": ticker, "days": days, "times": [], "close": [], "trades": [], "no_ohlc": True}
+    now = datetime.utcnow()
+    dt_end = now
+    dt_start = now - timedelta(days=min(days + 2, 14))
+    trades_out = []
+    try:
+        for t in get_trades_for_chart(ticker, dt_start, dt_end):
+            ts = t.get("ts")
+            stored_tz = t.get("ts_timezone")
+            ts_et = trade_ts_to_et(ts, source_tz=stored_tz)
+            if ts_et is not None and hasattr(ts_et, "isoformat"):
+                ts = ts_et.isoformat()
+            elif hasattr(ts, "isoformat"):
+                ts = ts.isoformat()
+            trades_out.append({
+                "ts": ts,
+                "price": float(t.get("price", 0)),
+                "side": t.get("side"),
+                "signal_type": t.get("signal_type"),
+            })
+    except Exception:
+        pass
+    return {
+        "ticker": str(ticker),
+        "days": int(days),
+        "times": [],
+        "close": [],
+        "dt_max": None,
+        "dt_max_ext": None,
+        "prolongation": {"times": [], "prices": [], "forecast_defined": False, "label": None},
+        "entry_price": None,
+        "session_high": None,
+        "take_level": None,
+        "trades": trades_out,
+        "no_ohlc": True,
+    }
+
+
 def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
     """Строит данные для графика 5m с пролонгацией (те же функции, что в Telegram)."""
     try:
@@ -702,7 +746,8 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
                 days = fallback_days
                 break
         else:
-            return None
+            # Нет 5m свечей (тикер вне FAST или Yahoo не отдаёт 5m) — всё равно отдаём сделки GAME_5M за период
+            return _build_chart5m_trades_only(ticker, days)
     try:
         df["datetime"] = pd.to_datetime(df["datetime"])
     except Exception:
@@ -782,6 +827,7 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
     trades = []
     try:
         from services.game_5m import trade_ts_to_et
+        # Диапазон графика (ET); внутри get_trades_for_chart конвертируется в MSK и фильтруется по ET
         for t in get_trades_for_chart(ticker, dt_min, dt_max):
             ts = t.get("ts")
             # График в ET; используем ts_timezone из строки (в БД храним явно)
@@ -867,8 +913,7 @@ async def get_chart5m(ticker: str, days: int = 5):
 
 @app.get("/visualization", response_class=HTMLResponse)
 async def visualization_page(request: Request):
-    """Страница визуализации данных"""
-    # Получаем список тикеров для дневного графика (из БД) и тикеры для 5m (те же + быстрые)
+    """Страница визуализации данных. ?ticker=LITE — предвыбор тикера для 5m."""
     with engine.connect() as conn:
         tickers_df = pd.read_sql(
             text("SELECT DISTINCT ticker FROM quotes ORDER BY ticker"),
@@ -878,9 +923,13 @@ async def visualization_page(request: Request):
     tickers_5m = list(tickers)
     if "SNDK" not in tickers_5m:
         tickers_5m = ["SNDK"] + tickers_5m
+    selected_5m = (request.query_params.get("ticker") or "").strip().upper()
+    if selected_5m and selected_5m not in tickers_5m:
+        tickers_5m = [selected_5m] + [t for t in tickers_5m if t != selected_5m]
     return HTMLResponse(render_template("visualization.html", {
         "tickers": tickers,
         "tickers_5m": tickers_5m,
+        "selected_ticker_5m": selected_5m if selected_5m in tickers_5m else None,
     }))
 
 

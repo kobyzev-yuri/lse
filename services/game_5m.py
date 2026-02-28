@@ -106,7 +106,7 @@ def get_open_position(ticker: str) -> Optional[dict[str, Any]]:
                 SELECT id, ts, quantity, price, signal_type
                 FROM public.trade_history
                 WHERE ticker = :ticker AND strategy_name = :strategy AND side = 'BUY'
-                ORDER BY ts DESC
+                ORDER BY ts DESC, id DESC
                 LIMIT 1
             """),
             {"ticker": ticker, "strategy": GAME_5M_STRATEGY},
@@ -114,13 +114,15 @@ def get_open_position(ticker: str) -> Optional[dict[str, Any]]:
         if not last_buy:
             return None
         buy_id, buy_ts, qty, price, signal_type = last_buy
+        # SELL после этого BUY: позже по времени или тот же ts, но id больше (сделки в одну минуту)
         sell_after = conn.execute(
             text("""
                 SELECT 1 FROM public.trade_history
-                WHERE ticker = :ticker AND strategy_name = :strategy AND side = 'SELL' AND ts > :after_ts
+                WHERE ticker = :ticker AND strategy_name = :strategy AND side = 'SELL'
+                  AND (ts > :after_ts OR (ts = :after_ts AND id > :buy_id))
                 LIMIT 1
             """),
-            {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "after_ts": buy_ts},
+            {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "after_ts": buy_ts, "buy_id": buy_id},
         ).fetchone()
         if sell_after:
             return None
@@ -213,15 +215,40 @@ def close_position(ticker: str, exit_price: float, exit_signal_type: str) -> Opt
     return pnl_pct
 
 
+def _chart_range_et_to_msk(dt_min: datetime, dt_max: datetime, margin_days: int = 1) -> tuple[datetime, datetime]:
+    """Переводит диапазон графика (ET) в московское время для запроса к БД. Добавляет margin_days с обеих сторон."""
+    try:
+        import pandas as pd
+        t_lo = pd.Timestamp(dt_min)
+        t_hi = pd.Timestamp(dt_max)
+        if t_lo.tzinfo is None:
+            t_lo = t_lo.tz_localize(CHART_DISPLAY_TZ)
+        else:
+            t_lo = t_lo.tz_convert(CHART_DISPLAY_TZ)
+        if t_hi.tzinfo is None:
+            t_hi = t_hi.tz_localize(CHART_DISPLAY_TZ)
+        else:
+            t_hi = t_hi.tz_convert(CHART_DISPLAY_TZ)
+        t_lo_msk = t_lo.tz_convert(TRADE_HISTORY_TZ)
+        t_hi_msk = t_hi.tz_convert(TRADE_HISTORY_TZ)
+        lo = (t_lo_msk - pd.Timedelta(days=margin_days)).tz_localize(None)
+        hi = (t_hi_msk + pd.Timedelta(days=margin_days)).tz_localize(None)
+        return lo.to_pydatetime() if hasattr(lo, "to_pydatetime") else lo, hi.to_pydatetime() if hasattr(hi, "to_pydatetime") else hi
+    except Exception:
+        return dt_min, dt_max
+
+
 def get_trades_for_chart(
     ticker: str,
     dt_min: datetime,
     dt_max: datetime,
 ) -> list[dict[str, Any]]:
     """Сделки GAME_5M по тикеру в заданном диапазоне времени (для нанесения на график 5m).
+    dt_min, dt_max — диапазон графика в ET. В БД ts хранятся в Moscow, поэтому диапазон переводится в MSK.
     Возвращает список dict: ts, price, side ('BUY'|'SELL'), signal_type, ts_timezone (если есть в таблице)."""
+    dt_lo, dt_hi = _chart_range_et_to_msk(dt_min, dt_max, margin_days=1)
     engine = _engine()
-    params = {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "dt_min": dt_min, "dt_max": dt_max}
+    params = {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "dt_min": dt_lo, "dt_max": dt_hi}
     with engine.connect() as conn:
         try:
             rows = conn.execute(
@@ -234,12 +261,11 @@ def get_trades_for_chart(
                 """),
                 params,
             ).fetchall()
-            return [
+            raw = [
                 {"ts": r[0], "price": float(r[2]), "side": r[1], "signal_type": r[3] or "", "ts_timezone": r[4]}
                 for r in rows
             ]
         except Exception:
-            # До миграции ts_timezone колонки может не быть
             rows = conn.execute(
                 text("""
                     SELECT ts, side, price, signal_type
@@ -250,10 +276,12 @@ def get_trades_for_chart(
                 """),
                 params,
             ).fetchall()
-            return [
+            raw = [
                 {"ts": r[0], "price": float(r[2]), "side": r[1], "signal_type": r[3] or "", "ts_timezone": None}
                 for r in rows
             ]
+    # Не фильтруем по ET здесь: диапазон уже переведён в MSK с запасом, отрисовка по сессиям сама отсечёт лишнее
+    return raw
 
 
 def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:

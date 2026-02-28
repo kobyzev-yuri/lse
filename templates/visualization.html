@@ -25,7 +25,7 @@
     <select id="ticker5mSelect">
         <option value="">Выберите тикер</option>
         {% for ticker in (tickers_5m or tickers or ['SNDK']) %}
-        <option value="{{ ticker }}" {% if ticker == 'SNDK' %}selected{% endif %}>{{ ticker }}</option>
+        <option value="{{ ticker }}" {% if (selected_ticker_5m and ticker == selected_ticker_5m) or (not selected_ticker_5m and loop.first and ticker) %}selected{% endif %}>{{ ticker }}</option>
         {% endfor %}
     </select>
     <label style="margin-left:1rem;">Дней:</label>
@@ -72,35 +72,47 @@ async function loadChart5m() {
             const msg = (data.detail || response.statusText || 'Нет 5m данных');
             throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
         }
-        const labels = data.times.concat(data.prolongation.times);
-        const nMain = data.times.length;
-        const nProlong = data.prolongation.times.length;
-        const closeData = data.close.concat(Array(nProlong).fill(null));
-        const prolongData = Array(nMain).fill(null).concat(data.prolongation.prices);
-
-        const datasets = [
-            {
-                label: 'Close',
-                data: closeData,
-                borderColor: '#1565c0',
-                backgroundColor: 'rgba(21, 101, 192, 0.05)',
-                fill: false,
-                tension: 0.1,
-                pointRadius: 0,
-                borderWidth: 1.2
-            },
-            {
-                label: data.prolongation.label || (data.prolongation.forecast_defined ? 'Прогноз' : '… прогноз не определён'),
-                data: prolongData,
-                borderColor: '#c62828',
-                borderDash: data.prolongation.forecast_defined ? [] : [4, 4],
-                borderWidth: data.prolongation.forecast_defined ? 1.2 : 0.8,
-                fill: false,
-                tension: 0,
-                pointRadius: 0
+        const noOhlc = data.no_ohlc === true;
+        const prolong = data.prolongation || { times: [], prices: [], forecast_defined: false, label: null };
+        const labels = (data.times || []).concat(prolong.times || []);
+        const nMain = (data.times || []).length;
+        const nProlong = (prolong.times || []).length;
+        if (noOhlc && (data.trades || []).length > 0) {
+            const tradeTimes = (data.trades || []).map(t => t.ts).filter(Boolean);
+            if (tradeTimes.length > 0) {
+                tradeTimes.sort((a, b) => new Date(a) - new Date(b));
+                labels.push(...tradeTimes);
             }
-        ];
-        if (data.entry_price != null) {
+        }
+        const closeData = (data.close || []).concat(Array(nProlong).fill(null));
+        const prolongData = Array(nMain).fill(null).concat(prolong.prices || []);
+
+        const datasets = [];
+        if (!noOhlc && nMain > 0) {
+            datasets.push(
+                {
+                    label: 'Close',
+                    data: closeData,
+                    borderColor: '#1565c0',
+                    backgroundColor: 'rgba(21, 101, 192, 0.05)',
+                    fill: false,
+                    tension: 0.1,
+                    pointRadius: 0,
+                    borderWidth: 1.2
+                },
+                {
+                    label: prolong.label || (prolong.forecast_defined ? 'Прогноз' : '… прогноз не определён'),
+                    data: prolongData,
+                    borderColor: '#c62828',
+                    borderDash: prolong.forecast_defined ? [] : [4, 4],
+                    borderWidth: prolong.forecast_defined ? 1.2 : 0.8,
+                    fill: false,
+                    tension: 0,
+                    pointRadius: 0
+                }
+            );
+        }
+        if (!noOhlc && data.entry_price != null) {
             datasets.push({
                 label: 'Вход @ ' + data.entry_price.toFixed(2),
                 data: labels.map(() => data.entry_price),
@@ -111,7 +123,7 @@ async function loadChart5m() {
                 pointRadius: 0
             });
         }
-        if (data.session_high != null) {
+        if (!noOhlc && data.session_high != null) {
             datasets.push({
                 label: 'Хай сессии ' + data.session_high.toFixed(2),
                 data: labels.map(() => data.session_high),
@@ -122,7 +134,7 @@ async function loadChart5m() {
                 pointRadius: 0
             });
         }
-        if (data.take_level != null) {
+        if (!noOhlc && data.take_level != null) {
             datasets.push({
                 label: 'Тейк ' + data.take_level.toFixed(2),
                 data: labels.map(() => data.take_level),
@@ -165,11 +177,25 @@ async function loadChart5m() {
                 borderWidth: 0
             };
         }
-        const trades = data.trades || [];
-        const buyTrades = trades.filter(t => t.side === 'BUY');
-        const takeTrades = trades.filter(t => t.side === 'SELL' && (t.signal_type || '').toUpperCase() === 'TAKE_PROFIT');
-        const stopTrades = trades.filter(t => t.side === 'SELL' && (t.signal_type || '').toUpperCase() === 'STOP_LOSS');
-        const otherTrades = trades.filter(t => t.side === 'SELL' && (t.signal_type || '').toUpperCase() !== 'TAKE_PROFIT' && (t.signal_type || '').toUpperCase() !== 'STOP_LOSS');
+        const trades = (data.trades || []).slice();
+        trades.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+        let lastBuyPrice = null;
+        const buyTrades = [];
+        const takeTrades = [];
+        const stopTrades = [];
+        const otherTrades = [];
+        trades.forEach(t => {
+            const price = parseFloat(t.price) || 0;
+            if (t.side === 'BUY') {
+                buyTrades.push(t);
+                lastBuyPrice = price;
+            } else if (t.side === 'SELL') {
+                if (lastBuyPrice != null) {
+                    if (price >= lastBuyPrice) takeTrades.push(t);
+                    else stopTrades.push(t);
+                } else otherTrades.push(t);
+            }
+        });
         [buyTrades, takeTrades, stopTrades, otherTrades].forEach((arr, idx) => {
             const cfg = [
                 { label: 'Вход (BUY)', color: '#2e7d32', pointStyle: 'triangle' },
@@ -198,10 +224,9 @@ async function loadChart5m() {
                 }
             }
         });
-        document.getElementById('chart5mLegend').textContent =
-            data.prolongation.forecast_defined
-                ? 'Пролонгация: ' + (data.prolongation.label || '')
-                : 'Пролонгация: тренд не определён (нужно ≥5 свечей в одном направлении)';
+        document.getElementById('chart5mLegend').textContent = noOhlc
+            ? (data.trades && data.trades.length ? 'Нет свечей за период; отображены сделки GAME_5M.' : 'Нет свечей и сделок за период.')
+            : (prolong.forecast_defined ? 'Пролонгация: ' + (prolong.label || '') : 'Пролонгация: тренд не определён (нужно ≥5 свечей в одном направлении)');
     } catch (err) {
         if (chart5m) { chart5m.destroy(); chart5m = null; }
         document.getElementById('chart5mLegend').textContent = 'Ошибка: ' + (err.message || 'нет данных');
