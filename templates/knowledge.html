@@ -6,6 +6,33 @@
 <h1>База знаний</h1>
 
 <div class="card">
+    <h2>Сгенерировать новости по теме (LLM)</h2>
+    <p>Введите тему (например: эскалация Иран–Израиль–США, влияние на золото и полупроводники). LLM сформирует группу коротких новостей по нашим тикерам.</p>
+    <form id="generateLlmForm">
+        <label>Тема:</label>
+        <input type="text" name="topic" id="topicInput" placeholder="Иран, Израиль, США, золото, полупроводники" style="width: 100%; max-width: 400px;">
+        <button type="submit" id="btnGenerate">Сгенерировать</button>
+    </form>
+    <div id="generateLlmResult" style="margin-top: 1rem;"></div>
+    <div id="generatedListWrap" style="display: none; margin-top: 1rem;">
+        <h3>Сгенерированные записи</h3>
+        <table id="generatedTable">
+            <thead>
+                <tr>
+                    <th>Тикер</th>
+                    <th>Содержание</th>
+                    <th>Sentiment</th>
+                    <th>Insight</th>
+                </tr>
+            </thead>
+            <tbody id="generatedTableBody"></tbody>
+        </table>
+        <button type="button" id="btnInsertBatch">Ввести группу в базу</button>
+        <div id="insertBatchResult" style="margin-top: 0.5rem;"></div>
+    </div>
+</div>
+
+<div class="card">
     <h2>Добавить новость</h2>
     <form id="addNewsForm">
         <label>Тикер:</label>
@@ -75,6 +102,71 @@
 
 {% block extra_js %}
 <script>
+(function() {
+    var generatedItems = [];
+
+    document.getElementById('generateLlmForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var topic = document.getElementById('topicInput').value.trim();
+        if (!topic) return;
+        var resultDiv = document.getElementById('generateLlmResult');
+        var wrap = document.getElementById('generatedListWrap');
+        var btn = document.getElementById('btnGenerate');
+        resultDiv.innerHTML = '<div class="loading">Генерация через LLM...</div>';
+        wrap.style.display = 'none';
+        btn.disabled = true;
+        try {
+            var res = await fetch('/api/news/generate_llm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic: topic })
+            });
+            var data = await res.json();
+            if (!res.ok) throw new Error(data.detail || res.statusText);
+            generatedItems = data.items || [];
+            if (generatedItems.length === 0) {
+                resultDiv.innerHTML = '<div style="color: orange;">Нет записей. Проверьте тему или LLM-ключи.</div>';
+            } else {
+                resultDiv.innerHTML = '<div style="color: green;">Сгенерировано записей: ' + generatedItems.length + '</div>';
+                var tbody = document.getElementById('generatedTableBody');
+                tbody.innerHTML = '';
+                generatedItems.forEach(function(item, i) {
+                    var tr = document.createElement('tr');
+                    tr.innerHTML = '<td>' + (item.ticker || '') + '</td>' +
+                        '<td title="' + (item.content || '').replace(/"/g, '&quot;').substring(0, 200) + '">' + (item.content || '').substring(0, 80) + (item.content && item.content.length > 80 ? '...' : '') + '</td>' +
+                        '<td>' + (item.sentiment_score != null ? item.sentiment_score : '—') + '</td>' +
+                        '<td>' + (item.insight || '—') + '</td>';
+                    tbody.appendChild(tr);
+                });
+                wrap.style.display = 'block';
+                document.getElementById('insertBatchResult').innerHTML = '';
+            }
+        } catch (err) {
+            resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + err.message + '</div>';
+        }
+        btn.disabled = false;
+    });
+
+    document.getElementById('btnInsertBatch').addEventListener('click', async function() {
+        if (generatedItems.length === 0) return;
+        var resultDiv = document.getElementById('insertBatchResult');
+        resultDiv.innerHTML = '<div class="loading">Добавление...</div>';
+        try {
+            var res = await fetch('/api/news/add_batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: generatedItems })
+            });
+            var data = await res.json();
+            if (!res.ok) throw new Error(data.detail || res.statusText);
+            resultDiv.innerHTML = '<div style="color: green;">' + (data.message || 'Готово') + '</div>';
+            setTimeout(function() { location.reload(); }, 1500);
+        } catch (err) {
+            resultDiv.innerHTML = '<div style="color: red;">Ошибка: ' + err.message + '</div>';
+        }
+    });
+})();
+
 document.getElementById('newsTickerFilter').addEventListener('change', function() {
     const filter = this.value;
     document.querySelectorAll('#newsTable tbody tr').forEach(function(tr) {

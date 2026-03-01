@@ -28,6 +28,7 @@ import numpy as np
 from analyst_agent import AnalystAgent
 from config_loader import get_database_url
 from execution_agent import ExecutionAgent
+from services.ticker_groups import get_tickers_fast
 from news_importer import add_news
 from report_generator import compute_closed_trade_pnls, load_trade_history, get_engine
 
@@ -53,6 +54,12 @@ async def catch_all_errors(request: Request, call_next):
             status_code=500,
             content={"detail": f"{type(e).__name__}: {e!s}"},
         )
+
+
+def _default_ticker_5m() -> str:
+    """Тикер по умолчанию для 5m API: первый из TICKERS_FAST или SNDK как fallback."""
+    fast = get_tickers_fast()
+    return (fast[0] if fast else "SNDK")
 
 
 def _to_jsonable(obj: Any) -> Any:
@@ -330,8 +337,12 @@ async def get_recommend(ticker: str):
 
 
 @app.get("/api/recommend5m", response_class=JSONResponse)
-async def get_recommend5m(ticker: str = "SNDK", days: int = 5):
+async def get_recommend5m(ticker: str = None, days: int = 5):
     """API: Рекомендация по 5m данным (аналог /recommend5m в Telegram)"""
+    if ticker is None or not ticker.strip():
+        ticker = _default_ticker_5m()
+    else:
+        ticker = ticker.strip().upper()
     try:
         from services.recommend_5m import get_decision_5m
     except ImportError:
@@ -678,6 +689,79 @@ async def add_news_api(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/news/generate_llm", response_class=JSONResponse)
+async def generate_news_llm_api(request: Request):
+    """API: Сгенерировать группу новостей по теме через LLM (для ручного ввода в базу)."""
+    try:
+        body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+        topic = (body.get("topic") or "").strip()
+        if not topic:
+            raise HTTPException(status_code=400, detail="topic обязателен")
+        tickers = body.get("tickers")
+        if tickers is not None and not isinstance(tickers, list):
+            tickers = [t.strip() for t in str(tickers).split(",") if t.strip()]
+        try:
+            from services.llm_service import get_llm_service
+            from services.ticker_groups import get_tracked_tickers_for_kb
+            if tickers is None or len(tickers) == 0:
+                tickers = get_tracked_tickers_for_kb()
+            llm = get_llm_service()
+            items = llm.generate_news_by_topic(topic, tickers=tickers)
+        except Exception as e:
+            logger.exception("generate_news_llm: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
+        return {"status": "success", "items": items}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/news/add_batch", response_class=JSONResponse)
+async def add_news_batch_api(request: Request):
+    """API: Ввести группу новостей в базу (массив объектов с ticker, source, content, sentiment_score, insight?, link?)."""
+    try:
+        body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+        items = body.get("items")
+        if not items or not isinstance(items, list):
+            raise HTTPException(status_code=400, detail="items — непустой массив обязателен")
+        from datetime import datetime
+        inserted = 0
+        with engine.begin() as conn:
+            for it in items:
+                ticker = (it.get("ticker") or "").strip().upper()
+                source = (it.get("source") or "Manual (LLM)")[:200]
+                content = (it.get("content") or "").strip()
+                if not ticker or not content:
+                    continue
+                try:
+                    sent = float(it.get("sentiment_score", 0.5))
+                    sent = max(0.0, min(1.0, sent))
+                except (TypeError, ValueError):
+                    sent = 0.5
+                insight = (it.get("insight") or "").strip()[:1000] or None
+                link = (it.get("link") or "").strip()[:500] or None
+                conn.execute(text("""
+                    INSERT INTO knowledge_base (ts, ticker, source, content, sentiment_score, insight, event_type, link)
+                    VALUES (:ts, :ticker, :source, :content, :sentiment_score, :insight, 'NEWS', :link)
+                """), {
+                    "ts": datetime.now(),
+                    "ticker": ticker,
+                    "source": source,
+                    "content": content[:8000],
+                    "sentiment_score": sent,
+                    "insight": insight,
+                    "link": link,
+                })
+                inserted += 1
+        return {"status": "success", "message": f"Добавлено новостей: {inserted}", "inserted": inserted}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("add_news_batch: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
     """Минимальный ответ для chart5m при отсутствии OHLC: только сделки GAME_5M за последние days дней."""
     from datetime import datetime, timedelta
@@ -920,9 +1004,12 @@ async def visualization_page(request: Request):
             conn
         )
         tickers = tickers_df['ticker'].tolist() if not tickers_df.empty else []
+    fast_first = get_tickers_fast()
     tickers_5m = list(tickers)
-    if "SNDK" not in tickers_5m:
-        tickers_5m = ["SNDK"] + tickers_5m
+    for t in reversed(fast_first):
+        if t in tickers_5m:
+            tickers_5m.remove(t)
+        tickers_5m.insert(0, t)
     selected_5m = (request.query_params.get("ticker") or "").strip().upper()
     if selected_5m and selected_5m not in tickers_5m:
         tickers_5m = [selected_5m] + [t for t in tickers_5m if t != selected_5m]
@@ -1093,8 +1180,12 @@ async def get_trades(limit: int = 100):
 
 
 @app.get("/api/game5m", response_class=JSONResponse)
-async def get_game5m(ticker: str = "SNDK", limit: int = 20):
+async def get_game5m(ticker: str = None, limit: int = 20):
     """API: Мониторинг игры 5m — открытая позиция и закрытые сделки по тикеру (strategy_name=GAME_5M)."""
+    if ticker is None or not ticker.strip():
+        ticker = _default_ticker_5m()
+    else:
+        ticker = ticker.strip().upper()
     try:
         from services.game_5m import get_open_position, get_recent_results, get_strategy_params
         pos = get_open_position(ticker)

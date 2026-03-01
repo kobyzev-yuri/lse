@@ -14,7 +14,7 @@
 | **NewsAPI** | Да | Да (ключ) | 100 запросов/день |
 | **Alpha Vantage** (Earnings + News Sentiment) | Да | Да (ключ) | ~25 запросов/день |
 | **Alpha Vantage** (Economic) | Код есть | Нет | В cron выключено; free tier часто пусто |
-| **LLM (GPT/Gemini и т.д.)** | Да | Опционально | Прямой запрос к LLM: «какие новости влияют на тикер»; при `USE_LLM_NEWS=true` и настроенном `OPENAI_API_KEY` cron сохраняет ответ в knowledge_base. Список тикеров: `LLM_NEWS_TICKERS=SNDK,MU`. **LLM не ищет в интернете** — только знание из обучения; breaking news должны попадать в KB через другие источники (Investing.com News, NewsAPI и т.д.). |
+| **LLM (GPT/Gemini и т.д.)** | Да | Опционально | Прямой запрос к LLM: «какие новости влияют на тикер»; при `USE_LLM_NEWS=true` и настроенном `OPENAI_API_KEY` cron сохраняет ответ в knowledge_base. Список тикеров: `LLM_NEWS_TICKERS=SNDK,MU`. **LLM не ищет в интернете** — только знание из обучения; breaking news должны попадать в KB через другие источники. Чтобы не плодить одинаковые LLM-новости (одни и те же факты каждый час): дедупликация по времени (`LLM_NEWS_COOLDOWN_HOURS`, по умолч. 7 дней) и по содержанию (если последняя запись по тикеру почти совпадает с новой — не сохраняем). |
 
 **Запуск сбора:** `python scripts/fetch_news_cron.py`. В `config.env`: при необходимости `ALPHAVANTAGE_KEY`, `NEWSAPI_KEY`; для LLM-новостей — `USE_LLM_NEWS=true`, `OPENAI_API_KEY`; опционально `LLM_NEWS_TICKERS=SNDK`, `INVESTING_NEWS_TICKER_KEYWORDS` (см. ниже).
 

@@ -36,7 +36,7 @@
 | **TELEGRAM_DASHBOARD_CHAT_ID** | send_dashboard_cron, telegram_signal | — | Чат для дашборда. |
 | **TRADING_CYCLE_TICKERS** | trading_cycle_cron, ticker_groups | — | Явный список тикеров портфельной игры (иначе MEDIUM+LONG). |
 | **DASHBOARD_WATCHLIST** | dashboard_builder | SNDK,MU,LITE,ALAB,TER,MSFT | Добавить в пример: тикеры для дашборда. |
-| **LLM_NEWS_COOLDOWN_HOURS** | llm_news_fetcher | 24 | Добавить в пример: не чаще одной LLM-новости по тикеру за N часов. |
+| **LLM_NEWS_COOLDOWN_HOURS** | llm_news_fetcher | 168 (7 дн.) | Не чаще одной LLM-новости по тикеру за N часов; плюс дедупликация по содержанию (одинаковые факты не сохраняются повторно). |
 | **HOST, PORT** | api/bot_app | 0.0.0.0, 8080 | Отдельный сервер API бота; добавить в пример, если используется api/bot_app. |
 
 ---
@@ -70,7 +70,7 @@
    - TELEGRAM_DASHBOARD_CHAT_ID
    - TRADING_CYCLE_TICKERS
    - DASHBOARD_WATCHLIST
-   - LLM_NEWS_COOLDOWN_HOURS=24
+   - LLM_NEWS_COOLDOWN_HOURS=168
    - Секцию «Alpha Vantage (доп.)» с таймаутами и задержками (закомментировано)
    - INVESTING_CALENDAR_DEBUG_HTML (закомментировано)
    - HOST, PORT для api/bot_app (если используется)

@@ -21,7 +21,7 @@ from services.recommend_5m import has_5m_data, fetch_5m_ohlc, MAX_DAYS_5M
 def main():
     tickers = get_tickers_fast()
     if not tickers:
-        print("TICKERS_FAST пуст. Задайте в config.env: TICKERS_FAST=SNDK,NDK,LITE,NBIS")
+        print("TICKERS_FAST пуст. Задайте в config.env: TICKERS_FAST=SNDK,MU (или другие тикеры с 5m данными)")
         sys.exit(0)
 
     ok = []

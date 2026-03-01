@@ -1,18 +1,19 @@
 #!/bin/bash
-# Подготовка и запуск сервисов для игры (пока только SNDK).
+# Подготовка и запуск сервисов для игры 5m (тикеры из TICKERS_FAST в config.env).
 # Запуск из корня проекта: ./scripts/run_game_services.sh
 # Опции: --bot-only   только бот (без cron и веба)
 #        --no-bot     не запускать бот (только подготовка + cron)
+# Загрузите config.env или задайте TICKERS_FAST (например SNDK,MU) перед запуском.
 
 set -e
 cd "$(dirname "$0")/.."
 PROJECT_DIR="$PWD"
 
-# TICKERS_FAST только SNDK для игры
+# Тикеры для игры 5m: из окружения или fallback для совместимости
 export TICKERS_FAST="${TICKERS_FAST:-SNDK}"
 
 echo "=============================================="
-echo "  Подготовка сервисов игры (SNDK)"
+echo "  Подготовка сервисов игры 5m (TICKERS_FAST)"
 echo "  TICKERS_FAST=$TICKERS_FAST"
 echo "=============================================="
 

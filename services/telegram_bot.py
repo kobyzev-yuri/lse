@@ -447,21 +447,21 @@ class LSETelegramBot:
     
     async def _handle_news(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /news <ticker>"""
-        user_id = update.effective_user.id
-        
-        if not self._check_access(user_id):
-            await update.message.reply_text("❌ Доступ запрещен")
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id is None or not self._check_access(user_id):
+            await self._reply_to_update(update, context, "❌ Доступ запрещен")
             return
-        
+
         # Извлекаем ticker и опциональный лимит: /news MSFT  или  /news MSFT 15
         if not context.args or len(context.args) == 0:
-            await update.message.reply_text(
+            await self._reply_to_update(
+                update, context,
                 "❌ Укажите тикер\n"
                 "Пример: `/news GC=F` или `/news MSFT 15` (число — сколько новостей показать, по умолчанию 10)",
-                parse_mode='Markdown'
+                parse_mode='Markdown',
             )
             return
-        
+
         ticker_raw = context.args[0].upper()
         ticker = _normalize_ticker(ticker_raw)
         limit = 10
@@ -471,39 +471,41 @@ class LSETelegramBot:
                 limit = max(1, min(50, n))
             except ValueError:
                 pass
-        
+
         try:
-            await update.message.reply_text(f"📰 Поиск новостей для {ticker}...")
-            
+            await self._reply_to_update(update, context, f"📰 Поиск новостей для {ticker}...")
+
             news_timeout = 30
             try:
                 news_df = await self._get_recent_news_async(ticker, timeout=news_timeout)
             except asyncio.TimeoutError:
                 logger.error(f"Таймаут получения новостей для {ticker} ({news_timeout} с)")
-                await update.message.reply_text(
+                await self._reply_to_update(
+                    update, context,
                     f"❌ Получение новостей для {ticker} заняло больше {news_timeout} с. "
-                    "Попробуйте позже или проверьте доступность БД."
+                    "Попробуйте позже или проверьте доступность БД.",
                 )
                 return
-            
+
             if news_df.empty:
-                await update.message.reply_text(
-                    f"ℹ️ Новостей для {ticker} не найдено за последние 7 дней"
+                await self._reply_to_update(
+                    update, context,
+                    f"ℹ️ Новостей для {ticker} не найдено за последние 7 дней",
                 )
                 return
-            
+
             # Форматируем новости (top N по умолчанию 10)
             response = self._format_news_response(ticker, news_df, top_n=limit)
-            
+
             async def _send_news_part(text: str):
                 try:
-                    await update.message.reply_text(text, parse_mode='Markdown')
+                    await self._reply_to_update(update, context, text, parse_mode='Markdown')
                 except Exception as parse_err:
                     if 'parse' in str(parse_err).lower() or 'entit' in str(parse_err).lower():
-                        await update.message.reply_text(text)
+                        await self._reply_to_update(update, context, text)
                     else:
                         raise
-            
+
             # Telegram имеет лимит 4096 символов на сообщение
             if len(response) > 4000:
                 parts = self._split_long_message(response, max_length=4000)
@@ -511,7 +513,7 @@ class LSETelegramBot:
                     await _send_news_part(part)
             else:
                 await _send_news_part(response)
-            
+
         except Exception as e:
             err_type = type(e).__name__
             err_msg = str(e)
@@ -526,7 +528,7 @@ class LSETelegramBot:
                 )
             else:
                 reply = f"❌ Ошибка получения новостей для {ticker}: {err_msg}"
-            await update.message.reply_text(reply)
+            await self._reply_to_update(update, context, reply)
     
     async def _handle_price_by_ticker(self, update: Update, ticker: str, ticker_raw: str = None):
         """Вспомогательная функция для получения цены по тикеру"""
@@ -1359,12 +1361,13 @@ class LSETelegramBot:
             logger.exception("Ошибка дашборда")
             await update.message.reply_text(f"❌ Ошибка: {e}")
             return
+        # Без parse_mode: в тексте дашборда могут быть _ * из тикеров, VIX, period_str и т.д. — парсер падает
         if len(text) > 4000:
             parts = [text[i : i + 4000] for i in range(0, len(text), 4000)]
             for p in parts:
-                await update.message.reply_text(p, parse_mode="Markdown")
+                await update.message.reply_text(p)
         else:
-            await update.message.reply_text(text, parse_mode="Markdown")
+            await update.message.reply_text(text)
     
     async def _handle_tickers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /tickers"""

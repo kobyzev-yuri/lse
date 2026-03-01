@@ -13,6 +13,14 @@ from analyst_agent import AnalystAgent
 
 logger = logging.getLogger(__name__)
 
+
+def _escape_md(s: str) -> str:
+    """Экранирует символы Markdown для Telegram (parse_mode=Markdown), чтобы не ломать парсер."""
+    if not s:
+        return s
+    return str(s).replace("\\", "\\\\").replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+
+
 try:
     from zoneinfo import ZoneInfo
     _ET = ZoneInfo("America/New_York")
@@ -55,7 +63,7 @@ def build_dashboard_text(mode: str = "all") -> str:
     lines = [
         "📊 **Дашборд** (мониторинг)",
         f"🕐 {now_str} ET  ·  VIX: {vix_val:.1f}" if vix_val is not None else f"🕐 {now_str} ET  ·  VIX: —",
-        f"Режим рынка (по VIX, один для всех тикеров): {vix_regime}{regime_hint}",
+        f"Режим рынка (по VIX, один для всех тикеров): {_escape_md(vix_regime)}{regime_hint}",
         "",
     ]
 
@@ -69,7 +77,7 @@ def build_dashboard_text(mode: str = "all") -> str:
                     {"ticker": ticker},
                 ).fetchone()
             if not row or row[0] is None:
-                lines.append(f"• **{ticker}** — нет данных")
+                lines.append(f"• **{_escape_md(ticker)}** — нет данных")
                 continue
             price = float(row[0])
             rsi = float(row[1]) if row[1] is not None else None
@@ -99,11 +107,11 @@ def build_dashboard_text(mode: str = "all") -> str:
             except Exception as e:
                 logger.debug("Dashboard get_decision %s: %s", ticker, e)
             emoji = "🟢" if decision in ("BUY", "STRONG_BUY") else "🔴" if decision == "SELL" else "⚪"
-            line = f"{emoji} **{ticker}** ${price:.2f}  {rsi_str}  → {decision}  ·  Новостей 7д: {news_count}"
+            line = f"{emoji} **{_escape_md(ticker)}** ${price:.2f}  {rsi_str}  → {decision}  ·  Новостей 7д: {news_count}"
             lines.append(line)
         except Exception as e:
             logger.warning("Dashboard ticker %s: %s", ticker, e)
-            lines.append(f"• **{ticker}** — ошибка")
+            lines.append(f"• **{_escape_md(ticker)}** — ошибка")
 
     if mode in ("5m", "all"):
         lines.append("")
@@ -116,7 +124,7 @@ def build_dashboard_text(mode: str = "all") -> str:
                     f"  SNDK: ${d5['price']:.2f}  RSI(5m) {d5.get('rsi_5m') or '—'}  "
                     f"импульс 2ч {d5.get('momentum_2h_pct', 0):+.2f}%  → **{d5['decision']}**"
                 )
-                lines.append(f"  _Период данных: {d5.get('period_str', '')}_")
+                lines.append(f"  _Период данных: {_escape_md(d5.get('period_str', ''))}_")
             else:
                 lines.append("  SNDK: нет 5m данных")
         except Exception as e:

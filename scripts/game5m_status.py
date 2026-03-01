@@ -5,8 +5,8 @@
 
 Использование:
   python scripts/game5m_status.py              # по всем тикерам из TICKERS_FAST
-  python scripts/game5m_status.py SNDK         # только SNDK
-  python scripts/game5m_status.py SNDK 10     # SNDK, последние 10 закрытых сделок
+  python scripts/game5m_status.py <тикер>      # только указанный тикер
+  python scripts/game5m_status.py <тикер> 10    # тикер, последние 10 закрытых сделок
 """
 
 import sys
@@ -30,7 +30,7 @@ def main():
     if not tickers:
         tickers = get_tickers_fast()
     if not tickers:
-        print("Нет тикеров. Задайте TICKERS_FAST в config.env или: game5m_status.py SNDK")
+        print("Нет тикеров. Задайте TICKERS_FAST в config.env или укажите тикер аргументом: game5m_status.py <тикер>")
         return
 
     params = get_strategy_params()

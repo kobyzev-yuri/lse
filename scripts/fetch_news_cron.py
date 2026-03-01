@@ -104,19 +104,22 @@ def fetch_all_news_sources():
         logger.error(f"❌ Ошибка NewsAPI: {e}")
         sources_status['NewsAPI'] = f'❌ Ошибка: {e}'
 
-    # 5. LLM (GPT/Gemini и т.д.) — прямой запрос «новости по SNDK» (при USE_LLM_NEWS=true)
+    # 5. LLM (GPT/Gemini и т.д.) — прямой запрос новостей по тикерам из LLM_NEWS_TICKERS (при USE_LLM_NEWS=true)
     try:
         logger.info("\n🤖 Источник 5/6: LLM (новости по тикеру)")
         from services.llm_news_fetcher import fetch_and_save_llm_news
-        from config_loader import get_config_value
-        llm_tickers = get_config_value("LLM_NEWS_TICKERS", "SNDK").strip()
+        from services.ticker_groups import get_tickers_fast
+        fast = get_tickers_fast()
+        default_llm = (fast[0] if fast else "SNDK")
+        llm_tickers = get_config_value("LLM_NEWS_TICKERS", default_llm).strip()
         for t in [x.strip() for x in llm_tickers.split(",") if x.strip()]:
             nid = fetch_and_save_llm_news(t)
             if nid is not None:
                 sources_status[f'LLM({t})'] = '✅ Успешно'
             else:
                 sources_status[f'LLM({t})'] = '⏭️ Пропущено (выкл. или ошибка)'
-        if 'LLM(SNDK)' not in sources_status and 'LLM' not in str(sources_status):
+        has_llm_ticker = any(k.startswith('LLM(') for k in sources_status)
+        if not has_llm_ticker and 'LLM' not in str(sources_status):
             sources_status['LLM'] = '⏭️ Пропущено (USE_LLM_NEWS не включён или нет ключа)'
     except Exception as e:
         logger.error(f"❌ Ошибка LLM-новостей: {e}")

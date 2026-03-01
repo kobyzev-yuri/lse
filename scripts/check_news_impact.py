@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Сводка по влиянию новостей на тикер: сколько новостей, sentiment, исходы (outcome_json).
-Использование: python scripts/check_news_impact.py [SNDK]
-Без аргумента — тикер SNDK.
+Использование: python scripts/check_news_impact.py [тикер]
+Без аргумента — первый тикер из TICKERS_FAST (config.env).
 """
 
 import sys
@@ -14,10 +14,15 @@ sys.path.insert(0, str(project_root))
 
 from sqlalchemy import create_engine, text
 from config_loader import get_database_url
+from services.ticker_groups import get_tickers_fast
 
 
 def main():
-    ticker = (sys.argv[1].strip().upper() if len(sys.argv) >= 2 else "SNDK")
+    if len(sys.argv) >= 2 and sys.argv[1].strip():
+        ticker = sys.argv[1].strip().upper()
+    else:
+        fast = get_tickers_fast()
+        ticker = (fast[0] if fast else "SNDK")
     days = 90
     engine = create_engine(get_database_url())
 

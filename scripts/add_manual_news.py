@@ -2,8 +2,8 @@
 """
 Разовая вставка новости в knowledge_base по ссылке и тексту.
 Использование:
-  python scripts/add_manual_news.py "Заголовок или краткое содержание" "https://..." [SNDK]
-  python scripts/add_manual_news.py "SanDisk stock falls after Citron Research short call. Citron Research issued a short call on SanDisk; stock declined." "https://www.investing.com/news/stock-market-news/sandisk-stock-falls-after-citron-research-short-call-4521795" SNDK
+  python scripts/add_manual_news.py "Заголовок или краткое содержание" "https://..." [тикер]
+  Тикер по умолчанию — первый из TICKERS_FAST (config.env).
 """
 
 import sys
@@ -15,6 +15,7 @@ sys.path.insert(0, str(project_root))
 
 from sqlalchemy import create_engine, text
 from config_loader import get_database_url
+from services.ticker_groups import get_tickers_fast
 
 
 def main():
@@ -23,7 +24,11 @@ def main():
         sys.exit(1)
     content = sys.argv[1].strip()
     link = sys.argv[2].strip()
-    ticker = (sys.argv[3].strip().upper() if len(sys.argv) > 3 else "SNDK")
+    if len(sys.argv) > 3 and sys.argv[3].strip():
+        ticker = sys.argv[3].strip().upper()
+    else:
+        fast = get_tickers_fast()
+        ticker = (fast[0] if fast else "SNDK")
     source = "Investing.com"
     event_type = "NEWS"
     importance = "HIGH"

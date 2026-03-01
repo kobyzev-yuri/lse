@@ -479,6 +479,88 @@ Sentiment анализ:
             logger.exception("Ошибка fetch_news_for_ticker %s: %s", ticker, e)
             return None
 
+    def generate_news_by_topic(
+        self, topic: str, tickers: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Генерация группы новостей по заданной теме для ручного ввода в базу знаний.
+        LLM возвращает JSON-массив записей с полями ticker, content, sentiment_score, insight, source.
+        tickers: список тикеров, по которым нужно сформировать записи (например GC=F, MSFT, AMD, MU, SNDK).
+        """
+        if not self.client:
+            logger.warning("LLM не инициализирован, пропуск generate_news_by_topic")
+            return []
+
+        default_tickers = ["GC=F", "MSFT", "AMD", "MU", "SNDK"]
+        ticker_list = tickers or default_tickers
+        ticker_list_upper = [t.strip().upper() for t in ticker_list if t]
+        if not ticker_list_upper:
+            ticker_list_upper = [t.upper() for t in default_tickers]
+        tickers_str = ", ".join(ticker_list)
+
+        system_prompt = """Ты финансовый обзор. Задача: по заданной теме сформировать группу коротких новостных записей для базы знаний (по одной или несколько на тикер).
+Отвечай строго в формате JSON — один массив объектов. Каждый объект:
+{
+  "ticker": "один из указанных тикеров",
+  "content": "2-4 предложения: суть события/ожидания для рынка в связи с темой, релевантно тикеру",
+  "sentiment_score": число от 0.0 до 1.0 (0.5 нейтрально, выше — позитив для цены, ниже — негатив),
+  "insight": "одна короткая фраза-вывод для трейдера",
+  "source": "краткое имя источника, например LLM (тема)"
+}
+Тикеры для использования: """ + tickers_str + """. Распредели тему по тикерам уместно (золото — GC=F, тех/полупроводники — MSFT, AMD, MU, SNDK). От 3 до 8 записей. Только JSON, без markdown и пояснений до/после."""
+
+        user_message = f"""Тема: {topic}\n\nСформируй группу новостных записей в формате JSON (массив объектов с полями ticker, content, sentiment_score, insight, source)."""
+
+        try:
+            result = self.generate_response(
+                [{"role": "user", "content": user_message}],
+                system_prompt=system_prompt,
+                max_tokens=2000,
+            )
+            text = (result.get("response") or "").strip()
+            if not text:
+                return []
+            # Убрать markdown-обёртку если есть
+            if "```json" in text:
+                text = text.split("```json")[-1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+            data = json.loads(text)
+            if not isinstance(data, list):
+                data = [data]
+            out = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                ticker = (item.get("ticker") or "").strip().upper()
+                if not ticker or ticker not in ticker_list_upper:
+                    ticker = ticker_list_upper[0]
+                content = (item.get("content") or "")[:8000]
+                if not content:
+                    continue
+                try:
+                    sent = float(item.get("sentiment_score", 0.5))
+                    sent = max(0.0, min(1.0, sent))
+                except (TypeError, ValueError):
+                    sent = 0.5
+                insight = (item.get("insight") or "")[:1000]
+                source = (item.get("source") or f"LLM ({self.model})")[:200]
+                out.append({
+                    "ticker": ticker,
+                    "content": content,
+                    "sentiment_score": round(sent, 2),
+                    "insight": insight,
+                    "source": source,
+                    "link": (item.get("link") or "")[:500],
+                })
+            return out
+        except json.JSONDecodeError as e:
+            logger.warning("generate_news_by_topic: не удалось распарсить JSON: %s", e)
+            return []
+        except Exception as e:
+            logger.exception("Ошибка generate_news_by_topic: %s", e)
+            return []
+
 
 # Глобальный экземпляр сервиса
 _llm_service: Optional[LLMService] = None

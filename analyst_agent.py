@@ -249,21 +249,17 @@ class AnalystAgent:
     
     def get_recent_news(self, ticker: str, hours: int = None) -> pd.DataFrame:
         """
-        Получает новости для тикера с учетом временного лага в зависимости от типа события.
-        Для макро-событий (MACRO/US_MACRO) использует 72 часа (3 дня), для обычных новостей - 24 часа.
+        Получает новости для тикера за последние N часов.
+        В выборку входят записи по самому тикеру и MACRO/US_MACRO. Окно по умолчанию — 7 дней (168 ч),
+        чтобы в боте /news соответствовало надписи «последние 7 дней».
         """
-        # Определяем временной лаг в зависимости от типа события
-        # Сначала загружаем все новости за последние 3 дня, затем определим тип
         if hours is None:
-            # Используем максимальный период для макро-событий
-            hours = 72
-        
-        logger.info(f"📰 Поиск новостей за последние {hours} часов для {ticker} или MACRO/US_MACRO")
-        
+            hours = 168  # 7 дней
         cutoff_time = datetime.now() - timedelta(hours=hours)
-        
+
+        logger.info(f"📰 Поиск новостей за последние {hours} ч для {ticker} или MACRO/US_MACRO")
+
         with self.engine.connect() as conn:
-            # Ищем в knowledge_base (там есть sentiment_score; insight может отсутствовать в старых схемах)
             query = text("""
                 SELECT id, ts, ticker, source, content, sentiment_score, event_type, insight, link
                 FROM knowledge_base
@@ -275,33 +271,15 @@ class AnalystAgent:
                 "ticker": ticker,
                 "cutoff_time": cutoff_time
             })
-        
+
         if df.empty:
-            logger.info(f"ℹ️  Новостей за последние {hours} часов не найдено")
+            logger.info(f"ℹ️  Новостей за последние {hours} ч не найдено")
         else:
             logger.info(f"✅ Найдено {len(df)} новостей")
-            # Определяем тип событий и применяем фильтрацию по времени
-            macro_news = df[df['ticker'].isin(['MACRO', 'US_MACRO'])]
-            ticker_news = df[df['ticker'] == ticker]
-            
-            # Для макро-событий используем 72 часа, для обычных - 24 часа
-            macro_cutoff = datetime.now() - timedelta(hours=72)
-            ticker_cutoff = datetime.now() - timedelta(hours=24)
-            
-            macro_filtered = macro_news[macro_news['ts'] >= macro_cutoff] if not macro_news.empty else pd.DataFrame()
-            ticker_filtered = ticker_news[ticker_news['ts'] >= ticker_cutoff] if not ticker_news.empty else pd.DataFrame()
-            
-            # Объединяем отфильтрованные результаты
-            df = pd.concat([macro_filtered, ticker_filtered]).drop_duplicates(subset=['id']).reset_index(drop=True)
-            
             # Сортируем: сначала NEWS и EARNINGS, потом остальное (ECONOMIC_INDICATOR в конец)
             order_map = {'NEWS': 0, 'EARNINGS': 1}
             df['_sort_order'] = df['event_type'].map(order_map).fillna(2).astype(int)
             df = df.sort_values(by=['_sort_order', 'ts'], ascending=[True, False]).drop(columns=['_sort_order'], errors='ignore')
-            
-            logger.info(f"   После фильтрации по типу события: {len(df)} новостей")
-            logger.info(f"   - Макро-новости (72ч): {len(macro_filtered)}")
-            logger.info(f"   - Новости тикера (24ч): {len(ticker_filtered)}")
             
             for idx, row in df.iterrows():
                 event_type = "MACRO" if row['ticker'] in ['MACRO', 'US_MACRO'] else "TICKER"
