@@ -170,6 +170,10 @@ class VectorKB:
             "ALL_PROXY", "all_proxy", "SOCKS_PROXY", "socks_proxy", "NO_PROXY", "no_proxy"
         )
         saved = {k: os.environ.pop(k, None) for k in proxy_vars}
+        # Убираем любые переменные окружения со значением socks:// — иначе huggingface/requests падают с "Unable to determine SOCKS version"
+        socks_keys = [k for k, v in os.environ.items() if v and "socks" in str(v).lower()]
+        for k in socks_keys:
+            saved[k] = os.environ.pop(k, None)
         try:
             from sentence_transformers import SentenceTransformer
             logger.info(f"📥 Загрузка модели {self._local_model_name}...")
@@ -180,7 +184,15 @@ class VectorKB:
             logger.error("❌ sentence-transformers не установлен. Установите: pip install sentence-transformers")
             raise
         except Exception as e:
-            logger.error(f"❌ Ошибка загрузки модели: {e}")
+            err_msg = str(e)
+            if "socks" in err_msg.lower() or "SOCKS" in err_msg:
+                logger.error(
+                    "❌ Ошибка загрузки модели: %s — отключите прокси (unset HTTP_PROXY HTTPS_PROXY ALL_PROXY) "
+                    "или задайте USE_OPENAI_EMBEDDINGS=true в config.env и отключите локальные эмбеддинги.",
+                    e,
+                )
+            else:
+                logger.error(f"❌ Ошибка загрузки модели: {e}")
             raise
         finally:
             for k, v in saved.items():

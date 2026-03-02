@@ -23,11 +23,19 @@ import logging
 from config_loader import get_config_value
 from services.telegram_bot import LSETelegramBot
 
-# Прокси для Telegram API (если api.telegram.org недоступен напрямую)
+# Прокси для Telegram API (если api.telegram.org недоступен напрямую).
+# Только HTTP/HTTPS — socks:// не ставим в окружение (ломает загрузку sentence-transformers и др.).
 _telegram_proxy = get_config_value("TELEGRAM_PROXY_URL", "").strip()
-if _telegram_proxy:
+if _telegram_proxy and "socks" not in _telegram_proxy.lower():
     os.environ["HTTPS_PROXY"] = _telegram_proxy
     os.environ["HTTP_PROXY"] = _telegram_proxy
+elif _telegram_proxy and "socks" in _telegram_proxy.lower():
+    import logging as _log
+    _log.basicConfig(level=_log.INFO)
+    _log.getLogger(__name__).warning(
+        "TELEGRAM_PROXY_URL с socks:// не задаётся в окружение (не поддерживается здесь). "
+        "Используйте http:// или https:// прокси, либо уберите переменную."
+    )
 
 logging.basicConfig(
     level=logging.INFO,

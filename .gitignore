@@ -26,6 +26,8 @@ dist/
 # Логи
 logs/
 *.log
+# Состояние watchdog (уже отправленные в Telegram ошибки)
+.cron_watchdog_sent.json
 
 # Cooldown для проактивных сигналов (cron)
 .last_sndk_signal_sent
