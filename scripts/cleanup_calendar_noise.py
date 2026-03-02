@@ -115,30 +115,37 @@ def cleanup_calendar_noise(dry_run: bool = True):
                 logger.info(f"  Удалено {n} записей ECONOMIC_INDICATOR")
 
         # 2) Alpha Vantage Earnings Calendar — «Earnings report for TICKER» (и с Estimate)
+        #    Удаляем по source и дополнительно по content на случай другого source
         av_rows = conn.execute(
             text("""
-                SELECT id, ticker, content, ts
+                SELECT id, ticker, content, ts, source
                 FROM knowledge_base
                 WHERE source = 'Alpha Vantage Earnings Calendar'
+                   OR content IS NOT NULL AND TRIM(content) LIKE 'Earnings report for %'
                 ORDER BY ts DESC
             """)
         ).fetchall()
 
         av_to_delete = []
+        seen_ids = set()
         for row in av_rows:
+            if row[0] in seen_ids:
+                continue
             content = row[2] or ''
             if is_av_earnings_noise(content):
                 av_to_delete.append({
                     'id': row[0],
                     'ticker': row[1],
                     'content': (content[:60] + '...') if len(content) > 60 else content,
-                    'ts': row[3]
+                    'ts': row[3],
+                    'source': row[4] or ''
                 })
+                seen_ids.add(row[0])
 
         if av_to_delete:
-            logger.info(f"🗑️  Alpha Vantage Earnings: {len(av_to_delete)} мусорных записей для удаления")
+            logger.info(f"🗑️  Alpha Vantage Earnings / «Earnings report for X»: {len(av_to_delete)} мусорных записей для удаления")
             for i, item in enumerate(av_to_delete[:5], 1):
-                logger.info(f"  {i}. ID={item['id']}, {item['ts']} {item['ticker']}: {item['content']}")
+                logger.info(f"  {i}. ID={item['id']}, {item['ts']} {item.get('ticker','')} [{item.get('source','')}]: {item['content']}")
             if len(av_to_delete) > 5:
                 logger.info(f"  ... и еще {len(av_to_delete) - 5} записей")
             if not dry_run:
@@ -148,7 +155,7 @@ def cleanup_calendar_noise(dry_run: bool = True):
                         {"ids": [item['id'] for item in av_to_delete]}
                     ).rowcount
                 total_deleted += n
-                logger.info(f"  Удалено {n} записей Alpha Vantage Earnings")
+                logger.info(f"  Удалено {n} записей Alpha Vantage Earnings / «Earnings report for X»")
 
     if dry_run and (to_delete or av_to_delete):
         logger.info("\n⚠️  Режим DRY RUN - записи не удалены. Запустите с --execute для удаления.")

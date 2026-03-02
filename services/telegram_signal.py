@@ -33,12 +33,13 @@ def get_signal_chat_ids() -> list[str]:
 
 
 def send_telegram_message(
-    token: str, chat_id: str, text: str, parse_mode: str = "Markdown"
+    token: str, chat_id: str, text: str, parse_mode: str | None = "Markdown"
 ) -> bool:
-    """Отправить сообщение в Telegram. Возвращает True при успехе."""
-    data = urllib.parse.urlencode(
-        {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-    ).encode()
+    """Отправить сообщение в Telegram. Возвращает True при успехе. parse_mode=None — обычный текст."""
+    payload = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    data = urllib.parse.urlencode(payload).encode()
     req = urllib.request.Request(
         TELEGRAM_SEND_URL.format(token=token), data=data, method="POST"
     )

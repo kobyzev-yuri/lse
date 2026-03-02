@@ -29,6 +29,9 @@ logs/
 
 # Cooldown для проактивных сигналов (cron)
 .last_sndk_signal_sent
+.last_signal_sent_*
+# Локальные бэкапы БД (не в репозиторий)
+lse_trading_backup_*.sql
 
 # IDE
 .vscode/

@@ -50,7 +50,8 @@
 - **MANUAL** — записи, добавленные через `VectorKB.add_event()` без указания `source` (по умолчанию `'MANUAL'`). Не «ручной импорт новостей», а события из кода/бота.
 - **Почему нет строки «NewsAPI» в списке source?** В БД сохраняется название издания из API (Bloomberg, Reuters, The Globe and Mail и т.д.) — это и есть новости из NewsAPI.
 - **Чего не хватает:** стабильного экономического календаря (даты CPI, NFP и т.д.) и числовых макро-рядов по регионам. Для базовой работы (новости ЦБ, макро-новости, earnings) текущих источников достаточно.
-- **Мусор в новостях (Alpha Vantage Earnings):** записи вида «Earnings report for TICKER» почти не несут пользы. По умолчанию они **больше не сохраняются** (в cron Alpha Vantage не пишет Earnings Calendar, если не задано `EARNINGS_CALENDAR_SAVE=true` в config.env). Уже попавшие в БД удаляются скриптом `scripts/cleanup_calendar_noise.py --execute`. Рекомендуется запускать его по cron раз в 1–7 дней (например `0 4 * * *`).
+- **Мусор в новостях (Alpha Vantage Earnings):** записи вида «Earnings report for TICKER» почти не несут пользы. По умолчанию они **больше не сохраняются** (в cron Alpha Vantage не пишет Earnings Calendar, если не задано `EARNINGS_CALENDAR_SAVE=true` в config.env). Уже попавшие в БД удаляются скриптом `scripts/cleanup_calendar_noise.py --execute`. Рекомендуется запускать его по cron раз в 1–7 дней (например `30 4 * * *`).
+- **Предупреждение PostgreSQL про collation:** при обновлении ОС/glibc в логах может появляться «несовпадение версии для правила сортировки» (БД создана с 2.39, ОС даёт 2.42). На работу приложения это не влияет. Чтобы убрать предупреждение, от имени суперпользователя БД выполните: `ALTER DATABASE lse_trading REFRESH COLLATION VERSION;`
 
 ---
 
@@ -64,6 +65,7 @@
 | `scripts/add_sentiment_to_news_cron.py` | LLM: заполнение `sentiment_score` и `insight` для новостей без sentiment. |
 | `scripts/analyze_event_outcomes_cron.py` | Заполнение `outcome_json` (изменение цены после события). |
 | `scripts/cleanup_calendar_noise.py` | Удаление мусора: ECONOMIC_INDICATOR «только число»; **Alpha Vantage Earnings Calendar** вида «Earnings report for TICKER» (без пользы). Запуск: `python scripts/cleanup_calendar_noise.py` (dry-run), `--execute` для удаления. Рекомендуется в cron раз в 1–7 дней. |
+| `scripts/cron_watchdog.py` | Сканирует логи cron (последние 500 строк каждого) на строки с ERROR, Exception, Traceback, failed и т.п. и пишет находки в `logs/cron_watchdog.log`. При `CRON_WATCHDOG_TELEGRAM=true` или `--telegram` при находках отправляет уведомление в Telegram (TELEGRAM_SIGNAL_CHAT_IDS). В cron: каждый час в :45. |
 | `scripts/cleanup_manual_duplicates.py` | Удаление записей с `source='MANUAL'`, дублирующих другую запись по (ts, ticker, content). `--dry-run` затем `--execute`. |
 
 Модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`, `services/investing_news_fetcher.py` (лента Investing.com News, тикеры из TICKERS_FAST и встроенные ключевые слова), `services/llm_news_fetcher.py` (запрос к LLM за новостями по тикеру).
