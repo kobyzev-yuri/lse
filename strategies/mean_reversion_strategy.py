@@ -88,10 +88,16 @@ class MeanReversionStrategy(BaseStrategy):
             signal = "HOLD"
             confidence = 0.3
         
-        # Рекомендуемые параметры
+        # Извлечение параметров
+        target_id = f"TICKER:{ticker}"
+        params = self.get_parameters({
+            "stop_loss": 5.0,
+            "take_profit": 4.0
+        }, target_identifier=target_id)
+        
         entry_price = close
-        stop_loss = 5.0  # 5% стоп-лосс для Mean Reversion (более широкий)
-        take_profit = 4.0  # 4% тейк-профит (ожидаем возврат к среднему)
+        stop_loss = params.get("stop_loss", 5.0)
+        take_profit = params.get("take_profit", 4.0)
         
         # Извлекаем insight из новостей
         insight = self._extract_insight(news_data)

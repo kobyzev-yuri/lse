@@ -1,4 +1,5 @@
 import logging
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import floor
@@ -220,7 +221,8 @@ class ExecutionAgent:
 
     # ---------- Торговые операции ----------
 
-    def _execute_buy(self, ticker: str, decision: str, strategy_name: str = None) -> None:
+    def _execute_buy(self, ticker: str, decision: str, strategy_name: str = None,
+                     stop_loss: float = None, take_profit: float = None, context_json: dict = None) -> None:
         """Имитация покупки по сигналу BUY/STRONG_BUY."""
         if self._has_open_position(ticker):
             logger.info(
@@ -322,11 +324,13 @@ class ExecutionAgent:
                 text("""
                     INSERT INTO trade_history (
                         ts, ticker, side, quantity, price, commission,
-                        signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone
+                        signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone,
+                        take_profit, stop_loss, context_json
                     )
                     VALUES (
                         CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission,
-                        :signal, :total_value, :sentiment, :strategy_name, :ts_tz
+                        :signal, :total_value, :sentiment, :strategy_name, :ts_tz,
+                        :take_profit, :stop_loss, :context_json
                     )
                 """),
                 {
@@ -339,6 +343,9 @@ class ExecutionAgent:
                     "sentiment": sentiment,
                     "strategy_name": strategy_name,
                     "ts_tz": TRADE_HISTORY_TZ,
+                    "take_profit": take_profit,
+                    "stop_loss": stop_loss,
+                    "context_json": json.dumps(context_json) if context_json else None,
                 },
             )
 
@@ -375,6 +382,23 @@ class ExecutionAgent:
         # Лог‑доходность по позиции
         log_ret = float(np.log(current_price / position.entry_price))
 
+        # Расчет MFE/MAE (максимальной прибыли/убытка)
+        mfe, mae = None, None
+        try:
+            with self.engine.connect() as conn:
+                mfe_mae_result = conn.execute(text("""
+                    SELECT MAX(high), MIN(low) FROM quotes 
+                    WHERE ticker = :ticker AND date >= :entry_ts
+                """), {"ticker": ticker, "entry_ts": position.entry_ts}).fetchone()
+                
+                if mfe_mae_result and mfe_mae_result[0] and mfe_mae_result[1]:
+                    max_price = float(mfe_mae_result[0])
+                    min_price = float(mfe_mae_result[1])
+                    mfe = (max_price - position.entry_price) / position.entry_price * 100.0
+                    mae = (min_price - position.entry_price) / position.entry_price * 100.0
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка при расчете MFE/MAE для {ticker}: {e}")
+
         cash = self._get_cash()
         sentiment = self._get_weighted_sentiment(ticker)
 
@@ -395,11 +419,13 @@ class ExecutionAgent:
                 text("""
                     INSERT INTO trade_history (
                         ts, ticker, side, quantity, price, commission,
-                        signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone
+                        signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone,
+                        mfe, mae
                     )
                     VALUES (
                         CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission,
-                        :signal, :total_value, :sentiment, :strategy_name, :ts_tz
+                        :signal, :total_value, :sentiment, :strategy_name, :ts_tz,
+                        :mfe, :mae
                     )
                 """),
                 {
@@ -412,6 +438,8 @@ class ExecutionAgent:
                     "sentiment": sentiment,
                     "strategy_name": strategy_name,
                     "ts_tz": TRADE_HISTORY_TZ,
+                    "mfe": mfe,
+                    "mae": mae,
                 },
             )
 
@@ -691,12 +719,27 @@ class ExecutionAgent:
             result = None
             decision = "HOLD"
             strategy_name = None
+            stop_loss = None
+            take_profit = None
+            context_json = None
             
             if use_llm and hasattr(self.analyst, 'get_decision_with_llm'):
                 try:
                     result = self.analyst.get_decision_with_llm(ticker)
                     decision = result.get('decision', 'HOLD')
                     strategy_name = result.get('selected_strategy')  # Получаем название стратегии
+                    
+                    strategy_result_dict = result.get('strategy_result')
+                    if strategy_result_dict:
+                        stop_loss = strategy_result_dict.get('stop_loss')
+                        take_profit = strategy_result_dict.get('take_profit')
+                        
+                    context_json = {
+                        "technical_data": result.get("technical_data", {}),
+                        "sentiment": result.get("sentiment_normalized", 0.0),
+                        "base_decision": result.get("base_decision")
+                    }
+                    
                     logger.info("🎯 Сигнал AnalystAgent (с LLM) для %s: %s", ticker, decision)
                     if strategy_name:
                         logger.info("   Стратегия: %s", strategy_name)
@@ -722,7 +765,7 @@ class ExecutionAgent:
                     logger.info("   Стратегия: %s", strategy_name)
 
             if decision in ("BUY", "STRONG_BUY"):
-                self._execute_buy(ticker, decision, strategy_name)
+                self._execute_buy(ticker, decision, strategy_name, stop_loss, take_profit, context_json)
             else:
                 logger.info("ℹ️ Сигнал %s для %s, покупка не выполняется", decision, ticker)
 

@@ -21,6 +21,22 @@ class BaseStrategy(ABC):
         """
         self.name = name
     
+    def get_parameters(self, default_params: Dict[str, Any], target_identifier: str = 'GLOBAL') -> Dict[str, Any]:
+        """
+        Загружает параметры стратегии из БД (через кэширующий лоадер ParameterStore) 
+        и объединяет их с default_params.
+        """
+        from utils.parameter_store import get_parameter_store
+        
+        store = get_parameter_store()
+        db_params = store.get_parameters(self.name, target_identifier)
+        
+        merged = default_params.copy()
+        if db_params:
+            merged.update(db_params)
+            
+        return merged
+    
     @abstractmethod
     def calculate_signal(
         self,

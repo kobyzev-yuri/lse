@@ -73,10 +73,16 @@ class GeopoliticalBounceStrategy(BaseStrategy):
         else:
             confidence = 0.65
 
-        # Стоп уже под «минимумом паники» (вчерашний минимум или текущий low — в бэктесте нет low, используем консервативно)
+        # Извлечение параметров
+        target_id = f"TICKER:{ticker}"
+        params = self.get_parameters({
+            "stop_loss": 5.0,
+            "take_profit": 4.0
+        }, target_identifier=target_id)
+        
         entry_price = close
-        stop_loss = 5.0  # 5% под точку входа (упрощённо; в реальности — под локальный low)
-        take_profit = 4.0  # 4% тейк-профит на отскоке
+        stop_loss = params.get("stop_loss", 5.0)
+        take_profit = params.get("take_profit", 4.0)
 
         prev_str = f"{prev_day_return_pct:.2f}%" if prev_day_return_pct is not None else "N/A"
         reasoning = (

@@ -99,10 +99,16 @@ class VolatileGapStrategy(BaseStrategy):
             signal = "HOLD"
             confidence = 0.4
         
-        # Рекомендуемые параметры (более широкие для волатильности)
+        # Извлечение параметров
+        target_id = f"TICKER:{ticker}"
+        params = self.get_parameters({
+            "stop_loss": 7.0,
+            "take_profit": 12.0
+        }, target_identifier=target_id)
+        
         entry_price = close
-        stop_loss = 7.0  # 7% стоп-лосс для волатильных рынков
-        take_profit = 12.0  # 12% тейк-профит (высокий потенциал)
+        stop_loss = params.get("stop_loss", 7.0)
+        take_profit = params.get("take_profit", 12.0)
         
         # Извлекаем insight из новостей
         insight = self._extract_insight(news_data)

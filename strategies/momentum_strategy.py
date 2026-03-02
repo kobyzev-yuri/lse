@@ -96,10 +96,16 @@ class MomentumStrategy(BaseStrategy):
             signal = "HOLD"
             confidence = 0.4
         
-        # Рекомендуемые параметры
+        # Извлечение параметров (сначала ищем для конкретного тикера, затем GLOBAL)
+        target_id = f"TICKER:{ticker}"
+        params = self.get_parameters({
+            "stop_loss": 3.0,
+            "take_profit": 8.0
+        }, target_identifier=target_id)
+        
         entry_price = close
-        stop_loss = 3.0  # 3% стоп-лосс для Momentum
-        take_profit = 8.0  # 8% тейк-профит для Momentum
+        stop_loss = params.get("stop_loss", 3.0)
+        take_profit = params.get("take_profit", 8.0)
         
         # Извлекаем insight из новостей
         insight = self._extract_insight(news_data)

@@ -1247,6 +1247,81 @@ async def get_pnl():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/parameters", response_class=HTMLResponse)
+async def parameters_page(request: Request):
+    """Страница управления параметрами стратегий"""
+    return HTMLResponse(render_template("parameters.html", {"request": request}))
+
+
+@app.get("/api/parameters", response_class=JSONResponse)
+async def get_parameters_api():
+    """API: Получение параметров стратегий"""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT id, strategy_name, target_identifier, parameters, updated_at FROM strategy_parameters ORDER BY strategy_name, target_identifier"))
+            params = []
+            for row in result:
+                params.append({
+                    "id": row[0],
+                    "strategy_name": row[1],
+                    "target_identifier": row[2],
+                    "parameters": row[3] if isinstance(row[3], dict) else json.loads(row[3]),
+                    "updated_at": row[4].isoformat() if row[4] else None
+                })
+        return params
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/parameters", response_class=JSONResponse)
+async def add_parameter_api(
+    strategy_name: str = Form(...),
+    target_identifier: str = Form(...),
+    parameters_json: str = Form(...)
+):
+    """API: Добавление/обновление параметров стратегии"""
+    try:
+        params_dict = json.loads(parameters_json)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON format")
+        
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO strategy_parameters (strategy_name, target_identifier, parameters, updated_at)
+                VALUES (:strategy_name, :target_identifier, :parameters, CURRENT_TIMESTAMP)
+                ON CONFLICT (strategy_name, target_identifier) DO UPDATE
+                SET parameters = :parameters, updated_at = CURRENT_TIMESTAMP
+            """), {
+                "strategy_name": strategy_name.strip(),
+                "target_identifier": target_identifier.strip(),
+                "parameters": json.dumps(params_dict)
+            })
+        
+        # Инвалидация кэша
+        from utils.parameter_store import get_parameter_store
+        get_parameter_store().clear_cache()
+        
+        return {"status": "success", "message": "Параметры успешно сохранены"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/parameters/{param_id}", response_class=JSONResponse)
+async def delete_parameter_api(param_id: int):
+    """API: Удаление параметров стратегии"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM strategy_parameters WHERE id = :id"), {"id": param_id})
+        
+        from utils.parameter_store import get_parameter_store
+        get_parameter_store().clear_cache()
+            
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

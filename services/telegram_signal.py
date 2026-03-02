@@ -3,6 +3,7 @@
 Используется: send_sndk_signal_cron (GAME_5M), trading_cycle_cron (портфельная игра).
 """
 import logging
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -32,24 +33,33 @@ def get_signal_chat_ids() -> list[str]:
     return []
 
 
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+
+
 def send_telegram_message(
     token: str, chat_id: str, text: str, parse_mode: str | None = "Markdown"
 ) -> bool:
     """Отправить сообщение в Telegram. Возвращает True при успехе. parse_mode=None — обычный текст."""
+    if len(text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+        text = text[: TELEGRAM_MAX_MESSAGE_LENGTH - 80] + "\n\n… (сообщение обрезано)"
     payload = {"chat_id": chat_id, "text": text}
     if parse_mode:
         payload["parse_mode"] = parse_mode
-    data = urllib.parse.urlencode(payload).encode()
+    data = urllib.parse.urlencode(payload).encode("utf-8", errors="replace")
     req = urllib.request.Request(
         TELEGRAM_SEND_URL.format(token=token), data=data, method="POST"
     )
-    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             if resp.status != 200:
                 logger.error("Telegram API error: %s %s", resp.status, resp.read())
                 return False
             return True
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        logger.error("Telegram HTTP %s: %s", e.code, body[:500])
+        return False
     except Exception as e:
         logger.exception("Send failed: %s", e)
         return False
