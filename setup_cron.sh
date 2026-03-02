@@ -65,8 +65,8 @@ cat >> "$CRON_FILE" << EOF
 # Игра 5m: тикеры из config.env TICKERS_FAST. Аргумент переопределяет: ... send_sndk_signal_cron.py "SNDK,NDK"
 */5 * * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/send_sndk_signal_cron.py >> logs/cron_sndk_signal.log 2>&1
 
-# Премаркет: за ~30–60 мин до открытия US (8:30 ET). Москва: 16:30 MSK. При PREMARKET_ALERT_TELEGRAM=true — алерт в Telegram
-30 16 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/premarket_cron.py >> logs/premarket_cron.log 2>&1
+# Премаркет: за 15 мин до открытия US (9:15 ET = 17:15 MSK зимой). При PREMARKET_ALERT_TELEGRAM=true — алерт в Telegram. Летом (EDT): 9:15 ET = 16:15 MSK — при необходимости сменить на 15 16
+15 17 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/premarket_cron.py >> logs/premarket_cron.log 2>&1
 
 # Новости (RSS, NewsAPI, Alpha Vantage): каждый час
 0 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/fetch_news_cron.py >> logs/news_fetch.log 2>&1
@@ -97,7 +97,7 @@ echo "  - RSI локальный: 22:10 (после обновления цен)
 echo "  - RSI Finviz: пн-пт 19:00"
 echo "  - Торговый цикл: пн-пт 9:00, 13:00, 17:00"
 echo "  - Игра 5m (сигнал): каждые 5 мин пн-пт (при закрытой бирже — выход без 5m)"
-echo "  - Премаркет: пн-пт 16:30 MSK (алерт при PREMARKET_ALERT_TELEGRAM=true)"
+echo "  - Премаркет: пн-пт 17:15 MSK, за 15 мин до открытия US (алерт при PREMARKET_ALERT_TELEGRAM=true)"
 echo "  - Новости: каждый час (:00)"
 echo "  - Backfill embedding: каждый час в :10 (после новостей)"
 echo "  - Sentiment к новостям: каждый час в :20 (при USE_LLM=true)"
