@@ -218,8 +218,9 @@ def process_ticker(
         return False
 
     ok = 0
+    # Без parse_mode: в тексте бывают reasoning/новости с _ * ` — ломают Markdown и дают 400
     for cid in chat_ids:
-        if send_telegram_message(token, cid, text):
+        if send_telegram_message(token, cid, text, parse_mode=None):
             ok += 1
             logger.info("Сигнал %s отправлен в chat_id=%s", ticker, cid)
         else:

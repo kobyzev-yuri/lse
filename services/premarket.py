@@ -69,7 +69,8 @@ def get_premarket_context(ticker: str, dt_utc: Optional[datetime] = None) -> Dic
 
     Returns:
         - prev_close: float | None — последний close регулярной сессии (вчера)
-        - premarket_last: float | None — последняя цена в премаркете
+        - premarket_last: float | None — последняя цена в премаркете (последняя минута Yahoo)
+        - premarket_last_time_et: метка времени этой минуты (для сравнения с данными «там»)
         - premarket_gap_pct: float | None — гэп % к prev_close
         - premarket_volume: int | None — объём премаркета (если есть)
         - minutes_until_open: int | None — минуты до 9:30 ET
@@ -112,11 +113,23 @@ def get_premarket_context(ticker: str, dt_utc: Optional[datetime] = None) -> Dic
         if "Close" not in df.columns:
             out["error"] = "нет колонки Close"
             return out
-        # Берём последнюю цену (при вызове в PRE_MARKET это текущая цена премаркета)
+        # Сортируем по времени — yfinance может вернуть строки не по порядку или в UTC
+        dt_col = "Datetime" if "Datetime" in df.columns else "Date"
+        if dt_col in df.columns:
+            df = df.sort_values(dt_col).reset_index(drop=True)
+        # Берём последнюю цену (последняя минута премаркета по времени)
+        last_ts = df[dt_col].iloc[-1] if dt_col in df.columns else None
         premarket_last = float(df["Close"].iloc[-1])
         premarket_vol = int(df["Volume"].iloc[-1]) if "Volume" in df.columns and len(df) else None
         out["premarket_last"] = premarket_last
         out["premarket_volume"] = premarket_vol
+        # В ET для сравнения с Yahoo (приводим к ET если есть tz)
+        try:
+            if last_ts is not None and hasattr(last_ts, "tz_convert") and NYSE_TZ is not None:
+                last_ts = last_ts.tz_convert(NYSE_TZ) if getattr(last_ts, "tzinfo", None) is not None else last_ts
+        except Exception:
+            pass
+        out["premarket_last_time_et"] = str(last_ts) if last_ts is not None else None
         if prev_close is not None and prev_close > 0 and premarket_last is not None:
             out["premarket_gap_pct"] = round((premarket_last / prev_close - 1.0) * 100.0, 2)
     except Exception as e:

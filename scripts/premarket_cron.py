@@ -75,10 +75,11 @@ def main() -> None:
             last = pm.get("premarket_last")
             gap = pm.get("premarket_gap_pct")
             mins = pm.get("minutes_until_open")
-            results.append((ticker, prev, last, gap, mins))
+            last_time = pm.get("premarket_last_time_et")  # время последней минуты (Yahoo), чтобы сравнивать с «там»
+            results.append((ticker, prev, last, gap, mins, last_time))
             logger.info(
-                "%s: prev_close=%s premarket_last=%s gap_pct=%s min_to_open=%s",
-                ticker, prev, last, gap, mins,
+                "%s: prev_close=%s premarket_last=%s (на %s ET) gap_pct=%s min_to_open=%s",
+                ticker, prev, last, last_time, gap, mins,
             )
         except Exception as e:
             logger.warning("%s: %s", ticker, e)
@@ -90,11 +91,15 @@ def main() -> None:
         chat_ids_raw = get_config_value("TELEGRAM_SIGNAL_CHAT_IDS", "") or get_config_value("TELEGRAM_SIGNAL_CHAT_ID", "")
         chat_ids = [x.strip() for x in chat_ids_raw.split(",") if x.strip()]
         if token and chat_ids:
-            lines = ["📊 **Премаркет** (до открытия US)"]
-            for ticker, prev, last, gap, mins in results:
+            lines = ["📊 **Премаркет** (до открытия US). Цена — последняя минута Yahoo (prepost)."]
+            for item in results:
+                ticker, prev, last, gap, mins = item[0], item[1], item[2], item[3], item[4]
+                last_time = item[5] if len(item) > 5 else None
                 gap_str = f"{gap:+.2f}%" if gap is not None else "—"
                 mins_str = f"{mins} мин" if mins is not None else "—"
-                lines.append(f"• {ticker}: премаркет {last} гэп {gap_str} до открытия {mins_str}")
+                prev_str = f", вчера close {prev}" if prev is not None else ""
+                time_str = f" ({last_time})" if last_time is not None else ""
+                lines.append(f"• {ticker}: премаркет {last}{time_str} гэп {gap_str}{prev_str} до открытия {mins_str}")
             text = "\n".join(lines)
             import urllib.parse
             import urllib.request
