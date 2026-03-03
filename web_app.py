@@ -30,7 +30,7 @@ from config_loader import get_database_url
 from execution_agent import ExecutionAgent
 from services.ticker_groups import get_tickers_fast
 from news_importer import add_news
-from report_generator import compute_closed_trade_pnls, load_trade_history, get_engine
+from report_generator import compute_closed_trade_pnls, compute_open_positions, load_trade_history, get_engine, get_latest_prices
 
 app = FastAPI(title="LSE Trading System", version="1.0.0")
 
@@ -1245,6 +1245,118 @@ async def get_pnl():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _closed_report_rows(limit: int = 50):
+    """Данные для отчёта закрытых позиций (как /closed): сортировка по дате закрытия, новые сверху."""
+    report_engine = get_engine()
+    all_trades = load_trade_history(report_engine)
+    trade_pnls = compute_closed_trade_pnls(all_trades)
+    if not trade_pnls:
+        return []
+    sorted_pnls = sorted(trade_pnls, key=lambda t: pd.Timestamp(t.ts) if t.ts else pd.Timestamp.min, reverse=True)[:limit]
+    def _to_msk_str(ts):
+        if ts is None:
+            return "—"
+        try:
+            t = pd.Timestamp(ts)
+            if t.tzinfo is not None:
+                t = t.tz_convert("Europe/Moscow")
+            return t.strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            return str(ts)[:16] if ts else "—"
+
+    rows = []
+    for t in sorted_pnls:
+        pts = t.exit_price - t.entry_price
+        pips = round(pts * 10000) if ("=X" in t.ticker or "USD" in t.ticker or "EUR" in t.ticker) else round(pts, 2)
+        open_msk = _to_msk_str(t.entry_ts)
+        close_msk = _to_msk_str(t.ts)
+        direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
+        exit_reason = (t.signal_type or "—") if t.signal_type and str(t.signal_type).strip() else "—"
+        rows.append({
+            "instrument": t.ticker,
+            "direction": direction,
+            "open": float(t.entry_price),
+            "close": float(t.exit_price),
+            "profit_pips": pips,
+            "profit_usd": float(t.net_pnl),
+            "units": int(t.quantity),
+            "entry_strategy": getattr(t, "entry_strategy", None) or "—",
+            "exit_strategy": getattr(t, "exit_strategy", None) or "—",
+            "open_msk": open_msk,
+            "close_msk": close_msk,
+            "exit_reason": exit_reason,
+        })
+    return rows
+
+
+def _pending_report_rows(limit: int = 50):
+    """Данные для отчёта открытых позиций (как /pending): Strategy, P/L по последней цене."""
+    report_engine = get_engine()
+    trades = load_trade_history(report_engine)
+    pending = compute_open_positions(trades)[:limit]
+    if not pending:
+        return []
+    try:
+        from services.ticker_groups import get_tickers_game_5m
+        tickers_in_game_5m = set(get_tickers_game_5m())
+    except Exception:
+        tickers_in_game_5m = set()
+    latest_prices = get_latest_prices(report_engine, [p.ticker for p in pending])
+
+    def _to_msk_str(ts):
+        if ts is None:
+            return "—"
+        try:
+            t = pd.Timestamp(ts)
+            if t.tzinfo is not None:
+                t = t.tz_convert("Europe/Moscow")
+            return t.strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            return str(ts)[:16] if ts else "—"
+
+    rows = []
+    for p in pending:
+        strat = (p.strategy_name or "—").strip() or "—"
+        if strat == "GAME_5M" and p.ticker not in tickers_in_game_5m:
+            strat = "5m вне"
+        now_price = latest_prices.get(p.ticker)
+        if now_price is not None and p.entry_price and p.entry_price > 0:
+            pct = (now_price - p.entry_price) / p.entry_price * 100.0
+            usd = (now_price - p.entry_price) * p.quantity
+            pl_str = f"{pct:+.1f}% {usd:+.0f}$"
+        else:
+            pl_str = "—"
+            now_price = None
+        open_msk = _to_msk_str(p.entry_ts)
+        rows.append({
+            "instrument": p.ticker,
+            "direction": "Long",
+            "open": float(p.entry_price),
+            "now": f"{now_price:.2f}" if now_price is not None else "—",
+            "units": int(p.quantity),
+            "pl": pl_str,
+            "strategy": strat,
+            "open_msk": open_msk,
+        })
+    return rows
+
+
+@app.get("/reports/closed", response_class=HTMLResponse)
+async def report_closed(request: Request, limit: int = 50):
+    """HTML-отчёт: закрытые позиции (аналог /closed в Telegram)."""
+    limit = max(1, min(500, limit))
+    rows = _closed_report_rows(limit=limit)
+    return HTMLResponse(render_template("reports_closed.html", {"request": request, "rows": rows, "limit": limit}))
+
+
+@app.get("/reports/pending", response_class=HTMLResponse)
+async def report_pending(request: Request, limit: int = 50):
+    """HTML-отчёт: открытые позиции (аналог /pending в Telegram)."""
+    limit = max(1, min(500, limit))
+    rows = _pending_report_rows(limit=limit)
+    return HTMLResponse(render_template("reports_pending.html", {"request": request, "rows": rows, "limit": limit}))
 
 
 @app.get("/parameters", response_class=HTMLResponse)

@@ -230,9 +230,46 @@ python scripts/run_telegram_bot.py
 
 ### 2. Webhook режим (для продакшена)
 
-**Использование:** Развертывание на Cloud Run или другом сервере
+**Использование:** Развертывание на Cloud Run или другом сервере; локальный тест через туннель (ngrok и т.п.).
 
-**Настройка:**
+**Локальный запуск webhook-сервера:**
+
+```bash
+./start_telegram_bot_webhook.sh
+# или: python api/bot_app.py
+```
+
+Сервер слушает порт 8080 (или `PORT` из config.env). Для приёма обновлений от Telegram нужен **публичный HTTPS-URL**. Варианты:
+
+- **cloudflared (в проекте):** `./scripts/run_tunnel.sh` → в выводе будет `https://XXX.trycloudflare.com`, подставить `.../webhook`
+- **ngrok:** `ngrok http 8080` → в настройку webhook подставить `https://XXXX.ngrok.io/webhook`
+- **Cloud Run / VM:** развернуть `api/bot_app.py` (см. `docs/DEPLOY_INSTRUCTIONS.md`)
+
+После того как есть публичный URL:
+
+```bash
+python scripts/setup_webhook.py --url https://YOUR_PUBLIC_URL/webhook
+```
+
+Проверка: `curl https://YOUR_PUBLIC_URL/webhook/info`
+
+**Тест webhook через cloudflared (без своего сервера):**
+
+1. Терминал 1 — webhook-сервер:
+   ```bash
+   ./start_telegram_bot_webhook.sh
+   ```
+2. Терминал 2 — туннель (появится URL вида `https://XXX.trycloudflare.com`):
+   ```bash
+   ./scripts/run_tunnel.sh
+   ```
+3. Скопировать из вывода строку «Webhook для Telegram» и выполнить:
+   ```bash
+   python scripts/setup_webhook.py --url https://XXX.trycloudflare.com/webhook
+   ```
+4. Написать боту в Telegram — ответы идут через webhook.
+
+**Настройка на сервере:**
 
 1. Развернуть `api/bot_app.py` на Cloud Run или на VM (см. `docs/DEPLOY_INSTRUCTIONS.md`)
 
@@ -265,6 +302,10 @@ lse/
     ├── run_telegram_bot.py       # Локальный запуск (polling)
     └── setup_webhook.py          # Настройка webhook
 ```
+
+В корне проекта:
+- `start_telegram_bot.sh` — запуск в режиме **polling**
+- `start_telegram_bot_webhook.sh` — запуск **webhook**-сервера (FastAPI на порту 8080)
 
 ---
 

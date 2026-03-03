@@ -29,6 +29,12 @@ logs/
 # Состояние watchdog (уже отправленные в Telegram ошибки)
 .cron_watchdog_sent.json
 
+# Кэш HTML-отчётов (closed/pending) для ссылок из Telegram
+cache/
+
+# Локальные бинарники туннеля (cloudflared), скачиваются scripts/run_tunnel.sh
+scripts/bin/
+
 # Cooldown для проактивных сигналов (cron)
 .last_sndk_signal_sent
 .last_signal_sent_*

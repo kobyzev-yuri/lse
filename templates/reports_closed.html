@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Закрытые позиции — LSE Trading System{% endblock %}
+
+{% block extra_css %}
+<style>
+.table-responsive { overflow-x: auto; }
+.muted { color: #7f8c8d; font-size: 0.9rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Закрытые позиции</h1>
+<p class="muted">Аналог команды /closed в Telegram. Показано последних {{ rows|length }} (лимит {{ limit }}). Даты в MSK.</p>
+<div class="card">
+    {% if rows %}
+    <div class="table-responsive">
+    <table>
+        <thead>
+            <tr>
+                <th>Instrument</th>
+                <th>Dir</th>
+                <th>Open</th>
+                <th>Close</th>
+                <th>Pips</th>
+                <th>Profit</th>
+                <th>Units</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>Open (MSK)</th>
+                <th>Close (MSK)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                <td>{{ row.instrument }}</td>
+                <td>{{ row.direction }}</td>
+                <td>${{ "%.2f"|format(row.open) }}</td>
+                <td>${{ "%.2f"|format(row.close) }}</td>
+                <td>{{ row.profit_pips }}</td>
+                <td class="{% if row.profit_usd >= 0 %}positive{% else %}negative{% endif %}">${{ "%+.2f"|format(row.profit_usd) }}</td>
+                <td>{{ row.units }}</td>
+                <td>{{ row.entry_strategy }}</td>
+                <td>{{ row.exit_strategy }}</td>
+                <td>{{ row.open_msk }}</td>
+                <td>{{ row.close_msk }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p>Закрытых позиций пока нет.</p>
+    {% endif %}
+</div>
+<p class="muted"><a href="/">Портфель</a> · <a href="/reports/pending">Открытые позиции</a></p>
+{% endblock %}

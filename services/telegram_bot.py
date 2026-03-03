@@ -11,10 +11,13 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import asyncio
+import html
 import logging
 import math
 import re
-from typing import Optional, Dict, Any
+import uuid
+from io import BytesIO
+from typing import Optional, Dict, Any, List, Set
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -60,6 +63,84 @@ def _normalize_ticker(ticker: str) -> str:
         if len(parts) == 2 and len(parts[0]) == 3 and len(parts[1]) == 3:
             ticker = parts[0] + parts[1] + "=X"
     return ticker
+
+
+def _unique_report_filename(title: str) -> str:
+    """Уникальное имя файла отчёта: видно в Telegram как заголовок, по нажатию открывается file://.../имя.html"""
+    ts = datetime.now().strftime("%Y-%m-%d %H-%M")
+    short_id = uuid.uuid4().hex[:6]
+    return f"{title} {ts} {short_id}.html"
+
+
+def _ts_msk(ts) -> str:
+    if ts is None:
+        return "—"
+    try:
+        import pandas as pd
+        t = pd.Timestamp(ts)
+        if t.tzinfo is not None:
+            t = t.tz_convert("Europe/Moscow")
+        return t.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return str(ts)[:16] if ts else "—"
+
+
+def _build_closed_html(closed: List[Any]) -> str:
+    """Собирает простой HTML для отчёта закрытых позиций (для сохранения в кэш)."""
+    rows_html = []
+    for t in closed:
+        direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
+        pts = t.exit_price - t.entry_price
+        pips = round(pts * 10000) if ("=X" in t.ticker or "USD" in t.ticker or "EUR" in t.ticker) else round(pts, 2)
+        entry_s = html.escape(str(getattr(t, "entry_strategy", None) or "—"))
+        exit_s = html.escape(str(getattr(t, "exit_strategy", None) or "—"))
+        profit_cls = "positive" if t.net_pnl >= 0 else "negative"
+        rows_html.append(
+            f"<tr><td>{html.escape(t.ticker)}</td><td>{direction}</td>"
+            f"<td>{t.entry_price:.2f}</td><td>{t.exit_price:.2f}</td><td>{pips}</td>"
+            f'<td class="{profit_cls}">{t.net_pnl:+.2f}</td><td>{int(t.quantity)}</td>'
+            f"<td>{entry_s}</td><td>{exit_s}</td>"
+            f"<td>{_ts_msk(t.entry_ts)}</td><td>{_ts_msk(t.ts)}</td></tr>"
+        )
+    body = "\n".join(rows_html)
+    return f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8"><title>Закрытые позиции</title>
+<style>table{{border-collapse:collapse;width:100%}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}}</style>
+</head><body><h1>Закрытые позиции</h1><p>Даты в MSK. Entry/Exit — стратегия открытия/закрытия.</p>
+<table><thead><tr><th>Instrument</th><th>Dir</th><th>Open</th><th>Close</th><th>Pips</th><th>Profit</th><th>Units</th><th>Entry</th><th>Exit</th><th>Open (MSK)</th><th>Close (MSK)</th></tr></thead>
+<tbody>{body}</tbody></table></body></html>"""
+
+
+def _build_pending_html(pending: List[Any], latest_prices: Dict[str, float], tickers_in_game_5m: Set[str]) -> str:
+    """Собирает простой HTML для отчёта открытых позиций (для сохранения в кэш)."""
+    rows_html = []
+    for p in pending:
+        strat = (p.strategy_name or "—").strip() or "—"
+        if strat == "GAME_5M" and p.ticker not in tickers_in_game_5m:
+            strat = "5m вне"
+        now_price = latest_prices.get(p.ticker)
+        if now_price is not None and p.entry_price and p.entry_price > 0:
+            pct = (now_price - p.entry_price) / p.entry_price * 100.0
+            usd = (now_price - p.entry_price) * p.quantity
+            pl_str = f"{pct:+.1f}% {usd:+.0f}$"
+            pl_cls = "positive" if pct >= 0 else "negative"
+        else:
+            pl_str = "—"
+            pl_cls = ""
+        now_str = f"{now_price:.2f}" if now_price is not None else "—"
+        rows_html.append(
+            f"<tr><td>{html.escape(p.ticker)}</td><td>Long</td>"
+            f"<td>{p.entry_price:.2f}</td><td>{now_str}</td><td>{int(p.quantity)}</td>"
+            f'<td class="{pl_cls}">{html.escape(pl_str)}</td><td>{html.escape(strat)}</td>'
+            f"<td>{_ts_msk(p.entry_ts)}</td></tr>"
+        )
+    body = "\n".join(rows_html)
+    return f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8"><title>Открытые позиции</title>
+<style>table{{border-collapse:collapse;width:100%}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}}</style>
+</head><body><h1>Открытые позиции</h1><p>Даты в MSK. «5m вне» — тикер убран из игры 5m.</p>
+<table><thead><tr><th>Instrument</th><th>Dir</th><th>Open</th><th>Now</th><th>Units</th><th>P/L</th><th>Strategy</th><th>Open (MSK)</th></tr></thead>
+<tbody>{body}</tbody></table></body></html>"""
 
 
 class LSETelegramBot:
@@ -1952,9 +2033,15 @@ class LSETelegramBot:
                 )
                 rows.append(row)
             table = "\n".join(rows)
-            caption = f"📋 **Positions** (последние {len(closed)})\nEntry/Exit — стратегия открытия/закрытия. Даты в MSK."
+            html_content = _build_closed_html(closed)
+            filename = _unique_report_filename("Закрытые позиции")
+            await update.message.reply_document(
+                document=BytesIO(html_content.encode("utf-8")),
+                filename=filename,
+                caption=f"📋 Закрытые позиции (последние {len(closed)}). Откройте файл в браузере.",
+            )
             await update.message.reply_text(
-                caption + "\n\n```\n" + table + "\n```",
+                f"📋 **Positions** (последние {len(closed)})\nEntry/Exit — стратегия открытия/закрытия. Даты в MSK.\n\n```\n{table}\n```",
                 parse_mode="Markdown",
             )
         except Exception as e:
@@ -2039,9 +2126,15 @@ class LSETelegramBot:
                 )
                 rows.append(row)
             table = "\n".join(rows)
-            caption = "📋 **Открытые позиции** (показано {})\nNow и P/L — по последней close из quotes. Даты в MSK. _«5m вне» — тикер убран из игры 5m._".format(len(pending))
+            html_content = _build_pending_html(pending, latest_prices, tickers_in_game_5m)
+            filename = _unique_report_filename("Открытые позиции")
+            await update.message.reply_document(
+                document=BytesIO(html_content.encode("utf-8")),
+                filename=filename,
+                caption=f"📋 Открытые позиции (показано {len(pending)}). Откройте файл в браузере.",
+            )
             await update.message.reply_text(
-                caption + "\n\n```\n" + table + "\n```",
+                "📋 **Открытые позиции** (показано {})\nNow и P/L — по последней close из quotes. Даты в MSK. _«5m вне» — тикер убран из игры 5m._\n\n```\n{}\n```".format(len(pending), table),
                 parse_mode="Markdown",
             )
         except Exception as e:
