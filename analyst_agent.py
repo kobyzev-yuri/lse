@@ -5,7 +5,7 @@ import re
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import logging
 
 # Импорт LLM сервиса (опционально)
@@ -545,7 +545,52 @@ class AnalystAgent:
 
         logger.info(f"=" * 60)
         return decision
-    
+
+    def _get_benchmark_signal(self, benchmark: str = "MU") -> Optional[str]:
+        """Базовый сигнал по бенчмарку (без LLM) — для контекста в промпте при анализе другого тикера."""
+        try:
+            sig = self.check_technical_signal(benchmark)
+            if sig == "NO_DATA":
+                return None
+            df = self.get_last_5_days_quotes(benchmark)
+            if df.empty:
+                return None
+            latest = df.iloc[0]
+            news_df = self.get_recent_news(benchmark)
+            sentiment = 0.0
+            news_list = []
+            if not news_df.empty:
+                sentiment = self.calculate_weighted_sentiment(news_df, benchmark)
+                news_list = news_df.to_dict("records")
+            if SENTIMENT_UTILS_AVAILABLE and (sentiment > 1.0 or sentiment < -1.0) and 0.0 <= sentiment <= 1.0:
+                sentiment = normalize_sentiment(sentiment)
+            tech = {
+                "close": float(latest.get("close")),
+                "sma_5": float(latest["sma_5"]) if latest.get("sma_5") is not None else None,
+                "volatility_5": float(latest["volatility_5"]) if latest.get("volatility_5") is not None else None,
+                "open_price": float(df.iloc[1]["close"]) if len(df) > 1 else None,
+            }
+            if self.use_strategy_manager and self.strategy_manager:
+                try:
+                    sel = self.strategy_manager.select_strategy(
+                        ticker=benchmark, technical_data=tech, news_data=news_list, sentiment_score=sentiment
+                    )
+                    if sel:
+                        res = sel.calculate_signal(
+                            ticker=benchmark, technical_data=tech, news_data=news_list, sentiment_score=sentiment
+                        )
+                        return res.get("signal", "HOLD")
+                except Exception:
+                    pass
+            if sig == "BUY" and sentiment > 0.0:
+                return "STRONG_BUY"
+            if sig == "BUY":
+                return "BUY"
+            return "HOLD"
+        except Exception as e:
+            logger.debug("Сигнал по бенчмарку %s: %s", benchmark, e)
+            return None
+
     def get_decision_with_llm(self, ticker: str) -> dict:
         """
         Принятие решения с использованием LLM для улучшения анализа
@@ -589,6 +634,19 @@ class AnalystAgent:
             "rsi": rsi_value,
             "technical_signal": technical_signal
         }
+        # Корреляция с бенчмарком (MU) за 14 дн. и текущий сигнал по MU — для контекста LLM (совместный контекст по паре).
+        # Для MU не добавляем — смысл тривиален (1.0 с собой).
+        if ticker and ticker.upper() != "MU":
+            try:
+                from report_generator import get_rolling_corr_with_benchmark
+                corr_val, corr_label = get_rolling_corr_with_benchmark(self.engine, ticker, benchmark="MU", window_days=14)
+                technical_data["corr_with_benchmark"] = corr_val
+                technical_data["corr_label"] = corr_label
+                mu_signal = self._get_benchmark_signal("MU")
+                if mu_signal:
+                    technical_data["benchmark_signal"] = mu_signal
+            except Exception as e:
+                logger.debug("Корреляция/сигнал бенчмарка для LLM недоступны: %s", e)
         
         news_df = self.get_recent_news(ticker)
         weighted_sentiment = 0.0

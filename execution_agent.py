@@ -70,9 +70,9 @@ class ExecutionAgent:
         # Читаем глобальные параметры один раз за запуск (БД strategy_parameters или config.env)
         self.commission_rate = float(get_dynamic_config_value("COMMISSION_RATE", "0.0", engine=self.engine))
         self.stop_loss_level = float(get_dynamic_config_value("STOP_LOSS_LEVEL", "0.95", engine=self.engine))
-        # Стоп-лосс портфеля: true = проверять по STOP_LOSS_LEVEL; false = отключён (только тейк)
-        _sl_enabled = (get_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true").strip().lower() in ("1", "true", "yes"))
-        self.stop_loss_enabled = _sl_enabled
+        # Стоп-лосс портфеля: true = проверять по STOP_LOSS_LEVEL; false = отключён (только тейк). Из config или БД (strategy_parameters GLOBAL).
+        _sl_raw = (get_dynamic_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true", engine=self.engine) or "true").strip().lower()
+        self.stop_loss_enabled = _sl_raw in ("1", "true", "yes")
 
         logger.info("✅ ExecutionAgent инициализирован, подключение к БД установлено")
         logger.info(f"   Risk Manager: загружены лимиты из {self.risk_manager.config_path}")

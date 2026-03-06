@@ -95,6 +95,23 @@
 ## 5. Конфиг: тикеры и тейк/стоп
 
 - **5m:** тикеры — **GAME_5M_TICKERS** или TICKERS_FAST; тейк/стоп — **GAME_5M_TAKE_PROFIT_PCT**, **GAME_5M_STOP_LOSS_PCT**, GAME_5M_TAKE_PROFIT_MIN_PCT и др. (см. config.env.example).
-- **Портфель:** тикеры — **TRADING_CYCLE_TICKERS** или TICKERS_MEDIUM + TICKERS_LONG; тейк по умолчанию — **PORTFOLIO_TAKE_PROFIT_PCT** (если 0 или не задан — в логах «Тейк‑профит не задан»). Стоп-лосс: **PORTFOLIO_STOP_LOSS_ENABLED** (true/false); при false в логах предупреждение «стоп отключён», закрытие только по тейку. Порог стопа — **STOP_LOSS_LEVEL** (0.95 ≈ −5%).
+- **Портфель:** тикеры — **TRADING_CYCLE_TICKERS** или TICKERS_MEDIUM + TICKERS_LONG; тейк по умолчанию — **PORTFOLIO_TAKE_PROFIT_PCT** (если 0 или не задан — в логах «Тейк‑профит не задан»). Стоп-лосс: **PORTFOLIO_STOP_LOSS_ENABLED** (true/false); при false в логах предупреждение «стоп отключён», закрытие только по тейку. Порог стопа — **STOP_LOSS_LEVEL** (0.95 ≈ −5%). Оба параметра (PORTFOLIO_STOP_LOSS_ENABLED, STOP_LOSS_LEVEL) можно переопределить в БД (strategy_parameters, GLOBAL) — тогда trading_cycle_cron и /gameparams используют значение из БД.
 
 См. также: [TICKER_GROUPS.md](TICKER_GROUPS.md), [CRON_TICKERS_EXPLANATION.md](CRON_TICKERS_EXPLANATION.md).
+
+---
+
+## 6. Проверка: сигнал 5m пришёл, но позиция не в /pending
+
+Цепочка по шагам:
+
+1. **Крон** `send_sndk_signal_cron.py` при решении BUY/STRONG_BUY вызывает `record_entry(ticker, price, ...)` из `services/game_5m.py`.
+2. **record_entry** делает `INSERT INTO public.trade_history (..., side='BUY', strategy_name='GAME_5M', ...)`. Подключение к БД: `create_engine(get_database_url())`; конфиг берётся из `config_loader.load_config()` → файл `Path(config_loader.__file__).parent / "config.env"` (рядом с config_loader.py в корне проекта).
+3. **Бот** по команде /pending вызывает `report_generator.get_engine()` → `create_engine(get_database_url())`, затем `load_trade_history(engine)` без фильтра по стратегии → `SELECT * FROM trade_history ORDER BY ts, id`, затем `compute_open_positions(trades)` → считает открытые позиции (BUY без полного SELL по тикеру).
+
+Чтобы позиция из шага 1 попала в шаг 3, **крон и бот должны подключаться к одной и той же БД**:
+
+- Один и тот же **config.env**: оба процесса загружают конфиг из пути относительно `config_loader.__file__` (каталог, где лежит config_loader.py). Если крон запускается из другого каталога или другого клона репозитория — может подхватиться другой config.env с другим DATABASE_URL.
+- Переменные окружения: `get_config_value()` сначала смотрит `os.getenv(key)`. Если в crontab задан `DATABASE_URL=...` или бот запущен с `export DATABASE_URL=...`, а второй процесс — без него, получится разная БД.
+
+**Что проверить:** в логах крона после записи входа есть строка вида `game_5m: вход SNDK id=123 @ 567.70 qty=... BUY` и (при следующем изменении) `[5m] БД: host=... database=lse_trading`. Убедитесь, что бот при /pending подключается к тому же host и database (например, добавьте временно лог в боте при старте или в обработчике /pending: какой DATABASE_URL используется, с замаскированным паролем).

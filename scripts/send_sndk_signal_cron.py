@@ -25,7 +25,7 @@ sys.path.insert(0, str(project_root))
 
 import logging
 
-from config_loader import get_config_value
+from config_loader import get_config_value, get_dynamic_config_value
 from services.ticker_groups import get_tickers_fast, get_tickers_game_5m
 from services.telegram_signal import get_signal_chat_ids, send_telegram_message
 
@@ -61,6 +61,17 @@ def mark_signal_sent(ticker: str) -> None:
         cooldown_file(ticker).write_text(str(datetime.now().timestamp()))
     except Exception as e:
         logger.warning("Не удалось записать cooldown для %s: %s", ticker, e)
+
+
+def clear_cooldown(ticker: str) -> None:
+    """Сбрасывает cooldown по тикеру (после закрытия позиции — следующий запуск может отправить новый вход)."""
+    try:
+        f = cooldown_file(ticker)
+        if f.exists():
+            f.unlink()
+            logger.info("%s: cooldown сброшен после закрытия позиции → в следующем запуске при BUY сигнал будет отправлен", ticker)
+    except Exception as e:
+        logger.warning("Не удалось сбросить cooldown для %s: %s", ticker, e)
 
 
 def get_signal_mentions() -> str:
@@ -100,6 +111,8 @@ def process_ticker(
     bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
 
     outcome_lines = []  # итоговая причина для лога
+    closed_this_run = False  # закрыли позицию в этом запуске — отправим уведомление и сбросим cooldown
+    close_price = close_exit_type = close_entry_price = None
 
     try:
         # Сначала «любая» позиция по тикеру (как в /pending), иначе только GAME_5M — чтобы видеть MU и др. при другой стратегии
@@ -131,6 +144,10 @@ def process_ticker(
             if should_close and exit_type:
                 close_position(ticker, price_for_check, exit_type, position=open_pos)
                 outcome_lines.append("позиция закрыта по %s @ %.2f" % (exit_type, price_for_check))
+                closed_this_run = True
+                close_price = price_for_check
+                close_exit_type = exit_type
+                close_entry_price = entry_f
             else:
                 if entry_f:
                     pnl_pct = (price_for_check - entry_f) / entry_f * 100.0
@@ -155,34 +172,70 @@ def process_ticker(
 
     logger.info("[5m] %s: итог — %s", ticker, "; ".join(outcome_lines))
 
+    # Сразу после закрытия: уведомление в Telegram и сброс cooldown (следующий запуск сможет отправить новый вход)
+    if closed_this_run and close_exit_type:
+        clear_cooldown(ticker)
+        if chat_ids:
+            pnl_str = ""
+            if close_entry_price is not None and close_price is not None and close_entry_price > 0:
+                pnl_pct = (close_price - close_entry_price) / close_entry_price * 100.0
+                pnl_str = ", PnL %+.2f%%" % pnl_pct
+            close_msg = "🔒 **5m:** %s закрыта по %s @ %.2f%s. Открытые позиции: /pending" % (
+                ticker, close_exit_type, close_price or 0, pnl_str,
+            )
+            ok = 0
+            for cid in chat_ids:
+                if send_telegram_message(token, cid, close_msg, parse_mode=None):
+                    ok += 1
+            if ok > 0:
+                logger.info("[5m] %s: отправлено уведомление о закрытии по %s @ %.2f (в этом запуске новый вход не слать)", ticker, close_exit_type, close_price or 0)
+                return True
+        return True  # закрыли в этом запуске — не слать новый вход в том же запуске
+
     if decision not in ("BUY", "STRONG_BUY"):
         return False
 
     # Вход только в регулярную сессию NYSE (9:30–16:00 ET). В премаркете/после закрытия торговля «плоская», ликвидность низкая.
     session_phase = (d5.get("market_session") or {}).get("session_phase") or ""
     if session_phase in ("PRE_MARKET", "AFTER_HOURS", "WEEKEND", "HOLIDAY"):
-        logger.info("%s: решение BUY, но сессия=%s — вход отложен до открытия биржи", ticker, session_phase)
+        logger.info("%s: решение BUY, позиции нет, но сессия=%s — пропуск рассылки (вход только в регулярную сессию 9:30–16:00 ET)", ticker, session_phase)
         return False
 
     cooldown_min = get_cooldown_minutes()
-    if last_signal_sent_at(ticker) and (datetime.now() - last_signal_sent_at(ticker)).total_seconds() < cooldown_min * 60:
-        logger.info("%s: cooldown, пропуск рассылки", ticker)
-        return False
+    last_sent = last_signal_sent_at(ticker)
+    if last_sent:
+        elapsed_sec = (datetime.now() - last_sent).total_seconds()
+        if elapsed_sec < cooldown_min * 60:
+            mins_ago = int(elapsed_sec / 60)
+            logger.info(
+                "%s: решение BUY, позиции нет, но пропуск рассылки — cooldown (последняя рассылка %d мин назад, лимит %d мин). Следующий вход: после истечения cooldown или после закрытия позиции.",
+                ticker, mins_ago, cooldown_min,
+            )
+            return False
 
     # Не слать «Сигнал на вход», если уже в позиции — это не новый вход, ждём закрытия
     try:
         if get_open_position_any(ticker) is not None:
-            logger.info("%s: уже в позиции, пропуск рассылки (ожидаем закрытия)", ticker)
+            logger.info("%s: решение BUY, но уже в позиции — пропуск рассылки (ожидаем закрытия по тейку/стопу)", ticker)
             return False
     except Exception as e:
         logger.warning("game_5m: проверка открытой позиции %s: %s", ticker, e)
 
+    logger.info("[5m] %s: отправка сигнала на вход (BUY, позиции нет, cooldown пройден)", ticker)
     rsi = d5.get("rsi_5m")
     mom = d5.get("momentum_2h_pct")
     vol = d5.get("volatility_5m_pct")
     period = d5.get("period_str", "")
     reasoning = (d5.get("reasoning") or "")[:200]
 
+    # Пояснение про стоп: в сообщении — стоп/тейк для игры 5m (интрадей). Если стоп портфеля отключён (config или БД) — явно пишем.
+    try:
+        from report_generator import get_engine
+        _eng = get_engine()
+        _sl_raw = (get_dynamic_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true", engine=_eng) or "true").strip().lower()
+    except Exception:
+        _sl_raw = (get_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true") or "true").strip().lower()
+    portfolio_stop_disabled = _sl_raw in ("0", "false", "no")
     lines = [
         f"🟢 **Сигнал на вход {ticker} (5m)**",
         "",
@@ -194,9 +247,11 @@ def process_ticker(
         f"_Период данных: {period}_" if period else "",
         "",
         "Параметры (интрадей): стоп −%.1f%%, тейк +%.1f%% (стоп < тейк, оба от импульса 2ч)." % (_effective_stop_loss_pct(momentum_2h_pct), _effective_take_profit_pct(momentum_2h_pct)),
-        "",
-        f"Подробнее: /recommend5m {ticker}",
     ]
+    if portfolio_stop_disabled:
+        lines.append("⚠️ Стоп портфеля отключён (PORTFOLIO_STOP_LOSS_ENABLED=false, config или БД): по портфельным позициям закрытие только по тейку. Строки выше — стоп/тейк для игры 5m.")
+    lines.append("")
+    lines.append(f"Подробнее: /recommend5m {ticker}")
     if reasoning:
         lines.insert(-2, f"💭 {reasoning}")
 
@@ -258,6 +313,22 @@ def process_ticker(
     except Exception as e:
         logger.exception("game_5m: ошибка записи входа %s в trade_history: %s — рассылка отменена", ticker, e)
         return False
+
+    # Лог для проверки: крон и бот должны подключаться к одной БД (см. docs/CRONS_AND_TAKE_STOP.md §6)
+    try:
+        from config_loader import get_database_url
+        import re
+        url = get_database_url()
+        m = re.match(r"postgresql://[^@]+@([^:/]+)(?::(\d+))?/([^?]+)", url)
+        if m:
+            logger.info("[5m] БД (для проверки /pending): host=%s port=%s database=%s", m.group(1), m.group(2) or "5432", m.group(3))
+    except Exception:
+        pass
+
+    # Напоминание: позиция уже в trade_history; смотреть в /pending (бот и крон должны использовать один DATABASE_URL в config.env)
+    text = text.strip()
+    if "/pending" not in text:
+        text += "\n\n📋 Позиция записана в игру 5m. Открытые позиции: /pending"
 
     ok = 0
     # Без parse_mode: в тексте бывают reasoning/новости с _ * ` — ломают Markdown и дают 400
@@ -367,7 +438,8 @@ def main():
 
     if not any_sent:
         logger.info(
-            "Нет сигналов BUY/STRONG_BUY к рассылке. Причины по тикерам см. выше (открытая позиция — тейк/стоп; решение HOLD; cooldown или сессия)."
+            "[5m] Рассылка: ни одного сообщения не отправлено. Причины по каждому тикеру — см. строки выше: "
+            "cooldown (минуты назад/лимит), уже в позиции, решение HOLD, сессия не торговая."
         )
     sys.exit(0)
 

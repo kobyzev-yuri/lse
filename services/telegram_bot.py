@@ -2903,7 +2903,8 @@ class LSETelegramBot:
             return
         try:
             text = self._format_recommendation(data)
-            await update.message.reply_text(text, parse_mode="Markdown")
+            # Без parse_mode: в тексте бывают reasoning, стратегия, числа — символы _ * ломают Markdown
+            await update.message.reply_text(text, parse_mode=None)
         except Exception as e:
             logger.exception("Ошибка форматирования рекомендации")
             await update.message.reply_text(f"❌ Ошибка: {e}")
@@ -2940,7 +2941,8 @@ class LSETelegramBot:
             return
         try:
             text = self._format_recommendation_5m(data)
-            await update.message.reply_text(text, parse_mode="Markdown")
+            # Без parse_mode: reasoning, LLM, премаркет — символы _ * ломают Markdown
+            await update.message.reply_text(text, parse_mode=None)
         except Exception as e:
             logger.exception("Ошибка форматирования рекомендации 5m")
             await update.message.reply_text(f"❌ Ошибка: {e}")
@@ -3020,6 +3022,8 @@ class LSETelegramBot:
             await update.message.reply_text("❌ Доступ запрещен")
             return
         try:
+            import re
+            from config_loader import get_database_url
             from services.game_5m import get_strategy_params
             from services.ticker_groups import get_tickers_game_5m, get_tickers_for_portfolio_game
             params_5m = get_strategy_params()
@@ -3028,13 +3032,25 @@ class LSETelegramBot:
             cooldown = get_config_value("GAME_5M_COOLDOWN_MINUTES", "120").strip()
             momentum_factor = get_config_value("GAME_5M_TAKE_MOMENTUM_FACTOR", "1.0").strip()
             portfolio_take = get_config_value("PORTFOLIO_TAKE_PROFIT_PCT", "0").strip() or "0"
-            stop_level = get_config_value("STOP_LOSS_LEVEL", "0.95").strip()
-            stop_enabled_raw = (get_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true").strip().lower() in ("1", "true", "yes"))
+            from config_loader import get_dynamic_config_value
+            from report_generator import get_engine
+            _engine = get_engine()
+            stop_level = (get_dynamic_config_value("STOP_LOSS_LEVEL", "0.95", engine=_engine) or "0.95").strip()
+            _sl_raw = (get_dynamic_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true", engine=_engine) or "true").strip().lower()
+            stop_enabled_raw = _sl_raw in ("1", "true", "yes")
             stop_enabled_str = "вкл." if stop_enabled_raw else "выкл. (только тейк)"
         except Exception as e:
             logger.exception("Ошибка загрузки параметров игр")
             await update.message.reply_text(f"❌ Ошибка: {e}")
             return
+        db_info = ""
+        try:
+            url = get_database_url()
+            m = re.match(r"postgresql://[^@]+@([^:/]+)(?::(\d+))?/([^?]+)", url)
+            if m:
+                db_info = f"• БД (для сверки с крон-логом): host={m.group(1)} port={m.group(2) or '5432'} database={m.group(3)}"
+        except Exception:
+            pass
         lines = [
             "⚙️ **Параметры игр** _(config.env)_",
             "",
@@ -3054,7 +3070,10 @@ class LSETelegramBot:
         ]
         if not stop_enabled_raw:
             lines.append("")
-            lines.append("⚠️ _Стоп-лосс портфеля выключен в config (PORTFOLIO\_STOP\_LOSS\_ENABLED=false). Закрытие по стопу не выполняется, только по тейку._")
+            lines.append("⚠️ _Стоп-лосс портфеля выключен (PORTFOLIO\_STOP\_LOSS\_ENABLED=false, config или БД). Закрытие по стопу не выполняется, только по тейку._")
+        if db_info:
+            lines.append("")
+            lines.append(db_info)
         lines.append("")
         lines.append("_Подробнее: docs/CRONS_AND_TAKE_STOP.md_")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
@@ -3167,7 +3186,8 @@ class LSETelegramBot:
                             return
                     except Exception as e:
                         logger.warning(f"LLM для рекомендации не сработал: {e}")
-                await update.message.reply_text(recommendation_text, parse_mode="Markdown")
+                # Без parse_mode: рекомендация может содержать _ * из reasoning/LLM — парсер падает
+                await update.message.reply_text(recommendation_text, parse_mode=None)
                 return
             
             if tickers:

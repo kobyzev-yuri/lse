@@ -253,6 +253,15 @@ Sentiment анализ:
 Новости:
 {news_summary if news_summary else "Новостей не найдено"}
 """
+        corr_val = technical_data.get("corr_with_benchmark")
+        corr_label = technical_data.get("corr_label")
+        benchmark_signal = technical_data.get("benchmark_signal")
+        if corr_val is not None and corr_label:
+            user_message += f"\n\nКорреляция с бенчмарком (MU, 14 дн.): {corr_val:.2f} ({corr_label})."
+            if benchmark_signal:
+                user_message += f" Текущий сигнал по MU: {benchmark_signal}. При высокой корреляции (In-Sync) движение бенчмарка может поддерживать или давить на тикер — учти при рекомендации."
+            else:
+                user_message += " Учти при рекомендации: при In-Sync бумага движется с сектором; при Independent — на собственных драйверах."
         premarket_note = technical_data.get("premarket_note")
         if premarket_note:
             user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
@@ -383,6 +392,15 @@ Sentiment анализ:
 Новости:
 {news_summary if news_summary else "Новостей не найдено"}
 """
+        corr_val = technical_data.get("corr_with_benchmark")
+        corr_label = technical_data.get("corr_label")
+        benchmark_signal = technical_data.get("benchmark_signal")
+        if corr_val is not None and corr_label:
+            user_message += f"\n\nКорреляция с бенчмарком (MU, 14 дн.): {corr_val:.2f} ({corr_label})."
+            if benchmark_signal:
+                user_message += f" Текущий сигнал по MU: {benchmark_signal}. При высокой корреляции (In-Sync) движение бенчмарка может поддерживать или давить на тикер — учти при рекомендации."
+            else:
+                user_message += " Учти при рекомендации: при In-Sync бумага движется с сектором; при Independent — на собственных драйверах."
         premarket_note = technical_data.get("premarket_note")
         if premarket_note:
             user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."

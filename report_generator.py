@@ -347,6 +347,40 @@ def load_quotes(engine, tickers: List[str]) -> pd.DataFrame:
     return df
 
 
+def get_rolling_corr_with_benchmark(
+    engine,
+    ticker: str,
+    benchmark: str = "MU",
+    window_days: int = 14,
+) -> tuple[Optional[float], str]:
+    """
+    Скользящая корреляция лог-доходностей ticker vs benchmark за последние window_days.
+    Возвращает (corr_float | None, label: "Independent" | "In-Sync" | "Unknown").
+    Для контекста LLM: высокая корреляция — бумага движется с сектором/бенчмарком.
+    """
+    if ticker == benchmark:
+        return (1.0, "In-Sync")
+    quotes = load_quotes(engine, [ticker, benchmark])
+    if quotes.empty or quotes["date"].nunique() < 2:
+        return (None, "Unknown")
+    prices = quotes.pivot_table(index="date", columns="ticker", values="close").sort_index()
+    if ticker not in prices.columns or benchmark not in prices.columns:
+        return (None, "Unknown")
+    log_ret = np.log(prices / prices.shift(1)).dropna(how="all")
+    if log_ret.shape[0] < window_days:
+        return (None, "Unknown")
+    rolling = log_ret[ticker].rolling(window=window_days).corr(log_ret[benchmark])
+    last_corr = rolling.dropna().iloc[-1] if not rolling.dropna().empty else None
+    if last_corr is None:
+        return (None, "Unknown")
+    corr_f = float(last_corr)
+    if abs(corr_f) < 0.3:
+        label = "Independent"
+    else:
+        label = "In-Sync"
+    return (corr_f, label)
+
+
 def get_latest_prices(engine, tickers: List[str]) -> Dict[str, float]:
     """Последняя цена (close) по каждому тикеру из quotes. Нет данных → тикер не в словаре."""
     if not tickers:
