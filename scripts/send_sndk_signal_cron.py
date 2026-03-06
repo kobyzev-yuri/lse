@@ -142,10 +142,24 @@ def process_ticker(
             entry_f = float(entry) if entry is not None and entry > 0 else None
 
             if should_close and exit_type:
-                close_position(ticker, price_for_check, exit_type, position=open_pos)
-                outcome_lines.append("позиция закрыта по %s @ %.2f" % (exit_type, price_for_check))
+                # Ограничиваем цену bar_high/bar_low до вызова, чтобы в БД и уведомлении была реалистичная цифра
+                exit_price = price_for_check
+                if exit_type == "TAKE_PROFIT" and bar_high is not None and bar_high > 0:
+                    exit_price = min(exit_price, bar_high)
+                elif exit_type == "STOP_LOSS" and bar_low is not None and bar_low > 0:
+                    exit_price = max(exit_price, bar_low)
+                logger.info(
+                    "[5m] %s закрытие: тип=%s, price_5m=%.2f, price_quotes=%s, bar_high=%s, bar_low=%s → exit_price=%.2f",
+                    ticker, exit_type, price, price_quotes, bar_high, bar_low, exit_price,
+                )
+                close_position(
+                    ticker, exit_price, exit_type, position=open_pos,
+                    bar_high=bar_high if exit_type == "TAKE_PROFIT" else None,
+                    bar_low=bar_low if exit_type == "STOP_LOSS" else None,
+                )
+                outcome_lines.append("позиция закрыта по %s @ %.2f" % (exit_type, exit_price))
                 closed_this_run = True
-                close_price = price_for_check
+                close_price = exit_price
                 close_exit_type = exit_type
                 close_entry_price = entry_f
             else:
@@ -396,8 +410,17 @@ def main():
                         bar_high=bar_high, bar_low=bar_low,
                     )
                     if should_close and exit_type:
-                        close_position(ticker, price_for_check, exit_type, position=open_pos)
-                        logger.info("AFTER_HOURS: закрыта позиция %s @ %.2f (%s)", ticker, price_for_check, exit_type)
+                        exit_price = price_for_check
+                        if exit_type == "TAKE_PROFIT" and bar_high is not None and bar_high > 0:
+                            exit_price = min(exit_price, bar_high)
+                        elif exit_type == "STOP_LOSS" and bar_low is not None and bar_low > 0:
+                            exit_price = max(exit_price, bar_low)
+                        close_position(
+                            ticker, exit_price, exit_type, position=open_pos,
+                            bar_high=bar_high if exit_type == "TAKE_PROFIT" else None,
+                            bar_low=bar_low if exit_type == "STOP_LOSS" else None,
+                        )
+                        logger.info("AFTER_HOURS: закрыта позиция %s @ %.2f (%s)", ticker, exit_price, exit_type)
                 except Exception as e:
                     logger.warning("AFTER_HOURS проверка %s: %s", ticker, e)
             logger.info("Биржа закрыта (AFTER_HOURS), проверка открытых позиций выполнена, выход")

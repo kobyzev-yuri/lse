@@ -325,7 +325,15 @@ class LSETelegramBot:
         except AttributeError:
             pass  # старые версии PTB без media_write_timeout
         self.application = builder.build()
-        
+        # Логируем каждый входящий апдейт (чтобы понять, доходят ли команды до бота)
+        _orig_process = self.application.process_update
+        async def _logged_process_update(update: Update) -> None:
+            msg = getattr(update, "message", None) or getattr(update, "edited_message", None)
+            text = getattr(msg, "text", None) if msg else None
+            logger.info("Входящий апдейт: update_id=%s, chat_id=%s, text=%r", update.update_id, getattr(msg, "chat_id", None) if msg else None, text)
+            await _orig_process(update)
+        self.application.process_update = _logged_process_update
+
         # Получаем информацию о боте для логирования
         async def get_bot_info():
             bot_info = await self.application.bot.get_me()
@@ -386,7 +394,20 @@ class LSETelegramBot:
         
         # Обработка callback queries (для inline кнопок)
         self.application.add_handler(CallbackQueryHandler(self._handle_callback))
-    
+        # Логирование любых ошибок в обработчиках (чтобы не молчать при падении команды)
+        self.application.add_error_handler(self._handle_error)
+
+    async def _handle_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Логируем ошибку при обработке апдейта (иначе команды падают без вывода)."""
+        logger.exception("Ошибка при обработке команды/сообщения: %s", context.error)
+        if update and isinstance(update, Update) and update.effective_message:
+            try:
+                await update.effective_message.reply_text(
+                    "❌ Произошла ошибка. Проверьте логи бота."
+                )
+            except Exception:
+                pass
+
     def _check_access(self, user_id: int) -> bool:
         """Проверка доступа пользователя"""
         if self.allowed_users is None:
@@ -480,6 +501,7 @@ class LSETelegramBot:
     
     async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /help"""
+        logger.info("Команда /help вызвана, user_id=%s", update.effective_user.id if update.effective_user else None)
         chat_id = update.effective_chat.id if update.effective_chat else None
         if chat_id is not None:
             try:
@@ -489,9 +511,10 @@ class LSETelegramBot:
         user_id = update.effective_user.id
         
         if not self._check_access(user_id):
+            logger.warning("Доступ запрещён для user_id=%s (нет в TELEGRAM_ALLOWED_USERS)", user_id)
             await update.message.reply_text("❌ Доступ запрещен")
             return
-        
+
         help_text = """
 📖 **Справка по командам**
 
@@ -560,7 +583,8 @@ class LSETelegramBot:
   Подробнее: `/strategies`
         """
         
-        await update.message.reply_text(help_text, parse_mode='Markdown')
+        # Без parse_mode: в справке много символов _ . [ ] — парсер Markdown падает с "Can't parse entities"
+        await update.message.reply_text(help_text, parse_mode=None)
     
     def _get_available_tickers(self) -> list:
         """Список тикеров для справки /signal и др.: quotes + конфиг (TICKERS_FAST/MEDIUM/LONG), чтобы тикеры вроде CL=F были видны сразу после добавления в конфиг."""
@@ -1242,40 +1266,53 @@ class LSETelegramBot:
 
     async def _handle_chart5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """График 5-минутных данных по требованию."""
+        async def _reply(text: str, **kwargs):
+            try:
+                await update.message.reply_text(text, **kwargs)
+            except Exception as e:
+                logger.warning("chart5m: не удалось отправить ответ: %s", e)
         if not self._check_access(update.effective_user.id):
-            await update.message.reply_text("❌ Доступ запрещен")
+            await _reply("❌ Доступ запрещен")
             return
         if not context.args:
-            await update.message.reply_text(
+            await _reply(
                 "❌ Укажите тикер. Пример: `/chart5m SNDK` или `/chart5m GBPUSD=X 3`",
                 parse_mode="Markdown"
             )
             return
         ticker_raw = context.args[0].strip().upper()
         ticker = _normalize_ticker(ticker_raw)
-        logger.info("chart5m: тикер=%s (args[0]=%s)", ticker, ticker_raw)
         days = 5
-        for i in range(1, len(context.args)):
+        if len(context.args) >= 2:
             try:
-                days = max(1, min(7, int(context.args[i].strip())))
-                break
-            except (ValueError, IndexError):
-                continue
-        await update.message.reply_text(
+                days = max(1, min(7, int(context.args[1].strip())))
+            except (ValueError, TypeError):
+                pass
+        logger.info("chart5m: тикер=%s, days=%s (args=%s)", ticker, days, context.args)
+        await _reply(
             f"📥 Загрузка 5m для {ticker}: последние {days} амер. сессий (9:30–16:00 ET)…"
         )
         loop = asyncio.get_event_loop()
         try:
             from services.recommend_5m import fetch_5m_ohlc, filter_to_last_n_us_sessions
-            # Загружаем с запасом по календарным дням, потом оставляем только полные сессии
-            df = await loop.run_in_executor(
-                None, lambda: fetch_5m_ohlc(ticker, days=min(days + 2, 7))
+            fetch_days = min(max(days + 2, 5), 7)
+            df = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, lambda: fetch_5m_ohlc(ticker, days=fetch_days)
+                ),
+                timeout=90.0,
             )
             if df is not None and not df.empty:
                 df = filter_to_last_n_us_sessions(df, n=days)
+        except asyncio.TimeoutError:
+            logger.warning("chart5m: таймаут загрузки 5m данных для %s", ticker)
+            await _reply(
+                f"❌ Таймаут загрузки данных для {ticker} (90 с). Yahoo может быть перегружен. Попробуйте позже или /chart5m {ticker} 3"
+            )
+            return
         except Exception as e:
             logger.exception("Ошибка загрузки 5m")
-            await update.message.reply_text(f"❌ Ошибка загрузки: {e}")
+            await _reply(f"❌ Ошибка загрузки: {e}")
             return
         if df is None or df.empty:
             msg = (
@@ -1302,7 +1339,7 @@ class LSETelegramBot:
                     msg = msg + "\n\n" + "\n".join(lines)
             except Exception:
                 pass
-            await update.message.reply_text(msg, parse_mode="Markdown")
+            await _reply(msg, parse_mode="Markdown")
             return
         # Открытая позиция только из игры 5m (GAME_5M); портфель ExecutionAgent на график 5m не тянем
         entry_price = None
@@ -1313,11 +1350,16 @@ class LSETelegramBot:
                 entry_price = float(pos["entry_price"])
         except Exception:
             pass
-        # Прогноз для графика: хай сессии, оценка подъёма по кривизне, тейк при открытой позиции
+        # Прогноз для графика: хай сессии, оценка подъёма по кривизне, тейк при открытой позиции (таймаут 45 с)
         d5_chart = None
         try:
             from services.recommend_5m import get_decision_5m
-            d5_chart = await loop.run_in_executor(None, lambda: get_decision_5m(ticker, days=days, use_llm_news=False))
+            d5_chart = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: get_decision_5m(ticker, days=days, use_llm_news=False)),
+                timeout=45.0,
+            )
+        except asyncio.TimeoutError:
+            logger.debug("chart5m: таймаут get_decision_5m для %s, график без прогноза", ticker)
         except Exception:
             pass
         try:
@@ -1350,7 +1392,7 @@ class LSETelegramBot:
             if not session_dates:
                 session_dates = unique_keys
             if not session_dates:
-                await update.message.reply_text(
+                await _reply(
                     f"❌ Нет данных по сессиям 9:30–16:00 ET для {ticker}. Попробуйте позже или другой тикер."
                 )
                 return
@@ -1492,10 +1534,15 @@ class LSETelegramBot:
                         return lo <= t <= hi
                     except Exception:
                         return False
+                # Диапазон цен сессии: маркеры тейка/стопа не рисуем выше/ниже реальных цен (если в БД ошибочно записана 600 при хае 571)
+                price_lo = float(df_i["Low"].min()) if "Low" in df_i.columns else float(df_i["Close"].min())
+                price_hi = float(df_i["High"].max()) if "High" in df_i.columns else float(df_i["Close"].max())
+                def _clip_p(pr: float) -> float:
+                    return max(price_lo, min(price_hi, pr))
                 buy_i = [(t, p) for t, p in zip(buy_ts, buy_p) if _in_range(t, dt_i_min, dt_i_max)]
-                take_i = [(t, p) for t, p in zip(take_ts, take_p) if _in_range(t, dt_i_min, dt_i_max)]
-                stop_i = [(t, p) for t, p in zip(stop_ts, stop_p) if _in_range(t, dt_i_min, dt_i_max)]
-                other_i = [(t, p) for t, p in zip(other_ts, other_p) if _in_range(t, dt_i_min, dt_i_max)]
+                take_i = [(t, _clip_p(p)) for t, p in zip(take_ts, take_p) if _in_range(t, dt_i_min, dt_i_max)]
+                stop_i = [(t, _clip_p(p)) for t, p in zip(stop_ts, stop_p) if _in_range(t, dt_i_min, dt_i_max)]
+                other_i = [(t, _clip_p(p)) for t, p in zip(other_ts, other_p) if _in_range(t, dt_i_min, dt_i_max)]
                 if buy_i:
                     ax.scatter([x[0] for x in buy_i], [x[1] for x in buy_i], color="#2e7d32", marker="^", s=70, zorder=5, label="Вход (BUY)", edgecolors="darkgreen", linewidths=1)
                 if take_i:
@@ -1561,7 +1608,6 @@ class LSETelegramBot:
                 await update.message.reply_text(f"❌ Ошибка графика 5m: {err_msg}")
             except Exception:
                 pass
-
     async def _handle_table5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Таблица последних 5-минутных свечей."""
         if not self._check_access(update.effective_user.id):
@@ -3859,6 +3905,11 @@ class LSETelegramBot:
     def run_polling(self):
         """Запуск бота в режиме polling (для разработки)"""
         logger.info("🚀 Запуск Telegram бота в режиме polling...")
+        logger.info(
+            "Если команды не срабатывают: 1) Пишите боту в личку (Private), не в группе. "
+            "2) Убедитесь, что не запущен второй процесс с тем же токеном (ps aux | grep run_telegram_bot). "
+            "3) В логах при вашем сообщении должна появиться строка «Входящий апдейт»."
+        )
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
     
     def get_webhook_handler(self):

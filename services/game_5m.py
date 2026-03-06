@@ -250,10 +250,15 @@ def close_position(
     exit_price: float,
     exit_signal_type: str,
     position: Optional[dict[str, Any]] = None,
+    *,
+    bar_high: Optional[float] = None,
+    bar_low: Optional[float] = None,
 ) -> Optional[float]:
     """Закрывает открытую позицию: INSERT SELL. Возвращает PnL в %.
     position — если передан (например от get_open_position_any), SELL пишется с strategy_name из позиции;
-    иначе берётся позиция только GAME_5M."""
+    иначе берётся позиция только GAME_5M.
+    bar_high/bar_low — опционально: при TAKE_PROFIT цена не выше bar_high, при STOP_LOSS не ниже bar_low.
+    Если не заданы — применяется ограничение по entry (макс. +15% тейк / −15% стоп), чтобы в БД не попали нереальные цифры из глючных котировок."""
     if position is None:
         position = get_open_position(ticker)
         strategy = GAME_5M_STRATEGY
@@ -263,10 +268,40 @@ def close_position(
         logger.info("game_5m: по %s нет открытой позиции для закрытия", ticker)
         return None
 
-    entry_price = position["entry_price"]
+    entry_price = float(position["entry_price"])
     quantity = position["quantity"]
     if entry_price <= 0 or exit_price <= 0:
         return None
+
+    # Защита от нереальной цены в БД (глюк 5m/quotes или ручное закрытие с опечаткой)
+    original_exit = exit_price
+    if exit_signal_type == "TAKE_PROFIT":
+        if bar_high is not None and bar_high > 0:
+            exit_price = min(exit_price, bar_high)
+        else:
+            cap = entry_price * 1.15
+            if exit_price > cap:
+                logger.warning(
+                    "game_5m: %s TAKE_PROFIT exit_price=%.2f выше разумного (entry=%.2f, cap +15%%=%.2f) — записываем %.2f",
+                    ticker, original_exit, entry_price, cap, cap,
+                )
+                exit_price = cap
+    elif exit_signal_type == "STOP_LOSS":
+        if bar_low is not None and bar_low > 0:
+            exit_price = max(exit_price, bar_low)
+        else:
+            cap = entry_price * 0.85
+            if exit_price < cap:
+                logger.warning(
+                    "game_5m: %s STOP_LOSS exit_price=%.2f ниже разумного (entry=%.2f, cap −15%%=%.2f) — записываем %.2f",
+                    ticker, original_exit, entry_price, cap, cap,
+                )
+                exit_price = cap
+    if abs(exit_price - entry_price) / entry_price > 0.25:
+        logger.warning(
+            "game_5m: %s закрытие @ %.2f (entry=%.2f) даёт PnL ~%.0f%% — проверьте источник цены",
+            ticker, exit_price, entry_price, (exit_price / entry_price - 1.0) * 100.0,
+        )
 
     notional = quantity * exit_price
     commission = notional * COMMISSION_RATE

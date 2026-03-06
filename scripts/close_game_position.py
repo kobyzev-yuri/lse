@@ -35,16 +35,21 @@ def main():
         print(f"По {ticker} нет открытой позиции GAME_5M.")
         sys.exit(0)
 
-    # Текущая цена из quotes
+    # Текущая цена из quotes (источник возможных ошибок: неверный тикер, устаревшая дата, баг в загрузке)
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT close FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 1"),
+            text("SELECT date, close FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 1"),
             {"ticker": ticker},
         ).fetchone()
-    if not row or row[0] is None:
+    if not row or row[0] is None or row[1] is None:
         print(f"Нет котировок для {ticker}. Укажите цену вручную или обновите quotes.")
         sys.exit(1)
-    price = float(row[0])
+    quote_date, price = row[0], float(row[1])
+    entry = float(pos["entry_price"])
+    pct_from_entry = (price / entry - 1.0) * 100.0
+    if abs(pct_from_entry) > 20:
+        print(f"Внимание: цена из quotes ({price:.2f}, date={quote_date}) отличается от входа ({entry:.2f}) на {pct_from_entry:+.1f}%. Возможна ошибка в quotes.")
+        print("close_position ограничит цену до ±15% от входа при записи в БД.")
 
     pnl_pct = close_position(ticker, price, signal_type)
     if pnl_pct is not None:
