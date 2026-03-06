@@ -204,7 +204,12 @@ def init_db():
                 signal_type VARCHAR(20), -- 'STRONG_BUY', 'STOP_LOSS' и т.д.
                 total_value DECIMAL,
                 sentiment_at_trade DECIMAL, -- Сохраняем sentiment для анализа ошибок
-                strategy_name VARCHAR(50) -- Название стратегии (Momentum, Mean Reversion, GAME_5M)
+                strategy_name VARCHAR(50), -- Название стратегии (Momentum, Mean Reversion, GAME_5M)
+                take_profit_usd DECIMAL,
+                stop_loss_usd DECIMAL,
+                mfe_usd DECIMAL,
+                mae_usd DECIMAL,
+                context_json JSONB
             );
         """))
         # Миграция: добавить strategy_name если таблица создана по старой схеме
@@ -224,6 +229,34 @@ def init_db():
         except Exception:
             pass
 
+        # Миграция RLM: новые поля для рефлексии и контекста
+        rlm_columns = [
+            ('take_profit_usd', 'DECIMAL'),
+            ('stop_loss_usd', 'DECIMAL'),
+            ('mfe_usd', 'DECIMAL'),
+            ('mae_usd', 'DECIMAL'),
+            ('context_json', 'JSONB')
+        ]
+        for col_name, col_type in rlm_columns:
+            try:
+                conn.execute(text(f"ALTER TABLE trade_history ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
+            except Exception as e:
+                print(f"⚠️ Предупреждение при добавлении колонки {col_name} к trade_history: {e}")
+
+        # Таблица для динамических параметров стратегий
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS strategy_parameters (
+                id SERIAL PRIMARY KEY,
+                target_entity VARCHAR(20) NOT NULL, -- 'GLOBAL', 'CLUSTER_NAME' или ticker
+                parameter_name VARCHAR(50) NOT NULL,
+                parameter_value JSONB NOT NULL,
+                valid_from TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                valid_to TIMESTAMP,
+                updated_by VARCHAR(50) DEFAULT 'system'
+                -- Можно добавить составной индекс, если потребуется
+            );
+        """))
+
         # Инициализируем стартовый капитал
         conn.execute(text("""
             INSERT INTO portfolio_state (ticker, quantity) 
@@ -233,7 +266,7 @@ def init_db():
     print("✅ База данных инициализирована")
 
 # Тикер золота: XAUUSD=X не поддерживается Yahoo Finance → используем GC=F (Gold Futures)
-DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X", "GC=F", "^VIX", "MU", "LITE", "ALAB", "TER", "AMD"]
+DEFAULT_TICKERS = ["MSFT", "SNDK", "GBPUSD=X", "GC=F", "^VIX", "MU", "LITE", "ALAB", "TER", "AMD", "CL=F"]
 
 
 def seed_data(tickers=None):

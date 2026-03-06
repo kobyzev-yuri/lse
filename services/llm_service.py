@@ -204,6 +204,75 @@ Sentiment анализ:
 Дай рекомендацию на основе этих данных.""",
         }
 
+    @staticmethod
+    def build_entry_prompt(
+        ticker: str,
+        technical_data: Dict[str, Any],
+        news_data: List[Dict[str, Any]],
+        sentiment_score: float,
+        strategy_name: Optional[str] = None,
+        strategy_signal: Optional[str] = None,
+        strategy_outcome_stats: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """
+        Собирает промпт (system + user) для решения о входе без вызова LLM.
+        Те же входы, что у analyze_trading_situation. Для /prompt_entry: всегда заполнять user_prompt в JSON.
+        """
+        system_prompt = LLMService.get_entry_decision_system_prompt()
+        news_summary = "\n".join([
+            f"- {news.get('source', 'Unknown')}: {news.get('content', '')[:200]}... (sentiment: {news.get('sentiment_score', 0)})"
+            for news in (news_data or [])[:5]
+        ])
+        rsi_value = technical_data.get('rsi')
+        rsi_text = ""
+        if rsi_value is not None:
+            if rsi_value >= 70:
+                rsi_status = "перекупленность"
+            elif rsi_value <= 30:
+                rsi_status = "перепроданность"
+            elif rsi_value >= 60:
+                rsi_status = "близко к перекупленности"
+            elif rsi_value <= 40:
+                rsi_status = "близко к перепроданности"
+            else:
+                rsi_status = "нейтральная зона"
+            rsi_text = f"\n- RSI: {rsi_value:.1f} ({rsi_status})"
+        user_message = f"""Анализ для тикера {ticker}:
+
+Технические данные:
+- Текущая цена: {technical_data.get('close', 'N/A')}
+- SMA_5: {technical_data.get('sma_5', 'N/A')}
+- Волатильность (5 дней): {technical_data.get('volatility_5', 'N/A')}
+- Средняя волатильность (20 дней): {technical_data.get('avg_volatility_20', 'N/A')}{rsi_text}
+- Технический сигнал: {technical_data.get('technical_signal', 'N/A')}
+
+Sentiment анализ:
+- Взвешенный sentiment: {sentiment_score:.3f}
+- Количество новостей: {len(news_data or [])}
+
+Новости:
+{news_summary if news_summary else "Новостей не найдено"}
+"""
+        premarket_note = technical_data.get("premarket_note")
+        if premarket_note:
+            user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
+        if strategy_name and strategy_signal:
+            user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Учти при итоговой рекомендации (можешь согласиться или скорректировать)."
+        if strategy_outcome_stats:
+            user_message += f"\n\n{strategy_outcome_stats} Учти исходы в похожих ситуациях при рекомендации."
+        _geo_keywords = ("israel", "iran", "escalat", "war", "strike", "middle east", "geopolit", "военн", "эскалац", "конфликт")
+        _news_text = (news_summary or "").lower()
+        if any(kw in _news_text for kw in _geo_keywords):
+            _deesc_keywords = ("de-escalat", "deescalat", "stabiliz", "calm", "market priced", "уже учт", "стабилизац", "снижени", "переговор")
+            _has_deesc = any(d in _news_text for d in _deesc_keywords)
+            user_message += "\n\nВ новостях за период есть упоминания геополитической эскалации или военного конфликта."
+            if _has_deesc:
+                user_message += " Вместе с тем в новостях звучат деэскалация или стабилизация — учти: риски могут быть терпимы, адаптация рынка могла произойти; не исключай вход или удержание без необходимости."
+            else:
+                user_message += " Учти при рекомендации: при открытых позициях рассмотреть превентивный выход даже с небольшой потерей."
+        user_message += "\n\nДай рекомендацию на основе этих данных."
+        return {"prompt_system": system_prompt, "prompt_user": user_message}
+
     def generate_response_with_model(
         self,
         base_url: str,
@@ -367,7 +436,10 @@ Sentiment анализ:
             
             return {
                 "llm_analysis": analysis,
-                "usage": result.get("usage", {})
+                "usage": result.get("usage", {}),
+                "prompt_system": system_prompt,
+                "prompt_user": user_message,
+                "llm_response_raw": response_text,
             }
         except Exception as e:
             logger.error(f"Ошибка анализа через LLM: {e}")
@@ -379,7 +451,10 @@ Sentiment анализ:
                     "risks": ["Ошибка LLM анализа"],
                     "key_factors": []
                 },
-                "usage": {}
+                "usage": {},
+                "prompt_system": system_prompt,
+                "prompt_user": user_message,
+                "llm_response_raw": "",
             }
 
     def fetch_news_for_ticker(self, ticker: str) -> Optional[Dict[str, Any]]:

@@ -264,16 +264,24 @@ def main():
 
     if findings:
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"[cron_watchdog] {now} — найдено строк с ошибками: {len(findings)}")
-        for log_name, line_no, text in findings[:20]:
-            print(f"  [{log_name}:~{line_no}] {text[:120]}...")
-        if len(findings) > 20:
-            print(f"  ... и ещё {len(findings) - 20}")
+        sent_set, sent_list = _load_sent_hashes(logs_dir)
+        findings_new = [(n, no, t) for (n, no, t) in findings if _finding_hash(n, t) not in sent_set]
+        print(f"[cron_watchdog] {now} — всего строк с ошибками: {len(findings)}, из них новых (ещё не в Telegram): {len(findings_new)}")
+        if findings_new:
+            print("  Новые ошибки (первые до 20):")
+            for log_name, line_no, text in findings_new[:20]:
+                print(f"  [{log_name}:~{line_no}] {text[:120]}...")
+            if len(findings_new) > 20:
+                print(f"  ... и ещё {len(findings_new) - 20}")
+        else:
+            print("  (все текущие ошибки — из старых логов, уже отправлялись в Telegram)")
+            for log_name, line_no, text in findings[:10]:
+                print(f"  [{log_name}:~{line_no}] {text[:120]}...")
+            if len(findings) > 10:
+                print(f"  ... и ещё {len(findings) - 10}")
         if args.execute:
             print(f"Записано в {logs_dir / WATCHDOG_LOG_NAME}")
         if use_telegram:
-            sent_set, sent_list = _load_sent_hashes(logs_dir)
-            findings_new = [(n, no, t) for (n, no, t) in findings if _finding_hash(n, t) not in sent_set]
             if findings_new:
                 send_watchdog_to_telegram(findings_new, logs_dir)
                 for item in findings_new:
@@ -281,7 +289,7 @@ def main():
                     sent_set.add(h)
                     sent_list.append(h)
                 _save_sent_hashes(logs_dir, sent_list)
-            elif findings and not findings_new:
+            else:
                 print("В Telegram не отправлено: все текущие ошибки уже были отправлены ранее.", file=sys.stderr)
     else:
         print("[cron_watchdog] Ошибок в хвостах логов не обнаружено.")

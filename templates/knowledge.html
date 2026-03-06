@@ -6,6 +6,32 @@
 <h1>База знаний</h1>
 
 <div class="card">
+    <h2>Каналы новостей (за 14 дней)</h2>
+    <p>Источники записей в базе знаний и количество новостей по каждому за последние 2 недели.</p>
+    {% if sources_stats %}
+    <table id="sourcesTable" style="width: 100%; max-width: 500px;">
+        <thead>
+            <tr>
+                <th>Источник</th>
+                <th>Записей</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in sources_stats %}
+            <tr>
+                <td>{{ s.source }}</td>
+                <td>{{ s.count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 0.5rem;"><strong>Всего записей:</strong> {{ sources_total }}</p>
+    {% else %}
+    <p>За последние 14 дней записей нет.</p>
+    {% endif %}
+</div>
+
+<div class="card">
     <h2>Сгенерировать новости по теме (LLM)</h2>
     <p>Введите тему (например: эскалация Иран–Израиль–США, влияние на золото и полупроводники). LLM сформирует группу коротких новостей по нашим тикерам.</p>
     <form id="generateLlmForm">

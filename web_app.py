@@ -26,10 +26,10 @@ from sqlalchemy import create_engine, text
 import numpy as np
 
 from analyst_agent import AnalystAgent
-from config_loader import get_database_url
+from config_loader import get_database_url, get_use_llm_for_analyst
 from execution_agent import ExecutionAgent
 from services.ticker_groups import get_tickers_fast
-from news_importer import add_news
+from news_importer import add_news, get_news_sources_stats
 from report_generator import compute_closed_trade_pnls, compute_open_positions, load_trade_history, get_engine, get_latest_prices
 
 app = FastAPI(title="LSE Trading System", version="1.0.0")
@@ -264,9 +264,9 @@ async def get_price(ticker: str):
 
 
 def _get_recommendation_data(ticker: str) -> Optional[Dict[str, Any]]:
-    """Собирает данные для рекомендации (тот же контракт, что и в Telegram)."""
+    """Собирает данные для рекомендации (тот же контракт, что и в Telegram). USE_LLM из config/БД."""
     try:
-        agent = AnalystAgent(use_llm=True)
+        agent = AnalystAgent(use_llm=get_use_llm_for_analyst(engine=engine))
         result = agent.get_decision_with_llm(ticker)
         if result.get("decision") == "NO_DATA":
             return None
@@ -656,10 +656,22 @@ async def knowledge_page(request: Request):
     news_list = news_df.to_dict("records") if not news_df.empty else []
     for n in news_list:
         n["ts"] = _format_ts(n.get("ts"))
+    sources_stats = get_news_sources_stats(engine, days=14)
+    sources_total = sum(s["count"] for s in sources_stats)
     return HTMLResponse(render_template("knowledge.html", {
         "news": news_list,
-        "tickers": tickers
+        "tickers": tickers,
+        "sources_stats": sources_stats,
+        "sources_total": sources_total,
     }))
+
+
+@app.get("/api/news/sources", response_class=JSONResponse)
+async def api_news_sources(days: int = 14):
+    """API: список каналов новостей и количество записей за последние days дней."""
+    days = max(1, min(365, days))
+    stats = get_news_sources_stats(engine, days=days)
+    return JSONResponse(content={"days": days, "sources": stats, "total": sum(s["count"] for s in stats)})
 
 
 @app.post("/api/news/add", response_class=JSONResponse)

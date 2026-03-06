@@ -4,6 +4,7 @@
 """
 
 import logging
+import math
 from typing import Dict, Any, List, Optional
 from strategies.momentum_strategy import MomentumStrategy
 from strategies.mean_reversion_strategy import MeanReversionStrategy
@@ -65,14 +66,15 @@ class StrategyManager:
         volatility_ratio = 1.0
         if volatility_5 and avg_volatility_20 and avg_volatility_20 > 0:
             volatility_ratio = volatility_5 / avg_volatility_20
-        
+        vol_str = f"{volatility_ratio:.2f}x" if math.isfinite(volatility_ratio) else "—"
+
         # Расчет гэпа (если есть данные об открытии)
         gap_percent = 0.0
         if open_price and close and open_price > 0:
             gap_percent = abs((close - open_price) / open_price) * 100
-        
+
         logger.info(f"📊 Анализ режима рынка для {ticker}:")
-        logger.info(f"   Волатильность: {volatility_ratio:.2f}x (порог: {self.high_volatility_threshold})")
+        logger.info(f"   Волатильность: {vol_str} (порог: {self.high_volatility_threshold})")
         logger.info(f"   Sentiment: {sentiment_score:.2f} (порог: ±{self.extreme_sentiment_threshold})")
         logger.info(f"   Гэп: {gap_percent:.2f}% (порог: {self.gap_threshold}%)")
         prev_day_return_pct = technical_data.get("prev_day_return_pct")

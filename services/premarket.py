@@ -137,3 +137,26 @@ def get_premarket_context(ticker: str, dt_utc: Optional[datetime] = None) -> Dic
         out["error"] = str(e)
 
     return out
+
+
+def get_premarket_ohlc(ticker: str):
+    """
+    OHLC 1m за сегодня с премаркетом (prepost) для графика.
+    Returns: DataFrame с колонками Datetime, Open, High, Low, Close, Volume или None при ошибке.
+    """
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        df = t.history(period="1d", interval="1m", prepost=True, auto_adjust=False)
+        if df is None or df.empty or "Close" not in df.columns:
+            return None
+        df = df.rename_axis("Datetime").reset_index()
+        if "Datetime" not in df.columns and "Date" in df.columns:
+            df = df.rename(columns={"Date": "Datetime"})
+        dt_col = "Datetime" if "Datetime" in df.columns else "Date"
+        if dt_col in df.columns:
+            df = df.sort_values(dt_col).reset_index(drop=True)
+        return df
+    except Exception as e:
+        logger.warning("get_premarket_ohlc %s: %s", ticker, e)
+        return None

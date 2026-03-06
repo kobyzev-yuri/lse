@@ -85,7 +85,7 @@ def process_ticker(
 ) -> bool:
     """Обрабатывает один тикер: игра (закрытие/вход) и при BUY/STRONG_BUY — рассылка. Возвращает True если хотя бы одно сообщение отправлено."""
     from services.recommend_5m import get_decision_5m
-    from services.game_5m import get_open_position, close_position, should_close_position, record_entry, _effective_take_profit_pct, _effective_stop_loss_pct
+    from services.game_5m import get_open_position, get_open_position_any, close_position, should_close_position, record_entry, _effective_take_profit_pct, _effective_stop_loss_pct
 
     # Свечи за текущий и 5–7 предыдущих дней для анализа входа/выхода; опционально LLM перед решением
     d5 = get_decision_5m(ticker, use_llm_news=True)  # полное окно 7 дн. + KB + LLM новости
@@ -95,23 +95,65 @@ def process_ticker(
 
     decision = d5.get("decision", "HOLD")
     price = d5.get("price")
-
-    # Игра: закрыть позицию по тейку/стопу. Учитываем макс. High и мин. Low за последние ~30 мин (6 свечей),
-    # чтобы при кроне каждые 5 мин не проскочить фазу подъёма и фиксации прибыли (как при отскоке в начале сессии).
     momentum_2h_pct = d5.get("momentum_2h_pct")
     bar_high = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
     bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
+
+    outcome_lines = []  # итоговая причина для лога
+
     try:
-        open_pos = get_open_position(ticker)
-        if open_pos and price is not None:
+        # Сначала «любая» позиция по тикеру (как в /pending), иначе только GAME_5M — чтобы видеть MU и др. при другой стратегии
+        open_pos = get_open_position_any(ticker) or get_open_position(ticker)
+        has_pos = open_pos is not None
+        price_ok = price is not None and price > 0
+        strategy_label = (" [%s]" % open_pos.get("strategy_name")) if (has_pos and open_pos.get("strategy_name")) else ""
+        logger.info(
+            "[5m] %s: открытая_позиция=%s%s, цена_5m=%s, решение=%s",
+            ticker, "да" if has_pos else "нет", strategy_label, "%.2f" % price if price_ok else "нет", decision,
+        )
+
+        if has_pos and price_ok:
+            try:
+                from report_generator import get_engine, get_latest_prices
+                engine = get_engine()
+                quotes_prices = get_latest_prices(engine, [ticker])
+                price_quotes = quotes_prices.get(ticker)
+            except Exception:
+                price_quotes = None
+            price_for_check = max(price, price_quotes) if (price_quotes is not None and price_quotes > 0) else price
             should_close, exit_type = should_close_position(
-                open_pos, decision, price, momentum_2h_pct=momentum_2h_pct,
+                open_pos, decision, price_for_check, momentum_2h_pct=momentum_2h_pct,
                 bar_high=bar_high, bar_low=bar_low,
             )
+            entry = open_pos.get("entry_price")
+            entry_f = float(entry) if entry is not None and entry > 0 else None
+
             if should_close and exit_type:
-                close_position(ticker, price, exit_type)
+                close_position(ticker, price_for_check, exit_type, position=open_pos)
+                outcome_lines.append("позиция закрыта по %s @ %.2f" % (exit_type, price_for_check))
+            else:
+                if entry_f:
+                    pnl_pct = (price_for_check - entry_f) / entry_f * 100.0
+                    take_pct = _effective_take_profit_pct(momentum_2h_pct)
+                    stop_pct = _effective_stop_loss_pct(momentum_2h_pct)
+                    outcome_lines.append(
+                        "позиция открыта: вход=%.2f, текущая=%.2f, pnl=%.2f%%, тейк=%.1f%%, стоп=%.1f%% — тейк/стоп не сработали"
+                        % (entry_f, price_for_check, pnl_pct, take_pct, stop_pct)
+                    )
+                else:
+                    outcome_lines.append("позиция есть, но entry_price неизвестен — проверка пропущена")
+        elif has_pos and not price_ok:
+            outcome_lines.append("позиция есть, цена 5m отсутствует — проверка тейка/стопа пропущена")
+        else:
+            outcome_lines.append("позиции нет")
+
+        if decision not in ("BUY", "STRONG_BUY"):
+            outcome_lines.append("решение %s → нет сигнала на вход" % decision)
     except Exception as e:
         logger.warning("game_5m: проверка/закрытие %s: %s", ticker, e)
+        outcome_lines.append("ошибка при проверке: %s" % e)
+
+    logger.info("[5m] %s: итог — %s", ticker, "; ".join(outcome_lines))
 
     if decision not in ("BUY", "STRONG_BUY"):
         return False
@@ -129,7 +171,7 @@ def process_ticker(
 
     # Не слать «Сигнал на вход», если уже в позиции — это не новый вход, ждём закрытия
     try:
-        if get_open_position(ticker) is not None:
+        if get_open_position_any(ticker) is not None:
             logger.info("%s: уже в позиции, пропуск рассылки (ожидаем закрытия)", ticker)
             return False
     except Exception as e:
@@ -248,7 +290,7 @@ def main():
     # чтобы не пропустить фиксацию, если цена ушла выше тейка в конце сессии (16:00 ET). Остальные фазы — пропуск.
     try:
         from services.market_session import get_market_session_context
-        from services.game_5m import get_open_position, close_position, should_close_position
+        from services.game_5m import get_open_position, get_open_position_any, close_position, should_close_position
         from services.recommend_5m import get_decision_5m, has_5m_data
         ctx = get_market_session_context()
         phase = (ctx.get("session_phase") or "").strip()
@@ -261,23 +303,30 @@ def main():
             tickers_ah = [t for t in tickers_ah if has_5m_data(t)]
             for ticker in tickers_ah:
                 try:
-                    open_pos = get_open_position(ticker)
+                    open_pos = get_open_position_any(ticker) or get_open_position(ticker)
                     if not open_pos:
                         continue
                     d5 = get_decision_5m(ticker, use_llm_news=False)
                     if not d5 or d5.get("price") is None:
                         continue
                     price = d5.get("price")
+                    try:
+                        from report_generator import get_engine, get_latest_prices
+                        quotes_prices = get_latest_prices(get_engine(), [ticker])
+                        pq = quotes_prices.get(ticker)
+                        price_for_check = max(price, pq) if (pq is not None and pq > 0) else price
+                    except Exception:
+                        price_for_check = price
                     bar_high = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
                     bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
                     should_close, exit_type = should_close_position(
-                        open_pos, d5.get("decision", "HOLD"), price,
+                        open_pos, d5.get("decision", "HOLD"), price_for_check,
                         momentum_2h_pct=d5.get("momentum_2h_pct"),
                         bar_high=bar_high, bar_low=bar_low,
                     )
                     if should_close and exit_type:
-                        close_position(ticker, price, exit_type)
-                        logger.info("AFTER_HOURS: закрыта позиция %s @ %.2f (%s)", ticker, price, exit_type)
+                        close_position(ticker, price_for_check, exit_type, position=open_pos)
+                        logger.info("AFTER_HOURS: закрыта позиция %s @ %.2f (%s)", ticker, price_for_check, exit_type)
                 except Exception as e:
                     logger.warning("AFTER_HOURS проверка %s: %s", ticker, e)
             logger.info("Биржа закрыта (AFTER_HOURS), проверка открытых позиций выполнена, выход")
@@ -302,9 +351,10 @@ def main():
 
     # Только тикеры с доступными 5m данными (/chart5m, игра 5m)
     tickers = [t for t in tickers_all if has_5m_data(t)]
-    for t in tickers_all:
-        if t not in tickers:
-            logger.warning("%s: нет 5m данных (Yahoo), пропуск в этом запуске. Уберите из TICKERS_FAST или добавьте сбор.", t)
+    skipped = [t for t in tickers_all if t not in tickers]
+    logger.info("Игра 5m: тикеры из конфига %s → обрабатываем %s", tickers_all, tickers)
+    for t in skipped:
+        logger.warning("%s: нет 5m данных (Yahoo), пропуск в этом запуске. Вернуть в игру: запуск в часы торгов или проверка Yahoo.", t)
 
     if not tickers:
         logger.warning("Нет быстрых тикеров с 5m данными, выход")
@@ -316,7 +366,9 @@ def main():
             any_sent = True
 
     if not any_sent:
-        logger.info("Нет сигналов BUY/STRONG_BUY по быстрым тикерам или cooldown")
+        logger.info(
+            "Нет сигналов BUY/STRONG_BUY к рассылке. Причины по тикерам см. выше (открытая позиция — тейк/стоп; решение HOLD; cooldown или сессия)."
+        )
     sys.exit(0)
 
 

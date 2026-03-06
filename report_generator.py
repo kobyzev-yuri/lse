@@ -34,6 +34,11 @@ class TradePnL:
     entry_ts: Optional[pd.Timestamp] = None  # open time (MSK) for table /closed
     entry_strategy: Optional[str] = None  # стратегия открытия (первый BUY)
     exit_strategy: Optional[str] = None  # стратегия закрытия (SELL)
+    take_profit: Optional[float] = None
+    stop_loss: Optional[float] = None
+    mfe: Optional[float] = None
+    mae: Optional[float] = None
+    context_json: Optional[str] = None
 
 
 @dataclass
@@ -44,6 +49,9 @@ class OpenPosition:
     entry_price: float
     entry_ts: Optional[pd.Timestamp]
     strategy_name: Optional[str] = None  # стратегия последнего BUY по этой позиции
+    take_profit: Optional[float] = None
+    stop_loss: Optional[float] = None
+    context_json: Optional[str] = None
 
 
 def get_engine():
@@ -55,7 +63,8 @@ def load_trade_history(engine, strategy_name: Optional[str] = None) -> pd.DataFr
     """Загружает историю сделок. strategy_name — опциональный фильтр (например 'GAME_5M')."""
     query = """
         SELECT id, ts, ticker, side, quantity, price,
-               commission, signal_type, total_value, sentiment_at_trade, strategy_name
+               commission, signal_type, total_value, sentiment_at_trade, strategy_name,
+               take_profit, stop_loss, mfe, mae, context_json
         FROM public.trade_history
     """
     if strategy_name:
@@ -90,6 +99,9 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
     position_cost: Dict[str, float] = {}  # суммарный cost basis (включая комиссии)
     position_open_ts: Dict[str, Optional[pd.Timestamp]] = {}  # дата открытия текущей позиции (для /closed)
     position_open_strategy: Dict[str, str] = {}  # стратегия открытия (первый BUY по позиции)
+    position_take_profit: Dict[str, Optional[float]] = {}
+    position_stop_loss: Dict[str, Optional[float]] = {}
+    position_context_json: Dict[str, Optional[str]] = {}
 
     for _, row in trades.iterrows():
         ticker = row["ticker"]
@@ -112,12 +124,18 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
             position_cost[ticker] = 0.0
             position_open_ts[ticker] = None
             position_open_strategy[ticker] = "—"
+            position_take_profit[ticker] = None
+            position_stop_loss[ticker] = None
+            position_context_json[ticker] = None
 
         if side == "BUY":
             # Покупка: при открытии позиции (с 0) запоминаем дату и стратегию
             if position_qty[ticker] == 0:
                 position_open_ts[ticker] = pd.to_datetime(ts)
                 position_open_strategy[ticker] = strategy
+                position_take_profit[ticker] = float(row["take_profit"]) if pd.notna(row.get("take_profit")) else None
+                position_stop_loss[ticker] = float(row["stop_loss"]) if pd.notna(row.get("stop_loss")) else None
+                position_context_json[ticker] = row.get("context_json")
             position_qty[ticker] += qty
             position_cost[ticker] += qty * price + commission
         elif side == "SELL":
@@ -170,6 +188,11 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
                     entry_ts=entry_ts,
                     entry_strategy=entry_strat,
                     exit_strategy=strategy,
+                    take_profit=position_take_profit.get(ticker),
+                    stop_loss=position_stop_loss.get(ticker),
+                    mfe=float(row.get("mfe")) if pd.notna(row.get("mfe")) else None,
+                    mae=float(row.get("mae")) if pd.notna(row.get("mae")) else None,
+                    context_json=position_context_json.get(ticker),
                 )
             )
 
@@ -195,6 +218,9 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
     position_cost: Dict[str, float] = {}
     position_open_ts: Dict[str, Optional[pd.Timestamp]] = {}
     position_last_strategy: Dict[str, str] = {}
+    position_take_profit: Dict[str, Optional[float]] = {}
+    position_stop_loss: Dict[str, Optional[float]] = {}
+    position_context_json: Dict[str, Optional[str]] = {}
 
     for _, row in trades.iterrows():
         ticker = row["ticker"]
@@ -210,10 +236,16 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
             position_cost[ticker] = 0.0
             position_open_ts[ticker] = None
             position_last_strategy[ticker] = "—"
+            position_take_profit[ticker] = None
+            position_stop_loss[ticker] = None
+            position_context_json[ticker] = None
 
         if side == "BUY":
             if position_qty[ticker] == 0:
                 position_open_ts[ticker] = pd.to_datetime(ts)
+                position_take_profit[ticker] = float(row["take_profit"]) if pd.notna(row.get("take_profit")) else None
+                position_stop_loss[ticker] = float(row["stop_loss"]) if pd.notna(row.get("stop_loss")) else None
+                position_context_json[ticker] = row.get("context_json")
             position_qty[ticker] += qty
             position_cost[ticker] += qty * price + commission
             position_last_strategy[ticker] = strategy
@@ -236,6 +268,9 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
                     entry_price=position_cost[ticker] / qty,
                     entry_ts=position_open_ts.get(ticker),
                     strategy_name=position_last_strategy.get(ticker) or "—",
+                    take_profit=position_take_profit.get(ticker),
+                    stop_loss=position_stop_loss.get(ticker),
+                    context_json=position_context_json.get(ticker),
                 )
             )
 

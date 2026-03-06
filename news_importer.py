@@ -8,7 +8,7 @@
 
 import pandas as pd
 from sqlalchemy import create_engine, text
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import json
 import csv
@@ -217,6 +217,29 @@ def import_from_json(file_path):
     
     logger.info(f"✅ Импортировано {imported} новостей из {file_path}")
     engine.dispose()
+
+
+def get_news_sources_stats(engine, days=14):
+    """
+    Возвращает список каналов (источников) новостей и количество записей за последние days дней.
+    Returns: list of dicts [{"source": str, "count": int}, ...], sorted by count descending.
+    """
+    cutoff = datetime.now() - timedelta(days=int(days))
+    with engine.connect() as conn:
+        df = pd.read_sql(
+            text("""
+                SELECT COALESCE(source, '—') AS source, COUNT(*) AS cnt
+                FROM knowledge_base
+                WHERE ts >= :cutoff
+                GROUP BY source
+                ORDER BY cnt DESC
+            """),
+            conn,
+            params={"cutoff": cutoff},
+        )
+    if df.empty:
+        return []
+    return [{"source": row["source"], "count": int(row["cnt"])} for _, row in df.iterrows()]
 
 
 def show_recent_news(limit=10):

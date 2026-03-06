@@ -56,6 +56,7 @@ BUILTIN_KEYWORDS: Dict[str, List[str]] = {
     "MSFT": ["MSFT", "Microsoft"],
     "NDK": ["NDK"],
     "NBIS": ["NBIS"],
+    "CL=F": ["oil", "crude", "WTI", "Brent", "нефть", "нефти", "OPEC", "petroleum"],
 }
 
 # Текущая структура: ссылки на новости в виде /news/stock-market-news/...

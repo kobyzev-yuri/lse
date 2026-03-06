@@ -6,7 +6,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 
 def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
@@ -98,4 +98,48 @@ def get_config_value(key: str, default: Optional[str] = None, config: Optional[D
     return value
 
 
+def get_dynamic_config_value(key: str, default: Any = None, entity: str = 'GLOBAL', engine=None) -> Any:
+    """
+    Получает динамическое значение конфигурации из БД strategy_parameters (RLM).
+    Если значения нет в БД или engine не передан, возвращает значение из config.env.
+    """
+    if engine is not None:
+        try:
+            from sqlalchemy import text
+            with engine.connect() as conn:
+                res = conn.execute(
+                    text("""
+                        SELECT parameter_value FROM strategy_parameters 
+                        WHERE parameter_name = :key 
+                          AND (target_entity = 'GLOBAL' OR target_entity = :entity)
+                        ORDER BY 
+                            CASE WHEN target_entity = :entity THEN 1 ELSE 0 END DESC, 
+                            valid_from DESC
+                        LIMIT 1
+                    """),
+                    {"key": key, "entity": entity}
+                ).fetchone()
+                
+                if res and res[0] is not None:
+                    val = res[0]
+                    # Если словарь или массив — возвращаем как есть
+                    if isinstance(val, (dict, list)):
+                        return val
+                    # Если в JSONB была записана строка, она может быть с кавычками
+                    return str(val).strip('"\'')
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Ошибка загрузки динамического параметра {key}: {e}")
+            pass
+            
+    return get_config_value(key, default)
 
+
+def get_use_llm_for_analyst(engine=None) -> bool:
+    """
+    Включён ли LLM для аналитика (прогноз BUY/HOLD в боте, trading_cycle и т.д.).
+    Читает USE_LLM из config.env или из глобальных параметров БД (strategy_parameters), если engine передан.
+    false / 0 / no → не применять LLM; иначе — применять.
+    """
+    raw = (get_dynamic_config_value("USE_LLM", "true", engine=engine) or "true").strip().lower()
+    return raw in ("1", "true", "yes")

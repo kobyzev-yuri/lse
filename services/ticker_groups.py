@@ -17,7 +17,8 @@ from config_loader import get_config_value
 # Дефолты: распределение по группам (ваши зарегистрированные тикеры)
 DEFAULT_TICKERS_FAST = "SNDK,MU,LITE"
 DEFAULT_TICKERS_MEDIUM = "ALAB,MU,TER,AMD"
-DEFAULT_TICKERS_LONG = "MSFT,GBPUSD=X,GC=F,^VIX"
+# CL=F — WTI нефть: индикатор геополитической напряжённости, торговля, новости по тикеру
+DEFAULT_TICKERS_LONG = "MSFT,GBPUSD=X,GC=F,^VIX,CL=F"
 
 
 def get_tickers_fast() -> List[str]:
@@ -46,6 +47,12 @@ def get_tickers_long() -> List[str]:
     """Тикеры для игры вдолгую (свинг, дневные решения)."""
     raw = get_config_value("TICKERS_LONG", DEFAULT_TICKERS_LONG) or ""
     return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def get_oil_ticker() -> str:
+    """Тикер нефти для индикатора геополитики и торговли (WTI — CL=F). Можно переопределить через OIL_TICKER в config.env."""
+    raw = get_config_value("OIL_TICKER", "CL=F").strip()
+    return raw or "CL=F"
 
 
 def get_all_ticker_groups() -> List[str]:

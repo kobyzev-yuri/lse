@@ -20,7 +20,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-INITIAL_CASH_USD = 100_000.0
+def _get_initial_cash_usd() -> float:
+    """Начальный кэш = капитал из local/risk_limits.json (risk_capacity.total_capital_usd). Один источник правды."""
+    return get_risk_manager().get_total_capital()
 COMMISSION_RATE = 0.0  # 0% — оплаты брокеру нет
 STOP_LOSS_LEVEL = 0.95   # 5% падение от цены входа
 
@@ -28,11 +30,13 @@ STOP_LOSS_LEVEL = 0.95   # 5% падение от цены входа
 TRADE_HISTORY_TZ = "Europe/Moscow"
 
 
-def _get_slippage_sell_pct() -> float:
+def _get_slippage_sell_pct(engine=None) -> float:
     """Проскальзывание при продаже (%), 0 = отключено. Учитывает, что реальная цена исполнения может быть хуже последней котировки."""
     try:
-        return max(0.0, min(5.0, float(get_config_value("SANDBOX_SLIPPAGE_SELL_PCT", "0").strip() or "0")))
-    except (ValueError, TypeError):
+        from config_loader import get_dynamic_config_value
+        val = get_dynamic_config_value("SANDBOX_SLIPPAGE_SELL_PCT", "0", engine=engine)
+        return max(0.0, min(5.0, float(str(val).strip() or "0")))
+    except (Exception):
         return 0.0
 
 
@@ -55,8 +59,20 @@ class ExecutionAgent:
     def __init__(self):
         self.db_url = get_database_url()
         self.engine = create_engine(self.db_url)
-        self.analyst = AnalystAgent()
-        self.risk_manager = get_risk_manager()
+        from config_loader import get_use_llm_for_analyst
+        use_llm = get_use_llm_for_analyst(engine=self.engine)
+        self.analyst = AnalystAgent(use_llm=use_llm)
+        self.risk_manager = get_risk_manager(engine=self.engine)
+        self._trades_done_this_run: list[dict] = []  # сделки этого запуска для уведомлений в Telegram
+        self._stop_loss_disabled_warned = False  # предупреждение «стоп отключён» один раз за запуск
+
+        from config_loader import get_dynamic_config_value
+        # Читаем глобальные параметры один раз за запуск (БД strategy_parameters или config.env)
+        self.commission_rate = float(get_dynamic_config_value("COMMISSION_RATE", "0.0", engine=self.engine))
+        self.stop_loss_level = float(get_dynamic_config_value("STOP_LOSS_LEVEL", "0.95", engine=self.engine))
+        # Стоп-лосс портфеля: true = проверять по STOP_LOSS_LEVEL; false = отключён (только тейк)
+        _sl_enabled = (get_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true").strip().lower() in ("1", "true", "yes"))
+        self.stop_loss_enabled = _sl_enabled
 
         logger.info("✅ ExecutionAgent инициализирован, подключение к БД установлено")
         logger.info(f"   Risk Manager: загружены лимиты из {self.risk_manager.config_path}")
@@ -72,15 +88,16 @@ class ExecutionAgent:
             ).scalar()
 
             if result == 0:
+                initial = _get_initial_cash_usd()
                 conn.execute(
                     text("""
                         INSERT INTO portfolio_state (ticker, quantity, avg_entry_price, last_updated)
                         VALUES ('CASH', :cash, 0, CURRENT_TIMESTAMP)
                     """),
-                    {"cash": INITIAL_CASH_USD},
+                    {"cash": initial},
                 )
                 logger.info(
-                    "✅ Портфель инициализирован: cash=%.2f USD", INITIAL_CASH_USD
+                    "✅ Портфель инициализирован: cash=%.2f USD", initial
                 )
             else:
                 logger.info("✅ Портфель уже инициализирован")
@@ -95,7 +112,7 @@ class ExecutionAgent:
             ).fetchone()
             if result:
                 return float(result[0])
-            return INITIAL_CASH_USD
+            return _get_initial_cash_usd()
 
     def _update_cash(self, new_cash: float) -> None:
         """Обновляет баланс кэша в portfolio_state."""
@@ -219,6 +236,24 @@ class ExecutionAgent:
             logger.warning(f"⚠️ Не удалось получить strategy_name для {ticker}: {e}")
         return None
 
+    def _get_last_take_profit(self, ticker: str) -> float | None:
+        """Возвращает take_profit (%) из последней сделки BUY по тикеру (портфельная игра)."""
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(
+                    text("""
+                        SELECT take_profit FROM trade_history
+                        WHERE ticker = :ticker AND side = 'BUY'
+                        ORDER BY ts DESC, id DESC LIMIT 1
+                    """),
+                    {"ticker": ticker},
+                ).fetchone()
+            if result and result[0] is not None:
+                return float(result[0])
+        except Exception as e:
+            logger.debug("Не удалось получить take_profit для %s: %s", ticker, e)
+        return None
+
     # ---------- Торговые операции ----------
 
     def _execute_buy(self, ticker: str, decision: str, strategy_name: str = None,
@@ -264,7 +299,7 @@ class ExecutionAgent:
             return
 
         notional = quantity * current_price
-        commission = notional * COMMISSION_RATE
+        commission = notional * self.commission_rate
         total_cost = notional + commission
 
         # Проверка risk limits перед покупкой
@@ -360,6 +395,15 @@ class ExecutionAgent:
             decision,
             strategy_name or "N/A",
         )
+        self._trades_done_this_run.append({
+            "ts": datetime.now(),
+            "ticker": ticker,
+            "side": "BUY",
+            "quantity": quantity,
+            "price": current_price,
+            "signal_type": decision,
+            "strategy_name": (strategy_name or "").strip() or "Portfolio",
+        })
 
     def _execute_sell(self, ticker: str, position: Position, reason: str, strategy_name: str = None) -> None:
         """Закрытие позиции по текущей цене (например, по стоп‑лоссу). При SANDBOX_SLIPPAGE_SELL_PCT > 0 цена исполнения занижается (консервативная оценка)."""
@@ -369,14 +413,14 @@ class ExecutionAgent:
                 "⚠️ Нет котировок для %s, закрытие позиции невозможна", ticker
             )
             return
-        slippage_pct = _get_slippage_sell_pct()
+        slippage_pct = _get_slippage_sell_pct(self.engine)
         if slippage_pct > 0:
             current_price = current_price * (1 - slippage_pct / 100.0)
             logger.debug("Продажа %s: учтено проскальзывание %.2f%%, цена исполнения %.2f", ticker, slippage_pct, current_price)
 
         quantity = float(position.quantity)
         notional = quantity * current_price
-        commission = notional * COMMISSION_RATE
+        commission = notional * self.commission_rate
         total_proceeds = notional - commission
 
         # Лог‑доходность по позиции
@@ -414,7 +458,7 @@ class ExecutionAgent:
 
             # Записываем сделку в trade_history (strategy_name не должен быть NULL)
             strategy_name = (strategy_name or "").strip() or "Portfolio"
-            signal_type = "STOP_LOSS" if "Stop-loss" in reason else "SELL"
+            signal_type = "TAKE_PROFIT" if "Take-profit" in reason else ("STOP_LOSS" if "Stop-loss" in reason else "SELL")
             conn.execute(
                 text("""
                     INSERT INTO trade_history (
@@ -455,6 +499,15 @@ class ExecutionAgent:
             reason,
             strategy_name or "N/A",
         )
+        self._trades_done_this_run.append({
+            "ts": datetime.now(),
+            "ticker": ticker,
+            "side": "SELL",
+            "quantity": quantity,
+            "price": current_price,
+            "signal_type": signal_type,
+            "strategy_name": (strategy_name or "").strip() or "Portfolio",
+        })
 
     # ---------- Ручная торговля (песочница / Telegram) ----------
 
@@ -475,7 +528,7 @@ class ExecutionAgent:
             return False, "Укажите количество > 0."
         cash = self._get_cash()
         notional = quantity * price
-        commission = notional * COMMISSION_RATE
+        commission = notional * self.commission_rate
         total_cost = notional + commission
         is_valid, err = self.risk_manager.check_position_size(notional, ticker)
         if not is_valid:
@@ -534,7 +587,7 @@ class ExecutionAgent:
         if qty <= 0:
             return False, "Укажите количество > 0."
         notional = qty * price
-        commission = notional * COMMISSION_RATE
+        commission = notional * self.commission_rate
         proceeds = notional - commission
         entry_value = qty * position.entry_price
         pnl = proceeds - entry_value
@@ -562,8 +615,9 @@ class ExecutionAgent:
         return True, f"Продано {qty:.0f} {ticker} @ ${price:.2f}. P&L: ${pnl:.2f} ({pnl_pct:+.2f}%)"
 
     def get_portfolio_summary(self) -> dict:
-        """Сводка виртуального портфеля для бота: cash, позиции с текущей оценкой и P&L."""
+        """Сводка виртуального портфеля для бота: cash, позиции с текущей оценкой и P&L, суммарная доходность."""
         cash = self._get_cash()
+        initial_cash = _get_initial_cash_usd()
         positions = self._get_open_positions()
         lines = []
         total_equity = cash
@@ -587,7 +641,18 @@ class ExecutionAgent:
                 "pnl": pnl,
                 "pnl_pct": pnl_pct,
             })
-        return {"cash": cash, "positions": lines, "total_equity": total_equity}
+        total_return_pct = (
+            (total_equity - initial_cash) / initial_cash * 100.0
+            if initial_cash and initial_cash > 0
+            else None
+        )
+        return {
+            "cash": cash,
+            "positions": lines,
+            "total_equity": total_equity,
+            "initial_cash": initial_cash,
+            "total_return_pct": total_return_pct,
+        }
 
     def get_trade_history(
         self,
@@ -714,6 +779,7 @@ class ExecutionAgent:
         logger.info("=" * 60)
         logger.info("🚀 Запуск ExecutionAgent для тикеров: %s", ", ".join(tickers))
         logger.info("=" * 60)
+        self._trades_done_this_run = []
 
         for ticker in tickers:
             result = None
@@ -774,22 +840,47 @@ class ExecutionAgent:
 
     def check_stop_losses(self) -> None:
         """
-        Проходит по открытым позициям и закрывает их,
-        если цена упала на 5% от цены входа (используем лог‑доходность).
+        Проходит по открытым позициям и закрывает их по стопу (если включён) или по тейку.
+        Список позиций берём из trade_history (как в /pending).
         """
+        if not self.stop_loss_enabled and not self._stop_loss_disabled_warned:
+            self._stop_loss_disabled_warned = True
+            logger.warning(
+                "⚠️ Стоп-лосс отключён в настройках (PORTFOLIO_STOP_LOSS_ENABLED=false). "
+                "Закрытие по стопу не выполняется, проверяется только тейк-профит."
+            )
         logger.info("🛡  Проверка стоп‑лоссов по открытым позициям")
 
-        positions_df = self._get_open_positions()
-        if positions_df.empty:
-            logger.info("ℹ️ Открытых позиций нет, стоп‑лоссы не проверяются")
-            return
+        try:
+            from report_generator import load_trade_history, compute_open_positions
+            trades = load_trade_history(self.engine)
+            open_from_history = {p.ticker: p for p in compute_open_positions(trades)}
+        except Exception as e:
+            logger.debug("Не удалось загрузить открытые позиции из trade_history: %s", e)
+            open_from_history = {}
 
-        stop_log_threshold = float(np.log(STOP_LOSS_LEVEL))  # ~ -0.0513
+        # Если по trade_history позиций нет — пробуем portfolio_state (обратная совместимость)
+        if not open_from_history:
+            positions_df = self._get_open_positions()
+            if positions_df.empty:
+                logger.info("ℹ️ Открытых позиций нет, стоп‑лоссы не проверяются")
+                return
+            for _, pos_row in positions_df.iterrows():
+                ticker = pos_row["ticker"]
+                open_from_history[ticker] = type("OpenPos", (), {
+                    "entry_price": float(pos_row["entry_price"]),
+                    "entry_ts": pos_row["entry_ts"],
+                    "quantity": float(pos_row["quantity"]),
+                    "strategy_name": self._get_last_strategy_name(ticker) or "Portfolio",
+                })()
 
-        for _, pos_row in positions_df.iterrows():
-            ticker = pos_row["ticker"]
-            entry_price = float(pos_row["entry_price"])
-            entry_ts = pos_row["entry_ts"]
+        stop_log_threshold = float(np.log(self.stop_loss_level)) if self.stop_loss_enabled else 0.0  # при отключённом стопе не срабатывает
+
+        for ticker, p_open in open_from_history.items():
+            entry_price = float(p_open.entry_price)
+            entry_ts = p_open.entry_ts
+            quantity = float(p_open.quantity)
+            strategy_name = (getattr(p_open, "strategy_name", None) or "").strip() or "Portfolio"
 
             current_price = self._get_current_price(ticker)
             if current_price is None:
@@ -810,27 +901,64 @@ class ExecutionAgent:
                 stop_log_threshold,
             )
 
-            if log_ret <= stop_log_threshold:
+            if self.stop_loss_enabled and log_ret <= stop_log_threshold:
                 reason = (
                     f"Stop-loss triggered: log_return={log_ret:.4f} "
                     f"(entry={entry_price:.2f}, current={current_price:.2f})"
                 )
                 position = Position(
                     ticker=ticker,
-                    quantity=float(pos_row["quantity"]),
+                    quantity=quantity,
                     entry_price=entry_price,
                     entry_ts=entry_ts,
                 )
-                # Получаем strategy_name из последней сделки BUY для этого тикера
-                strategy_name = self._get_last_strategy_name(ticker)
                 self._execute_sell(ticker, position, reason, strategy_name)
+                continue
+
+            # Тейк‑профит: при входе задан take_profit (%) или порог из конфига PORTFOLIO_TAKE_PROFIT_PCT (для стратегий без тейка, напр. Neutral). GAME_5M не трогаем — закрывает send_sndk_signal_cron.
+            if strategy_name == "GAME_5M":
+                logger.info("✅ %s — GAME_5M, тейк/стоп проверяет send_sndk_signal_cron", ticker)
+                continue
+            take_pct = self._get_last_take_profit(ticker)
+            from_config = False
+            if take_pct is None:
+                try:
+                    take_pct = float(get_config_value("PORTFOLIO_TAKE_PROFIT_PCT", "0").strip() or "0")
+                    from_config = True
+                except (ValueError, TypeError):
+                    take_pct = 0.0
+            pnl_pct = (current_price - entry_price) / entry_price * 100.0
+            if take_pct is not None and take_pct > 0:
+                if from_config:
+                    logger.info("📈 Тейк для %s: из конфига PORTFOLIO_TAKE_PROFIT_PCT=%.1f%%, pnl=%.2f%%", ticker, take_pct, pnl_pct)
+                if pnl_pct >= take_pct:
+                    reason = (
+                        f"Take-profit triggered: pnl={pnl_pct:.2f}% >= {take_pct}% "
+                        f"(entry={entry_price:.2f}, current={current_price:.2f})"
+                    )
+                    position = Position(
+                        ticker=ticker,
+                        quantity=quantity,
+                        entry_price=entry_price,
+                        entry_ts=entry_ts,
+                    )
+                    self._execute_sell(ticker, position, reason, strategy_name)
+                    continue
+                logger.info(
+                    "📈 Тейк‑профит для %s: порог=%.1f%%, pnl=%.2f%% — не достигнут",
+                    ticker, take_pct, pnl_pct,
+                )
             else:
                 logger.info(
-                    "✅ Стоп‑лосс для %s не сработал (log_ret=%.4f > %.4f)",
+                    "📈 Тейк‑профит для %s не задан (задайте PORTFOLIO_TAKE_PROFIT_PCT в config.env, напр. 3.0)",
                     ticker,
-                    log_ret,
-                    stop_log_threshold,
                 )
+            logger.info(
+                "✅ Стоп‑лосс для %s не сработал (log_ret=%.4f > %.4f)",
+                ticker,
+                log_ret,
+                stop_log_threshold,
+            )
 
 
 if __name__ == "__main__":

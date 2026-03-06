@@ -11,7 +11,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import logging
-from fastapi import FastAPI, Request, HTTPException
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from telegram import Update
 from telegram.error import TelegramError
@@ -25,25 +26,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Создаем FastAPI приложение
-app = FastAPI(title="LSE Telegram Bot API")
 
-# Инициализация бота
-bot_token = get_config_value('TELEGRAM_BOT_TOKEN')
-if not bot_token:
-    raise ValueError("TELEGRAM_BOT_TOKEN не найден в config.env")
+def _get_bot_config():
+    token = get_config_value('TELEGRAM_BOT_TOKEN')
+    if not token:
+        raise ValueError("TELEGRAM_BOT_TOKEN не найден в config.env")
+    allowed_users = None
+    allowed_users_str = get_config_value('TELEGRAM_ALLOWED_USERS', '')
+    if allowed_users_str:
+        try:
+            allowed_users = [int(uid.strip()) for uid in allowed_users_str.split(',') if uid.strip()]
+        except ValueError:
+            logger.warning("⚠️ Неверный формат TELEGRAM_ALLOWED_USERS, доступ для всех")
+    return token, allowed_users
 
-allowed_users_str = get_config_value('TELEGRAM_ALLOWED_USERS', '')
-allowed_users = None
-if allowed_users_str:
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Создание бота и инициализация Application в том же event loop, что и uvicorn."""
+    token, allowed_users = _get_bot_config()
+    bot = LSETelegramBot(token=token, allowed_users=allowed_users)
+    app.state.bot = bot
+    await bot.application.initialize()
+    logger.info("✅ LSE Telegram Bot API инициализирован (webhook)")
     try:
-        allowed_users = [int(uid.strip()) for uid in allowed_users_str.split(',') if uid.strip()]
-    except ValueError:
-        logger.warning("⚠️ Неверный формат TELEGRAM_ALLOWED_USERS, доступ для всех")
+        yield
+    finally:
+        await bot.application.shutdown()
 
-bot = LSETelegramBot(token=bot_token, allowed_users=allowed_users)
 
-logger.info("✅ LSE Telegram Bot API инициализирован")
+app = FastAPI(title="LSE Telegram Bot API", lifespan=lifespan)
 
 
 @app.get("/")
@@ -69,18 +81,12 @@ async def webhook(request: Request):
     
     Telegram отправляет updates на этот endpoint
     """
+    bot = request.app.state.bot
     try:
-        # Получаем JSON из запроса
         data = await request.json()
-        
-        # Создаем Update объект
         update = Update.de_json(data, bot.application.bot)
-        
-        # Обрабатываем update
         await bot.application.process_update(update)
-        
         return JSONResponse({"ok": True})
-    
     except TelegramError as e:
         logger.error(f"Telegram error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
@@ -90,18 +96,19 @@ async def webhook(request: Request):
 
 
 @app.get("/webhook/info")
-async def webhook_info():
+async def webhook_info(request: Request):
     """Информация о webhook"""
+    bot = request.app.state.bot
     try:
-        webhook_info = await bot.application.bot.get_webhook_info()
+        wh_info = await bot.application.bot.get_webhook_info()
         return {
-            "url": webhook_info.url,
-            "has_custom_certificate": webhook_info.has_custom_certificate,
-            "pending_update_count": webhook_info.pending_update_count,
-            "last_error_date": webhook_info.last_error_date.isoformat() if webhook_info.last_error_date else None,
-            "last_error_message": webhook_info.last_error_message,
-            "max_connections": webhook_info.max_connections,
-            "allowed_updates": webhook_info.allowed_updates
+            "url": wh_info.url,
+            "has_custom_certificate": wh_info.has_custom_certificate,
+            "pending_update_count": wh_info.pending_update_count,
+            "last_error_date": wh_info.last_error_date.isoformat() if wh_info.last_error_date else None,
+            "last_error_message": wh_info.last_error_message,
+            "max_connections": wh_info.max_connections,
+            "allowed_updates": wh_info.allowed_updates
         }
     except Exception as e:
         logger.error(f"Error getting webhook info: {e}")

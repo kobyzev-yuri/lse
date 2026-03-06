@@ -143,8 +143,9 @@ class AnalystAgent:
         logger.info(f"🌡  VIX={vix_value:.2f} на {ts} → режим: {regime}")
         return {"regime": regime, "vix_value": vix_value, "ts": ts}
     
-    def get_last_5_days_quotes(self, ticker: str) -> pd.DataFrame:
-        """Выгружает последние 5 дней котировок для указанного тикера"""
+    def get_last_5_days_quotes(self, ticker: str, include_today: bool = True) -> pd.DataFrame:
+        """Выгружает последние 5 дней котировок для указанного тикера.
+        Если include_today и в quotes ещё нет текущего дня — подтягивает последний close из yfinance (для игр в долгую)."""
         logger.info(f"📊 Загрузка последних 5 дней котировок для {ticker}")
         
         with self.engine.connect() as conn:
@@ -160,6 +161,41 @@ class AnalystAgent:
         if df.empty:
             logger.warning(f"⚠️  Нет данных для тикера {ticker}")
             return df
+
+        # Подтянуть текущий день из yfinance, если в quotes только предыдущие закрытия
+        if include_today and not df.empty:
+            last_date = pd.Timestamp(df["date"].iloc[0]).date()
+            today = datetime.now().date()
+            if last_date < today:
+                try:
+                    import yfinance as yf
+                    t = yf.Ticker(ticker)
+                    hist = t.history(period="2d", interval="1d", auto_adjust=False)
+                    if hist is not None and not hist.empty:
+                        hist = hist.rename_axis("Date").reset_index()
+                        row = hist.iloc[-1]
+                        row_date = pd.Timestamp(row["Date"]).date()
+                        if row_date >= today and pd.notna(row.get("Close")):
+                            today_df = pd.DataFrame([{
+                                "date": row_date,
+                                "ticker": ticker,
+                                "close": float(row["Close"]),
+                                "volume": float(row["Volume"]) if pd.notna(row.get("Volume")) else None,
+                                "sma_5": None,
+                                "volatility_5": None,
+                                "rsi": None,
+                            }])
+                            if not today_df.empty and not df.empty:
+                                # Убираем колонки полностью NA, чтобы избежать FutureWarning при concat
+                                today_df = today_df.dropna(axis=1, how="all")
+                                df = df.dropna(axis=1, how="all")
+                                df = pd.concat([today_df, df], ignore_index=True)
+                            elif not today_df.empty:
+                                df = today_df
+                            df = df.drop_duplicates(subset=["date"], keep="first").sort_values("date", ascending=False).head(5)
+                            logger.info(f"   Добавлен текущий день {row_date} (close={row['Close']:.2f}) из yfinance")
+                except Exception as e:
+                    logger.debug("Не удалось подтянуть текущий день из yfinance: %s", e)
         
         logger.info(f"✅ Загружено {len(df)} записей для {ticker}")
         return df
@@ -637,6 +673,17 @@ class AnalystAgent:
         except Exception as e:
             logger.debug("Премаркет-контекст для LLM: %s", e)
 
+        # Sentiment в шкале 0.0-1.0 для промпта и LLM
+        sentiment_for_llm = denormalize_sentiment(weighted_sentiment) if SENTIMENT_UTILS_AVAILABLE else weighted_sentiment
+        if sentiment_for_llm < 0 or sentiment_for_llm > 1:
+            sentiment_for_llm = 0.5  # Fallback
+        strategy_outcome_stats = ""
+        try:
+            from report_generator import get_engine, get_strategy_outcome_stats
+            strategy_outcome_stats = get_strategy_outcome_stats(get_engine(), limit_days=180)
+        except Exception as e:
+            logger.debug("Статистика по стратегиям для LLM недоступна: %s", e)
+
         # LLM анализ (если доступен)
         llm_result = None
         llm_guidance = None
@@ -644,21 +691,6 @@ class AnalystAgent:
         if self.use_llm and self.llm_service:
             try:
                 logger.info("\n🤖 ШАГ 3: LLM анализ торговой ситуации")
-                
-                # Для LLM используем sentiment в шкале 0.0-1.0 (конвертируем обратно)
-                sentiment_for_llm = denormalize_sentiment(weighted_sentiment) if SENTIMENT_UTILS_AVAILABLE else weighted_sentiment
-                if sentiment_for_llm < 0 or sentiment_for_llm > 1:
-                    sentiment_for_llm = 0.5  # Fallback
-                
-                # Статистика исходов по стратегиям (закрытые сделки за 180 дн.) — LLM учитывает при рекомендации
-                strategy_outcome_stats = ""
-                try:
-                    from report_generator import get_engine, get_strategy_outcome_stats
-                    strategy_outcome_stats = get_strategy_outcome_stats(get_engine(), limit_days=180)
-                except Exception as e:
-                    logger.debug("Статистика по стратегиям для LLM недоступна: %s", e)
-                
-                # Получаем детальный LLM анализ (стратегия, её сигнал и история исходов в промпт)
                 llm_result = self.llm_service.analyze_trading_situation(
                     ticker=ticker,
                     technical_data=technical_data,
@@ -669,8 +701,6 @@ class AnalystAgent:
                     strategy_outcome_stats=strategy_outcome_stats if strategy_outcome_stats else None,
                 )
                 logger.info(f"✅ LLM анализ завершен: {llm_result.get('llm_analysis', {}).get('decision', 'N/A')}")
-                
-                # LLM guidance теперь не используется, стратегия выбирается через StrategyManager
                 llm_guidance = None
             except Exception as e:
                 logger.error(f"❌ Ошибка LLM анализа: {e}")
@@ -706,6 +736,28 @@ class AnalystAgent:
             "llm_usage": llm_result.get('usage', {}) if llm_result else None,
             "base_decision": base_decision
         }
+        # Для /prompt_entry с тикером: всегда заполняем промпт (актуальный контекст); ответ LLM — если был вызов
+        if llm_result:
+            if "prompt_system" in llm_result:
+                result["prompt_system"] = llm_result["prompt_system"]
+            if "prompt_user" in llm_result:
+                result["prompt_user"] = llm_result["prompt_user"]
+            if "llm_response_raw" in llm_result:
+                result["llm_response_raw"] = llm_result["llm_response_raw"]
+        elif self.llm_service:
+            # LLM не вызывался или ошибка — всё равно подставляем собранный промпт для экспорта
+            built = self.llm_service.build_entry_prompt(
+                ticker=ticker,
+                technical_data=technical_data,
+                news_data=news_list,
+                sentiment_score=sentiment_for_llm,
+                strategy_name=selected_strategy.name if selected_strategy else None,
+                strategy_signal=base_decision if base_decision else None,
+                strategy_outcome_stats=strategy_outcome_stats if strategy_outcome_stats else None,
+            )
+            result["prompt_system"] = built["prompt_system"]
+            result["prompt_user"] = built["prompt_user"]
+            result["llm_response_raw"] = ""
         
         logger.info(f"\n🎯 ФИНАЛЬНОЕ РЕШЕНИЕ: {final_decision}")
         if llm_result:

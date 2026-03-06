@@ -2,6 +2,7 @@
 pandas>=2.0.0
 numpy>=1.24.0
 yfinance>=0.2.0
+matplotlib>=3.7.0  # Графики 5m в боте (/chart5m)
 
 # База данных
 sqlalchemy>=2.0.0

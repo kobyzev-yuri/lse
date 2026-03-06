@@ -36,23 +36,28 @@ logger = logging.getLogger(__name__)
 
 
 def _notify_portfolio_trades(agent: ExecutionAgent) -> None:
-    """Отправить в Telegram уведомления о сделках портфельной игры за последние 5 минут."""
+    """Отправить в Telegram уведомления о сделках портфельной игры. Сначала — сделки этого запуска (тейк/стоп), иначе — за последние 5 мин из БД."""
     token = get_config_value("TELEGRAM_BOT_TOKEN", "").strip()
     chat_ids = get_signal_chat_ids()
     if not token or not chat_ids:
         return
-    trades = agent.get_recent_trades(minutes_ago=5, exclude_strategy_name="GAME_5M")
+    trades = getattr(agent, "_trades_done_this_run", None) or []
+    if not trades:
+        trades = agent.get_recent_trades(minutes_ago=5, exclude_strategy_name="GAME_5M")
+    # Исключаем GAME_5M — те уведомляет send_sndk_signal_cron
+    trades = [r for r in trades if (r.get("strategy_name") or "").strip() != "GAME_5M"]
     for r in trades:
         ts = r["ts"].strftime("%Y-%m-%d %H:%M") if hasattr(r["ts"], "strftime") else str(r["ts"])
         side_emoji = "🟢" if r["side"] == "BUY" else "🔴"
         strat = r.get("strategy_name", "—")
         text = (
-            f"{side_emoji} **Портфель** {r['side']} {r['ticker']} x{r['quantity']:.0f} "
-            f"@ ${r['price']:.2f} ({r['signal_type']}) [{strat}]\n_{ts}_"
+            f"{side_emoji} Портфель {r['side']} {r['ticker']} x{r['quantity']:.0f} "
+            f"@ ${r['price']:.2f} ({r['signal_type']}) [{strat}]\n{ts}"
         )
         for cid in chat_ids:
             try:
-                if send_telegram_message(token, cid, text):
+                # Без parse_mode: в signal_type/strategy могут быть _ или * — ломают Markdown и дают HTTP 400
+                if send_telegram_message(token, cid, text, parse_mode=None):
                     logger.info("Уведомление о сделке %s %s отправлено в chat_id=%s", r["side"], r["ticker"], cid)
             except Exception as e:
                 logger.warning("Не удалось отправить уведомление в %s: %s", cid, e)

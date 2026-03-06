@@ -6,7 +6,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -16,15 +16,17 @@ class RiskManager:
     """
     Менеджер рисков для управления лимитами компании
     
-    Загружает конфигурацию из local/risk_limits.json
+    Загружает конфигурацию из local/risk_limits.json,
+    с fallback'ом на БД (RLM), если передан engine.
     """
     
-    def __init__(self, risk_config_path: Optional[Path] = None):
+    def __init__(self, risk_config_path: Optional[Path] = None, engine=None):
         """
         Инициализация RiskManager
         
         Args:
             risk_config_path: Путь к файлу risk_limits.json (если None, ищет в local/)
+            engine: SQLAlchemy engine для загрузки динамических параметров
         """
         if risk_config_path is None:
             # Ищем в local/risk_limits.json
@@ -33,6 +35,7 @@ class RiskManager:
         
         self.config_path = Path(risk_config_path)
         self.config: Dict = {}
+        self.engine = engine
         self._load_config()
     
     def _load_config(self):
@@ -53,6 +56,34 @@ class RiskManager:
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки risk_limits.json: {e}")
             self.config = self._get_default_config()
+
+    def _get_dynamic_param(self, key: str, default: Any, entity: str = 'GLOBAL') -> Any:
+        """Получает параметр из БД, если есть engine."""
+        if self.engine is not None:
+            try:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    res = conn.execute(
+                        text("""
+                            SELECT parameter_value FROM strategy_parameters 
+                            WHERE parameter_name = :key 
+                              AND (target_entity = 'GLOBAL' OR target_entity = :entity)
+                            ORDER BY 
+                                CASE WHEN target_entity = :entity THEN 1 ELSE 0 END DESC, 
+                                valid_from DESC
+                            LIMIT 1
+                        """),
+                        {"key": key, "entity": entity}
+                    ).fetchone()
+                    
+                    if res and res[0] is not None:
+                        val = res[0]
+                        if isinstance(val, (dict, list)):
+                            return val
+                        return type(default)(str(val).strip('"\'')) if default is not None else str(val).strip('"\'')
+            except Exception as e:
+                logger.debug(f"Ошибка загрузки динамического risk-параметра {key}: {e}")
+        return default
     
     def _get_default_config(self) -> Dict:
         """Возвращает дефолтную конфигурацию (консервативные лимиты)"""
@@ -79,55 +110,49 @@ class RiskManager:
         }
     
     def get_max_position_size(self, ticker: Optional[str] = None) -> float:
-        """
-        Возвращает максимальный размер позиции в USD
-        
-        Args:
-            ticker: Тикер (для будущего расширения - разные лимиты по тикерам)
-            
-        Returns:
-            Максимальный размер позиции в USD
-        """
-        return self.config.get("risk_capacity", {}).get("max_position_size_usd", 10000.0)
+        """Возвращает максимальный размер позиции в USD"""
+        default_val = self.config.get("risk_capacity", {}).get("max_position_size_usd", 10000.0)
+        return float(self._get_dynamic_param("max_position_size_usd", default_val, ticker or 'GLOBAL'))
     
     def get_max_portfolio_exposure(self) -> float:
         """Возвращает максимальную экспозицию портфеля в процентах"""
-        return self.config.get("risk_capacity", {}).get("max_portfolio_exposure_percent", 80.0)
+        default_val = self.config.get("risk_capacity", {}).get("max_portfolio_exposure_percent", 80.0)
+        return float(self._get_dynamic_param("max_portfolio_exposure_percent", default_val))
     
     def get_max_single_ticker_exposure(self) -> float:
         """Возвращает максимальную экспозицию по одному тикеру в процентах"""
-        return self.config.get("risk_capacity", {}).get("max_single_ticker_exposure_percent", 20.0)
+        default_val = self.config.get("risk_capacity", {}).get("max_single_ticker_exposure_percent", 20.0)
+        return float(self._get_dynamic_param("max_single_ticker_exposure_percent", default_val))
     
     def get_max_daily_loss(self) -> Dict[str, float]:
-        """
-        Возвращает максимальные дневные потери
-        
-        Returns:
-            dict с 'usd' и 'percent'
-        """
+        """Возвращает максимальные дневные потери dict с 'usd' и 'percent'"""
         capacity = self.config.get("risk_capacity", {})
         return {
-            "usd": capacity.get("max_daily_loss_usd", 5000.0),
-            "percent": capacity.get("max_daily_loss_percent", 5.0)
+            "usd": float(self._get_dynamic_param("max_daily_loss_usd", capacity.get("max_daily_loss_usd", 5000.0))),
+            "percent": float(self._get_dynamic_param("max_daily_loss_percent", capacity.get("max_daily_loss_percent", 5.0)))
         }
     
     def get_max_positions_open(self) -> int:
         """Возвращает максимальное количество открытых позиций"""
-        return self.config.get("position_limits", {}).get("max_positions_open", 10)
+        default_val = self.config.get("position_limits", {}).get("max_positions_open", 10)
+        return int(self._get_dynamic_param("max_positions_open", default_val))
     
-    def get_stop_loss_percent(self) -> float:
+    def get_stop_loss_percent(self, ticker: Optional[str] = None) -> float:
         """Возвращает процент стоп-лосса"""
-        return self.config.get("risk_parameters", {}).get("stop_loss_percent", 5.0)
+        default_val = self.config.get("risk_parameters", {}).get("stop_loss_percent", 5.0)
+        return float(self._get_dynamic_param("stop_loss_percent", default_val, ticker or 'GLOBAL'))
     
-    def get_take_profit_percent(self) -> float:
+    def get_take_profit_percent(self, ticker: Optional[str] = None) -> float:
         """Возвращает процент тейк-профита"""
-        return self.config.get("risk_parameters", {}).get("take_profit_percent", 10.0)
+        default_val = self.config.get("risk_parameters", {}).get("take_profit_percent", 10.0)
+        return float(self._get_dynamic_param("take_profit_percent", default_val, ticker or 'GLOBAL'))
     
     def get_total_capital(self) -> float:
         """Возвращает общий капитал компании"""
-        return self.config.get("risk_capacity", {}).get("total_capital_usd", 100000.0)
-    
-    def check_position_size(self, position_size_usd: float, ticker: str = None) -> tuple[bool, str]:
+        default_val = self.config.get("risk_capacity", {}).get("total_capital_usd", 100000.0)
+        return float(self._get_dynamic_param("total_capital_usd", default_val))
+
+    def check_position_size(self, position_size_usd: float, ticker: Optional[str] = None) -> tuple[bool, str]:
         """
         Проверяет, не превышает ли размер позиции лимиты
         
@@ -223,7 +248,7 @@ class RiskManager:
 _risk_manager: Optional[RiskManager] = None
 
 
-def get_risk_manager() -> RiskManager:
+def get_risk_manager(engine=None) -> RiskManager:
     """
     Получает глобальный экземпляр RiskManager (singleton)
     
@@ -232,5 +257,7 @@ def get_risk_manager() -> RiskManager:
     """
     global _risk_manager
     if _risk_manager is None:
-        _risk_manager = RiskManager()
+        _risk_manager = RiskManager(engine=engine)
+    elif engine is not None and _risk_manager.engine is None:
+        _risk_manager.engine = engine
     return _risk_manager

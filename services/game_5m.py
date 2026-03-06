@@ -128,10 +128,79 @@ def get_open_position(ticker: str) -> Optional[dict[str, Any]]:
             return None
     return {
         "id": buy_id,
+        "ticker": ticker,
         "entry_ts": buy_ts,
         "entry_price": float(price),
         "quantity": float(qty),
         "entry_signal_type": signal_type,
+    }
+
+
+def get_open_position_any(ticker: str) -> Optional[dict[str, Any]]:
+    """
+    Открытая позиция по тикеру по всей trade_history (любая стратегия).
+    Как в /pending: последний BUY без полного SELL, средневзвешенная цена входа.
+    Нужно, чтобы крон видел позиции, открытые не через GAME_5M (например с другой стратегией).
+    Поиск по UPPER(ticker), чтобы находить позиции при разном регистре в БД.
+    """
+    ticker_upper = (ticker or "").strip().upper()
+    if not ticker_upper:
+        return None
+    engine = _engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT ts, id, side, quantity, price, signal_type, strategy_name
+                FROM public.trade_history
+                WHERE UPPER(TRIM(ticker)) = :ticker_upper
+                ORDER BY ts ASC, id ASC
+            """),
+            {"ticker_upper": ticker_upper},
+        ).fetchall()
+    if not rows:
+        logger.info("get_open_position_any %s: в trade_history 0 строк (проверьте БД и тикер)", ticker_upper)
+        return None
+    position_qty = 0.0
+    position_cost = 0.0
+    position_open_ts = None
+    position_last_strategy = "—"
+    position_last_signal = None
+    for row in rows:
+        ts, _id, side, qty, price, signal_type, strategy = row
+        qty = float(qty or 0)
+        price = float(price or 0)
+        strat = (strategy or "").strip() or "—"
+        if side and side.upper() == "BUY":
+            if position_qty == 0:
+                position_open_ts = ts
+            position_qty += qty
+            position_cost += qty * price
+            position_last_strategy = strat
+            position_last_signal = signal_type
+        elif side and side.upper() == "SELL":
+            if position_qty <= 0:
+                continue
+            avg_entry = position_cost / position_qty
+            cost_sold = avg_entry * min(qty, position_qty)
+            position_qty -= qty
+            position_cost -= cost_sold
+            if position_qty <= 0:
+                position_open_ts = None
+                position_cost = 0.0
+    if position_qty <= 0 or position_cost <= 0:
+        logger.info(
+            "get_open_position_any %s: в trade_history %s строк, после скана position_qty=%.2f — позиция закрыта",
+            ticker_upper, len(rows), position_qty,
+        )
+        return None
+    return {
+        "id": None,
+        "ticker": ticker,
+        "entry_ts": position_open_ts,
+        "entry_price": position_cost / position_qty,
+        "quantity": position_qty,
+        "entry_signal_type": position_last_signal,
+        "strategy_name": position_last_strategy,
     }
 
 
@@ -176,15 +245,26 @@ def record_entry(
     return new_id
 
 
-def close_position(ticker: str, exit_price: float, exit_signal_type: str) -> Optional[float]:
-    """Закрывает открытую позицию: INSERT SELL. Возвращает PnL в %."""
-    pos = get_open_position(ticker)
-    if not pos:
+def close_position(
+    ticker: str,
+    exit_price: float,
+    exit_signal_type: str,
+    position: Optional[dict[str, Any]] = None,
+) -> Optional[float]:
+    """Закрывает открытую позицию: INSERT SELL. Возвращает PnL в %.
+    position — если передан (например от get_open_position_any), SELL пишется с strategy_name из позиции;
+    иначе берётся позиция только GAME_5M."""
+    if position is None:
+        position = get_open_position(ticker)
+        strategy = GAME_5M_STRATEGY
+    else:
+        strategy = position.get("strategy_name") or GAME_5M_STRATEGY
+    if not position:
         logger.info("game_5m: по %s нет открытой позиции для закрытия", ticker)
         return None
 
-    entry_price = pos["entry_price"]
-    quantity = pos["quantity"]
+    entry_price = position["entry_price"]
+    quantity = position["quantity"]
     if entry_price <= 0 or exit_price <= 0:
         return None
 
@@ -207,11 +287,11 @@ def close_position(ticker: str, exit_price: float, exit_signal_type: str) -> Opt
                 "commission": commission,
                 "signal_type": exit_signal_type,
                 "total_value": notional,
-                "strategy": GAME_5M_STRATEGY,
+                "strategy": strategy,
                 "ts_tz": TRADE_HISTORY_TZ,
             },
         )
-    logger.info("game_5m: %s закрыта @ %.2f %s, PnL=%.2f%%", ticker, exit_price, exit_signal_type, pnl_pct)
+    logger.info("game_5m: %s закрыта @ %.2f %s (strategy=%s), PnL=%.2f%%", ticker, exit_price, exit_signal_type, strategy, pnl_pct)
     return pnl_pct
 
 
@@ -345,15 +425,22 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
 
 
 def _effective_take_profit_pct(momentum_2h_pct: Optional[float]) -> float:
-    """Тейк-профит: импульс 2ч, который видит модель, или порог из конфига (если импульс мал/отсутствует)."""
+    """Тейк-профит: импульс 2ч (реализованное движение за 2ч, не прогноз) или конфиг; ограничен конфигом и опционально коэффициентом < 1 (консервативнее)."""
     params = get_strategy_params()
     config_take = params["take_profit_pct"]
     try:
         min_take = float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "1.0"))
     except (ValueError, TypeError):
         min_take = 1.0
+    try:
+        momentum_factor = float(get_config_value("GAME_5M_TAKE_MOMENTUM_FACTOR", "1.0"))
+        momentum_factor = max(0.3, min(1.0, momentum_factor))
+    except (ValueError, TypeError):
+        momentum_factor = 1.0
     if momentum_2h_pct is not None and momentum_2h_pct >= min_take:
-        return float(momentum_2h_pct)
+        # Импульс — ретроспектива; factor < 1 делает тейк консервативнее (фиксируем прибыль раньше)
+        effective_momentum = float(momentum_2h_pct) * momentum_factor
+        return min(effective_momentum, config_take)
     return config_take
 
 
@@ -401,8 +488,21 @@ def should_close_position(
         price_for_stop = min(current_price, bar_low) if bar_low is not None and bar_low > 0 else current_price
         pnl_take_pct = (price_for_take - entry_price) / entry_price * 100.0
         pnl_stop_pct = (price_for_stop - entry_price) / entry_price * 100.0
-        if pnl_take_pct >= take_pct:
+        ticker = open_position.get("ticker", "?")
+        # Допуск 0.05%: в pending может показываться 2.7%, а в кроне (5m/quotes) получается 2.67% — чтобы тейк сработал
+        take_threshold = take_pct - 0.05
+        if pnl_take_pct >= take_threshold:
             return True, "TAKE_PROFIT"
+        # DEBUG: всегда пишем pnl vs порог; INFO — только когда до тейка осталось ≤0.5%
+        logger.debug(
+            "GAME_5M %s: тейк не сработал — pnl=%.2f%%, порог тейка=%.2f%% (>= %.2f%% с допуском 0.05%%)",
+            ticker, pnl_take_pct, take_pct, take_threshold,
+        )
+        if 0 < pnl_take_pct < take_threshold and take_pct - pnl_take_pct <= 0.5:
+            logger.info(
+                "GAME_5M %s: тейк не достигнут — pnl=%.2f%%, порог=%.2f%% (с допуском 0.05%% сработает при >= %.2f%%)",
+                ticker, pnl_take_pct, take_pct, take_threshold,
+            )
         if pnl_stop_pct <= -stop_pct:
             return True, "STOP_LOSS"
 

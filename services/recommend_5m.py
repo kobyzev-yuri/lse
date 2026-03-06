@@ -291,7 +291,8 @@ def get_decision_5m(
     # RSI по 5m
     rsi_5m = compute_rsi_5m(closes, period=RSI_PERIOD_5M)
 
-    # Импульс за последние ~2 часа (24 свечи по 5m); при малом числе баров — за доступный хвост
+    # Импульс за последние ~2 часа (24 свечи по 5m) — реализованное изменение цены (close сейчас / close 2ч назад − 1), не прогноз.
+    # В GAME_5M используется для целевого тейка: консервативнее брать долю от импульса (GAME_5M_TAKE_MOMENTUM_FACTOR < 1).
     n = min(BARS_2H, len(closes) - 1)
     momentum_2h_pct = 0.0
     if n >= 1 and len(closes) >= n + 1:
