@@ -113,11 +113,11 @@ def fetch_all_news_sources():
         default_llm = (fast[0] if fast else "SNDK")
         llm_tickers = get_config_value("LLM_NEWS_TICKERS", default_llm).strip()
         for t in [x.strip() for x in llm_tickers.split(",") if x.strip()]:
-            nid = fetch_and_save_llm_news(t)
+            nid, skip_reason = fetch_and_save_llm_news(t)
             if nid is not None:
                 sources_status[f'LLM({t})'] = '✅ Успешно'
             else:
-                sources_status[f'LLM({t})'] = '⏭️ Пропущено (выкл. или ошибка)'
+                sources_status[f'LLM({t})'] = f'⏭️ Пропущено ({skip_reason or "ошибка"})'
         has_llm_ticker = any(k.startswith('LLM(') for k in sources_status)
         if not has_llm_ticker and 'LLM' not in str(sources_status):
             sources_status['LLM'] = '⏭️ Пропущено (USE_LLM_NEWS не включён или нет ключа)'

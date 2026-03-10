@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_tracked_tickers(engine) -> List[str]:
-    """Получает список тикеров, которые отслеживаются в системе."""
+    """Получает список тикеров из таблицы quotes."""
     with engine.connect() as conn:
         result = conn.execute(text("""
             SELECT DISTINCT ticker 
@@ -29,6 +29,15 @@ def get_tracked_tickers(engine) -> List[str]:
         """))
         tickers = [row[0] for row in result.fetchall()]
     return tickers
+
+
+def get_tickers_from_config() -> List[str]:
+    """Тикеры из config.env (FAST + MEDIUM + LONG) для согласованности с update_prices."""
+    try:
+        from services.ticker_groups import get_all_ticker_groups
+        return get_all_ticker_groups()
+    except Exception:
+        return []
 
 
 def update_rsi_for_ticker(engine, ticker: str, rsi: Optional[float]) -> bool:
@@ -106,8 +115,17 @@ def update_rsi_for_all_tickers(tickers: Optional[List[str]] = None, delay: float
     engine = create_engine(db_url)
     
     if tickers is None:
-        tickers = get_tracked_tickers(engine)
-        logger.info(f"📋 Найдено {len(tickers)} тикеров для обновления RSI: {', '.join(tickers)}")
+        from_config = get_tickers_from_config()
+        from_db = get_tracked_tickers(engine)
+        seen = set()
+        tickers = []
+        for t in from_config + from_db:
+            if t and t not in seen:
+                seen.add(t)
+                tickers.append(t)
+        if not tickers:
+            tickers = from_db
+        logger.info(f"📋 Тикеры для RSI ({len(tickers)}): из конфига и quotes: {', '.join(tickers)}")
     
     # Finviz поддерживает только акции; пропускаем валютные пары (=X), индексы (^), фьючерсы (=F)
     def is_finviz_supported(t: str) -> bool:

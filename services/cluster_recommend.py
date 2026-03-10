@@ -15,17 +15,24 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-def get_correlation_matrix(tickers: List[str], days: int = 30) -> Optional[Dict[str, Dict[str, float]]]:
+def get_correlation_matrix(
+    tickers: List[str],
+    days: int = 30,
+    min_tickers_per_row: Optional[int] = None,
+) -> Optional[Dict[str, Dict[str, float]]]:
     """
     Матрица корреляций по тикерам (дневные доходности из quotes).
     Возвращает dict[ticker1][ticker2] = correlation или None при ошибке.
+    min_tickers_per_row=2 — мягче (оставлять строки с данными хотя бы по 2 тикерам), чтобы матрица строилась чаще.
     """
     if len(tickers) < 2:
         return None
     try:
         from services.cluster_manager import ClusterManager
         cm = ClusterManager()
-        corr_df, _ = cm.get_correlation_and_beta_matrix(tickers, days=days)
+        corr_df, _ = cm.get_correlation_and_beta_matrix(
+            tickers, days=days, min_tickers_per_row=min_tickers_per_row
+        )
         if corr_df is None or corr_df.empty:
             return None
         return corr_df.to_dict()

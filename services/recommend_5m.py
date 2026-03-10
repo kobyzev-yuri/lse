@@ -556,11 +556,14 @@ def get_decision_5m(
     out["entry_advice"] = entry_advice
     out["entry_advice_reason"] = entry_advice_reason
 
-    # Свежие новости/настроения от LLM непосредственно перед решением (дополнение к KB)
+    # Блок «LLM-новости» в решении 5m: по умолчанию выключен (GAME_5M_USE_LLM_NEWS=false).
+    # Текущий источник — ответ модели по обучению, не в реальном времени; даты в тексте могут быть старыми.
+    # Включать true имеет смысл только при наличии актуального источника (RAG по KB, web search API). См. docs/GAME_5M_NEWS.md.
     if use_llm_news:
         try:
             from config_loader import get_config_value
-            if get_config_value("USE_LLM_NEWS", "").strip().lower() in ("1", "true", "yes"):
+            use_in_5m = get_config_value("GAME_5M_USE_LLM_NEWS", "false").strip().lower() in ("1", "true", "yes")
+            if use_in_5m and get_config_value("USE_LLM_NEWS", "").strip().lower() in ("1", "true", "yes"):
                 from services.llm_service import get_llm_service
                 llm = get_llm_service()
                 llm_data = llm.fetch_news_for_ticker(ticker) if getattr(llm, "client", None) else None

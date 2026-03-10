@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Tuple
 
 from sqlalchemy import create_engine, text
 
@@ -39,18 +39,19 @@ def _normalize_for_compare(s: str, max_len: int = 500) -> str:
     return t.strip()
 
 
-def fetch_and_save_llm_news(ticker: str = "SNDK") -> Optional[int]:
+def fetch_and_save_llm_news(ticker: str = "SNDK") -> Tuple[Optional[int], Optional[str]]:
     """
     Запрашивает у LLM свежие новости по тикеру и сохраняет одну запись в knowledge_base.
     Не сохраняет, если (1) уже есть LLM-запись за последние N ч (cooldown) или
     (2) последняя LLM-запись по тикеру имеет очень похожее содержание (одни и те же факты).
 
     Returns:
-        id созданной записи в knowledge_base или None при ошибке/отключении/пропуске из-за дедупликации.
+        (id созданной записи, None) при успехе; (None, причина_пропуска) при пропуске/ошибке.
     """
     if get_config_value("USE_LLM_NEWS", "").strip().lower() not in ("1", "true", "yes"):
-        logger.debug("USE_LLM_NEWS не включён, пропуск LLM-новостей для %s", ticker)
-        return None
+        reason = "USE_LLM_NEWS не включён"
+        logger.info("LLM(%s): %s", ticker, reason)
+        return (None, reason)
 
     try:
         cooldown_hours = int(get_config_value("LLM_NEWS_COOLDOWN_HOURS", str(DEFAULT_LLM_NEWS_COOLDOWN_HOURS)).strip() or DEFAULT_LLM_NEWS_COOLDOWN_HOURS)
@@ -72,17 +73,22 @@ def fetch_and_save_llm_news(ticker: str = "SNDK") -> Optional[int]:
             {"ticker": ticker_upper, "since": since},
         ).fetchone()
         if existing:
-            logger.debug("LLM-новость по %s не сохранена: уже есть запись за последние %s ч (id=%s)", ticker, cooldown_hours, existing[0])
-            return None
+            reason = f"уже есть запись за последние {cooldown_hours} ч"
+            logger.info("LLM(%s): ⏭️ %s", ticker, reason)
+            return (None, reason)
 
     llm = get_llm_service()
     data = llm.fetch_news_for_ticker(ticker)
     if not data:
-        return None
+        reason = "LLM не ответил или не инициализирован"
+        logger.info("LLM(%s): ⏭️ %s", ticker, reason)
+        return (None, reason)
 
     content = data.get("content") or ""
     if not content.strip():
-        return None
+        reason = "LLM вернул пустой контент"
+        logger.info("LLM(%s): ⏭️ %s", ticker, reason)
+        return (None, reason)
 
     # 2) Дедупликация по содержанию: не сохранять, если последняя LLM-запись по тикеру почти такая же
     with engine.connect() as conn:
@@ -98,8 +104,9 @@ def fetch_and_save_llm_news(ticker: str = "SNDK") -> Optional[int]:
             prev = _normalize_for_compare(last_row[0], max_len=CONTENT_DEDUP_PREFIX_LEN)
             new_prefix = _normalize_for_compare(content, max_len=CONTENT_DEDUP_PREFIX_LEN)
             if prev and new_prefix and len(prev) >= 100 and (prev == new_prefix or prev in new_prefix or new_prefix in prev):
-                logger.debug("LLM-новость по %s не сохранена: содержание совпадает с последней записью", ticker)
-                return None
+                reason = "содержание совпадает с последней записью"
+                logger.info("LLM(%s): ⏭️ %s", ticker, reason)
+                return (None, reason)
 
     source = data.get("source_label", "LLM")
     sentiment = data.get("sentiment_score")
@@ -109,8 +116,9 @@ def fetch_and_save_llm_news(ticker: str = "SNDK") -> Optional[int]:
     try:
         from services.ticker_groups import get_tracked_tickers_for_kb
         if ticker_upper not in set(get_tracked_tickers_for_kb()):
-            logger.debug("Пропуск LLM-новости по ненаблюдаемому тикеру %s", ticker_upper)
-            return None
+            reason = "тикер не в списке для KB"
+            logger.info("LLM(%s): ⏭️ %s", ticker, reason)
+            return (None, reason)
     except Exception:
         pass
     try:
@@ -132,7 +140,7 @@ def fetch_and_save_llm_news(ticker: str = "SNDK") -> Optional[int]:
             row = conn.execute(text("SELECT LASTVAL()")).fetchone()
             news_id = row[0] if row else None
         logger.info("✅ LLM-новость по %s сохранена в knowledge_base, id=%s", ticker, news_id)
-        return news_id
+        return (news_id, None)
     except Exception as e:
         logger.exception("Ошибка сохранения LLM-новости по %s: %s", ticker, e)
-        return None
+        return (None, str(e))

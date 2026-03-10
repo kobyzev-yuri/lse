@@ -609,6 +609,12 @@ async def analyze_ticker(ticker: str = Form(...), use_llm: bool = Form(True)):
 async def execute_trade(tickers: str = Form(..., description="Тикеры через запятую")):
     """API: Исполнить торговый цикл для тикеров (портфельная игра: сигнал → BUY при наличии, проверка стоп-лоссов)."""
     try:
+        from config_loader import get_config_value
+        if get_config_value("TRADING_CYCLE_ENABLED", "").strip().lower() not in ("1", "true", "yes"):
+            raise HTTPException(
+                status_code=503,
+                detail="Портфельная игра приостановлена (TRADING_CYCLE_ENABLED не включён в config.env). Включите для исполнения сделок.",
+            )
         ticker_list = [t.strip().upper() for t in tickers.split(",") if t and t.strip()]
         if not ticker_list:
             raise HTTPException(status_code=400, detail="Укажите хотя бы один тикер (через запятую)")

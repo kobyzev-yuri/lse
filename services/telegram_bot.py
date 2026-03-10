@@ -17,7 +17,7 @@ import math
 import re
 import uuid
 from io import BytesIO
-from typing import Optional, Dict, Any, List, Set
+from typing import Optional, Dict, Any, List, Set, Tuple
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -35,6 +35,31 @@ from services.vector_kb import VectorKB
 from config_loader import get_config_value, get_use_llm_for_analyst
 
 logger = logging.getLogger(__name__)
+
+# Лимит длины одного сообщения Telegram (API допускает 4096)
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+HELP_CHUNK_SIZE = 4000
+
+
+def _split_message_chunks(text: str, max_len: int = HELP_CHUNK_SIZE) -> List[str]:
+    """Разбивает текст на части не длиннее max_len, по возможности по переносам строк."""
+    if not text or len(text) <= max_len:
+        return [text] if text else []
+    chunks = []
+    rest = text
+    while rest:
+        if len(rest) <= max_len:
+            chunks.append(rest)
+            break
+        block = rest[:max_len]
+        last_nl = block.rfind("\n")
+        if last_nl > max_len // 2:
+            cut = last_nl + 1
+        else:
+            cut = max_len
+        chunks.append(rest[:cut])
+        rest = rest[cut:].lstrip()
+    return chunks
 
 
 def _escape_markdown(text: str) -> str:
@@ -88,7 +113,16 @@ def _ts_msk(ts) -> str:
 def _build_prompt_entry_html(payload: Dict[str, Any]) -> str:
     """Шаблон принятия решения: отчёт для человека; для портфеля/тикера — в отчёте промпт для LLM (system, user, ответ)."""
     ticker = payload.get("ticker")
-    title = f"Шаблон решения (портфель) — {ticker}" if ticker else "Шаблон решения о входе (пустой шаблон)"
+    game_label = payload.get("game_label")
+    if game_label is None and ticker:
+        try:
+            from services.ticker_groups import get_tickers_game_5m
+            game_label = "игра 5m" if ticker in (get_tickers_game_5m() or []) else "портфель"
+        except Exception:
+            game_label = "портфель"
+    if game_label is None:
+        game_label = "портфель"
+    title = f"Шаблон решения ({game_label}) — {ticker}" if ticker else "Шаблон решения о входе (пустой шаблон)"
     note = payload.get("note")
     system = (payload.get("system_prompt") or "").strip()
     user = (payload.get("user_prompt") or payload.get("user_template") or "").strip()
@@ -210,9 +244,10 @@ def _build_prompt_entry_game5m_html(
     per_ticker_results: List[Dict[str, Any]],
     correlation_matrix: Optional[Dict[str, Dict[str, float]]] = None,
     correlation_tickers: Optional[List[str]] = None,
+    extra_tech_by_ticker: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
     """HTML для /prompt_entry game5m: тот же формат, что и portfolio.
-    correlation_tickers: полный список для матрицы (игра 5m + контекст) — по нему показываем «все со всеми»."""
+    correlation_tickers: полный список для матрицы. extra_tech_by_ticker: цена/RSI для тикеров не из игры 5m (MEDIUM/LONG)."""
     def _pre(s: str) -> str:
         return html.escape(s) if s else "—"
 
@@ -233,11 +268,15 @@ def _build_prompt_entry_game5m_html(
         "<title>Шаблон решения: игра 5m</title>",
         "<style>", _PROMPT_ENTRY_REPORT_CSS, "</style></head><body>",
         "<h1>Шаблон принятия решения: игра «5m»</h1>",
-        '<p class="intro">Контекст по параметрам и тикерам игры 5m. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — контекст (входные данные) и обоснование решения. Решение по правилам и контексту (KB, опционально LLM-новости); вход/выход и тейк/стоп из GAME_5M_*.</p>',
+        '<p class="intro">Контекст по параметрам и тикерам игры 5m. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — контекст (входные данные) и обоснование решения. Решение по правилам и контексту (KB, опционально LLM-новости). <em>LLM-новости</em> — ответ модели по её обучению, без поиска в интернете в реальном времени; даты в тексте могут относиться к прошлым годам (2023 и др.). Актуальные новости — в блоке «Новости из KB» (RSS, NewsAPI, Investing.com). Вход/выход и тейк/стоп из GAME_5M_*.</p>',
         f'<p class="cluster"><strong>Кластер:</strong> {html.escape(", ".join(cluster_tickers))}</p>',
     ]
     if correlation_note:
         parts.append(f'<p class="cluster">{_pre(correlation_note)}</p>')
+
+    tech_by_ticker = {r.get("ticker"): {"price": r.get("price"), "rsi": r.get("rsi_5m")} for r in per_ticker_results if r.get("ticker")}
+    if extra_tech_by_ticker:
+        tech_by_ticker.update(extra_tech_by_ticker)
 
     for r in per_ticker_results:
         ticker = r.get("ticker") or "—"
@@ -273,12 +312,45 @@ def _build_prompt_entry_game5m_html(
         parts.append(f'<div class="ticker-section"><h2>{html.escape(str(ticker))} — {html.escape(str(decision) if decision else "—")}</h2>')
         if meta_parts:
             parts.append(f'<p class="meta">{"  ·  ".join(meta_parts)}</p>')
+        # Полный контекст: тикеры матрицы (FAST + MEDIUM + LONG при успешном расчёте)
+        full_list = correlation_tickers if correlation_tickers else cluster_tickers
         if correlation_matrix and ticker in cluster_tickers:
-            full_list = correlation_tickers if correlation_tickers else cluster_tickers
             others = [x for x in full_list if x != ticker]
             corr_pairs = _corr_row(ticker, others, correlation_matrix)
             if corr_pairs:
                 parts.append(f'<p class="corr">Корреляция с другими (30 дн.): {", ".join(corr_pairs)}</p>')
+        # Только тикеры с известной корреляцией (из полного списка матрицы), по убыванию коэффициента
+        other_rows: List[Tuple[str, Optional[float], Optional[float], float]] = []
+        for t in full_list:
+            if t == ticker:
+                continue
+            tech = tech_by_ticker.get(t) or {}
+            pr = tech.get("price")
+            rsi_o = tech.get("rsi")
+            c_val: Optional[float] = None
+            if correlation_matrix:
+                raw = correlation_matrix.get(ticker, {}).get(t) or correlation_matrix.get(t, {}).get(ticker)
+                if raw is not None:
+                    try:
+                        f_c = float(raw)
+                        if math.isfinite(f_c):
+                            c_val = f_c
+                    except (TypeError, ValueError):
+                        pass
+            if c_val is not None and math.isfinite(c_val):
+                other_rows.append((t, pr, rsi_o, c_val))
+        other_rows.sort(key=lambda r: r[3], reverse=True)
+        cluster_context_lines = []
+        for t, pr, rsi_o, c_val in other_rows:
+            seg = [t]
+            if pr is not None:
+                seg.append(f"${pr:.2f}")
+            if rsi_o is not None:
+                seg.append(f"RSI {rsi_o:.1f}")
+            seg.append(f"corr {c_val:+.2f}")
+            cluster_context_lines.append(" ".join(seg))
+        if cluster_context_lines:
+            parts.append(f'<p class="corr">По тикерам с известной корреляцией (по убыванию корр.): {", ".join(cluster_context_lines)}</p>')
         context_parts = []
         if period_str:
             context_parts.append(f"Период данных: {_pre(period_str)}")
@@ -287,7 +359,8 @@ def _build_prompt_entry_game5m_html(
         if kb_news_summary:
             context_parts.append(f"Новости из KB: {_pre(kb_news_summary)}")
         if llm_news_content:
-            context_parts.append(f"LLM-новости: {_pre(llm_news_content[:500])}{'…' if len(llm_news_content or '') > 500 else ''}")
+            context_parts.append("LLM-новости (по обучению модели, не в реальном времени; даты могут быть старыми):")
+            context_parts.append(_pre(llm_news_content[:500]) + ('…' if len(llm_news_content or '') > 500 else ''))
         if llm_sentiment is not None:
             context_parts.append(f"LLM sentiment: {llm_sentiment}")
         if entry_advice and entry_advice != "ALLOW":
@@ -539,6 +612,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("pending", self._handle_pending))
         self.application.add_handler(CommandHandler("set_strategy", self._handle_set_strategy))
         self.application.add_handler(CommandHandler("prompt_entry", self._handle_prompt_entry))
+        self.application.add_handler(CommandHandler("pe_5m", self._handle_pe_5m))
         self.application.add_handler(CommandHandler("strategies", self._handle_strategies))
         self.application.add_handler(CommandHandler("recommend", self._handle_recommend))
         self.application.add_handler(CommandHandler("recommend5m", self._handle_recommend5m))
@@ -653,7 +727,7 @@ class LSETelegramBot:
 /corr5m [ticker1] [ticker2] — то же по кластеру игры 5m.
 /set_strategy <ticker> <стратегия> — переназначить стратегию у открытой позиции (напр. «5m вне» → Manual)
 /strategies — описание стратегий (GAME_5M, Portfolio, Manual, Momentum и др.)
-/prompt_entry [portfolio|game5m|тикер] — отчёт: как получено решение (контекст + ответ); для портфеля — ещё промпт для LLM.
+/prompt_entry [portfolio|game5m|5m|тикер] — отчёт: как получено решение (контекст + ответ); 5m = game5m; для портфеля — ещё промпт для LLM. Коротко: /pe_5m = /prompt_entry 5m.
 
 /help — полная справка
         """
@@ -686,7 +760,7 @@ class LSETelegramBot:
 `/signal <ticker>` — анализ по одному тикеру (игра портфель): цена, RSI, решение, стратегия, sentiment. Итоговая рекомендация кратко.
 `/recommend [ticker]` — рекомендация по игре портфель: когда входить, стоп/тейк; без тикера — по кластеру. Итоговая рекомендация.
 `/recommend5m [ticker] [days]` — прогноз для вступления в игру 5m (решение и параметры входа); без тикера — по кластеру.
-`/prompt_entry [portfolio|game5m|тикер]` — не рекомендация, а отчёт: контекст и ответ по каждому тикеру (как получено решение). Для портфеля в выгрузке также промпт для LLM. Без аргумента — пустой шаблон.
+`/prompt_entry [portfolio|game5m|5m|тикер]` — не рекомендация, а отчёт: контекст и ответ по каждому тикеру. Коротко: `5m` = game5m, `/pe_5m` = то же. Для портфеля в выгрузке также промпт для LLM. Без аргумента — пустой шаблон.
 
 **Анализ (справка по signal):**
 `/signal` — справка и список доступных тикеров
@@ -747,7 +821,10 @@ class LSETelegramBot:
         """
         
         # Без parse_mode: в справке много символов _ . [ ] — парсер Markdown падает с "Can't parse entities"
-        await update.message.reply_text(help_text, parse_mode=None)
+        # Telegram: лимит 4096 символов — разбиваем на части
+        chunks = _split_message_chunks(help_text.strip(), max_len=HELP_CHUNK_SIZE)
+        for i, chunk in enumerate(chunks):
+            await update.message.reply_text(chunk, parse_mode=None)
     
     def _get_available_tickers(self) -> list:
         """Список тикеров для справки /signal и др.: quotes + конфиг (TICKERS_FAST/MEDIUM/LONG), чтобы тикеры вроде CL=F были видны сразу после добавления в конфиг."""
@@ -2208,10 +2285,10 @@ class LSETelegramBot:
         llm_content = (data.get("llm_news_content") or "").strip()[:350]
         if llm_insight:
             lines.append("")
-            lines.append(f"📰 **LLM (свежие новости/настроения):** _{_escape_markdown(llm_insight)}_")
+            lines.append(f"📰 **LLM (по обучению, не в реальном времени):** _{_escape_markdown(llm_insight)}_")
         elif llm_content:
             lines.append("")
-            lines.append(f"📰 **LLM:** _{_escape_markdown(llm_content)}…_")
+            lines.append(f"📰 **LLM (по обучению):** _{_escape_markdown(llm_content)}…_")
         alex = data.get("alex_rule")
         if alex and alex.get("message"):
             lines.append("")
@@ -3064,6 +3141,11 @@ class LSETelegramBot:
             logger.exception("Ошибка set_strategy")
             await self._reply_to_update(update, context, f"❌ Ошибка: {str(e)}")
 
+    async def _handle_pe_5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Алиас: /pe_5m = /prompt_entry 5m — отчёт по кластеру игры 5m."""
+        context.args = ["5m"]
+        await self._handle_prompt_entry(update, context)
+
     async def _handle_prompt_entry(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Шаблон принятия решения по игре. Аргумент: игра (portfolio, game5m) или тикер — контекст по параметрам и тикерам этой игры. Выгрузка: отчёт для человека; для портфеля в отчёте также промпт к LLM (system/user и ответ)."""
         user_id = update.effective_user.id
@@ -3073,7 +3155,7 @@ class LSETelegramBot:
         ticker_arg = (context.args or [])[0].strip() if context.args else ""
         game_arg = ticker_arg.strip().upper() if ticker_arg else ""
         is_portfolio_cluster = game_arg in ("PORTFOLIO", "ALL")
-        is_game5m_cluster = game_arg == "GAME5M"
+        is_game5m_cluster = game_arg in ("GAME5M", "GAME_5M", "5M")
         ticker = None if (is_portfolio_cluster or is_game5m_cluster) else (_normalize_ticker(ticker_arg) if ticker_arg else None)
 
         try:
@@ -3083,7 +3165,7 @@ class LSETelegramBot:
             if is_game5m_cluster:
                 # Игра 5m: отчёт по кластеру (контекст + решение по правилам), не промпт к LLM
                 await update.message.reply_text("📋 Формирую отчёт по кластеру 5m…")
-                from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation
+                from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation, get_tickers_fast, get_all_ticker_groups
                 from services.cluster_recommend import get_correlation_matrix
                 from services.recommend_5m import get_decision_5m
                 cluster_5m = list(get_tickers_game_5m() or [])
@@ -3093,10 +3175,30 @@ class LSETelegramBot:
                 correlation_tickers = get_tickers_for_5m_correlation()
                 correlation_note = None
                 corr_matrix: Optional[Dict[str, Dict[str, float]]] = None
-                if len(correlation_tickers) >= 2:
-                    corr_matrix = get_correlation_matrix(correlation_tickers, days=30)
+                corr_tickers_used: Optional[List[str]] = None  # список тикеров матрицы — полный контекст для промпта
+                full_context = [t for t in (get_all_ticker_groups() or []) if t]
+                if len(full_context) >= 2:
+                    corr_matrix = get_correlation_matrix(full_context, days=30, min_tickers_per_row=2)
                     if corr_matrix:
-                        correlation_note = "Корреляция всех со всеми за 30 дн. (игра 5m + контекст: фон и индикаторы)."
+                        correlation_note = "Корреляция за 30 дн. (полный контекст: FAST + MEDIUM + LONG)."
+                        corr_tickers_used = full_context
+                if corr_matrix is None:
+                    fast_tickers = [t for t in (get_tickers_fast() or []) if t]
+                    if len(fast_tickers) >= 2:
+                        corr_matrix = get_correlation_matrix(fast_tickers, days=30, min_tickers_per_row=2)
+                        if corr_matrix:
+                            correlation_note = "Корреляция за 30 дн. (по FAST тикерам)."
+                            corr_tickers_used = fast_tickers
+                if corr_matrix is None and len(correlation_tickers) >= 2:
+                    corr_matrix = get_correlation_matrix(correlation_tickers, days=30, min_tickers_per_row=2)
+                    if corr_matrix:
+                        correlation_note = "Корреляция за 30 дн. (игра 5m + контекст: фон и индикаторы)."
+                        corr_tickers_used = correlation_tickers
+                if corr_matrix is None and len(cluster_5m) >= 2:
+                    corr_matrix = get_correlation_matrix(cluster_5m, days=30, min_tickers_per_row=2)
+                    if corr_matrix:
+                        correlation_note = "Корреляция за 30 дн. (по тикерам игры 5m)."
+                        corr_tickers_used = cluster_5m
                 per_ticker_results: List[Dict[str, Any]] = []
                 for tkr in cluster_5m:
                     d5 = get_decision_5m(tkr, use_llm_news=True)
@@ -3127,9 +3229,19 @@ class LSETelegramBot:
                         "entry_advice": d5.get("entry_advice"),
                         "entry_advice_reason": d5.get("entry_advice_reason"),
                     })
+                extra_tech: Dict[str, Dict[str, Any]] = {}
+                if corr_tickers_used:
+                    cluster_set = set(cluster_5m)
+                    for t in corr_tickers_used:
+                        if t in cluster_set:
+                            continue
+                        d5 = get_decision_5m(t, use_llm_news=False)
+                        if d5 and (d5.get("price") is not None or d5.get("rsi_5m") is not None):
+                            extra_tech[t] = {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}
                 html_content = _build_prompt_entry_game5m_html(
                     cluster_5m, correlation_note, per_ticker_results,
-                    correlation_matrix=corr_matrix, correlation_tickers=correlation_tickers if corr_matrix else None,
+                    correlation_matrix=corr_matrix, correlation_tickers=corr_tickers_used if corr_matrix else None,
+                    extra_tech_by_ticker=extra_tech if extra_tech else None,
                 )
                 filename = f"prompt_entry_game5m_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
                 await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
@@ -3351,7 +3463,7 @@ class LSETelegramBot:
             except (ValueError, IndexError):
                 pass
         try:
-            from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation
+            from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation, get_tickers_fast, get_all_ticker_groups
             from services.cluster_recommend import get_correlation_matrix
             from services.recommend_5m import get_decision_5m
             cluster_5m = list(get_tickers_game_5m() or []) if not ticker else [ticker]
@@ -3362,10 +3474,30 @@ class LSETelegramBot:
             correlation_tickers = get_tickers_for_5m_correlation() if not ticker else [ticker]
             correlation_note = None
             corr_matrix: Optional[Dict[str, Dict[str, float]]] = None
-            if len(correlation_tickers) >= 2:
-                corr_matrix = get_correlation_matrix(correlation_tickers, days=30)
+            corr_tickers_used: Optional[List[str]] = None
+            full_context = [t for t in (get_all_ticker_groups() or []) if t]
+            if len(full_context) >= 2:
+                corr_matrix = get_correlation_matrix(full_context, days=30, min_tickers_per_row=2)
                 if corr_matrix:
-                    correlation_note = "Корреляция всех со всеми за 30 дн. (игра 5m + контекст)."
+                    correlation_note = "Корреляция за 30 дн. (полный контекст: FAST + MEDIUM + LONG)."
+                    corr_tickers_used = full_context
+            if corr_matrix is None:
+                fast_tickers = [t for t in (get_tickers_fast() or []) if t]
+                if len(fast_tickers) >= 2:
+                    corr_matrix = get_correlation_matrix(fast_tickers, days=30, min_tickers_per_row=2)
+                    if corr_matrix:
+                        correlation_note = "Корреляция за 30 дн. (по FAST тикерам)."
+                        corr_tickers_used = fast_tickers
+            if corr_matrix is None and len(correlation_tickers) >= 2:
+                corr_matrix = get_correlation_matrix(correlation_tickers, days=30, min_tickers_per_row=2)
+                if corr_matrix:
+                    correlation_note = "Корреляция за 30 дн. (игра 5m + контекст)."
+                    corr_tickers_used = correlation_tickers
+            if corr_matrix is None and len(cluster_5m) >= 2:
+                corr_matrix = get_correlation_matrix(cluster_5m, days=30, min_tickers_per_row=2)
+                if corr_matrix:
+                    correlation_note = "Корреляция за 30 дн. (по тикерам игры 5m)."
+                    corr_tickers_used = cluster_5m
             per_ticker_results: List[Dict[str, Any]] = []
             for tkr in cluster_5m:
                 d5 = get_decision_5m(tkr, days=days, use_llm_news=True)
@@ -3396,9 +3528,19 @@ class LSETelegramBot:
                     "entry_advice": d5.get("entry_advice"),
                     "entry_advice_reason": d5.get("entry_advice_reason"),
                 })
+            extra_tech = {}
+            if corr_tickers_used:
+                cluster_set = set(cluster_5m)
+                for t in corr_tickers_used:
+                    if t in cluster_set:
+                        continue
+                    d5 = get_decision_5m(t, days=days, use_llm_news=False)
+                    if d5 and (d5.get("price") is not None or d5.get("rsi_5m") is not None):
+                        extra_tech[t] = {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}
             html_content = _build_prompt_entry_game5m_html(
                 cluster_5m, correlation_note, per_ticker_results,
-                correlation_matrix=corr_matrix, correlation_tickers=correlation_tickers if corr_matrix else None,
+                correlation_matrix=corr_matrix, correlation_tickers=corr_tickers_used if corr_matrix else None,
+                extra_tech_by_ticker=extra_tech if extra_tech else None,
             )
             filename = f"recommend_5m_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
             await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)

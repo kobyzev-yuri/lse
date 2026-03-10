@@ -42,7 +42,8 @@ class ClusterManager:
             if quotes.empty:
                 logger.warning("Нет котировок для запрошенных тикеров.")
                 return None
-
+            # Один календарный день на строку (иначе date vs timestamp дают разные ключи pivot и пары вроде SNDK–MU не совпадают)
+            quotes["date"] = pd.to_datetime(quotes["date"]).dt.tz_localize(None).dt.normalize()
             pt = quotes.pivot_table(index="date", columns="ticker", values="close").sort_index()
             pt = pt.tail(max(max_days, 252))
             pt = pt.replace(0, np.nan)
@@ -70,7 +71,10 @@ class ClusterManager:
         if min_tickers_per_row is None and len(tickers) > 4:
             # Смешанный кластер (акции + forex + товары): оставляем строки, где есть данные хотя бы по n-2 тикерам
             min_tickers_per_row = max(2, len(tickers) - 2)
-        prices = self.get_price_data(tickers, max_days, min_tickers_per_row=min_tickers_per_row)
+        prices = self.get_price_data(
+            tickers, max_days,
+            min_tickers_per_row=min_tickers_per_row,
+        )
         if prices is None or prices.shape[0] < 5:
             logger.info("Используем fallback yfinance для загрузки данных...")
             try:
@@ -99,16 +103,28 @@ class ClusterManager:
         return prices
 
     def calculate_log_returns(self, prices: pd.DataFrame) -> pd.DataFrame:
-        """Считает лог-доходности для матрицы цен."""
-        log_returns = np.log(prices / prices.shift(1)).replace([np.inf, -np.inf], np.nan).dropna(how="any")
+        """
+        Лог-доходности для матрицы цен. Удаляются только строки, где все значения NaN
+        (первая после shift(1)), чтобы pandas .corr() считал корреляцию попарно по общим датам.
+        """
+        log_returns = np.log(prices / prices.shift(1)).replace([np.inf, -np.inf], np.nan)
+        log_returns = log_returns.dropna(how="all")  # pairwise: для каждой пары тикеров используются только общие даты
         return log_returns
 
-    def get_correlation_and_beta_matrix(self, tickers: List[str], days: int = 30) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def get_correlation_and_beta_matrix(
+        self,
+        tickers: List[str],
+        days: int = 30,
+        min_tickers_per_row: Optional[int] = None,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Возвращает (corr_matrix, beta_matrix) за последние `days` дней.
+        min_tickers_per_row: при 2 — мягче (больше строк, матрица чаще строится); None — авто (для >4 тикеров = n-2).
         """
         # Запрашиваем данные с небольшим запасом для shift(1)
-        prices = self.get_price_data_with_fallback(tickers, max_days=days + 10)
+        prices = self.get_price_data_with_fallback(
+            tickers, max_days=days + 10, min_tickers_per_row=min_tickers_per_row
+        )
         
         if prices is None or prices.shape[0] < 5:
             return pd.DataFrame(), pd.DataFrame()
@@ -118,11 +134,11 @@ class ClusterManager:
         # Ограничиваем окно нужным количеством дней
         log_returns = log_returns.tail(days)
 
-        if log_returns.shape[0] < 5:
+        if log_returns.empty:
             return pd.DataFrame(), pd.DataFrame()
 
-        # Матрица корреляции
-        corr_matrix = log_returns.corr()
+        # Матрица корреляции: попарно по общим датам; минимум 5 общих наблюдений на пару
+        corr_matrix = log_returns.corr(min_periods=5)
 
         # Матрица Beta: Beta_i,j = Cov(i, j) / Var(j)
         # beta_matrix[j][i] будет значить Beta тикера i по отношению к бенчмарку j

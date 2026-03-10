@@ -19,6 +19,15 @@ import re
 
 from config_loader import get_database_url
 
+# При отсутствии аргументов тикеров берём из конфига (FAST + MEDIUM + LONG), чтобы котировки и тех. признаки собирались по всем
+def get_tickers_from_config():
+    """Список тикеров из config.env (TICKERS_FAST + MEDIUM + LONG) для загрузки quotes."""
+    try:
+        from services.ticker_groups import get_all_ticker_groups
+        return get_all_ticker_groups()
+    except Exception:
+        return []
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -89,6 +98,9 @@ def update_ticker_prices(engine, ticker, days_back=30, force_days_back=None):
             return 0
         # Приводим имена колонок к ожидаемому виду (Open, High, Low, Close, Volume)
         df = df.rename_axis("Date").reset_index()
+        # yfinance может вернуть Date с таймзоной (Europe/London, America/New_York) — сравнение с naive last_date из БД ломается
+        if hasattr(df["Date"].dtype, "tz") and df["Date"].dtype.tz is not None:
+            df["Date"] = df["Date"].dt.tz_convert("UTC").dt.tz_localize(None)
         for col in ("Open", "High", "Low", "Close", "Volume"):
             if col not in df.columns:
                 logger.warning(f"   ⚠️ Нет колонки {col} для {ticker}")
@@ -161,11 +173,20 @@ def update_all_prices(tickers=None, days_back=30, force_days_back=None):
     engine = create_engine(db_url)
 
     if tickers is None:
-        tickers = get_tracked_tickers(engine)
-        logger.info(f"📋 Найдено {len(tickers)} тикеров для обновления: {', '.join(tickers)}")
+        from_config = get_tickers_from_config()
+        from_db = get_tracked_tickers(engine)
+        seen = set()
+        tickers = []
+        for t in from_config + from_db:
+            if t and t not in seen:
+                seen.add(t)
+                tickers.append(t)
+        if not tickers:
+            tickers = from_db
+        logger.info(f"📋 Тикеры для обновления ({len(tickers)}): из конфига (FAST+MEDIUM+LONG) и quotes: {', '.join(tickers)}")
 
     if not tickers:
-        logger.warning("⚠️ Нет тикеров для обновления")
+        logger.warning("⚠️ Нет тикеров для обновления (добавьте TICKERS_FAST/MEDIUM/LONG в config.env или укажите тикеры аргументом)")
         return
 
     total_inserted = 0

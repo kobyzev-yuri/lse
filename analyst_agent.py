@@ -635,9 +635,22 @@ class AnalystAgent:
             "rsi": rsi_value,
             "technical_signal": technical_signal
         }
-        # Корреляция с бенчмарком (MU) за 14 дн. и текущий сигнал по MU — для контекста LLM (совместный контекст по паре).
-        # Для MU не добавляем — смысл тривиален (1.0 с собой).
-        if ticker and ticker.upper() != "MU":
+        # Кластер по умолчанию: все тикеры (FAST + MEDIUM + LONG), чтобы в промпте была корреляция со всеми, а не только с MU
+        if cluster_context is None:
+            try:
+                from services.ticker_groups import get_all_ticker_groups
+                from services.cluster_recommend import get_correlation_matrix
+                full_list = list(get_all_ticker_groups() or [])
+                if ticker and (not full_list or ticker not in full_list):
+                    full_list = [ticker] + [t for t in full_list if t != ticker]
+                if len(full_list) >= 2:
+                    corr = get_correlation_matrix(full_list, days=30)
+                    if corr:
+                        cluster_context = {"tickers": full_list, "correlation": corr, "other_signals": {}}
+            except Exception as e:
+                logger.debug("Кластер по умолчанию для LLM: %s", e)
+        # Устаревший блок «только MU» — только если кластера нет, иначе в промпте уже есть корреляция по всем тикерам
+        if cluster_context is None and ticker and ticker.upper() != "MU":
             try:
                 from report_generator import get_rolling_corr_with_benchmark
                 corr_val, corr_label = get_rolling_corr_with_benchmark(self.engine, ticker, benchmark="MU", window_days=14)
@@ -649,7 +662,7 @@ class AnalystAgent:
             except Exception as e:
                 logger.debug("Корреляция/сигнал бенчмарка для LLM недоступны: %s", e)
 
-        # Кластерный контекст: корреляция и сигналы по другим тикерам кластера — LLM приглядывает за связанными парами
+        # Кластерный контекст: корреляция и сигналы по всем тикерам кластера (FAST + портфель)
         if cluster_context:
             cluster_tickers = cluster_context.get("tickers") or []
             correlation = cluster_context.get("correlation") or {}
@@ -667,12 +680,27 @@ class AnalystAgent:
                             except (TypeError, ValueError):
                                 pass
                 if corr_pairs:
-                    lines.append(f"Корреляция этого тикера с другими (30 дн.): {', '.join(corr_pairs[:8])}.")
+                    lines.append(f"Корреляция этого тикера с другими (30 дн.): {', '.join(corr_pairs[:12])}.")
                 lines.append("Сильно коррелированные активы часто движутся вместе — учитывай при рекомендации (например, не дублировать риск по двум очень коррелированным бумагам; при расхождении сигналов — осторожность).")
                 if other_signals:
                     sig_str = ", ".join(f"{t}={other_signals.get(t, '?')}" for t in others if other_signals.get(t))
                     if sig_str:
                         lines.append(f"Сигналы по другим тикерам кластера в этом запуске: {sig_str}.")
+                # Цены и тех. сигналы по остальным тикерам кластера (FAST + MEDIUM + LONG) — чтобы LLM учитывал их влияние
+                ctx_parts = []
+                for o in others[:12]:
+                    try:
+                        df_o = self.get_last_5_days_quotes(o)
+                        price_o = float(df_o.iloc[0]["close"]) if not df_o.empty and "close" in df_o.columns else None
+                        sig_o = self.check_technical_signal(o)
+                        if sig_o == "NO_DATA":
+                            sig_o = "—"
+                        if price_o is not None:
+                            ctx_parts.append(f"{o} {price_o:.2f} {sig_o}")
+                    except Exception:
+                        continue
+                if ctx_parts:
+                    lines.append("По остальным тикерам кластера (цена, тех. сигнал): " + "; ".join(ctx_parts) + ".")
                 technical_data["cluster_note"] = "\n".join(lines)
         
         news_df = self.get_recent_news(ticker)

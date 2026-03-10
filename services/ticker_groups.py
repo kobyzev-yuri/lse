@@ -15,8 +15,8 @@ from typing import List
 from config_loader import get_config_value
 
 # Дефолты: распределение по группам (ваши зарегистрированные тикеры)
-DEFAULT_TICKERS_FAST = "SNDK,MU,LITE"
-DEFAULT_TICKERS_MEDIUM = "ALAB,MU,TER,AMD"
+DEFAULT_TICKERS_FAST = "SNDK,MU,LITE,MSFT"
+DEFAULT_TICKERS_MEDIUM = "ALAB,TER,AMD"
 # CL=F — WTI нефть: индикатор геополитической напряжённости, торговля, новости по тикеру
 DEFAULT_TICKERS_LONG = "MSFT,GBPUSD=X,GC=F,^VIX,CL=F"
 

@@ -3,6 +3,8 @@
 Скрипт портфельной игры (торговый цикл по дневным стратегиям).
 Кластер и логика входа совпадают с /prompt_entry portfolio (портфельная игра).
 
+Включение: TRADING_CYCLE_ENABLED=true в config.env. При false или не задан — крон сразу выходит без исполнения (портфельная игра приостановлена).
+
 Тикеры по умолчанию из config.env: TRADING_CYCLE_TICKERS (если задан) или TICKERS_MEDIUM + TICKERS_LONG.
 Аргумент: [тикеры] — через запятую, переопределяет config.
 
@@ -64,8 +66,17 @@ def _notify_portfolio_trades(agent: ExecutionAgent) -> None:
                 logger.warning("Не удалось отправить уведомление в %s: %s", cid, e)
 
 
+def _is_trading_cycle_enabled() -> bool:
+    """Портфельная игра выполняется только при TRADING_CYCLE_ENABLED=true (или 1/yes)."""
+    v = get_config_value("TRADING_CYCLE_ENABLED", "").strip().lower()
+    return v in ("1", "true", "yes")
+
+
 if __name__ == "__main__":
     try:
+        if not _is_trading_cycle_enabled():
+            logger.info("Портфельная игра приостановлена (TRADING_CYCLE_ENABLED не включён в config.env). Крон завершён без исполнения.")
+            sys.exit(0)
         if len(sys.argv) > 1 and sys.argv[1].strip():
             tickers = [t.strip() for t in sys.argv[1].strip().split(",") if t.strip()]
             cluster_tickers = None  # аргумент — только торгуемые

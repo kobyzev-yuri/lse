@@ -29,7 +29,7 @@ sys.path.insert(0, str(project_root))
 import logging
 
 from config_loader import get_config_value, get_dynamic_config_value
-from services.ticker_groups import get_tickers_fast, get_tickers_game_5m
+from services.ticker_groups import get_tickers_fast, get_tickers_game_5m, get_tickers_for_5m_correlation
 from services.telegram_signal import get_signal_chat_ids, send_telegram_message
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -502,12 +502,18 @@ def main():
         logger.warning("Нет быстрых тикеров с 5m данными, выход")
         sys.exit(0)
 
-    # Кластерный анализ: один раз загружаем решения по всем тикерам + корреляция, затем входы/закрытия с учётом контекста
+    # Кластерный анализ: решения по тикерам игры 5m; корреляция — по полному списку (игра + контекст MSFT, VIX, нефть и т.д.)
     cluster_decisions = None
     try:
-        from services.cluster_recommend import get_cluster_decisions_5m
+        from services.cluster_recommend import get_cluster_decisions_5m, get_correlation_matrix
         cluster_decisions = get_cluster_decisions_5m(tickers, days=5, use_llm_news=True)
-        if cluster_decisions and cluster_decisions.get("correlation"):
+        corr_tickers = get_tickers_for_5m_correlation()
+        if len(corr_tickers) >= 2:
+            full_corr = get_correlation_matrix(corr_tickers, days=30)
+            if full_corr and cluster_decisions:
+                cluster_decisions["correlation"] = full_corr
+                logger.info("[5m] Кластер: корреляция загружена для %s (игра + контекст)", corr_tickers)
+        elif cluster_decisions and cluster_decisions.get("correlation"):
             logger.info("[5m] Кластер: корреляция загружена для %s", tickers)
     except Exception as e:
         logger.debug("Кластер 5m (fallback на потикерный вызов): %s", e)
