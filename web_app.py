@@ -883,7 +883,7 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
         try:
             from services.game_5m import _effective_take_profit_pct
             mom = d5_chart.get("momentum_2h_pct")
-            take_pct = _effective_take_profit_pct(mom)
+            take_pct = _effective_take_profit_pct(mom, ticker=ticker)
             take_level = float(entry_price * (1 + take_pct / 100.0))
         except Exception:
             pass

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Скрипт портфельной игры (торговый цикл по дневным стратегиям).
+Кластер и логика входа совпадают с /prompt_entry portfolio (портфельная игра).
 
 Тикеры по умолчанию из config.env: TRADING_CYCLE_TICKERS (если задан) или TICKERS_MEDIUM + TICKERS_LONG.
 Аргумент: [тикеры] — через запятую, переопределяет config.

@@ -525,7 +525,7 @@ def get_decision_5m(
     # Оценка апсайда на день и рекомендуемый тейк (4.1)
     try:
         from services.game_5m import _effective_take_profit_pct
-        effective_take_pct = _effective_take_profit_pct(momentum_2h_pct)
+        effective_take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
         out["estimated_upside_pct_day"] = effective_take_pct
         p = out.get("price") or price
         if p is not None and p > 0:

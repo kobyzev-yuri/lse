@@ -4,13 +4,15 @@
 Собирает контекст премаркета по TICKERS_FAST (и опционально тикерам портфельной игры),
 логирует в logs/premarket_cron.log. При PREMARKET_ALERT_TELEGRAM=true отправляет алерт в Telegram.
 
+Прогноз для вступления: при PREMARKET_ENTRY_PREVIEW_5M=true в алерт добавляется блок
+«Прогноз на вступление (5m)» по тикерам игры 5m (по последним 5m данным) — чтобы трейдер видел
+картину до открытия и мог подготовиться.
+
 При сильном гэпе вниз по «индикаторам стресса» (Forex и др., PREMARKET_STRESS_TICKERS) отправляется
-доп. алерт: рекомендуется закрыть позиции GAME_5m и рассмотреть закрытие прочих до открытия
-(в пятницу — до выходных, чтобы не нести геополитический риск через выходные).
+доп. алерт: рекомендуется закрыть позиции GAME_5m и рассмотреть закрытие прочих до открытия.
 
 Запуск вручную: python scripts/premarket_cron.py
 Cron (пример: 8:30 ET = 13:30 UTC зимой): 30 13 * * 1-5  cd /path/to/lse && python scripts/premarket_cron.py
-Настройка часов: подстройте под свой часовой пояс (см. setup_cron.sh).
 """
 
 import sys
@@ -98,6 +100,7 @@ def main() -> None:
 
     # Опционально: алерт в Telegram (премаркет по тикерам)
     alert = get_config_value("PREMARKET_ALERT_TELEGRAM", "").strip().lower() in ("1", "true", "yes")
+    entry_preview_5m = get_config_value("PREMARKET_ENTRY_PREVIEW_5M", "").strip().lower() in ("1", "true", "yes")
     if alert and results and token and chat_ids:
         lines = ["📊 **Премаркет** (до открытия US). Цена — последняя минута Yahoo (prepost)."]
         for item in results:
@@ -108,6 +111,31 @@ def main() -> None:
             prev_str = f", вчера close {prev}" if prev is not None else ""
             time_str = f" ({last_time})" if last_time is not None else ""
             lines.append(f"• {ticker}: премаркет {last}{time_str} гэп {gap_str}{prev_str} до открытия {mins_str}")
+        # Прогноз на вступление (5m): по тикерам игры 5m — решение до открытия (трейдеру информация по возможности раньше)
+        if entry_preview_5m:
+            try:
+                from services.ticker_groups import get_tickers_game_5m
+                from services.recommend_5m import get_decision_5m
+                game5m = get_tickers_game_5m()
+                if game5m:
+                    preview_parts = []
+                    for t in game5m:
+                        try:
+                            d5 = get_decision_5m(t, days=2, use_llm_news=False)
+                            if d5 and d5.get("price") is not None:
+                                dec = d5.get("decision", "—")
+                                pr = d5.get("price")
+                                rsi = d5.get("rsi_5m")
+                                rsi_str = f", RSI {rsi:.0f}" if rsi is not None else ""
+                                preview_parts.append(f"• {t}: {dec} (${pr:.2f}{rsi_str})")
+                        except Exception:
+                            continue
+                    if preview_parts:
+                        lines.append("")
+                        lines.append("🎯 **Прогноз на вступление (5m)** — по последним данным до открытия:")
+                        lines.extend(preview_parts)
+            except Exception as e:
+                logger.debug("Прогноз на вступление 5m: %s", e)
         text = "\n".join(lines)
         data = urllib.parse.urlencode({"chat_id": chat_ids[0], "text": text, "parse_mode": "Markdown"}).encode()
         req = urllib.request.Request(telegram_url, data=data, method="POST")

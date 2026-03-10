@@ -657,8 +657,8 @@ class AnalystAgent:
             others = [t for t in cluster_tickers if t != ticker]
             if others:
                 lines = [f"Кластер тикеров: {', '.join(cluster_tickers)}. Ты анализируешь один из них."]
-                if correlation and ticker in correlation:
-                    corr_pairs = []
+                corr_pairs = []
+                if correlation:
                     for o in others:
                         c = correlation.get(ticker, {}).get(o) or correlation.get(o, {}).get(ticker)
                         if c is not None:
@@ -666,8 +666,8 @@ class AnalystAgent:
                                 corr_pairs.append(f"{o} {float(c):+.2f}")
                             except (TypeError, ValueError):
                                 pass
-                    if corr_pairs:
-                        lines.append(f"Корреляция этого тикера с другими (30 дн.): {', '.join(corr_pairs[:8])}.")
+                if corr_pairs:
+                    lines.append(f"Корреляция этого тикера с другими (30 дн.): {', '.join(corr_pairs[:8])}.")
                 lines.append("Сильно коррелированные активы часто движутся вместе — учитывай при рекомендации (например, не дублировать риск по двум очень коррелированным бумагам; при расхождении сигналов — осторожность).")
                 if other_signals:
                     sig_str = ", ".join(f"{t}={other_signals.get(t, '?')}" for t in others if other_signals.get(t))

@@ -65,8 +65,8 @@ def main():
     entry_ts = pd.Timestamp(entry_ts)
     if entry_ts.tzinfo is None:
         entry_ts = entry_ts.tz_localize("America/New_York")
-    take_pct = _effective_take_profit_pct(None)
-    stop_pct = _effective_stop_loss_pct(None)
+    take_pct = _effective_take_profit_pct(None, ticker=ticker)
+    stop_pct = _effective_stop_loss_pct(None, ticker=ticker)
     take_level = entry_price * (1 + take_pct / 100.0)
     stop_level = entry_price * (1 - stop_pct / 100.0)
 

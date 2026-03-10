@@ -471,10 +471,32 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
     return result[:limit]
 
 
-def _effective_take_profit_pct(momentum_2h_pct: Optional[float]) -> float:
-    """Тейк-профит: импульс 2ч (реализованное движение за 2ч, не прогноз) или конфиг; ограничен конфигом и опционально коэффициентом < 1 (консервативнее)."""
+def _take_profit_cap_pct(ticker: Optional[str] = None) -> float:
+    """Потолок тейка (%): по тикеру (GAME_5M_TAKE_PROFIT_PCT_SNDK=8) или общий GAME_5M_TAKE_PROFIT_PCT."""
+    if ticker:
+        key = f"GAME_5M_TAKE_PROFIT_PCT_{ticker.upper()}"
+        raw = get_config_value(key, "").strip()
+        if raw:
+            try:
+                return float(raw)
+            except (ValueError, TypeError):
+                pass
     params = get_strategy_params()
-    config_take = params["take_profit_pct"]
+    return params["take_profit_pct"]
+
+
+def _effective_take_profit_pct(
+    momentum_2h_pct: Optional[float],
+    ticker: Optional[str] = None,
+) -> float:
+    """Тейк-профит по импульсу 2ч или из конфига.
+
+    Формула:
+    - Если импульс_2ч >= GAME_5M_TAKE_PROFIT_MIN_PCT (4%): тейк = min(импульс_2ч × GAME_5M_TAKE_MOMENTUM_FACTOR, потолок).
+    - Иначе: тейк = потолок (GAME_5M_TAKE_PROFIT_PCT или GAME_5M_TAKE_PROFIT_PCT_<TICKER>).
+    Потолок не даёт тейку превысить заданный %; при импульсе 6% и factor=1 тейк = 6% (поэтому сработало на 6%, а не 7%).
+    """
+    cap = _take_profit_cap_pct(ticker)
     try:
         min_take = float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "2.0"))
     except (ValueError, TypeError):
@@ -485,17 +507,19 @@ def _effective_take_profit_pct(momentum_2h_pct: Optional[float]) -> float:
     except (ValueError, TypeError):
         momentum_factor = 1.0
     if momentum_2h_pct is not None and momentum_2h_pct >= min_take:
-        # Импульс — ретроспектива; factor < 1 делает тейк консервативнее (фиксируем прибыль раньше)
         effective_momentum = float(momentum_2h_pct) * momentum_factor
-        return min(effective_momentum, config_take)
-    return config_take
+        return min(effective_momentum, cap)
+    return cap
 
 
-def _effective_stop_loss_pct(momentum_2h_pct: Optional[float]) -> float:
+def _effective_stop_loss_pct(
+    momentum_2h_pct: Optional[float],
+    ticker: Optional[str] = None,
+) -> float:
     """Стоп-лосс: меньше тейка, прогнозируется как доля от эффективного тейка (тейк от импульса 2ч)."""
     params = get_strategy_params()
     config_stop = params["stop_loss_pct"]
-    take_pct = _effective_take_profit_pct(momentum_2h_pct)
+    take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
     try:
         ratio = float(get_config_value("GAME_5M_STOP_TO_TAKE_RATIO", "0.5"))
     except (ValueError, TypeError):
@@ -527,8 +551,9 @@ def should_close_position(
 
     entry_price = open_position.get("entry_price")
     if isinstance(entry_price, (int, float)) and entry_price > 0:
-        take_pct = _effective_take_profit_pct(momentum_2h_pct)
-        stop_pct = _effective_stop_loss_pct(momentum_2h_pct)
+        tkr = open_position.get("ticker")
+        take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=tkr)
+        stop_pct = _effective_stop_loss_pct(momentum_2h_pct, ticker=tkr)
         # Для тейка учитываем High последней свечи (отскок вверх при открытии сессии)
         price_for_take = max(current_price, bar_high) if bar_high is not None and bar_high > 0 else current_price
         # Для стопа учитываем Low последней свечи

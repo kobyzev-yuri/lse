@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-Поллинг 5m по быстрым бумагам (SNDK, NDK, LITE, NBIS и т.д.) и проактивная отправка сигнала о входе.
+Поллинг 5m по быстрым бумагам (игра 5m) и проактивная отправка прогноза для вступления в игру.
 
-Список тикеров берётся из TICKERS_FAST (config.env). По каждому тикеру:
+Приоритет: прогнозы для вступления в игру — трейдер играет сам, ему нужна информация, по возможности раньше.
+Система даёт сигнал (BUY/STRONG_BUY) и параметры входа; решение о сделке принимает трейдер.
+
+Список тикеров: GAME_5M_TICKERS или TICKERS_FAST (config.env). По каждому тикеру:
 - при BUY/STRONG_BUY — отправка в Telegram (с cooldown по тикеру) и запись входа в игру (trade_history, GAME_5M);
 - при открытой позиции и (SELL или >2 дней) — закрытие позиции в игре.
 
 Настройка config.env:
   TELEGRAM_BOT_TOKEN=..., TELEGRAM_SIGNAL_CHAT_IDS, TICKERS_FAST, GAME_5M_COOLDOWN_MINUTES (и др. GAME_5M_*).
 
-Аргументы: [тикеры] — если заданы, используются вместо TICKERS_FAST (через запятую).
+Аргументы: [тикеры] — если заданы, используются вместо GAME_5M_TICKERS/TICKERS_FAST (через запятую).
 
 Cron: */5 * * * 1-5  cd /path/to/lse && python scripts/send_sndk_signal_cron.py
-  или с тикерами: ... send_sndk_signal_cron.py SNDK,NDK
+  (каждые 5 мин — чтобы прогноз для вступления приходил по возможности раньше)
 """
 
 import os
@@ -180,9 +183,9 @@ def process_ticker(
             else:
                 if entry_f:
                     pnl_pct = (price_for_check - entry_f) / entry_f * 100.0
-                    take_pct = _effective_take_profit_pct(momentum_2h_pct)
+                    take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
                     if _game_5m_stop_loss_enabled():
-                        stop_pct = _effective_stop_loss_pct(momentum_2h_pct)
+                        stop_pct = _effective_stop_loss_pct(momentum_2h_pct, ticker=ticker)
                         outcome_lines.append(
                             "позиция открыта: вход=%.2f, текущая=%.2f, pnl=%.2f%%, тейк=%.1f%%, стоп=%.1f%% — тейк/стоп не сработали"
                             % (entry_f, price_for_check, pnl_pct, take_pct, stop_pct)
@@ -273,15 +276,18 @@ def process_ticker(
         _sl_raw = (get_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true") or "true").strip().lower()
     portfolio_stop_disabled = _sl_raw in ("0", "false", "no")
     game5m_stop_enabled = _game_5m_stop_loss_enabled()
-    take_pct_msg = _effective_take_profit_pct(momentum_2h_pct)
+    take_pct_msg = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
     if game5m_stop_enabled:
         params_line = "Параметры (интрадей): стоп −%.1f%%, тейк +%.1f%% (стоп < тейк, оба от импульса 2ч)." % (_effective_stop_loss_pct(momentum_2h_pct), take_pct_msg)
     else:
         params_line = "Параметры (интрадей): тейк +%.1f%% (стоп 5m выкл. — закрытие только по тейку/TIME_EXIT/SELL)." % take_pct_msg
+    # Первая строка — сразу видно: прогноз для вступления, тикер и решение (трейдер играет сам, информация по возможности раньше)
+    price_str = f"${price:.2f}" if price is not None else "—"
+    headline = f"🎯 ВХОД 5m: {ticker} — {decision} · {price_str}"
     lines = [
-        f"🟢 **Сигнал на вход {ticker} (5m)**",
+        headline,
         "",
-        f"**Решение:** {decision}",
+        f"Решение: {decision}",
         f"Цена: ${price:.2f}" if price is not None else "",
         f"RSI(5m): {rsi:.1f}" if rsi is not None else "",
         f"Импульс 2ч: {mom:+.2f}%" if mom is not None else "",

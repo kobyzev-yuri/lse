@@ -20,6 +20,11 @@ DEFAULT_TICKERS_MEDIUM = "ALAB,MU,TER,AMD"
 # CL=F — WTI нефть: индикатор геополитической напряжённости, торговля, новости по тикеру
 DEFAULT_TICKERS_LONG = "MSFT,GBPUSD=X,GC=F,^VIX,CL=F"
 
+# Быстрая игра 5m: целевые стоки для daily (Alex: SNDK, NBIS — лидеры; ASML, MU — AI bottlenecks; LITE, CIEN — волатильные)
+DEFAULT_GAME_5M_FAST = "SNDK,NBIS,ASML,MU,LITE,CIEN"
+# Тикеры для корреляции «все со всеми»: фон (MSFT, META, AMZN) + метрики (NVDA, SMH, QQQ, TLT, VIX) + геополитика (нефть, золото) + forex
+DEFAULT_GAME_5M_CORRELATION_CONTEXT = "MSFT,META,AMZN,NVDA,SMH,QQQ,TLT,^VIX,CL=F,GC=F,GBPUSD=X"
+
 
 def get_tickers_fast() -> List[str]:
     """Тикеры для быстрой игры (5m, интрадей). Используются для /chart5m, /recommend5m, списков."""
@@ -35,6 +40,28 @@ def get_tickers_game_5m() -> List[str]:
     if raw:
         return [t.strip() for t in raw.split(",") if t.strip()]
     return get_tickers_fast()
+
+
+def get_game_5m_correlation_context() -> List[str]:
+    """Тикеры-контекст для корреляции с игрой 5m: фон (MSFT, META, AMZN) и индикаторы (NVDA, SMH, QQQ, VIX, нефть, forex).
+    Не торгуем ими в 5m; используем для матрицы «все со всеми» при решении по быстрым стокам.
+    config.env: GAME_5M_CORRELATION_CONTEXT (пусто = дефолт из DEFAULT_GAME_5M_CORRELATION_CONTEXT)."""
+    raw = get_config_value("GAME_5M_CORRELATION_CONTEXT", DEFAULT_GAME_5M_CORRELATION_CONTEXT) or ""
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def get_tickers_for_5m_correlation() -> List[str]:
+    """Полный список тикеров для расчёта корреляции по игре 5m: торгуемые (game_5m) + контекст.
+    Используется для «корреляция всех со всеми» в /prompt_entry game5m, /recommend5m, кроне."""
+    game = get_tickers_game_5m()
+    context = get_game_5m_correlation_context()
+    seen: set = set()
+    result: List[str] = []
+    for t in game + context:
+        if t and t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result
 
 
 def get_tickers_medium() -> List[str]:
