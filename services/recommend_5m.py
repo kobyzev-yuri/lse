@@ -379,7 +379,7 @@ def get_decision_5m(
 
     reasoning = " ".join(reasons)
 
-    # Параметры стратегии 5m из конфига (config.env: GAME_5M_STOP_LOSS_PCT, GAME_5M_TAKE_PROFIT_PCT)
+    # Параметры стратегии 5m из конфига (config.env: GAME_5M_STOP_LOSS_PCT, GAME_5M_TAKE_PROFIT_PCT, GAME_5M_STOP_LOSS_ENABLED)
     from config_loader import get_config_value
     try:
         stop_loss_pct = float(get_config_value("GAME_5M_STOP_LOSS_PCT", "2.5"))
@@ -389,6 +389,8 @@ def get_decision_5m(
         take_profit_pct = float(get_config_value("GAME_5M_TAKE_PROFIT_PCT", "5.0"))
     except (ValueError, TypeError):
         take_profit_pct = 5.0
+    _sl_raw = (get_config_value("GAME_5M_STOP_LOSS_ENABLED", "true") or "true").strip().lower()
+    stop_loss_enabled = _sl_raw in ("1", "true", "yes")
 
     # KB уже загружены выше для учёта негатива в решении; передаём в контекст
     # Открытие/закрытие биржи и праздники — отдельно (особые процессы новостей в эти моменты)
@@ -455,10 +457,30 @@ def get_decision_5m(
                     f"Рекомендация: войти после открытия 9:30 ET или лимит ниже {limit_str}."
                 )
 
+    # Close бара, который только что завершился к текущему моменту (для записи цены выхода — без расхождений с корректором)
+    exit_bar_close = None
+    try:
+        now_et = pd.Timestamp.now(tz="America/New_York")
+        bar_end = now_et.floor("5min")
+        bar_start = bar_end - pd.Timedelta(minutes=5)
+        dts = pd.to_datetime(df["datetime"])
+        if dts.dt.tz is None:
+            dts = dts.dt.tz_localize("America/New_York", ambiguous="infer")
+        else:
+            dts = dts.dt.tz_convert("America/New_York")
+        mask = (dts >= bar_start) & (dts < bar_end)
+        if mask.any():
+            exit_bar_close = float(df.loc[mask, "Close"].iloc[-1])
+        if exit_bar_close is None or exit_bar_close <= 0:
+            exit_bar_close = price
+    except Exception:
+        exit_bar_close = price
+
     out = {
         "decision": decision,
         "reasoning": reasoning,
         "price": price,
+        "exit_bar_close": exit_bar_close,
         "rsi_5m": rsi_5m,
         "volatility_5m_pct": volatility_5m_pct,
         "momentum_2h_pct": momentum_2h_pct,
@@ -474,7 +496,8 @@ def get_decision_5m(
         "possible_bounce_to_high_pct": possible_bounce_to_high_pct,
         "estimated_bounce_pct": estimated_bounce_pct,
         "period_str": period_str,
-        "stop_loss_pct": stop_loss_pct,
+        "stop_loss_enabled": stop_loss_enabled,
+        "stop_loss_pct": stop_loss_pct if stop_loss_enabled else None,
         "take_profit_pct": take_profit_pct,
         "bars_count": len(df),
         "kb_news_days": days,

@@ -591,10 +591,11 @@ class AnalystAgent:
             logger.debug("Сигнал по бенчмарку %s: %s", benchmark, e)
             return None
 
-    def get_decision_with_llm(self, ticker: str) -> dict:
+    def get_decision_with_llm(self, ticker: str, cluster_context: Optional[dict] = None) -> dict:
         """
-        Принятие решения с использованием LLM для улучшения анализа
-        
+        Принятие решения с использованием LLM для улучшения анализа.
+        cluster_context: опционально {"tickers": [...], "correlation": {t1: {t2: corr}}, "other_signals": {t: decision}}
+        — при наличии в промпт LLM добавляется блок о кластере и корреляции, чтобы учитывать связанные тикеры.
         Returns:
             dict с полным анализом, включая LLM рекомендации
         """
@@ -647,6 +648,32 @@ class AnalystAgent:
                     technical_data["benchmark_signal"] = mu_signal
             except Exception as e:
                 logger.debug("Корреляция/сигнал бенчмарка для LLM недоступны: %s", e)
+
+        # Кластерный контекст: корреляция и сигналы по другим тикерам кластера — LLM приглядывает за связанными парами
+        if cluster_context:
+            cluster_tickers = cluster_context.get("tickers") or []
+            correlation = cluster_context.get("correlation") or {}
+            other_signals = cluster_context.get("other_signals") or {}
+            others = [t for t in cluster_tickers if t != ticker]
+            if others:
+                lines = [f"Кластер тикеров: {', '.join(cluster_tickers)}. Ты анализируешь один из них."]
+                if correlation and ticker in correlation:
+                    corr_pairs = []
+                    for o in others:
+                        c = correlation.get(ticker, {}).get(o) or correlation.get(o, {}).get(ticker)
+                        if c is not None:
+                            try:
+                                corr_pairs.append(f"{o} {float(c):+.2f}")
+                            except (TypeError, ValueError):
+                                pass
+                    if corr_pairs:
+                        lines.append(f"Корреляция этого тикера с другими (30 дн.): {', '.join(corr_pairs[:8])}.")
+                lines.append("Сильно коррелированные активы часто движутся вместе — учитывай при рекомендации (например, не дублировать риск по двум очень коррелированным бумагам; при расхождении сигналов — осторожность).")
+                if other_signals:
+                    sig_str = ", ".join(f"{t}={other_signals.get(t, '?')}" for t in others if other_signals.get(t))
+                    if sig_str:
+                        lines.append(f"Сигналы по другим тикерам кластера в этом запуске: {sig_str}.")
+                technical_data["cluster_note"] = "\n".join(lines)
         
         news_df = self.get_recent_news(ticker)
         weighted_sentiment = 0.0

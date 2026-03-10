@@ -765,22 +765,42 @@ class ExecutionAgent:
 
     # ---------- Публичные методы ----------
 
-    def run_for_tickers(self, tickers: list[str], use_llm: bool = True) -> None:
+    def run_for_tickers(
+        self,
+        tickers: list[str],
+        use_llm: bool = True,
+        cluster_tickers: list[str] | None = None,
+    ) -> None:
         """
-        Запускает цикл анализа и исполнения по списку тикеров:
-        - получает сигнал от AnalystAgent (с LLM или без)
-        - открывает позиции по BUY / STRONG_BUY, если их ещё нет
-        - проверяет стоп‑лоссы
+        Запускает цикл анализа и исполнения по списку тикеров с учётом кластера:
+        - загружает корреляцию по cluster_tickers (если задан) или по tickers
+        - по каждому тикеру из tickers получает сигнал, передавая кластерный контекст (корреляция с полным списком)
+        - открывает позиции только по tickers (индикаторы в cluster_tickers не торгуем)
         
         Args:
-            tickers: Список тикеров для анализа
-            use_llm: Использовать LLM анализ (по умолчанию True)
+            tickers: Тикеры, по которым принимаем решения и открываем позиции
+            use_llm: Использовать LLM анализ
+            cluster_tickers: Полный список для матрицы корреляций (включая индикаторы ^VIX и т.д.). Если None — равен tickers.
         """
         logger.info("=" * 60)
         logger.info("🚀 Запуск ExecutionAgent для тикеров: %s", ", ".join(tickers))
         logger.info("=" * 60)
         self._trades_done_this_run = []
 
+        # Кластер: корреляция по полному списку (включая индикаторы) — LLM видит связи с VIX и др.
+        list_for_corr = cluster_tickers if cluster_tickers is not None else tickers
+        cluster_context = None
+        if len(list_for_corr) >= 2:
+            try:
+                from services.cluster_recommend import get_correlation_matrix
+                correlation = get_correlation_matrix(list_for_corr, days=30)
+                if correlation:
+                    cluster_context = {"tickers": list_for_corr, "correlation": correlation}
+                    logger.info("Кластер портфеля: корреляция для %s", list_for_corr)
+            except Exception as e:
+                logger.debug("Кластер портфеля (продолжаем без корреляции): %s", e)
+
+        other_signals: dict[str, str] = {}  # по мере прохода добавляем решения — следующий тикер видит предыдущие
         for ticker in tickers:
             result = None
             decision = "HOLD"
@@ -791,7 +811,10 @@ class ExecutionAgent:
             
             if use_llm and hasattr(self.analyst, 'get_decision_with_llm'):
                 try:
-                    result = self.analyst.get_decision_with_llm(ticker)
+                    ctx = cluster_context.copy() if cluster_context else None
+                    if ctx and other_signals:
+                        ctx = {**ctx, "other_signals": dict(other_signals)}
+                    result = self.analyst.get_decision_with_llm(ticker, cluster_context=ctx)
                     decision = result.get('decision', 'HOLD')
                     strategy_name = result.get('selected_strategy')  # Получаем название стратегии
                     
@@ -805,7 +828,24 @@ class ExecutionAgent:
                         "sentiment": result.get("sentiment_normalized", 0.0),
                         "base_decision": result.get("base_decision")
                     }
-                    
+                    # Снимок кластера при решении — для последующего анализа: как корреляция и other_signals повлияли на исход сделки
+                    if cluster_context:
+                        corr = cluster_context.get("correlation") or {}
+                        correlation_this = {}
+                        for o in (cluster_context.get("tickers") or []):
+                            if o == ticker:
+                                continue
+                            c = corr.get(ticker, {}).get(o) or corr.get(o, {}).get(ticker)
+                            if c is not None:
+                                try:
+                                    correlation_this[o] = round(float(c), 4)
+                                except (TypeError, ValueError):
+                                    pass
+                        context_json["cluster"] = {
+                            "tickers": list(cluster_context.get("tickers") or []),
+                            "correlation_this_ticker": correlation_this,
+                            "other_signals_at_decision": dict(other_signals),
+                        }
                     logger.info("🎯 Сигнал AnalystAgent (с LLM) для %s: %s", ticker, decision)
                     if strategy_name:
                         logger.info("   Стратегия: %s", strategy_name)
@@ -834,6 +874,9 @@ class ExecutionAgent:
                 self._execute_buy(ticker, decision, strategy_name, stop_loss, take_profit, context_json)
             else:
                 logger.info("ℹ️ Сигнал %s для %s, покупка не выполняется", decision, ticker)
+
+            if cluster_context is not None:
+                other_signals[ticker] = decision
 
         # После обработки всех тикеров проверяем стоп‑лоссы
         self.check_stop_losses()

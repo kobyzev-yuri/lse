@@ -67,13 +67,13 @@ def get_quote_at_moment(ticker: str, ts_et) -> float | None:
                     d = d.dt.tz_convert("America/New_York")
                 df = df.copy()
                 df["_dt"] = d
-                # Бар, в который попадает ts_et: bar_start <= ts_et < bar_start+5min
-                for _, row in df.iterrows():
-                    bar_start = row["_dt"]
-                    bar_end = bar_start + pd.Timedelta(minutes=5)
-                    if bar_start <= pd_ts < bar_end:
-                        return float(row["Close"])
-                # Иначе ближайший бар по времени (последний до или первый после)
+                # Тот же критерий, что и в кроне: Close бара, который только что завершился к моменту ts (не бар, содержащий ts)
+                bar_end = pd_ts.floor("5min")
+                bar_start = bar_end - pd.Timedelta(minutes=5)
+                mask = (df["_dt"] >= bar_start) & (df["_dt"] < bar_end)
+                if mask.any():
+                    return float(df.loc[mask, "Close"].iloc[-1])
+                # Fallback: последний бар до ts
                 df = df.sort_values("_dt")
                 idx = df["_dt"].searchsorted(pd_ts, side="right")
                 if idx > 0:

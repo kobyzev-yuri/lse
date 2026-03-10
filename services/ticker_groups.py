@@ -93,3 +93,13 @@ def get_tickers_for_portfolio_game() -> List[str]:
             seen.add(t)
             result.append(t)
     return result
+
+
+def get_tickers_indicator_only() -> List[str]:
+    """Тикеры только как индикаторы (контекст, корреляция): по ним не открываем позиции в портфеле.
+    config.env: TICKERS_INDICATOR_ONLY (например ^VIX). Пусто — используем правило: тикеры с ^ в портфеле считаем индикаторами."""
+    raw = get_config_value("TICKERS_INDICATOR_ONLY", "").strip()
+    if raw:
+        return [t.strip() for t in raw.split(",") if t.strip()]
+    portfolio = get_tickers_for_portfolio_game()
+    return [t for t in portfolio if t.startswith("^")]

@@ -57,6 +57,12 @@ def _max_position_days() -> int:
         return 2
 
 
+def _game_5m_stop_loss_enabled() -> bool:
+    """Стоп-лосс 5m включён (GAME_5M_STOP_LOSS_ENABLED). При false закрытие только по тейку/TIME_EXIT/SELL."""
+    raw = (get_config_value("GAME_5M_STOP_LOSS_ENABLED", "true") or "true").strip().lower()
+    return raw in ("1", "true", "yes")
+
+
 def get_strategy_params() -> dict[str, Any]:
     """Текущие параметры стратегии 5m из config.env (для мониторинга и варьирования)."""
     try:
@@ -67,10 +73,11 @@ def get_strategy_params() -> dict[str, Any]:
         take = float(get_config_value("GAME_5M_TAKE_PROFIT_PCT", "5.0"))
     except (ValueError, TypeError):
         take = 5.0
+    # Импульсы менее этого % не рассматриваем — тейк берётся из конфига (Alex: «импульсы менее 2% не рассматриваем»)
     try:
-        take_min = float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "1.0"))
+        take_min = float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "2.0"))
     except (ValueError, TypeError):
-        take_min = 1.0
+        take_min = 2.0
     try:
         stop_to_take_ratio = float(get_config_value("GAME_5M_STOP_TO_TAKE_RATIO", "0.5"))
     except (ValueError, TypeError):
@@ -79,7 +86,9 @@ def get_strategy_params() -> dict[str, Any]:
         stop_min = float(get_config_value("GAME_5M_STOP_LOSS_MIN_PCT", "0.5"))
     except (ValueError, TypeError):
         stop_min = 0.5
+    stop_enabled = _game_5m_stop_loss_enabled()
     return {
+        "stop_loss_enabled": stop_enabled,
         "stop_loss_pct": stop,
         "take_profit_pct": take,
         "take_profit_min_pct": take_min,
@@ -253,6 +262,7 @@ def close_position(
     *,
     bar_high: Optional[float] = None,
     bar_low: Optional[float] = None,
+    context_json: Optional[dict[str, Any]] = None,
 ) -> Optional[float]:
     """Закрывает открытую позицию: INSERT SELL. Возвращает PnL в %.
     position — если передан (например от get_open_position_any), SELL пишется с strategy_name из позиции;
@@ -308,12 +318,13 @@ def close_position(
     log_return = math.log(exit_price / entry_price)
     pnl_pct = float(log_return * 100.0 - 2 * COMMISSION_RATE * 100.0)
 
+    import json
     engine = _engine()
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone)
-                VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz)
+                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone, context_json)
+                VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz, :context_json)
             """),
             {
                 "ticker": ticker,
@@ -324,6 +335,7 @@ def close_position(
                 "total_value": notional,
                 "strategy": strategy,
                 "ts_tz": TRADE_HISTORY_TZ,
+                "context_json": json.dumps(context_json) if context_json else None,
             },
         )
     logger.info("game_5m: %s закрыта @ %.2f %s (strategy=%s), PnL=%.2f%%", ticker, exit_price, exit_signal_type, strategy, pnl_pct)
@@ -464,9 +476,9 @@ def _effective_take_profit_pct(momentum_2h_pct: Optional[float]) -> float:
     params = get_strategy_params()
     config_take = params["take_profit_pct"]
     try:
-        min_take = float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "1.0"))
+        min_take = float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "2.0"))
     except (ValueError, TypeError):
-        min_take = 1.0
+        min_take = 2.0
     try:
         momentum_factor = float(get_config_value("GAME_5M_TAKE_MOMENTUM_FACTOR", "1.0"))
         momentum_factor = max(0.3, min(1.0, momentum_factor))
@@ -538,7 +550,7 @@ def should_close_position(
                 "GAME_5M %s: тейк не достигнут — pnl=%.2f%%, порог=%.2f%% (с допуском 0.05%% сработает при >= %.2f%%)",
                 ticker, pnl_take_pct, take_pct, take_threshold,
             )
-        if pnl_stop_pct <= -stop_pct:
+        if _game_5m_stop_loss_enabled() and pnl_stop_pct <= -stop_pct:
             return True, "STOP_LOSS"
 
     entry_ts = open_position.get("entry_ts")

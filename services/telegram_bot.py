@@ -388,6 +388,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("dashboard", self._handle_dashboard))
         self.application.add_handler(CommandHandler("premarket", self._handle_premarket))
         self.application.add_handler(CommandHandler("corr", self._handle_corr))
+        self.application.add_handler(CommandHandler("corr5m", self._handle_corr5m))
         
         # Обработка текстовых сообщений (для произвольных запросов)
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
@@ -473,7 +474,7 @@ class LSETelegramBot:
 /chart <ticker> [days] — график дневной
 /chart5m <ticker> [days] — график 5 мин (по требованию)
 /table5m <ticker> [days] — таблица 5m свечей
-/recommend5m [ticker] [days] — рекомендация по 5m + 5д статистике (по умолч. SNDK, 5 дн.)
+/recommend5m [ticker] [days] — рекомендация по 5m; без тикера — по кластеру игры 5m
 /game5m [ticker] — мониторинг игры 5m: позиция, сделки, win rate и PnL (по умолч. SNDK)
 /gameparams — все существенные параметры игр (5m и портфель): тикеры, тейк/стоп, cooldown
 /dashboard [5m|daily|all] — дашборд по тикерам: решения, 5m, новости (проактивный мониторинг)
@@ -485,10 +486,11 @@ class LSETelegramBot:
 /buy <ticker> <кол-во> — купить
 /sell <ticker> [кол-во] — продать (без кол-ва — вся позиция)
 /history [тикер] [N] — последние сделки (с тикером — фильтр по тикеру)
-/closed [N] — таблица закрытых позиций (PnL, даты MSK)
-/pending [N] — таблица открытых позиций (ещё не закрытые)
+/closed [тикер] [N] — закрытые позиции; без аргументов — все (25); с тикером — фильтр (напр. /closed MU 10)
+/pending [тикер] [N] — открытые позиции; с тикером — только по нему (напр. /pending SNDK)
 /premarket [тикер] — премаркет: таблица + HTML; с тикером — ещё график 1m (как /chart5m)
-/corr [ticker1] [ticker2] — корреляции лог-доходностей: без аргументов — матрица; один тикер — строка; два — одна пара
+/corr [ticker1] [ticker2] — корреляции по кластеру портфеля (60 дн.). Без аргументов — матрица; один/два тикера — строка или пара.
+/corr5m [ticker1] [ticker2] — то же по кластеру игры 5m.
 /set_strategy <ticker> <стратегия> — переназначить стратегию у открытой позиции (напр. «5m вне» → Manual)
 /strategies — описание стратегий (GAME_5M, Portfolio, Manual, Momentum и др.)
 /prompt\_entry [ticker] — промпт к LLM для решения о входе (BUY/STRONG\_BUY/HOLD). Без тикера — шаблон; с тикером — контекст и ответ LLM. Выгрузка в HTML\-файле.
@@ -560,15 +562,15 @@ class LSETelegramBot:
 `/buy <ticker> <кол-во>` — купить по последней цене из БД
 `/sell <ticker>` — закрыть всю позицию; `/sell <ticker> <кол-во>` — частичная продажа
 `/history [тикер] [N]` — последние сделки (по умолч. 15); с тикером — только по нему. В ответе — стратегия [GAME\_5M / Portfolio / Manual]
-`/closed [N]` — таблица закрытых позиций: Instrument, Open/Close, Profit, Units, даты MSK (по умолч. 25)
-`/pending [N]` — таблица открытых позиций (по умолч. 25). «5m вне» — тикер убран из игры 5m.
+`/closed [тикер] [N]` — закрытые позиции; с тикером — только по нему (напр. `/closed MU 10`). По умолч. 25.
+`/pending [тикер] [N]` — открытые позиции; с тикером — фильтр (напр. `/pending SNDK`). «5m вне» — тикер убран из игры 5m.
 `/premarket` — таблица премаркета + HTML. `/premarket <тикер>` — дополнительно график 1m по тикеру (как /chart5m).
-`/corr` — матрица корреляций лог-доходностей (60 дн.). `/corr <тикер>` — строка по тикеру. `/corr <T1> <T2>` — одна корреляция.
+`/corr` — матрица корреляций по кластеру портфеля (60 дн.). `/corr5m` — по кластеру 5m. С аргументами: строка по тикеру или пара T1 T2.
 `/set\_strategy <ticker> <стратегия>` — переназначить стратегию у открытой позиции (Manual, Portfolio)
 `/strategies` — описание стратегий (GAME\_5M, Portfolio, Manual, Momentum и др.)
 `/prompt\_entry [ticker]` — промпт к LLM для решения о входе. Без аргумента: шаблон. С тикером: актуальный контекст и ответ LLM; выгрузка в HTML\-файле (как /closed).
-`/recommend <ticker>` — рекомендация: когда открыть позицию, стоп-лосс, размер позиции
-`/recommend5m [ticker] [days]` — рекомендация по 5m и 5д статистике (интрадей, по умолч. SNDK 5д)
+`/recommend [ticker]` — рекомендация; без тикера — по кластеру медленных/средних игр
+`/recommend5m [ticker] [days]` — рекомендация по 5m; без тикера — по кластеру игры 5m
 `/game5m [ticker]` — мониторинг игры 5m: открытая позиция, последние сделки, win rate и PnL (по умолч. SNDK)
 `/gameparams` — все параметры игр (5m и портфель): тикеры, тейк/стоп, cooldown _(config.env)_
 `/dashboard [5m|daily|all]` — дашборд: все тикеры, сигналы, 5m (SNDK), новости за 7 дн. Для смены курса и решений.
@@ -1736,49 +1738,53 @@ class LSETelegramBot:
                 await _send("ℹ️ Нет отслеживаемых инструментов")
                 return
 
-            # Игры: в каких группах используется тикер
-            fast_set = set(get_tickers_fast())
+            # Роли: индикаторы (только контекст), 5m, портфель (открываем позиции)
+            from services.ticker_groups import get_tickers_game_5m, get_tickers_for_portfolio_game, get_tickers_indicator_only
+            indicator_set = set(get_tickers_indicator_only())
+            game5m_set = set(get_tickers_game_5m())
             portfolio_set = set(get_tickers_for_portfolio_game())
+            # Портфель без индикаторов = тикеры, по которым реально открываем позиции
+            portfolio_trade_set = portfolio_set - indicator_set
 
-            def _game_label(t: str) -> str:
-                in_fast = t in fast_set
-                in_port = t in portfolio_set
-                if in_fast and in_port:
-                    return " (5m, Портфель)"
-                if in_fast:
-                    return " (5m)"
-                if in_port:
-                    return " (Портфель)"
-                return ""
-
-            # Группируем по типам
-            commodities = [t for t in tickers if '=' in t or t.startswith('GC')]
-            currencies = [t for t in tickers if 'USD' in t or 'EUR' in t or 'GBP' in t]
-            stocks = [t for t in tickers if t not in commodities and t not in currencies]
+            def _line(t: str, suffix: str = "") -> str:
+                return f"  • {_escape_markdown(t)}{suffix}"
 
             response = "📊 **Отслеживаемые инструменты:**\n\n"
 
-            def _line(t: str) -> str:
-                return f"  • {_escape_markdown(t)}{_game_label(t)}"
-
-            if commodities:
-                response += "🥇 **Товары:**\n"
-                response += "\n".join([_line(t) for t in commodities[:10]])
+            # 1. Технические индексы (индикаторы) — только для контекста/корреляции
+            indicators = [t for t in tickers if t in indicator_set]
+            if indicators:
+                response += "📐 **Технические индексы (индикаторы):**\n"
+                response += "  _только контекст и корреляция, позиции не открываем_\n"
+                response += "\n".join([_line(t) for t in sorted(indicators)])
                 response += "\n\n"
 
-            if currencies:
-                response += "💱 **Валютные пары:**\n"
-                response += "\n".join([_line(t) for t in currencies[:10]])
+            # 2. 5m — быстрая игра
+            in_5m = [t for t in tickers if t in game5m_set]
+            if in_5m:
+                response += "⚡ **5m (быстрая игра):**\n"
+                response += "\n".join([_line(t) for t in sorted(in_5m)])
                 response += "\n\n"
 
-            if stocks:
-                response += "📈 **Акции:**\n"
-                response += "\n".join([_line(t) for t in stocks[:10]])
+            # 3. Портфель (trading_cycle) — по ним открываем позиции
+            in_portfolio = [t for t in tickers if t in portfolio_trade_set]
+            if in_portfolio:
+                response += "📈 **Портфель (trading_cycle):**\n"
+                response += "  _открываем позиции (MEDIUM/LONG)_\n"
+                response += "\n".join([_line(t) for t in sorted(in_portfolio)])
 
-            if len(tickers) > 30:
+            # Тикеры не ни в одной группе (только в quotes/конфиге)
+            rest = [t for t in tickers if t not in indicator_set and t not in game5m_set and t not in portfolio_trade_set]
+            if rest:
+                response += "\n\n📋 **Прочие (в конфиге/quotes):**\n"
+                response += "\n".join([_line(t) for t in sorted(rest)[:15]])
+                if len(rest) > 15:
+                    response += f"\n  ... и ещё {len(rest) - 15}"
+
+            if len(tickers) > 30 and not rest:
                 response += "\n\n... и еще " + _escape_markdown(str(len(tickers) - 30)) + " инструментов"
 
-            legend = "5m — быстрая игра; Портфель — trading_cycle (MEDIUM/LONG)."
+            legend = "Индикаторы — только для контекста; 5m — быстрая игра; Портфель — trading_cycle (открываем позиции)."
             response += "\n\n" + _escape_markdown(legend)
 
             await _send(response)
@@ -1893,6 +1899,61 @@ class LSETelegramBot:
             lines.append(f"\n💭 _{_escape_markdown(str(data['reasoning'])[:180])}..._")
         return "\n".join(lines)
 
+    def _build_recommendation_data_5m_from_d5(self, ticker: str, data_5m: Dict[str, Any]) -> Dict[str, Any]:
+        """Собирает структуру для _format_recommendation_5m из готового выхода get_decision_5m (при кластерном запуске)."""
+        has_position = False
+        position_info = None
+        ex = self._get_execution_agent()
+        if ex:
+            summary = ex.get_portfolio_summary()
+            for p in summary.get("positions") or []:
+                if p["ticker"] == ticker:
+                    has_position = True
+                    position_info = p
+                    break
+        alex_rule = None
+        if ticker.upper() == "SNDK":
+            try:
+                from services.alex_rule import get_alex_rule_status
+                alex_rule = get_alex_rule_status(ticker, data_5m.get("price"))
+            except Exception:
+                pass
+        return {
+            "ticker": ticker,
+            "decision": data_5m.get("decision", "HOLD"),
+            "strategy": "5m (интрадей + 5–7д статистика)",
+            "price": data_5m.get("price"),
+            "rsi": data_5m.get("rsi_5m"),
+            "reasoning": data_5m.get("reasoning", ""),
+            "period_str": data_5m.get("period_str", ""),
+            "momentum_2h_pct": data_5m.get("momentum_2h_pct"),
+            "volatility_5m_pct": data_5m.get("volatility_5m_pct"),
+            "stop_loss_enabled": data_5m.get("stop_loss_enabled", True),
+            "stop_loss_pct": data_5m.get("stop_loss_pct"),
+            "take_profit_pct": data_5m.get("take_profit_pct", 5.0),
+            "bars_count": data_5m.get("bars_count"),
+            "has_position": has_position,
+            "position": position_info,
+            "alex_rule": alex_rule,
+            "llm_insight": data_5m.get("llm_insight"),
+            "llm_news_content": data_5m.get("llm_news_content"),
+            "curvature_5m_pct": data_5m.get("curvature_5m_pct"),
+            "possible_bounce_to_high_pct": data_5m.get("possible_bounce_to_high_pct"),
+            "estimated_bounce_pct": data_5m.get("estimated_bounce_pct"),
+            "session_high": data_5m.get("session_high"),
+            "entry_advice": data_5m.get("entry_advice"),
+            "entry_advice_reason": data_5m.get("entry_advice_reason"),
+            "estimated_upside_pct_day": data_5m.get("estimated_upside_pct_day"),
+            "suggested_take_profit_price": data_5m.get("suggested_take_profit_price"),
+            "premarket_entry_recommendation": data_5m.get("premarket_entry_recommendation"),
+            "premarket_suggested_limit_price": data_5m.get("premarket_suggested_limit_price"),
+            "premarket_last": data_5m.get("premarket_last"),
+            "premarket_gap_pct": data_5m.get("premarket_gap_pct"),
+            "minutes_until_open": data_5m.get("minutes_until_open"),
+            "max_position_usd": 0,
+            "max_ticker_pct": 0,
+        }
+
     def _get_recommendation_data_5m(self, ticker: str, days: int = 5) -> Optional[Dict[str, Any]]:
         """Собирает данные для рекомендации по 5m (свечи за 5–7 дн. + опционально LLM перед решением)."""
         try:
@@ -1900,57 +1961,7 @@ class LSETelegramBot:
             data_5m = get_decision_5m(ticker, days=days, use_llm_news=True)
             if not data_5m:
                 return None
-            has_position = False
-            position_info = None
-            ex = self._get_execution_agent()
-            if ex:
-                summary = ex.get_portfolio_summary()
-                for p in summary.get("positions") or []:
-                    if p["ticker"] == ticker:
-                        has_position = True
-                        position_info = p
-                        break
-            alex_rule = None
-            if ticker.upper() == "SNDK":
-                try:
-                    from services.alex_rule import get_alex_rule_status
-                    alex_rule = get_alex_rule_status(ticker, data_5m.get("price"))
-                except Exception:
-                    pass
-            return {
-                "ticker": ticker,
-                "decision": data_5m["decision"],
-                "strategy": "5m (интрадей + 5–7д статистика)",
-                "price": data_5m["price"],
-                "rsi": data_5m.get("rsi_5m"),
-                "reasoning": data_5m.get("reasoning", ""),
-                "period_str": data_5m.get("period_str", ""),
-                "momentum_2h_pct": data_5m.get("momentum_2h_pct"),
-                "volatility_5m_pct": data_5m.get("volatility_5m_pct"),
-                "stop_loss_pct": data_5m.get("stop_loss_pct", 2.5),
-                "take_profit_pct": data_5m.get("take_profit_pct", 5.0),
-                "bars_count": data_5m.get("bars_count"),
-                "has_position": has_position,
-                "position": position_info,
-                "alex_rule": alex_rule,
-                "llm_insight": data_5m.get("llm_insight"),
-                "llm_news_content": data_5m.get("llm_news_content"),
-                "curvature_5m_pct": data_5m.get("curvature_5m_pct"),
-                "possible_bounce_to_high_pct": data_5m.get("possible_bounce_to_high_pct"),
-                "estimated_bounce_pct": data_5m.get("estimated_bounce_pct"),
-                "session_high": data_5m.get("session_high"),
-                "entry_advice": data_5m.get("entry_advice"),
-                "entry_advice_reason": data_5m.get("entry_advice_reason"),
-                "estimated_upside_pct_day": data_5m.get("estimated_upside_pct_day"),
-                "suggested_take_profit_price": data_5m.get("suggested_take_profit_price"),
-                "premarket_entry_recommendation": data_5m.get("premarket_entry_recommendation"),
-                "premarket_suggested_limit_price": data_5m.get("premarket_suggested_limit_price"),
-                "premarket_last": data_5m.get("premarket_last"),
-                "premarket_gap_pct": data_5m.get("premarket_gap_pct"),
-                "minutes_until_open": data_5m.get("minutes_until_open"),
-                "max_position_usd": 0,
-                "max_ticker_pct": 0,
-            }
+            return self._build_recommendation_data_5m_from_d5(ticker, data_5m)
         except Exception as e:
             logger.warning(f"Ошибка рекомендации 5m для {ticker}: {e}")
             return None
@@ -1963,7 +1974,8 @@ class LSETelegramBot:
         price_str = f"${price:.2f}" if price is not None else "—"
         rsi = data.get("rsi")
         rsi_str = f"{rsi:.1f}" if rsi is not None else "—"
-        sl = data.get("stop_loss_pct", 2.5)
+        stop_enabled = data.get("stop_loss_enabled", True)
+        sl = data.get("stop_loss_pct") if stop_enabled else None
         tp = data.get("take_profit_pct", 5.0)
         period_str = data.get("period_str") or ""
         mom = data.get("momentum_2h_pct")
@@ -1992,7 +2004,7 @@ class LSETelegramBot:
             f"**Действие:** {action}",
             "",
             "**Параметры (интрадей):**",
-            f"• Стоп-лосс: −{sl:.1f}%  ·  Тейк-профит: +{tp:.1f}%",
+            (f"• Стоп-лосс: −{sl:.1f}%  ·  Тейк-профит: +{tp:.1f}%" if sl is not None else f"• Стоп: выкл.  ·  Тейк-профит: +{tp:.1f}%"),
         ]
         upside = data.get("estimated_upside_pct_day")
         take_price = data.get("suggested_take_profit_price")
@@ -2393,7 +2405,40 @@ class LSETelegramBot:
                 pass
 
     async def _handle_corr(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Корреляции лог-доходностей: /corr — матрица по всем тикерам; /corr T1 [T2] — строка по T1 или пара T1,T2."""
+        """Корреляции по кластеру портфеля (как в промпте портфельной игры)."""
+        if update.message is None:
+            return
+        from services.ticker_groups import get_tickers_for_portfolio_game
+        tickers = get_tickers_for_portfolio_game()
+        if not tickers:
+            await update.message.reply_text(
+                "❌ Тикеры не заданы (TRADING_CYCLE_TICKERS или TICKERS_MEDIUM/TICKERS_LONG в config.env)."
+            )
+            return
+        await self._run_corr_reply(update, context, tickers, days=60, cluster_label="портфель (медленные/средние игры)")
+
+    async def _handle_corr5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Корреляции по кластеру игры 5m (как в промпте 5m)."""
+        if update.message is None:
+            return
+        from services.ticker_groups import get_tickers_game_5m
+        tickers = get_tickers_game_5m()
+        if not tickers:
+            await update.message.reply_text(
+                "❌ Тикеры не заданы (GAME_5M_TICKERS или TICKERS_FAST в config.env)."
+            )
+            return
+        await self._run_corr_reply(update, context, tickers, days=60, cluster_label="5m")
+
+    async def _run_corr_reply(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        base_tickers: list,
+        days: int = 60,
+        cluster_label: str = "",
+    ):
+        """Общая логика: корреляции лог-доходностей по списку тикеров. Без аргументов — матрица; /corr T1 [T2] — строка или пара."""
         if update.message is None:
             return
         chat_id = update.effective_chat.id if update.effective_chat else None
@@ -2410,79 +2455,69 @@ class LSETelegramBot:
         if not self._check_access(user_id):
             await update.message.reply_text("❌ Доступ запрещен")
             return
-        days = 60
-        args = (context.args or [])[:3]
-        ticker1 = _normalize_ticker(args[0].strip()) if len(args) >= 1 else None
-        ticker2 = _normalize_ticker(args[1].strip()) if len(args) >= 2 else None
+        raw_args = (context.args or [])[:3]
+        args = [str(a).strip() for a in raw_args if a is not None and str(a).strip()]
+        ticker1 = _normalize_ticker(args[0]) if len(args) >= 1 else None
+        ticker2 = _normalize_ticker(args[1]) if len(args) >= 2 else None
+        all_tickers = list(base_tickers)
+        if ticker1 and ticker1 not in all_tickers:
+            all_tickers.append(ticker1)
+        if ticker2 and ticker2 not in all_tickers:
+            all_tickers.append(ticker2)
+        if len(all_tickers) < 2:
+            await update.message.reply_text(
+                f"❌ Для расчёта корреляции нужно минимум 2 тикера. "
+                f"В кластере «{cluster_label}» задан один тикер — добавьте тикеры в config или укажите: /corr T1 T2."
+            )
+            return
         try:
             import numpy as np
             import pandas as pd
-            from report_generator import get_engine, load_quotes
-            from services.ticker_groups import get_all_ticker_groups
+            from report_generator import get_engine
+            from services.cluster_manager import ClusterManager
 
-            all_tickers = get_all_ticker_groups()
-            if not all_tickers:
-                await update.message.reply_text("❌ Нет тикеров (TICKERS_FAST/MEDIUM/LONG в config.env).")
-                return
-            if ticker1 and ticker1 not in all_tickers:
-                all_tickers = list(all_tickers) + [ticker1]
-            if ticker2 and ticker2 not in all_tickers:
-                all_tickers = list(all_tickers) + [ticker2]
             engine = get_engine()
-            quotes = load_quotes(engine, all_tickers)
-            prices = None
+            cm = ClusterManager(engine)
+            # Портфель (много тикеров): запрашиваем больше истории (до 252 дн.), чтобы после thresh осталось достаточно строк
+            max_days_load = max(days + 30, 252) if len(all_tickers) > 4 else days + 30
+            prices = cm.get_price_data_with_fallback(all_tickers, max_days=max_days_load)
             source_note = ""
-            if not quotes.empty:
-                pt = quotes.pivot_table(index="date", columns="ticker", values="close").sort_index().tail(max(days, 252))
-                pt = pt.replace(0, np.nan)
-                pt = pt.dropna(how="any")
-                if pt.shape[0] >= 5:
-                    prices = pt
-                    source_note = ""
-            if prices is None:
-                try:
-                    import yfinance as yf
-                    last = max(days, 60)
-                    data = {}
-                    for t in all_tickers:
-                        try:
-                            hist = yf.Ticker(t).history(period=f"{last}d", interval="1d", auto_adjust=False)
-                            if hist is not None and not hist.empty and "Close" in hist.columns:
-                                data[t] = hist["Close"]
-                        except Exception:
-                            continue
-                    if len(data) >= 2:
-                        prices = pd.DataFrame(data).sort_index().dropna(how="any")
-                        if prices.shape[0] >= 5:
-                            source_note = " (источник: yfinance; в quotes нет общих дат — проверьте крон update_prices)"
-                        else:
-                            prices = None
-                except Exception as yf_e:
-                    logger.warning("Fallback yfinance для corr: %s", yf_e)
             if prices is None or prices.shape[0] < 5:
                 await update.message.reply_text(
-                    "❌ **Ошибка данных:** в quotes нет общих дат по всем тикерам (или их < 5). "
-                    "Такого быть не должно: крон обновления цен (update_prices) должен заполнять quotes по всем тикерам. "
-                    "Проверьте БД, тикеры в config и логи крона. Fallback на yfinance не дал результата.",
-                    parse_mode="Markdown",
+                    "❌ Недостаточно общих дней по тикерам (в БД и yfinance). "
+                    "Проверьте тикеры в config и наличие котировок."
                 )
                 return
-            log_returns = np.log(prices / prices.shift(1)).replace([np.inf, -np.inf], np.nan).dropna(how="any")
-            if log_returns.shape[0] < 5:
-                await update.message.reply_text(
-                    "❌ В quotes недостаточно общих дней для лог-доходностей. Проверьте крон update_prices."
-                )
+            if prices.shape[1] < 2:
+                await update.message.reply_text("❌ После выравнивания дат осталось меньше 2 тикеров — корреляцию не посчитать.")
+                return
+            prices = prices.tail(min(days * 2, prices.shape[0]))  # окно до 2*days, чтобы после лог-доходностей хватило
+            if prices.shape[0] < 5:
+                await update.message.reply_text("❌ Меньше 5 дней в окне — увеличьте объём данных или проверьте тикеры.")
+                return
+            # Не dropna(how="any"): при портфеле в prices есть NaN (thresh), иначе теряем все строки; corr() считает по парам
+            log_returns = np.log(prices / prices.shift(1)).replace([np.inf, -np.inf], np.nan)
+            log_returns = log_returns.dropna(how="all").dropna(axis=1, how="all")  # убрать только полностью пустые строки/столбцы
+            if log_returns.shape[0] < 5 or log_returns.shape[1] < 2:
+                await update.message.reply_text("❌ Недостаточно данных для лог-доходностей после выравнивания.")
                 return
             corr = log_returns.corr()
+            if not hasattr(corr, "columns") or not hasattr(corr, "loc"):
+                await update.message.reply_text("❌ Ошибка расчёта матрицы корреляций.")
+                return
             n_days = len(log_returns)
+            cluster_note = f" Кластер: {cluster_label}." if cluster_label else ""
 
             def _cell(s: str, w: int) -> str:
                 return str(s)[:w].ljust(w)
 
             def _corr_fmt(v):
-                if v is None or (isinstance(v, float) and np.isnan(v)):
+                if v is None or (isinstance(v, float) and (v != v or v == float("nan"))):
                     return "—"
-                return f"{float(v):.3f}"
+                try:
+                    return f"{float(v):.3f}"
+                except (TypeError, ValueError):
+                    return "—"
 
             if ticker1 and ticker2:
                 t1, t2 = ticker1, ticker2
@@ -2490,14 +2525,14 @@ class LSETelegramBot:
                     await update.message.reply_text(f"❌ Тикер не найден в данных: {t1} или {t2}.")
                     return
                 val = corr.loc[t1, t2]
-                if np.isnan(val):
+                if np.isnan(val) if hasattr(np, "isnan") else (val != val):
                     await update.message.reply_text(
-                        f"❌ По паре ({t1}, {t2}) меньше 5 общих дней с данными — корреляцию не посчитать."
+                        f"❌ По паре ({t1}, {t2}) недостаточно общих дней для корреляции."
                     )
                     return
                 await update.message.reply_text(
-                    f"📊 **Корреляция лог-доходностей** ({n_days} дн.){source_note}\n\n"
-                    f"Corr({_escape_markdown(t1)}, {_escape_markdown(t2)}) = **{val:.3f}**",
+                    f"📊 **Корреляция лог-доходностей** ({n_days} дн.){source_note}{cluster_note}\n\n"
+                    f"Corr({_escape_markdown(t1)}, {_escape_markdown(t2)}) = **{float(val):.3f}**",
                     parse_mode="Markdown",
                 )
                 return
@@ -2516,7 +2551,7 @@ class LSETelegramBot:
                         lines.append(_cell(t, w_t) + sep + _corr_fmt(v))
                 table = "\n".join(lines)
                 msg = (
-                    f"📊 **Корреляции с {_escape_markdown(ticker1)}** ({n_days} дн.){source_note}\n\n"
+                    f"📊 **Корреляции с {_escape_markdown(ticker1)}** ({n_days} дн.){source_note}{cluster_note}\n\n"
                     f"```\n{table}\n```"
                 )
                 await update.message.reply_text(msg, parse_mode="Markdown")
@@ -2532,9 +2567,10 @@ class LSETelegramBot:
             table = "\n".join(lines)
             if len(table) > 3800:
                 table = "\n".join(lines[:15]) + "\n... (обрезано, используйте /corr T1 или /corr T1 T2)"
-            html_content = _build_corr_html(corr, n_days, "Корреляции лог-доходностей")
+            title = f"Корреляции лог-доходностей ({cluster_label})" if cluster_label else "Корреляции лог-доходностей"
+            html_content = _build_corr_html(corr, n_days, title)
             filename = _unique_report_filename("Корреляции")
-            caption = f"📊 Корреляции лог-доходностей ({n_days} дн., {len(cols)} тикеров). Откройте файл в браузере."
+            caption = f"📊 {title} ({n_days} дн., {len(cols)} тикеров). Откройте файл в браузере."
             try:
                 await update.message.reply_document(
                     document=BytesIO(html_content.encode("utf-8")),
@@ -2542,21 +2578,21 @@ class LSETelegramBot:
                     caption=caption,
                 )
             except Exception as doc_e:
-                logger.warning(f"Не удалось отправить HTML-файл corr: {doc_e}")
+                logger.warning("Не удалось отправить HTML-файл corr: %s", doc_e)
                 msg = (
-                    f"📊 **Корреляция лог-доходностей** ({n_days} дн., {len(cols)} тикеров){source_note}\n\n"
+                    f"📊 **Корреляция лог-доходностей** ({n_days} дн., {len(cols)} тикеров){source_note}{cluster_note}\n\n"
                     f"```\n{table}\n```"
                 )
                 await update.message.reply_text(msg, parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"Ошибка corr: {e}", exc_info=True)
+            logger.error("Ошибка corr: %s", e, exc_info=True)
             try:
                 await update.message.reply_text(f"❌ Ошибка: {str(e)[:300]}")
             except Exception:
                 pass
 
     async def _handle_closed(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Таблица закрытых позиций: Instrument, Direction, Open, Close, Profit(pips), Profit, Units, Open Date (MSK), Close Date (MSK)."""
+        """Таблица закрытых позиций. /closed [тикер] [N] — фильтр по тикеру, затем лимит (по умолч. 25)."""
         if update.message is None:
             return
         chat_id = update.effective_chat.id if update.effective_chat else None
@@ -2574,11 +2610,18 @@ class LSETelegramBot:
             await update.message.reply_text("❌ Доступ запрещен")
             return
         limit = 25
-        if context.args and len(context.args) >= 1:
-            try:
-                limit = min(int(context.args[0].strip()), 50)
-            except ValueError:
-                pass
+        ticker_filter = None
+        if context.args:
+            a0 = str(context.args[0]).strip()
+            a1 = str(context.args[1]).strip() if len(context.args) > 1 else None
+            if a0.isdigit():
+                limit = min(int(a0), 50)
+                if a1 and not a1.isdigit():
+                    ticker_filter = _normalize_ticker(a1)
+            else:
+                ticker_filter = _normalize_ticker(a0)
+                if a1 and a1.isdigit():
+                    limit = min(int(a1), 50)
         try:
             import pandas as pd
             from report_generator import get_engine, load_trade_history, compute_closed_trade_pnls
@@ -2586,10 +2629,13 @@ class LSETelegramBot:
             engine = get_engine()
             trades = load_trade_history(engine)
             closed = compute_closed_trade_pnls(trades)
+            if ticker_filter:
+                closed = [t for t in closed if t.ticker == ticker_filter]
             if not closed:
-                await update.message.reply_text("📋 Закрытых позиций пока нет.")
+                await update.message.reply_text(
+                    f"📋 Закрытых позиций по тикеру {ticker_filter} нет." if ticker_filter else "📋 Закрытых позиций пока нет."
+                )
                 return
-            # сортируем по дате закрытия (новые сверху), берём последние limit
             closed = sorted(closed, key=lambda t: t.ts, reverse=True)[:limit]
 
             def _fmt_ts_msk(ts) -> str:
@@ -2649,12 +2695,13 @@ class LSETelegramBot:
                 )
                 rows.append(row)
             total_pnl = sum(t.net_pnl for t in closed)
+            ticker_note = f" по {ticker_filter}" if ticker_filter else ""
             footer_closed = f"\nИтого: {len(closed)} позиций, суммарный P/L: ${total_pnl:+,.2f}"
             table = "\n".join(rows) + footer_closed
             html_content = _build_closed_html(closed, total_pnl=total_pnl)
             filename = _unique_report_filename("Закрытые позиции")
             caption = (
-                f"📋 Закрытые позиции (последние {len(closed)}). "
+                f"📋 Закрытые позиции{ticker_note} (последние {len(closed)}). "
                 f"Итого: {len(closed)} позиций, суммарный P/L: ${total_pnl:+,.2f}. Откройте файл в браузере."
             )
             try:
@@ -2666,7 +2713,7 @@ class LSETelegramBot:
             except Exception as doc_e:
                 logger.warning(f"Не удалось отправить HTML-файл closed: {doc_e}")
                 await update.message.reply_text(
-                    f"📋 Закрытые позиции (последние {len(closed)})\nEntry/Exit — стратегия. Даты в MSK.\n\n```\n{table}\n```",
+                    f"📋 Закрытые позиции{ticker_note} (последние {len(closed)})\nEntry/Exit — стратегия. Даты в MSK.\n\n```\n{table}\n```",
                     parse_mode="Markdown",
                 )
         except Exception as e:
@@ -2677,17 +2724,24 @@ class LSETelegramBot:
                 pass
 
     async def _handle_pending(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Таблица открытых позиций: Instrument, Open, Units, Strategy, Open (MSK)."""
+        """Таблица открытых позиций: Instrument, Open, Units, Strategy, Open (MSK). /pending [ticker] [N] — фильтр по тикеру."""
         user_id = update.effective_user.id
         if not self._check_access(user_id):
             await update.message.reply_text("❌ Доступ запрещен")
             return
         limit = 25
-        if context.args and len(context.args) >= 1:
-            try:
-                limit = min(int(context.args[0].strip()), 50)
-            except ValueError:
-                pass
+        ticker_filter = None
+        if context.args:
+            a0 = str(context.args[0]).strip()
+            a1 = str(context.args[1]).strip() if len(context.args) > 1 else None
+            if a0.isdigit():
+                limit = min(int(a0), 50)
+                if a1 and not a1.isdigit():
+                    ticker_filter = _normalize_ticker(a1)
+            else:
+                ticker_filter = _normalize_ticker(a0)
+                if a1 and a1.isdigit():
+                    limit = min(int(a1), 50)
         try:
             import pandas as pd
             from report_generator import get_engine, load_trade_history, compute_open_positions, get_latest_prices
@@ -2697,8 +2751,12 @@ class LSETelegramBot:
             engine = get_engine()
             trades = load_trade_history(engine)
             pending = compute_open_positions(trades)
+            if ticker_filter:
+                pending = [p for p in pending if p.ticker == ticker_filter]
             if not pending:
-                await update.message.reply_text("📋 Открытых позиций нет.")
+                await update.message.reply_text(
+                    f"📋 Открытых позиций по тикеру {ticker_filter} нет." if ticker_filter else "📋 Открытых позиций нет."
+                )
                 return
             pending = pending[:limit]
             tickers_in_game_5m = set(get_tickers_game_5m())
@@ -2782,13 +2840,14 @@ class LSETelegramBot:
                 total_entry=total_entry, total_now=total_now, pnl_total=pnl_total, ret_pct=ret_pct,
             )
             filename = _unique_report_filename("Открытые позиции")
+            ticker_note_p = f" по {ticker_filter}" if ticker_filter else ""
             if total_entry and total_entry > 0:
                 caption = (
-                    f"📋 Открытые позиции (показано {len(pending)}). "
+                    f"📋 Открытые позиции{ticker_note_p} (показано {len(pending)}). "
                     f"Итого: вход ${total_entry:,.0f} → сейчас ${total_now:,.0f} | P/L: ${pnl_total:+,.0f} ({ret_pct:+.2f}%). Откройте файл в браузере."
                 )
             else:
-                caption = f"📋 Открытые позиции (показано {len(pending)}). Откройте файл в браузере."
+                caption = f"📋 Открытые позиции{ticker_note_p} (показано {len(pending)}). Откройте файл в браузере."
             try:
                 await update.message.reply_document(
                     document=BytesIO(html_content.encode("utf-8")),
@@ -2798,7 +2857,7 @@ class LSETelegramBot:
             except Exception as doc_e:
                 logger.warning(f"Не удалось отправить HTML-файл pending: {doc_e}")
                 await update.message.reply_text(
-                    "📋 **Открытые позиции** (показано {})\nNow и P/L — по 5m или quotes. Даты в MSK.\n\n```\n{}\n```".format(len(pending), table),
+                    "📋 **Открытые позиции{}** (показано {})\nNow и P/L — по 5m или quotes. Даты в MSK.\n\n```\n{}\n```".format(ticker_note_p, len(pending), table),
                     parse_mode="Markdown",
                 )
         except Exception as e:
@@ -2926,7 +2985,7 @@ class LSETelegramBot:
         await update.message.reply_text(text.strip(), parse_mode="Markdown")
 
     async def _handle_recommend(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Рекомендация: когда открыть позицию и какие параметры управления (стоп-лосс, размер)."""
+        """Рекомендация: когда открыть позицию и какие параметры управления. Без тикера — по кластеру медленных/средних игр."""
         user_id = update.effective_user.id
         if not self._check_access(user_id):
             await update.message.reply_text("❌ Доступ запрещен")
@@ -2935,12 +2994,30 @@ class LSETelegramBot:
         if context.args and len(context.args) >= 1:
             ticker = _normalize_ticker(context.args[0])
         if not ticker:
-            await update.message.reply_text(
-                "Укажите тикер для рекомендации.\n"
-                "Пример: `/recommend SNDK` или `/recommend GC=F`\n\n"
-                "Можно спросить текстом: _когда можно открыть позицию по SNDK и какие параметры советуешь?_",
-                parse_mode="Markdown",
-            )
+            await update.message.reply_text("🔍 Готовлю рекомендации по кластеру (медленные/средние игры)...")
+            try:
+                from services.ticker_groups import get_tickers_for_portfolio_game
+                from services.cluster_recommend import get_correlation_matrix, format_correlation_summary
+                tickers = get_tickers_for_portfolio_game()
+                if not tickers:
+                    await update.message.reply_text("❌ Тикеры не заданы (TRADING_CYCLE_TICKERS или TICKERS_MEDIUM/TICKERS_LONG).")
+                    return
+                corr = get_correlation_matrix(tickers)
+                parts = [f"📊 Кластер (медленные/средние): {', '.join(tickers)}"]
+                if corr:
+                    parts.append(format_correlation_summary(corr, tickers))
+                for t in tickers:
+                    data = self._get_recommendation_data(t)
+                    if data:
+                        parts.append("—")
+                        parts.append(self._format_recommendation(data))
+                if len(parts) <= 2:
+                    await update.message.reply_text("❌ Нет данных по тикерам кластера.")
+                    return
+                await update.message.reply_text("\n".join(parts), parse_mode=None)
+            except Exception as e:
+                logger.exception("Ошибка кластерной рекомендации")
+                await update.message.reply_text(f"❌ Ошибка: {e}")
             return
         await update.message.reply_text("🔍 Готовлю рекомендацию...")
         data = self._get_recommendation_data(ticker)
@@ -2949,18 +3026,17 @@ class LSETelegramBot:
             return
         try:
             text = self._format_recommendation(data)
-            # Без parse_mode: в тексте бывают reasoning, стратегия, числа — символы _ * ломают Markdown
             await update.message.reply_text(text, parse_mode=None)
         except Exception as e:
             logger.exception("Ошибка форматирования рекомендации")
             await update.message.reply_text(f"❌ Ошибка: {e}")
 
     async def _handle_recommend5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Рекомендация по 5-минутным данным с учётом 5-дневной статистики (агрессивный интрадей, напр. SNDK)."""
+        """Рекомендация по 5m. Без тикера — по кластеру игры 5m (GAME_5M_TICKERS); с тикером — один тикер."""
         if not self._check_access(update.effective_user.id):
             await update.message.reply_text("❌ Доступ запрещен")
             return
-        ticker = "SNDK"
+        ticker = None
         days = 5
         if context.args and len(context.args) >= 1:
             ticker = _normalize_ticker(context.args[0])
@@ -2969,6 +3045,37 @@ class LSETelegramBot:
                 days = max(1, min(7, int(context.args[1].strip())))
             except (ValueError, IndexError):
                 pass
+        if not ticker:
+            await update.message.reply_text("🔍 Готовлю рекомендации по кластеру 5m...")
+            loop = asyncio.get_event_loop()
+            try:
+                from services.ticker_groups import get_tickers_game_5m
+                from services.cluster_recommend import get_cluster_decisions_5m, format_correlation_summary
+                tickers = get_tickers_game_5m()
+                if not tickers:
+                    await update.message.reply_text("❌ Тикеры не заданы (GAME_5M_TICKERS или TICKERS_FAST).")
+                    return
+                cluster = await loop.run_in_executor(
+                    None, lambda: get_cluster_decisions_5m(tickers, days=days, use_llm_news=True)
+                )
+                parts = [f"📊 Кластер 5m: {', '.join(tickers)}"]
+                if cluster.get("correlation"):
+                    parts.append(format_correlation_summary(cluster["correlation"], tickers))
+                for t in tickers:
+                    d5 = cluster.get("decisions", {}).get(t)
+                    if not d5:
+                        continue
+                    data = self._build_recommendation_data_5m_from_d5(t, d5)
+                    parts.append("—")
+                    parts.append(self._format_recommendation_5m(data))
+                if len(parts) <= 2:
+                    await update.message.reply_text("❌ Нет 5m данных по тикерам кластера.")
+                    return
+                await update.message.reply_text("\n".join(parts), parse_mode=None)
+            except Exception as e:
+                logger.exception("Ошибка кластерной рекомендации 5m")
+                await update.message.reply_text(f"❌ Ошибка: {e}")
+            return
         await update.message.reply_text(f"📥 Загрузка 5m данных для {ticker} за {days} дн....")
         loop = asyncio.get_event_loop()
         try:
@@ -2987,7 +3094,6 @@ class LSETelegramBot:
             return
         try:
             text = self._format_recommendation_5m(data)
-            # Без parse_mode: reasoning, LLM, премаркет — символы _ * ломают Markdown
             await update.message.reply_text(text, parse_mode=None)
         except Exception as e:
             logger.exception("Ошибка форматирования рекомендации 5m")
@@ -3024,7 +3130,10 @@ class LSETelegramBot:
             return
 
         lines = [f"📊 **Игра 5m — {_escape_markdown(ticker)}** (мониторинг)", ""]
-        lines.append(f"Параметры: стоп −{params['stop_loss_pct']}%, тейк +{params['take_profit_pct']}%, макс. {params['max_position_days']} дн. _(config.env)_")
+        if params.get("stop_loss_enabled", True):
+            lines.append(f"Параметры: стоп −{params['stop_loss_pct']}%, тейк +{params['take_profit_pct']}%, макс. {params['max_position_days']} дн. _(config.env)_")
+        else:
+            lines.append(f"Параметры: тейк +{params['take_profit_pct']}% (стоп выкл.), макс. {params['max_position_days']} дн. _(config.env)_")
         lines.append("")
         if pos:
             entry_ts = pos.get("entry_ts")
@@ -3098,31 +3207,32 @@ class LSETelegramBot:
         except Exception:
             pass
         lines = [
-            "⚙️ **Параметры игр** _(config.env)_",
+            "⚙️ Параметры игр (config.env)",
             "",
-            "**Игра 5m** (send_sndk_signal_cron):",
+            "Игра 5m (send_sndk_signal_cron):",
             f"• Тикеры: {', '.join(tickers_5m) or '—'}",
             f"• Cooldown рассылки: {cooldown} мин",
-            f"• Стоп: −{params_5m['stop_loss_pct']}% (мин. −{params_5m['stop_loss_min_pct']}%)",
+            f"• Стоп 5m: {'−' + str(params_5m['stop_loss_pct']) + '% (мин. −' + str(params_5m['stop_loss_min_pct']) + '%)' if params_5m.get('stop_loss_enabled', True) else 'выкл. (только тейк)'}",
             f"• Тейк: +{params_5m['take_profit_pct']}% (базовый); мин. от импульса 2ч: +{params_5m['take_profit_min_pct']}%",
-            f"• Стоп/тейк ratio: {params_5m['stop_to_take_ratio']}",
+            (f"• Стоп/тейк ratio: {params_5m['stop_to_take_ratio']}" if params_5m.get('stop_loss_enabled', True) else "• Стоп 5m выкл. — в ответах не рекомендуй стоп по 5m"),
             f"• Фактор тейка от импульса: {momentum_factor}",
             f"• Макс. дней в позиции: {params_5m['max_position_days']}",
             "",
-            "**Портфельная игра** (trading_cycle_cron):",
+            "Портфельная игра (trading_cycle_cron):",
             f"• Тикеры: {', '.join(tickers_portfolio) or '—'}",
             f"• Тейк по умолчанию: +{portfolio_take}% (PORTFOLIO_TAKE_PROFIT_PCT; 0 = не закрывать по тейку)",
             f"• Стоп: {stop_enabled_str}, порог={stop_level} (PORTFOLIO_STOP_LOSS_ENABLED / STOP_LOSS_LEVEL)",
         ]
         if not stop_enabled_raw:
             lines.append("")
-            lines.append("⚠️ _Стоп-лосс портфеля выключен (PORTFOLIO\_STOP\_LOSS\_ENABLED=false, config или БД). Закрытие по стопу не выполняется, только по тейку._")
+            lines.append("⚠️ Стоп-лосс портфеля выключен (PORTFOLIO_STOP_LOSS_ENABLED=false, config или БД). Закрытие по стопу не выполняется, только по тейку.")
         if db_info:
             lines.append("")
             lines.append(db_info)
         lines.append("")
-        lines.append("_Подробнее: docs/CRONS_AND_TAKE_STOP.md_")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        lines.append("Подробнее: docs/CRONS_AND_TAKE_STOP.md")
+        # Без Markdown: в тексте есть PORTFOLIO_STOP_LOSS_ENABLED и др. — подчёркивания ломают парсер (Can't parse entities)
+        await update.message.reply_text("\n".join(lines), parse_mode=None)
 
     async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик произвольных текстовых сообщений"""
@@ -3211,10 +3321,13 @@ class LSETelegramBot:
                 recommendation_text = self._format_recommendation(data)
                 if self.llm_service and recommendation_text:
                     try:
+                        from services.game_5m import _game_5m_stop_loss_enabled
+                        game5m_stop_off = not _game_5m_stop_loss_enabled()
                         system_prompt = (
                             "Ты помощник по виртуальной торговле. Пользователь задаёт вопрос о том, когда открыть позицию и какие параметры управления использовать. "
-                            "Ответь кратко и по делу на русском, опираясь ТОЛЬКО на приведённые данные. Упомяни: стоит ли открывать позицию сейчас, стоп-лосс, размер позиции. "
-                            "Не придумывай цифры — используй только данные из контекста."
+                            "Ответь кратко и по делу на русском, опираясь ТОЛЬКО на приведённые данные. "
+                            + ("Стоп-лосс игры 5m отключён — не рекомендуй и не упоминай стоп по 5m позициям. " if game5m_stop_off else "Упомяни: стоит ли открывать позицию сейчас, стоп-лосс (из данных), размер позиции. ")
+                            + "Не придумывай цифры — используй только данные из контекста."
                         )
                         ctx = (
                             f"Данные для ответа:\n{recommendation_text}\n\n"

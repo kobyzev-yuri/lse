@@ -46,6 +46,7 @@ HEADERS = {
 
 # Встроенные ключевые слова для сопоставления заголовка новости с тикером.
 # Для тикера не из списка используется сам тикер как единственное слово.
+# Индикаторы (^VIX) и товары (BZ=F, CL=F, GC=F) — чтобы отлавливать новости даже если по ним не торгуем.
 BUILTIN_KEYWORDS: Dict[str, List[str]] = {
     "SNDK": ["SanDisk", "Western Digital", "WDC", "SNDK"],
     "LITE": ["LITE", "Lumentum"],
@@ -57,6 +58,9 @@ BUILTIN_KEYWORDS: Dict[str, List[str]] = {
     "NDK": ["NDK"],
     "NBIS": ["NBIS"],
     "CL=F": ["oil", "crude", "WTI", "Brent", "нефть", "нефти", "OPEC", "petroleum"],
+    "BZ=F": ["Brent", "Brent Oil", "crude", "oil", "OPEC", "petroleum"],
+    "GC=F": ["gold", "precious metals", "XAU", "желтый металл", "золот"],
+    "^VIX": ["VIX", "volatility", "CBOE", "fear index", "волатильност"],
 }
 
 # Текущая структура: ссылки на новости в виде /news/stock-market-news/...

@@ -20,7 +20,7 @@ sys.path.insert(0, str(project_root))
 
 from config_loader import get_config_value
 from execution_agent import ExecutionAgent
-from services.ticker_groups import get_tickers_for_portfolio_game
+from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_indicator_only
 from services.telegram_signal import get_signal_chat_ids, send_telegram_message
 import logging
 
@@ -67,15 +67,20 @@ if __name__ == "__main__":
     try:
         if len(sys.argv) > 1 and sys.argv[1].strip():
             tickers = [t.strip() for t in sys.argv[1].strip().split(",") if t.strip()]
+            cluster_tickers = None  # аргумент — только торгуемые
         else:
-            tickers = get_tickers_for_portfolio_game()
+            full_list = get_tickers_for_portfolio_game()
+            indicator_only = set(get_tickers_indicator_only())
+            tickers = [t for t in full_list if t not in indicator_only]
+            # Корреляция по полному списку (включая индикаторы ^VIX и т.д.) — LLM видит связи, позиции не открываем по индикаторам
+            cluster_tickers = full_list if indicator_only else None
 
         if not tickers:
             logging.warning("Тикеры не заданы (TRADING_CYCLE_TICKERS или TICKERS_MEDIUM/TICKERS_LONG в config.env, либо аргумент)")
             sys.exit(0)
 
         agent = ExecutionAgent()
-        agent.run_for_tickers(tickers)
+        agent.run_for_tickers(tickers, cluster_tickers=cluster_tickers)
         _notify_portfolio_trades(agent)
     except Exception as e:
         logger.error("Ошибка торгового цикла: %s", e)

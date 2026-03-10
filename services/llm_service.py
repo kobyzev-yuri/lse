@@ -265,6 +265,9 @@ Sentiment анализ:
         premarket_note = technical_data.get("premarket_note")
         if premarket_note:
             user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
+        cluster_note = technical_data.get("cluster_note")
+        if cluster_note:
+            user_message += f"\n\nКластер и корреляция:\n{cluster_note}"
         if strategy_name and strategy_signal:
             user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Учти при итоговой рекомендации (можешь согласиться или скорректировать)."
         if strategy_outcome_stats:
@@ -404,6 +407,9 @@ Sentiment анализ:
         premarket_note = technical_data.get("premarket_note")
         if premarket_note:
             user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
+        cluster_note = technical_data.get("cluster_note")
+        if cluster_note:
+            user_message += f"\n\nКластер и корреляция:\n{cluster_note}"
         if strategy_name and strategy_signal:
             user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Учти при итоговой рекомендации (можешь согласиться или скорректировать)."
         if strategy_outcome_stats:
