@@ -238,6 +238,63 @@ def _build_prompt_entry_all_html(
     return "\n".join(parts)
 
 
+def _build_cluster_note_for_5m_llm(
+    ticker: str,
+    full_list: List[str],
+    correlation_matrix: Optional[Dict[str, Dict[str, float]]],
+    tech_by_ticker: Dict[str, Dict[str, Any]],
+) -> Optional[str]:
+    """Собирает текст «Кластер и корреляция» для промпта LLM в game_5m (тот же контекст, что в отчёте)."""
+    if not correlation_matrix or not full_list:
+        return None
+    others = [x for x in full_list if x != ticker]
+    if not others:
+        return None
+    lines = [f"Кластер тикеров: {', '.join(full_list)}. Анализируемый тикер: {ticker}."]
+    corr_pairs = []
+    for o in others:
+        c = correlation_matrix.get(ticker, {}).get(o) or correlation_matrix.get(o, {}).get(ticker)
+        if c is not None and math.isfinite(c):
+            try:
+                corr_pairs.append(f"{o} {float(c):+.2f}")
+            except (TypeError, ValueError):
+                pass
+    if corr_pairs:
+        lines.append(f"Корреляция с другими (30 дн.): {', '.join(corr_pairs[:15])}.")
+    other_rows: List[Tuple[str, Optional[float], Optional[float], float]] = []
+    for t in full_list:
+        if t == ticker:
+            continue
+        tech = tech_by_ticker.get(t) or {}
+        pr = tech.get("price")
+        rsi_o = tech.get("rsi")
+        c_val = None
+        raw = correlation_matrix.get(ticker, {}).get(t) or correlation_matrix.get(t, {}).get(ticker)
+        if raw is not None:
+            try:
+                f_c = float(raw)
+                if math.isfinite(f_c):
+                    c_val = f_c
+            except (TypeError, ValueError):
+                pass
+        if c_val is not None:
+            other_rows.append((t, pr, rsi_o, c_val))
+    other_rows.sort(key=lambda r: r[3], reverse=True)
+    if other_rows:
+        ctx_lines = []
+        for t, pr, rsi_o, c_val in other_rows:
+            seg = [t]
+            if pr is not None:
+                seg.append(f"${pr:.2f}")
+            if rsi_o is not None:
+                seg.append(f"RSI {rsi_o:.1f}")
+            seg.append(f"corr {c_val:+.2f}")
+            ctx_lines.append(" ".join(seg))
+        lines.append("По тикерам с известной корреляцией (по убыванию корр.): " + "; ".join(ctx_lines) + ".")
+    lines.append("Учти: при высокой корреляции с другим активом они часто движутся вместе; при расхождении сигналов — осторожность.")
+    return "\n".join(lines)
+
+
 def _build_prompt_entry_game5m_html(
     cluster_tickers: List[str],
     correlation_note: Optional[str],
@@ -268,7 +325,7 @@ def _build_prompt_entry_game5m_html(
         "<title>Шаблон решения: игра 5m</title>",
         "<style>", _PROMPT_ENTRY_REPORT_CSS, "</style></head><body>",
         "<h1>Шаблон принятия решения: игра «5m»</h1>",
-        '<p class="intro">Контекст по параметрам и тикерам игры 5m. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — контекст (входные данные) и обоснование решения. Решение по правилам и контексту (KB, опционально LLM-новости). <em>LLM-новости</em> — ответ модели по её обучению, без поиска в интернете в реальном времени; даты в тексте могут относиться к прошлым годам (2023 и др.). Актуальные новости — в блоке «Новости из KB» (RSS, NewsAPI, Investing.com). Вход/выход и тейк/стоп из GAME_5M_*.</p>',
+        '<p class="intro">Контекст по параметрам и тикерам игры 5m. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — контекст (входные данные), обоснование по правилам и блок «С учётом корреляции (LLM)» при USE_LLM=true (LLM получает тот же контекст корреляций). Решение по правилам и контексту (KB). Вход/выход и тейк/стоп из GAME_5M_*.</p>',
         f'<p class="cluster"><strong>Кластер:</strong> {html.escape(", ".join(cluster_tickers))}</p>',
     ]
     if correlation_note:
@@ -374,6 +431,13 @@ def _build_prompt_entry_game5m_html(
             parts.append('<div class="context-block">—</div>')
         parts.append("<h3>Обоснование</h3>")
         parts.append(f"<pre>{_pre(reasoning) if reasoning else '—'}</pre>")
+        llm_corr = r.get("llm_correlation_reasoning")
+        if llm_corr:
+            parts.append("<h3>С учётом корреляции (LLM)</h3>")
+            parts.append(f"<pre>{_pre(llm_corr)}</pre>")
+            kf = r.get("llm_key_factors")
+            if kf:
+                parts.append(f"<p class=\"meta\">Ключевые факторы: {', '.join(_pre(str(x)) for x in kf[:10])}</p>")
         parts.append("</div>")
 
     parts.append("</body></html>")
@@ -397,7 +461,7 @@ def _build_closed_html(closed: List[Any], total_pnl: float = 0) -> str:
         rows_html.append(
             f"<tr><td>{html.escape(t.ticker)}</td><td>{direction}</td>"
             f"<td>{t.entry_price:.2f}</td><td>{t.exit_price:.2f}</td><td>{pips}</td>"
-            f'<td class="{profit_cls}">{t.net_pnl:+.2f}</td><td>{int(t.quantity)}</td>'
+            f'<td class="{profit_cls}">{t.net_pnl:+.2f}</td>'
             f"<td>{entry_s}</td><td>{exit_s}</td>"
             f"<td>{tp_str}</td><td>{sl_str}</td><td>{mfe_str}</td><td>{mae_str}</td>"
             f"<td>{_ts_msk(t.entry_ts)}</td><td>{_ts_msk(t.ts)}</td></tr>"
@@ -408,7 +472,7 @@ def _build_closed_html(closed: List[Any], total_pnl: float = 0) -> str:
 <html lang="ru"><head><meta charset="utf-8"><title>Закрытые позиции</title>
 <style>table{{border-collapse:collapse;width:100%}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}} .summary{{margin-top:1em}}</style>
 </head><body><h1>Закрытые позиции</h1><p>Даты в MSK. Entry/Exit — стратегия открытия/закрытия. MFE/MAE - плавающая макс прибыль/убыток в %.</p>
-<table><thead><tr><th>Instrument</th><th>Dir</th><th>Open</th><th>Close</th><th>Pips</th><th>Profit</th><th>Units</th><th>Entry</th><th>Exit</th><th>TP</th><th>SL</th><th>MFE</th><th>MAE</th><th>Open (MSK)</th><th>Close (MSK)</th></tr></thead>
+<table><thead><tr><th>Instrument</th><th>Dir</th><th>Open</th><th>Close</th><th>Pips</th><th>Profit</th><th>Entry</th><th>Exit</th><th>TP</th><th>SL</th><th>MFE</th><th>MAE</th><th>Open (MSK)</th><th>Close (MSK)</th></tr></thead>
 <tbody>{body}</tbody></table>{summary}</body></html>"""
 
 
@@ -2896,7 +2960,6 @@ class LSETelegramBot:
             w_close = 8
             w_pips = 8
             w_profit = 10
-            w_units = 6
             w_strat = 8
             w_date = 16
 
@@ -2907,7 +2970,7 @@ class LSETelegramBot:
                 _cell("Instrument", w_inst) + sep + _cell("Dir", w_dir) + sep
                 + _cell("Open", w_open) + sep + _cell("Close", w_close) + sep
                 + _cell("Pips", w_pips) + sep + _cell("Profit", w_profit) + sep
-                + _cell("Units", w_units) + sep + _cell("Entry", w_strat) + sep + _cell("Exit", w_strat) + sep
+                + _cell("Entry", w_strat) + sep + _cell("Exit", w_strat) + sep
                 + _cell("Open (MSK)", w_date) + sep + "Close (MSK)"
             )
             rows = [header]
@@ -2927,7 +2990,6 @@ class LSETelegramBot:
                     _cell(str(t.ticker), w_inst) + sep + _cell(direction, w_dir) + sep
                     + _cell(f"{t.entry_price:.2f}", w_open) + sep + _cell(f"{t.exit_price:.2f}", w_close) + sep
                     + _cell(str(pips_val), w_pips) + sep + _cell(f"{t.net_pnl:+.2f}", w_profit) + sep
-                    + _cell(str(int(t.quantity)), w_units) + sep
                     + _cell(entry_s, w_strat) + sep + _cell(exit_s, w_strat) + sep
                     + _cell(_fmt_ts_msk(t.entry_ts), w_date) + sep + _fmt_ts_msk(t.ts)
                 )
@@ -3238,6 +3300,48 @@ class LSETelegramBot:
                         d5 = get_decision_5m(t, use_llm_news=False)
                         if d5 and (d5.get("price") is not None or d5.get("rsi_5m") is not None):
                             extra_tech[t] = {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}
+                if get_use_llm_for_analyst() and corr_matrix and (corr_tickers_used or cluster_5m):
+                    tech_by_ticker_5m = {r.get("ticker"): {"price": r.get("price"), "rsi": r.get("rsi_5m")} for r in per_ticker_results if r.get("ticker")}
+                    tech_by_ticker_5m.update(extra_tech)
+                    full_list_5m = corr_tickers_used if corr_tickers_used else cluster_5m
+                    for r in per_ticker_results:
+                        if r.get("decision") == "NO_DATA" or not full_list_5m:
+                            continue
+                        cluster_note = _build_cluster_note_for_5m_llm(
+                            r["ticker"], full_list_5m, corr_matrix, tech_by_ticker_5m,
+                        )
+                        if not cluster_note:
+                            continue
+                        try:
+                            from services.llm_service import get_llm_service
+                            llm = get_llm_service()
+                            if not getattr(llm, "client", None):
+                                continue
+                            technical_data = {
+                                "close": r.get("price"),
+                                "rsi": r.get("rsi_5m"),
+                                "volatility_5": r.get("volatility_5m_pct"),
+                                "technical_signal": r.get("decision"),
+                                "cluster_note": cluster_note,
+                            }
+                            news_list = []
+                            if r.get("kb_news_summary") or r.get("kb_news_impact"):
+                                news_list = [{"source": "KB", "content": (r.get("kb_news_summary") or r.get("kb_news_impact") or "")[:500], "sentiment_score": 0.5}]
+                            sentiment = 0.5
+                            if r.get("kb_news_impact") == "негативно":
+                                sentiment = 0.35
+                            elif r.get("kb_news_impact") == "позитивно":
+                                sentiment = 0.65
+                            result = llm.analyze_trading_situation(
+                                r["ticker"], technical_data, news_list, sentiment,
+                                strategy_name="GAME_5M", strategy_signal=r.get("decision"),
+                            )
+                            if result and result.get("llm_analysis"):
+                                ana = result["llm_analysis"]
+                                r["llm_correlation_reasoning"] = ana.get("reasoning") or ""
+                                r["llm_key_factors"] = ana.get("key_factors") or []
+                        except Exception as e:
+                            logger.debug("LLM с корреляцией для 5m %s: %s", r.get("ticker"), e)
                 html_content = _build_prompt_entry_game5m_html(
                     cluster_5m, correlation_note, per_ticker_results,
                     correlation_matrix=corr_matrix, correlation_tickers=corr_tickers_used if corr_matrix else None,
@@ -3537,6 +3641,48 @@ class LSETelegramBot:
                     d5 = get_decision_5m(t, days=days, use_llm_news=False)
                     if d5 and (d5.get("price") is not None or d5.get("rsi_5m") is not None):
                         extra_tech[t] = {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}
+            if get_use_llm_for_analyst() and corr_matrix and (corr_tickers_used or cluster_5m):
+                tech_by_ticker_5m = {r.get("ticker"): {"price": r.get("price"), "rsi": r.get("rsi_5m")} for r in per_ticker_results if r.get("ticker")}
+                tech_by_ticker_5m.update(extra_tech)
+                full_list_5m = corr_tickers_used if corr_tickers_used else cluster_5m
+                for r in per_ticker_results:
+                    if r.get("decision") == "NO_DATA" or not full_list_5m:
+                        continue
+                    cluster_note = _build_cluster_note_for_5m_llm(
+                        r["ticker"], full_list_5m, corr_matrix, tech_by_ticker_5m,
+                    )
+                    if not cluster_note:
+                        continue
+                    try:
+                        from services.llm_service import get_llm_service
+                        llm = get_llm_service()
+                        if not getattr(llm, "client", None):
+                            continue
+                        technical_data = {
+                            "close": r.get("price"),
+                            "rsi": r.get("rsi_5m"),
+                            "volatility_5": r.get("volatility_5m_pct"),
+                            "technical_signal": r.get("decision"),
+                            "cluster_note": cluster_note,
+                        }
+                        news_list = []
+                        if r.get("kb_news_summary") or r.get("kb_news_impact"):
+                            news_list = [{"source": "KB", "content": (r.get("kb_news_summary") or r.get("kb_news_impact") or "")[:500], "sentiment_score": 0.5}]
+                        sentiment = 0.5
+                        if r.get("kb_news_impact") == "негативно":
+                            sentiment = 0.35
+                        elif r.get("kb_news_impact") == "позитивно":
+                            sentiment = 0.65
+                        result = llm.analyze_trading_situation(
+                            r["ticker"], technical_data, news_list, sentiment,
+                            strategy_name="GAME_5M", strategy_signal=r.get("decision"),
+                        )
+                        if result and result.get("llm_analysis"):
+                            ana = result["llm_analysis"]
+                            r["llm_correlation_reasoning"] = ana.get("reasoning") or ""
+                            r["llm_key_factors"] = ana.get("key_factors") or []
+                    except Exception as e:
+                        logger.debug("LLM с корреляцией для 5m %s: %s", r.get("ticker"), e)
             html_content = _build_prompt_entry_game5m_html(
                 cluster_5m, correlation_note, per_ticker_results,
                 correlation_matrix=corr_matrix, correlation_tickers=corr_tickers_used if corr_matrix else None,

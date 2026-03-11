@@ -542,7 +542,8 @@ def should_close_position(
     bar_high: Optional[float] = None,
     bar_low: Optional[float] = None,
 ) -> tuple[bool, str]:
-    """Закрывать ли позицию: по тейку/стопу (цена), по сигналу SELL или по истечении GAME_5M_MAX_POSITION_DAYS.
+    """Закрывать ли позицию: по тейку/стопу (цена), по сигналу SELL, по истечении GAME_5M_MAX_POSITION_DAYS,
+    либо в последние N минут сессии с минимальным профитом (TIME_EXIT). При сигнале STRONG_BUY выход в конец сессии не делаем — остаёмся в позиции.
     Тейк считается от импульса 2ч (как у модели), если он >= GAME_5M_TAKE_PROFIT_MIN_PCT, иначе из конфига.
     bar_high/bar_low — макс. High / мин. Low по последним свечам (до 30 мин): не пропускаем фазу подъёма
     при запуске крона каждые 5 мин (отскок в начале сессии и т.п.)."""
@@ -577,6 +578,30 @@ def should_close_position(
             )
         if _game_5m_stop_loss_enabled() and pnl_stop_pct <= -stop_pct:
             return True, "STOP_LOSS"
+
+        # В последние N минут сессии: закрыть с минимальным профитом, чтобы не уходить через день в минус.
+        # Исключение: если текущий сигнал STRONG_BUY — остаёмся (рискуем перейти в следующую сессию).
+        try:
+            exit_min = int(get_config_value("GAME_5M_SESSION_END_EXIT_MINUTES", "30"))
+            min_profit = float(get_config_value("GAME_5M_SESSION_END_MIN_PROFIT_PCT", "0.3"))
+        except (ValueError, TypeError):
+            exit_min, min_profit = 30, 0.3
+        if exit_min > 0 and min_profit >= 0 and current_decision != "STRONG_BUY":
+            try:
+                from services.market_session import get_market_session_context
+                ctx = get_market_session_context()
+                if ctx.get("session_phase") in ("REGULAR", "NEAR_CLOSE"):
+                    mins_left = ctx.get("minutes_until_close")
+                    if mins_left is not None and mins_left <= exit_min:
+                        pnl_current_pct = (current_price - entry_price) / entry_price * 100.0
+                        if pnl_current_pct >= min_profit:
+                            logger.info(
+                                "GAME_5M %s: конец сессии через %s мин, PnL=%.2f%% >= %.2f%% — выход TIME_EXIT",
+                                ticker, mins_left, pnl_current_pct, min_profit,
+                            )
+                            return True, "TIME_EXIT"
+            except Exception as e:
+                logger.debug("GAME_5M session-end exit check: %s", e)
 
     entry_ts = open_position.get("entry_ts")
     if isinstance(entry_ts, datetime):

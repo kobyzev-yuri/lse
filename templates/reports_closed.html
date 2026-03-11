@@ -24,7 +24,6 @@
                 <th>Close</th>
                 <th>Pips</th>
                 <th>Profit</th>
-                <th>Units</th>
                 <th>Entry</th>
                 <th>Exit</th>
                 <th>Open (MSK)</th>
@@ -40,7 +39,6 @@
                 <td>${{ "%.2f"|format(row.close) }}</td>
                 <td>{{ row.profit_pips }}</td>
                 <td class="{% if row.profit_usd >= 0 %}positive{% else %}negative{% endif %}">${{ "%+.2f"|format(row.profit_usd) }}</td>
-                <td>{{ row.units }}</td>
                 <td>{{ row.entry_strategy }}</td>
                 <td>{{ row.exit_strategy }}</td>
                 <td>{{ row.open_msk }}</td>

@@ -194,6 +194,13 @@ def get_market_session_context(dt_utc: datetime | None = None) -> Dict[str, Any]
         delta = open_et - et_now
         minutes_until_open = max(0, int(delta.total_seconds() / 60))
 
+    # Минуты до закрытия (16:00 ET): в REGULAR / NEAR_OPEN / NEAR_CLOSE — для выхода «в конец сессии с минимальным профитом»
+    minutes_until_close = None
+    if session_phase in ("REGULAR", "NEAR_OPEN", "NEAR_CLOSE") and NYSE_TZ is not None:
+        close_et = datetime.combine(date_et, NYSE_CLOSE_TIME, tzinfo=NYSE_TZ)
+        delta = close_et - et_now
+        minutes_until_close = max(0, int(delta.total_seconds() / 60))
+
     result = {
         "market_tz": "America/New_York",
         "et_now": et_now.strftime("%Y-%m-%d %H:%M"),
@@ -208,6 +215,8 @@ def get_market_session_context(dt_utc: datetime | None = None) -> Dict[str, Any]
     }
     if minutes_until_open is not None:
         result["minutes_until_open"] = minutes_until_open
+    if minutes_until_close is not None:
+        result["minutes_until_close"] = minutes_until_close
     return result
 
 

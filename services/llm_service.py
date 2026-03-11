@@ -165,6 +165,7 @@ class LLMService:
 3. Контекст новостей
 4. Риски
 5. Геополитический риск: при существенных геополитических изменениях (эскалация, военные действия, удары, санкции, risk-off) — предпочтительнее HOLD и в reasoning/risks укажи рекомендацию рассмотреть превентивный выход по открытым позициям даже с небольшой потерей (история: удержание через такое событие часто ведёт к большим потерям). Одновременно учитывай прогнозы о деэскалации или стабилизации: если в новостях звучит снижение напряжённости, переговоры, «рынок учёл», адаптация — риски могут быть терпимы, не исключай вход или удержание, когда рынок уже адаптировался, чтобы не оставаться вне игры без необходимости.
+6. Кластер и корреляция: если в контексте есть блок «Кластер и корреляция» (корреляция тикера с другими, цены и сигналы по ним) — обязательно учти его в key_factors и в reasoning. Высокая корреляция с другим активом означает, что они часто движутся вместе; при расхождении сигналов или падении коррелированного актива — осторожность; не дублируй риск по двум сильно коррелированным бумагам.
 
 Отвечай в формате JSON:
 {
@@ -268,7 +269,7 @@ Sentiment анализ:
         if premarket_note:
             user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
         if cluster_note:
-            user_message += f"\n\nКластер и корреляция:\n{cluster_note}"
+            user_message += f"\n\nКластер и корреляция (обязательно учти в key_factors и reasoning):\n{cluster_note}"
         if strategy_name and strategy_signal:
             user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Учти при итоговой рекомендации (можешь согласиться или скорректировать)."
         if strategy_outcome_stats:
@@ -411,7 +412,7 @@ Sentiment анализ:
         if premarket_note:
             user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
         if cluster_note:
-            user_message += f"\n\nКластер и корреляция:\n{cluster_note}"
+            user_message += f"\n\nКластер и корреляция (обязательно учти в key_factors и reasoning):\n{cluster_note}"
         if strategy_name and strategy_signal:
             user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Учти при итоговой рекомендации (можешь согласиться или скорректировать)."
         if strategy_outcome_stats:
@@ -459,7 +460,20 @@ Sentiment анализ:
                     "risks": [],
                     "key_factors": []
                 }
-            
+            # Отслеживание: учитывает ли LLM контекст кластера/корреляции (для проверки промпта)
+            if technical_data.get("cluster_note"):
+                reasoning_text = (analysis.get("reasoning") or "") + " " + " ".join(analysis.get("key_factors") or [])
+                reasoning_lower = reasoning_text.lower()
+                mentions_correlation = any(
+                    k in reasoning_lower for k in (
+                        "коррел", "кластер", "correlation", "cluster",
+                        "синхрон", "in-sync", "дублир", "согласован", "другим тикер",
+                    )
+                )
+                logger.info(
+                    "LLM entry (ticker=%s): cluster_note was in prompt; reasoning/key_factors mention correlation: %s; reasoning: %.200s",
+                    ticker, mentions_correlation, (analysis.get("reasoning") or "")[:200],
+                )
             return {
                 "llm_analysis": analysis,
                 "usage": result.get("usage", {}),
