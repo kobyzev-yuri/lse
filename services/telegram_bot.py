@@ -244,55 +244,9 @@ def _build_cluster_note_for_5m_llm(
     correlation_matrix: Optional[Dict[str, Dict[str, float]]],
     tech_by_ticker: Dict[str, Dict[str, Any]],
 ) -> Optional[str]:
-    """Собирает текст «Кластер и корреляция» для промпта LLM в game_5m (тот же контекст, что в отчёте)."""
-    if not correlation_matrix or not full_list:
-        return None
-    others = [x for x in full_list if x != ticker]
-    if not others:
-        return None
-    lines = [f"Кластер тикеров: {', '.join(full_list)}. Анализируемый тикер: {ticker}."]
-    corr_pairs = []
-    for o in others:
-        c = correlation_matrix.get(ticker, {}).get(o) or correlation_matrix.get(o, {}).get(ticker)
-        if c is not None and math.isfinite(c):
-            try:
-                corr_pairs.append(f"{o} {float(c):+.2f}")
-            except (TypeError, ValueError):
-                pass
-    if corr_pairs:
-        lines.append(f"Корреляция с другими (30 дн.): {', '.join(corr_pairs[:15])}.")
-    other_rows: List[Tuple[str, Optional[float], Optional[float], float]] = []
-    for t in full_list:
-        if t == ticker:
-            continue
-        tech = tech_by_ticker.get(t) or {}
-        pr = tech.get("price")
-        rsi_o = tech.get("rsi")
-        c_val = None
-        raw = correlation_matrix.get(ticker, {}).get(t) or correlation_matrix.get(t, {}).get(ticker)
-        if raw is not None:
-            try:
-                f_c = float(raw)
-                if math.isfinite(f_c):
-                    c_val = f_c
-            except (TypeError, ValueError):
-                pass
-        if c_val is not None:
-            other_rows.append((t, pr, rsi_o, c_val))
-    other_rows.sort(key=lambda r: r[3], reverse=True)
-    if other_rows:
-        ctx_lines = []
-        for t, pr, rsi_o, c_val in other_rows:
-            seg = [t]
-            if pr is not None:
-                seg.append(f"${pr:.2f}")
-            if rsi_o is not None:
-                seg.append(f"RSI {rsi_o:.1f}")
-            seg.append(f"corr {c_val:+.2f}")
-            ctx_lines.append(" ".join(seg))
-        lines.append("По тикерам с известной корреляцией (по убыванию корр.): " + "; ".join(ctx_lines) + ".")
-    lines.append("Учти: при высокой корреляции с другим активом они часто движутся вместе; при расхождении сигналов — осторожность.")
-    return "\n".join(lines)
+    """Алиас к общей функции (services.cluster_recommend.build_cluster_note_for_5m_llm)."""
+    from services.cluster_recommend import build_cluster_note_for_5m_llm as _build
+    return _build(ticker, full_list, correlation_matrix, tech_by_ticker)
 
 
 def _build_prompt_entry_game5m_html(
@@ -444,36 +398,54 @@ def _build_prompt_entry_game5m_html(
     return "\n".join(parts)
 
 
-def _build_closed_html(closed: List[Any], total_pnl: float = 0) -> str:
-    """Собирает простой HTML для отчёта закрытых позиций (для сохранения в кэш)."""
+def _build_closed_html(closed: List[Any], total_pnl: float = 0, impulse_pct: bool = False) -> str:
+    """Собирает простой HTML для отчёта закрытых позиций (для сохранения в кэш). impulse_pct: добавить колонку Impulse %."""
     rows_html = []
     for t in closed:
         direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
         pts = t.exit_price - t.entry_price
         pips = round(pts * 10000) if ("=X" in t.ticker or "USD" in t.ticker or "EUR" in t.ticker) else round(pts, 2)
+        impulse_cell = ""
+        if impulse_pct:
+            imp = getattr(t, "entry_impulse_pct", None)
+            if imp is not None:
+                impulse_cell = f"<td>{imp:+.2f}%</td>"
+            elif t.entry_price and t.entry_price > 0:
+                imp = (t.exit_price - t.entry_price) / t.entry_price * 100.0
+                impulse_cell = f"<td>{imp:+.2f}%</td>"
+            else:
+                impulse_cell = "<td>—</td>"
         entry_s = html.escape(str(getattr(t, "entry_strategy", None) or "—"))
         exit_s = html.escape(str(getattr(t, "exit_strategy", None) or "—"))
         profit_cls = "positive" if t.net_pnl >= 0 else "negative"
-        mfe_str = f"{t.mfe:+.2f}%" if getattr(t, "mfe", None) is not None else "—"
-        mae_str = f"{t.mae:+.2f}%" if getattr(t, "mae", None) is not None else "—"
-        tp_str = f"{t.take_profit}%" if getattr(t, "take_profit", None) is not None else "—"
-        sl_str = f"{t.stop_loss}%" if getattr(t, "stop_loss", None) is not None else "—"
-        rows_html.append(
+        qty_val = getattr(t, "quantity", None)
+        qty_str = f"{int(qty_val)}" if qty_val is not None and float(qty_val) == int(float(qty_val)) else f"{float(qty_val):.2f}" if qty_val is not None else "—"
+        pnl_pct = (t.exit_price - t.entry_price) / t.entry_price * 100.0 if t.entry_price and t.entry_price > 0 else 0.0
+        pnl_pct_str = f"{pnl_pct:+.2f}%"
+        row_cells = (
             f"<tr><td>{html.escape(t.ticker)}</td><td>{direction}</td>"
-            f"<td>{t.entry_price:.2f}</td><td>{t.exit_price:.2f}</td><td>{pips}</td>"
+            f"<td>{t.entry_price:.2f}</td><td>{t.exit_price:.2f}</td>"
+        )
+        if impulse_pct:
+            row_cells += impulse_cell
+        reason = html.escape(str(getattr(t, "signal_type", None) or "—"))
+        row_cells += (
+            f"<td>{pips}</td><td>{qty_str}</td>"
             f'<td class="{profit_cls}">{t.net_pnl:+.2f}</td>'
-            f"<td>{entry_s}</td><td>{exit_s}</td>"
-            f"<td>{tp_str}</td><td>{sl_str}</td><td>{mfe_str}</td><td>{mae_str}</td>"
+            f'<td class="{profit_cls}">{pnl_pct_str}</td>'
+            f"<td>{entry_s}</td><td>{exit_s}</td><td>{reason}</td>"
             f"<td>{_ts_msk(t.entry_ts)}</td><td>{_ts_msk(t.ts)}</td></tr>"
         )
+        rows_html.append(row_cells)
     body = "\n".join(rows_html)
     summary = f'<p class="summary"><strong>Итого:</strong> {len(closed)} позиций, суммарный P/L: ${total_pnl:+,.2f}</p>'
+    th_impulse = "<th>Импульс % (при входе)</th>" if impulse_pct else ""
+    thead = f"<thead><tr><th>Instrument</th><th>Dir</th><th>Open</th><th>Close</th>{th_impulse}<th>Pips</th><th>Qty</th><th>Profit</th><th>P/L %</th><th>Entry</th><th>Exit</th><th>Причина выхода</th><th>Open (MSK)</th><th>Close (MSK)</th></tr></thead>"
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><title>Закрытые позиции</title>
 <style>table{{border-collapse:collapse;width:100%}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}} .summary{{margin-top:1em}}</style>
-</head><body><h1>Закрытые позиции</h1><p>Даты в MSK. Entry/Exit — стратегия открытия/закрытия. MFE/MAE - плавающая макс прибыль/убыток в %.</p>
-<table><thead><tr><th>Instrument</th><th>Dir</th><th>Open</th><th>Close</th><th>Pips</th><th>Profit</th><th>Entry</th><th>Exit</th><th>TP</th><th>SL</th><th>MFE</th><th>MAE</th><th>Open (MSK)</th><th>Close (MSK)</th></tr></thead>
-<tbody>{body}</tbody></table>{summary}</body></html>"""
+</head><body><h1>Закрытые позиции</h1><p>Даты в MSK. Entry/Exit — стратегия. Причина выхода: TAKE_PROFIT (достигнут тейк), TIME_EXIT (конец сессии или макс. дней), SELL (сигнал), STOP_LOSS. Цель тейка при входе задаётся от импульса 2ч (напр. 6%%), но выход может быть по другой причине — тогда P/L %% меньше цели.</p>
+<table>{thead}<tbody>{body}</tbody></table>{summary}</body></html>"""
 
 
 def _build_pending_html(
@@ -673,6 +645,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("sell", self._handle_sell))
         self.application.add_handler(CommandHandler("history", self._handle_history))
         self.application.add_handler(CommandHandler("closed", self._handle_closed))
+        self.application.add_handler(CommandHandler("closed_impulse", self._handle_closed_impulse))
         self.application.add_handler(CommandHandler("pending", self._handle_pending))
         self.application.add_handler(CommandHandler("set_strategy", self._handle_set_strategy))
         self.application.add_handler(CommandHandler("prompt_entry", self._handle_prompt_entry))
@@ -785,6 +758,7 @@ class LSETelegramBot:
 /sell <ticker> [кол-во] — продать (без кол-ва — вся позиция)
 /history [тикер] [N] — последние сделки (с тикером — фильтр по тикеру)
 /closed [тикер] [N] — закрытые позиции; без аргументов — все (25); с тикером — фильтр (напр. /closed MU 10)
+/closed_impulse [N] [pct|all] — закрытые 5m без стоп-лоссов; pct=порог импульса при входе % (по умолч. 5), all=все сделки (при отсутствии импульса — в колонке)
 /pending [тикер] [N] — открытые позиции; с тикером — только по нему (напр. /pending SNDK)
 /premarket [тикер] — премаркет: таблица + HTML; с тикером — ещё график 1m (как /chart5m)
 /corr [ticker1] [ticker2] — корреляции по кластеру портфеля (60 дн.). Без аргументов — матрица; один/два тикера — строка или пара.
@@ -865,6 +839,7 @@ class LSETelegramBot:
 `/sell <ticker>` — закрыть всю позицию; `/sell <ticker> <кол-во>` — частичная продажа
 `/history [тикер] [N]` — последние сделки (по умолч. 15); с тикером — только по нему. В ответе — стратегия [GAME\_5M / Portfolio / Manual]
 `/closed [тикер] [N]` — закрытые позиции; с тикером — только по нему (напр. `/closed MU 10`). По умолч. 25.
+`/closed_impulse [N] [pct|all]` — закрытые 5m без стоп-лоссов. По умолч. импульс при входе >5%; pct=другой порог %; all=все сделки (импульс при входе в колонке или —). Внизу — открытые 5m.
 `/pending [тикер] [N]` — открытые позиции; с тикером — фильтр (напр. `/pending SNDK`). «5m вне» — тикер убран из игры 5m.
 `/premarket` — таблица премаркета + HTML. `/premarket <тикер>` — дополнительно график 1m по тикеру (как /chart5m).
 `/corr` — матрица корреляций по кластеру портфеля (60 дн.). `/corr5m` — по кластеру 5m. С аргументами: строка по тикеру или пара T1 T2.
@@ -1689,9 +1664,9 @@ class LSETelegramBot:
             df["_session_key"] = dt_plot.dt.strftime("%Y-%m-%d")
             dt_min = dt_plot.min()
             dt_max = dt_plot.max()
-            # Сессии по убыванию даты (сверху — самая новая). Для каждой сессии — своё окно 09:30–16:00 ET по дате.
+            # Сессии: слева направо от более раннего к более позднему дню (каждая — своё окно 09:30–16:00 ET).
             MIN_BARS_PER_SESSION = 3
-            unique_keys = sorted(df["_session_key"].unique(), reverse=True)
+            unique_keys = sorted(df["_session_key"].unique())
             session_dates = [sk for sk in unique_keys if (df["_session_key"] == sk).sum() >= MIN_BARS_PER_SESSION]
             if not session_dates:
                 session_dates = unique_keys
@@ -1711,10 +1686,12 @@ class LSETelegramBot:
                 fig, axes = plt.subplots(1, 1, figsize=(11, 5), facecolor="white")
                 axes = [axes]
             else:
-                # Без sharex: у каждой сессии свой диапазон по X, иначе верхний график «подхватывает» пределы нижнего и данные не видны
+                # Горизонтально впритык: каждая сессия — свой столбец, у каждого своя временная шкала (9:30–16:00 ET)
+                w_per_day = 4.2
                 fig, axes = plt.subplots(
-                    n_sessions, 1, figsize=(10, 3.2 * n_sessions), sharex=False, facecolor="white"
+                    1, n_sessions, figsize=(w_per_day * n_sessions, 5), sharex=False, sharey=True, facecolor="white"
                 )
+                axes = list(axes)
             # Сделки за период (один раз); маркер выхода — по фактическому PnL (цена выхода vs входа), а не по signal_type
             buy_ts, buy_p = [], []
             take_ts, take_p = [], []
@@ -2966,11 +2943,15 @@ class LSETelegramBot:
             def _cell(s: str, w: int) -> str:
                 return str(s)[:w].ljust(w)
 
+            w_qty = 5
+            w_pct = 8
+            w_reason = 12
             header = (
                 _cell("Instrument", w_inst) + sep + _cell("Dir", w_dir) + sep
                 + _cell("Open", w_open) + sep + _cell("Close", w_close) + sep
-                + _cell("Pips", w_pips) + sep + _cell("Profit", w_profit) + sep
-                + _cell("Entry", w_strat) + sep + _cell("Exit", w_strat) + sep
+                + _cell("Pips", w_pips) + sep + _cell("Qty", w_qty) + sep + _cell("Profit", w_profit) + sep
+                + _cell("P/L %", w_pct) + sep
+                + _cell("Entry", w_strat) + sep + _cell("Exit", w_strat) + sep + _cell("Причина", w_reason) + sep
                 + _cell("Open (MSK)", w_date) + sep + "Close (MSK)"
             )
             rows = [header]
@@ -2984,13 +2965,19 @@ class LSETelegramBot:
                         pips_val = round(pts, 2)
                 else:
                     pips_val = round(pts, 2)
+                qty_val = getattr(t, "quantity", None)
+                qty_str = f"{int(qty_val)}" if qty_val is not None and float(qty_val) == int(float(qty_val)) else f"{float(qty_val):.2f}" if qty_val is not None else "—"
+                pnl_pct = (t.exit_price - t.entry_price) / t.entry_price * 100.0 if t.entry_price and t.entry_price > 0 else 0.0
+                pct_str = f"{pnl_pct:+.2f}%"
                 entry_s = getattr(t, "entry_strategy", None) or "—"
                 exit_s = getattr(t, "exit_strategy", None) or "—"
+                reason_s = getattr(t, "signal_type", None) or "—"
                 row = (
                     _cell(str(t.ticker), w_inst) + sep + _cell(direction, w_dir) + sep
                     + _cell(f"{t.entry_price:.2f}", w_open) + sep + _cell(f"{t.exit_price:.2f}", w_close) + sep
-                    + _cell(str(pips_val), w_pips) + sep + _cell(f"{t.net_pnl:+.2f}", w_profit) + sep
-                    + _cell(entry_s, w_strat) + sep + _cell(exit_s, w_strat) + sep
+                    + _cell(str(pips_val), w_pips) + sep + _cell(qty_str, w_qty) + sep + _cell(f"{t.net_pnl:+.2f}", w_profit) + sep
+                    + _cell(pct_str, w_pct) + sep
+                    + _cell(entry_s, w_strat) + sep + _cell(exit_s, w_strat) + sep + _cell(reason_s, w_reason) + sep
                     + _cell(_fmt_ts_msk(t.entry_ts), w_date) + sep + _fmt_ts_msk(t.ts)
                 )
                 rows.append(row)
@@ -3018,6 +3005,149 @@ class LSETelegramBot:
                 )
         except Exception as e:
             logger.error(f"Ошибка closed: {e}", exc_info=True)
+            try:
+                await update.message.reply_text(f"❌ Ошибка: {str(e)[:400]}")
+            except Exception:
+                pass
+
+    async def _handle_closed_impulse(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Закрытые 5m: по умолчанию импульс при входе >5%, без стоп-лоссов. /closed_impulse [N] [pct|all] — pct порог в %, all = все сделки 5m (при отсутствии импульса показываем —)."""
+        if update.message is None:
+            return
+        user_id = (update.effective_user or update.message.from_user).id if (update.effective_user or getattr(update.message, "from_user", None)) else None
+        if user_id is None or not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        limit = 25
+        show_all = False  # all = показывать все закрытые 5m без фильтра по импульсу
+        impulse_min = 5.0
+        args = [str(a).strip() for a in (context.args or [])]
+        if args and args[0].isdigit():
+            limit = min(int(args[0]), 50)
+            if len(args) > 1:
+                if args[1].lower() in ("all", "*", "все", "всё"):
+                    show_all = True
+                else:
+                    try:
+                        impulse_min = float(args[1])
+                    except ValueError:
+                        pass
+        elif args and args[0].lower() in ("all", "*", "все", "всё"):
+            show_all = True
+            if len(args) > 1 and args[1].isdigit():
+                limit = min(int(args[1]), 50)
+        elif args and not args[0].isdigit():
+            try:
+                impulse_min = float(args[0])
+                if len(args) > 1 and args[1].isdigit():
+                    limit = min(int(args[1]), 50)
+            except ValueError:
+                if args[0].lower() in ("all", "*", "все", "всё"):
+                    show_all = True
+
+        try:
+            import pandas as pd
+            from report_generator import get_engine, load_trade_history, compute_closed_trade_pnls, compute_open_positions, get_latest_prices
+
+            engine = get_engine()
+            trades_5m = load_trade_history(engine, strategy_name="GAME_5M")
+            closed_all = compute_closed_trade_pnls(trades_5m)
+            # Без стоп-лоссов в любом режиме
+            closed_all = [t for t in closed_all if (getattr(t, "signal_type", "") or "").strip().upper() != "STOP_LOSS"]
+            if show_all:
+                closed = closed_all
+            else:
+                # Импульс при входе (entry_impulse_pct) >= порог; при отсутствии импульса не показываем (только при show_all)
+                closed = [
+                    t for t in closed_all
+                    if getattr(t, "entry_impulse_pct", None) is not None and float(t.entry_impulse_pct) > impulse_min
+                ]
+            closed = sorted(closed, key=lambda x: x.ts, reverse=True)[:limit]
+            open_5m = compute_open_positions(trades_5m)
+
+            def _fmt_ts_msk(ts) -> str:
+                if ts is None:
+                    return "—"
+                try:
+                    t = pd.Timestamp(ts)
+                    if t.tzinfo:
+                        t = t.tz_convert("Europe/Moscow")
+                    return t.strftime("%d.%m.%Y %H:%M")
+                except Exception:
+                    return str(ts)[:16] if ts else "—"
+
+            sep = "  "
+            w_inst, w_open, w_close, w_imp, w_qty, w_profit, w_pct, w_strat, w_date = 10, 8, 8, 9, 5, 10, 8, 8, 16
+            def _cell(s: str, w: int) -> str:
+                return str(s)[:w].ljust(w)
+            w_reason = 12
+            header = (
+                _cell("Instrument", w_inst) + sep + _cell("Open", w_open) + sep + _cell("Close", w_close) + sep
+                + _cell("Импульс%вх", w_imp) + sep + _cell("Qty", w_qty) + sep + _cell("Profit", w_profit) + sep + _cell("P/L %", w_pct) + sep
+                + _cell("Причина", w_reason) + sep
+                + _cell("Open (MSK)", w_date) + sep + "Close (MSK)"
+            )
+            rows = [header]
+            for t in closed:
+                impulse_at_entry = getattr(t, "entry_impulse_pct", None)
+                impulse_str = f"{impulse_at_entry:+.2f}%" if impulse_at_entry is not None else "—"
+                qty_val = getattr(t, "quantity", None)
+                qty_str = f"{int(qty_val)}" if qty_val is not None and float(qty_val) == int(float(qty_val)) else f"{float(qty_val):.2f}" if qty_val is not None else "—"
+                pnl_pct = (t.exit_price - t.entry_price) / t.entry_price * 100.0 if t.entry_price and t.entry_price > 0 else 0.0
+                pct_str = f"{pnl_pct:+.2f}%"
+                reason_s = getattr(t, "signal_type", "") or "—"
+                row = (
+                    _cell(t.ticker, w_inst) + sep + _cell(f"{t.entry_price:.2f}", w_open) + sep + _cell(f"{t.exit_price:.2f}", w_close) + sep
+                    + _cell(impulse_str, w_imp) + sep + _cell(qty_str, w_qty) + sep + _cell(f"{t.net_pnl:+.2f}", w_profit) + sep + _cell(pct_str, w_pct) + sep
+                    + _cell(reason_s, w_reason) + sep
+                    + _cell(_fmt_ts_msk(t.entry_ts), w_date) + sep + _fmt_ts_msk(t.ts)
+                )
+                rows.append(row)
+            total_pnl = sum(t.net_pnl for t in closed)
+            if closed:
+                rows.append("")
+                rows.append(f"Итого: {len(closed)} позиций, суммарный P/L: ${total_pnl:+,.2f}")
+            if open_5m:
+                rows.append("")
+                rows.append("--- Открытые 5m (ещё не закрыты) ---")
+                latest = get_latest_prices(engine, [p.ticker for p in open_5m])
+                for p in open_5m[:20]:
+                    now_price = latest.get(p.ticker) or p.entry_price
+                    pnl_pct = (now_price - p.entry_price) / p.entry_price * 100.0 if p.entry_price and p.entry_price > 0 else 0.0
+                    pq = getattr(p, "quantity", None)
+                    pqty = f"{int(pq)}" if pq is not None and float(pq) == int(float(pq)) else f"{float(pq):.2f}" if pq is not None else "—"
+                    rows.append(
+                        _cell(p.ticker, w_inst) + sep + _cell(f"{p.entry_price:.2f}", w_open) + sep + _cell(f"{now_price:.2f}", w_close) + sep
+                        + _cell(f"{pnl_pct:+.2f}%", w_imp) + sep + _cell(pqty, w_qty) + sep + _cell("—", w_profit) + sep + _cell(f"{pnl_pct:+.2f}%", w_pct) + sep
+                        + _cell("—", w_reason) + sep
+                        + _cell(_fmt_ts_msk(p.entry_ts), w_date) + sep + "не закрыта"
+                    )
+            table = "\n".join(rows)
+            html_content = _build_closed_html(closed, total_pnl=total_pnl, impulse_pct=True)
+            if open_5m:
+                html_content = html_content.replace("</body>", "<h2>Открытые 5m (ещё не закрыты)</h2><p>Ниже — позиции, по которым ещё не было выхода.</p></body>")
+            filename = _unique_report_filename("Закрытые_импульс_5")
+            if show_all:
+                caption = f"📋 closed_impulse: все закрытые 5m без стоп-лоссов (последние {len(closed)}). Импульс при входе: если есть — в колонке, иначе —."
+            else:
+                caption = f"📋 closed_impulse: закрытые 5m с импульсом при входе >{impulse_min}%, без стоп-лоссов (последние {len(closed)})."
+            if open_5m:
+                caption += f" Открытые 5m: {len(open_5m)}."
+            try:
+                await update.message.reply_document(
+                    document=BytesIO(html_content.encode("utf-8")),
+                    filename=filename,
+                    caption=caption,
+                )
+            except Exception as doc_e:
+                logger.warning("closed_impulse: не удалось отправить HTML: %s", doc_e)
+                mode_str = "все 5m" if show_all else f"импульс при входе >{impulse_min}%"
+                await update.message.reply_text(
+                    f"📋 closed_impulse ({mode_str}, без стоп-лоссов)\n\n```\n{table}\n```",
+                    parse_mode="Markdown",
+                )
+        except Exception as e:
+            logger.error("Ошибка closed_impulse: %s", e, exc_info=True)
             try:
                 await update.message.reply_text(f"❌ Ошибка: {str(e)[:400]}")
             except Exception:

@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy import create_engine, text
@@ -17,6 +19,10 @@ from sqlalchemy import create_engine, text
 from config_loader import get_database_url, get_config_value
 
 logger = logging.getLogger(__name__)
+
+# Кэш подсказок из local/suggested_5m_params.json (обновлённых ежедневным daily_5m_params.py)
+_SUGGESTED_5M_CACHE: Optional[dict] = None
+_SUGGESTED_5M_MAX_AGE_HOURS = 25
 
 # Таймзона, в которой хранятся ts в trade_history (если naive — считаем Москвой)
 TRADE_HISTORY_TZ = "Europe/Moscow"
@@ -49,8 +55,59 @@ GAME_NOTIONAL_USD = 10_000.0
 COMMISSION_RATE = 0.0  # 0% — оплаты брокеру нет
 
 
-def _max_position_days() -> int:
-    """Макс. срок удержания позиции (дней) из конфига GAME_5M_MAX_POSITION_DAYS."""
+def _get_suggested_5m_params() -> Optional[dict]:
+    """
+    Подсказки из local/suggested_5m_params.json (ежедневный daily_5m_params.py).
+    Используются только при USE_SUGGESTED_5M_PARAMS=true и если файл обновлён не более 25 ч назад.
+    Возвращает {"take_pct": {ticker: float}, "max_days": {ticker: int}} или None.
+    """
+    global _SUGGESTED_5M_CACHE
+    raw = (get_config_value("USE_SUGGESTED_5M_PARAMS", "") or "").strip().lower()
+    if raw not in ("1", "true", "yes"):
+        return None
+    if _SUGGESTED_5M_CACHE is not None:
+        return _SUGGESTED_5M_CACHE
+    path = Path(__file__).resolve().parent.parent / "local" / "suggested_5m_params.json"
+    if not path.is_file():
+        return None
+    try:
+        now = datetime.now(timezone.utc)
+        mtime = path.stat().st_mtime
+        from datetime import datetime as dt_from_ts
+        file_dt = dt_from_ts.fromtimestamp(mtime, tz=timezone.utc)
+        if (now - file_dt).total_seconds() > _SUGGESTED_5M_MAX_AGE_HOURS * 3600:
+            logger.debug("suggested_5m_params.json старше %s ч — не используем", _SUGGESTED_5M_MAX_AGE_HOURS)
+            return None
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        take_pct = data.get("take_pct") or {}
+        max_days = data.get("max_days") or {}
+        _SUGGESTED_5M_CACHE = {"take_pct": take_pct, "max_days": max_days}
+        return _SUGGESTED_5M_CACHE
+    except Exception as e:
+        logger.debug("Не удалось загрузить suggested_5m_params: %s", e)
+        return None
+
+
+def _max_position_days(ticker: Optional[str] = None) -> int:
+    """Макс. срок удержания позиции (дней). Сначала подсказка из suggested_5m_params (если включено), затем GAME_5M_MAX_POSITION_DAYS_<TICKER>, иначе общий."""
+    suggested = _get_suggested_5m_params()
+    if ticker and suggested:
+        days_map = suggested.get("max_days") or {}
+        v = days_map.get(ticker.upper()) or days_map.get(ticker)
+        if v is not None:
+            try:
+                return max(1, int(v))
+            except (ValueError, TypeError):
+                pass
+    if ticker:
+        key = f"GAME_5M_MAX_POSITION_DAYS_{ticker.upper()}"
+        val = get_config_value(key, "").strip()
+        if val:
+            try:
+                return max(1, int(val))
+            except (ValueError, TypeError):
+                pass
     try:
         return max(1, int(get_config_value("GAME_5M_MAX_POSITION_DAYS", "2")))
     except (ValueError, TypeError):
@@ -96,7 +153,7 @@ def get_strategy_params() -> dict[str, Any]:
         "stop_to_take_ratio": stop_to_take_ratio,
         "stop_loss_min_pct": stop_min,
         "stop_loss_rule": "min(config, тейк×ratio), не меньше stop_loss_min_pct — стоп всегда меньше тейка",
-        "max_position_days": _max_position_days(),
+        "max_position_days": _max_position_days(None),
     }
 
 
@@ -218,8 +275,11 @@ def record_entry(
     price: float,
     signal_type: str,
     reasoning: Optional[str] = None,
+    *,
+    entry_context: Optional[dict[str, Any]] = None,
 ) -> Optional[int]:
-    """Фиксирует бумажный вход: INSERT BUY в trade_history (strategy_name=GAME_5M)."""
+    """Фиксирует бумажный вход: INSERT BUY в trade_history (strategy_name=GAME_5M).
+    entry_context: контекст на момент входа (momentum_2h_pct и др.) — сохраняется в context_json для /closed_impulse (импульс при решении об открытии)."""
     if price <= 0:
         logger.warning("game_5m: record_entry %s с ценой <= 0, пропуск", ticker)
         return None
@@ -230,12 +290,14 @@ def record_entry(
     quantity = max(1, int(GAME_NOTIONAL_USD / price))
     notional = quantity * price
     commission = notional * COMMISSION_RATE
+    import json as _json
+    context_str = _json.dumps(entry_context) if entry_context else None
     engine = _engine()
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone)
-                VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz)
+                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone, context_json)
+                VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz, :context_json)
             """),
             {
                 "ticker": ticker,
@@ -246,6 +308,7 @@ def record_entry(
                 "total_value": notional,
                 "strategy": GAME_5M_STRATEGY,
                 "ts_tz": TRADE_HISTORY_TZ,
+                "context_json": context_str,
             },
         )
         row = conn.execute(text("SELECT LASTVAL()")).fetchone()
@@ -472,7 +535,16 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
 
 
 def _take_profit_cap_pct(ticker: Optional[str] = None) -> float:
-    """Потолок тейка (%): по тикеру (GAME_5M_TAKE_PROFIT_PCT_SNDK=8) или общий GAME_5M_TAKE_PROFIT_PCT."""
+    """Потолок тейка (%): сначала подсказка из suggested_5m_params (если включено), затем GAME_5M_TAKE_PROFIT_PCT_<TICKER>, иначе общий."""
+    suggested = _get_suggested_5m_params()
+    if ticker and suggested:
+        take_map = suggested.get("take_pct") or {}
+        v = take_map.get(ticker.upper()) or take_map.get(ticker)
+        if v is not None:
+            try:
+                return max(2.0, min(10.0, float(v)))
+            except (ValueError, TypeError):
+                pass
     if ticker:
         key = f"GAME_5M_TAKE_PROFIT_PCT_{ticker.upper()}"
         raw = get_config_value(key, "").strip()
@@ -608,7 +680,7 @@ def should_close_position(
         age = datetime.now() - entry_ts
     else:
         age = timedelta(0)
-    if age > timedelta(days=_max_position_days()):
+    if age > timedelta(days=_max_position_days(open_position.get("ticker"))):
         return True, "TIME_EXIT"
     if current_decision == "SELL":
         return True, "SELL"

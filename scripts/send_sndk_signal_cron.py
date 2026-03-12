@@ -97,9 +97,11 @@ def process_ticker(
     mentions: str,
     ticker: str,
     d5_precomputed: dict | None = None,
+    cluster_context: dict | None = None,
 ) -> bool:
     """Обрабатывает один тикер: игра (закрытие/вход) и при BUY/STRONG_BUY — рассылка. Возвращает True если хотя бы одно сообщение отправлено.
-    d5_precomputed: при кластерном запуске — готовое решение из get_cluster_decisions_5m; иначе вызывается get_decision_5m(ticker)."""
+    d5_precomputed: при кластерном запуске — готовое решение из get_cluster_decisions_5m; иначе вызывается get_decision_5m(ticker).
+    cluster_context: при GAME_5M_ENTRY_STRATEGY=llm — {decisions, correlation, tickers} для вызова LLM с контекстом корреляций."""
     from services.recommend_5m import get_decision_5m
     from services.game_5m import get_open_position, get_open_position_any, close_position, should_close_position, record_entry, _effective_take_profit_pct, _effective_stop_loss_pct, _game_5m_stop_loss_enabled
 
@@ -148,13 +150,18 @@ def process_ticker(
             entry_f = float(entry) if entry is not None and entry > 0 else None
 
             if should_close and exit_type:
-                # Цена выхода = Close бара, который только что завершился (exit_bar_close), чтобы не было расхождений с корректором
                 base_exit = d5.get("exit_bar_close") if isinstance(d5.get("exit_bar_close"), (int, float)) and d5.get("exit_bar_close") > 0 else price_for_check
-                exit_price = base_exit
-                if exit_type == "TAKE_PROFIT" and bar_high is not None and bar_high > 0:
-                    exit_price = min(exit_price, bar_high)
+                if exit_type == "TAKE_PROFIT":
+                    # Решение о тейке принято по bar_high (price_for_take = max(current, bar_high)). Записываем в БД
+                    # ту же цену — bar_high: закрытие в соответствии с high, по которому принято решение.
+                    if bar_high is not None and bar_high > 0:
+                        exit_price = bar_high
+                    else:
+                        exit_price = base_exit
                 elif exit_type == "STOP_LOSS" and bar_low is not None and bar_low > 0:
-                    exit_price = max(exit_price, bar_low)
+                    exit_price = max(base_exit, bar_low)
+                else:
+                    exit_price = base_exit
                 logger.info(
                     "[5m] %s закрытие: тип=%s, exit_bar_close=%s, price_5m=%.2f, bar_high=%s, bar_low=%s → exit_price=%.2f",
                     ticker, exit_type, d5.get("exit_bar_close"), price, bar_high, bar_low, exit_price,
@@ -177,9 +184,21 @@ def process_ticker(
                 )
                 outcome_lines.append("позиция закрыта по %s @ %.2f" % (exit_type, exit_price))
                 closed_this_run = True
-                close_price = exit_price
                 close_exit_type = exit_type
-                close_entry_price = entry_f
+                # Цена входа/выхода из БД (как в /closed), чтобы уведомление совпадало с отчётом
+                try:
+                    from report_generator import get_engine, get_last_closed_for_ticker
+                    last_closed = get_last_closed_for_ticker(get_engine(), ticker, "GAME_5M")
+                    if last_closed:
+                        close_entry_price = last_closed.entry_price
+                        close_price = last_closed.exit_price
+                    else:
+                        close_entry_price = entry_f
+                        close_price = exit_price
+                except Exception as e:
+                    logger.debug("get_last_closed_for_ticker: %s", e)
+                    close_entry_price = entry_f
+                    close_price = exit_price
             else:
                 if entry_f:
                     pnl_pct = (price_for_check - entry_f) / entry_f * 100.0
@@ -259,6 +278,66 @@ def process_ticker(
             return False
     except Exception as e:
         logger.warning("game_5m: проверка открытой позиции %s: %s", ticker, e)
+
+    # Стратегия входа: technical (по умолчанию) или llm — с учётом корреляций (для тестирования)
+    entry_strategy = (get_config_value("GAME_5M_ENTRY_STRATEGY", "technical") or "technical").strip().lower()
+    if entry_strategy == "llm" and cluster_context and cluster_context.get("correlation"):
+        try:
+            from services.cluster_recommend import build_cluster_note_for_5m_llm
+            from services.llm_service import get_llm_service
+            decisions_map = cluster_context.get("decisions") or {}
+            full_list = cluster_context.get("tickers") or list(decisions_map.keys())
+            tech_by_ticker = {
+                t: {"price": d.get("price"), "rsi": d.get("rsi_5m")}
+                for t, d in decisions_map.items() if d
+            }
+            cluster_note = build_cluster_note_for_5m_llm(ticker, full_list, cluster_context.get("correlation"), tech_by_ticker)
+            if cluster_note:
+                llm = get_llm_service()
+                if getattr(llm, "client", None):
+                    technical_data = {
+                        "close": d5.get("price"),
+                        "rsi": d5.get("rsi_5m"),
+                        "volatility_5": d5.get("volatility_5m_pct"),
+                        "technical_signal": decision,
+                        "cluster_note": cluster_note,
+                    }
+                    kb_impact = d5.get("kb_news_impact") or ""
+                    kb_news = d5.get("kb_news") or []
+                    news_list = [
+                        {"source": "KB", "content": (n.get("content") or n.get("title") or "")[:200], "sentiment_score": float(n.get("sentiment_score", 0.5))}
+                        for n in kb_news[:5]
+                    ] if kb_news else []
+                    if not news_list and kb_impact:
+                        news_list = [{"source": "KB", "content": kb_impact[:500], "sentiment_score": 0.5}]
+                    sentiment = 0.5
+                    if "негатив" in (kb_impact or "").lower():
+                        sentiment = 0.35
+                    elif "позитив" in (kb_impact or "").lower():
+                        sentiment = 0.65
+                    result = llm.analyze_trading_situation(
+                        ticker, technical_data, news_list, sentiment,
+                        strategy_name="GAME_5M", strategy_signal=decision,
+                    )
+                    if result and result.get("llm_analysis"):
+                        llm_decision = (result["llm_analysis"].get("decision") or "").strip().upper()
+                        if llm_decision not in ("BUY", "STRONG_BUY"):
+                            logger.info("%s: стратегия входа=llm, LLM дал %s — вход не выполняем (технический был %s)", ticker, llm_decision or "—", decision)
+                            return False
+                        decision = llm_decision
+                        ana = result["llm_analysis"]
+                        reasoning = (ana.get("reasoning") or d5.get("reasoning") or "")[:500]
+                        llm_key_factors = ana.get("key_factors")
+                        if not isinstance(llm_key_factors, list):
+                            llm_key_factors = [llm_key_factors] if llm_key_factors else None
+                        d5 = dict(d5, decision=decision, reasoning=reasoning, entry_strategy="llm", llm_key_factors=llm_key_factors)
+                        logger.info("%s: стратегия входа=llm, решение LLM: %s", ticker, decision)
+                else:
+                    logger.debug("%s: стратегия llm, но LLM недоступен — используем технический вход", ticker)
+            else:
+                logger.debug("%s: стратегия llm, cluster_note пустой — используем технический вход", ticker)
+        except Exception as e:
+            logger.warning("game_5m: LLM для входа %s: %s — используем технический вход", ticker, e)
 
     logger.info("[5m] %s: отправка сигнала на вход (BUY, позиции нет, cooldown пройден)", ticker)
     rsi = d5.get("rsi_5m")
@@ -356,7 +435,12 @@ def process_ticker(
         logger.warning("game_5m: нет цены для %s, рассылка отменена", ticker)
         return False
     try:
-        entry_id = record_entry(ticker, price, decision, reasoning)
+        # Полный дамп параметров (prompt_entry-уровень) для новых сделок; старые — упрощённый формат
+        from services.deal_params_5m import build_full_entry_context
+        entry_context = build_full_entry_context(d5) if d5 else None
+        if entry_context is not None and not entry_context:
+            entry_context = None
+        entry_id = record_entry(ticker, price, decision, reasoning, entry_context=entry_context)
         if entry_id is None:
             logger.error("game_5m: запись входа %s не создана (record_entry вернул None), рассылка отменена", ticker)
             return False
@@ -521,7 +605,7 @@ def main():
     any_sent = False
     for ticker in tickers:
         d5_pre = (cluster_decisions.get("decisions") or {}).get(ticker) if cluster_decisions else None
-        if process_ticker(token, chat_ids, mentions, ticker, d5_precomputed=d5_pre):
+        if process_ticker(token, chat_ids, mentions, ticker, d5_precomputed=d5_pre, cluster_context=cluster_decisions):
             any_sent = True
 
     if not any_sent:

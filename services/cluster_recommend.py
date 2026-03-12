@@ -9,8 +9,9 @@
 
 from __future__ import annotations
 
+import math
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,63 @@ def get_cluster_decisions_5m(
         "correlation": correlation,
         "tickers": tickers,
     }
+
+
+def build_cluster_note_for_5m_llm(
+    ticker: str,
+    full_list: List[str],
+    correlation_matrix: Optional[Dict[str, Dict[str, float]]],
+    tech_by_ticker: Dict[str, Dict[str, Any]],
+) -> Optional[str]:
+    """Собирает текст «Кластер и корреляция» для промпта LLM в game_5m. Общий для крона и бота."""
+    if not correlation_matrix or not full_list:
+        return None
+    others = [x for x in full_list if x != ticker]
+    if not others:
+        return None
+    lines = [f"Кластер тикеров: {', '.join(full_list)}. Анализируемый тикер: {ticker}."]
+    corr_pairs = []
+    for o in others:
+        c = correlation_matrix.get(ticker, {}).get(o) or correlation_matrix.get(o, {}).get(ticker)
+        if c is not None and math.isfinite(c):
+            try:
+                corr_pairs.append(f"{o} {float(c):+.2f}")
+            except (TypeError, ValueError):
+                pass
+    if corr_pairs:
+        lines.append(f"Корреляция с другими (30 дн.): {', '.join(corr_pairs[:15])}.")
+    other_rows: List[Tuple[str, Optional[float], Optional[float], float]] = []
+    for t in full_list:
+        if t == ticker:
+            continue
+        tech = tech_by_ticker.get(t) or {}
+        pr = tech.get("price")
+        rsi_o = tech.get("rsi")
+        c_val = None
+        raw = correlation_matrix.get(ticker, {}).get(t) or correlation_matrix.get(t, {}).get(ticker)
+        if raw is not None:
+            try:
+                f_c = float(raw)
+                if math.isfinite(f_c):
+                    c_val = f_c
+            except (TypeError, ValueError):
+                pass
+        if c_val is not None:
+            other_rows.append((t, pr, rsi_o, c_val))
+    other_rows.sort(key=lambda r: r[3], reverse=True)
+    if other_rows:
+        ctx_lines = []
+        for t, pr, rsi_o, c_val in other_rows:
+            seg = [t]
+            if pr is not None:
+                seg.append(f"${pr:.2f}")
+            if rsi_o is not None:
+                seg.append(f"RSI {rsi_o:.1f}")
+            seg.append(f"corr {c_val:+.2f}")
+            ctx_lines.append(" ".join(seg))
+        lines.append("По тикерам с известной корреляцией (по убыванию корр.): " + "; ".join(ctx_lines) + ".")
+    lines.append("Учти: при высокой корреляции с другим активом они часто движутся вместе; при расхождении сигналов — осторожность.")
+    return "\n".join(lines)
 
 
 def get_cluster_recommendations_portfolio(

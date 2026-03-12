@@ -39,6 +39,7 @@ class TradePnL:
     mfe: Optional[float] = None
     mae: Optional[float] = None
     context_json: Optional[str] = None
+    entry_impulse_pct: Optional[float] = None  # импульс при принятии решения об открытии (momentum_2h_pct на момент BUY)
 
 
 @dataclass
@@ -164,6 +165,14 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
             # Обновляем состояние позиции
             entry_ts = position_open_ts.get(ticker)
             entry_strat = position_open_strategy.get(ticker) or "—"
+            entry_ctx = position_context_json.get(ticker)
+            entry_impulse_pct = None
+            if entry_ctx:
+                try:
+                    from services.deal_params_5m import get_entry_impulse_pct
+                    entry_impulse_pct = get_entry_impulse_pct(entry_ctx)
+                except Exception:
+                    pass
             position_qty[ticker] -= qty
             position_cost[ticker] -= cost_for_sold
             if position_qty[ticker] <= 0:
@@ -192,7 +201,8 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
                     stop_loss=position_stop_loss.get(ticker),
                     mfe=float(row.get("mfe")) if pd.notna(row.get("mfe")) else None,
                     mae=float(row.get("mae")) if pd.notna(row.get("mae")) else None,
-                    context_json=position_context_json.get(ticker),
+                    context_json=entry_ctx,
+                    entry_impulse_pct=entry_impulse_pct,
                 )
             )
 
@@ -275,6 +285,22 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
             )
 
     return sorted(result, key=lambda p: (p.entry_ts or pd.Timestamp.min), reverse=True)
+
+
+def get_last_closed_for_ticker(engine, ticker: str, strategy_name: str = "GAME_5M") -> Optional[TradePnL]:
+    """
+    Последняя закрытая сделка по тикеру (как в /closed).
+    Нужно для уведомления о закрытии: брать entry_price/exit_price из БД, чтобы совпадало с /closed.
+    """
+    trades = load_trade_history(engine, strategy_name=strategy_name)
+    if trades.empty:
+        return None
+    closed = compute_closed_trade_pnls(trades)
+    by_ticker = [t for t in closed if (t.ticker or "").strip().upper() == (ticker or "").strip().upper()]
+    if not by_ticker:
+        return None
+    by_ticker.sort(key=lambda t: t.ts, reverse=True)
+    return by_ticker[0]
 
 
 def compute_win_rate(trade_pnls: List[TradePnL]) -> float:
