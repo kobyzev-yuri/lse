@@ -205,6 +205,114 @@ def _log_returns(series: pd.Series) -> pd.Series:
     return np.log(series / series.shift(1)).dropna()
 
 
+def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Вычисляет все технические параметры по 5m-датафрейму один раз.
+    Результат переиспользуется: для правил решения, context_json, промпта LLM и (при необходимости) для ML-модели.
+    Не включает: загрузку KB-новостей, контекст сессии, итоговое решение (decision/reasoning).
+    """
+    if df is None or df.empty or "Close" not in df.columns:
+        return None
+    df = df.sort_values("datetime").reset_index(drop=True)
+    closes = df["Close"].astype(float)
+    high_5d = float(df["High"].max())
+    low_5d = float(df["Low"].min())
+    price = float(closes.iloc[-1])
+    last_bar_high = float(df["High"].iloc[-1])
+    last_bar_low = float(df["Low"].iloc[-1])
+    n_tail = min(6, len(df))
+    recent_bars_high_max = float(df["High"].iloc[-n_tail:].max()) if n_tail else last_bar_high
+    recent_bars_low_min = float(df["Low"].iloc[-n_tail:].min()) if n_tail else last_bar_low
+
+    session_high = high_5d
+    try:
+        dts = pd.to_datetime(df["datetime"])
+        last_date = dts.max().date()
+        session_mask = dts.dt.date == last_date
+        session_high_val = float(df.loc[session_mask, "High"].max())
+    except Exception:
+        session_high_val = high_5d
+    if session_high_val > 0 and price < session_high_val:
+        session_high = session_high_val
+
+    curvature_5m_pct = None
+    if len(closes) >= 3 and price > 0:
+        d1 = float(closes.iloc[-1] - closes.iloc[-2])
+        d0 = float(closes.iloc[-2] - closes.iloc[-3])
+        curvature_5m_pct = (d1 - d0) / price * 100.0
+
+    possible_bounce_to_high_pct = None
+    estimated_bounce_pct = None
+    if session_high > 0 and price > 0 and session_high >= price:
+        possible_bounce_to_high_pct = (session_high - price) / price * 100.0
+    if session_high > 0 and recent_bars_low_min > 0 and price > 0 and curvature_5m_pct is not None and curvature_5m_pct > 0:
+        estimated_bounce_pct = 0.5 * (session_high - recent_bars_low_min) / price * 100.0
+
+    log_ret = _log_returns(closes)
+    volatility_5m_pct = float(log_ret.std() * 100) if len(log_ret) > 1 else 0.0
+    rsi_5m = compute_rsi_5m(closes, period=RSI_PERIOD_5M)
+
+    n = min(BARS_2H, len(closes) - 1)
+    momentum_2h_pct = 0.0
+    if n >= 1 and len(closes) >= n + 1:
+        price_2h_ago = float(closes.iloc[-(n + 1)])
+        if price_2h_ago > 0:
+            momentum_2h_pct = ((price / price_2h_ago) - 1.0) * 100.0
+
+    dt_min, dt_max = df["datetime"].min(), df["datetime"].max()
+    period_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}" if hasattr(dt_min, "strftime") else f"{dt_min} – {dt_max}"
+
+    pullback_from_high_pct = (session_high - price) / session_high * 100.0 if session_high > 0 and price < session_high else 0.0
+
+    # ATR по 5m (14 баров): среднее от True Range, в % от цены
+    atr_5m = None
+    if len(df) >= 2 and all(c in df.columns for c in ("High", "Low", "Close")):
+        high = df["High"].astype(float)
+        low = df["Low"].astype(float)
+        close = df["Close"].astype(float)
+        prev_close = close.shift(1)
+        tr = np.maximum(high - low, np.maximum((high - prev_close).abs(), (low - prev_close).abs()))
+        tail = tr.iloc[-14:] if len(tr) >= 14 else tr
+        mean_tr = tail.replace([np.inf, -np.inf], np.nan).dropna().mean()
+        if pd.notna(mean_tr) and mean_tr > 0 and price > 0:
+            atr_5m = round(float(mean_tr) / price * 100.0, 4)
+
+    # Объём: последний бар vs среднее за хвост (если есть Volume)
+    volume_5m_last = None
+    volume_vs_avg_pct = None
+    if "Volume" in df.columns:
+        vol = df["Volume"].replace(0, np.nan).dropna()
+        if len(vol) > 0:
+            volume_5m_last = int(vol.iloc[-1])
+            tail = min(20, len(vol))
+            avg_vol = float(vol.iloc[-tail:].mean())
+            if avg_vol > 0 and volume_5m_last is not None:
+                volume_vs_avg_pct = round(volume_5m_last / avg_vol * 100.0, 2)
+
+    return {
+        "price": price,
+        "high_5d": high_5d,
+        "low_5d": low_5d,
+        "rsi_5m": rsi_5m,
+        "volatility_5m_pct": volatility_5m_pct,
+        "momentum_2h_pct": momentum_2h_pct,
+        "session_high": session_high,
+        "pullback_from_high_pct": pullback_from_high_pct,
+        "last_bar_high": last_bar_high,
+        "last_bar_low": last_bar_low,
+        "recent_bars_high_max": recent_bars_high_max,
+        "recent_bars_low_min": recent_bars_low_min,
+        "curvature_5m_pct": curvature_5m_pct,
+        "possible_bounce_to_high_pct": possible_bounce_to_high_pct,
+        "estimated_bounce_pct": estimated_bounce_pct,
+        "period_str": period_str,
+        "bars_count": len(df),
+        "atr_5m_pct": atr_5m,
+        "volume_5m_last": volume_5m_last,
+        "volume_vs_avg_pct": volume_vs_avg_pct,
+    }
+
+
 def compute_rsi_5m(closes: pd.Series, period: int = RSI_PERIOD_5M) -> Optional[float]:
     """RSI по ряду 5m закрытий (последнее значение = текущее)."""
     from services.rsi_calculator import compute_rsi_from_closes
@@ -243,74 +351,26 @@ def get_decision_5m(
         logger.warning("Нет 5m данных для %s за последние %d дн.", ticker, days)
         return None
 
-    df = df.sort_values("datetime").reset_index(drop=True)
-    closes = df["Close"].astype(float)
-    high_5d = float(df["High"].max())
-    low_5d = float(df["Low"].min())
-    price = float(closes.iloc[-1])
-    last_bar_high = float(df["High"].iloc[-1])
-    last_bar_low = float(df["Low"].iloc[-1])
-    # Макс. High и мин. Low за последние 6 свечей (30 мин) — чтобы при кроне каждые 5 мин не пропустить отскок/просадку
-    n_tail = min(6, len(df))
-    recent_bars_high_max = float(df["High"].iloc[-n_tail:].max()) if n_tail else last_bar_high
-    recent_bars_low_min = float(df["Low"].iloc[-n_tail:].min()) if n_tail else last_bar_low
-
-    # Хай сессии (последний торговый день в данных) — нужен до possible_bounce/estimated_bounce
-    session_high = high_5d
-    try:
-        dts = pd.to_datetime(df["datetime"])
-        last_date = dts.max().date()
-        session_mask = dts.dt.date == last_date
-        session_high_val = float(df.loc[session_mask, "High"].max())
-    except Exception:
-        session_high_val = high_5d
-    if session_high_val > 0 and price < session_high_val:
-        session_high = session_high_val
-
-    # Кривизна графика (ускорение цены): вторая разность последних закрытий, в % от цены. >0 = разворот вверх
-    curvature_5m_pct = None
-    if len(closes) >= 3 and price > 0:
-        d1 = float(closes.iloc[-1] - closes.iloc[-2])
-        d0 = float(closes.iloc[-2] - closes.iloc[-3])
-        curvature_5m_pct = (d1 - d0) / price * 100.0
-
-    # Высота возможного подъёма: до хая сессии (макс. разумная цель) и оценка по кривизне (50% от глубины отката)
-    possible_bounce_to_high_pct = None
-    estimated_bounce_pct = None
-    if session_high > 0 and price > 0 and session_high >= price:
-        possible_bounce_to_high_pct = (session_high - price) / price * 100.0
-    if session_high > 0 and recent_bars_low_min > 0 and price > 0:
-        depth_pct = (session_high - recent_bars_low_min) / session_high * 100.0
-        if curvature_5m_pct is not None and curvature_5m_pct > 0:
-            estimated_bounce_pct = 0.5 * (session_high - recent_bars_low_min) / price * 100.0
-
-    # Лог-доходности за весь период
-    log_ret = _log_returns(closes)
-    volatility_5m_pct = float(log_ret.std() * 100) if len(log_ret) > 1 else 0.0
-
-    # RSI по 5m
-    rsi_5m = compute_rsi_5m(closes, period=RSI_PERIOD_5M)
-
-    # Импульс за последние ~2 часа (24 свечи по 5m) — реализованное изменение цены (close сейчас / close 2ч назад − 1), не прогноз.
-    # В GAME_5M используется для целевого тейка: консервативнее брать долю от импульса (GAME_5M_TAKE_MOMENTUM_FACTOR < 1).
-    n = min(BARS_2H, len(closes) - 1)
-    momentum_2h_pct = 0.0
-    if n >= 1 and len(closes) >= n + 1:
-        price_2h_ago = float(closes.iloc[-(n + 1)])
-        if price_2h_ago > 0:
-            momentum_2h_pct = ((price / price_2h_ago) - 1.0) * 100.0
-
-    dt_min = df["datetime"].min()
-    dt_max = df["datetime"].max()
-    if hasattr(dt_min, "strftime"):
-        period_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}"
-    else:
-        period_str = f"{dt_min} – {dt_max}"
-
-    # Откат от хая сессии (session_high уже вычислен выше)
-    pullback_from_high_pct = 0.0
-    if session_high > 0 and price < session_high:
-        pullback_from_high_pct = (session_high - price) / session_high * 100.0
+    # Все технические параметры из 5m — один раз; переиспользуются для правил, context_json, LLM/ML
+    features = compute_5m_features(df, ticker)
+    if features is None:
+        return None
+    price = features["price"]
+    high_5d = features["high_5d"]
+    low_5d = features["low_5d"]
+    rsi_5m = features["rsi_5m"]
+    volatility_5m_pct = features["volatility_5m_pct"]
+    momentum_2h_pct = features["momentum_2h_pct"]
+    session_high = features["session_high"]
+    pullback_from_high_pct = features["pullback_from_high_pct"]
+    last_bar_high = features["last_bar_high"]
+    last_bar_low = features["last_bar_low"]
+    recent_bars_high_max = features["recent_bars_high_max"]
+    recent_bars_low_min = features["recent_bars_low_min"]
+    curvature_5m_pct = features.get("curvature_5m_pct")
+    possible_bounce_to_high_pct = features.get("possible_bounce_to_high_pct")
+    estimated_bounce_pct = features.get("estimated_bounce_pct")
+    period_str = features["period_str"]
 
     # Правила решения (агрессивные под интрадей)
     decision = "HOLD"
@@ -476,30 +536,15 @@ def get_decision_5m(
     except Exception:
         exit_bar_close = price
 
+    # Базовый вывод: все признаки из compute_5m_features (один раз посчитаны) + решение и контекст
     out = {
+        **features,
         "decision": decision,
         "reasoning": reasoning,
-        "price": price,
         "exit_bar_close": exit_bar_close,
-        "rsi_5m": rsi_5m,
-        "volatility_5m_pct": volatility_5m_pct,
-        "momentum_2h_pct": momentum_2h_pct,
-        "high_5d": high_5d,
-        "low_5d": low_5d,
-        "session_high": session_high,
-        "pullback_from_high_pct": pullback_from_high_pct,
-        "last_bar_high": last_bar_high,
-        "last_bar_low": last_bar_low,
-        "recent_bars_high_max": recent_bars_high_max,
-        "recent_bars_low_min": recent_bars_low_min,
-        "curvature_5m_pct": curvature_5m_pct,
-        "possible_bounce_to_high_pct": possible_bounce_to_high_pct,
-        "estimated_bounce_pct": estimated_bounce_pct,
-        "period_str": period_str,
         "stop_loss_enabled": stop_loss_enabled,
         "stop_loss_pct": stop_loss_pct if stop_loss_enabled else None,
         "take_profit_pct": take_profit_pct,
-        "bars_count": len(df),
         "kb_news_days": days,
         "kb_news": kb_news,
         "kb_news_impact": kb_news_impact,
