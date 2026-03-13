@@ -190,34 +190,37 @@ def fetch_and_save_investing_news(max_articles: int = 25) -> int:
     except Exception:
         tracked = None
     engine = create_engine(get_database_url())
-    added = 0
-    with engine.begin() as conn:
-        for title, url in items:
-            if _link_already_in_kb(conn, url):
-                continue
-            ticker = _match_ticker(title, keyword_map)
-            if not ticker:
-                ticker = "MACRO"
-            if tracked is not None and ticker not in tracked:
-                continue
-            content = title
-            try:
-                conn.execute(
-                    text("""
-                        INSERT INTO knowledge_base (ts, ticker, source, content, event_type, importance, link)
-                        VALUES (:ts, :ticker, :source, :content, 'NEWS', 'MEDIUM', :link)
-                    """),
-                    {
-                        "ts": datetime.now(),
-                        "ticker": ticker,
-                        "source": "Investing.com News",
-                        "content": content[:4000],
-                        "link": url[:2000],
-                    },
-                )
-                added += 1
-            except Exception as e:
-                logger.debug("Не удалось вставить новость %s: %s", url[:50], e)
-    if added:
-        logger.info("Investing.com news: добавлено %s новостей в knowledge_base", added)
-    return added
+    try:
+        added = 0
+        with engine.begin() as conn:
+            for title, url in items:
+                if _link_already_in_kb(conn, url):
+                    continue
+                ticker = _match_ticker(title, keyword_map)
+                if not ticker:
+                    ticker = "MACRO"
+                if tracked is not None and ticker not in tracked:
+                    continue
+                content = title
+                try:
+                    conn.execute(
+                        text("""
+                            INSERT INTO knowledge_base (ts, ticker, source, content, event_type, importance, link)
+                            VALUES (:ts, :ticker, :source, :content, 'NEWS', 'MEDIUM', :link)
+                        """),
+                        {
+                            "ts": datetime.now(),
+                            "ticker": ticker,
+                            "source": "Investing.com News",
+                            "content": content[:4000],
+                            "link": url[:2000],
+                        },
+                    )
+                    added += 1
+                except Exception as e:
+                    logger.debug("Не удалось вставить новость %s: %s", url[:50], e)
+        if added:
+            logger.info("Investing.com news: добавлено %s новостей в knowledge_base", added)
+        return added
+    finally:
+        engine.dispose()

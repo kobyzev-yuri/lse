@@ -697,7 +697,7 @@ async def add_news_api(
             auto_calculate = get_config_value('SENTIMENT_AUTO_CALCULATE', 'false').lower() == 'true'
             if auto_calculate:
                 try:
-                    sentiment_score = calculate_sentiment(content)
+                    sentiment_score, _ = calculate_sentiment(content)
                 except Exception as e:
                     logger.warning(f"⚠️ Не удалось рассчитать sentiment: {e}")
         

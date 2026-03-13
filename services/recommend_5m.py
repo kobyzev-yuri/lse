@@ -127,7 +127,11 @@ def fetch_5m_ohlc(ticker: str, days: int = None) -> Optional[pd.DataFrame]:
             logger.debug("Приведение 5m к US/Eastern: %s", e)
             return df_in
 
-    df = t.history(start=start_str, end=end_str, interval="5m", auto_adjust=False)
+    try:
+        df = t.history(start=start_str, end=end_str, interval="5m", auto_adjust=False)
+    except (TypeError, KeyError, AttributeError) as e:
+        logger.debug("yfinance history для %s (start/end): %s", ticker, e)
+        df = None
     df = _normalize(df)
     if df is not None:
         return _to_us_eastern(df)
@@ -399,6 +403,29 @@ def get_decision_5m(
     elif volatility_5m_pct > 0.6:
         if decision == "HOLD":
             reasons.append(f"волатильность 5m {volatility_5m_pct:.2f}% — выжидать")
+
+    # Опциональные пороги ATR 5m и объёма (оценка: scripts/estimate_5m_thresholds.py)
+    from config_loader import get_config_value as _gcv
+    atr_5m_pct = features.get("atr_5m_pct")
+    volume_vs_avg_pct = features.get("volume_vs_avg_pct")
+    _min_vol = _gcv("GAME_5M_MIN_VOLUME_VS_AVG_PCT", "").strip()
+    _max_atr = _gcv("GAME_5M_MAX_ATR_5M_PCT", "").strip()
+    if _min_vol and volume_vs_avg_pct is not None and decision in ("BUY", "STRONG_BUY"):
+        try:
+            min_vol = float(_min_vol)
+            if volume_vs_avg_pct < min_vol:
+                decision = "HOLD"
+                reasons.append(f"объём {volume_vs_avg_pct:.0f}% от среднего < порога {min_vol:.0f}% — вход отложен")
+        except (ValueError, TypeError):
+            pass
+    if _max_atr and atr_5m_pct is not None and decision in ("BUY", "STRONG_BUY"):
+        try:
+            max_atr = float(_max_atr)
+            if atr_5m_pct > max_atr:
+                decision = "HOLD"
+                reasons.append(f"ATR 5m {atr_5m_pct:.2f}% > порога {max_atr}% — высокая волатильность, вход отложен")
+        except (ValueError, TypeError):
+            pass
 
     # Влияние новостей из KB на короткую игру 5m: явный учёт в решении BUY/HOLD/SELL
     kb_news = fetch_kb_news_for_period(ticker, days)

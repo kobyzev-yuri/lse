@@ -97,6 +97,48 @@ def _unique_report_filename(title: str) -> str:
     return f"{title} {ts} {short_id}.html"
 
 
+def _build_help_html(help_text: str) -> str:
+    """Преобразует текст справки (markdown-подобный) в HTML для отправки файлом (как /closed)."""
+    if not help_text or not help_text.strip():
+        return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Справка</title></head><body><p>Нет содержимого.</p></body></html>"
+    raw = help_text.strip()
+    # Убираем экранирование Markdown для Telegram (в HTML не нужно)
+    raw = raw.replace("\\_", "_").replace("\\.", ".")
+    # Плейсхолдеры, чтобы не экранировать разметку
+    raw = raw.replace("**", "\x01")
+    raw = raw.replace("`", "\x02")
+    escaped = html.escape(raw)
+    # Чередование тегов для ** (bold)
+    parts = escaped.split("\x01")
+    buf = []
+    for i, p in enumerate(parts):
+        if i % 2 == 1:
+            buf.append("<strong>" + p + "</strong>")
+        else:
+            buf.append(p)
+    escaped = "".join(buf)
+    # Чередование тегов для ` (code)
+    parts = escaped.split("\x02")
+    buf = []
+    for i, p in enumerate(parts):
+        if i % 2 == 1:
+            buf.append("<code>" + p + "</code>")
+        else:
+            buf.append(p)
+    escaped = "".join(buf)
+    # Абзацы и переносы
+    escaped = escaped.replace("\n\n", "</p><p>").replace("\n", "<br>\n")
+    body = "<p>" + escaped + "</p>"
+    return (
+        "<!DOCTYPE html><html lang='ru'><head><meta charset='utf-8'><title>Справка по командам</title>"
+        "<style>body{font-family:sans-serif;max-width:720px;margin:1em auto;padding:0 1em;line-height:1.4}"
+        "code{background:#f0f0f0;padding:2px 4px;border-radius:3px}"
+        "p{margin:0.6em 0}</style></head><body><h1>Справка по командам</h1>"
+        + body +
+        "</body></html>"
+    )
+
+
 def _ts_msk(ts) -> str:
     if ts is None:
         return "—"
@@ -740,7 +782,7 @@ class LSETelegramBot:
 **Команды:**
 /news <ticker> [N] — новости; /newssources — каналы и статистика за 14 дн.
 /price <ticker> — цена
-/chart <ticker> [days] — график дневной
+/chart <ticker> [days] — график дневной; /chart game_5m [days] — все тикеры игры 5m (горизонтально по сессиям, тикеры друг под другом)
 /chart5m <ticker> [days] — график 5 мин (по требованию)
 /table5m <ticker> [days] — таблица 5m свечей
 /signal <ticker> — анализ по тикеру (портфель): решение, цена, RSI, sentiment
@@ -815,8 +857,8 @@ class LSETelegramBot:
   Пример: `/price MSFT`
 
 **График:**
-`/chart <ticker> [days]` - График цены за период (по умолч. 1 день, макс. 30)
-  Пример: `/chart GC=F` или `/chart GC=F 7`
+`/chart <ticker> [days]` - График цены за период (по умолч. 1 день, макс. 30). Пример: `/chart GC=F 7`
+`/chart game_5m [days]` - Все тикеры игры 5m: для каждого тикер — горизонтальный график как /chart5m, тикеры друг под другом (макс. 7 сессий).
 `/chart5m <ticker> [days]` - Внутридневной график 5 мин (по требованию, макс. 7 дней)
 `/table5m <ticker> [days]` - Таблица последних 5-минутных свечей (макс. 7 дней)
 
@@ -851,19 +893,31 @@ class LSETelegramBot:
   В /ask можно спросить: когда можно открыть позицию по SNDK и какие параметры советуешь.
   Пример: `/recommend SNDK`, `/buy GC=F 5`, `/sell MSFT`
 
-**Стратегии** (колонка в /history, /pending, /closed):
+        **Стратегии** (колонка в /history, /pending, /closed):
   • **GAME\_5M** — игра 5m (крон, интрадей). «5m вне» — тикер убран из списка, крон не управляет.
   • **Portfolio** — портфельный цикл (trading\_cycle), дефолт при отсутствии имени стратегии. SELL по стоп-лоссу выполняется.
   • **Manual** — ручные команды `/buy`, `/sell`.
   • **Momentum, Mean Reversion, Neutral** и др. — стратегии из StrategyManager при портфельном цикле.
   Подробнее: `/strategies`
         """
-        
-        # Без parse_mode: в справке много символов _ . [ ] — парсер Markdown падает с "Can't parse entities"
-        # Telegram: лимит 4096 символов — разбиваем на части
-        chunks = _split_message_chunks(help_text.strip(), max_len=HELP_CHUNK_SIZE)
-        for i, chunk in enumerate(chunks):
-            await update.message.reply_text(chunk, parse_mode=None)
+        # Отправляем справку HTML-файлом (как /closed) — удобнее смотреть длинный текст
+        html_content = _build_help_html(help_text.strip())
+        filename = _unique_report_filename("Справка")
+        caption = "📖 Справка по командам. Откройте файл в браузере."
+        try:
+            await update.message.reply_document(
+                document=BytesIO(html_content.encode("utf-8")),
+                filename=filename,
+                caption=caption,
+            )
+        except Exception as doc_e:
+            logger.warning("Не удалось отправить HTML-файл help: %s", doc_e)
+            # Fallback: короткое сообщение со ссылкой на команды
+            await update.message.reply_text(
+                "📖 Справка по командам (файл не отправлен). Основное: /signal, /recommend, /recommend5m, /prompt_entry, "
+                "/closed, /closed_impulse, /pending, /chart, /chart5m, /game5m, /dashboard. Повторите /help для попытки отправки файла.",
+                parse_mode=None,
+            )
     
     def _get_available_tickers(self) -> list:
         """Список тикеров для справки /signal и др.: quotes + конфиг (TICKERS_FAST/MEDIUM/LONG), чтобы тикеры вроде CL=F были видны сразу после добавления в конфиг."""
@@ -1241,21 +1295,32 @@ class LSETelegramBot:
         await self._handle_price_by_ticker(update, ticker, ticker_raw)
     
     async def _handle_chart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /chart <ticker> [days]"""
+        """Обработчик команды /chart <ticker> [days] или /chart game_5m [days]"""
         user_id = update.effective_user.id
-        
+
         if not self._check_access(user_id):
             await update.message.reply_text("❌ Доступ запрещен")
             return
-        
+
         if not context.args or len(context.args) == 0:
             await update.message.reply_text(
-                "❌ Укажите тикер\n"
-                "Пример: `/chart GC=F` или `/chart GC=F 7` (за 7 дней)",
+                "❌ Укажите тикер или game_5m\n"
+                "Примеры: `/chart GC=F 7` или `/chart game_5m 5` (все тикеры игры 5m, 5 сессий)",
                 parse_mode='Markdown'
             )
             return
-        
+
+        first_arg = context.args[0].strip().lower()
+        if first_arg in ("game_5m", "game5m"):
+            days = 5
+            if len(context.args) >= 2:
+                try:
+                    days = max(1, min(7, int(context.args[1].strip())))
+                except (ValueError, TypeError):
+                    pass
+            await self._handle_chart_game_5m(update, context, days)
+            return
+
         ticker_raw = context.args[0].strip().upper()
         ticker = _normalize_ticker(ticker_raw)
         days = 1  # По умолчанию текущий день
@@ -1889,6 +1954,261 @@ class LSETelegramBot:
                 await update.message.reply_text(f"❌ Ошибка графика 5m: {err_msg}")
             except Exception:
                 pass
+
+    async def _handle_chart_game_5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE, days: int):
+        """График по всей игре 5m: для каждого тикера — горизонтальный график как /chart5m, тикеры друг под другом."""
+        if not self._check_access(update.effective_user.id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        from services.ticker_groups import get_tickers_game_5m
+        tickers = get_tickers_game_5m()
+        if not tickers:
+            await update.message.reply_text("❌ Нет тикеров в игре 5m (GAME_5M_TICKERS / TICKERS_FAST).")
+            return
+
+        async def _reply(text: str):
+            try:
+                msg = update.message or (update.effective_message if update else None)
+                if msg is not None:
+                    await msg.reply_text(text)
+            except Exception as e:
+                logger.warning("chart game_5m: %s", e)
+
+        await _reply(f"📥 Загрузка 5m по {len(tickers)} тикерам, {days} сессий…")
+        loop = asyncio.get_event_loop()
+
+        def fetch_one(ticker: str) -> dict:
+            from services.recommend_5m import fetch_5m_ohlc, filter_to_last_n_us_sessions
+            from services.game_5m import get_trades_for_chart, get_open_position, trade_ts_to_et, TRADE_HISTORY_TZ
+            from services.recommend_5m import get_decision_5m
+            import pandas as pd
+            empty = {"ticker": ticker, "df": None, "session_dates": [], "trades": [], "entry_price": None, "d5_chart": None, "dt_min": None, "dt_max": None}
+            try:
+                fetch_days = min(max(days + 2, 5), 7)
+                df = fetch_5m_ohlc(ticker, days=fetch_days)
+            except Exception as e:
+                logger.warning("chart game_5m: загрузка %s: %s", ticker, e)
+                return empty
+            if df is None or df.empty:
+                return empty
+            df = filter_to_last_n_us_sessions(df, n=days)
+            if df is None or df.empty:
+                return empty
+            df = df.copy()
+            df["datetime"] = pd.to_datetime(df["datetime"])
+            if hasattr(df["datetime"].dtype, "tz") and df["datetime"].dtype.tz is not None:
+                dt_plot = df["datetime"].dt.tz_convert("America/New_York").dt.tz_localize(None)
+            else:
+                d = df["datetime"]
+                try:
+                    d = d.dt.tz_localize("America/New_York", ambiguous=True)
+                except Exception:
+                    d = d.dt.tz_localize("UTC", ambiguous=True).dt.tz_convert("America/New_York")
+                dt_plot = d.dt.tz_localize(None)
+            df["_dt_plot"] = dt_plot
+            df["_session_key"] = dt_plot.dt.strftime("%Y-%m-%d")
+            unique_keys = sorted(df["_session_key"].unique())
+            MIN_BARS = 3
+            session_dates = [sk for sk in unique_keys if (df["_session_key"] == sk).sum() >= MIN_BARS]
+            if not session_dates:
+                session_dates = unique_keys
+            dt_min = df["_dt_plot"].min()
+            dt_max = df["_dt_plot"].max()
+            trades = []
+            try:
+                trades = get_trades_for_chart(ticker, dt_min, dt_max)
+            except Exception:
+                pass
+            entry_price = None
+            try:
+                pos = get_open_position(ticker)
+                if pos and isinstance(pos.get("entry_price"), (int, float)):
+                    entry_price = float(pos["entry_price"])
+            except Exception:
+                pass
+            d5_chart = None
+            try:
+                d5_chart = get_decision_5m(ticker, days=days, use_llm_news=False)
+            except Exception:
+                pass
+            return {"ticker": ticker, "df": df, "session_dates": session_dates, "dt_min": dt_min, "dt_max": dt_max, "trades": trades, "entry_price": entry_price, "d5_chart": d5_chart}
+
+        results = await asyncio.gather(*[loop.run_in_executor(None, lambda t=t: fetch_one(t)) for t in tickers])
+        failed = [r["ticker"] for r in results if r["df"] is None and not r["session_dates"]]
+        if failed and len(failed) == len(tickers):
+            await _reply(f"❌ Нет 5m данных ни по одному тикеру (Yahoo пустой ответ). Попробуйте позже или /chart5m SNDK 1")
+            return
+        if failed:
+            await _reply(f"⚠️ Нет данных по: {', '.join(failed)}. Остальные тикеры на графике.")
+
+        max_cols = max((len(r["session_dates"]) for r in results), default=1)
+        if max_cols == 0:
+            max_cols = 1
+        n_rows = len(tickers)
+        w_per_day = 3.5
+        h_per_row = 3.2
+        import pandas as pd
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        from io import BytesIO
+        import numpy as np
+        try:
+            plt.style.use("seaborn-v0_8-whitegrid")
+        except Exception:
+            pass
+        plt.rcParams["font.size"] = 8
+        fig, axes = plt.subplots(n_rows, max_cols, figsize=(w_per_day * max_cols, h_per_row * n_rows), sharex=False, sharey=False, facecolor="white")
+        if n_rows == 1 and max_cols == 1:
+            axes = np.array([[axes]])
+        elif n_rows == 1:
+            axes = axes.reshape(1, -1)
+        elif max_cols == 1:
+            axes = axes.reshape(-1, 1)
+
+        def session_window(session_key: str):
+            t = pd.Timestamp(session_key)
+            start = t.replace(hour=9, minute=30, second=0, microsecond=0)
+            end = t.replace(hour=16, minute=0, second=0, microsecond=0)
+            return start, end
+
+        for i, res in enumerate(results):
+            ticker = res["ticker"]
+            df = res["df"]
+            session_dates = res["session_dates"]
+            trades = res["trades"]
+            entry_price = res["entry_price"]
+            d5_chart = res["d5_chart"]
+            buy_ts, buy_p = [], []
+            take_ts, take_p = [], []
+            stop_ts, stop_p = [], []
+            other_ts, other_p = [], []
+            if df is not None and not df.empty and trades:
+                from services.game_5m import trade_ts_to_et, TRADE_HISTORY_TZ
+                dt_min, dt_max = res["dt_min"], res["dt_max"]
+                last_buy_price = None
+                for t in trades:
+                    ts = t["ts"]
+                    try:
+                        stored_tz = t.get("ts_timezone") or TRADE_HISTORY_TZ
+                        ts_et = trade_ts_to_et(ts, source_tz=stored_tz)
+                        if ts_et is not None:
+                            dt = ts_et.to_pydatetime() if hasattr(ts_et, "to_pydatetime") else ts_et
+                            ts = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+                    except Exception:
+                        pass
+                    p = float(t["price"])
+                    if t["side"] == "BUY":
+                        buy_ts.append(ts)
+                        buy_p.append(p)
+                        last_buy_price = p
+                    elif t["side"] == "SELL":
+                        if last_buy_price is not None:
+                            if p >= last_buy_price:
+                                take_ts.append(ts)
+                                take_p.append(p)
+                            else:
+                                stop_ts.append(ts)
+                                stop_p.append(p)
+                        else:
+                            other_ts.append(ts)
+                            other_p.append(p)
+
+            for j in range(max_cols):
+                ax = axes[i, j]
+                ax.set_facecolor("#ffffff")
+                if j >= len(session_dates):
+                    ax.set_visible(False)
+                    continue
+                sd = session_dates[j]
+                window_start, window_end = session_window(sd)
+                if df is None or df.empty:
+                    ax.text(0.5, 0.5, f"{ticker}\nнет данных", ha="center", va="center", transform=ax.transAxes, fontsize=9)
+                    try:
+                        sd_str = pd.Timestamp(sd).strftime("%d.%m")
+                    except Exception:
+                        sd_str = str(sd)
+                    ax.set_title(f"{ticker} · {sd_str}", fontsize=9)
+                    ax.set_xlim(window_start, window_end)
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+                    ax.grid(True, linestyle="--", alpha=0.4)
+                    continue
+                df_i = df[(df["_dt_plot"] >= window_start) & (df["_dt_plot"] <= window_end)].copy()
+                ax.set_xlim(window_start, window_end)
+                ax.autoscale(enable=False, axis="x")
+                if df_i.empty:
+                    ax.text(0.5, 0.5, f"Нет данных за {sd}", ha="center", va="center", transform=ax.transAxes, fontsize=8)
+                else:
+                    dt_i = df_i["_dt_plot"]
+                    ax.plot(dt_i, df_i["Close"], color="#1565c0", linewidth=1.0, label="Close")
+                    if "Open" in df_i.columns:
+                        ax.fill_between(dt_i, df_i["Low"], df_i["High"], alpha=0.12, color="#1565c0")
+                    if entry_price is not None:
+                        ax.axhline(entry_price, color="#2e7d32", linestyle="--", linewidth=1.0, alpha=0.8, label=f"Вход {entry_price:.1f}")
+                    is_last_session = j == len(session_dates) - 1
+                    if is_last_session and d5_chart:
+                        session_high = d5_chart.get("session_high")
+                        if session_high is not None and session_high > 0:
+                            ax.axhline(session_high, color="#f57c00", linestyle=":", linewidth=0.9, alpha=0.8, label=f"Хай {session_high:.1f}")
+                        if entry_price is not None and entry_price > 0:
+                            try:
+                                from services.game_5m import _effective_take_profit_pct
+                                mom = d5_chart.get("momentum_2h_pct")
+                                take_pct = _effective_take_profit_pct(mom, ticker=ticker)
+                                take_level = entry_price * (1 + take_pct / 100.0)
+                                ax.axhline(take_level, color="#2e7d32", linestyle=":", linewidth=0.9, alpha=0.7, label=f"Тейк +{take_pct:.1f}%")
+                            except Exception:
+                                pass
+                    def _in_range(ts, lo, hi):
+                        try:
+                            t = pd.Timestamp(ts)
+                            if t.tzinfo is not None:
+                                t = t.tz_convert("America/New_York").tz_localize(None)
+                            return lo <= t <= hi
+                        except Exception:
+                            return False
+                    price_lo = float(df_i["Low"].min()) if "Low" in df_i.columns else float(df_i["Close"].min())
+                    price_hi = float(df_i["High"].max()) if "High" in df_i.columns else float(df_i["Close"].max())
+                    def _clip(p):
+                        return max(price_lo, min(price_hi, p))
+                    buy_i = [(t, p) for t, p in zip(buy_ts, buy_p) if _in_range(t, window_start, window_end)]
+                    take_i = [(t, _clip(p)) for t, p in zip(take_ts, take_p) if _in_range(t, window_start, window_end)]
+                    stop_i = [(t, _clip(p)) for t, p in zip(stop_ts, stop_p) if _in_range(t, window_start, window_end)]
+                    other_i = [(t, _clip(p)) for t, p in zip(other_ts, other_p) if _in_range(t, window_start, window_end)]
+                    if buy_i:
+                        ax.scatter([x[0] for x in buy_i], [x[1] for x in buy_i], color="#2e7d32", marker="^", s=40, zorder=5, edgecolors="darkgreen", linewidths=0.8)
+                    if take_i:
+                        ax.scatter([x[0] for x in take_i], [x[1] for x in take_i], color="#0277bd", marker="v", s=40, zorder=5, edgecolors="#01579b", linewidths=0.8)
+                    if stop_i:
+                        ax.scatter([x[0] for x in stop_i], [x[1] for x in stop_i], color="#c62828", marker="v", s=40, zorder=5, edgecolors="#b71c1c", linewidths=0.8)
+                    if other_i:
+                        ax.scatter([x[0] for x in other_i], [x[1] for x in other_i], color="#757575", marker="v", s=32, zorder=4, edgecolors="#616161", linewidths=0.6)
+                try:
+                    sd_str = pd.Timestamp(sd).strftime("%d.%m")
+                except Exception:
+                    sd_str = str(sd)
+                ax.set_title(f"{ticker} · {sd_str} (9:30–16:00 ET)", fontsize=9, fontweight="bold")
+                ax.set_ylabel("Цена", fontsize=8)
+                ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+                ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=8))
+                plt.setp(ax.xaxis.get_majorticklabels(), rotation=25, ha="right")
+                ax.grid(True, linestyle="--", alpha=0.4)
+            axes[i, 0].set_ylabel(ticker, fontsize=10, fontweight="bold")
+        plt.tight_layout()
+        buf = BytesIO()
+        plt.savefig(buf, format="png", dpi=72, bbox_inches="tight", facecolor="white")
+        buf.seek(0)
+        plt.close()
+        caption = f"📈 Игра 5m: все тикеры, {days} сессий (9:30–16:00 ET). Каждый ряд — один тикер, как /chart5m."
+        try:
+            await update.message.reply_photo(photo=buf, caption=caption)
+        except Exception as send_err:
+            if "timeout" in str(send_err).lower() or "timed" in str(send_err).lower():
+                await _reply("⏱ График построен, отправка по таймауту. Попробуйте /chart game_5m 3 или повторите позже.")
+            else:
+                raise
+
     async def _handle_table5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Таблица последних 5-минутных свечей."""
         if not self._check_access(update.effective_user.id):
@@ -3906,13 +4226,15 @@ class LSETelegramBot:
         try:
             import re
             from config_loader import get_database_url
-            from services.game_5m import get_strategy_params
+            from services.game_5m import get_strategy_params, _take_profit_cap_pct, _max_position_days
             from services.ticker_groups import get_tickers_game_5m, get_tickers_for_portfolio_game
             params_5m = get_strategy_params()
             tickers_5m = get_tickers_game_5m()
             tickers_portfolio = get_tickers_for_portfolio_game() or []
             cooldown = get_config_value("GAME_5M_COOLDOWN_MINUTES", "120").strip()
             momentum_factor = get_config_value("GAME_5M_TAKE_MOMENTUM_FACTOR", "1.0").strip()
+            max_atr_pct = get_config_value("GAME_5M_MAX_ATR_5M_PCT", "").strip()
+            min_vol_pct = get_config_value("GAME_5M_MIN_VOLUME_VS_AVG_PCT", "").strip()
             portfolio_take = get_config_value("PORTFOLIO_TAKE_PROFIT_PCT", "0").strip() or "0"
             from config_loader import get_dynamic_config_value
             from report_generator import get_engine
@@ -3944,6 +4266,24 @@ class LSETelegramBot:
             (f"• Стоп/тейк ratio: {params_5m['stop_to_take_ratio']}" if params_5m.get('stop_loss_enabled', True) else "• Стоп 5m выкл. — в ответах не рекомендуй стоп по 5m"),
             f"• Фактор тейка от импульса: {momentum_factor}",
             f"• Макс. дней в позиции: {params_5m['max_position_days']}",
+        ]
+        if max_atr_pct or min_vol_pct:
+            lines.append("• Пороги входа (расширенный тех. анализ):")
+            if max_atr_pct:
+                lines.append(f"  — ATR 5m макс.: {max_atr_pct}% (GAME_5M_MAX_ATR_5M_PCT; выше — не входить)")
+            if min_vol_pct:
+                lines.append(f"  — Объём мин. от среднего: {min_vol_pct}% (GAME_5M_MIN_VOLUME_VS_AVG_PCT; ниже — не входить)")
+        base_take = params_5m["take_profit_pct"]
+        base_days = params_5m["max_position_days"]
+        lines.append("• По тикерам (тейк потолок, макс. дней):")
+        for t in (tickers_5m or []):
+            eff_take = _take_profit_cap_pct(t)
+            eff_days = _max_position_days(t)
+            note = ""
+            if eff_take != base_take or eff_days != base_days:
+                note = " (переопределён)"
+            lines.append(f"  — {t}: тейк +{eff_take}%, макс. {eff_days} дн.{note}")
+        lines += [
             "",
             "Портфельная игра (trading_cycle_cron):",
             f"• Тикеры: {', '.join(tickers_portfolio) or '—'}",

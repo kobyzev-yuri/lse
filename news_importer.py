@@ -151,7 +151,7 @@ def import_from_csv(file_path):
                 # Автоматический расчет sentiment
                 try:
                     from services.sentiment_analyzer import calculate_sentiment
-                    sentiment_score = calculate_sentiment(content)
+                    sentiment_score, _ = calculate_sentiment(content)
                 except Exception as e:
                     logger.warning(f"⚠️ Не удалось рассчитать sentiment для строки {_ + 1}: {e}")
             
@@ -199,7 +199,7 @@ def import_from_json(file_path):
                 # Автоматический расчет sentiment
                 try:
                     from services.sentiment_analyzer import calculate_sentiment
-                    sentiment_score = calculate_sentiment(content)
+                    sentiment_score, _ = calculate_sentiment(content)
                 except Exception as e:
                     logger.warning(f"⚠️ Не удалось рассчитать sentiment: {e}")
             

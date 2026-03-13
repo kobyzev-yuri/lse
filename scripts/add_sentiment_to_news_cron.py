@@ -53,11 +53,15 @@ def add_sentiment_to_news(
     logger.info("🔄 Начало добавления sentiment анализа к новостям")
     logger.info("=" * 60)
     
-    # Проверяем, включен ли LLM
-    use_llm = get_config_value('USE_LLM', 'false').lower() == 'true'
-    if not use_llm:
-        logger.warning("⚠️ USE_LLM=false, sentiment анализ через LLM недоступен")
-        return
+    # Проверяем способ расчёта sentiment: transformers можно без USE_LLM
+    sentiment_method = (get_config_value('SENTIMENT_METHOD', 'llm') or 'llm').strip().lower()
+    if sentiment_method == 'llm':
+        use_llm = get_config_value('USE_LLM', 'false').lower() == 'true'
+        if not use_llm:
+            logger.warning("⚠️ SENTIMENT_METHOD=llm и USE_LLM=false — sentiment через LLM недоступен")
+            return
+    else:
+        logger.info("📊 Sentiment через бесплатную модель (SENTIMENT_METHOD=%s)", sentiment_method)
     
     db_url = get_database_url()
     engine = create_engine(db_url)

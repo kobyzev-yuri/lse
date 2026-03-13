@@ -33,7 +33,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Максимум хешей «уже отправлено» — чтобы файл не рос бесконечно; старые выкидываются
 SENT_HASHES_MAX = 2000
@@ -120,7 +120,7 @@ def scan_log_dir(
     Сканирует логи. Возвращает список (log_name, line_number, line_text).
     Если execute — пишет находки в logs/cron_watchdog.log.
     """
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     findings: list[tuple[str, str, str]] = []
 
     for log_name in CRON_LOG_FILES:
@@ -263,7 +263,7 @@ def main():
     )
 
     if findings:
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         sent_set, sent_list = _load_sent_hashes(logs_dir)
         findings_new = [(n, no, t) for (n, no, t) in findings if _finding_hash(n, t) not in sent_set]
         print(f"[cron_watchdog] {now} — всего строк с ошибками: {len(findings)}, из них новых (ещё не в Telegram): {len(findings_new)}")

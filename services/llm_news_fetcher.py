@@ -60,68 +60,67 @@ def fetch_and_save_llm_news(ticker: str = "SNDK") -> Tuple[Optional[int], Option
 
     engine = create_engine(get_database_url())
     ticker_upper = ticker.upper()
-
-    # 1) Дедупликация по времени
-    with engine.connect() as conn:
-        since = datetime.now() - timedelta(hours=cooldown_hours)
-        existing = conn.execute(
-            text("""
-                SELECT id FROM knowledge_base
-                WHERE ticker = :ticker AND source LIKE 'LLM%' AND ts >= :since
-                LIMIT 1
-            """),
-            {"ticker": ticker_upper, "since": since},
-        ).fetchone()
-        if existing:
-            reason = f"уже есть запись за последние {cooldown_hours} ч"
-            logger.info("LLM(%s): ⏭️ %s", ticker, reason)
-            return (None, reason)
-
-    llm = get_llm_service()
-    data = llm.fetch_news_for_ticker(ticker)
-    if not data:
-        reason = "LLM не ответил или не инициализирован"
-        logger.info("LLM(%s): ⏭️ %s", ticker, reason)
-        return (None, reason)
-
-    content = data.get("content") or ""
-    if not content.strip():
-        reason = "LLM вернул пустой контент"
-        logger.info("LLM(%s): ⏭️ %s", ticker, reason)
-        return (None, reason)
-
-    # 2) Дедупликация по содержанию: не сохранять, если последняя LLM-запись по тикеру почти такая же
-    with engine.connect() as conn:
-        last_row = conn.execute(
-            text("""
-                SELECT content FROM knowledge_base
-                WHERE ticker = :ticker AND source LIKE 'LLM%' AND content IS NOT NULL
-                ORDER BY ts DESC LIMIT 1
-            """),
-            {"ticker": ticker_upper},
-        ).fetchone()
-        if last_row and last_row[0]:
-            prev = _normalize_for_compare(last_row[0], max_len=CONTENT_DEDUP_PREFIX_LEN)
-            new_prefix = _normalize_for_compare(content, max_len=CONTENT_DEDUP_PREFIX_LEN)
-            if prev and new_prefix and len(prev) >= 100 and (prev == new_prefix or prev in new_prefix or new_prefix in prev):
-                reason = "содержание совпадает с последней записью"
+    try:
+        # 1) Дедупликация по времени
+        with engine.connect() as conn:
+            since = datetime.now() - timedelta(hours=cooldown_hours)
+            existing = conn.execute(
+                text("""
+                    SELECT id FROM knowledge_base
+                    WHERE ticker = :ticker AND source LIKE 'LLM%' AND ts >= :since
+                    LIMIT 1
+                """),
+                {"ticker": ticker_upper, "since": since},
+            ).fetchone()
+            if existing:
+                reason = f"уже есть запись за последние {cooldown_hours} ч"
                 logger.info("LLM(%s): ⏭️ %s", ticker, reason)
                 return (None, reason)
 
-    source = data.get("source_label", "LLM")
-    sentiment = data.get("sentiment_score")
-    insight = (data.get("insight") or "")[:1000]
-    ts = datetime.now()
-
-    try:
-        from services.ticker_groups import get_tracked_tickers_for_kb
-        if ticker_upper not in set(get_tracked_tickers_for_kb()):
-            reason = "тикер не в списке для KB"
+        llm = get_llm_service()
+        data = llm.fetch_news_for_ticker(ticker)
+        if not data:
+            reason = "LLM не ответил или не инициализирован"
             logger.info("LLM(%s): ⏭️ %s", ticker, reason)
             return (None, reason)
-    except Exception:
-        pass
-    try:
+
+        content = data.get("content") or ""
+        if not content.strip():
+            reason = "LLM вернул пустой контент"
+            logger.info("LLM(%s): ⏭️ %s", ticker, reason)
+            return (None, reason)
+
+        # 2) Дедупликация по содержанию: не сохранять, если последняя LLM-запись по тикеру почти такая же
+        with engine.connect() as conn:
+            last_row = conn.execute(
+                text("""
+                    SELECT content FROM knowledge_base
+                    WHERE ticker = :ticker AND source LIKE 'LLM%' AND content IS NOT NULL
+                    ORDER BY ts DESC LIMIT 1
+                """),
+                {"ticker": ticker_upper},
+            ).fetchone()
+            if last_row and last_row[0]:
+                prev = _normalize_for_compare(last_row[0], max_len=CONTENT_DEDUP_PREFIX_LEN)
+                new_prefix = _normalize_for_compare(content, max_len=CONTENT_DEDUP_PREFIX_LEN)
+                if prev and new_prefix and len(prev) >= 100 and (prev == new_prefix or prev in new_prefix or new_prefix in prev):
+                    reason = "содержание совпадает с последней записью"
+                    logger.info("LLM(%s): ⏭️ %s", ticker, reason)
+                    return (None, reason)
+
+        source = data.get("source_label", "LLM")
+        sentiment = data.get("sentiment_score")
+        insight = (data.get("insight") or "")[:1000]
+        ts = datetime.now()
+
+        try:
+            from services.ticker_groups import get_tracked_tickers_for_kb
+            if ticker_upper not in set(get_tracked_tickers_for_kb()):
+                reason = "тикер не в списке для KB"
+                logger.info("LLM(%s): ⏭️ %s", ticker, reason)
+                return (None, reason)
+        except Exception:
+            pass
         with engine.begin() as conn:
             conn.execute(
                 text("""
@@ -144,3 +143,5 @@ def fetch_and_save_llm_news(ticker: str = "SNDK") -> Tuple[Optional[int], Option
     except Exception as e:
         logger.exception("Ошибка сохранения LLM-новости по %s: %s", ticker, e)
         return (None, str(e))
+    finally:
+        engine.dispose()
