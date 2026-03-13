@@ -1751,10 +1751,10 @@ class LSETelegramBot:
                 fig, axes = plt.subplots(1, 1, figsize=(11, 5), facecolor="white")
                 axes = [axes]
             else:
-                # Горизонтально впритык: каждая сессия — свой столбец, у каждого своя временная шкала (9:30–16:00 ET)
-                w_per_day = 4.2
+                # Горизонтально впритык: каждая сессия — свой столбец (умеренный размер — меньше таймаут при отправке)
+                w_per_day = 3.6
                 fig, axes = plt.subplots(
-                    1, n_sessions, figsize=(w_per_day * n_sessions, 5), sharex=False, sharey=True, facecolor="white"
+                    1, n_sessions, figsize=(w_per_day * n_sessions, 4.5), sharex=False, sharey=True, facecolor="white"
                 )
                 axes = list(axes)
             # Сделки за период (один раз); маркер выхода — по фактическому PnL (цена выхода vs входа), а не по signal_type
@@ -1831,7 +1831,7 @@ class LSETelegramBot:
                         alpha=0.9,
                         label=f"Вход @ {entry_price:.2f}",
                     )
-                is_last_session = idx == 0
+                is_last_session = idx == len(session_dates) - 1
                 if is_last_session and d5_chart:
                     price_cur = d5_chart.get("price")
                     session_high = d5_chart.get("session_high")
@@ -1912,7 +1912,7 @@ class LSETelegramBot:
             axes[-1].set_xlabel("Дата, время", fontsize=10)
             plt.tight_layout()
             buf = BytesIO()
-            plt.savefig(buf, format="png", dpi=72, bbox_inches="tight", facecolor="white")
+            plt.savefig(buf, format="png", dpi=60, bbox_inches="tight", facecolor="white")
             buf.seek(0)
             plt.close()
             n_markers = len(buy_ts) + len(take_ts) + len(stop_ts) + len(other_ts)
@@ -1934,6 +1934,7 @@ class LSETelegramBot:
                 caption += f"\n📌 Сделки: {', '.join(parts)} — {n_markers} шт. Время ET."
             if entry_price is not None:
                 caption += f"\n📌 Позиция открыта @ ${entry_price:.2f}"
+            buf.seek(0)
             try:
                 await update.message.reply_photo(
                     photo=buf,
@@ -1941,10 +1942,17 @@ class LSETelegramBot:
                 )
             except Exception as send_err:
                 if "timeout" in str(send_err).lower() or "timed" in str(send_err).lower():
-                    await update.message.reply_text(
-                        "⏱ График построен, но отправка не успела (таймаут). "
-                        "Попробуйте /chart5m SNDK 1 или повторите позже."
-                    )
+                    buf.seek(0)
+                    try:
+                        await update.message.reply_document(
+                            document=buf,
+                            filename=f"chart5m_{ticker}_{n_sessions}d.png",
+                            caption=caption,
+                        )
+                    except Exception:
+                        await update.message.reply_text(
+                            "⏱ График построен, но отправка по таймауту. Попробуйте /chart5m с 1 сессией или повторите позже."
+                        )
                 else:
                     raise
         except Exception as e:
