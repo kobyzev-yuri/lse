@@ -19,7 +19,8 @@ fi
 if docker ps -q -f name=lse-postgres 2>/dev/null | head -1 | grep -q .; then
   echo "📥 Восстановление в контейнер lse-postgres..."
   CONTAINER=$(docker ps -q -f name=lse-postgres | head -1)
-  gunzip -c "$DUMP_FILE" | docker exec -i "$CONTAINER" psql -U postgres -d lse_trading --set ON_ERROR_STOP=on
+  # Убираем SET transaction_timeout (есть в PG17+, в pg15 нет — иначе ERROR)
+  gunzip -c "$DUMP_FILE" | grep -v 'transaction_timeout' | docker exec -i "$CONTAINER" psql -U postgres -d lse_trading --set ON_ERROR_STOP=on
   echo "✅ Готово."
   exit 0
 fi
@@ -27,7 +28,7 @@ fi
 # Локальный Postgres
 if [ -n "$DATABASE_URL" ]; then
   echo "📥 Восстановление в БД из DATABASE_URL..."
-  gunzip -c "$DUMP_FILE" | psql "$DATABASE_URL" --set ON_ERROR_STOP=on
+  gunzip -c "$DUMP_FILE" | grep -v 'transaction_timeout' | psql "$DATABASE_URL" --set ON_ERROR_STOP=on
   echo "✅ Готово."
   exit 0
 fi
@@ -35,7 +36,7 @@ fi
 if [ -f config.env ]; then
   source <(grep -v '^#' config.env | grep -E '^DATABASE_URL=' | sed 's/^/export /')
   echo "📥 Восстановление в БД из config.env..."
-  gunzip -c "$DUMP_FILE" | psql "$DATABASE_URL" --set ON_ERROR_STOP=on
+  gunzip -c "$DUMP_FILE" | grep -v 'transaction_timeout' | psql "$DATABASE_URL" --set ON_ERROR_STOP=on
   echo "✅ Готово."
   exit 0
 fi
