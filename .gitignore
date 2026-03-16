@@ -1,5 +1,7 @@
 # Конфигурационные файлы с секретами
 config.env
+# Дампы БД (переносить на сервер через scp, не через git)
+*.sql.gz
 
 # Локальные данные о risk limits и capacity (не публикуем в git)
 local/risk_limits.json

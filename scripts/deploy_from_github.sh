@@ -37,7 +37,7 @@ cd "$REPO_DIR"
 # Сохраняем текущий коммит до pull
 OLD_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
 git fetch origin
-git pull --rebase || { log "ERROR: git pull failed"; exit 3; }
+git pull --rebase --autostash || { log "ERROR: git pull failed"; exit 3; }
 NEW_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
 
 if [ "$FORCE" -eq 1 ] || [ "$OLD_HEAD" != "$NEW_HEAD" ]; then

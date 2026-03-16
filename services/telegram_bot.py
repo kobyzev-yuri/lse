@@ -901,24 +901,23 @@ class LSETelegramBot:
   • **Momentum, Mean Reversion, Neutral** и др. — стратегии из StrategyManager при портфельном цикле.
   Подробнее: `/strategies`
         """
-        # Отправляем справку HTML-файлом (как /closed) — удобнее смотреть длинный текст
-        html_content = _build_help_html(help_text.strip())
-        filename = _unique_report_filename("Справка")
-        caption = "📖 Справка по командам. Откройте файл в браузере."
+        # Сначала пробуем отправить HTML-файлом; при ошибке — текст без разметки (как /start)
+        raw_help = help_text.strip().replace("\\_", "_").replace("\\.", ".")
         try:
+            html_content = _build_help_html(help_text.strip())
+            filename = _unique_report_filename("Справка")
             await update.message.reply_document(
                 document=BytesIO(html_content.encode("utf-8")),
                 filename=filename,
-                caption=caption,
+                caption="📖 Справка по командам. Откройте файл в браузере.",
             )
         except Exception as doc_e:
             logger.warning("Не удалось отправить HTML-файл help: %s", doc_e)
-            # Fallback: короткое сообщение со ссылкой на команды
-            await update.message.reply_text(
-                "📖 Справка по командам (файл не отправлен). Основное: /signal, /recommend, /recommend5m, /prompt_entry, "
-                "/closed, /closed_impulse, /pending, /chart, /chart5m, /game5m, /dashboard. Повторите /help для попытки отправки файла.",
-                parse_mode=None,
-            )
+            # Fallback: справка текстом без parse_mode (лимит Telegram 4096)
+            chunk_size = 4000
+            for i in range(0, len(raw_help), chunk_size):
+                chunk = raw_help[i : i + chunk_size]
+                await update.message.reply_text(chunk, parse_mode=None)
     
     def _get_available_tickers(self) -> list:
         """Список тикеров для справки /signal и др.: quotes + конфиг (TICKERS_FAST/MEDIUM/LONG), чтобы тикеры вроде CL=F были видны сразу после добавления в конфиг."""
@@ -1621,8 +1620,8 @@ class LSETelegramBot:
             return
         if not context.args:
             await _reply(
-                "❌ Укажите тикер. Пример: `/chart5m SNDK` или `/chart5m GBPUSD=X 3`",
-                parse_mode="Markdown"
+                "❌ Укажите тикер. Пример: /chart5m SNDK или /chart5m GBPUSD=X 3",
+                parse_mode=None,
             )
             return
         ticker_raw = context.args[0].strip().upper()
@@ -1671,7 +1670,7 @@ class LSETelegramBot:
                 dt_start = now - timedelta(days=min(days + 2, 14))
                 trades = get_trades_for_chart(ticker, dt_start, now)
                 if trades:
-                    lines = ["📋 **Сделки GAME_5M по %s** (без свечей):" % ticker]
+                    lines = ["📋 Сделки GAME_5M по %s (без свечей):" % ticker]
                     for t in trades[-10:]:
                         ts = t.get("ts")
                         tz = t.get("ts_timezone") or TRADE_HISTORY_TZ
@@ -1684,7 +1683,7 @@ class LSETelegramBot:
                     msg = msg + "\n\n" + "\n".join(lines)
             except Exception:
                 pass
-            await _reply(msg, parse_mode="Markdown")
+            await _reply(msg, parse_mode=None)
             return
         # Открытая позиция только из игры 5m (GAME_5M); портфель ExecutionAgent на график 5m не тянем
         entry_price = None
