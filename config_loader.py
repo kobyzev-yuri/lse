@@ -1,53 +1,52 @@
 """
 Универсальный загрузчик конфигурации для LSE Trading System
-Использует локальный config.env или fallback к ../brats/config.env
+Использует локальный config.env или fallback к ../brats/config.env.
+Если файла нет (например Cloud Run) — возвращает пустой dict, значения берутся из переменных окружения.
 """
 
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Dict, Optional, Any
 
+logger = logging.getLogger(__name__)
+
 
 def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
     """
     Загружает конфигурацию из config.env
-    
+
     Args:
         config_file: Путь к файлу конфигурации (если None, ищет локальный config.env)
-        
+
     Returns:
-        dict с параметрами конфигурации
+        dict с параметрами конфигурации. Если файл не найден — пустой dict (для Cloud Run: только env).
     """
     if config_file is None:
-        # Сначала пытаемся найти локальный config.env
         local_config = Path(__file__).parent / "config.env"
         if local_config.exists():
             config_file = str(local_config)
         else:
-            # Fallback к ../brats/config.env
             brats_config = Path(__file__).parent.parent / "brats" / "config.env"
             if brats_config.exists():
                 config_file = str(brats_config)
             else:
-                raise FileNotFoundError(
-                    f"Конфигурационный файл не найден. "
-                    f"Ожидался: {local_config} или {brats_config}"
-                )
-    
+                logger.debug("config.env не найден, конфиг только из переменных окружения")
+                return {}
+
     config_path = Path(config_file)
     if not config_path.exists():
-        raise FileNotFoundError(f"Конфигурационный файл не найден: {config_path}")
-    
+        logger.debug("config.env не найден: %s", config_path)
+        return {}
+
     config = {}
-    with open(config_path, 'r', encoding='utf-8') as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            # Пропускаем комментарии и пустые строки
-            if line and not line.startswith('#') and '=' in line:
-                key, value = line.split('=', 1)
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
                 config[key.strip()] = value.strip()
-    
     return config
 
 
@@ -63,13 +62,15 @@ def get_database_url(config: Optional[Dict[str, str]] = None) -> str:
     """
     if config is None:
         config = load_config()
-    
-    db_url = config.get('DATABASE_URL', 'postgresql://postgres:1234@localhost:5432/brats')
+    db_url = os.getenv("DATABASE_URL") or config.get("DATABASE_URL", "postgresql://postgres:1234@localhost:5432/brats")
     
     # Парсим DATABASE_URL и меняем базу данных на lse_trading
     match = re.match(r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)', db_url)
     if match:
         user, password, host, port, _ = match.groups()
+        # В контейнере lse-bot Postgres доступен по имени сервиса postgres, не localhost (cron и бот)
+        if host in ("localhost", "127.0.0.1") and Path("/app/scripts/run_telegram_bot.py").exists():
+            host = "postgres"
         db_url_lse = f"postgresql://{user}:{password}@{host}:{port}/lse_trading"
         # В БД храним московское время; при отображении конвертируем в ET (см. trade_ts_to_et, docs/TIMEZONES.md)
         db_url_lse += "?options=-c%20timezone%3DEurope%2FMoscow"
