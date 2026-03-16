@@ -811,8 +811,9 @@ class LSETelegramBot:
 
 /help — полная справка
         """
-        
-        await update.message.reply_text(welcome_text, parse_mode='Markdown')
+        # Без parse_mode: в тексте много подчёркиваний (game_5m, closed_impulse, config.env),
+        # Telegram Markdown воспринимает _ как курсив и падает с "can't find end of entity"
+        await update.message.reply_text(welcome_text.strip(), parse_mode=None)
     
     async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /help"""
