@@ -32,6 +32,7 @@ services:
     env_file:
       - config.env
     environment:
+      TZ: Europe/Moscow
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-lse_pg_pass}@postgres:5432/lse_trading?options=-c%20timezone%3DEurope%2FMoscow
     depends_on:
       postgres:
