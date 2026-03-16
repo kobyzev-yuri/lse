@@ -28,8 +28,9 @@ cat >> "$CRON_FILE" << EOF
 # ========== LSE Trading System (Docker) ==========
 # Контейнер: $CONTAINER_NAME
 
-0 22 * * * docker exec $CONTAINER_NAME python scripts/update_prices_cron.py >> /dev/null 2>&1
-0 10,12,14,16,18,20 * * 1-5 docker exec $CONTAINER_NAME python scripts/update_prices_cron.py >> /dev/null 2>&1
+# Цены: будни 10,12,14,16,18,20,22 ч; выходные только 22 ч
+0 10,12,14,16,18,20,22 * * 1-5 docker exec $CONTAINER_NAME python scripts/update_prices_cron.py >> /dev/null 2>&1
+0 22 * * 0,6 docker exec $CONTAINER_NAME python scripts/update_prices_cron.py >> /dev/null 2>&1
 10 22 * * * docker exec $CONTAINER_NAME python scripts/update_rsi_local.py >> /dev/null 2>&1
 0 19 * * 1-5 docker exec $CONTAINER_NAME python update_finviz_data.py >> /dev/null 2>&1
 0 9,13,17 * * 1-5 docker exec $CONTAINER_NAME python scripts/trading_cycle_cron.py >> "$PROJECT_DIR/logs/cron_trading_cycle.log" 2>&1
