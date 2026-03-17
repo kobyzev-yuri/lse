@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>5m — карточки</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eaeaea;
+            padding: 0 0 2rem;
+            max-width: 420px;
+            margin: 0 auto;
+        }
+        .header {
+            position: sticky;
+            top: 0;
+            background: #16213e;
+            padding: 0.6rem 0.8rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+            border-bottom: 1px solid #0f3460;
+        }
+        .header h1 { font-size: 1rem; font-weight: 600; }
+        .header a { color: #7dd3fc; text-decoration: none; font-size: 0.9rem; }
+        .updated { font-size: 0.75rem; color: #94a3b8; }
+        .btn { background: #0f3460; color: #e2e8f0; border: none; padding: 0.4rem 0.8rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; }
+        .btn:active { background: #1e3a5f; }
+        .card-5m {
+            background: #16213e;
+            border-radius: 10px;
+            margin: 0.8rem 0.8rem 0;
+            padding: 0.9rem;
+            border-left: 4px solid #475569;
+        }
+        .card-5m.decision-buy { border-left-color: #22c55e; }
+        .card-5m.decision-sell { border-left-color: #ef4444; }
+        .card-5m.decision-hold { border-left-color: #eab308; }
+        .card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .card-head .ticker { font-weight: 700; font-size: 1.1rem; }
+        .card-head .decision { font-size: 0.85rem; padding: 0.2rem 0.5rem; border-radius: 6px; }
+        .card-head .decision.BUY, .card-head .decision.STRONG_BUY { background: #14532d; color: #86efac; }
+        .card-head .decision.SELL { background: #7f1d1d; color: #fca5a5; }
+        .card-head .decision.HOLD { background: #422006; color: #fde047; }
+        .row { display: flex; justify-content: space-between; margin: 0.35rem 0; font-size: 0.85rem; }
+        .row .label { color: #94a3b8; }
+        .row .value.positive { color: #86efac; }
+        .row .value.negative { color: #fca5a5; }
+        .block-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin: 0.5rem 0 0.25rem; }
+        .reasoning { font-size: 0.8rem; color: #cbd5e1; margin-top: 0.5rem; line-height: 1.4; }
+        .llm-btn { margin-top: 0.6rem; width: 100%; font-size: 0.8rem; }
+        .llm-block { margin-top: 0.5rem; padding: 0.6rem; background: #0f172a; border-radius: 6px; font-size: 0.8rem; color: #cbd5e1; white-space: pre-wrap; display: none; }
+        .llm-block.open { display: block; }
+        .loading-llm { color: #94a3b8; }
+        .chart-link { font-size: 0.8rem; margin-top: 0.4rem; }
+        .chart-link a { color: #7dd3fc; }
+        .no-data { color: #64748b; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>5m карточки</h1>
+        <div>
+            <span class="updated" id="updatedAt">—</span>
+            <a href="/monitor" style="margin-left: 0.5rem;">Мониторинг</a>
+        </div>
+    </div>
+    <div style="padding: 0.5rem 0.8rem;">
+        <button class="btn" id="refreshBtn">Обновить</button>
+    </div>
+    <div id="cardsContainer"></div>
+
+    <script>
+        function escapeHtml(s) {
+            if (s == null || s === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(s);
+            return div.innerHTML;
+        }
+        function fmt(v, decimals) {
+            if (v == null || v === undefined) return '—';
+            if (typeof v === 'number' && decimals != null) return v.toFixed(decimals);
+            return String(v);
+        }
+        function decisionClass(d) {
+            if (!d) return '';
+            if (d === 'BUY' || d === 'STRONG_BUY') return 'decision-buy';
+            if (d === 'SELL') return 'decision-sell';
+            return 'decision-hold';
+        }
+        function renderCard(c) {
+            const isNoData = c.decision === 'NO_DATA';
+            const upside = c.estimated_upside_pct_day != null ? c.estimated_upside_pct_day : c.take_profit_pct;
+            const downside = c.stop_loss_pct;
+            const pullback = c.pullback_from_high_pct;
+            let html = '<div class="card-5m ' + decisionClass(c.decision) + '" data-ticker="' + escapeHtml(c.ticker) + '">';
+            html += '<div class="card-head"><span class="ticker">' + escapeHtml(c.ticker) + '</span><span class="decision">' + escapeHtml(c.decision || '—') + '</span></div>';
+            if (isNoData) {
+                html += '<p class="no-data">' + escapeHtml(c.reasoning || 'Нет данных') + '</p></div>';
+                return html;
+            }
+            html += '<div class="row"><span class="label">Цена</span><span class="value">' + fmt(c.price, 2) + '</span></div>';
+            html += '<div class="row"><span class="label">RSI(5m)</span><span class="value">' + fmt(c.rsi_5m, 1) + '</span></div>';
+            html += '<div class="block-title">Upside / Downside</div>';
+            html += '<div class="row"><span class="label">Апсайд (тейк)</span><span class="value positive">+' + fmt(upside, 1) + '%</span></div>';
+            if (c.suggested_take_profit_price != null) html += '<div class="row"><span class="label">Цель</span><span class="value">' + fmt(c.suggested_take_profit_price, 2) + '</span></div>';
+            html += '<div class="row"><span class="label">Даунсайд (стоп)</span><span class="value negative">−' + fmt(downside, 1) + '%</span></div>';
+            html += '<div class="row"><span class="label">Импульс 2ч</span><span class="value">' + fmt(c.momentum_2h_pct, 2) + '%</span></div>';
+            if (pullback != null) html += '<div class="row"><span class="label">Откат от хая</span><span class="value">' + fmt(pullback, 2) + '%</span></div>';
+            html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
+            if (c.reasoning) html += '<div class="reasoning">' + escapeHtml(c.reasoning) + '</div>';
+            html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">Вывод LLM</button>';
+            html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';
+            html += '<div class="chart-link"><a href="/visualization?ticker=' + encodeURIComponent(c.ticker) + '" target="_blank">График 5m</a></div>';
+            html += '</div>';
+            return html;
+        }
+        async function loadCards() {
+            const container = document.getElementById('cardsContainer');
+            const updatedEl = document.getElementById('updatedAt');
+            container.innerHTML = '<div class="loading-llm" style="padding:1rem;">Загрузка…</div>';
+            try {
+                const r = await fetch('/api/game5m/cards?days=5');
+                if (!r.ok) { container.innerHTML = '<div style="color:#fca5a5;">Ошибка ' + r.status + '</div>'; return; }
+                const data = await r.json();
+                updatedEl.textContent = data.updated_at ? new Date(data.updated_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—';
+                container.innerHTML = (data.cards || []).map(renderCard).join('');
+                document.querySelectorAll('.llm-btn').forEach(function(btn) {
+                    btn.addEventListener('click', function() { onLlmClick(this.getAttribute('data-ticker')); });
+                });
+            } catch (e) {
+                container.innerHTML = '<div style="color:#fca5a5;">' + escapeHtml(e.message) + '</div>';
+            }
+        }
+        async function onLlmClick(ticker) {
+            const block = document.getElementById('llm-' + ticker);
+            if (!block) return;
+            if (block.classList.contains('open') && block.dataset.loaded === '1') return;
+            block.classList.add('open');
+            block.innerHTML = '<span class="loading-llm">Загрузка LLM…</span>';
+            try {
+                const r = await fetch('/api/game5m/card/' + encodeURIComponent(ticker) + '/llm');
+                const data = await r.json();
+                let text = data.llm_reasoning || '';
+                if (data.llm_key_factors && Array.isArray(data.llm_key_factors)) text += '\n\n' + data.llm_key_factors.join(', ');
+                if (!text) text = 'Нет вывода LLM.';
+                block.textContent = text;
+                block.dataset.loaded = '1';
+            } catch (e) {
+                block.textContent = 'Ошибка: ' + e.message;
+                block.dataset.loaded = '1';
+            }
+        }
+        document.getElementById('refreshBtn').addEventListener('click', loadCards);
+        loadCards();
+    </script>
+</body>
+</html>

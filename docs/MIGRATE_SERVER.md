@@ -196,6 +196,27 @@ docker compose up -d lse
 
 Cron переустанавливать не нужно (пути к скриптам внутри контейнера те же).
 
+### Ошибка сборки: no space left on device
+
+При сборке образа `lse-bot` (зависимости `transformers`, `sentence-transformers`, `torch`) на диске может не хватить места. Ошибка вида: `write ... configuration_bit.cpython-311.pyc: no space left on device`.
+
+**Что сделать на сервере:**
+
+1. Освободить место под Docker и пересобрать:
+   ```bash
+   cd ~/lse
+   chmod +x scripts/server_build_clean.sh
+   ./scripts/server_build_clean.sh
+   ```
+   Скрипт останавливает контейнеры, делает `docker system prune -af` и `docker builder prune -af`, затем собирает образ `lse` с `--no-cache` и поднимает `docker compose up -d`.
+
+2. Если места всё равно мало — проверить диск и при необходимости расширить или добавить второй диск (см. раздел 10):
+   ```bash
+   df -h /
+   docker system df
+   ```
+   Для сборки образа с torch/transformers желательно иметь **не менее 5–6 ГБ** свободного места.
+
 ---
 
 ## 9. Автодеплой при изменениях на GitHub

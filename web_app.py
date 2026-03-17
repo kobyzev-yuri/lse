@@ -1244,6 +1244,126 @@ async def get_game5m(ticker: str = None, limit: int = 20):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/game5m/cards", response_class=JSONResponse)
+async def get_game5m_cards(days: int = 5):
+    """API: Карточки по всем тикерам игры 5m для веб-мониторинга (Telegram). Без LLM."""
+    try:
+        from services.ticker_groups import get_tickers_game_5m
+        from services.recommend_5m import get_decision_5m
+    except ImportError:
+        raise HTTPException(status_code=501, detail="Модули recommend_5m / ticker_groups недоступны")
+    tickers = list(get_tickers_game_5m() or [])
+    if not tickers:
+        return _to_jsonable({"tickers": [], "cards": [], "updated_at": None})
+    days = min(max(1, days), 7)
+    cards = []
+    for tkr in tickers:
+        try:
+            d5 = get_decision_5m(tkr, days=days, use_llm_news=False)
+        except Exception:
+            d5 = None
+        if not d5:
+            cards.append({"ticker": tkr, "decision": "NO_DATA", "reasoning": "Нет 5m данных."})
+            continue
+        session = d5.get("market_session") or {}
+        cards.append({
+            "ticker": tkr,
+            "decision": d5.get("decision"),
+            "price": d5.get("price"),
+            "rsi_5m": d5.get("rsi_5m"),
+            "momentum_2h_pct": d5.get("momentum_2h_pct"),
+            "volatility_5m_pct": d5.get("volatility_5m_pct"),
+            "stop_loss_pct": d5.get("stop_loss_pct"),
+            "take_profit_pct": d5.get("take_profit_pct"),
+            "estimated_upside_pct_day": d5.get("estimated_upside_pct_day"),
+            "suggested_take_profit_price": d5.get("suggested_take_profit_price"),
+            "pullback_from_high_pct": d5.get("pullback_from_high_pct"),
+            "session_high": d5.get("session_high"),
+            "entry_advice": d5.get("entry_advice"),
+            "entry_advice_reason": d5.get("entry_advice_reason"),
+            "reasoning": (d5.get("reasoning") or "")[:400],
+            "period_str": d5.get("period_str"),
+            "kb_news_impact": d5.get("kb_news_impact"),
+            "session_phase": session.get("session_phase"),
+            "premarket_gap_pct": d5.get("premarket_gap_pct"),
+            "premarket_last": d5.get("premarket_last"),
+            "bars_count": d5.get("bars_count"),
+        })
+    return _to_jsonable({
+        "tickers": tickers,
+        "cards": cards,
+        "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
+    })
+
+
+@app.get("/api/game5m/card/{ticker}/llm", response_class=JSONResponse)
+async def get_game5m_card_llm(ticker: str):
+    """API: Вывод LLM по одному тикеру 5m (по запросу, аналог prompt_entry). Для кнопки в карточке."""
+    ticker = ticker.strip().upper()
+    try:
+        from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation
+        from services.recommend_5m import get_decision_5m
+        from services.cluster_recommend import get_correlation_matrix, build_cluster_note_for_5m_llm
+        from services.llm_service import get_llm_service
+    except ImportError as e:
+        raise HTTPException(status_code=501, detail=f"Модули недоступны: {e}")
+    if ticker not in (get_tickers_game_5m() or []):
+        raise HTTPException(status_code=404, detail="Тикер не в игре 5m")
+    d5 = get_decision_5m(ticker, days=5, use_llm_news=True)
+    if not d5:
+        raise HTTPException(status_code=404, detail="Нет 5m данных")
+    corr_tickers = get_tickers_for_5m_correlation() or []
+    corr_matrix = get_correlation_matrix(corr_tickers, days=30) if len(corr_tickers) >= 2 else None
+    tech_by_ticker = {ticker: {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}}
+    for t in corr_tickers:
+        if t == ticker:
+            continue
+        try:
+            d = get_decision_5m(t, days=5, use_llm_news=False)
+            if d:
+                tech_by_ticker[t] = {"price": d.get("price"), "rsi": d.get("rsi_5m")}
+        except Exception:
+            pass
+    cluster_note = build_cluster_note_for_5m_llm(ticker, corr_tickers or [ticker], corr_matrix, tech_by_ticker) if corr_matrix else None
+    llm_reasoning = None
+    llm_key_factors = None
+    if cluster_note:
+        try:
+            llm = get_llm_service()
+            if getattr(llm, "client", None):
+                technical_data = {
+                    "close": d5.get("price"),
+                    "rsi": d5.get("rsi_5m"),
+                    "volatility_5": d5.get("volatility_5m_pct"),
+                    "technical_signal": d5.get("decision"),
+                    "cluster_note": cluster_note,
+                }
+                news_list = [{"source": "KB", "content": (d5.get("kb_news_impact") or "")[:500], "sentiment_score": 0.5}]
+                sentiment = 0.35 if "негатив" in (d5.get("kb_news_impact") or "").lower() else (0.65 if "позитив" in (d5.get("kb_news_impact") or "").lower() else 0.5)
+                result = llm.analyze_trading_situation(
+                    ticker, technical_data, news_list, sentiment,
+                    strategy_name="GAME_5M", strategy_signal=d5.get("decision"),
+                )
+                if result and result.get("llm_analysis"):
+                    ana = result["llm_analysis"]
+                    llm_reasoning = ana.get("reasoning") or ""
+                    llm_key_factors = ana.get("key_factors")
+        except Exception as e:
+            llm_reasoning = f"Ошибка LLM: {e!s}"
+    return _to_jsonable({
+        "ticker": ticker,
+        "llm_reasoning": llm_reasoning,
+        "llm_key_factors": llm_key_factors,
+        "technical_signal": d5.get("decision"),
+    })
+
+
+@app.get("/game5m/cards", response_class=HTMLResponse)
+async def game5m_cards_page(request: Request):
+    """Страница карточек 5m для мониторинга в Telegram (компактный скролл, LLM по кнопке)."""
+    return HTMLResponse(render_template("game5m_cards.html", {"request": request}))
+
+
 @app.get("/api/pnl", response_class=JSONResponse)
 async def get_pnl():
     """API: Получить PnL по закрытым сделкам"""

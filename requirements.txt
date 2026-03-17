@@ -11,10 +11,11 @@ pgvector>=0.2.0
 
 # LLM и AI
 openai>=1.0.0  # Для работы с LLM через proxyapi.ru
-# Для Vector KB (sync_vector_kb_cron): sentence-transformers тянет transformers;
-# EncoderDecoderCache нужен с transformers>=4.45, иначе "cannot import name 'EncoderDecoderCache'"
+# Для Vector KB и sentiment: sentence-transformers тянет transformers и torch.
+# В Docker (Dockerfile) torch ставится отдельно — CPU-only (без nvidia). Локально при отсутствии GPU:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
 transformers>=4.45.0
-sentence-transformers>=2.2.0  # Для локальной генерации embeddings (бесплатно)
+sentence-transformers>=2.2.0  # Локальные embeddings (бесплатно); torch уже установлен в Docker как CPU
 
 # Веб-интерфейс
 fastapi>=0.104.0
