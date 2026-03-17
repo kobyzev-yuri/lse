@@ -283,13 +283,17 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
             parts.append(f"<tr><td>{_pre(ticker)}</td><td colspan=\"7\">Нет 5m данных</td></tr>")
             continue
         dec_cls = "decision-buy" if decision in ("BUY", "STRONG_BUY") else ("decision-sell" if decision == "SELL" else "decision-hold")
+        price_s = f"{price:.2f}" if price is not None else "—"
+        rsi_s = f"{rsi:.1f}" if rsi is not None else "—"
+        mom_s = f"{mom:+.2f}%" if mom is not None else "—"
+        vol_s = f"{vol:.2f}%" if vol is not None else "—"
         parts.append(
             f"<tr><td>{_pre(ticker)}</td>"
             f"<td class=\"{dec_cls}\">{_pre(decision)}</td>"
-            f"<td>{price:.2f if price is not None else '—'}</td>"
-            f"<td>{rsi:.1f if rsi is not None else '—'}</td>"
-            f"<td>{mom:+.2f if mom is not None else '—'}%</td>"
-            f"<td>{vol:.2f if vol is not None else '—'}%</td>"
+            f"<td>{price_s}</td>"
+            f"<td>{rsi_s}</td>"
+            f"<td>{mom_s}</td>"
+            f"<td>{vol_s}</td>"
             f"<td>{_pre(period)}</td>"
             f"<td>{_pre(entry)}</td></tr>"
         )

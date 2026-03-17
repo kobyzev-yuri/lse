@@ -25,10 +25,11 @@ services:
     image: lse-bot:latest
     container_name: lse-bot
     restart: unless-stopped
-    # Polling (основной режим, уже работал). Для webhook замените на:
-    # command: ["uvicorn", "api.bot_app:app", "--host", "0.0.0.0", "--port", "8080"]
-    # и добавьте ports: "8080:8080"
-    command: ["python", "scripts/run_telegram_bot.py"]
+    # Бот (polling) + веб (карточки 5m, мониторинг) в одном контейнере. Порт 8080 — веб.
+    # Для только webhook без веб-страниц замените на: command: ["uvicorn", "api.bot_app:app", ...]
+    command: ["sh", "-c", "python scripts/run_telegram_bot.py & exec uvicorn web_app:app --host 0.0.0.0 --port 8080"]
+    ports:
+      - "8080:8080"
     env_file:
       - config.env
     environment:
