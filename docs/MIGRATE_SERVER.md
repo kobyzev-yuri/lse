@@ -6,6 +6,8 @@
 
 ## 1. Экспорт дампа на старом сервере
 
+Скрипт экспортирует **только таблицы LSE**: `quotes`, `knowledge_base`, `portfolio_state`, `trade_history`, `strategy_parameters`. Чужие схемы (tbl_*, vanna_vectors и т.д.) в дамп не попадают.
+
 На машине, где сейчас крутится LSE и есть доступ к текущей БД:
 
 ```bash
@@ -331,6 +333,13 @@ chmod +x scripts/setup_server.sh scripts/deploy_from_github.sh scripts/restore_p
 Скрипт установит Docker и напишет выйти из SSH и зайти снова. Сделай это (чтобы применилась группа `docker`).
 
 ### Шаг 1: Второй заход — конфиг и дамп
+
+**config.env** и **дамп БД** в репозиторий не коммитить — копируй их на сервер напрямую (scp с ноутбука):
+
+```bash
+scp /path/to/lse/config.env ai8049520@IP_СЕРВЕРА:~/lse/
+scp /path/to/my_backup.sql.gz ai8049520@IP_СЕРВЕРА:~/
+```
 
 Снова зайди по SSH. Если дамп уже лежит на сервере (например `~/my_backup.sql.gz`):
 

@@ -326,6 +326,14 @@ def compute_rsi_5m(closes: pd.Series, period: int = RSI_PERIOD_5M) -> Optional[f
     return compute_rsi_from_closes(vals, period=period)
 
 
+# Поля технического сигнала 5m: один источник правды для signal5m, recommend5m compact и cron
+TECHNICAL_SIGNAL_KEYS = (
+    "decision", "reasoning", "price", "rsi_5m", "momentum_2h_pct", "volatility_5m_pct",
+    "period_str", "bars_count", "stop_loss_pct", "take_profit_pct", "stop_loss_enabled",
+    "kb_news_impact", "entry_advice", "entry_advice_reason", "market_session",
+)
+
+
 def get_decision_5m(
     ticker: str,
     days: int = None,
@@ -648,4 +656,36 @@ def get_decision_5m(
         except Exception as e:
             logger.debug("LLM новости перед решением %s: %s", ticker, e)
 
+    return out
+
+
+def get_5m_technical_signal(
+    ticker: str,
+    days: int = None,
+    use_llm_news: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Технический сигнал 5m: подмножество get_decision_5m для signal5m и выравнивания с cron.
+    Те же правила, что в scripts/send_sndk_signal_cron.py; без длинных списков корреляций и новостей.
+    """
+    d5 = get_decision_5m(ticker, days=days, use_llm_news=use_llm_news)
+    if d5 is None:
+        return None
+    return {k: d5.get(k) for k in TECHNICAL_SIGNAL_KEYS if k in d5}
+
+
+def build_5m_compact_payload(d5: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Компактный payload для recommend5m: технический вывод + краткий LLM вывод при наличии.
+    Без длинных списков корреляций и полных текстов новостей.
+    """
+    out = {k: d5.get(k) for k in TECHNICAL_SIGNAL_KEYS if k in d5}
+    if d5.get("llm_correlation_reasoning"):
+        out["llm_reasoning"] = (d5.get("llm_correlation_reasoning") or "")[:500]
+    if d5.get("llm_key_factors"):
+        out["llm_key_factors"] = d5.get("llm_key_factors")
+    if d5.get("llm_news_content"):
+        out["llm_news_preview"] = (d5.get("llm_news_content") or "")[:300]
+    if d5.get("llm_sentiment") is not None:
+        out["llm_sentiment"] = d5.get("llm_sentiment")
     return out

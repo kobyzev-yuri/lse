@@ -1,0 +1,18 @@
+# Контекст сборки для gcloud builds submit (меньше размер загрузки)
+.git
+.gitignore
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+htmlcov
+logs
+*.log
+.env
+config.env
+local/
+cache/
+.cursor
+.idea
+.vscode
+*.sql

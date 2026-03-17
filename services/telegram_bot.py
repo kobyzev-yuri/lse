@@ -239,6 +239,71 @@ pre { white-space: pre-wrap; word-break: break-word; background: #f8f8f8; paddin
 .intro { color: #555; font-size: 0.9em; margin-bottom: 1em; }
 """
 
+# Компактный отчёт recommend5m: таблица технический + краткий LLM, без списков корреляций
+_RECOMMEND5M_COMPACT_CSS = """
+body { font-family: sans-serif; max-width: 820px; margin: 1em auto; padding: 0 1em; }
+h1 { font-size: 1.15em; color: #333; margin-bottom: 0.5em; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+th, td { border: 1px solid #ddd; padding: 0.4em 0.6em; text-align: left; }
+th { background: #e8f4f8; font-weight: 600; }
+tr:nth-child(even) { background: #fafafa; }
+.llm-cell { font-size: 0.85em; color: #555; max-width: 28em; }
+.decision-buy { color: #0a6; }
+.decision-hold { color: #666; }
+.decision-sell { color: #c33; }
+"""
+
+
+def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], days: int = 5) -> str:
+    """Компактный HTML для /recommend5m: таблица технический сигнал + краткий вывод LLM при наличии."""
+    def _pre(s: str) -> str:
+        return html.escape(str(s)) if s is not None and s != "" else "—"
+
+    parts = [
+        "<!DOCTYPE html>",
+        '<html lang="ru"><head><meta charset="utf-8">',
+        "<title>Рекомендация 5m</title>",
+        "<style>", _RECOMMEND5M_COMPACT_CSS, "</style></head><body>",
+        f"<h1>Рекомендация 5m (технический сигнал + LLM)</h1>",
+        f"<p>Период: {days} дн. Подробный отчёт: /prompt_entry game5m</p>",
+        "<table><thead><tr>",
+        "<th>Тикер</th><th>Решение</th><th>Цена</th><th>RSI</th><th>Имп. 2ч%</th><th>Вол%</th><th>Период</th><th>Вход</th>",
+        "</tr></thead><tbody>",
+    ]
+    for r in per_ticker_results:
+        ticker = r.get("ticker") or "—"
+        decision = r.get("decision") or "—"
+        price = r.get("price")
+        rsi = r.get("rsi_5m")
+        mom = r.get("momentum_2h_pct")
+        vol = r.get("volatility_5m_pct")
+        period = r.get("period_str")
+        entry = r.get("entry_advice") or "—"
+        if decision == "NO_DATA":
+            parts.append(f"<tr><td>{_pre(ticker)}</td><td colspan=\"7\">Нет 5m данных</td></tr>")
+            continue
+        dec_cls = "decision-buy" if decision in ("BUY", "STRONG_BUY") else ("decision-sell" if decision == "SELL" else "decision-hold")
+        parts.append(
+            f"<tr><td>{_pre(ticker)}</td>"
+            f"<td class=\"{dec_cls}\">{_pre(decision)}</td>"
+            f"<td>{price:.2f if price is not None else '—'}</td>"
+            f"<td>{rsi:.1f if rsi is not None else '—'}</td>"
+            f"<td>{mom:+.2f if mom is not None else '—'}%</td>"
+            f"<td>{vol:.2f if vol is not None else '—'}%</td>"
+            f"<td>{_pre(period)}</td>"
+            f"<td>{_pre(entry)}</td></tr>"
+        )
+        llm_reasoning = r.get("llm_reasoning") or r.get("llm_correlation_reasoning")
+        llm_factors = r.get("llm_key_factors")
+        if llm_reasoning or llm_factors:
+            llm_text = (llm_reasoning or "")[:400] if llm_reasoning else ""
+            if llm_factors and isinstance(llm_factors, list):
+                llm_text += " " + ", ".join(str(f)[:80] for f in llm_factors[:5])
+            if llm_text.strip():
+                parts.append(f'<tr><td colspan="8" class="llm-cell">LLM: {_pre(llm_text.strip())}</td></tr>')
+    parts.append("</tbody></table></body></html>")
+    return "\n".join(parts)
+
 
 def _build_prompt_entry_all_html(
     cluster_tickers: List[str],
@@ -695,6 +760,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("strategies", self._handle_strategies))
         self.application.add_handler(CommandHandler("recommend", self._handle_recommend))
         self.application.add_handler(CommandHandler("recommend5m", self._handle_recommend5m))
+        self.application.add_handler(CommandHandler("signal5m", self._handle_signal5m))
         self.application.add_handler(CommandHandler("game5m", self._handle_game5m))
         self.application.add_handler(CommandHandler("gameparams", self._handle_gameparams))
         self.application.add_handler(CommandHandler("dashboard", self._handle_dashboard))
@@ -785,9 +851,10 @@ class LSETelegramBot:
 /chart <ticker> [days] — график дневной; /chart game_5m [days] — все тикеры игры 5m (горизонтально по сессиям, тикеры друг под другом)
 /chart5m <ticker> [days] — график 5 мин (по требованию)
 /table5m <ticker> [days] — таблица 5m свечей
-/signal <ticker> — анализ по тикеру (портфель): решение, цена, RSI, sentiment
+/signal <ticker> — технический сигнал по тикеру: для игры 5m — 5m; иначе портфель (решение, RSI, sentiment)
 /recommend [ticker] — рекомендация по портфелю; без тикера — по кластеру
-/recommend5m [ticker] [days] — прогноз для вступления в игру 5m; без тикера — по кластеру
+/recommend5m [ticker] [days] — компактный прогноз 5m (технический + LLM при включении); без тикера — кластер
+/signal5m [ticker] [days] — только технический сигнал 5m (тот же источник, что крон)
 /game5m [ticker] — мониторинг игры 5m: позиция, сделки, win rate и PnL (по умолч. SNDK)
 /gameparams — все существенные параметры игр (5m и портфель): тикеры, тейк/стоп, cooldown
 /dashboard [5m|daily|all] — дашборд по тикерам: решения, 5m, новости (проактивный мониторинг)
@@ -838,9 +905,9 @@ class LSETelegramBot:
 
 **Рекомендации (итог по игре) и отчёт (как получено решение):**
 Одна цепочка решений; разница — форма вывода. При USE_LLM=false итог = только тех. рекомендация; при USE_LLM=true LLM учитывает тех. сигнал и может скорректировать.
-`/signal <ticker>` — анализ по одному тикеру (игра портфель): цена, RSI, решение, стратегия, sentiment. Итоговая рекомендация кратко.
+`/signal <ticker>` — технический сигнал: если тикер в игре 5m — 5m (как signal5m); иначе портфель (цена, RSI, решение, sentiment).
 `/recommend [ticker]` — рекомендация по игре портфель: когда входить, стоп/тейк; без тикера — по кластеру. Итоговая рекомендация.
-`/recommend5m [ticker] [days]` — прогноз для вступления в игру 5m (решение и параметры входа); без тикера — по кластеру.
+`/recommend5m [ticker] [days]` — компактный прогноз 5m (таблица: технический + LLM). `/signal5m [ticker]` — только технический 5m.
 `/prompt_entry [portfolio|game5m|5m|тикер]` — не рекомендация, а отчёт: контекст и ответ по каждому тикеру. Коротко: `5m` = game5m, `/pe_5m` = то же. Для портфеля в выгрузке также промпт для LLM. Без аргумента — пустой шаблон.
 
 **Анализ (справка по signal):**
@@ -1020,10 +1087,25 @@ class LSETelegramBot:
         logger.info(f"📊 Запрос /signal для {ticker} от пользователя {update.effective_user.id} (исходные args: {context.args})")
         
         try:
+            # Если тикер в игре 5m — технический сигнал 5m (тот же источник, что signal5m и cron)
+            try:
+                from services.ticker_groups import get_tickers_game_5m
+                from services.recommend_5m import get_5m_technical_signal
+                game5m_set = set(get_tickers_game_5m() or [])
+                if ticker in game5m_set:
+                    await update.message.reply_text(f"🔍 Сигнал 5m для {ticker}...")
+                    tech = get_5m_technical_signal(ticker, days=5, use_llm_news=False)
+                    if tech:
+                        response = self._format_5m_technical_signal(ticker, tech)
+                        await update.message.reply_text(response, parse_mode=None)
+                        return
+            except Exception as e:
+                logger.debug("5m technical signal fallback: %s", e)
+            
             # Показываем, что анализ начат
             await update.message.reply_text(f"🔍 Анализ {ticker}...")
             
-            # Получаем решение от AnalystAgent
+            # Получаем решение от AnalystAgent (портфель и прочие игры)
             logger.info(f"Вызов analyst.get_decision_with_llm({ticker})")
             decision_result = self.analyst.get_decision_with_llm(ticker)
             logger.info(f"Получен результат для {ticker}: decision={decision_result.get('decision')}")
@@ -3667,11 +3749,15 @@ class LSETelegramBot:
         await self._handle_prompt_entry(update, context)
 
     async def _handle_prompt_entry(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Шаблон принятия решения по игре. Аргумент: игра (portfolio, game5m) или тикер — контекст по параметрам и тикерам этой игры. Выгрузка: отчёт для человека; для портфеля в отчёте также промпт к LLM (system/user и ответ)."""
+        """Шаблон принятия решения по игре. Аргумент: игра (portfolio, game5m) или тикер — контекст по параметрам и тикерам этой игры. Выгрузка: отчёт для человека; для портфеля в отчёте также промпт к LLM (system/user и ответ). Последний аргумент json — выгрузка в JSON."""
         user_id = update.effective_user.id
         if not self._check_access(user_id):
             await update.message.reply_text("❌ Доступ запрещен")
             return
+        raw_args = list(context.args or [])
+        output_json = any((a or "").strip().upper() == "JSON" for a in raw_args)
+        if output_json:
+            context.args = [a for a in raw_args if (a or "").strip().upper() != "JSON"]
         ticker_arg = (context.args or [])[0].strip() if context.args else ""
         game_arg = ticker_arg.strip().upper() if ticker_arg else ""
         is_portfolio_cluster = game_arg in ("PORTFOLIO", "ALL")
@@ -3719,9 +3805,11 @@ class LSETelegramBot:
                     if corr_matrix:
                         correlation_note = "Корреляция за 30 дн. (по тикерам игры 5m)."
                         corr_tickers_used = cluster_5m
+                # Тот же период, что и в /recommend5m по умолчанию (5 дн.), чтобы выводы совпадали
+                days_5m = 5
                 per_ticker_results: List[Dict[str, Any]] = []
                 for tkr in cluster_5m:
-                    d5 = get_decision_5m(tkr, use_llm_news=True)
+                    d5 = get_decision_5m(tkr, days=days_5m, use_llm_news=True)
                     if not d5:
                         per_ticker_results.append({"ticker": tkr, "decision": "NO_DATA", "reasoning": "Нет 5m данных."})
                         continue
@@ -3755,7 +3843,7 @@ class LSETelegramBot:
                     for t in corr_tickers_used:
                         if t in cluster_set:
                             continue
-                        d5 = get_decision_5m(t, use_llm_news=False)
+                        d5 = get_decision_5m(t, days=days_5m, use_llm_news=False)
                         if d5 and (d5.get("price") is not None or d5.get("rsi_5m") is not None):
                             extra_tech[t] = {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}
                 if get_use_llm_for_analyst() and corr_matrix and (corr_tickers_used or cluster_5m):
@@ -3800,13 +3888,38 @@ class LSETelegramBot:
                                 r["llm_key_factors"] = ana.get("key_factors") or []
                         except Exception as e:
                             logger.debug("LLM с корреляцией для 5m %s: %s", r.get("ticker"), e)
-                html_content = _build_prompt_entry_game5m_html(
-                    cluster_5m, correlation_note, per_ticker_results,
-                    correlation_matrix=corr_matrix, correlation_tickers=corr_tickers_used if corr_matrix else None,
-                    extra_tech_by_ticker=extra_tech if extra_tech else None,
-                )
-                filename = f"prompt_entry_game5m_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
-                await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
+                if output_json:
+                    import json
+                    def _json_serial(obj):
+                        if hasattr(obj, "isoformat"):
+                            return obj.isoformat()
+                        if hasattr(obj, "item"):  # numpy scalar
+                            return obj.item()
+                        raise TypeError(type(obj).__name__)
+                    tickers_payload = []
+                    for r in per_ticker_results:
+                        row = {k: v for k, v in r.items() if v is not None and k not in ("kb_news",)}
+                        tickers_payload.append(row)
+                    payload = {
+                        "game": "5m",
+                        "cluster": cluster_5m,
+                        "correlation_note": correlation_note,
+                        "days": days_5m,
+                        "tickers": tickers_payload,
+                    }
+                    if corr_matrix:
+                        payload["correlation_matrix"] = {k: {k2: float(v2) for k2, v2 in v.items()} for k, v in corr_matrix.items()}
+                    json_bytes = json.dumps(payload, ensure_ascii=False, indent=2, default=_json_serial).encode("utf-8")
+                    filename = f"prompt_entry_game5m_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.json"
+                    await update.message.reply_document(document=BytesIO(json_bytes), filename=filename)
+                else:
+                    html_content = _build_prompt_entry_game5m_html(
+                        cluster_5m, correlation_note, per_ticker_results,
+                        correlation_matrix=corr_matrix, correlation_tickers=corr_tickers_used if corr_matrix else None,
+                        extra_tech_by_ticker=extra_tech if extra_tech else None,
+                    )
+                    filename = f"prompt_entry_game5m_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
+                    await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
                 decisions_str = ", ".join(f"{r['ticker']}={r.get('decision', '?')}" for r in per_ticker_results)
                 await update.message.reply_text(f"✅ Прогноз для вступления (5m) выгружен. Решения: {decisions_str}")
                 return
@@ -3844,9 +3957,21 @@ class LSETelegramBot:
                         "decision": dec,
                         "note": None,
                     })
-                html_content = _build_prompt_entry_all_html(full_list, correlation_note, per_ticker_payloads)
-                filename = f"prompt_entry_{'all' if game_arg == 'ALL' else 'portfolio'}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
-                await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
+                if output_json:
+                    import json
+                    payload = {
+                        "game": "portfolio",
+                        "cluster": full_list,
+                        "correlation_note": correlation_note,
+                        "tickers": per_ticker_payloads,
+                    }
+                    json_bytes = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+                    filename = f"prompt_entry_{'all' if game_arg == 'ALL' else 'portfolio'}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.json"
+                    await update.message.reply_document(document=BytesIO(json_bytes), filename=filename)
+                else:
+                    html_content = _build_prompt_entry_all_html(full_list, correlation_note, per_ticker_payloads)
+                    filename = f"prompt_entry_{'all' if game_arg == 'ALL' else 'portfolio'}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
+                    await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
                 decisions_str = ", ".join(f"{p['ticker']}={p.get('decision', '?')}" for p in per_ticker_payloads)
                 await update.message.reply_text(f"✅ Промпт по кластеру портфеля выгружен. Предикт: {decisions_str}")
                 return
@@ -4141,17 +4266,65 @@ class LSETelegramBot:
                             r["llm_key_factors"] = ana.get("key_factors") or []
                     except Exception as e:
                         logger.debug("LLM с корреляцией для 5m %s: %s", r.get("ticker"), e)
-            html_content = _build_prompt_entry_game5m_html(
-                cluster_5m, correlation_note, per_ticker_results,
-                correlation_matrix=corr_matrix, correlation_tickers=corr_tickers_used if corr_matrix else None,
-                extra_tech_by_ticker=extra_tech if extra_tech else None,
-            )
+            html_content = _build_recommend5m_compact_html(per_ticker_results, days)
             filename = f"recommend_5m_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
             await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
             decisions_str = ", ".join(f"{r['ticker']}={r.get('decision', '?')}" for r in per_ticker_results)
             await update.message.reply_text(f"✅ Прогноз для вступления в игру 5m (HTML). Решения: {decisions_str}")
         except Exception as e:
             logger.exception("Ошибка рекомендации 5m")
+            await update.message.reply_text(f"❌ Ошибка: {e}")
+
+    async def _handle_signal5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Технический сигнал 5m: тот же источник, что recommend5m и cron. Без LLM-нарратива."""
+        if not self._check_access(update.effective_user.id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        from services.ticker_groups import get_tickers_game_5m
+        from services.recommend_5m import get_5m_technical_signal
+
+        ticker = None
+        days = 5
+        if context.args and len(context.args) >= 1:
+            ticker = _normalize_ticker(context.args[0])
+        if len(context.args) >= 2:
+            try:
+                days = max(1, min(7, int(context.args[1].strip())))
+            except (ValueError, IndexError):
+                pass
+        cluster_5m = list(get_tickers_game_5m() or [])
+        if not cluster_5m:
+            await update.message.reply_text("❌ Тикеры игры 5m не заданы (GAME_5M_TICKERS / TICKERS_FAST).")
+            return
+        if ticker and ticker not in cluster_5m:
+            await update.message.reply_text(f"❌ {ticker} не в игре 5m. Кластер: {', '.join(cluster_5m)}")
+            return
+        tickers_to_show = [ticker] if ticker else cluster_5m
+        try:
+            results = []
+            for tkr in tickers_to_show:
+                tech = get_5m_technical_signal(tkr, days=days, use_llm_news=False)
+                if tech:
+                    tech["ticker"] = tkr
+                    results.append(tech)
+                else:
+                    results.append({"ticker": tkr, "decision": "NO_DATA"})
+            if not results:
+                await update.message.reply_text("❌ Нет 5m данных по выбранным тикерам.")
+                return
+            if len(results) == 1:
+                text = self._format_5m_technical_signal(results[0]["ticker"], results[0])
+                await update.message.reply_text(text, parse_mode=None)
+            else:
+                html_content = _build_recommend5m_compact_html(
+                    [{"ticker": r.get("ticker"), "decision": r.get("decision"), "price": r.get("price"), "rsi_5m": r.get("rsi_5m"), "momentum_2h_pct": r.get("momentum_2h_pct"), "volatility_5m_pct": r.get("volatility_5m_pct"), "period_str": r.get("period_str"), "entry_advice": r.get("entry_advice"), "reasoning": r.get("reasoning"), "kb_news_impact": r.get("kb_news_impact")} for r in results],
+                    days,
+                )
+                filename = f"signal5m_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
+                await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
+                await update.message.reply_text("✅ Сигнал 5m (технический) выгружен.")
+        except Exception as e:
+            logger.exception("Ошибка signal5m")
             await update.message.reply_text(f"❌ Ошибка: {e}")
 
     async def _handle_game5m(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4547,15 +4720,22 @@ class LSETelegramBot:
                         # Запрос цены
                         await self._handle_price_by_ticker(update, ticker)
                     else:
-                        # Полный анализ (по умолчанию, если найден тикер)
+                        # Полный анализ: если тикер в игре 5m — технический сигнал 5m, иначе портфель
                         logger.info(f"Выполняем полный анализ для {ticker}")
                         await update.message.reply_text(f"🔍 Анализ {ticker}...")
-                        
                         try:
+                            from services.ticker_groups import get_tickers_game_5m
+                            from services.recommend_5m import get_5m_technical_signal
+                            game5m_set = set(get_tickers_game_5m() or [])
+                            if ticker in game5m_set:
+                                tech = get_5m_technical_signal(ticker, days=5, use_llm_news=False)
+                                if tech:
+                                    response = self._format_5m_technical_signal(ticker, tech)
+                                    await update.message.reply_text(response, parse_mode=None)
+                                    return
                             decision_result = self.analyst.get_decision_with_llm(ticker)
                             logger.info(f"Получен результат анализа для {ticker}: {decision_result.get('decision')}")
                             response = self._format_signal_response(ticker, decision_result)
-                            
                             try:
                                 await update.message.reply_text(response, parse_mode='Markdown')
                             except Exception as e:
@@ -4565,15 +4745,24 @@ class LSETelegramBot:
                             logger.error(f"Ошибка при анализе {ticker}: {e}", exc_info=True)
                             await update.message.reply_text(f"❌ Ошибка при анализе {ticker}: {str(e)}")
                 else:
-                    # Несколько тикеров, но не новости - анализируем каждый
+                    # Несколько тикеров, но не новости — по каждому: 5m технический если в игре 5m, иначе портфель
                     await update.message.reply_text(f"🔍 Анализ {len(tickers)} инструментов...")
-                    
+                    try:
+                        from services.ticker_groups import get_tickers_game_5m
+                        from services.recommend_5m import get_5m_technical_signal
+                        game5m_set = set(get_tickers_game_5m() or [])
+                    except Exception:
+                        game5m_set = set()
                     all_responses = []
                     for ticker in tickers:
                         ticker = _normalize_ticker(ticker)
                         try:
-                            decision_result = self.analyst.get_decision_with_llm(ticker)
-                            response = self._format_signal_response(ticker, decision_result)
+                            if ticker in game5m_set:
+                                tech = get_5m_technical_signal(ticker, days=5, use_llm_news=False)
+                                response = self._format_5m_technical_signal(ticker, tech) if tech else f"❌ Нет 5m данных: {ticker}"
+                            else:
+                                decision_result = self.analyst.get_decision_with_llm(ticker)
+                                response = self._format_signal_response(ticker, decision_result)
                             all_responses.append(response)
                         except Exception as e:
                             logger.error(f"Ошибка при анализе {ticker}: {e}")
@@ -4653,7 +4842,33 @@ class LSETelegramBot:
         # Обработка callback data
         data = query.data
         # Можно добавить логику для кнопок позже
-    
+
+    def _format_5m_technical_signal(self, ticker: str, tech: Dict[str, Any]) -> str:
+        """Форматирует технический сигнал 5m (источник: get_5m_technical_signal / cron). Без длинных списков."""
+        decision = tech.get("decision") or "—"
+        price = tech.get("price")
+        rsi = tech.get("rsi_5m")
+        mom = tech.get("momentum_2h_pct")
+        vol = tech.get("volatility_5m_pct")
+        period = tech.get("period_str")
+        entry = tech.get("entry_advice") or "—"
+        reasoning = (tech.get("reasoning") or "")[:300]
+        kb = tech.get("kb_news_impact") or "—"
+        lines = [
+            f"5m · {ticker} — {decision}",
+            f"Цена: ${price:.2f}" if price is not None else "Цена: —",
+            f"RSI(5m): {rsi:.1f}" if rsi is not None else "RSI: —",
+            f"Импульс 2ч: {mom:+.2f}%" if mom is not None else "",
+            f"Волатильность: {vol:.2f}%" if vol is not None else "",
+            f"Вход: {entry}",
+            f"Новости (KB): {kb}",
+        ]
+        if period:
+            lines.append(f"Период: {period}")
+        if reasoning:
+            lines.append(f"Обоснование: {reasoning}")
+        return "\n".join(s for s in lines if s)
+
     def _format_signal_response(self, ticker: str, decision_result: Dict[str, Any]) -> str:
         """Форматирует ответ с анализом сигнала"""
         decision = decision_result.get('decision', 'HOLD')
