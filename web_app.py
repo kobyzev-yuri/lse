@@ -1274,6 +1274,7 @@ async def get_game5m_cards(days: int = 5):
             "momentum_2h_pct": d5.get("momentum_2h_pct"),
             "volatility_5m_pct": d5.get("volatility_5m_pct"),
             "stop_loss_pct": d5.get("stop_loss_pct"),
+            "stop_loss_enabled": d5.get("stop_loss_enabled"),
             "take_profit_pct": d5.get("take_profit_pct"),
             "estimated_upside_pct_day": d5.get("estimated_upside_pct_day"),
             "suggested_take_profit_price": d5.get("suggested_take_profit_price"),
