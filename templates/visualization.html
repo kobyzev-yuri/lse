@@ -20,30 +20,24 @@
 
 <div class="card">
     <h2>График 5m (интрадей + пролонгация)</h2>
-    <p class="muted" style="margin-bottom:0.5rem;">Те же функции, что в Telegram: зона прогноза, аппроксимация EMA, тренд при ≥5 свечах. Ось времени — US Eastern (NYSE/NASDAQ).</p>
-    <label>Тикер:</label>
-    <select id="ticker5mSelect">
-        <option value="">Выберите тикер</option>
-        {% for ticker in (tickers_5m or tickers or ['SNDK']) %}
-        <option value="{{ ticker }}" {% if (selected_ticker_5m and ticker == selected_ticker_5m) or (not selected_ticker_5m and loop.first and ticker) %}selected{% endif %}>{{ ticker }}</option>
-        {% endfor %}
-    </select>
-    <label style="margin-left:1rem;">Дней:</label>
+    <p class="muted" style="margin-bottom:0.5rem;">Все тикеры игры 5m (как в карточках). Те же функции, что в Telegram: зона прогноза, EMA, тренд при ≥5 свечах. Ось времени — US Eastern (NYSE/NASDAQ).</p>
+    <label>Дней:</label>
     <select id="days5mSelect">
-        <option value="1">1</option>
+        <option value="1" selected>1</option>
         <option value="3">3</option>
-        <option value="5" selected>5</option>
+        <option value="5">5</option>
         <option value="7">7</option>
     </select>
-    <canvas id="chart5m" style="max-height: 400px; margin-top: 1rem;"></canvas>
-    <div id="chart5mSymbolsLegend" class="muted" style="margin-top:0.75rem; font-size:0.8rem; line-height:1.4;">
-        <strong style="color:#cbd5e1;">Обозначения:</strong> ▲ треугольник — <strong>покупка</strong> (вход в позицию). ● зелёный круг — <strong>тейк-профит</strong> (выход в плюс, цель достигнута). ● красный круг — <strong>стоп-лосс</strong> (выход в минус, ограничение убытка). Вертикальные линии — границы торговых дней (9:30 ET). Красная линия — прогноз движения цены.
+    <div id="chart5mSymbolsLegend" class="muted" style="margin-top:0.75rem; margin-bottom:0.5rem; font-size:0.8rem; line-height:1.4;">
+        <strong style="color:#cbd5e1;">Обозначения:</strong> ▲ покупка · ● зелёный — тейк · ● красный — стоп · вертикальные линии — границы дней (9:30 ET).
     </div>
-    <div id="chart5mLegend" class="muted" style="margin-top:0.5rem; font-size:0.85rem;"></div>
+    <div id="chart5mContainer"></div>
 </div>
+<script type="application/json" id="tickers5mList">{{ tickers_5m_json or "[]" }}</script>
 
 <div class="card">
     <h2>PnL по сделкам</h2>
+    <p id="pnlEmptyHint" class="muted" style="display:none; margin-bottom:0.5rem;">Нет закрытых сделок. График появится после закрытия позиций.</p>
     <canvas id="pnlChart" style="max-height: 400px;"></canvas>
 </div>
 {% endblock %}
@@ -52,7 +46,7 @@
 <script>
 let quotesChart = null;
 let pnlChart = null;
-let chart5m = null;
+let chart5mInstances = {};
 
 function formatChart5mTime(iso) {
     if (!iso) return '';
@@ -60,218 +54,150 @@ function formatChart5mTime(iso) {
     return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' });
 }
 
-async function loadChart5m() {
-    const ticker = document.getElementById('ticker5mSelect').value;
-    const days = parseInt(document.getElementById('days5mSelect').value, 10);
-    if (!ticker) {
-        if (chart5m) { chart5m.destroy(); chart5m = null; }
-        document.getElementById('chart5mLegend').textContent = '';
-        return;
+function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
+    const noOhlc = data.no_ohlc === true;
+    const prolong = data.prolongation || { times: [], prices: [], forecast_defined: false, label: null };
+    let labels = (data.times || []).concat(prolong.times || []);
+    const nMain = (data.times || []).length;
+    const nProlong = (prolong.times || []).length;
+    if (noOhlc && (data.trades || []).length > 0) {
+        const tradeTimes = (data.trades || []).map(t => t.ts).filter(Boolean);
+        if (tradeTimes.length > 0) {
+            tradeTimes.sort((a, b) => new Date(a) - new Date(b));
+            labels = labels.length ? labels : tradeTimes;
+            if (labels.length === 0) labels = tradeTimes;
+        }
     }
-    try {
-        const response = await fetch(`/api/chart5m/${encodeURIComponent(ticker)}?days=${days}`);
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-            const msg = (data.detail || response.statusText || 'Нет 5m данных');
-            throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-        }
-        const noOhlc = data.no_ohlc === true;
-        const prolong = data.prolongation || { times: [], prices: [], forecast_defined: false, label: null };
-        const labels = (data.times || []).concat(prolong.times || []);
-        const nMain = (data.times || []).length;
-        const nProlong = (prolong.times || []).length;
-        if (noOhlc && (data.trades || []).length > 0) {
-            const tradeTimes = (data.trades || []).map(t => t.ts).filter(Boolean);
-            if (tradeTimes.length > 0) {
-                tradeTimes.sort((a, b) => new Date(a) - new Date(b));
-                labels.push(...tradeTimes);
-            }
-        }
-        const closeData = (data.close || []).concat(Array(nProlong).fill(null));
-        const prolongData = Array(nMain).fill(null).concat(prolong.prices || []);
+    const closeData = (data.close || []).concat(Array(nProlong).fill(null));
+    const prolongData = Array(nMain).fill(null).concat(prolong.prices || []);
 
-        const datasets = [];
-        if (!noOhlc && nMain > 0) {
-            datasets.push(
-                {
-                    label: 'Close',
-                    data: closeData,
-                    borderColor: '#1565c0',
-                    backgroundColor: 'rgba(21, 101, 192, 0.05)',
-                    fill: false,
-                    tension: 0.1,
-                    pointRadius: 0,
-                    borderWidth: 1.2
-                },
-                {
-                    label: prolong.label || (prolong.forecast_defined ? 'Прогноз' : '… прогноз не определён'),
-                    data: prolongData,
-                    borderColor: '#c62828',
-                    borderDash: prolong.forecast_defined ? [] : [4, 4],
-                    borderWidth: prolong.forecast_defined ? 1.2 : 0.8,
-                    fill: false,
-                    tension: 0,
-                    pointRadius: 0
-                }
-            );
-        }
-        if (!noOhlc && data.entry_price != null) {
-            datasets.push({
-                label: 'Вход @ ' + data.entry_price.toFixed(2),
-                data: labels.map(() => data.entry_price),
-                borderColor: '#2e7d32',
-                borderDash: [6, 4],
-                borderWidth: 1,
-                fill: false,
-                pointRadius: 0
-            });
-        }
-        if (!noOhlc && data.session_high != null) {
-            datasets.push({
-                label: 'Хай сессии ' + data.session_high.toFixed(2),
-                data: labels.map(() => data.session_high),
-                borderColor: '#f57c00',
-                borderDash: [2, 4],
-                borderWidth: 1,
-                fill: false,
-                pointRadius: 0
-            });
-        }
-        if (!noOhlc && data.take_level != null) {
-            datasets.push({
-                label: 'Тейк ' + data.take_level.toFixed(2),
-                data: labels.map(() => data.take_level),
-                borderColor: '#2e7d32',
-                borderDash: [2, 2],
-                borderWidth: 1,
-                fill: false,
-                pointRadius: 0
-            });
-        }
+    const datasets = [];
+    if (!noOhlc && nMain > 0) {
+        datasets.push(
+            { label: 'Close', data: closeData, borderColor: '#1565c0', backgroundColor: 'rgba(21, 101, 192, 0.05)', fill: false, tension: 0.1, pointRadius: 0, borderWidth: 1.2 },
+            { label: prolong.label || (prolong.forecast_defined ? 'Прогноз' : '…'), data: prolongData, borderColor: '#c62828', borderDash: prolong.forecast_defined ? [] : [4, 4], borderWidth: prolong.forecast_defined ? 1.2 : 0.8, fill: false, tension: 0, pointRadius: 0 }
+        );
+    }
+    if (!noOhlc && data.entry_price != null) {
+        datasets.push({ label: 'Вход @ ' + data.entry_price.toFixed(2), data: labels.map(() => data.entry_price), borderColor: '#2e7d32', borderDash: [6, 4], borderWidth: 1, fill: false, pointRadius: 0 });
+    }
+    if (!noOhlc && data.session_high != null) {
+        datasets.push({ label: 'Хай ' + data.session_high.toFixed(2), data: labels.map(() => data.session_high), borderColor: '#f57c00', borderDash: [2, 4], borderWidth: 1, fill: false, pointRadius: 0 });
+    }
+    if (!noOhlc && data.take_level != null) {
+        datasets.push({ label: 'Тейк ' + data.take_level.toFixed(2), data: labels.map(() => data.take_level), borderColor: '#2e7d32', borderDash: [2, 2], borderWidth: 1, fill: false, pointRadius: 0 });
+    }
 
-        // Отметки сделок: вход (BUY), тейк, стоп, прочий выход
-        function findClosestLabelIndex(labels, ts) {
-            const t = new Date(ts).getTime();
-            let best = 0;
-            let bestDiff = Infinity;
-            labels.forEach((l, i) => {
-                const d = Math.abs(new Date(l).getTime() - t);
-                if (d < bestDiff) { bestDiff = d; best = i; }
-            });
-            return best;
-        }
-        function makeTradeDataset(trades, label, color, pointStyle) {
-            const arr = labels.map(() => null);
-            trades.forEach(tr => {
-                const i = findClosestLabelIndex(labels, tr.ts);
-                arr[i] = tr.price;
-            });
-            if (arr.every(v => v == null)) return null;
-            return {
-                label: label,
-                data: arr,
-                borderColor: color,
-                backgroundColor: color,
-                pointRadius: 5,
-                pointHoverRadius: 7,
-                pointStyle: pointStyle,
-                fill: false,
-                tension: 0,
-                borderWidth: 0
-            };
-        }
-        const trades = (data.trades || []).slice();
-        trades.sort((a, b) => new Date(a.ts) - new Date(b.ts));
-        let lastBuyPrice = null;
-        const buyTrades = [];
-        const takeTrades = [];
-        const stopTrades = [];
-        const otherTrades = [];
-        trades.forEach(t => {
-            const price = parseFloat(t.price) || 0;
-            if (t.side === 'BUY') {
-                buyTrades.push(t);
-                lastBuyPrice = price;
-            } else if (t.side === 'SELL') {
-                if (lastBuyPrice != null) {
-                    if (price >= lastBuyPrice) takeTrades.push(t);
-                    else stopTrades.push(t);
-                } else otherTrades.push(t);
-            }
+    function findClosestLabelIndex(lbls, ts) {
+        const t = new Date(ts).getTime();
+        let best = 0, bestDiff = Infinity;
+        lbls.forEach((l, i) => {
+            const d = Math.abs(new Date(l).getTime() - t);
+            if (d < bestDiff) { bestDiff = d; best = i; }
         });
-        [buyTrades, takeTrades, stopTrades, otherTrades].forEach((arr, idx) => {
-            const cfg = [
-                { label: 'Вход (BUY)', color: '#2e7d32', pointStyle: 'triangle' },
-                { label: 'Тейк', color: '#1b5e20', pointStyle: 'circle' },
-                { label: 'Стоп', color: '#c62828', pointStyle: 'circle' },
-                { label: 'Выход', color: '#757575', pointStyle: 'circle' }
-            ][idx];
-            const ds = makeTradeDataset(arr, cfg.label, cfg.color, cfg.pointStyle);
-            if (ds) datasets.push(ds);
-        });
+        return best;
+    }
+    function makeTradeDataset(trades, label, color, pointStyle) {
+        const arr = labels.map(() => null);
+        trades.forEach(tr => { const i = findClosestLabelIndex(labels, tr.ts); arr[i] = tr.price; });
+        if (arr.every(v => v == null)) return null;
+        return { label, data: arr, borderColor: color, backgroundColor: color, pointRadius: 5, pointHoverRadius: 7, pointStyle, fill: false, tension: 0, borderWidth: 0 };
+    }
+    const trades = (data.trades || []).slice();
+    trades.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    let lastBuyPrice = null;
+    const buyTrades = [], takeTrades = [], stopTrades = [], otherTrades = [];
+    trades.forEach(t => {
+        const price = parseFloat(t.price) || 0;
+        if (t.side === 'BUY') { buyTrades.push(t); lastBuyPrice = price; }
+        else if (t.side === 'SELL') {
+            if (lastBuyPrice != null) { if (price >= lastBuyPrice) takeTrades.push(t); else stopTrades.push(t); }
+            else otherTrades.push(t);
+        }
+    });
+    [[buyTrades, 'Вход (BUY)', '#2e7d32', 'triangle'], [takeTrades, 'Тейк', '#1b5e20', 'circle'], [stopTrades, 'Стоп', '#c62828', 'circle'], [otherTrades, 'Выход', '#757575', 'circle']].forEach(([arr, lbl, col, style]) => {
+        const ds = makeTradeDataset(arr, lbl, col, style);
+        if (ds) datasets.push(ds);
+    });
 
-        const dayBoundaries = data.day_boundaries || [];
-
-        if (chart5m) chart5m.destroy();
-        const ctx = document.getElementById('chart5m').getContext('2d');
-        chart5m = new Chart(ctx, {
-            type: 'line',
-            data: { labels, datasets },
-            options: {
-                responsive: true,
-                maintainAspectRatio: true,
-                scales: {
-                    x: { ticks: { maxTicksLimit: 14, callback: (v, i) => formatChart5mTime(labels[i]) } },
-                    y: { title: { display: true, text: 'Цена' } }
-                },
-                plugins: {
-                    legend: { position: 'top' },
-                    dayBoundaries: dayBoundaries
-                }
+    const dayBoundaries = data.day_boundaries || [];
+    const ctx = canvasEl.getContext('2d');
+    const ch = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            scales: {
+                x: { ticks: { maxTicksLimit: 12, callback: (v, i) => formatChart5mTime(labels[i]) } },
+                y: { title: { display: true, text: 'Цена' } }
             },
-            plugins: [{
-                id: 'dayBoundaries',
-                afterDraw(chart) {
-                    const boundaries = chart.options.plugins?.dayBoundaries;
-                    if (!boundaries || !Array.isArray(boundaries) || boundaries.length === 0) return;
-                    const ctx = chart.ctx;
-                    const xScale = chart.scales.x;
-                    const yScale = chart.scales.y;
-                    if (!xScale || !yScale) return;
-                    const top = yScale.top;
-                    const bottom = yScale.bottom;
-                    ctx.save();
-                    ctx.strokeStyle = 'rgba(148, 163, 184, 0.7)';
-                    ctx.lineWidth = 1.5;
-                    ctx.setLineDash([6, 4]);
-                    boundaries.forEach(function(idx) {
-                        const x = xScale.getPixelForValue(idx - 0.5);
-                        if (x >= xScale.left && x <= xScale.right) {
-                            ctx.beginPath();
-                            ctx.moveTo(x, top);
-                            ctx.lineTo(x, bottom);
-                            ctx.stroke();
-                        }
-                    });
-                    ctx.restore();
-                }
-            }]
-        });
-        document.getElementById('chart5mLegend').textContent = noOhlc
-            ? (data.trades && data.trades.length ? 'Нет свечей за период; отображены сделки GAME_5M.' : 'Нет свечей и сделок за период.')
-            : (prolong.forecast_defined ? 'Пролонгация: ' + (prolong.label || '') : 'Пролонгация: тренд не определён (нужно ≥5 свечей в одном направлении)');
-    } catch (err) {
-        if (chart5m) { chart5m.destroy(); chart5m = null; }
-        document.getElementById('chart5mLegend').textContent = 'Ошибка: ' + (err.message || 'нет данных');
+            plugins: { legend: { position: 'top' }, dayBoundaries: dayBoundaries }
+        },
+        plugins: [{
+            id: 'dayBoundaries',
+            afterDraw(chart) {
+                const boundaries = chart.options.plugins?.dayBoundaries;
+                if (!boundaries || !Array.isArray(boundaries) || boundaries.length === 0) return;
+                const c = chart.ctx, xScale = chart.scales.x, yScale = chart.scales.y;
+                if (!xScale || !yScale) return;
+                c.save();
+                c.strokeStyle = 'rgba(148, 163, 184, 0.7)';
+                c.lineWidth = 1.5;
+                c.setLineDash([6, 4]);
+                boundaries.forEach(idx => {
+                    const x = xScale.getPixelForValue(idx - 0.5);
+                    if (x >= xScale.left && x <= xScale.right) { c.beginPath(); c.moveTo(x, yScale.top); c.lineTo(x, yScale.bottom); c.stroke(); }
+                });
+                c.restore();
+            }
+        }]
+    });
+    if (legendEl) {
+        legendEl.textContent = noOhlc
+            ? (data.trades && data.trades.length ? 'Нет свечей; сделки GAME_5M.' : 'Нет данных.')
+            : (prolong.forecast_defined ? 'Пролонгация: ' + (prolong.label || '') : 'Тренд не определён (≥5 свечей).');
+    }
+    return ch;
+}
+
+async function loadChart5mAll() {
+    const listEl = document.getElementById('tickers5mList');
+    const tickers = listEl ? (JSON.parse(listEl.textContent || '[]') || []) : [];
+    const days = parseInt(document.getElementById('days5mSelect').value, 10) || 1;
+    const container = document.getElementById('chart5mContainer');
+    if (!container) return;
+
+    Object.keys(chart5mInstances).forEach(t => { try { chart5mInstances[t].destroy(); } catch (_) {} });
+    chart5mInstances = {};
+    container.innerHTML = '';
+
+    for (const ticker of tickers) {
+        const section = document.createElement('div');
+        section.className = 'chart5m-section';
+        section.style.marginTop = '1.25rem';
+        section.innerHTML = '<h3 style="font-size:1rem; margin-bottom:0.4rem;">' + ticker.replace(/</g, '&lt;') + '</h3><canvas height="280" style="max-height:280px;"></canvas><div class="muted chart5m-legend" style="font-size:0.8rem; margin-top:0.35rem;"></div>';
+        container.appendChild(section);
+        const canvasEl = section.querySelector('canvas');
+        const legendEl = section.querySelector('.chart5m-legend');
+
+        try {
+            const response = await fetch('/api/chart5m/' + encodeURIComponent(ticker) + '?days=' + days);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                if (legendEl) legendEl.textContent = data.detail || 'Нет 5m данных';
+                continue;
+            }
+            const ch = buildChart5mFromData(ticker, data, canvasEl, legendEl);
+            chart5mInstances[ticker] = ch;
+        } catch (err) {
+            if (legendEl) legendEl.textContent = 'Ошибка: ' + (err.message || 'нет данных');
+        }
     }
 }
 
-document.getElementById('ticker5mSelect').addEventListener('change', loadChart5m);
-document.getElementById('days5mSelect').addEventListener('change', loadChart5m);
-// Автозагрузка графика 5m при открытии страницы (если выбран тикер)
-if (document.getElementById('ticker5mSelect').value) {
-    loadChart5m();
-}
+document.getElementById('days5mSelect').addEventListener('change', loadChart5mAll);
+loadChart5mAll();
 
 document.getElementById('tickerSelect').addEventListener('change', async (e) => {
     const ticker = e.target.value;
@@ -318,32 +244,59 @@ document.getElementById('tickerSelect').addEventListener('change', async (e) => 
 
 // Загрузка PnL данных
 (async () => {
+    const container = document.getElementById('pnlChart').closest('.card');
+    const emptyHint = document.getElementById('pnlEmptyHint');
     try {
         const response = await fetch('/api/pnl');
+        if (!response.ok) throw new Error('Ошибка API');
         const data = await response.json();
         
-        const trades = data.pnl;
-        const labels = trades.map(t => t.ts);
-        const pnl = trades.map(t => t.net_pnl);
+        const trades = data.pnl || [];
+        if (trades.length === 0) {
+            emptyHint.style.display = 'block';
+            if (pnlChart) { pnlChart.destroy(); pnlChart = null; }
+            return;
+        }
+        emptyHint.style.display = 'none';
+        const labels = trades.map(t => t.ts ? (typeof t.ts === 'string' ? t.ts.slice(0, 16) : String(t.ts)) : '—');
+        const pnl = trades.map(t => {
+            const v = t.net_pnl;
+            return (v != null && !Number.isNaN(v)) ? Number(v) : 0;
+        });
         
+        if (pnlChart) pnlChart.destroy();
         const ctx = document.getElementById('pnlChart').getContext('2d');
         pnlChart = new Chart(ctx, {
             type: 'bar',
             data: {
                 labels: labels,
                 datasets: [{
-                    label: 'PnL',
+                    label: 'PnL ($)',
                     data: pnl,
                     backgroundColor: pnl.map(p => p >= 0 ? 'rgba(75, 192, 192, 0.6)' : 'rgba(255, 99, 132, 0.6)')
                 }]
             },
             options: {
                 responsive: true,
-                maintainAspectRatio: true
+                maintainAspectRatio: true,
+                scales: {
+                    y: { title: { display: true, text: 'PnL ($)' } }
+                }
             }
         });
+        if (container) {
+            const totalEl = document.createElement('p');
+            totalEl.className = 'muted';
+            totalEl.style.marginTop = '0.5rem';
+            totalEl.textContent = 'Итого: $' + (data.total_pnl != null ? Number(data.total_pnl).toFixed(2) : '0.00') + (data.win_rate != null ? ' · Win rate: ' + Number(data.win_rate).toFixed(1) + '%' : '');
+            if (container.querySelector('.pnl-summary')) container.querySelector('.pnl-summary').remove();
+            totalEl.classList.add('pnl-summary');
+            document.getElementById('pnlChart').after(totalEl);
+        }
     } catch (error) {
         console.error('Ошибка загрузки PnL:', error);
+        emptyHint.textContent = 'Не удалось загрузить PnL.';
+        emptyHint.style.display = 'block';
     }
 })();
 </script>

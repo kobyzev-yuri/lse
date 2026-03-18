@@ -443,6 +443,36 @@ def get_5m_card_payload(d5: Dict[str, Any], ticker: str) -> Dict[str, Any]:
             out["expected_value_pct"] = None
     else:
         out["expected_value_pct"] = None
+
+    # Текстовый вывод Квена: почему параметры сделки позитивны или негативны (по чек-листу)
+    rr = out.get("risk_reward_ratio")
+    ev = out.get("expected_value_pct")
+    rr_ok = rr is not None and rr >= 2.0  # риск/ревард ≥ 1:2
+    ev_ok = ev is not None and ev > 0
+    if rr is None and ev is None:
+        out["qwen_checklist_verdict"] = "Нейтрально: нет данных по R:R и мат.ожиданию."
+    elif rr_ok and ev_ok:
+        out["qwen_checklist_verdict"] = (
+            f"Позитивно: R:R 1:{rr:.1f} (≥1:2), мат.ожидание {ev:+.2f}% (>0)."
+        )
+    elif not rr_ok and not ev_ok:
+        parts = []
+        if rr is not None and rr < 2.0:
+            parts.append(f"R:R 1:{rr:.1f} (<1:2)")
+        elif rr is None:
+            parts.append("R:R нет")
+        if ev is not None and ev <= 0:
+            parts.append(f"мат.ожидание {ev:+.2f}% (≤0)")
+        elif ev is None:
+            parts.append("мат.ожидание нет")
+        out["qwen_checklist_verdict"] = "Негативно: " + ", ".join(parts) + "."
+    elif not ev_ok:
+        ev_reason = f"мат.ожидание {ev:+.2f}% (≤0)" if ev is not None else "мат.ожидание нет"
+        out["qwen_checklist_verdict"] = f"Негативно: {ev_reason}."
+    else:
+        out["qwen_checklist_verdict"] = (
+            f"Негативно: R:R 1:{rr:.1f} (<1:2)."
+        )
     return out
 
 

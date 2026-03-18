@@ -130,6 +130,11 @@
             var ev = c.expected_value_pct;
             var evStr = (ev != null) ? ((ev >= 0 ? '+' : '') + ev.toFixed(2) + '%') : '—';
             html += '<div class="row"><span class="label">Мат. ожидание</span><span class="value ' + (ev != null && ev > 0 ? 'positive' : (ev != null && ev < 0 ? 'negative' : '')) + '">' + evStr + '</span></div>';
+            var verdict = c.qwen_checklist_verdict || '';
+            if (verdict) {
+                var verdictClass = verdict.indexOf('Позитивно') === 0 ? 'positive' : (verdict.indexOf('Негативно') === 0 ? 'negative' : 'muted');
+                html += '<div class="row" style="margin-top:0.35rem;"><span class="label">Вывод Квена</span><span class="value ' + verdictClass + '" style="font-size:0.85em;">' + escapeHtml(verdict) + '</span></div>';
+            }
             var momLabel = (c.momentum_window_min != null && c.momentum_window_min > 0 && c.momentum_window_min < 120)
                 ? ('Импульс за ' + c.momentum_window_min + ' мин')
                 : 'Импульс 2ч';

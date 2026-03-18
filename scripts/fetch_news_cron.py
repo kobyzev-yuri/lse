@@ -19,17 +19,19 @@ from services.investing_calendar_parser import fetch_and_save_investing_calendar
 from services.alphavantage_fetcher import fetch_all_alphavantage_data
 from services.newsapi_fetcher import fetch_and_save_newsapi_news
 
-# Настройка логирования
+# Настройка логирования (если /app/logs смонтирован :ro — пишем только в stderr)
 log_dir = project_root / 'logs'
-log_dir.mkdir(exist_ok=True)
+handlers_list = [logging.StreamHandler()]
+try:
+    log_dir.mkdir(exist_ok=True)
+    handlers_list.insert(0, logging.FileHandler(log_dir / 'news_fetch.log'))
+except OSError:
+    pass  # read-only FS — только StreamHandler
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_dir / 'news_fetch.log'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers_list
 )
 
 logger = logging.getLogger(__name__)

@@ -31,10 +31,10 @@ services:
     ports:
       - "8080:8080"
     # config.env с хоста — без :ro, чтобы веб-интерфейс (Параметры → config.env) мог сохранять правки на лету; после изменений — перезапуск (кнопка или docker compose restart lse).
-    # logs — для страницы «Сервис / логи» (чтение хвостов cron). На хосте: mkdir -p logs; cron пишет в PROJECT_DIR/logs.
+    # logs — без :ro, чтобы cron (fetch_news_cron и др.) мог писать в /app/logs; веб читает для страницы «Сервис / логи».
     volumes:
       - ./config.env:/app/config.env
-      - ./logs:/app/logs:ro
+      - ./logs:/app/logs
     environment:
       TZ: Europe/Moscow
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-lse_pg_pass}@postgres:5432/lse_trading?options=-c%20timezone%3DEurope%2FMoscow

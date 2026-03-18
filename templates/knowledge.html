@@ -88,15 +88,25 @@
 
 <div class="card">
     <h2>Последние новости</h2>
-    <label>Фильтр по тикеру:</label>
-    <select id="newsTickerFilter">
-        <option value="">Все</option>
-        {% for t in tickers %}
-        <option value="{{ t }}">{{ t }}</option>
-        {% endfor %}
-        <option value="MACRO">MACRO</option>
-        <option value="US_MACRO">US_MACRO</option>
-    </select>
+    <p class="muted">Решения центробанков и отчёты (безработица, ВВП) — первостепенны; фильтр по источнику: центробанки, Bloomberg и др.</p>
+    <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-bottom: 0.75rem;">
+        <label>По тикеру:</label>
+        <select id="newsTickerFilter">
+            <option value="">Все</option>
+            {% for t in tickers %}
+            <option value="{{ t }}">{{ t }}</option>
+            {% endfor %}
+            <option value="MACRO">MACRO</option>
+            <option value="US_MACRO">US_MACRO</option>
+        </select>
+        <label>По источнику:</label>
+        <select id="newsSourceFilter">
+            <option value="">Все</option>
+            {% for src in news_sources %}
+            <option value="{{ src }}">{{ src }}</option>
+            {% endfor %}
+        </select>
+    </div>
     {% if news %}
     <table id="newsTable">
         <thead>
@@ -193,14 +203,21 @@
     });
 })();
 
-document.getElementById('newsTickerFilter').addEventListener('change', function() {
-    const filter = this.value;
+function applyNewsFilters() {
+    const tickerFilter = document.getElementById('newsTickerFilter').value;
+    const sourceFilter = document.getElementById('newsSourceFilter').value;
     document.querySelectorAll('#newsTable tbody tr').forEach(function(tr) {
         const tickerCell = tr.querySelector('td:nth-child(2)');
+        const sourceCell = tr.querySelector('td:nth-child(3)');
         const ticker = tickerCell ? tickerCell.textContent.trim() : '';
-        tr.style.display = (!filter || ticker === filter) ? '' : 'none';
+        const source = sourceCell ? sourceCell.textContent.trim() : '';
+        const matchTicker = !tickerFilter || ticker === tickerFilter;
+        const matchSource = !sourceFilter || source === sourceFilter;
+        tr.style.display = (matchTicker && matchSource) ? '' : 'none';
     });
-});
+}
+document.getElementById('newsTickerFilter').addEventListener('change', applyNewsFilters);
+document.getElementById('newsSourceFilter').addEventListener('change', applyNewsFilters);
 
 document.getElementById('addNewsForm').addEventListener('submit', async (e) => {
     e.preventDefault();

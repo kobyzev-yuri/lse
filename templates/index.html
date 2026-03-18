@@ -1,84 +1,52 @@
 {% extends "base.html" %}
 
-{% block title %}Портфель - LSE Trading System{% endblock %}
+{% block title %}Портфель — LSE Trading System{% endblock %}
 
 {% block content %}
 <h1>Портфель</h1>
 
+<section aria-label="Баланс">
 <div class="card">
-    <h2>Закрытые позиции (Positions)</h2>
-    <p class="muted">Все закрытые сделки (без фильтра по дате). Даты в MSK. Как в команде /closed.</p>
-    {% if closed_positions %}
+    <h2>Баланс</h2>
+    <div class="value" style="font-size: 1.25rem;">${{ "{:,.2f}".format(cash) }}</div>
+    <p class="muted" style="margin-top: 0.35rem; font-size: 0.9rem;">Денежные средства (CASH в portfolio_state).</p>
+</div>
+</section>
+
+<section aria-label="Статистика по закрытым сделкам">
+<div class="card">
+    <h2>Статистика</h2>
+    <p class="muted" style="margin-bottom: 0.5rem; font-size: 0.9rem;">Сводка по закрытым позициям (вся история).</p>
+    <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.75rem;">
+        <div>
+            <div class="muted" style="font-size: 0.8rem;">Общий PnL</div>
+            <div class="value {% if total_pnl >= 0 %}positive{% else %}negative{% endif %}">${{ "{:,.2f}".format(total_pnl) }}</div>
+        </div>
+        <div>
+            <div class="muted" style="font-size: 0.8rem;">Win Rate</div>
+            <div class="value">{{ "{:.1f}".format(win_rate) }}%</div>
+        </div>
+        <div>
+            <div class="muted" style="font-size: 0.8rem;">Всего сделок</div>
+            <div class="value">{{ total_trades }}</div>
+        </div>
+    </div>
+</div>
+</section>
+
+<section aria-label="Открытые позиции">
+<div class="card">
+    <h2>Открытые позиции</h2>
+    <p class="muted" style="margin-bottom: 0.5rem; font-size: 0.9rem;">Текущие позиции по trade_history. Полный отчёт: <a href="/reports/pending">Открытые</a>.</p>
+    {% if positions %}
     <div class="table-responsive">
     <table>
         <thead>
             <tr>
-                <th>Instrument</th>
-                <th>Dir</th>
-                <th>Open</th>
-                <th>Close</th>
-                <th>Pips</th>
-                <th>Profit</th>
-                <th>Units</th>
-                <th>Выход</th>
-                <th>Open (MSK)</th>
-                <th>Close (MSK)</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for row in closed_positions %}
-            <tr>
-                <td>{{ row.instrument }}</td>
-                <td>{{ row.direction }}</td>
-                <td>${{ "%.2f"|format(row.open) }}</td>
-                <td>${{ "%.2f"|format(row.close) }}</td>
-                <td>{{ row.profit_pips }}</td>
-                <td class="{% if row.profit_usd >= 0 %}positive{% else %}negative{% endif %}">${{ "%+.2f"|format(row.profit_usd) }}</td>
-                <td>{{ row.units }}</td>
-                <td>{{ row.exit_reason or '—' }}</td>
-                <td>{{ row.open_msk }}</td>
-                <td>{{ row.close_msk }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    </div>
-    {% else %}
-    <p>Закрытых позиций пока нет.</p>
-    {% endif %}
-</div>
-
-<div class="stats">
-    <div class="stat-card">
-        <h3>Денежные средства</h3>
-        <div class="value">${{ "{:,.2f}".format(cash) }}</div>
-    </div>
-    <div class="stat-card">
-        <h3>Общий PnL</h3>
-        <div class="value {% if total_pnl >= 0 %}positive{% else %}negative{% endif %}">
-            ${{ "{:,.2f}".format(total_pnl) }}
-        </div>
-    </div>
-    <div class="stat-card">
-        <h3>Win Rate</h3>
-        <div class="value">{{ "{:.1f}".format(win_rate) }}%</div>
-    </div>
-    <div class="stat-card">
-        <h3>Всего сделок</h3>
-        <div class="value">{{ total_trades }}</div>
-    </div>
-</div>
-
-<div class="card">
-    <h2>Открытые позиции</h2>
-    {% if positions %}
-    <table>
-        <thead>
-            <tr>
                 <th>Тикер</th>
-                <th>Количество</th>
-                <th>Цена входа</th>
-                <th>Текущая цена</th>
+                <th>Кол-во</th>
+                <th>Вход</th>
+                <th>Текущая</th>
                 <th>PnL</th>
             </tr>
         </thead>
@@ -94,43 +62,47 @@
             {% endfor %}
         </tbody>
     </table>
+    </div>
     {% else %}
-    <p>Нет открытых позиций</p>
+    <p>Нет открытых позиций. <a href="/reports/pending">Открытые</a></p>
     {% endif %}
 </div>
+</section>
 
+<section aria-label="Закрытые позиции">
 <div class="card">
-    <h2>Последние сделки</h2>
-    <p class="muted">Превью последних 5 записей. Полная история — на странице <a href="/trading">Торги</a> (кнопка «Загрузить историю»).</p>
-    {% if trades %}
+    <h2>Закрытые позиции</h2>
+    <p class="muted" style="margin-bottom: 0.5rem; font-size: 0.9rem;">Закрытые сделки (последние на странице). Полный отчёт: <a href="/reports/closed">Закрытые</a>.</p>
+    {% if closed_positions %}
+    <div class="table-responsive">
     <table>
         <thead>
             <tr>
-                <th>Время</th>
                 <th>Тикер</th>
-                <th>Сторона</th>
-                <th>Кол-во</th>
-                <th>Цена</th>
-                <th>Сигнал</th>
+                <th>Вход</th>
+                <th>Выход</th>
+                <th>P/L</th>
+                <th>Выход (MSK)</th>
             </tr>
         </thead>
         <tbody>
-            {% for trade in trades %}
+            {% for row in closed_positions %}
             <tr>
-                <td>{{ trade.ts }}</td>
-                <td>{{ trade.ticker }}</td>
-                <td>{{ trade.side }}</td>
-                <td>{{ "{:.2f}".format(trade.quantity) }}</td>
-                <td>${{ "{:.2f}".format(trade.price) }}</td>
-                <td>{{ trade.signal_type }}</td>
+                <td>{{ row.instrument }}</td>
+                <td>${{ "%.2f"|format(row.open) }}</td>
+                <td>${{ "%.2f"|format(row.close) }}</td>
+                <td class="{% if row.profit_usd >= 0 %}positive{% else %}negative{% endif %}">${{ "%+.2f"|format(row.profit_usd) }}</td>
+                <td>{{ row.close_msk }}</td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    </div>
     {% else %}
-    <p>Нет сделок</p>
+    <p>Закрытых позиций пока нет. <a href="/reports/closed">Закрытые</a></p>
     {% endif %}
 </div>
+</section>
 {% endblock %}
 
 

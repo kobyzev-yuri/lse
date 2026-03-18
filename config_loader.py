@@ -39,6 +39,7 @@ EDITABLE_CONFIG_KEYS = [
     "PORTFOLIO_TAKE_PROFIT_PCT",
     "SENTIMENT_AUTO_CALCULATE",
     "SENTIMENT_METHOD",
+    "RESTART_CMD",  # команда перезапуска сервиса (кнопка «Перезапустить с новыми параметрами»); пусто = docker compose restart lse
 ]
 
 
