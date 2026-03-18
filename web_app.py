@@ -1246,10 +1246,10 @@ async def get_game5m(ticker: str = None, limit: int = 20):
 
 @app.get("/api/game5m/cards", response_class=JSONResponse)
 async def get_game5m_cards(days: int = 5):
-    """API: Карточки по всем тикерам игры 5m для веб-мониторинга (Telegram). Без LLM."""
+    """API: Карточки по всем тикерам игры 5m для веб-мониторинга (Telegram). Без LLM. Payload из get_5m_card_payload."""
     try:
         from services.ticker_groups import get_tickers_game_5m
-        from services.recommend_5m import get_decision_5m
+        from services.recommend_5m import get_decision_5m, get_5m_card_payload
     except ImportError:
         raise HTTPException(status_code=501, detail="Модули recommend_5m / ticker_groups недоступны")
     tickers = list(get_tickers_game_5m() or [])
@@ -1262,34 +1262,12 @@ async def get_game5m_cards(days: int = 5):
             d5 = get_decision_5m(tkr, days=days, use_llm_news=False)
         except Exception:
             d5 = None
-        if not d5:
-            cards.append({"ticker": tkr, "decision": "NO_DATA", "reasoning": "Нет 5m данных."})
-            continue
-        session = d5.get("market_session") or {}
-        cards.append({
-            "ticker": tkr,
-            "decision": d5.get("decision"),
-            "price": d5.get("price"),
-            "rsi_5m": d5.get("rsi_5m"),
-            "momentum_2h_pct": d5.get("momentum_2h_pct"),
-            "volatility_5m_pct": d5.get("volatility_5m_pct"),
-            "stop_loss_pct": d5.get("stop_loss_pct"),
-            "stop_loss_enabled": d5.get("stop_loss_enabled"),
-            "take_profit_pct": d5.get("take_profit_pct"),
-            "estimated_upside_pct_day": d5.get("estimated_upside_pct_day"),
-            "suggested_take_profit_price": d5.get("suggested_take_profit_price"),
-            "pullback_from_high_pct": d5.get("pullback_from_high_pct"),
-            "session_high": d5.get("session_high"),
-            "entry_advice": d5.get("entry_advice"),
-            "entry_advice_reason": d5.get("entry_advice_reason"),
-            "reasoning": (d5.get("reasoning") or "")[:400],
-            "period_str": d5.get("period_str"),
-            "kb_news_impact": d5.get("kb_news_impact"),
-            "session_phase": session.get("session_phase"),
-            "premarket_gap_pct": d5.get("premarket_gap_pct"),
-            "premarket_last": d5.get("premarket_last"),
-            "bars_count": d5.get("bars_count"),
-        })
+        card = get_5m_card_payload(d5, tkr)
+        if card.get("reasoning") and len(card["reasoning"]) > 400:
+            card["reasoning"] = card["reasoning"][:400]
+        session = (d5 or {}).get("market_session") or {}
+        card["session_phase"] = session.get("session_phase")
+        cards.append(card)
     return _to_jsonable({
         "tickers": tickers,
         "cards": cards,
@@ -1328,6 +1306,21 @@ async def get_game5m_card_llm(ticker: str):
     cluster_note = build_cluster_note_for_5m_llm(ticker, corr_tickers or [ticker], corr_matrix, tech_by_ticker) if corr_matrix else None
     llm_reasoning = None
     llm_key_factors = None
+    # Средняя волатильность за 20 дней (дневные данные из quotes) — для контекста LLM
+    avg_volatility_20 = None
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT (SELECT AVG(volatility_5) FROM (SELECT volatility_5 FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 20) s) AS avg_vol,
+                           (SELECT close FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 1) AS last_close
+                """),
+                {"ticker": ticker},
+            ).fetchone()
+        if row and row[0] is not None and row[1] is not None and float(row[1]) > 0:
+            avg_volatility_20 = round(float(row[0]) / float(row[1]) * 100, 2)  # в % для сопоставимости с 5m
+    except Exception:
+        pass
     if cluster_note:
         try:
             llm = get_llm_service()
@@ -1336,6 +1329,7 @@ async def get_game5m_card_llm(ticker: str):
                     "close": d5.get("price"),
                     "rsi": d5.get("rsi_5m"),
                     "volatility_5": d5.get("volatility_5m_pct"),
+                    "avg_volatility_20": avg_volatility_20,
                     "technical_signal": d5.get("decision"),
                     "cluster_note": cluster_note,
                 }

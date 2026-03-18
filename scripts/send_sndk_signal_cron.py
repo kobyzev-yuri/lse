@@ -102,7 +102,7 @@ def process_ticker(
     """Обрабатывает один тикер: игра (закрытие/вход) и при BUY/STRONG_BUY — рассылка. Возвращает True если хотя бы одно сообщение отправлено.
     d5_precomputed: при кластерном запуске — готовое решение из get_cluster_decisions_5m; иначе вызывается get_decision_5m(ticker).
     cluster_context: при GAME_5M_ENTRY_STRATEGY=llm — {decisions, correlation, tickers} для вызова LLM с контекстом корреляций."""
-    from services.recommend_5m import get_decision_5m
+    from services.recommend_5m import get_decision_5m, get_5m_card_payload, build_5m_close_context
     from services.game_5m import get_open_position, get_open_position_any, close_position, should_close_position, record_entry, _effective_take_profit_pct, _effective_stop_loss_pct, _game_5m_stop_loss_enabled
 
     d5 = d5_precomputed
@@ -112,11 +112,13 @@ def process_ticker(
         logger.debug("Нет 5m данных по %s, пропуск", ticker)
         return False
 
-    decision = d5.get("decision", "HOLD")
-    price = d5.get("price")
-    momentum_2h_pct = d5.get("momentum_2h_pct")
-    bar_high = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
-    bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
+    card = get_5m_card_payload(d5, ticker)
+    close_ctx = build_5m_close_context(d5)
+    decision = card.get("decision", "HOLD")
+    price = card.get("price")
+    momentum_2h_pct = card.get("momentum_2h_pct")
+    bar_high = close_ctx.get("bar_high")
+    bar_low = close_ctx.get("bar_low")
 
     outcome_lines = []  # итоговая причина для лога
     closed_this_run = False  # закрыли позицию в этом запуске — отправим уведомление и сбросим cooldown
@@ -150,7 +152,7 @@ def process_ticker(
             entry_f = float(entry) if entry is not None and entry > 0 else None
 
             if should_close and exit_type:
-                base_exit = d5.get("exit_bar_close") if isinstance(d5.get("exit_bar_close"), (int, float)) and d5.get("exit_bar_close") > 0 else price_for_check
+                base_exit = close_ctx.get("exit_bar_close") if isinstance(close_ctx.get("exit_bar_close"), (int, float)) and close_ctx.get("exit_bar_close") > 0 else price_for_check
                 if exit_type == "TAKE_PROFIT":
                     # Решение о тейке принято по bar_high (price_for_take = max(current, bar_high)). Записываем в БД
                     # ту же цену — bar_high: закрытие в соответствии с high, по которому принято решение.
@@ -164,23 +166,13 @@ def process_ticker(
                     exit_price = base_exit
                 logger.info(
                     "[5m] %s закрытие: тип=%s, exit_bar_close=%s, price_5m=%.2f, bar_high=%s, bar_low=%s → exit_price=%.2f",
-                    ticker, exit_type, d5.get("exit_bar_close"), price, bar_high, bar_low, exit_price,
+                    ticker, exit_type, close_ctx.get("exit_bar_close"), price, bar_high, bar_low, exit_price,
                 )
-                context_json = {
-                    "momentum_2h_pct": d5.get("momentum_2h_pct"),
-                    "rsi_5m": d5.get("rsi_5m"),
-                    "bar_high": bar_high,
-                    "bar_low": bar_low,
-                    "exit_bar_close": d5.get("exit_bar_close"),
-                    "volatility_5m_pct": d5.get("volatility_5m_pct"),
-                    "period_str": d5.get("period_str"),
-                    "session_high": d5.get("session_high"),
-                }
                 close_position(
                     ticker, exit_price, exit_type, position=open_pos,
                     bar_high=bar_high if exit_type == "TAKE_PROFIT" else None,
                     bar_low=bar_low if exit_type == "STOP_LOSS" else None,
-                    context_json=context_json,
+                    context_json=close_ctx,
                 )
                 outcome_lines.append("позиция закрыта по %s @ %.2f" % (exit_type, exit_price))
                 closed_this_run = True
@@ -340,100 +332,14 @@ def process_ticker(
             logger.warning("game_5m: LLM для входа %s: %s — используем технический вход", ticker, e)
 
     logger.info("[5m] %s: отправка сигнала на вход (BUY, позиции нет, cooldown пройден)", ticker)
-    rsi = d5.get("rsi_5m")
-    mom = d5.get("momentum_2h_pct")
-    vol = d5.get("volatility_5m_pct")
-    period = d5.get("period_str", "")
-    reasoning = (d5.get("reasoning") or "")[:200]
-
-    # Пояснение про стоп: 5m и портфель могут отключать стоп по конфигу.
-    try:
-        from report_generator import get_engine
-        _eng = get_engine()
-        _sl_raw = (get_dynamic_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true", engine=_eng) or "true").strip().lower()
-    except Exception:
-        _sl_raw = (get_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true") or "true").strip().lower()
-    portfolio_stop_disabled = _sl_raw in ("0", "false", "no")
-    game5m_stop_enabled = _game_5m_stop_loss_enabled()
-    take_pct_msg = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
-    if game5m_stop_enabled:
-        params_line = "Параметры (интрадей): стоп −%.1f%%, тейк +%.1f%% (стоп < тейк, оба от импульса 2ч)." % (_effective_stop_loss_pct(momentum_2h_pct), take_pct_msg)
-    else:
-        params_line = "Параметры (интрадей): тейк +%.1f%% (стоп 5m выкл. — закрытие только по тейку/TIME_EXIT/SELL)." % take_pct_msg
-    # Первая строка — сразу видно: прогноз для вступления, тикер и решение (трейдер играет сам, информация по возможности раньше)
-    price_str = f"${price:.2f}" if price is not None else "—"
-    headline = f"🎯 ВХОД 5m: {ticker} — {decision} · {price_str}"
-    lines = [
-        headline,
-        "",
-        f"Решение: {decision}",
-        f"Цена: ${price:.2f}" if price is not None else "",
-        f"RSI(5m): {rsi:.1f}" if rsi is not None else "",
-        f"Импульс 2ч: {mom:+.2f}%" if mom is not None else "",
-        f"Волатильность 5m: {vol:.2f}%" if vol is not None else "",
-        f"_Период данных: {period}_" if period else "",
-        "",
-        params_line,
-    ]
-    if portfolio_stop_disabled:
-        lines.append("⚠️ Стоп портфеля отключён (PORTFOLIO_STOP_LOSS_ENABLED=false): по портфельным позициям закрытие только по тейку.")
-    if not game5m_stop_enabled:
-        lines.append("⚠️ Стоп 5m отключён (GAME_5M_STOP_LOSS_ENABLED=false) — не рекомендуй стоп-лосс по 5m.")
-    lines.append("")
-    lines.append(f"Подробнее: /recommend5m {ticker}")
-    if reasoning:
-        lines.insert(-2, f"💭 {reasoning}")
-
-    # Влияние новостей на решение (явно учитывается в короткой игре 5m)
-    news_impact = d5.get("kb_news_impact") or "нейтрально"
-    lines.append("")
-    lines.append(f"📰 **Учёт новостей:** {news_impact}")
-
-    # Новости из базы за период 5m (показываем в алерте)
-    kb_news = d5.get("kb_news") or []
-    if kb_news:
-        recent = [n for n in kb_news[:3]]  # последние 3
-        parts = []
-        for n in recent:
-            sent = n.get("sentiment_score")
-            sent_str = f" (тон {sent:.2f})" if sent is not None else ""
-            content = (n.get("content") or "").strip()[:80]
-            if content:
-                parts.append(f"• {content}{sent_str}")
-        if parts:
-            lines.append("")
-            lines.append("📰 **Новости из базы (за период 5m):**")
-            lines.extend(parts)
-
-    # Свежие новости/настроения от LLM (запрос непосредственно перед решением)
-    llm_insight = d5.get("llm_insight")
-    llm_content = (d5.get("llm_news_content") or "").strip()[:400]
-    if llm_insight:
-        lines.append("")
-        lines.append(f"📰 **LLM (свежие новости):** {llm_insight}")
-    elif llm_content:
-        lines.append("")
-        lines.append(f"📰 **LLM:** {llm_content}…")
-
-    # Правило Алекса только для SNDK (дневной контекст)
-    if ticker.upper() == "SNDK":
-        try:
-            from services.alex_rule import get_alex_rule_status
-            alex = get_alex_rule_status(ticker, price)
-            if alex and alex.get("message"):
-                lines.append("")
-                lines.append(f"📋 {alex['message']}")
-        except Exception:
-            pass
-
-    text = "\n".join([s for s in lines if s])
-    if mentions:
-        text = mentions + "\n\n" + text
+    from services.signal_message_5m import build_5m_entry_signal_text
+    text = build_5m_entry_signal_text(d5, ticker, mentions=mentions)
 
     # Игра: сначала записать вход в public.trade_history — без записи алерт не слать
     if price is None:
         logger.warning("game_5m: нет цены для %s, рассылка отменена", ticker)
         return False
+    reasoning = (d5.get("reasoning") or "")[:500]
     try:
         # Полный дамп параметров (prompt_entry-уровень) для новых сделок; старые — упрощённый формат
         from services.deal_params_5m import build_full_entry_context
@@ -496,7 +402,7 @@ def main():
     try:
         from services.market_session import get_market_session_context
         from services.game_5m import get_open_position, get_open_position_any, close_position, should_close_position
-        from services.recommend_5m import get_decision_5m, has_5m_data
+        from services.recommend_5m import get_decision_5m, has_5m_data, build_5m_close_context
         ctx = get_market_session_context()
         phase = (ctx.get("session_phase") or "").strip()
         if phase in ("PRE_MARKET", "WEEKEND", "HOLIDAY"):
@@ -522,35 +428,26 @@ def main():
                         price_for_check = max(price, pq) if (pq is not None and pq > 0) else price
                     except Exception:
                         price_for_check = price
-                    bar_high = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
-                    bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
+                    close_ctx_ah = build_5m_close_context(d5)
+                    bar_high = close_ctx_ah.get("bar_high")
+                    bar_low = close_ctx_ah.get("bar_low")
                     should_close, exit_type = should_close_position(
                         open_pos, d5.get("decision", "HOLD"), price_for_check,
-                        momentum_2h_pct=d5.get("momentum_2h_pct"),
+                        momentum_2h_pct=close_ctx_ah.get("momentum_2h_pct"),
                         bar_high=bar_high, bar_low=bar_low,
                     )
                     if should_close and exit_type:
-                        base_exit = d5.get("exit_bar_close") if isinstance(d5.get("exit_bar_close"), (int, float)) and d5.get("exit_bar_close") > 0 else price_for_check
+                        base_exit = close_ctx_ah.get("exit_bar_close") if isinstance(close_ctx_ah.get("exit_bar_close"), (int, float)) and close_ctx_ah.get("exit_bar_close") > 0 else price_for_check
                         exit_price = base_exit
                         if exit_type == "TAKE_PROFIT" and bar_high is not None and bar_high > 0:
                             exit_price = min(exit_price, bar_high)
                         elif exit_type == "STOP_LOSS" and bar_low is not None and bar_low > 0:
                             exit_price = max(exit_price, bar_low)
-                        context_json = {
-                            "momentum_2h_pct": d5.get("momentum_2h_pct"),
-                            "rsi_5m": d5.get("rsi_5m"),
-                            "bar_high": bar_high,
-                            "bar_low": bar_low,
-                            "exit_bar_close": d5.get("exit_bar_close"),
-                            "volatility_5m_pct": d5.get("volatility_5m_pct"),
-                            "period_str": d5.get("period_str"),
-                            "session_high": d5.get("session_high"),
-                        }
                         close_position(
                             ticker, exit_price, exit_type, position=open_pos,
                             bar_high=bar_high if exit_type == "TAKE_PROFIT" else None,
                             bar_low=bar_low if exit_type == "STOP_LOSS" else None,
-                            context_json=context_json,
+                            context_json=close_ctx_ah,
                         )
                         logger.info("AFTER_HOURS: закрыта позиция %s @ %.2f (%s)", ticker, exit_price, exit_type)
                 except Exception as e:

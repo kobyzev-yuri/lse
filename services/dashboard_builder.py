@@ -60,13 +60,36 @@ def build_dashboard_text(mode: str = "all") -> str:
             regime_hint = " (VIX <15)"
         elif vix_regime == "HIGH_PANIC":
             regime_hint = " (VIX >25)"
+    # Всего новостей в KB за 7 дн. (для проверки: если 0 — крон не пишет или другая БД)
+    total_news_7d = None
+    try:
+        with engine.connect() as conn:
+            r = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM knowledge_base WHERE ts::date >= current_date - 7 AND content IS NOT NULL AND LENGTH(TRIM(content)) > 5"
+                ),
+            ).fetchone()
+        total_news_7d = int(r[0]) if r and r[0] is not None else 0
+    except Exception:
+        try:
+            with engine.connect() as conn:
+                r = conn.execute(
+                    text(
+                        "SELECT COUNT(*) FROM knowledge_base WHERE ts >= :cutoff AND content IS NOT NULL AND LENGTH(content) > 5"
+                    ),
+                    {"cutoff": datetime.now() - timedelta(days=7)},
+                ).fetchone()
+            total_news_7d = int(r[0]) if r and r[0] is not None else 0
+        except Exception:
+            pass
+
     lines = [
         "📊 **Дашборд** (мониторинг)",
         f"🕐 {now_str} ET  ·  VIX: {vix_val:.1f}" if vix_val is not None else f"🕐 {now_str} ET  ·  VIX: —",
         f"Режим рынка (по VIX, один для всех тикеров): {_escape_md(vix_regime)}{regime_hint}",
+        f"Новостей в KB за 7 дн.: {total_news_7d}" if total_news_7d is not None else "",
         "",
     ]
-
     for ticker in watchlist:
         try:
             with engine.connect() as conn:
@@ -85,21 +108,34 @@ def build_dashboard_text(mode: str = "all") -> str:
 
             news_count = 0
             try:
-                cutoff = datetime.now() - timedelta(days=7)
+                # Окно 7 дней: по дате в БД (PostgreSQL) или по cutoff в Python (fallback)
                 with engine.connect() as conn2:
-                    rn = conn2.execute(
-                        text(
-                            """
-                            SELECT COUNT(*) FROM knowledge_base
-                            WHERE ticker = :ticker AND ts >= :cutoff
-                              AND content IS NOT NULL AND LENGTH(content) > 10
-                            """
-                        ),
-                        {"ticker": ticker, "cutoff": cutoff},
-                    ).fetchone()
+                    try:
+                        rn = conn2.execute(
+                            text(
+                                """
+                                SELECT COUNT(*) FROM knowledge_base
+                                WHERE ticker = :ticker AND ts::date >= current_date - 7
+                                  AND content IS NOT NULL AND LENGTH(TRIM(content)) > 5
+                                """
+                            ),
+                            {"ticker": ticker},
+                        ).fetchone()
+                    except Exception:
+                        cutoff = datetime.now() - timedelta(days=7)
+                        rn = conn2.execute(
+                            text(
+                                """
+                                SELECT COUNT(*) FROM knowledge_base
+                                WHERE ticker = :ticker AND ts >= :cutoff
+                                  AND content IS NOT NULL AND LENGTH(content) > 5
+                                """
+                            ),
+                            {"ticker": ticker, "cutoff": cutoff},
+                        ).fetchone()
                 news_count = int(rn[0]) if rn and rn[0] else 0
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Dashboard news_count %s: %s", ticker, e)
 
             decision = "—"
             try:

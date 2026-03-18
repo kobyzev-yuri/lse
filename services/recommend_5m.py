@@ -326,12 +326,52 @@ def compute_rsi_5m(closes: pd.Series, period: int = RSI_PERIOD_5M) -> Optional[f
     return compute_rsi_from_closes(vals, period=period)
 
 
-# Поля технического сигнала 5m: один источник правды для signal5m, recommend5m compact и cron
+# Поля технического сигнала 5m: один источник правды для signal5m, recommend5m, веб-карточек и cron.
+# Все параметры считаются только в get_decision_5m(); здесь — список ключей для единого payload.
 TECHNICAL_SIGNAL_KEYS = (
     "decision", "reasoning", "price", "rsi_5m", "momentum_2h_pct", "volatility_5m_pct",
     "period_str", "bars_count", "stop_loss_pct", "take_profit_pct", "stop_loss_enabled",
+    "estimated_upside_pct_day", "suggested_take_profit_price",
+    "estimated_downside_pct_day", "prob_up", "prob_down",
+    "pullback_from_high_pct", "session_high",
     "kb_news_impact", "entry_advice", "entry_advice_reason", "market_session",
+    "premarket_gap_pct", "premarket_last", "bars_count",
 )
+
+
+def get_5m_card_payload(d5: Dict[str, Any], ticker: str) -> Dict[str, Any]:
+    """
+    Единый payload для отображения 5m (веб-карточки, Telegram, отчёты).
+    Все поля берутся из выхода get_decision_5m(); один источник правды.
+    """
+    if not d5:
+        return {"ticker": ticker, "decision": "NO_DATA", "reasoning": "Нет 5m данных."}
+    out = {"ticker": ticker}
+    for k in TECHNICAL_SIGNAL_KEYS:
+        if k in d5:
+            out[k] = d5[k]
+    return out
+
+
+def build_5m_close_context(d5: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Контекст для закрытия позиции 5m (cron, бот).
+    Возвращает dict для context_json в close_position(); все поля из get_decision_5m().
+    """
+    if not d5:
+        return {}
+    bar_high = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
+    bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
+    return {
+        "momentum_2h_pct": d5.get("momentum_2h_pct"),
+        "rsi_5m": d5.get("rsi_5m"),
+        "bar_high": bar_high,
+        "bar_low": bar_low,
+        "exit_bar_close": d5.get("exit_bar_close"),
+        "volatility_5m_pct": d5.get("volatility_5m_pct"),
+        "period_str": d5.get("period_str"),
+        "session_high": d5.get("session_high"),
+    }
 
 
 def get_decision_5m(
@@ -612,6 +652,66 @@ def get_decision_5m(
             out["suggested_take_profit_price"] = round(p * (1 + effective_take_pct / 100.0), 2)
     except Exception as e:
         logger.debug("estimated_upside для 5m: %s", e)
+
+    # Оценка downside (риск просадки), НЕ стоп-лосс (4.1b)
+    # Идея: размер потенциального хода вниз на горизонте дня, чтобы понимать risk/reward без привязки к стопу.
+    try:
+        p = out.get("price") or price
+        recent_low = out.get("recent_bars_low_min")
+        vol_5m = out.get("volatility_5m_pct")
+        mom_2h = out.get("momentum_2h_pct")
+        rsi_now = out.get("rsi_5m")
+        phase = (out.get("market_session") or {}).get("session_phase") or out.get("session_phase")
+
+        downside_to_recent_low = None
+        if p is not None and p > 0 and isinstance(recent_low, (int, float)) and recent_low > 0 and recent_low < p:
+            downside_to_recent_low = (p - float(recent_low)) / float(p) * 100.0
+
+        base = 0.0
+        if isinstance(vol_5m, (int, float)) and vol_5m > 0:
+            # Волатильность 5m — std лог-доходностей * 100. Для дневного риска берём консервативный мультипликатор.
+            base = max(base, float(vol_5m) * 2.5)
+        if isinstance(downside_to_recent_low, (int, float)) and downside_to_recent_low > 0:
+            base = max(base, float(downside_to_recent_low))
+
+        # Усиление риска при отрицательном импульсе / премаркете (ликвидность ниже)
+        if isinstance(mom_2h, (int, float)) and mom_2h < -1.0:
+            base *= 1.2
+        if phase in ("PRE_MARKET", "AFTER_HOURS"):
+            base *= 1.1
+
+        # Если RSI очень низкий (перепроданность) — downside риск обычно меньше, чем при перегреве
+        if isinstance(rsi_now, (int, float)) and rsi_now <= 25:
+            base *= 0.85
+        elif isinstance(rsi_now, (int, float)) and rsi_now >= 75:
+            base *= 1.15
+
+        # Ограничения, чтобы не раздувать и не получать нули
+        estimated_downside = round(min(max(base, 0.2), 25.0), 2) if base and base > 0 else None
+        out["estimated_downside_pct_day"] = estimated_downside
+
+        # Грубая вероятность направления (для скана): prob_up + prob_down = 1
+        up_score = 1.0
+        down_score = 1.0
+        if isinstance(rsi_now, (int, float)):
+            if rsi_now <= 30:
+                up_score += 0.6
+            elif rsi_now >= 70:
+                down_score += 0.6
+        if isinstance(mom_2h, (int, float)):
+            if mom_2h >= 1.0:
+                up_score += 0.4
+            elif mom_2h <= -1.0:
+                down_score += 0.4
+        if isinstance(vol_5m, (int, float)) and vol_5m >= 0.8:
+            # высокая волатильность делает направление менее определённым
+            up_score = 1.0 + (up_score - 1.0) * 0.7
+            down_score = 1.0 + (down_score - 1.0) * 0.7
+        s = up_score + down_score
+        out["prob_up"] = round(up_score / s, 2)
+        out["prob_down"] = round(down_score / s, 2)
+    except Exception as e:
+        logger.debug("estimated_downside для 5m: %s", e)
 
     # Совет по входу: ALLOW / CAUTION / AVOID (4.2)
     entry_advice = "ALLOW"

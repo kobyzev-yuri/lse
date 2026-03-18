@@ -267,9 +267,10 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
         f"<h1>Рекомендация 5m (технический сигнал + LLM)</h1>",
         f"<p>Период: {days} дн. Подробный отчёт: /prompt_entry game5m</p>",
         "<table><thead><tr>",
-        "<th>Тикер</th><th>Решение</th><th>Цена</th><th>RSI</th><th>Имп. 2ч%</th><th>Вол%</th><th>Период</th><th>Вход</th>",
+        "<th>Тикер</th><th>Решение</th><th>Цена</th><th>RSI</th><th>Имп. 2ч%</th><th>Вол%</th><th>Upside%</th><th>Downside%</th><th>P(up/down)</th><th>Период</th><th>Вход</th>",
         "</tr></thead><tbody>",
     ]
+    n_cols = 11
     for r in per_ticker_results:
         ticker = r.get("ticker") or "—"
         decision = r.get("decision") or "—"
@@ -277,16 +278,23 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
         rsi = r.get("rsi_5m")
         mom = r.get("momentum_2h_pct")
         vol = r.get("volatility_5m_pct")
+        upside = r.get("estimated_upside_pct_day")
+        downside = r.get("estimated_downside_pct_day")
+        prob_up = r.get("prob_up")
+        prob_down = r.get("prob_down")
         period = r.get("period_str")
         entry = r.get("entry_advice") or "—"
         if decision == "NO_DATA":
-            parts.append(f"<tr><td>{_pre(ticker)}</td><td colspan=\"7\">Нет 5m данных</td></tr>")
+            parts.append(f"<tr><td>{_pre(ticker)}</td><td colspan=\"{n_cols - 1}\">Нет 5m данных</td></tr>")
             continue
         dec_cls = "decision-buy" if decision in ("BUY", "STRONG_BUY") else ("decision-sell" if decision == "SELL" else "decision-hold")
         price_s = f"{price:.2f}" if price is not None else "—"
         rsi_s = f"{rsi:.1f}" if rsi is not None else "—"
         mom_s = f"{mom:+.2f}%" if mom is not None else "—"
         vol_s = f"{vol:.2f}%" if vol is not None else "—"
+        upside_s = f"{upside:+.1f}%" if upside is not None else "—"
+        downside_s = f"−{downside:.1f}%" if downside is not None else "—"
+        prob_s = f"{prob_up:.2f}/{prob_down:.2f}" if (prob_up is not None and prob_down is not None) else "—"
         parts.append(
             f"<tr><td>{_pre(ticker)}</td>"
             f"<td class=\"{dec_cls}\">{_pre(decision)}</td>"
@@ -294,6 +302,9 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
             f"<td>{rsi_s}</td>"
             f"<td>{mom_s}</td>"
             f"<td>{vol_s}</td>"
+            f"<td>{upside_s}</td>"
+            f"<td>{downside_s}</td>"
+            f"<td>{prob_s}</td>"
             f"<td>{_pre(period)}</td>"
             f"<td>{_pre(entry)}</td></tr>"
         )
@@ -304,7 +315,7 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
             if llm_factors and isinstance(llm_factors, list):
                 llm_text += " " + ", ".join(str(f)[:80] for f in llm_factors[:5])
             if llm_text.strip():
-                parts.append(f'<tr><td colspan="8" class="llm-cell">LLM: {_pre(llm_text.strip())}</td></tr>')
+                parts.append(f'<tr><td colspan="{n_cols}" class="llm-cell">LLM: {_pre(llm_text.strip())}</td></tr>')
     parts.append("</tbody></table></body></html>")
     return "\n".join(parts)
 
@@ -4156,7 +4167,7 @@ class LSETelegramBot:
         try:
             from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation, get_tickers_fast, get_all_ticker_groups
             from services.cluster_recommend import get_correlation_matrix
-            from services.recommend_5m import get_decision_5m
+            from services.recommend_5m import get_decision_5m, get_5m_card_payload
             cluster_5m = list(get_tickers_game_5m() or []) if not ticker else [ticker]
             if not cluster_5m:
                 await update.message.reply_text("❌ Тикеры не заданы (GAME_5M_TICKERS или TICKERS_FAST).")
@@ -4192,33 +4203,17 @@ class LSETelegramBot:
             per_ticker_results: List[Dict[str, Any]] = []
             for tkr in cluster_5m:
                 d5 = get_decision_5m(tkr, days=days, use_llm_news=True)
-                if not d5:
-                    per_ticker_results.append({"ticker": tkr, "decision": "NO_DATA", "reasoning": "Нет 5m данных."})
-                    continue
-                kb_news = d5.get("kb_news") or []
-                kb_summary = ""
-                if kb_news:
-                    titles = [n.get("title") or (n.get("content", "")[:80] if n.get("content") else "") for n in kb_news[:5]]
-                    kb_summary = "; ".join((t[:100] + ("…" if len(t) > 100 else "")) for t in titles if t)
-                per_ticker_results.append({
-                    "ticker": tkr,
-                    "decision": d5.get("decision"),
-                    "reasoning": d5.get("reasoning"),
-                    "price": d5.get("price"),
-                    "rsi_5m": d5.get("rsi_5m"),
-                    "momentum_2h_pct": d5.get("momentum_2h_pct"),
-                    "volatility_5m_pct": d5.get("volatility_5m_pct"),
-                    "stop_loss_pct": d5.get("stop_loss_pct"),
-                    "take_profit_pct": d5.get("take_profit_pct"),
-                    "stop_loss_enabled": d5.get("stop_loss_enabled", True),
-                    "period_str": d5.get("period_str"),
-                    "kb_news_impact": d5.get("kb_news_impact"),
-                    "kb_news_summary": kb_summary,
-                    "llm_news_content": d5.get("llm_news_content"),
-                    "llm_sentiment": d5.get("llm_sentiment"),
-                    "entry_advice": d5.get("entry_advice"),
-                    "entry_advice_reason": d5.get("entry_advice_reason"),
-                })
+                item = get_5m_card_payload(d5, tkr)
+                if d5:
+                    kb_news = d5.get("kb_news") or []
+                    kb_summary = ""
+                    if kb_news:
+                        titles = [n.get("title") or (n.get("content", "")[:80] if n.get("content") else "") for n in kb_news[:5]]
+                        kb_summary = "; ".join((t[:100] + ("…" if len(t) > 100 else "")) for t in titles if t)
+                    item["kb_news_summary"] = kb_summary
+                    item["llm_news_content"] = d5.get("llm_news_content")
+                    item["llm_sentiment"] = d5.get("llm_sentiment")
+                per_ticker_results.append(item)
             extra_tech = {}
             if corr_tickers_used:
                 cluster_set = set(cluster_5m)
@@ -4320,8 +4315,9 @@ class LSETelegramBot:
                 text = self._format_5m_technical_signal(results[0]["ticker"], results[0])
                 await update.message.reply_text(text, parse_mode=None)
             else:
+                # Единый payload: все поля из get_5m_technical_signal (TECHNICAL_SIGNAL_KEYS)
                 html_content = _build_recommend5m_compact_html(
-                    [{"ticker": r.get("ticker"), "decision": r.get("decision"), "price": r.get("price"), "rsi_5m": r.get("rsi_5m"), "momentum_2h_pct": r.get("momentum_2h_pct"), "volatility_5m_pct": r.get("volatility_5m_pct"), "period_str": r.get("period_str"), "entry_advice": r.get("entry_advice"), "reasoning": r.get("reasoning"), "kb_news_impact": r.get("kb_news_impact")} for r in results],
+                    [{"ticker": r.get("ticker"), **r} for r in results],
                     days,
                 )
                 filename = f"signal5m_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
@@ -4848,30 +4844,9 @@ class LSETelegramBot:
         # Можно добавить логику для кнопок позже
 
     def _format_5m_technical_signal(self, ticker: str, tech: Dict[str, Any]) -> str:
-        """Форматирует технический сигнал 5m (источник: get_5m_technical_signal / cron). Без длинных списков."""
-        decision = tech.get("decision") or "—"
-        price = tech.get("price")
-        rsi = tech.get("rsi_5m")
-        mom = tech.get("momentum_2h_pct")
-        vol = tech.get("volatility_5m_pct")
-        period = tech.get("period_str")
-        entry = tech.get("entry_advice") or "—"
-        reasoning = (tech.get("reasoning") or "")[:300]
-        kb = tech.get("kb_news_impact") or "—"
-        lines = [
-            f"5m · {ticker} — {decision}",
-            f"Цена: ${price:.2f}" if price is not None else "Цена: —",
-            f"RSI(5m): {rsi:.1f}" if rsi is not None else "RSI: —",
-            f"Импульс 2ч: {mom:+.2f}%" if mom is not None else "",
-            f"Волатильность: {vol:.2f}%" if vol is not None else "",
-            f"Вход: {entry}",
-            f"Новости (KB): {kb}",
-        ]
-        if period:
-            lines.append(f"Период: {period}")
-        if reasoning:
-            lines.append(f"Обоснование: {reasoning}")
-        return "\n".join(s for s in lines if s)
+        """Технический сигнал 5m — единый формат из services.signal_message_5m."""
+        from services.signal_message_5m import build_5m_technical_short_text
+        return build_5m_technical_short_text(tech, ticker)
 
     def _format_signal_response(self, ticker: str, decision_result: Dict[str, Any]) -> str:
         """Форматирует ответ с анализом сигнала"""

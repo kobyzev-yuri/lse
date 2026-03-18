@@ -100,8 +100,8 @@
         function renderCard(c) {
             const isNoData = c.decision === 'NO_DATA';
             const upside = c.estimated_upside_pct_day != null ? c.estimated_upside_pct_day : c.take_profit_pct;
-            const downside = c.stop_loss_pct;
             const stopEnabled = c.stop_loss_enabled === true;
+            const downsideRisk = c.estimated_downside_pct_day;
             const pullback = c.pullback_from_high_pct;
             let html = '<div class="card-5m ' + decisionClass(c.decision) + '" data-ticker="' + escapeHtml(c.ticker) + '">';
             html += '<div class="card-head"><span class="ticker">' + escapeHtml(c.ticker) + '</span><span class="decision">' + escapeHtml(c.decision || '—') + '</span></div>';
@@ -114,8 +114,14 @@
             html += '<div class="block-title">Upside / Downside</div>';
             html += '<div class="row"><span class="label">Апсайд (тейк)</span><span class="value positive">+' + fmt(upside, 1) + '%</span></div>';
             if (c.suggested_take_profit_price != null) html += '<div class="row"><span class="label">Цель</span><span class="value">' + fmt(c.suggested_take_profit_price, 2) + '</span></div>';
-            var downsideStr = (downside != null && stopEnabled) ? ('−' + fmt(downside, 1) + '%') : '—' + (stopEnabled ? '' : ' (стоп выкл.)');
-            html += '<div class="row"><span class="label">Даунсайд (стоп)</span><span class="value negative">' + downsideStr + '</span></div>';
+            var downsideRiskStr = (downsideRisk != null) ? ('−' + fmt(downsideRisk, 1) + '%') : '—';
+            html += '<div class="row"><span class="label">Даунсайд (риск)</span><span class="value negative">' + downsideRiskStr + '</span></div>';
+            if (stopEnabled && c.stop_loss_pct != null) {
+                html += '<div class="row"><span class="label">Стоп (правило)</span><span class="value negative">−' + fmt(c.stop_loss_pct, 1) + '%</span></div>';
+            }
+            if (c.prob_up != null && c.prob_down != null) {
+                html += '<div class="row"><span class="label">P(up/down)</span><span class="value">' + fmt(c.prob_up, 2) + ' / ' + fmt(c.prob_down, 2) + '</span></div>';
+            }
             html += '<div class="row"><span class="label">Импульс 2ч</span><span class="value">' + fmt(c.momentum_2h_pct, 2) + '%</span></div>';
             if (pullback != null) html += '<div class="row"><span class="label">Откат от хая</span><span class="value">' + fmt(pullback, 2) + '%</span></div>';
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
@@ -152,8 +158,11 @@
             try {
                 const r = await fetch('/api/game5m/card/' + encodeURIComponent(ticker) + '/llm');
                 const data = await r.json();
-                let text = data.llm_reasoning || '';
-                if (data.llm_key_factors && Array.isArray(data.llm_key_factors)) text += '\n\n' + data.llm_key_factors.join(', ');
+                let text = (data.llm_reasoning || '').trim();
+                if (data.llm_key_factors && Array.isArray(data.llm_key_factors) && data.llm_key_factors.length > 0) {
+                    var labels = data.llm_key_factors.filter(function(f){ return f && String(f).trim().length > 0; }).map(function(f){ return String(f).trim(); });
+                    if (labels.length > 0) text += (text ? '\n\nКлючевое: ' : '') + labels.join(' · ');
+                }
                 if (!text) text = 'Нет вывода LLM.';
                 block.textContent = text;
                 block.dataset.loaded = '1';

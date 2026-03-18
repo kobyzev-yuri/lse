@@ -173,10 +173,11 @@ class LLMService:
 {
     "decision": "BUY|STRONG_BUY|HOLD",
     "confidence": 0.0-1.0,
-    "reasoning": "объяснение решения",
+    "reasoning": "объяснение решения (один связный абзац)",
     "risks": ["список рисков"],
-    "key_factors": ["ключевые факторы"]
+    "key_factors": ["короткие метки 3–7 слов каждая, не дублируй текст из reasoning"]
 }
+key_factors — только краткие метки для быстрого скана (например: «RSI перепродан», «слабость сектора», «нейтральный sentiment»), не повторяй в них полные фразы из reasoning.
 """
 
     @staticmethod
