@@ -6,19 +6,6 @@
 <h1>Визуализация данных</h1>
 
 <div class="card">
-    <h2>График котировок (дневной)</h2>
-    <label>Тикер:</label>
-    <select id="tickerSelect">
-        <option value="">Выберите тикер</option>
-        {% for ticker in tickers %}
-        <option value="{{ ticker }}">{{ ticker }}</option>
-        {% endfor %}
-    </select>
-    
-    <canvas id="quotesChart" style="max-height: 400px; margin-top: 1rem;"></canvas>
-</div>
-
-<div class="card">
     <h2>График 5m (интрадей + пролонгация)</h2>
     <p class="muted" style="margin-bottom:0.5rem;">Все тикеры игры 5m (как в карточках). Те же функции, что в Telegram: зона прогноза, EMA, тренд при ≥5 свечах. Ось времени — US Eastern (NYSE/NASDAQ).</p>
     <label>Дней:</label>
@@ -34,18 +21,10 @@
     <div id="chart5mContainer"></div>
 </div>
 <script type="application/json" id="tickers5mList">{{ tickers_5m_json or "[]" }}</script>
-
-<div class="card">
-    <h2>PnL по сделкам</h2>
-    <p id="pnlEmptyHint" class="muted" style="display:none; margin-bottom:0.5rem;">Нет закрытых сделок. График появится после закрытия позиций.</p>
-    <canvas id="pnlChart" style="max-height: 400px;"></canvas>
-</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-let quotesChart = null;
-let pnlChart = null;
 let chart5mInstances = {};
 
 function formatChart5mTime(iso) {
@@ -199,106 +178,6 @@ async function loadChart5mAll() {
 document.getElementById('days5mSelect').addEventListener('change', loadChart5mAll);
 loadChart5mAll();
 
-document.getElementById('tickerSelect').addEventListener('change', async (e) => {
-    const ticker = e.target.value;
-    if (!ticker) return;
-    
-    try {
-        const response = await fetch(`/api/quotes/${ticker}?days=30`);
-        const data = await response.json();
-        
-        const dates = data.data.map(d => d.date);
-        const closes = data.data.map(d => d.close);
-        const sma5 = data.data.map(d => d.sma_5);
-        
-        if (quotesChart) {
-            quotesChart.destroy();
-        }
-        
-        const ctx = document.getElementById('quotesChart').getContext('2d');
-        quotesChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: dates,
-                datasets: [{
-                    label: 'Цена закрытия',
-                    data: closes,
-                    borderColor: 'rgb(75, 192, 192)',
-                    tension: 0.1
-                }, {
-                    label: 'SMA 5',
-                    data: sma5,
-                    borderColor: 'rgb(255, 99, 132)',
-                    tension: 0.1
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: true
-            }
-        });
-    } catch (error) {
-        console.error('Ошибка загрузки данных:', error);
-    }
-});
-
-// Загрузка PnL данных
-(async () => {
-    const container = document.getElementById('pnlChart').closest('.card');
-    const emptyHint = document.getElementById('pnlEmptyHint');
-    try {
-        const response = await fetch('/api/pnl');
-        if (!response.ok) throw new Error('Ошибка API');
-        const data = await response.json();
-        
-        const trades = data.pnl || [];
-        if (trades.length === 0) {
-            emptyHint.style.display = 'block';
-            if (pnlChart) { pnlChart.destroy(); pnlChart = null; }
-            return;
-        }
-        emptyHint.style.display = 'none';
-        const labels = trades.map(t => t.ts ? (typeof t.ts === 'string' ? t.ts.slice(0, 16) : String(t.ts)) : '—');
-        const pnl = trades.map(t => {
-            const v = t.net_pnl;
-            return (v != null && !Number.isNaN(v)) ? Number(v) : 0;
-        });
-        
-        if (pnlChart) pnlChart.destroy();
-        const ctx = document.getElementById('pnlChart').getContext('2d');
-        pnlChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'PnL ($)',
-                    data: pnl,
-                    backgroundColor: pnl.map(p => p >= 0 ? 'rgba(75, 192, 192, 0.6)' : 'rgba(255, 99, 132, 0.6)')
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: true,
-                scales: {
-                    y: { title: { display: true, text: 'PnL ($)' } }
-                }
-            }
-        });
-        if (container) {
-            const totalEl = document.createElement('p');
-            totalEl.className = 'muted';
-            totalEl.style.marginTop = '0.5rem';
-            totalEl.textContent = 'Итого: $' + (data.total_pnl != null ? Number(data.total_pnl).toFixed(2) : '0.00') + (data.win_rate != null ? ' · Win rate: ' + Number(data.win_rate).toFixed(1) + '%' : '');
-            if (container.querySelector('.pnl-summary')) container.querySelector('.pnl-summary').remove();
-            totalEl.classList.add('pnl-summary');
-            document.getElementById('pnlChart').after(totalEl);
-        }
-    } catch (error) {
-        console.error('Ошибка загрузки PnL:', error);
-        emptyHint.textContent = 'Не удалось загрузить PnL.';
-        emptyHint.style.display = 'block';
-    }
-})();
 </script>
 {% endblock %}
 

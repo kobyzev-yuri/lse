@@ -13,12 +13,12 @@
         <table>
             <thead>
                 <tr>
+                    <th>Действия</th>
                     <th>ID</th>
                     <th>Стратегия</th>
                     <th>Target</th>
                     <th>Параметры</th>
                     <th>Обновлено</th>
-                    <th>Действия</th>
                 </tr>
             </thead>
             <tbody id="paramsTableBody">
@@ -37,9 +37,9 @@
         <table>
             <thead>
                 <tr>
+                    <th>Действия</th>
                     <th>Ключ</th>
                     <th>Значение</th>
-                    <th>Действия</th>
                 </tr>
             </thead>
             <tbody id="configEnvTableBody">
@@ -143,15 +143,15 @@
                 const paramsForAttr = paramsStr.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                 const paramsForCell = escapeHtml(paramsStr);
                 tr.innerHTML = `
+                    <td>
+                        <button type="button" class="btn btn-sm edit-btn" data-id="${p.id}" data-strategy="${escapeHtml(p.strategy_name)}" data-target="${escapeHtml(p.target_identifier)}" data-params="${paramsForAttr}">Изм.</button>
+                        <button type="button" class="btn btn-sm del-btn" data-id="${p.id}">Удал.</button>
+                    </td>
                     <td>${p.id}</td>
                     <td><strong>${escapeHtml(p.strategy_name)}</strong></td>
                     <td><span class="badge">${escapeHtml(p.target_identifier)}</span></td>
                     <td><pre>${paramsForCell}</pre></td>
                     <td><span class="text-muted">${p.updated_at ? new Date(p.updated_at).toLocaleString() : ''}</span></td>
-                    <td>
-                        <button type="button" class="btn btn-sm edit-btn" data-id="${p.id}" data-strategy="${escapeHtml(p.strategy_name)}" data-target="${escapeHtml(p.target_identifier)}" data-params="${paramsForAttr}">Изм.</button>
-                        <button type="button" class="btn btn-sm del-btn" data-id="${p.id}">Удал.</button>
-                    </td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -231,7 +231,7 @@
             data.forEach(function(row, idx) {
                 const tr = document.createElement('tr');
                 const valDisplay = row.masked && row.value ? '••••••••' : (row.value || '');
-                tr.innerHTML = '<td><code>' + escapeHtml(row.key) + '</code></td><td><span class="config-val">' + escapeHtml(valDisplay) + '</span></td><td><button type="button" class="btn btn-sm config-edit-btn" data-idx="' + idx + '">Изм.</button></td>';
+                tr.innerHTML = '<td><button type="button" class="btn btn-sm config-edit-btn" data-idx="' + idx + '">Изм.</button></td><td><code>' + escapeHtml(row.key) + '</code></td><td><span class="config-val">' + escapeHtml(valDisplay) + '</span></td>';
                 tbody.appendChild(tr);
             });
             document.querySelectorAll('.config-edit-btn').forEach(function(btn) {
