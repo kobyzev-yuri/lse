@@ -122,7 +122,10 @@
             if (c.prob_up != null && c.prob_down != null) {
                 html += '<div class="row"><span class="label">P(up/down)</span><span class="value">' + fmt(c.prob_up, 2) + ' / ' + fmt(c.prob_down, 2) + '</span></div>';
             }
-            html += '<div class="row"><span class="label">Импульс 2ч</span><span class="value">' + fmt(c.momentum_2h_pct, 2) + '%</span></div>';
+            var momLabel = (c.momentum_window_min != null && c.momentum_window_min > 0 && c.momentum_window_min < 120)
+                ? ('Импульс за ' + c.momentum_window_min + ' мин')
+                : 'Импульс 2ч';
+            html += '<div class="row"><span class="label">' + momLabel + '</span><span class="value">' + fmt(c.momentum_2h_pct, 2) + '%</span></div>';
             if (pullback != null) html += '<div class="row"><span class="label">Откат от хая</span><span class="value">' + fmt(pullback, 2) + '%</span></div>';
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
             if (c.reasoning) html += '<div class="reasoning">' + escapeHtml(c.reasoning) + '</div>';

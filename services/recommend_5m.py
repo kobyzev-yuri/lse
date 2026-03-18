@@ -256,12 +256,15 @@ def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str
     volatility_5m_pct = float(log_ret.std() * 100) if len(log_ret) > 1 else 0.0
     rsi_5m = compute_rsi_5m(closes, period=RSI_PERIOD_5M)
 
+    # Импульс: окно до 2ч (24 бара 5m), но при малом числе баров — сколько есть (на 15 мин торгов = 3 бара → импульс за 10 мин)
     n = min(BARS_2H, len(closes) - 1)
     momentum_2h_pct = 0.0
+    momentum_window_min = 0
     if n >= 1 and len(closes) >= n + 1:
         price_2h_ago = float(closes.iloc[-(n + 1)])
         if price_2h_ago > 0:
             momentum_2h_pct = ((price / price_2h_ago) - 1.0) * 100.0
+        momentum_window_min = n * 5  # 5m бары → минуты
 
     dt_min, dt_max = df["datetime"].min(), df["datetime"].max()
     period_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}" if hasattr(dt_min, "strftime") else f"{dt_min} – {dt_max}"
@@ -300,6 +303,7 @@ def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str
         "rsi_5m": rsi_5m,
         "volatility_5m_pct": volatility_5m_pct,
         "momentum_2h_pct": momentum_2h_pct,
+        "momentum_window_min": momentum_window_min,  # фактическое окно импульса (мин), для подписи «импульс за N мин»
         "session_high": session_high,
         "pullback_from_high_pct": pullback_from_high_pct,
         "last_bar_high": last_bar_high,
@@ -326,16 +330,82 @@ def compute_rsi_5m(closes: pd.Series, period: int = RSI_PERIOD_5M) -> Optional[f
     return compute_rsi_from_closes(vals, period=period)
 
 
+# Минимум баров 1m премаркета для расчёта признаков (RSI 14 + импульс ~30 мин)
+PREMARKET_MIN_BARS = 14
+# Баров для «импульса» в премаркете (≈30 мин при 1m)
+PREMARKET_MOMENTUM_BARS = 30
+
+
+def compute_premarket_features(df_1m: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    """
+    Признаки по 1m барам премаркета (Yahoo prepost).
+    Используется в PRE_MARKET для расчёта RSI, волатильности, импульса и далее upside/downside/prob.
+    Возвращает словарь с полями, совместимыми с 5m (rsi_5m, volatility_5m_pct, momentum_2h_pct, period_str, ...).
+    """
+    if df_1m is None or df_1m.empty or "Close" not in df_1m.columns:
+        return None
+    dt_col = "Datetime" if "Datetime" in df_1m.columns else "datetime"
+    if dt_col not in df_1m.columns and "Date" in df_1m.columns:
+        dt_col = "Date"
+    if dt_col not in df_1m.columns:
+        return None
+    df = df_1m.sort_values(dt_col).reset_index(drop=True)
+    closes = df["Close"].astype(float)
+    price = float(closes.iloc[-1])
+    if price <= 0:
+        return None
+    n = len(closes)
+    if n < PREMARKET_MIN_BARS:
+        return None
+
+    rsi = compute_rsi_5m(closes, period=14)
+    log_ret = _log_returns(closes)
+    volatility_pct = float(log_ret.std() * 100) if len(log_ret) > 1 else 0.0
+
+    mom_bars = min(PREMARKET_MOMENTUM_BARS, n - 1)
+    momentum_pct = 0.0
+    if mom_bars >= 1 and n >= mom_bars + 1:
+        price_ago = float(closes.iloc[-(mom_bars + 1)])
+        if price_ago > 0:
+            momentum_pct = ((price / price_ago) - 1.0) * 100.0
+
+    n_tail = min(10, n)
+    recent_high = float(df["High"].iloc[-n_tail:].max()) if "High" in df.columns else price
+    recent_low = float(df["Low"].iloc[-n_tail:].min()) if "Low" in df.columns else price
+
+    try:
+        dt_min = df[dt_col].iloc[0]
+        dt_max = df[dt_col].iloc[-1]
+        if hasattr(dt_min, "strftime"):
+            period_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')} (премаркет 1m)"
+        else:
+            period_str = "премаркет 1m (предварительно)"
+    except Exception:
+        period_str = "премаркет 1m (предварительно)"
+
+    return {
+        "price": price,
+        "rsi_5m": round(rsi, 2) if rsi is not None else None,
+        "volatility_5m_pct": round(volatility_pct, 4),
+        "momentum_2h_pct": round(momentum_pct, 2),
+        "period_str": period_str,
+        "recent_bars_high_max": recent_high,
+        "recent_bars_low_min": recent_low,
+        "bars_count": n,
+    }
+
+
 # Поля технического сигнала 5m: один источник правды для signal5m, recommend5m, веб-карточек и cron.
 # Все параметры считаются только в get_decision_5m(); здесь — список ключей для единого payload.
 TECHNICAL_SIGNAL_KEYS = (
-    "decision", "reasoning", "price", "rsi_5m", "momentum_2h_pct", "volatility_5m_pct",
+    "decision", "reasoning", "price", "rsi_5m", "momentum_2h_pct", "momentum_window_min", "volatility_5m_pct",
     "period_str", "bars_count", "stop_loss_pct", "take_profit_pct", "stop_loss_enabled",
     "estimated_upside_pct_day", "suggested_take_profit_price",
     "estimated_downside_pct_day", "prob_up", "prob_down",
     "pullback_from_high_pct", "session_high",
     "kb_news_impact", "entry_advice", "entry_advice_reason", "market_session",
     "premarket_gap_pct", "premarket_last", "bars_count",
+    "is_preliminary",
 )
 
 

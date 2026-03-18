@@ -28,7 +28,8 @@ git push origin main
   cd ~/lse
   ./scripts/deploy_from_github.sh
   ```
-  Или принудительная пересборка без проверки изменений:
+  Скрипт сам делает `git fetch` и `git pull`; отдельно pull перед деплоем не нужен. Если появились новые коммиты — пересоберёт образ и перезапустит `lse`.  
+  **Принудительная пересборка** (например, после ручного `git pull` или чтобы пересобрать без новых коммитов):
   ```bash
   ./scripts/deploy_from_github.sh --force
   ```
@@ -90,6 +91,7 @@ docker compose restart lse
   - на сервере: `git add ... && git commit && git push origin main` (если на сервере есть права на push),  
   - или скопировать изменения к себе, закоммитить и запушить с локальной машины.
 - **Перед деплоем** убедитесь, что всё нужное запушено в `main`, тогда на сервере `deploy_from_github.sh` подтянет актуальное.
+- **Нужен ли `git pull` перед деплоем?** Нет. `./scripts/deploy_from_github.sh` сам делает `fetch` и `pull`. Достаточно выполнить `./scripts/deploy_from_github.sh` (при изменениях пересоберёт) или `./scripts/deploy_from_github.sh --force` (всегда пересборка).
 
 ---
 
