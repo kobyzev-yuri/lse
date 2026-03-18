@@ -112,28 +112,10 @@
             }
             html += '<div class="row"><span class="label">Цена</span><span class="value">' + fmt(c.price, 2) + '</span></div>';
             html += '<div class="row"><span class="label">RSI(5m)</span><span class="value">' + fmt(c.rsi_5m, 1) + '</span></div>';
-            html += '<div class="block-title">Upside / Downside <span class="muted" style="font-weight:normal; font-size:0.7em;">(наши расчёты, база для риск/ревард и мат. ожидания)</span></div>';
-            html += '<div class="row"><span class="label">Апсайд (тейк)</span><span class="value positive">+' + fmt(upside, 1) + '%</span></div>';
-            if (c.suggested_take_profit_price != null) html += '<div class="row"><span class="label">Цель</span><span class="value">' + fmt(c.suggested_take_profit_price, 2) + '</span></div>';
-            var downsideRiskStr = (downsideRisk != null) ? ('−' + fmt(downsideRisk, 1) + '%') : '—';
-            html += '<div class="row"><span class="label">Даунсайд (риск)</span><span class="value negative">' + downsideRiskStr + '</span></div>';
-            if (stopEnabled && c.stop_loss_pct != null) {
-                html += '<div class="row"><span class="label">Стоп (правило)</span><span class="value negative">−' + fmt(c.stop_loss_pct, 1) + '%</span></div>';
-            }
-            if (c.prob_up != null && c.prob_down != null) {
-                html += '<div class="row"><span class="label">P(up/down)</span><span class="value">' + fmt(c.prob_up, 2) + ' / ' + fmt(c.prob_down, 2) + '</span></div>';
-            }
-            html += '<div class="block-title">Чек-лист Квена <span class="muted" style="font-weight:normal; font-size:0.7em;">(риск/ревард ≥ 1:2, мат.ожидание &gt; 0)</span></div>';
-            var rr = c.risk_reward_ratio;
-            var rrStr = (rr != null) ? ('1:' + rr.toFixed(1)) : '—';
-            html += '<div class="row"><span class="label">Риск/ревард</span><span class="value">' + rrStr + '</span></div>';
-            var ev = c.expected_value_pct;
-            var evStr = (ev != null) ? ((ev >= 0 ? '+' : '') + ev.toFixed(2) + '%') : '—';
-            html += '<div class="row"><span class="label">Мат. ожидание</span><span class="value ' + (ev != null && ev > 0 ? 'positive' : (ev != null && ev < 0 ? 'negative' : '')) + '">' + evStr + '</span></div>';
             var verdict = c.qwen_checklist_verdict || '';
             if (verdict) {
                 var verdictClass = verdict.indexOf('Позитивно') === 0 ? 'positive' : (verdict.indexOf('Негативно') === 0 ? 'negative' : 'muted');
-                html += '<div class="row" style="margin-top:0.35rem;"><span class="label">Вывод Квена</span><span class="value ' + verdictClass + '" style="font-size:0.85em;">' + escapeHtml(verdict) + '</span></div>';
+                html += '<div class="row"><span class="label">Вывод Квена</span><span class="value ' + verdictClass + '" style="font-size:0.85em;">' + escapeHtml(verdict) + '</span></div>';
             }
             var momLabel = (c.momentum_window_min != null && c.momentum_window_min > 0 && c.momentum_window_min < 120)
                 ? ('Импульс за ' + c.momentum_window_min + ' мин')
@@ -141,7 +123,6 @@
             html += '<div class="row"><span class="label">' + momLabel + '</span><span class="value">' + fmt(c.momentum_2h_pct, 2) + '%</span></div>';
             if (pullback != null) html += '<div class="row"><span class="label">Откат от хая</span><span class="value">' + fmt(pullback, 2) + '%</span></div>';
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
-            if (c.reasoning) html += '<div class="reasoning">' + escapeHtml(c.reasoning) + '</div>';
             html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">Вывод LLM</button>';
             html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';
             html += '<div class="chart-link"><a href="/visualization?ticker=' + encodeURIComponent(c.ticker) + '" target="_blank">График 5m</a></div>';

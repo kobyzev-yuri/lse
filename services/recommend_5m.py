@@ -450,10 +450,10 @@ def get_5m_card_payload(d5: Dict[str, Any], ticker: str) -> Dict[str, Any]:
     rr_ok = rr is not None and rr >= 2.0  # риск/ревард ≥ 1:2
     ev_ok = ev is not None and ev > 0
     if rr is None and ev is None:
-        out["qwen_checklist_verdict"] = "Нейтрально: нет данных по R:R и мат.ожиданию."
+        out["qwen_checklist_verdict"] = "Нейтрально: нет данных по R:R и мат.ожиданию дохода."
     elif rr_ok and ev_ok:
         out["qwen_checklist_verdict"] = (
-            f"Позитивно: R:R 1:{rr:.1f} (≥1:2), мат.ожидание {ev:+.2f}% (>0)."
+            f"Позитивно: R:R 1:{rr:.1f} (≥1:2), мат.ожидание дохода {ev:+.2f}% (>0)."
         )
     elif not rr_ok and not ev_ok:
         parts = []
@@ -462,12 +462,12 @@ def get_5m_card_payload(d5: Dict[str, Any], ticker: str) -> Dict[str, Any]:
         elif rr is None:
             parts.append("R:R нет")
         if ev is not None and ev <= 0:
-            parts.append(f"мат.ожидание {ev:+.2f}% (≤0)")
+            parts.append(f"мат.ожидание дохода {ev:+.2f}% (≤0)")
         elif ev is None:
-            parts.append("мат.ожидание нет")
+            parts.append("мат.ожидание дохода нет")
         out["qwen_checklist_verdict"] = "Негативно: " + ", ".join(parts) + "."
     elif not ev_ok:
-        ev_reason = f"мат.ожидание {ev:+.2f}% (≤0)" if ev is not None else "мат.ожидание нет"
+        ev_reason = f"мат.ожидание дохода {ev:+.2f}% (≤0)" if ev is not None else "мат.ожидание дохода нет"
         out["qwen_checklist_verdict"] = f"Негативно: {ev_reason}."
     else:
         out["qwen_checklist_verdict"] = (
