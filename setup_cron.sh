@@ -68,8 +68,8 @@ cat >> "$CRON_FILE" << EOF
 # Премаркет: за 15 мин до открытия US (9:15 ET = 17:15 MSK зимой). При PREMARKET_ALERT_TELEGRAM=true — алерт в Telegram. Летом (EDT): 9:15 ET = 16:15 MSK — при необходимости сменить на 15 16
 15 17 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/premarket_cron.py >> logs/premarket_cron.log 2>&1
 
-# Новости (RSS, NewsAPI, Alpha Vantage): каждый час
-0 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/fetch_news_cron.py >> logs/news_fetch.log 2>&1
+# Новости (RSS, NewsAPI, Alpha Vantage): каждые 15 мин — чтобы подтягивать за день с утра, не только последний час
+*/15 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/fetch_news_cron.py >> logs/news_fetch.log 2>&1
 
 # Backfill embedding в knowledge_base (после сбора новостей; без прокси внутри скрипта)
 10 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/sync_vector_kb_cron.py >> logs/sync_vector_kb.log 2>&1

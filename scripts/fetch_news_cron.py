@@ -46,19 +46,22 @@ def fetch_all_news_sources():
     logger.info("=" * 60)
     
     sources_status = {}
-    
+    rss_saved, rss_skipped = 0, 0
+    newsapi_saved = 0
+    n_investing = 0
+
     # 1. RSS фиды центральных банков (всегда работает, бесплатно)
     try:
         logger.info("\n📡 Источник 1/5: RSS фиды центральных банков")
-        fetch_and_save_rss_news()
-        sources_status['RSS'] = '✅ Успешно'
+        rss_saved, rss_skipped = fetch_and_save_rss_news()
+        sources_status['RSS'] = f"✅ сохранено {rss_saved} новых, дубликатов {rss_skipped}" if (rss_saved or rss_skipped) else "✅ 0 записей из фидов"
     except Exception as e:
-        logger.error(f"❌ Ошибка RSS фидов: {e}")
+        logger.error("❌ Ошибка RSS фидов: %s", e)
         sources_status['RSS'] = f'❌ Ошибка: {e}'
     
     # 2. Investing.com Economic Calendar (web scraping)
     try:
-        logger.info("\n📅 Источник 2/6: Investing.com Economic Calendar")
+        logger.info("\n📅 Источник 2/5: Investing.com Economic Calendar")
         fetch_and_save_investing_calendar()
         sources_status['Investing.com Calendar'] = '✅ Успешно'
     except Exception as e:
@@ -68,10 +71,10 @@ def fetch_all_news_sources():
 
     # 2b. Investing.com News (лента stock-market-news, по тикерам из ключевых слов)
     try:
-        logger.info("\n📰 Источник 2b/6: Investing.com News")
+        logger.info("\n📰 Источник 2b/5: Investing.com News")
         from services.investing_news_fetcher import fetch_and_save_investing_news
-        n = fetch_and_save_investing_news(max_articles=25)
-        sources_status['Investing.com News'] = f'✅ Успешно (добавлено {n})' if n else '✅ Нет новых'
+        n_investing = fetch_and_save_investing_news(max_articles=25) or 0
+        sources_status['Investing.com News'] = f'✅ сохранено {n_investing} новых' if n_investing else '✅ 0 новых'
     except Exception as e:
         logger.error(f"❌ Ошибка Investing.com News: {e}")
         sources_status['Investing.com News'] = f'❌ Ошибка: {e}'
@@ -79,7 +82,7 @@ def fetch_all_news_sources():
 
     # 3. Alpha Vantage (требует API ключ)
     try:
-        logger.info("\n📊 Источник 3/6: Alpha Vantage API")
+        logger.info("\n📊 Источник 3/5: Alpha Vantage API")
         # Получаем тикеры из конфига или используем дефолтные
         from config_loader import get_config_value
         tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
@@ -103,41 +106,24 @@ def fetch_all_news_sources():
 
     # 4. NewsAPI (требует API ключ)
     try:
-        logger.info("\n📰 Источник 4/6: NewsAPI")
-        fetch_and_save_newsapi_news()
-        sources_status['NewsAPI'] = '✅ Успешно'
+        logger.info("\n📰 Источник 4/5: NewsAPI")
+        newsapi_saved = fetch_and_save_newsapi_news()
+        if newsapi_saved is None:
+            newsapi_saved = 0
+        sources_status['NewsAPI'] = f"✅ сохранено {newsapi_saved} новых" if newsapi_saved else "✅ 0 новых (ключ не задан или все дубликаты)"
     except Exception as e:
-        logger.error(f"❌ Ошибка NewsAPI: {e}")
+        logger.error("❌ Ошибка NewsAPI: %s", e)
         sources_status['NewsAPI'] = f'❌ Ошибка: {e}'
 
-    # 5. LLM (GPT/Gemini и т.д.) — прямой запрос новостей по тикерам из LLM_NEWS_TICKERS (при USE_LLM_NEWS=true)
-    try:
-        logger.info("\n🤖 Источник 5/6: LLM (новости по тикеру)")
-        from services.llm_news_fetcher import fetch_and_save_llm_news
-        from services.ticker_groups import get_tickers_fast
-        fast = get_tickers_fast()
-        default_llm = (fast[0] if fast else "SNDK")
-        llm_tickers = get_config_value("LLM_NEWS_TICKERS", default_llm).strip()
-        for t in [x.strip() for x in llm_tickers.split(",") if x.strip()]:
-            nid, skip_reason = fetch_and_save_llm_news(t)
-            if nid is not None:
-                sources_status[f'LLM({t})'] = '✅ Успешно'
-            else:
-                sources_status[f'LLM({t})'] = f'⏭️ Пропущено ({skip_reason or "ошибка"})'
-        has_llm_ticker = any(k.startswith('LLM(') for k in sources_status)
-        if not has_llm_ticker and 'LLM' not in str(sources_status):
-            sources_status['LLM'] = '⏭️ Пропущено (USE_LLM_NEWS не включён или нет ключа)'
-    except Exception as e:
-        logger.error(f"❌ Ошибка LLM-новостей: {e}")
-        sources_status['LLM'] = f'❌ Ошибка: {e}'
-    
     # Итоговый отчет
+    total_new = rss_saved + newsapi_saved + n_investing
     logger.info("\n" + "=" * 60)
     logger.info("📊 Итоговый статус источников:")
     for source, status in sources_status.items():
-        logger.info(f"   {source}: {status}")
+        logger.info("   %s: %s", source, status)
     logger.info("=" * 60)
-    logger.info(f"✅ Завершено получение новостей - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    logger.info("📥 За этот запуск всего сохранено новых записей: %s", total_new)
+    logger.info("✅ Завершено получение новостей - %s\n", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
 
 
 if __name__ == "__main__":

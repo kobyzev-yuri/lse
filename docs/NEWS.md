@@ -14,12 +14,19 @@
 | **NewsAPI** | Да | Да (ключ) | 100 запросов/день |
 | **Alpha Vantage** (Earnings + News Sentiment) | Да | Да (ключ) | ~25 запросов/день |
 | **Alpha Vantage** (Economic) | Код есть | Нет | В cron выключено; free tier часто пусто |
-| **LLM (GPT/Gemini и т.д.)** | Да | Опционально | Прямой запрос к LLM: «какие новости влияют на тикер»; при `USE_LLM_NEWS=true` и настроенном `OPENAI_API_KEY` cron сохраняет ответ в knowledge_base. Список тикеров: `LLM_NEWS_TICKERS=SNDK,MU`. **LLM не ищет в интернете** — только знание из обучения; breaking news должны попадать в KB через другие источники. Чтобы не плодить одинаковые LLM-новости (одни и те же факты каждый час): дедупликация по времени (`LLM_NEWS_COOLDOWN_HOURS`, по умолч. 7 дней) и по содержанию (если последняя запись по тикеру почти совпадает с новой — не сохраняем). |
-
-**Запуск сбора:** `python scripts/fetch_news_cron.py`. В `config.env`: при необходимости `ALPHAVANTAGE_KEY`, `NEWSAPI_KEY`; для LLM-новостей — `USE_LLM_NEWS=true`, `OPENAI_API_KEY`; опционально `LLM_NEWS_TICKERS=SNDK`, `INVESTING_NEWS_TICKER_KEYWORDS` (см. ниже).
+**Запуск сбора:** `python scripts/fetch_news_cron.py`. Рекомендуется в cron **каждые 15 минут** (`*/15 * * * *`), чтобы подтягивать новости за весь день с утра. В `config.env`: при необходимости `ALPHAVANTAGE_KEY`, `NEWSAPI_KEY`; опционально `INVESTING_NEWS_TICKER_KEYWORDS` (см. ниже).
 
 **Проверка:**  
 `SELECT source, COUNT(*), MIN(ts), MAX(ts) FROM knowledge_base GROUP BY source ORDER BY 2 DESC;`
+
+### 1.0. Как обеспечить поступление новостей
+
+1. **Cron** — запуск `fetch_news_cron.py` каждые 15 минут: `*/15 * * * * ... fetch_news_cron.py` (в `setup_cron.sh` / `setup_cron_docker.sh` уже так).
+2. **Лог** — в конце каждого запуска в `logs/news_fetch.log` появляется строка **«За этот запуск всего сохранено новых записей: N»** и по каждому источнику: «RSS: сохранено X новых, дубликатов Y», «NewsAPI: сохранено Z новых» и т.д. Если всегда 0 — см. п. 3–4.
+3. **Диагностика** — выполните один раз:  
+   `python scripts/check_news_sources.py` (на сервере: `docker compose exec lse python scripts/check_news_sources.py`).  
+   Скрипт покажет: число записей в БД, последнюю дату, результат одного прогона RSS, задан ли NEWSAPI_KEY/ALPHAVANTAGE_KEY.
+4. **Типичные причины «0 новых»:** нет доступа в интернет из контейнера/хоста; NEWSAPI_KEY не задан (макро-новости только с ключом); Investing.com отдаёт 403 — задать `INVESTING_NEWS_PROXY`; RSS фиды ЦБ недоступны (блокировка/сеть). Проверьте путь к логу: при запуске из Docker лог пишется внутрь контейнера (например `project_root/logs/news_fetch.log`); если логи монтируются на хост, смотрите тот же путь на хосте.
 
 ### 1.1. Investing.com News — как реализовано
 
@@ -59,7 +66,8 @@
 
 | Скрипт | Назначение |
 |--------|------------|
-| `scripts/fetch_news_cron.py` | Сбор из RSS, Investing.com (календарь + лента новостей), NewsAPI, Alpha Vantage; при `USE_LLM_NEWS=true` — LLM-запрос по тикерам из `LLM_NEWS_TICKERS`. |
+| `scripts/fetch_news_cron.py` | Сбор из RSS, Investing.com (календарь + лента новостей), NewsAPI, Alpha Vantage. |
+| `scripts/check_news_sources.py` | Диагностика: число записей в БД, один прогон RSS, наличие NEWSAPI_KEY/ALPHAVANTAGE_KEY. Запуск при «новостей нет». |
 | `scripts/add_manual_news.py` | Разовая вставка новости в knowledge_base: `python scripts/add_manual_news.py "Заголовок или текст" "https://..." [SNDK]`. Полезно для важной breaking news, которая ещё не попала в автоматический сбор. |
 | `scripts/sync_vector_kb_cron.py` | Backfill `embedding` для записей с `embedding IS NULL`. |
 | `scripts/add_sentiment_to_news_cron.py` | LLM: заполнение `sentiment_score` и `insight` для новостей без sentiment. |
@@ -68,7 +76,7 @@
 | `scripts/cron_watchdog.py` | Сканирует логи cron (последние 500 строк каждого) на строки с ERROR, Exception, Traceback, failed и т.п. и пишет находки в `logs/cron_watchdog.log`. При `CRON_WATCHDOG_TELEGRAM=true` или `--telegram` при находках отправляет уведомление в Telegram (TELEGRAM_SIGNAL_CHAT_IDS). В cron: каждый час в :45. |
 | `scripts/cleanup_manual_duplicates.py` | Удаление записей с `source='MANUAL'`, дублирующих другую запись по (ts, ticker, content). `--dry-run` затем `--execute`. |
 
-Модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`, `services/investing_news_fetcher.py` (лента Investing.com News, тикеры из TICKERS_FAST и встроенные ключевые слова), `services/llm_news_fetcher.py` (запрос к LLM за новостями по тикеру).
+Модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`, `services/investing_news_fetcher.py` (лента Investing.com News, тикеры из TICKERS_FAST и встроенные ключевые слова).
 
 ---
 

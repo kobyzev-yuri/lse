@@ -202,18 +202,17 @@ def fetch_all_rss_feeds() -> List[Dict]:
     return all_news
 
 
-def save_news_to_db(news_items: List[Dict], check_duplicates: bool = True):
+def save_news_to_db(news_items: List[Dict], check_duplicates: bool = True) -> tuple:
     """
-    Сохраняет новости в базу данных
-    
-    Args:
-        news_items: Список новостей для сохранения
-        check_duplicates: Проверять дубликаты по link
+    Сохраняет новости в базу данных.
+
+    Returns:
+        (saved_count, skipped_count)
     """
     if not news_items:
         logger.info("ℹ️ Нет новостей для сохранения")
-        return
-    
+        return (0, 0)
+
     db_url = get_database_url()
     engine = create_engine(db_url)
     
@@ -260,24 +259,26 @@ def save_news_to_db(news_items: List[Dict], check_duplicates: bool = True):
             except Exception as e:
                 logger.error(f"❌ Ошибка при сохранении новости '{item.get('title', '')[:50]}...': {e}")
     
-    logger.info(f"✅ Сохранено {saved_count} новостей, пропущено дубликатов: {skipped_count}")
+    logger.info("✅ Сохранено %s новостей, пропущено дубликатов: %s", saved_count, skipped_count)
     engine.dispose()
+    return (saved_count, skipped_count)
 
 
-def fetch_and_save_rss_news():
+def fetch_and_save_rss_news() -> tuple:
     """
-    Главная функция: получает новости из RSS и сохраняет в БД
+    Главная функция: получает новости из RSS и сохраняет в БД.
+
+    Returns:
+        (saved_count, skipped_count)
     """
     logger.info("🚀 Начало получения новостей из RSS фидов центральных банков")
-    
-    # Получаем новости
     news_items = fetch_all_rss_feeds()
-    
-    # Сохраняем в БД
-    if news_items:
-        save_news_to_db(news_items)
-    
+    if not news_items:
+        logger.info("✅ Завершено: из фидов получено 0 записей")
+        return (0, 0)
+    saved, skipped = save_news_to_db(news_items)
     logger.info("✅ Завершено получение новостей из RSS фидов")
+    return (saved, skipped)
 
 
 if __name__ == "__main__":

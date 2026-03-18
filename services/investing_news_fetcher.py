@@ -104,12 +104,14 @@ def _link_already_in_kb(conn, link: str) -> bool:
     return row is not None
 
 
-def _session_with_proxy() -> requests.Session:
+def _session_with_proxy(use_proxy: bool = True) -> requests.Session:
     """Сессия с браузерными заголовками и опциональным прокси (config: INVESTING_NEWS_PROXY)."""
     session = requests.Session()
     session.headers.update(HEADERS)
     session.headers["Referer"] = f"{INVESTING_BASE_URL}/"
-    proxy = get_config_value("INVESTING_NEWS_PROXY", "").strip() or None
+    proxy = None
+    if use_proxy:
+        proxy = get_config_value("INVESTING_NEWS_PROXY", "").strip() or None
     if proxy:
         session.proxies = {"http": proxy, "https": proxy}
     return session
@@ -119,10 +121,20 @@ def fetch_investing_news_list(max_articles: int = 30) -> List[Tuple[str, str]]:
     """
     Загружает ленту stock-market-news с Investing.com.
     Использует Session и браузерные заголовки; при 403 можно задать INVESTING_NEWS_PROXY в config.env.
+    Если задан socks5-прокси, но нет PySocks — повторяем запрос без прокси.
     """
-    session = _session_with_proxy()
+    # Попытка с прокси (если задан INVESTING_NEWS_PROXY)
+    out = _fetch_investing_news_list_impl(max_articles, use_proxy=True)
+    if out is not None:
+        return out
+    # Повтор без прокси при ошибке SOCKS (нет PySocks)
+    return _fetch_investing_news_list_impl(max_articles, use_proxy=False) or []
+
+
+def _fetch_investing_news_list_impl(max_articles: int, use_proxy: bool) -> Optional[List[Tuple[str, str]]]:
+    """Внутренняя реализация загрузки ленты. При SOCKS-ошибке возвращает None (вызовет повтор без прокси)."""
+    session = _session_with_proxy(use_proxy=use_proxy)
     try:
-        # Сначала главная страница — часто снимает 403 на дочерних (cookies)
         session.get(INVESTING_BASE_URL + "/", timeout=15)
     except Exception:
         pass
@@ -161,6 +173,12 @@ def fetch_investing_news_list(max_articles: int = 30) -> List[Tuple[str, str]]:
             logger.warning("Investing.com news: запрос не удался: %s", e)
             return []
         except Exception as e:
+            err_str = str(e)
+            if "SOCKS" in err_str or "socks" in err_str.lower():
+                logger.warning(
+                    "Investing.com news: прокси SOCKS требует PySocks (pip install pysocks). Повтор без прокси."
+                )
+                return None  # сигнал для повтора без прокси
             logger.warning("Investing.com news: запрос не удался: %s", e)
             return []
 

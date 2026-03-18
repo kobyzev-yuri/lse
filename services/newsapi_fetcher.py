@@ -31,113 +31,120 @@ def get_api_key() -> Optional[str]:
 
 
 def fetch_newsapi_articles(
-    api_key: str, 
-    query: str, 
+    api_key: str,
+    query: str,
     sources: str = 'reuters,bloomberg,financial-times',
     language: str = 'en',
-    days_back: int = 1
+    days_back: int = 3,
+    max_pages: int = 5
 ) -> List[Dict]:
     """
-    Получает новости через NewsAPI
-    
+    Получает новости через NewsAPI с пагинацией (задним числом за несколько дней).
+
     Args:
         api_key: API ключ NewsAPI
         query: Поисковый запрос (например, "Federal Reserve")
         sources: Источники через запятую
         language: Язык (en)
-        days_back: Сколько дней назад искать
-        
+        days_back: Сколько дней назад искать (по умолчанию 3 — чтобы при разовом запуске cron подтянуть весь день с утра)
+        max_pages: Максимум страниц по 100 статей (лимит API), чтобы не сжигать лимиты
+
     Returns:
         Список словарей с новостями
     """
     url = "https://newsapi.org/v2/everything"
-    
     from_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
-    
-    params = {
-        'q': query,
-        'sources': sources,
-        'language': language,
-        'sortBy': 'publishedAt',
-        'apiKey': api_key,
-        'from': from_date,
-        'pageSize': 100  # Максимум для бесплатного tier
-    }
-    
-    last_err = None
-    response = None
-    for attempt in range(NEWSAPI_429_MAX_RETRIES + 1):
-        try:
-            response = requests.get(url, params=params, timeout=30)
-            if response.status_code == 429:
-                if attempt < NEWSAPI_429_MAX_RETRIES:
+    page_size = 100
+
+    all_articles = []
+    page = 1
+
+    while page <= max_pages:
+        params = {
+            'q': query,
+            'sources': sources,
+            'language': language,
+            'sortBy': 'publishedAt',
+            'apiKey': api_key,
+            'from': from_date,
+            'pageSize': page_size,
+            'page': page
+        }
+
+        last_err = None
+        response = None
+        for attempt in range(NEWSAPI_429_MAX_RETRIES + 1):
+            try:
+                response = requests.get(url, params=params, timeout=30)
+                if response.status_code == 429:
+                    if attempt < NEWSAPI_429_MAX_RETRIES:
+                        wait = NEWSAPI_429_BACKOFF[attempt]
+                        logger.warning("NewsAPI 429 Too Many Requests, ждём %s с перед повтором (попытка %s)", wait, attempt + 1)
+                        time.sleep(wait)
+                        continue
+                    logger.error("❌ NewsAPI: 429 после %s повторов.", NEWSAPI_429_MAX_RETRIES + 1)
+                    return all_articles
+                response.raise_for_status()
+                break
+            except requests.exceptions.HTTPError as e:
+                last_err = e
+                if e.response is not None and e.response.status_code == 429 and attempt < NEWSAPI_429_MAX_RETRIES:
                     wait = NEWSAPI_429_BACKOFF[attempt]
-                    logger.warning("NewsAPI 429 Too Many Requests, ждём %s с перед повтором (попытка %s)", wait, attempt + 1)
+                    logger.warning("NewsAPI 429, ждём %s с (попытка %s)", wait, attempt + 1)
                     time.sleep(wait)
                     continue
-                logger.error("❌ NewsAPI: 429 Too Many Requests после %s повторов. Уменьшите частоту cron или проверьте лимиты плана.", NEWSAPI_429_MAX_RETRIES + 1)
-                return []
-            response.raise_for_status()
-            break
-        except requests.exceptions.HTTPError as e:
-            last_err = e
-            if e.response is not None and e.response.status_code == 429 and attempt < NEWSAPI_429_MAX_RETRIES:
-                wait = NEWSAPI_429_BACKOFF[attempt]
-                logger.warning("NewsAPI 429, ждём %s с (попытка %s)", wait, attempt + 1)
-                time.sleep(wait)
-                continue
-            raise
-        except requests.exceptions.RequestException as e:
-            last_err = e
-            break
-    else:
-        if last_err:
-            raise last_err
+                raise
+            except requests.exceptions.RequestException as e:
+                last_err = e
+                break
+        else:
+            if last_err:
+                raise last_err
 
-    if response is None:
-        return []
+        if response is None:
+            break
 
-    try:
-        data = response.json()
-        
-        if data.get('status') != 'ok':
-            logger.error(f"❌ NewsAPI ошибка: {data.get('message', 'Unknown error')}")
-            return []
-        
-        articles = []
-        for article in data.get('articles', []):
-            try:
-                # Парсим дату
-                published_time = None
-                if article.get('publishedAt'):
-                    try:
-                        published_time = datetime.fromisoformat(
-                            article['publishedAt'].replace('Z', '+00:00')
-                        )
-                    except:
-                        published_time = datetime.now()
-                
-                articles.append({
-                    'title': article.get('title', ''),
-                    'content': (article.get('description', '') or '') + '\n\n' + (article.get('content', '') or ''),
-                    'source': article.get('source', {}).get('name', 'Unknown'),
-                    'published': published_time or datetime.now(),
-                    'url': article.get('url', ''),
-                    'author': article.get('author', '')
-                })
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка парсинга статьи: {e}")
-                continue
-        
-        logger.info(f"✅ Получено {len(articles)} новостей из NewsAPI для запроса '{query}'")
-        return articles
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Ошибка запроса к NewsAPI: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"❌ Неожиданная ошибка при получении новостей: {e}")
-        return []
+        try:
+            data = response.json()
+            if data.get('status') != 'ok':
+                logger.error("❌ NewsAPI ошибка: %s", data.get('message', 'Unknown error'))
+                break
+
+            articles_batch = data.get('articles', [])
+            total_results = data.get('totalResults', 0)
+
+            for article in articles_batch:
+                try:
+                    published_time = None
+                    if article.get('publishedAt'):
+                        try:
+                            published_time = datetime.fromisoformat(
+                                article['publishedAt'].replace('Z', '+00:00')
+                            )
+                        except Exception:
+                            published_time = datetime.now()
+                    all_articles.append({
+                        'title': article.get('title', ''),
+                        'content': (article.get('description', '') or '') + '\n\n' + (article.get('content', '') or ''),
+                        'source': article.get('source', {}).get('name', 'Unknown'),
+                        'published': published_time or datetime.now(),
+                        'url': article.get('url', ''),
+                        'author': article.get('author', '')
+                    })
+                except Exception as e:
+                    logger.warning("⚠️ Ошибка парсинга статьи: %s", e)
+
+            if len(articles_batch) < page_size or len(all_articles) >= total_results:
+                break
+            page += 1
+            time.sleep(1)  # небольшая пауза между страницами, чтобы не упереться в rate limit
+
+        except Exception as e:
+            logger.warning("⚠️ Ошибка разбора ответа NewsAPI (страница %s): %s", page, e)
+            break
+
+    logger.info("✅ Получено %s новостей из NewsAPI для запроса '%s' (страниц: %s)", len(all_articles), query, page)
+    return all_articles
 
 
 def fetch_macro_news(api_key: str) -> List[Dict]:
@@ -160,8 +167,8 @@ def fetch_macro_news(api_key: str) -> List[Dict]:
     
     all_news = []
     for query in queries:
-        logger.info(f"🔍 Поиск новостей: {query}")
-        news = fetch_newsapi_articles(api_key, query, days_back=2)
+        logger.info("🔍 Поиск новостей: %s", query)
+        news = fetch_newsapi_articles(api_key, query, days_back=3, max_pages=5)
         all_news.extend(news)
     
     # Удаляем дубликаты по URL
@@ -176,18 +183,16 @@ def fetch_macro_news(api_key: str) -> List[Dict]:
     return unique_news
 
 
-def save_news_to_db(news_items: List[Dict], ticker: str = 'MACRO', event_type: str = 'NEWS'):
+def save_news_to_db(news_items: List[Dict], ticker: str = 'MACRO', event_type: str = 'NEWS') -> int:
     """
-    Сохраняет новости из NewsAPI в БД
-    
-    Args:
-        news_items: Список новостей
-        ticker: Тикер для сохранения (по умолчанию MACRO)
-        event_type: Тип события
+    Сохраняет новости из NewsAPI в БД.
+
+    Returns:
+        Количество сохранённых записей.
     """
     if not news_items:
-        return
-    
+        return 0
+
     db_url = get_database_url()
     engine = create_engine(db_url)
     
@@ -246,27 +251,28 @@ def save_news_to_db(news_items: List[Dict], ticker: str = 'MACRO', event_type: s
             except Exception as e:
                 logger.error(f"❌ Ошибка при сохранении новости: {e}")
     
-    logger.info(f"✅ Сохранено {saved_count} новостей из NewsAPI, пропущено дубликатов: {skipped_count}")
+    logger.info("✅ Сохранено %s новостей из NewsAPI, пропущено дубликатов: %s", saved_count, skipped_count)
     engine.dispose()
+    return saved_count
 
 
-def fetch_and_save_newsapi_news():
+def fetch_and_save_newsapi_news() -> int:
     """
     Главная функция: получает новости из NewsAPI и сохраняет в БД
     """
     api_key = get_api_key()
     if not api_key:
         logger.warning("⚠️ NEWSAPI_KEY не настроен в config.env, пропускаем NewsAPI")
-        return
-    
+        return 0
+
     logger.info("🚀 Начало получения новостей из NewsAPI")
-    
-    # Получаем макро-новости
     macro_news = fetch_macro_news(api_key)
-    if macro_news:
-        save_news_to_db(macro_news, ticker='MACRO', event_type='MACRO_NEWS')
-    
+    if not macro_news:
+        logger.info("✅ Завершено: NewsAPI вернул 0 статей")
+        return 0
+    saved = save_news_to_db(macro_news, ticker='MACRO', event_type='MACRO_NEWS')
     logger.info("✅ Завершено получение новостей из NewsAPI")
+    return saved
 
 
 if __name__ == "__main__":

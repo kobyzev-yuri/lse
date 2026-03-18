@@ -36,7 +36,8 @@ cat >> "$CRON_FILE" << EOF
 0 9,13,17 * * 1-5 docker exec $CONTAINER_NAME python scripts/trading_cycle_cron.py >> "$PROJECT_DIR/logs/cron_trading_cycle.log" 2>&1
 */5 * * * 1-5 docker exec $CONTAINER_NAME python scripts/send_sndk_signal_cron.py >> "$PROJECT_DIR/logs/cron_sndk_signal.log" 2>&1
 15 17 * * 1-5 docker exec $CONTAINER_NAME python scripts/premarket_cron.py >> "$PROJECT_DIR/logs/premarket_cron.log" 2>&1
-0 * * * * docker exec $CONTAINER_NAME python scripts/fetch_news_cron.py >> "$PROJECT_DIR/logs/news_fetch.log" 2>&1
+# Новости: каждые 15 мин (подтягивает за день с утра)
+*/15 * * * * docker exec $CONTAINER_NAME python scripts/fetch_news_cron.py >> "$PROJECT_DIR/logs/news_fetch.log" 2>&1
 10 * * * * docker exec $CONTAINER_NAME python scripts/sync_vector_kb_cron.py >> "$PROJECT_DIR/logs/sync_vector_kb.log" 2>&1
 20 * * * * docker exec $CONTAINER_NAME python scripts/add_sentiment_to_news_cron.py >> "$PROJECT_DIR/logs/add_sentiment_to_news.log" 2>&1
 0 4 * * * docker exec $CONTAINER_NAME python scripts/analyze_event_outcomes_cron.py >> "$PROJECT_DIR/logs/analyze_event_outcomes.log" 2>&1
