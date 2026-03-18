@@ -489,11 +489,16 @@ Sentiment анализ:
             }
         except Exception as e:
             logger.error(f"Ошибка анализа через LLM: {e}")
+            err_str = str(e).lower()
+            if "401" in err_str or "invalid api key" in err_str or "invalid_api_key" in err_str or "authentication" in err_str:
+                reasoning = "Ошибка анализа: неверный или отсутствующий API-ключ. Проверьте OPENAI_API_KEY (или прокси) в Параметрах → config.env."
+            else:
+                reasoning = f"Ошибка анализа: {str(e)}"
             return {
                 "llm_analysis": {
                     "decision": "HOLD",
                     "confidence": 0.0,
-                    "reasoning": f"Ошибка анализа: {str(e)}",
+                    "reasoning": reasoning,
                     "risks": ["Ошибка LLM анализа"],
                     "key_factors": []
                 },

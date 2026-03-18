@@ -653,7 +653,20 @@ async def knowledge_page(request: Request):
 
     news_list = news_df.to_dict("records") if not news_df.empty else []
     for n in news_list:
-        n["ts"] = _format_ts(n.get("ts"))
+        ts = n.get("ts")
+        n["ts"] = _format_ts(ts)
+        try:
+            t = pd.Timestamp(ts)
+            # Важно: в интерфейсе время помечается как ET через _format_ts без конвертации.
+            # Поэтому если ts tz-naive — считаем, что он уже в ET (иначе фильтр "Сегодня" смещается).
+            # Если ts tz-aware — конвертируем в America/New_York.
+            if t.tzinfo is None:
+                n["date_et"] = t.strftime("%Y-%m-%d")
+            else:
+                t_et = t.tz_convert("America/New_York")
+                n["date_et"] = t_et.strftime("%Y-%m-%d")
+        except Exception:
+            n["date_et"] = ""
     sources_stats = get_news_sources_stats(engine, days=14)
     sources_total = sum(s["count"] for s in sources_stats)
     # Список источников по загруженным новостям — для фильтра (центробанки, Bloomberg и т.д.)
