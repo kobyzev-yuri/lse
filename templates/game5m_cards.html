@@ -157,9 +157,19 @@
             if (!block) return;
             if (block.classList.contains('open') && block.dataset.loaded === '1') return;
             block.classList.add('open');
-            block.innerHTML = '<span class="loading-llm">Загрузка LLM…</span>';
+            block.innerHTML = '<span class="loading-llm">Загрузка LLM… (может занять до 1–2 мин)</span>';
+            const controller = new AbortController();
+            const timeoutId = setTimeout(function() { controller.abort(); }, 120000);
             try {
-                const r = await fetch('/api/game5m/card/' + encodeURIComponent(ticker) + '/llm');
+                const r = await fetch('/api/game5m/card/' + encodeURIComponent(ticker) + '/llm', { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (!r.ok) {
+                    var errBody = '';
+                    try { var j = await r.json(); errBody = j.detail || JSON.stringify(j); } catch (_) { errBody = await r.text() || r.statusText; }
+                    block.textContent = 'Ошибка ' + r.status + ': ' + (errBody || r.statusText);
+                    block.dataset.loaded = '1';
+                    return;
+                }
                 const data = await r.json();
                 let text = (data.llm_reasoning || '').trim();
                 if (data.llm_key_factors && Array.isArray(data.llm_key_factors) && data.llm_key_factors.length > 0) {
@@ -170,7 +180,12 @@
                 block.textContent = text;
                 block.dataset.loaded = '1';
             } catch (e) {
-                block.textContent = 'Ошибка: ' + e.message;
+                clearTimeout(timeoutId);
+                if (e.name === 'AbortError') {
+                    block.textContent = 'Таймаут (запрос дольше 2 мин). Попробуйте ещё раз или проверьте сервер.';
+                } else {
+                    block.textContent = 'Ошибка: ' + escapeHtml(e.message);
+                }
                 block.dataset.loaded = '1';
             }
         }

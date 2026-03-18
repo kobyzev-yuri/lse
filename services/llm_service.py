@@ -66,9 +66,12 @@ class LLMService:
         Инициализация LLM сервиса
         """
         config = load_config()
-        
-        self.api_key = config.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-        self.base_url = config.get("OPENAI_BASE_URL", "https://api.proxyapi.ru/openai/v1")
+        # OPENAI_GPT_KEY — ключ для прямого доступа к OpenAI (gpt-4o); OPENAI_API_KEY — proxy или прямой
+        self.api_key = (
+            config.get("OPENAI_GPT_KEY") or os.getenv("OPENAI_GPT_KEY") or
+            config.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+        )
+        self.base_url = (config.get("OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.proxyapi.ru/openai/v1").strip().rstrip("/")
         self.model = config.get("OPENAI_MODEL", "gpt-4o")
         self.temperature = float(config.get("OPENAI_TEMPERATURE", "0.2"))
         self.timeout = int(config.get("OPENAI_TIMEOUT", "60"))

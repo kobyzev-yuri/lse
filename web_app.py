@@ -1275,22 +1275,17 @@ async def get_game5m_cards(days: int = 5):
     })
 
 
-@app.get("/api/game5m/card/{ticker}/llm", response_class=JSONResponse)
-async def get_game5m_card_llm(ticker: str):
-    """API: Вывод LLM по одному тикеру 5m (по запросу, аналог prompt_entry). Для кнопки в карточке."""
-    ticker = ticker.strip().upper()
-    try:
-        from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation
-        from services.recommend_5m import get_decision_5m
-        from services.cluster_recommend import get_correlation_matrix, build_cluster_note_for_5m_llm
-        from services.llm_service import get_llm_service
-    except ImportError as e:
-        raise HTTPException(status_code=501, detail=f"Модули недоступны: {e}")
-    if ticker not in (get_tickers_game_5m() or []):
-        raise HTTPException(status_code=404, detail="Тикер не в игре 5m")
+def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
+    """Синхронный расчёт вывода LLM для карточки 5m (запускается в потоке, чтобы не блокировать event loop)."""
+    from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation
+    from services.recommend_5m import get_decision_5m
+    from services.cluster_recommend import get_correlation_matrix, build_cluster_note_for_5m_llm
+    from services.llm_service import get_llm_service
+    from report_generator import get_engine
+
     d5 = get_decision_5m(ticker, days=5, use_llm_news=True)
     if not d5:
-        raise HTTPException(status_code=404, detail="Нет 5m данных")
+        return {"_error": "Нет 5m данных", "_status": 404}
     corr_tickers = get_tickers_for_5m_correlation() or []
     corr_matrix = get_correlation_matrix(corr_tickers, days=30) if len(corr_tickers) >= 2 else None
     tech_by_ticker = {ticker: {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}}
@@ -1306,10 +1301,10 @@ async def get_game5m_card_llm(ticker: str):
     cluster_note = build_cluster_note_for_5m_llm(ticker, corr_tickers or [ticker], corr_matrix, tech_by_ticker) if corr_matrix else None
     llm_reasoning = None
     llm_key_factors = None
-    # Средняя волатильность за 20 дней (дневные данные из quotes) — для контекста LLM
     avg_volatility_20 = None
     try:
-        with engine.connect() as conn:
+        eng = get_engine()
+        with eng.connect() as conn:
             row = conn.execute(
                 text("""
                     SELECT (SELECT AVG(volatility_5) FROM (SELECT volatility_5 FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 20) s) AS avg_vol,
@@ -1318,7 +1313,7 @@ async def get_game5m_card_llm(ticker: str):
                 {"ticker": ticker},
             ).fetchone()
         if row and row[0] is not None and row[1] is not None and float(row[1]) > 0:
-            avg_volatility_20 = round(float(row[0]) / float(row[1]) * 100, 2)  # в % для сопоставимости с 5m
+            avg_volatility_20 = round(float(row[0]) / float(row[1]) * 100, 2)
     except Exception:
         pass
     if cluster_note:
@@ -1345,12 +1340,31 @@ async def get_game5m_card_llm(ticker: str):
                     llm_key_factors = ana.get("key_factors")
         except Exception as e:
             llm_reasoning = f"Ошибка LLM: {e!s}"
-    return _to_jsonable({
+    return {
         "ticker": ticker,
         "llm_reasoning": llm_reasoning,
         "llm_key_factors": llm_key_factors,
         "technical_signal": d5.get("decision"),
-    })
+    }
+
+
+@app.get("/api/game5m/card/{ticker}/llm", response_class=JSONResponse)
+async def get_game5m_card_llm(ticker: str):
+    """API: Вывод LLM по одному тикеру 5m (по запросу, аналог prompt_entry). Для кнопки в карточке. Выполняется в потоке, чтобы не блокировать сервер."""
+    ticker = ticker.strip().upper()
+    try:
+        from services.ticker_groups import get_tickers_game_5m
+    except ImportError as e:
+        raise HTTPException(status_code=501, detail=f"Модули недоступны: {e}")
+    if ticker not in (get_tickers_game_5m() or []):
+        raise HTTPException(status_code=404, detail="Тикер не в игре 5m")
+    try:
+        result = await asyncio.to_thread(_compute_game5m_card_llm_sync, ticker)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка расчёта LLM: {e!s}")
+    if result.get("_error"):
+        raise HTTPException(status_code=result.get("_status", 404), detail=result.get("_error", "Нет данных"))
+    return _to_jsonable(result)
 
 
 @app.get("/game5m/cards", response_class=HTMLResponse)
