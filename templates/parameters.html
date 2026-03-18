@@ -1,151 +1,166 @@
 {% extends "base.html" %}
 
+{% block title %}Параметры стратегий — LSE{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
-    <h1 class="h2">Параметры стратегий</h1>
-    <div class="btn-toolbar mb-2 mb-md-0">
-        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addParamModal">
-            <i class="fas fa-plus"></i> Добавить
-        </button>
+<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.8rem;">
+    <h1>Параметры стратегий</h1>
+    <button type="button" class="btn btn-sm btn-outline-primary" id="openModalBtn">+ Добавить</button>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Стратегия</th>
+                    <th>Target</th>
+                    <th>Параметры</th>
+                    <th>Обновлено</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody id="paramsTableBody">
+                <tr>
+                    <td colspan="6" class="text-center muted">Загрузка параметров...</td>
+                </tr>
+            </tbody>
+        </table>
     </div>
 </div>
 
-<div class="table-responsive">
-    <table class="table table-striped table-hover align-middle">
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Стратегия</th>
-                <th>Target (GLOBAL, TICKER:*, CLUSTER:*)</th>
-                <th>Параметры</th>
-                <th>Обновлено</th>
-                <th>Действия</th>
-            </tr>
-        </thead>
-        <tbody id="paramsTableBody">
-            <tr>
-                <td colspan="6" class="text-center">Загрузка параметров...</td>
-            </tr>
-        </tbody>
-    </table>
-</div>
-
-<!-- Модальное окно скрыто, оно активируется по кнопке "Добавить" -->
-<div class="modal fade" id="addParamModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content text-bg-dark">
-            <div class="modal-header border-secondary">
-                <h5 class="modal-title">Параметры стратегии</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <form id="addParamForm">
-                    <div class="mb-3">
-                        <label class="form-label">Название стратегии</label>
-                        <input type="text" class="form-control" name="strategy_name" id="strategy_name" placeholder="Momentum, Mean Reversion, etc." required value="">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Target Identifier</label>
-                        <input type="text" class="form-control" name="target_identifier" id="target_identifier" value="GLOBAL" required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Параметры (JSON)</label>
-                        <textarea class="form-control text-monospace" name="parameters_json" id="parameters_json" rows="4" style="font-family: monospace;" required>{"stop_loss": 3.0, "take_profit": 8.0}</textarea>
-                    </div>
-                    <button type="submit" class="btn btn-primary" id="saveBtn">Сохранить</button>
-                </form>
-            </div>
+<div class="modal-overlay" id="modalOverlay">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title">Параметры стратегии</h2>
+            <button type="button" class="modal-close" id="modalClose" aria-label="Закрыть">&times;</button>
         </div>
+        <form id="addParamForm">
+            <div class="mb-3">
+                <label class="form-label">Название стратегии</label>
+                <input type="text" name="strategy_name" id="strategy_name" placeholder="GAME_5M, Momentum, Mean Reversion" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Target (GLOBAL, TICKER:*, CLUSTER:*)</label>
+                <input type="text" name="target_identifier" id="target_identifier" value="GLOBAL" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Параметры (JSON)</label>
+                <textarea name="parameters_json" id="parameters_json" rows="4" style="font-family: monospace;" required>{"stop_loss": 3.0, "take_profit": 8.0}</textarea>
+            </div>
+            <button type="submit" class="btn" id="saveBtn">Сохранить</button>
+        </form>
     </div>
 </div>
-
 {% endblock %}
 
-{% block scripts %}
+{% block extra_js %}
 <script>
+(function() {
+    function openModal() {
+        document.getElementById('modalOverlay').classList.add('open');
+    }
+    function closeModal() {
+        document.getElementById('modalOverlay').classList.remove('open');
+        document.getElementById('addParamForm').reset();
+        document.getElementById('target_identifier').value = 'GLOBAL';
+        document.getElementById('parameters_json').value = '{"stop_loss": 3.0, "take_profit": 8.0}';
+    }
+    function escapeHtml(s) {
+        if (s == null) return '';
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+    }
+
+    document.getElementById('openModalBtn').addEventListener('click', openModal);
+    document.getElementById('modalClose').addEventListener('click', closeModal);
+    document.getElementById('modalOverlay').addEventListener('click', function(e) {
+        if (e.target === document.getElementById('modalOverlay')) closeModal();
+    });
+
     async function loadParams() {
         try {
             const resp = await fetch('/api/parameters');
             const data = await resp.json();
             const tbody = document.getElementById('paramsTableBody');
             tbody.innerHTML = '';
-            
+
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center">Нет настроенных параметров</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center muted">Нет настроенных параметров</td></tr>';
                 return;
             }
-            
+
             data.forEach(p => {
                 const tr = document.createElement('tr');
+                const paramsStr = JSON.stringify(p.parameters);
+                const paramsForAttr = paramsStr.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const paramsForCell = escapeHtml(paramsStr);
                 tr.innerHTML = `
                     <td>${p.id}</td>
-                    <td><strong>${p.strategy_name}</strong></td>
-                    <td><span class="badge bg-secondary">${p.target_identifier}</span></td>
-                    <td><pre class="m-0 bg-dark text-light p-2 rounded" style="font-size: 0.85em;">${JSON.stringify(p.parameters, null, 2)}</pre></td>
-                    <td><small class="text-muted">${p.updated_at ? new Date(p.updated_at).toLocaleString() : ''}</small></td>
+                    <td><strong>${escapeHtml(p.strategy_name)}</strong></td>
+                    <td><span class="badge">${escapeHtml(p.target_identifier)}</span></td>
+                    <td><pre>${paramsForCell}</pre></td>
+                    <td><span class="text-muted">${p.updated_at ? new Date(p.updated_at).toLocaleString() : ''}</span></td>
                     <td>
-                        <button class="btn btn-sm btn-outline-info edit-btn" data-id="${p.id}" data-strategy="${p.strategy_name}" data-target="${p.target_identifier}" data-params='${JSON.stringify(p.parameters)}'><i class="fas fa-edit"></i> Edit</button>
-                        <button class="btn btn-sm btn-outline-danger del-btn" data-id="${p.id}"><i class="fas fa-trash"></i></button>
+                        <button type="button" class="btn btn-sm edit-btn" data-id="${p.id}" data-strategy="${escapeHtml(p.strategy_name)}" data-target="${escapeHtml(p.target_identifier)}" data-params="${paramsForAttr}">Изм.</button>
+                        <button type="button" class="btn btn-sm del-btn" data-id="${p.id}">Удал.</button>
                     </td>
                 `;
                 tbody.appendChild(tr);
             });
-            
+
             document.querySelectorAll('.del-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
-                    if(!confirm('Удалить параметры?')) return;
+                    if (!confirm('Удалить параметры?')) return;
                     const id = e.currentTarget.dataset.id;
-                    const resp = await fetch(`/api/parameters/${id}`, { method: 'DELETE' });
-                    if(resp.ok) {
-                        loadParams();
-                    } else {
-                        alert('Ошибка при удалении');
-                    }
+                    const resp = await fetch('/api/parameters/' + id, { method: 'DELETE' });
+                    if (resp.ok) loadParams();
+                    else alert('Ошибка при удалении');
                 });
             });
-            
+
             document.querySelectorAll('.edit-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     const ds = e.currentTarget.dataset;
-                    document.getElementById('strategy_name').value = ds.strategy;
-                    document.getElementById('target_identifier').value = ds.target;
-                    document.getElementById('parameters_json').value = JSON.stringify(JSON.parse(ds.params), null, 2);
-                    new bootstrap.Modal(document.getElementById('addParamModal')).show();
+                    document.getElementById('strategy_name').value = ds.strategy || '';
+                    document.getElementById('target_identifier').value = ds.target || 'GLOBAL';
+                    try {
+                        const params = ds.params ? JSON.parse(ds.params) : {};
+                        document.getElementById('parameters_json').value = JSON.stringify(params, null, 2);
+                    } catch (_) {
+                        document.getElementById('parameters_json').value = '{}';
+                    }
+                    openModal();
                 });
             });
-            
-        } catch(e) {
+        } catch (e) {
             console.error(e);
-            document.getElementById('paramsTableBody').innerHTML = '<tr><td colspan="6" class="text-danger">Ошибка загрузки параметров</td></tr>';
+            document.getElementById('paramsTableBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger">Ошибка загрузки параметров</td></tr>';
         }
     }
 
     document.getElementById('addParamForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = new FormData(e.target);
-        
         try {
-            // validate json
             JSON.parse(fd.get('parameters_json'));
         } catch (err) {
             alert('Неверный формат JSON!');
             return;
         }
-        
         document.getElementById('saveBtn').disabled = true;
         try {
-            const resp = await fetch('/api/parameters', {
-                method: 'POST',
-                body: fd
-            });
+            const resp = await fetch('/api/parameters', { method: 'POST', body: fd });
             const res = await resp.json();
-            if(res.status === 'success') {
-                bootstrap.Modal.getInstance(document.getElementById('addParamModal')).hide();
+            if (res.status === 'success') {
+                closeModal();
                 loadParams();
             } else {
                 alert('Ошибка: ' + (res.detail || res.error || 'Неизвестная ошибка'));
             }
-        } catch(err) {
+        } catch (err) {
             console.error(err);
             alert('Сетевая ошибка');
         } finally {
@@ -153,13 +168,7 @@
         }
     });
 
-    // Очистка формы при закрытии модального окна вручную (опционально)
-    document.getElementById('addParamModal').addEventListener('hidden.bs.modal', function () {
-        document.getElementById('addParamForm').reset();
-        document.getElementById('target_identifier').value = "GLOBAL";
-        document.getElementById('parameters_json').value = '{"stop_loss": 3.0, "take_profit": 8.0}';
-    });
-
     document.addEventListener('DOMContentLoaded', loadParams);
+})();
 </script>
 {% endblock %}

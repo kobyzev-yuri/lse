@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Сервис и логи — LSE{% endblock %}
+
+{% block content %}
+<h1>Сервис и логи</h1>
+<p class="muted" style="margin-bottom: 0.8rem;">Диагностика БД, кронов и новостей для поиска проблем. Входы/покупки/тейки пишутся в trade_history; логи cron — в каталог logs на сервере.</p>
+
+<div class="card">
+    <h2>База данных</h2>
+    {% if status.db_ok %}
+    <p style="color: #86efac;">Подключение: OK</p>
+    <ul style="font-size: 0.9rem; margin: 0.5rem 0 0 1rem;">
+        <li>Последняя дата котировок (quotes): {{ status.quotes_last_date or '—' }}</li>
+        <li>Сделок за 24 ч (trade_history): {{ status.trades_24h }}</li>
+        <li>Новостей за 7 дней (knowledge_base): {{ status.news_7d }}</li>
+    </ul>
+    {% else %}
+    <p style="color: #fca5a5;">Ошибка: {{ status.db_error or 'нет подключения' }}</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Что проверить при проблемах</h2>
+    {% if status.hints %}
+    <ul style="font-size: 0.85rem; margin: 0; padding-left: 1rem; color: #cbd5e1;">
+        {% for h in status.hints %}
+        <li>{{ h }}</li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">Критичных подсказок нет. При сбоях смотрите блоки «Логи cron» и «Watchdog» ниже.</p>
+    {% endif %}
+</div>
+
+{% if status.logs_available %}
+<div class="card">
+    <h2>Логи cron</h2>
+    <p class="muted" style="font-size: 0.85rem;">Ошибки — красным, предупреждения — жёлтым. Обновить: <a href="/service">перезагрузить страницу</a>.</p>
+    {% if not status.log_tails %}
+    <p class="muted">Файлов логов пока нет (cron на сервере пишет в <code>~/lse/logs/</code>). После первого запуска задач появятся.</p>
+    {% endif %}
+    {% for log in status.log_tails %}
+    <details style="margin-top: 0.6rem;">
+        <summary style="cursor: pointer; font-weight: 600; color: #7dd3fc;">{{ log.name }}</summary>
+        <pre style="margin: 0.4rem 0 0 0; padding: 0.5rem; background: #0f172a; border-radius: 6px; font-size: 0.75rem; line-height: 1.35; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;">{% for kind, line in log.lines %}{% if kind == 'error' %}<span style="color: #fca5a5;">{{ line | e }}</span>
+{% elif kind == 'warn' %}<span style="color: #fde047;">{{ line | e }}</span>
+{% else %}{{ line | e }}
+{% endif %}{% endfor %}</pre>
+    </details>
+    {% endfor %}
+</div>
+
+<div class="card">
+    <h2>Watchdog (сводка ошибок из логов)</h2>
+    <p class="muted" style="font-size: 0.85rem;">cron_watchdog.py сканирует логи и пишет сюда найденные ERROR/Exception. При включённом CRON_WATCHDOG_TELEGRAM новые ошибки дублируются в Telegram.</p>
+    {% if status.watchdog_lines %}
+    <pre style="margin: 0; padding: 0.5rem; background: #0f172a; border-radius: 6px; font-size: 0.75rem; line-height: 1.35; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;">{% for line in status.watchdog_lines %}{{ line | e }}
+{% endfor %}</pre>
+    {% else %}
+    <p class="muted">Файл cron_watchdog.log пуст или отсутствует. Запустите: <code>python scripts/cron_watchdog.py --execute</code> (или по расписанию в crontab).</p>
+    {% endif %}
+</div>
+{% else %}
+<div class="card">
+    <h2>Логи cron</h2>
+    <p class="muted">Каталог <code>logs</code> не доступен из контейнера. Чтобы видеть логи здесь, смонтируйте его в docker-compose:</p>
+    <pre style="margin: 0.5rem 0 0; padding: 0.5rem; background: #0f172a; border-radius: 6px; font-size: 0.8rem;">volumes:
+  - ./config.env:/app/config.env:ro
+  - ./logs:/app/logs:ro</pre>
+    <p class="muted" style="margin-top: 0.5rem;">На сервере логи пишутся в <code>~/lse/logs/</code> (crontab перенаправляет вывод скриптов туда). После добавления тома перезапустите: <code>docker compose up -d lse</code>.</p>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Основные скрипты</h2>
+    <ul style="font-size: 0.85rem; margin: 0; padding-left: 1rem; color: #cbd5e1;">
+        <li><strong>send_sndk_signal_cron.py</strong> — входы/выходы 5m, рассылка в Telegram (каждые 5 мин)</li>
+        <li><strong>trading_cycle_cron.py</strong> — портфельная игра, BUY/SELL по тикерам MEDIUM+LONG (9:00, 13:00, 17:00)</li>
+        <li><strong>fetch_news_cron.py</strong> — загрузка новостей в knowledge_base (ежечасно)</li>
+        <li><strong>update_prices_cron.py</strong> — обновление котировок в quotes</li>
+        <li><strong>premarket_cron.py</strong> — премаркет, алерт в Telegram</li>
+        <li><strong>cron_watchdog.py</strong> — сканирование логов на ошибки, опционально алерт в Telegram</li>
+    </ul>
+</div>
+{% endblock %}

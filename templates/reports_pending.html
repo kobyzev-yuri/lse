@@ -2,16 +2,9 @@
 
 {% block title %}Открытые позиции — LSE Trading System{% endblock %}
 
-{% block extra_css %}
-<style>
-.table-responsive { overflow-x: auto; }
-.muted { color: #7f8c8d; font-size: 0.9rem; }
-</style>
-{% endblock %}
-
 {% block content %}
 <h1>Открытые позиции</h1>
-<p class="muted">Аналог команды /pending в Telegram. Показано {{ rows|length }} (лимит {{ limit }}). Now и P/L — по последней close из quotes. «5m вне» — тикер убран из игры 5m. Даты в MSK.</p>
+<p class="muted" style="margin-bottom: 0.5rem;">Аналог команды /pending в Telegram. Показано {{ rows|length }} (лимит {{ limit }}). Now и P/L — по последней close из quotes. «5m вне» — тикер убран из игры 5m. Даты в MSK.</p>
 <div class="card">
     {% if rows %}
     <div class="table-responsive">

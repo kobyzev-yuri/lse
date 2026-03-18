@@ -783,7 +783,8 @@ def get_decision_5m(
     except Exception as e:
         logger.debug("estimated_downside для 5m: %s", e)
 
-    # Совет по входу: ALLOW / CAUTION / AVOID (4.2)
+    # Совет по входу: ALLOW / CAUTION / AVOID — фильтр по новостям (KB), волатильности 5m и премаркет-гэпу.
+    # Логика и согласование с чек-листом Квена (риск/ревард, мат. ожидание): docs/GAME_5M_WEB_CARDS.md
     entry_advice = "ALLOW"
     entry_advice_reason = ""
     if very_negative:

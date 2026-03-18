@@ -2,16 +2,9 @@
 
 {% block title %}Закрытые позиции — LSE Trading System{% endblock %}
 
-{% block extra_css %}
-<style>
-.table-responsive { overflow-x: auto; }
-.muted { color: #7f8c8d; font-size: 0.9rem; }
-</style>
-{% endblock %}
-
 {% block content %}
 <h1>Закрытые позиции</h1>
-<p class="muted">Аналог команды /closed в Telegram. Показано последних {{ rows|length }} (лимит {{ limit }}). Даты в MSK.</p>
+<p class="muted" style="margin-bottom: 0.5rem;">Аналог команды /closed в Telegram. Показано последних {{ rows|length }} (лимит {{ limit }}). Даты в MSK.</p>
 <div class="card">
     {% if rows %}
     <div class="table-responsive">

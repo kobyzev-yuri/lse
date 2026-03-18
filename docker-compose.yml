@@ -31,8 +31,10 @@ services:
     ports:
       - "8080:8080"
     # config.env с хоста — контейнер всегда видит актуальный файл; после правки достаточно restart.
+    # logs — для страницы «Сервис / логи» (чтение хвостов cron). На хосте: mkdir -p logs; cron пишет в PROJECT_DIR/logs.
     volumes:
       - ./config.env:/app/config.env:ro
+      - ./logs:/app/logs:ro
     environment:
       TZ: Europe/Moscow
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-lse_pg_pass}@postgres:5432/lse_trading?options=-c%20timezone%3DEurope%2FMoscow
