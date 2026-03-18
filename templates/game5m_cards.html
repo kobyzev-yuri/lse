@@ -123,6 +123,13 @@
             if (c.prob_up != null && c.prob_down != null) {
                 html += '<div class="row"><span class="label">P(up/down)</span><span class="value">' + fmt(c.prob_up, 2) + ' / ' + fmt(c.prob_down, 2) + '</span></div>';
             }
+            html += '<div class="block-title">Чек-лист Квена <span class="muted" style="font-weight:normal; font-size:0.7em;">(риск/ревард ≥ 1:2, мат.ожидание &gt; 0)</span></div>';
+            var rr = c.risk_reward_ratio;
+            var rrStr = (rr != null) ? ('1:' + rr.toFixed(1)) : '—';
+            html += '<div class="row"><span class="label">Риск/ревард</span><span class="value">' + rrStr + '</span></div>';
+            var ev = c.expected_value_pct;
+            var evStr = (ev != null) ? ((ev >= 0 ? '+' : '') + ev.toFixed(2) + '%') : '—';
+            html += '<div class="row"><span class="label">Мат. ожидание</span><span class="value ' + (ev != null && ev > 0 ? 'positive' : (ev != null && ev < 0 ? 'negative' : '')) + '">' + evStr + '</span></div>';
             var momLabel = (c.momentum_window_min != null && c.momentum_window_min > 0 && c.momentum_window_min < 120)
                 ? ('Импульс за ' + c.momentum_window_min + ' мин')
                 : 'Импульс 2ч';

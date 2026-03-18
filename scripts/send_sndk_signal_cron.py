@@ -154,9 +154,11 @@ def process_ticker(
             if should_close and exit_type:
                 base_exit = close_ctx.get("exit_bar_close") if isinstance(close_ctx.get("exit_bar_close"), (int, float)) and close_ctx.get("exit_bar_close") > 0 else price_for_check
                 if exit_type == "TAKE_PROFIT":
-                    # Решение о тейке принято по bar_high (price_for_take = max(current, bar_high)). Записываем в БД
-                    # ту же цену — bar_high: закрытие в соответствии с high, по которому принято решение.
-                    if bar_high is not None and bar_high > 0:
+                    # В БД пишем цену закрытия бара (exit_bar_close), чтобы на графике маркер «Тейк» был на линии Close, а не выше (bar_high).
+                    # Решение о тейке принято по bar_high; для отображения и PnL используем close бара.
+                    if base_exit and base_exit > 0:
+                        exit_price = base_exit
+                    elif bar_high is not None and bar_high > 0:
                         exit_price = bar_high
                     else:
                         exit_price = base_exit

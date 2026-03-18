@@ -30,10 +30,10 @@ services:
     command: ["sh", "-c", "python scripts/run_telegram_bot.py & exec uvicorn web_app:app --host 0.0.0.0 --port 8080"]
     ports:
       - "8080:8080"
-    # config.env с хоста — контейнер всегда видит актуальный файл; после правки достаточно restart.
+    # config.env с хоста — без :ro, чтобы веб-интерфейс (Параметры → config.env) мог сохранять правки на лету; после изменений — перезапуск (кнопка или docker compose restart lse).
     # logs — для страницы «Сервис / логи» (чтение хвостов cron). На хосте: mkdir -p logs; cron пишет в PROJECT_DIR/logs.
     volumes:
-      - ./config.env:/app/config.env:ro
+      - ./config.env:/app/config.env
       - ./logs:/app/logs:ro
     environment:
       TZ: Europe/Moscow

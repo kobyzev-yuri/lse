@@ -33,8 +33,8 @@ def build_dashboard_text(mode: str = "all") -> str:
     Строит сводку по отслеживаемым тикерам.
 
     mode: "all" | "5m" | "daily"
-    - all: цена, RSI, решение, новости, плюс блок 5m по SNDK
-    - 5m: акцент на 5m (SNDK и быстрые тикеры)
+    - all: цена, RSI, решение, новости, открытые 5m/сделки 24ч, блок 5m по всем игровым тикерам
+    - 5m: акцент на 5m (все тикеры игры 5m)
     - daily: акцент на новостях (мониторинг через новости при дневных ценах)
     """
     watchlist_str = get_config_value("DASHBOARD_WATCHLIST", "SNDK,MU,LITE,ALAB,TER,MSFT")
@@ -60,8 +60,9 @@ def build_dashboard_text(mode: str = "all") -> str:
             regime_hint = " (VIX <15)"
         elif vix_regime == "HIGH_PANIC":
             regime_hint = " (VIX >25)"
-    # Всего новостей в KB за 7 дн. (для проверки: если 0 — крон не пишет или другая БД)
+    # Всего новостей в KB за 7 дн.; по тикерам (не макро) — для пояснения "почему по 0"
     total_news_7d = None
+    news_with_ticker_7d = None
     try:
         with engine.connect() as conn:
             r = conn.execute(
@@ -69,25 +70,51 @@ def build_dashboard_text(mode: str = "all") -> str:
                     "SELECT COUNT(*) FROM knowledge_base WHERE ts::date >= current_date - 7 AND content IS NOT NULL AND LENGTH(TRIM(content)) > 5"
                 ),
             ).fetchone()
-        total_news_7d = int(r[0]) if r and r[0] is not None else 0
+            total_news_7d = int(r[0]) if r and r[0] is not None else 0
+            r2 = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*) FROM knowledge_base
+                    WHERE ts::date >= current_date - 7 AND content IS NOT NULL AND LENGTH(TRIM(content)) > 5
+                      AND ticker IS NOT NULL AND ticker NOT IN ('MACRO', 'US_MACRO')
+                    """
+                ),
+            ).fetchone()
+            news_with_ticker_7d = int(r2[0]) if r2 and r2[0] is not None else 0
     except Exception:
         try:
+            cutoff = datetime.now() - timedelta(days=7)
             with engine.connect() as conn:
                 r = conn.execute(
                     text(
                         "SELECT COUNT(*) FROM knowledge_base WHERE ts >= :cutoff AND content IS NOT NULL AND LENGTH(content) > 5"
                     ),
-                    {"cutoff": datetime.now() - timedelta(days=7)},
+                    {"cutoff": cutoff},
                 ).fetchone()
-            total_news_7d = int(r[0]) if r and r[0] is not None else 0
+                total_news_7d = int(r[0]) if r and r[0] is not None else 0
+                r2 = conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) FROM knowledge_base
+                        WHERE ts >= :cutoff AND content IS NOT NULL AND LENGTH(content) > 5
+                          AND ticker IS NOT NULL AND ticker NOT IN ('MACRO', 'US_MACRO')
+                        """
+                    ),
+                    {"cutoff": cutoff},
+                ).fetchone()
+                news_with_ticker_7d = int(r2[0]) if r2 and r2[0] is not None else 0
         except Exception:
             pass
+
+    news_line = f"Новостей в KB за 7 дн.: {total_news_7d}"
+    if total_news_7d is not None and news_with_ticker_7d is not None and total_news_7d > 0:
+        news_line += f" (с тикером в KB: {news_with_ticker_7d})"
 
     lines = [
         "📊 **Дашборд** (мониторинг)",
         f"🕐 {now_str} ET  ·  VIX: {vix_val:.1f}" if vix_val is not None else f"🕐 {now_str} ET  ·  VIX: —",
         f"Режим рынка (по VIX, один для всех тикеров): {_escape_md(vix_regime)}{regime_hint}",
-        f"Новостей в KB за 7 дн.: {total_news_7d}" if total_news_7d is not None else "",
+        news_line if total_news_7d is not None else "",
         "",
     ]
     for ticker in watchlist:
@@ -149,28 +176,83 @@ def build_dashboard_text(mode: str = "all") -> str:
             logger.warning("Dashboard ticker %s: %s", ticker, e)
             lines.append(f"• **{_escape_md(ticker)}** — ошибка")
 
+    # Открытые позиции 5m и сделки за 24ч — чтобы дашборд не был "ни покупок ни продаж"
+    if mode in ("5m", "all"):
+        try:
+            from report_generator import get_engine as get_report_engine, load_trade_history, compute_open_positions
+            report_engine = get_report_engine()
+            trades_5m = load_trade_history(report_engine, strategy_name="GAME_5M")
+            open_5m = compute_open_positions(trades_5m)
+            if open_5m:
+                parts = [f"**{_escape_md(p.ticker)}** @ {p.entry_price:.2f}" for p in open_5m[:6]]
+                lines.append("")
+                lines.append("📌 **Открытые 5m:** " + ", ".join(parts))
+            else:
+                # Сделки за 24ч: сколько входов и выходов (по БД)
+                cutoff_24h = datetime.now() - timedelta(hours=24)
+                try:
+                    with engine.connect() as conn:
+                        buy_24 = conn.execute(
+                            text(
+                                "SELECT COUNT(*) FROM trade_history WHERE strategy_name = 'GAME_5M' AND side = 'BUY' AND ts >= :c"
+                            ),
+                            {"c": cutoff_24h},
+                        ).fetchone()
+                        sell_24 = conn.execute(
+                            text(
+                                "SELECT COUNT(*) FROM trade_history WHERE strategy_name = 'GAME_5M' AND side = 'SELL' AND ts >= :c"
+                            ),
+                            {"c": cutoff_24h},
+                        ).fetchone()
+                    n_buy = int(buy_24[0]) if buy_24 else 0
+                    n_sell = int(sell_24[0]) if sell_24 else 0
+                    if n_buy or n_sell:
+                        lines.append("")
+                        lines.append(f"📌 Открытых 5m: нет. За 24ч: входов {n_buy}, выходов {n_sell}")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug("Dashboard open/trades: %s", e)
+
     if mode in ("5m", "all"):
         lines.append("")
         lines.append("⏱ **5m (интрадей):**")
         try:
             from services.recommend_5m import get_decision_5m
-            d5 = get_decision_5m("SNDK")  # полное окно 7 дн. для решения
-            if d5:
-                lines.append(
-                    f"  SNDK: ${d5['price']:.2f}  RSI(5m) {d5.get('rsi_5m') or '—'}  "
-                    f"импульс 2ч {d5.get('momentum_2h_pct', 0):+.2f}%  → **{d5['decision']}**"
-                )
-                lines.append(f"  _Период данных: {_escape_md(d5.get('period_str', ''))}_")
-            else:
-                lines.append("  SNDK: нет 5m данных")
+            from services.ticker_groups import get_tickers_game_5m
+            game_tickers = get_tickers_game_5m()
+            if not game_tickers:
+                game_tickers = watchlist[:6]
+            period_str = None
+            for ticker in game_tickers[:8]:
+                d5 = get_decision_5m(ticker)
+                if d5:
+                    rsi_val = d5.get("rsi_5m")
+                    rsi_str = f"{rsi_val:.2f}" if rsi_val is not None else "—"
+                    lines.append(
+                        f"  **{_escape_md(ticker)}**: ${d5['price']:.2f}  RSI(5m) {rsi_str}  "
+                        f"импульс 2ч {d5.get('momentum_2h_pct', 0):+.2f}%  → **{d5['decision']}**"
+                    )
+                    if period_str is None:
+                        period_str = d5.get("period_str")
+                else:
+                    lines.append(f"  **{_escape_md(ticker)}**: нет 5m данных")
+            if period_str:
+                lines.append(f"  _Период данных: {_escape_md(period_str)}_")
         except Exception as e:
             logger.debug("Dashboard 5m: %s", e)
-            lines.append("  SNDK: 5m недоступен")
+            lines.append("  5m недоступен")
 
     if mode in ("daily", "all"):
         lines.append("")
-        lines.append("📰 **Новости (фокус дня):** по тикерам выше. Для деталей: /news <ticker>")
+        lines.append("📰 **Новости (фокус дня):** по тикерам выше. Для деталей: /news по тикеру")
 
     lines.append("")
-    lines.append("_Детали: /recommend <ticker>  ·  5m: /recommend5m SNDK  ·  График 5m: /chart5m SNDK_")
+    try:
+        from services.ticker_groups import get_tickers_game_5m
+        gt = get_tickers_game_5m()
+        first_ticker = gt[0] if gt else (watchlist[0] if watchlist else "SNDK")
+    except Exception:
+        first_ticker = watchlist[0] if watchlist else "SNDK"
+    lines.append(f"_Детали: /recommend  ·  5m: /recommend5m по тикеру  ·  График: /chart5m {_escape_md(first_ticker)}_")
     return "\n".join(lines)

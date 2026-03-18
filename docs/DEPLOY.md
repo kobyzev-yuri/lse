@@ -158,6 +158,8 @@ crontab -e
 
 Чтобы логи были видны в контейнере, в `docker-compose.yml` смонтирован каталог `./logs:/app/logs:ro`. На сервере cron пишет в `~/lse/logs/`; после перезапуска контейнера (`docker compose up -d lse`) страница /service подхватит эти файлы.
 
+**Если в `news_fetch.log` много ошибок 429 (Too Many Requests):** NewsAPI и Investing.com ограничивают число запросов. В коде включены повторные попытки с паузой (60–120 с) и паузы между источниками в cron. Если 429 не проходят — уменьшите частоту запуска новостного крона (например, раз в 2 часа вместо каждого часа) или проверьте лимиты вашего плана NewsAPI.
+
 ---
 
 ### 8. Краткий чеклист регулярного деплоя
@@ -237,6 +239,22 @@ crontab -e   # при желании добавить строку для deploy
 В GCP: **VPC → Firewall** — правило входящего **tcp:8080** (или создать вручную в консоли). Тогда URL: `http://104.197.235.201:8080/game5m/cards`.
 
 Полный чеклист и детали (второй диск, пароль Postgres, ошибка «no space left») — в [MIGRATE_SERVER.md](MIGRATE_SERVER.md).
+
+---
+
+## Если deploy не проходит
+
+**Ошибка `The following untracked working tree files would be overwritten by merge`**
+
+На сервере есть неотслеживаемый файл с тем же именем, что и в репозитории; Git не перезаписывает его при pull. Удалите этот файл и повторите деплой (после pull придёт версия из GitHub):
+
+```bash
+cd ~/lse
+rm -f scripts/check_openai_gpt_key.py   # или другой путь из сообщения об ошибке
+./scripts/deploy_from_github.sh
+```
+
+Файл `check_openai_gpt_key.py` уже есть в репозитории — после pull он появится из GitHub.
 
 ---
 

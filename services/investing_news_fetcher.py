@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
@@ -27,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 INVESTING_NEWS_URL = "https://www.investing.com/news/stock-market-news"
 INVESTING_BASE_URL = "https://www.investing.com"
+# При 429: паузы перед повтором (сек), макс. повторов
+INVESTING_429_BACKOFF = [45, 90]
+INVESTING_429_MAX_RETRIES = 2
 
 # Заголовки, максимально похожие на обычный браузер (снижает вероятность 403)
 HEADERS = {
@@ -122,22 +126,46 @@ def fetch_investing_news_list(max_articles: int = 30) -> List[Tuple[str, str]]:
         session.get(INVESTING_BASE_URL + "/", timeout=15)
     except Exception:
         pass
-    try:
-        resp = session.get(INVESTING_NEWS_URL, timeout=25)
-        resp.raise_for_status()
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 403:
-            logger.warning(
-                "Investing.com news: 403 Forbidden. Сайт блокирует запросы. Варианты: "
-                "1) Задать HTTP(S)-прокси в config.env: INVESTING_NEWS_PROXY=http://user:pass@host:port  2) Отключить источник в cron."
-            )
-        else:
+    resp = None
+    for attempt in range(INVESTING_429_MAX_RETRIES + 1):
+        try:
+            resp = session.get(INVESTING_NEWS_URL, timeout=25)
+            if resp.status_code == 429:
+                if attempt < INVESTING_429_MAX_RETRIES:
+                    wait = INVESTING_429_BACKOFF[attempt]
+                    logger.warning(
+                        "Investing.com news: 429 Too Many Requests, ждём %s с перед повтором (попытка %s)",
+                        wait, attempt + 1,
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.warning(
+                    "Investing.com news: 429 после %s повторов. Уменьшите частоту cron (например, раз в 2 часа).",
+                    INVESTING_429_MAX_RETRIES + 1,
+                )
+                return []
+            resp.raise_for_status()
+            break
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 403:
+                logger.warning(
+                    "Investing.com news: 403 Forbidden. Сайт блокирует запросы. Варианты: "
+                    "1) Задать HTTP(S)-прокси в config.env: INVESTING_NEWS_PROXY=http://user:pass@host:port  2) Отключить источник в cron."
+                )
+                return []
+            if e.response is not None and e.response.status_code == 429 and attempt < INVESTING_429_MAX_RETRIES:
+                wait = INVESTING_429_BACKOFF[attempt]
+                logger.warning("Investing.com news: 429, ждём %s с (попытка %s)", wait, attempt + 1)
+                time.sleep(wait)
+                continue
             logger.warning("Investing.com news: запрос не удался: %s", e)
-        return []
-    except Exception as e:
-        logger.warning("Investing.com news: запрос не удался: %s", e)
-        return []
+            return []
+        except Exception as e:
+            logger.warning("Investing.com news: запрос не удался: %s", e)
+            return []
 
+    if resp is None:
+        return []
     soup = BeautifulSoup(resp.content, "html.parser")
     results: List[Tuple[str, str]] = []
 

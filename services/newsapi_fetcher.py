@@ -9,6 +9,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import time
 import requests
 import logging
 from datetime import datetime, timedelta
@@ -18,6 +19,10 @@ from sqlalchemy import create_engine, text
 from config_loader import get_database_url, get_config_value
 
 logger = logging.getLogger(__name__)
+
+# Повторы при 429 (rate limit): паузы в секундах перед повторной попыткой
+NEWSAPI_429_BACKOFF = [60, 120]
+NEWSAPI_429_MAX_RETRIES = 2
 
 
 def get_api_key() -> Optional[str]:
@@ -59,10 +64,40 @@ def fetch_newsapi_articles(
         'pageSize': 100  # Максимум для бесплатного tier
     }
     
+    last_err = None
+    response = None
+    for attempt in range(NEWSAPI_429_MAX_RETRIES + 1):
+        try:
+            response = requests.get(url, params=params, timeout=30)
+            if response.status_code == 429:
+                if attempt < NEWSAPI_429_MAX_RETRIES:
+                    wait = NEWSAPI_429_BACKOFF[attempt]
+                    logger.warning("NewsAPI 429 Too Many Requests, ждём %s с перед повтором (попытка %s)", wait, attempt + 1)
+                    time.sleep(wait)
+                    continue
+                logger.error("❌ NewsAPI: 429 Too Many Requests после %s повторов. Уменьшите частоту cron или проверьте лимиты плана.", NEWSAPI_429_MAX_RETRIES + 1)
+                return []
+            response.raise_for_status()
+            break
+        except requests.exceptions.HTTPError as e:
+            last_err = e
+            if e.response is not None and e.response.status_code == 429 and attempt < NEWSAPI_429_MAX_RETRIES:
+                wait = NEWSAPI_429_BACKOFF[attempt]
+                logger.warning("NewsAPI 429, ждём %s с (попытка %s)", wait, attempt + 1)
+                time.sleep(wait)
+                continue
+            raise
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            break
+    else:
+        if last_err:
+            raise last_err
+
+    if response is None:
+        return []
+
     try:
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
-        
         data = response.json()
         
         if data.get('status') != 'ok':

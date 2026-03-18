@@ -28,7 +28,14 @@ from sqlalchemy import create_engine, text
 import numpy as np
 
 from analyst_agent import AnalystAgent
-from config_loader import get_database_url, get_use_llm_for_analyst
+from config_loader import (
+    get_database_url,
+    get_use_llm_for_analyst,
+    load_config,
+    get_config_file_path,
+    update_config_key,
+    EDITABLE_CONFIG_KEYS,
+)
 from execution_agent import ExecutionAgent
 from services.ticker_groups import get_tickers_fast
 from news_importer import add_news, get_news_sources_stats
@@ -1658,8 +1665,81 @@ async def service_page(request: Request):
 
 @app.get("/parameters", response_class=HTMLResponse)
 async def parameters_page(request: Request):
-    """Страница управления параметрами стратегий"""
+    """Страница управления параметрами стратегий и config.env"""
     return HTMLResponse(render_template("parameters.html", {"request": request}))
+
+
+@app.get("/api/config/env", response_class=JSONResponse)
+async def get_config_env_api():
+    """API: список редактируемых ключей config.env и их текущие значения (секреты маскируются)."""
+    try:
+        config = load_config()
+        out = []
+        for key in EDITABLE_CONFIG_KEYS:
+            value = config.get(key, "")
+            masked = key in ("TELEGRAM_BOT_TOKEN", "OPENAI_API_KEY", "OPENAI_GPT_KEY", "NEWSAPI_KEY", "ALPHAVANTAGE_KEY", "DATABASE_URL")
+            out.append({
+                "key": key,
+                "value": value if value else "",
+                "masked": masked,
+            })
+        return out
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/env", response_class=JSONResponse)
+async def update_config_env_api(key: str = Form(...), value: str = Form(...)):
+    """API: обновить ключ в config.env (файл модифицируется на диске)."""
+    key = (key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="key is required")
+    if key not in EDITABLE_CONFIG_KEYS:
+        raise HTTPException(status_code=400, detail=f"Key {key!r} is not editable")
+    try:
+        ok = update_config_key(key, value)
+        if not ok:
+            raise HTTPException(status_code=500, detail="Could not write config.env (file missing or read-only)")
+        return {"status": "success", "message": "Сохранено в config.env"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/restart", response_class=JSONResponse)
+async def restart_service_api():
+    """
+    Пытается перезапустить сервис (docker compose restart lse или команда из RESTART_CMD в config.env).
+    Если команда не задана или выполнение невозможно — возвращает подсказку для ручного перезапуска на сервере.
+    """
+    import subprocess
+    config = load_config()
+    cmd = (config.get("RESTART_CMD") or "docker compose restart lse").strip()
+    if not cmd:
+        return _to_jsonable({"ok": False, "message": "Выполните на сервере: docker compose restart lse"})
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            timeout=30,
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent,
+        )
+        if result.returncode != 0:
+            return _to_jsonable({
+                "ok": False,
+                "message": f"Команда вернула код {result.returncode}. Выполните на сервере: docker compose restart lse",
+                "stderr": (result.stderr or "")[:500],
+            })
+        return _to_jsonable({"ok": True, "message": "Перезапуск выполнен"})
+    except FileNotFoundError:
+        return _to_jsonable({"ok": False, "message": "Выполните на сервере: docker compose restart lse"})
+    except subprocess.TimeoutExpired:
+        return _to_jsonable({"ok": False, "message": "Таймаут. Проверьте на сервере: docker ps"})
+    except Exception as e:
+        return _to_jsonable({"ok": False, "message": f"Ошибка: {e!s}. Выполните на сервере: docker compose restart lse"})
 
 
 @app.get("/api/parameters", response_class=JSONResponse)

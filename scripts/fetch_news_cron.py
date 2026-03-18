@@ -10,6 +10,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import logging
+import time
 from datetime import datetime
 
 # Импорты модулей парсинга
@@ -61,6 +62,7 @@ def fetch_all_news_sources():
     except Exception as e:
         logger.error(f"❌ Ошибка Investing.com Calendar: {e}")
         sources_status['Investing.com Calendar'] = f'❌ Ошибка: {e}'
+    time.sleep(10)  # пауза между источниками, склонными к 429
 
     # 2b. Investing.com News (лента stock-market-news, по тикерам из ключевых слов)
     try:
@@ -71,7 +73,8 @@ def fetch_all_news_sources():
     except Exception as e:
         logger.error(f"❌ Ошибка Investing.com News: {e}")
         sources_status['Investing.com News'] = f'❌ Ошибка: {e}'
-    
+    time.sleep(10)  # пауза перед NewsAPI/Alpha Vantage (снижение 429)
+
     # 3. Alpha Vantage (требует API ключ)
     try:
         logger.info("\n📊 Источник 3/6: Alpha Vantage API")
@@ -94,7 +97,8 @@ def fetch_all_news_sources():
     except Exception as e:
         logger.error(f"❌ Ошибка Alpha Vantage: {e}")
         sources_status['Alpha Vantage'] = f'❌ Ошибка: {e}'
-    
+    time.sleep(15)  # пауза перед NewsAPI (лимиты бесплатного плана)
+
     # 4. NewsAPI (требует API ключ)
     try:
         logger.info("\n📰 Источник 4/6: NewsAPI")

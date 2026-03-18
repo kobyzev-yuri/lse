@@ -413,6 +413,7 @@ def get_5m_card_payload(d5: Dict[str, Any], ticker: str) -> Dict[str, Any]:
     """
     Единый payload для отображения 5m (веб-карточки, Telegram, отчёты).
     Все поля берутся из выхода get_decision_5m(); один источник правды.
+    Дополнительно считаем параметры чек-листа Квена: риск/ревард и мат. ожидание (docs/GAME_5M_WEB_CARDS.md).
     """
     if not d5:
         return {"ticker": ticker, "decision": "NO_DATA", "reasoning": "Нет 5m данных."}
@@ -420,6 +421,28 @@ def get_5m_card_payload(d5: Dict[str, Any], ticker: str) -> Dict[str, Any]:
     for k in TECHNICAL_SIGNAL_KEYS:
         if k in d5:
             out[k] = d5[k]
+    # Параметры чек-листа Квена (5 параметров решения): риск/ревард и мат. ожидание — выводятся в карточке отдельно
+    upside = d5.get("estimated_upside_pct_day")
+    downside = d5.get("estimated_downside_pct_day")
+    prob_up = d5.get("prob_up")
+    prob_down = d5.get("prob_down")
+    if downside is not None and float(downside) > 0 and upside is not None:
+        out["risk_reward_ratio"] = round(float(upside) / float(downside), 2)
+    else:
+        out["risk_reward_ratio"] = None
+    if (
+        prob_up is not None
+        and prob_down is not None
+        and upside is not None
+        and downside is not None
+    ):
+        try:
+            ev = float(prob_up) * float(upside) - float(prob_down) * float(downside)
+            out["expected_value_pct"] = round(ev, 2)
+        except (TypeError, ValueError):
+            out["expected_value_pct"] = None
+    else:
+        out["expected_value_pct"] = None
     return out
 
 
