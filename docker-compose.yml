@@ -30,8 +30,9 @@ services:
     command: ["sh", "-c", "python scripts/run_telegram_bot.py & exec uvicorn web_app:app --host 0.0.0.0 --port 8080"]
     ports:
       - "8080:8080"
-    env_file:
-      - config.env
+    # config.env с хоста — контейнер всегда видит актуальный файл; после правки достаточно restart.
+    volumes:
+      - ./config.env:/app/config.env:ro
     environment:
       TZ: Europe/Moscow
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-lse_pg_pass}@postgres:5432/lse_trading?options=-c%20timezone%3DEurope%2FMoscow
