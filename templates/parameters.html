@@ -1,37 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}Параметры стратегий — LSE{% endblock %}
+{% block title %}Параметры — LSE{% endblock %}
 
 {% block content %}
-<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.8rem;">
-    <h1>Параметры стратегий</h1>
-    <button type="button" class="btn btn-sm btn-outline-primary" id="openModalBtn">+ Добавить</button>
-</div>
-
-<div class="card">
-    <div class="table-responsive">
-        <table>
-            <thead>
-                <tr>
-                    <th>Действия</th>
-                    <th>ID</th>
-                    <th>Стратегия</th>
-                    <th>Target</th>
-                    <th>Параметры</th>
-                    <th>Обновлено</th>
-                </tr>
-            </thead>
-            <tbody id="paramsTableBody">
-                <tr>
-                    <td colspan="6" class="text-center muted">Загрузка параметров...</td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
-</div>
-
-<h2 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">config.env</h2>
-<p class="muted" style="font-size: 0.9em; margin-bottom: 0.8rem;">Редактирование параметров конфигурации на лету. Файл config.env обновляется на диске. После изменений нажмите «Перезапустить сервис», чтобы применить новые значения.</p>
+<h1>Параметры</h1>
+<p class="muted" style="font-size: 0.9em; margin-bottom: 0.8rem;">Редактирование <code>config.env</code> на лету. После изменений нажмите «Перезапустить сервис», чтобы применить значения.</p>
+<p class="muted" style="font-size: 0.85em; margin-bottom: 0.6rem; line-height: 1.45;">Список ключей берётся из <code>config.env.example</code> (все незакомментированные <code>KEY=value</code>, кроме секретов). Ниже для каждого тикера из <code>TICKERS_FAST</code> добавляются <code>GAME_5M_TAKE_PROFIT_PCT_&lt;ТИКЕР&gt;</code> и <code>GAME_5M_MAX_POSITION_DAYS_&lt;ТИКЕР&gt;</code>. Пустое значение у пер-тикерной строки = общие <code>GAME_5M_TAKE_PROFIT_PCT</code> / <code>GAME_5M_MAX_POSITION_DAYS</code>. Новый ключ — добавьте строку в <code>config.env</code> и при необходимости шаблон в <code>config.env.example</code>.</p>
 <div class="card">
     <div class="table-responsive">
         <table>
@@ -50,7 +24,7 @@
     <div style="margin-top: 0.8rem;">
         <button type="button" class="btn" id="restartServiceBtn">Перезапустить сервис с новыми параметрами</button>
         <span id="restartStatus" class="muted" style="margin-left: 0.5rem;"></span>
-        <p class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;">Команда перезапуска задаётся в config.env — ключ <strong>RESTART_CMD</strong> (выше в таблице). Пустое значение = <code>docker compose restart lse</code>.</p>
+        <p class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;">Команда перезапуска — ключ <strong>RESTART_CMD</strong> в таблице выше. Пустое значение = <code>docker compose restart lse</code>.</p>
     </div>
 </div>
 
@@ -74,44 +48,11 @@
         </form>
     </div>
 </div>
-
-<div class="modal-overlay" id="modalOverlay">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2 class="modal-title">Параметры стратегии</h2>
-            <button type="button" class="modal-close" id="modalClose" aria-label="Закрыть">&times;</button>
-        </div>
-        <form id="addParamForm">
-            <div class="mb-3">
-                <label class="form-label">Название стратегии</label>
-                <input type="text" name="strategy_name" id="strategy_name" placeholder="GAME_5M, Momentum, Mean Reversion" required>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Target (GLOBAL, TICKER:*, CLUSTER:*)</label>
-                <input type="text" name="target_identifier" id="target_identifier" value="GLOBAL" required>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Параметры (JSON)</label>
-                <textarea name="parameters_json" id="parameters_json" rows="4" style="font-family: monospace;" required>{"stop_loss": 3.0, "take_profit": 8.0}</textarea>
-            </div>
-            <button type="submit" class="btn" id="saveBtn">Сохранить</button>
-        </form>
-    </div>
-</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
 (function() {
-    function openModal() {
-        document.getElementById('modalOverlay').classList.add('open');
-    }
-    function closeModal() {
-        document.getElementById('modalOverlay').classList.remove('open');
-        document.getElementById('addParamForm').reset();
-        document.getElementById('target_identifier').value = 'GLOBAL';
-        document.getElementById('parameters_json').value = '{"stop_loss": 3.0, "take_profit": 8.0}';
-    }
     function escapeHtml(s) {
         if (s == null) return '';
         const div = document.createElement('div');
@@ -119,106 +60,6 @@
         return div.innerHTML;
     }
 
-    document.getElementById('openModalBtn').addEventListener('click', openModal);
-    document.getElementById('modalClose').addEventListener('click', closeModal);
-    document.getElementById('modalOverlay').addEventListener('click', function(e) {
-        if (e.target === document.getElementById('modalOverlay')) closeModal();
-    });
-
-    async function loadParams() {
-        try {
-            const resp = await fetch('/api/parameters');
-            const data = await resp.json();
-            const tbody = document.getElementById('paramsTableBody');
-            tbody.innerHTML = '';
-
-            if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center muted">Нет настроенных параметров</td></tr>';
-                return;
-            }
-
-            data.forEach(p => {
-                const tr = document.createElement('tr');
-                const paramsStr = JSON.stringify(p.parameters);
-                const paramsForAttr = paramsStr.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                const paramsForCell = escapeHtml(paramsStr);
-                tr.innerHTML = `
-                    <td>
-                        <button type="button" class="btn btn-sm edit-btn" data-id="${p.id}" data-strategy="${escapeHtml(p.strategy_name)}" data-target="${escapeHtml(p.target_identifier)}" data-params="${paramsForAttr}">Изм.</button>
-                        <button type="button" class="btn btn-sm del-btn" data-id="${p.id}">Удал.</button>
-                    </td>
-                    <td>${p.id}</td>
-                    <td><strong>${escapeHtml(p.strategy_name)}</strong></td>
-                    <td><span class="badge">${escapeHtml(p.target_identifier)}</span></td>
-                    <td><pre>${paramsForCell}</pre></td>
-                    <td><span class="text-muted">${p.updated_at ? new Date(p.updated_at).toLocaleString() : ''}</span></td>
-                `;
-                tbody.appendChild(tr);
-            });
-
-            document.querySelectorAll('.del-btn').forEach(btn => {
-                btn.addEventListener('click', async (e) => {
-                    if (!confirm('Удалить параметры?')) return;
-                    const id = e.currentTarget.dataset.id;
-                    const resp = await fetch('/api/parameters/' + id, { method: 'DELETE' });
-                    if (resp.ok) loadParams();
-                    else alert('Ошибка при удалении');
-                });
-            });
-
-            document.querySelectorAll('.edit-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    const ds = e.currentTarget.dataset;
-                    document.getElementById('strategy_name').value = ds.strategy || '';
-                    document.getElementById('target_identifier').value = ds.target || 'GLOBAL';
-                    try {
-                        const params = ds.params ? JSON.parse(ds.params) : {};
-                        document.getElementById('parameters_json').value = JSON.stringify(params, null, 2);
-                    } catch (_) {
-                        document.getElementById('parameters_json').value = '{}';
-                    }
-                    openModal();
-                });
-            });
-        } catch (e) {
-            console.error(e);
-            document.getElementById('paramsTableBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger">Ошибка загрузки параметров</td></tr>';
-        }
-    }
-
-    document.getElementById('addParamForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const fd = new FormData(e.target);
-        try {
-            JSON.parse(fd.get('parameters_json'));
-        } catch (err) {
-            alert('Неверный формат JSON!');
-            return;
-        }
-        document.getElementById('saveBtn').disabled = true;
-        try {
-            const resp = await fetch('/api/parameters', { method: 'POST', body: fd });
-            const res = await resp.json();
-            if (res.status === 'success') {
-                closeModal();
-                loadParams();
-            } else {
-                alert('Ошибка: ' + (res.detail || res.error || 'Неизвестная ошибка'));
-            }
-        } catch (err) {
-            console.error(err);
-            alert('Сетевая ошибка');
-        } finally {
-            document.getElementById('saveBtn').disabled = false;
-        }
-    });
-
-    document.addEventListener('DOMContentLoaded', function() {
-        loadParams();
-        loadConfigEnv();
-    });
-
-    // --- config.env (данные храним в переменной, чтобы не ломать атрибуты при спецсимволах в value) ---
     let configEnvData = [];
     async function loadConfigEnv() {
         const tbody = document.getElementById('configEnvTableBody');
@@ -304,6 +145,10 @@
             statusEl.textContent = 'Ошибка запроса';
             statusEl.classList.add('negative');
         }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadConfigEnv();
     });
 })();
 </script>

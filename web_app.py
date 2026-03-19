@@ -1,6 +1,6 @@
 """
 Веб-интерфейс для LSE Trading System
-FastAPI приложение с визуализацией данных и управлением торговлей
+FastAPI: портфель, отчёты 5m, база знаний, графики, параметры, сервис.
 """
 
 import asyncio
@@ -19,7 +19,7 @@ except ImportError:
     DISPLAY_TZ = None  # fallback: показываем как есть, без конвертации
 
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import pandas as pd
@@ -34,7 +34,8 @@ from config_loader import (
     load_config,
     get_config_file_path,
     update_config_key,
-    EDITABLE_CONFIG_KEYS,
+    get_editable_config_keys_expanded,
+    is_editable_config_env_key,
 )
 from execution_agent import ExecutionAgent
 from services.ticker_groups import get_tickers_fast
@@ -216,17 +217,22 @@ async def index(request: Request):
                     else:
                         exit_reason = str(raw).strip()
                     profit_usd = _safe_net_pnl(t)
+                    ep = float(t.entry_price)
+                    xp = float(t.exit_price)
+                    pl_pct = ((xp / ep) - 1.0) * 100.0 if ep > 0 else 0.0
                     closed_positions.append({
                         "instrument": t.ticker,
                         "direction": direction,
-                        "open": float(t.entry_price),
-                        "close": float(t.exit_price),
+                        "open": ep,
+                        "close": xp,
                         "profit_pips": pips,
                         "profit_usd": profit_usd,
+                        "pl_pct": pl_pct,
                         "units": int(t.quantity),
                         "open_msk": open_msk,
                         "close_msk": close_msk,
                         "exit_reason": exit_reason,
+                        "exit_reason_caption": _exit_reason_caption(exit_reason if exit_reason != "—" else None),
                     })
                 except Exception as e:
                     import logging
@@ -543,20 +549,10 @@ async def monitor_page(request: Request):
     return HTMLResponse(render_template("monitor.html", {"request": request}))
 
 
-@app.get("/trading", response_class=HTMLResponse)
-async def trading_page(request: Request):
-    """Страница управления торговлей"""
-    # Получаем список отслеживаемых тикеров
-    with engine.connect() as conn:
-        tickers_df = pd.read_sql(
-            text("SELECT DISTINCT ticker FROM quotes ORDER BY ticker"),
-            conn
-        )
-        tickers = tickers_df['ticker'].tolist() if not tickers_df.empty else []
-    
-    return HTMLResponse(render_template("trading.html", {
-        "tickers": tickers
-    }))
+@app.get("/trading")
+async def trading_page_removed():
+    """Раздел «Торги» снят (дублировал портфель, отчёты и Telegram). Редирект на главную."""
+    return RedirectResponse(url="/", status_code=302)
 
 
 @app.post("/api/analyze", response_class=JSONResponse)
@@ -792,7 +788,7 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
     """Минимальный ответ для chart5m при отсутствии OHLC: только сделки GAME_5M за последние days дней."""
     from datetime import datetime, timedelta
     try:
-        from services.game_5m import get_trades_for_chart, trade_ts_to_et
+        from services.game_5m import get_open_position, get_open_position_any, get_trades_for_chart, trade_ts_to_et
     except ImportError:
         return {"ticker": ticker, "days": days, "times": [], "close": [], "trades": [], "no_ohlc": True}
     now = datetime.utcnow()
@@ -816,6 +812,13 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
             })
     except Exception:
         pass
+    entry_price = None
+    try:
+        pos = get_open_position_any(ticker) or get_open_position(ticker)
+        if pos and pos.get("entry_price") is not None:
+            entry_price = float(pos["entry_price"])
+    except Exception:
+        pass
     return {
         "ticker": str(ticker),
         "days": int(days),
@@ -825,7 +828,7 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
         "dt_max": None,
         "dt_max_ext": None,
         "prolongation": {"times": [], "prices": [], "forecast_defined": False, "label": None},
-        "entry_price": None,
+        "entry_price": entry_price,
         "session_high": None,
         "take_level": None,
         "trades": trades_out,
@@ -838,7 +841,7 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
     try:
         from services.recommend_5m import fetch_5m_ohlc, get_decision_5m
         from services.chart_prolongation import fit_and_prolong
-        from services.game_5m import get_open_position, get_trades_for_chart
+        from services.game_5m import get_open_position, get_open_position_any, get_trades_for_chart
     except ImportError:
         return None
     try:
@@ -889,7 +892,8 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
 
     entry_price = None
     try:
-        pos = get_open_position(ticker)
+        # Как крон и /pending: сначала любая открытая позиция по тикеру, иначе только GAME_5M
+        pos = get_open_position_any(ticker) or get_open_position(ticker)
         if pos and pos.get("entry_price") is not None:
             entry_price = float(pos["entry_price"])
     except Exception:
@@ -1426,6 +1430,19 @@ async def get_pnl():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _exit_reason_caption(code: Optional[str]) -> str:
+    """Краткая расшифровка signal_type при закрытии (как в close_position)."""
+    if not code or not str(code).strip():
+        return ""
+    c = str(code).strip().upper()
+    return {
+        "TAKE_PROFIT": "достигнут тейк",
+        "TIME_EXIT": "конец сессии или макс. дней",
+        "SELL": "сигнал SELL (правила 5m)",
+        "STOP_LOSS": "стоп-лосс",
+    }.get(c, "")
+
+
 def _closed_report_rows(limit: int = 50):
     """Данные для отчёта закрытых позиций (как /closed): сортировка по дате закрытия, новые сверху."""
     report_engine = get_engine()
@@ -1453,19 +1470,23 @@ def _closed_report_rows(limit: int = 50):
         close_msk = _to_msk_str(t.ts)
         direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
         exit_reason = (t.signal_type or "—") if t.signal_type and str(t.signal_type).strip() else "—"
+        entry_px = float(t.entry_price)
+        pl_pct = ((float(t.exit_price) / entry_px) - 1.0) * 100.0 if entry_px > 0 else 0.0
         rows.append({
             "instrument": t.ticker,
             "direction": direction,
-            "open": float(t.entry_price),
+            "open": entry_px,
             "close": float(t.exit_price),
             "profit_pips": pips,
             "profit_usd": float(t.net_pnl),
+            "pl_pct": pl_pct,
             "units": int(t.quantity),
             "entry_strategy": getattr(t, "entry_strategy", None) or "—",
             "exit_strategy": getattr(t, "exit_strategy", None) or "—",
             "open_msk": open_msk,
             "close_msk": close_msk,
             "exit_reason": exit_reason,
+            "exit_reason_caption": _exit_reason_caption(exit_reason if exit_reason != "—" else None),
         })
     return rows
 
@@ -1527,7 +1548,13 @@ async def report_closed(request: Request, limit: int = 50):
     """HTML-отчёт: закрытые позиции (аналог /closed в Telegram)."""
     limit = max(1, min(500, limit))
     rows = _closed_report_rows(limit=limit)
-    return HTMLResponse(render_template("reports_closed.html", {"request": request, "rows": rows, "limit": limit}))
+    total_pnl = sum(float(r["profit_usd"]) for r in rows) if rows else 0.0
+    return HTMLResponse(
+        render_template(
+            "reports_closed.html",
+            {"request": request, "rows": rows, "limit": limit, "total_pnl": total_pnl, "total_count": len(rows)},
+        )
+    )
 
 
 @app.get("/reports/pending", response_class=HTMLResponse)
@@ -1678,7 +1705,7 @@ async def service_page(request: Request):
 
 @app.get("/parameters", response_class=HTMLResponse)
 async def parameters_page(request: Request):
-    """Страница управления параметрами стратегий и config.env"""
+    """Страница редактирования config.env"""
     return HTMLResponse(render_template("parameters.html", {"request": request}))
 
 
@@ -1688,7 +1715,7 @@ async def get_config_env_api():
     try:
         config = load_config()
         out = []
-        for key in EDITABLE_CONFIG_KEYS:
+        for key in get_editable_config_keys_expanded():
             value = config.get(key, "")
             masked = key in ("TELEGRAM_BOT_TOKEN", "OPENAI_API_KEY", "OPENAI_GPT_KEY", "NEWSAPI_KEY", "ALPHAVANTAGE_KEY", "DATABASE_URL")
             out.append({
@@ -1707,7 +1734,7 @@ async def update_config_env_api(key: str = Form(...), value: str = Form(...)):
     key = (key or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="key is required")
-    if key not in EDITABLE_CONFIG_KEYS:
+    if not is_editable_config_env_key(key):
         raise HTTPException(status_code=400, detail=f"Key {key!r} is not editable")
     try:
         ok = update_config_key(key, value)
@@ -1753,51 +1780,6 @@ async def restart_service_api():
         return _to_jsonable({"ok": False, "message": "Таймаут. Проверьте на сервере: docker ps"})
     except Exception as e:
         return _to_jsonable({"ok": False, "message": f"Ошибка: {e!s}. Выполните на сервере: docker compose restart lse"})
-
-
-@app.get("/api/parameters", response_class=JSONResponse)
-async def get_parameters_api():
-    """API: Получение параметров стратегий (единый источник: utils.parameter_store)."""
-    try:
-        from utils.parameter_store import get_parameter_store
-        params = get_parameter_store().list_all()
-        return params
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/parameters", response_class=JSONResponse)
-async def add_parameter_api(
-    strategy_name: str = Form(...),
-    target_identifier: str = Form(...),
-    parameters_json: str = Form(...)
-):
-    """API: Добавление/обновление параметров стратегии (единый источник: utils.parameter_store)."""
-    try:
-        params_dict = json.loads(parameters_json)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON format")
-    try:
-        from utils.parameter_store import get_parameter_store
-        get_parameter_store().save(
-            strategy_name=strategy_name,
-            target_identifier=target_identifier,
-            parameters=params_dict,
-        )
-        return {"status": "success", "message": "Параметры успешно сохранены"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/parameters/{param_id}", response_class=JSONResponse)
-async def delete_parameter_api(param_id: int):
-    """API: Удаление параметров стратегии (единый источник: utils.parameter_store)."""
-    try:
-        from utils.parameter_store import get_parameter_store
-        get_parameter_store().delete_by_id(param_id)
-        return {"status": "success"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

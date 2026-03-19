@@ -82,6 +82,8 @@
                 <th>Вход</th>
                 <th>Выход</th>
                 <th>P/L</th>
+                <th>P/L %</th>
+                <th>Причина</th>
                 <th>Выход (MSK)</th>
             </tr>
         </thead>
@@ -92,6 +94,8 @@
                 <td>${{ "%.2f"|format(row.open) }}</td>
                 <td>${{ "%.2f"|format(row.close) }}</td>
                 <td class="{% if row.profit_usd >= 0 %}positive{% else %}negative{% endif %}">${{ "%+.2f"|format(row.profit_usd) }}</td>
+                <td class="{% if row.pl_pct >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.2f"|format(row.pl_pct) }}%</td>
+                <td><span title="{{ row.exit_reason_caption }}">{{ row.exit_reason }}</span></td>
                 <td>{{ row.close_msk }}</td>
             </tr>
             {% endfor %}

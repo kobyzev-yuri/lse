@@ -4,7 +4,15 @@
 
 {% block content %}
 <h1>Закрытые позиции</h1>
-<p class="muted" style="margin-bottom: 0.5rem;">Аналог команды /closed в Telegram. Показано последних {{ rows|length }} (лимит {{ limit }}). Даты в MSK.</p>
+<p class="muted" style="margin-bottom: 0.35rem;">Аналог команды /closed в Telegram. Показано последних {{ rows|length }} (лимит {{ limit }}). Даты в MSK.</p>
+<p class="muted" style="margin-bottom: 0.75rem; font-size: 0.88rem; line-height: 1.45;">
+    <strong>Entry / Exit</strong> в таблице — колонки стратегии (обычно GAME_5M).<br>
+    <strong>Причина выхода</strong> — код из сделки SELL: <code>TAKE_PROFIT</code> (достигнут тейк),
+    <code>TIME_EXIT</code> (конец сессии или превышен макс. срок дней),
+    <code>SELL</code> (модель выдала SELL по правилам 5m),
+    <code>STOP_LOSS</code> (стоп, если включён в config).
+    Цель тейка при входе задаётся от импульса 2ч (например +6%), но выход может быть по другой причине — тогда P/L % ниже цели тейка.
+</p>
 <div class="card">
     {% if rows %}
     <div class="table-responsive">
@@ -16,9 +24,12 @@
                 <th>Open</th>
                 <th>Close</th>
                 <th>Pips</th>
+                <th>Qty</th>
                 <th>Profit</th>
+                <th>P/L %</th>
                 <th>Entry</th>
                 <th>Exit</th>
+                <th>Причина выхода</th>
                 <th>Open (MSK)</th>
                 <th>Close (MSK)</th>
             </tr>
@@ -31,9 +42,17 @@
                 <td>${{ "%.2f"|format(row.open) }}</td>
                 <td>${{ "%.2f"|format(row.close) }}</td>
                 <td>{{ row.profit_pips }}</td>
+                <td>{{ row.units }}</td>
                 <td class="{% if row.profit_usd >= 0 %}positive{% else %}negative{% endif %}">${{ "%+.2f"|format(row.profit_usd) }}</td>
+                <td class="{% if row.pl_pct >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.2f"|format(row.pl_pct) }}%</td>
                 <td>{{ row.entry_strategy }}</td>
                 <td>{{ row.exit_strategy }}</td>
+                <td>
+                    <strong>{{ row.exit_reason }}</strong>
+                    {% if row.exit_reason_caption %}
+                    <br><span class="muted" style="font-size:0.82rem;">{{ row.exit_reason_caption }}</span>
+                    {% endif %}
+                </td>
                 <td>{{ row.open_msk }}</td>
                 <td>{{ row.close_msk }}</td>
             </tr>
@@ -41,6 +60,7 @@
         </tbody>
     </table>
     </div>
+    <p class="muted" style="margin-top: 0.75rem;"><strong>Итого:</strong> {{ total_count }} позиций, суммарный P/L: <span class="{% if total_pnl >= 0 %}positive{% else %}negative{% endif %}">${{ "%+.2f"|format(total_pnl) }}</span></p>
     {% else %}
     <p>Закрытых позиций пока нет.</p>
     {% endif %}

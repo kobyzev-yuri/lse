@@ -8,39 +8,133 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
-# Ключи config.env, которые можно редактировать из веб-интерфейса (параметры стратегий, игры 5m, порт, флаги).
-# Секреты (KEY, TOKEN, PASSWORD) не включать сюда или отображать маскированно.
-EDITABLE_CONFIG_KEYS = [
+# Секреты и чувствительные значения: не показывать/не сохранять через веб /parameters.
+# Список редактируемых ключей берётся из config.env.example (все незакомментированные KEY=value), кроме этого набора.
+CONFIG_ENV_WEB_BLOCKLIST = frozenset(
+    {
+        "DATABASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_GPT_KEY",
+        "NEWSAPI_KEY",
+        "ALPHAVANTAGE_KEY",
+        "GEMINI_API_KEY",
+        "TELEGRAM_BOT_TOKEN",
+        "INVESTING_NEWS_PROXY",  # может содержать user:pass
+    }
+)
+
+# Если config.env.example недоступен (редкие тесты) — минимальный fallback.
+_FALLBACK_EDITABLE_BASE_KEYS = (
+    "RESTART_CMD",
     "TRADING_CYCLE_ENABLED",
     "USE_LLM",
-    "GAME_5M_STOP_LOSS_ENABLED",
-    "GAME_5M_STOP_TO_TAKE_RATIO",
-    "GAME_5M_STOP_LOSS_PCT",
-    "GAME_5M_STOP_LOSS_MIN_PCT",
-    "GAME_5M_MAX_POSITION_DAYS",
-    "GAME_5M_TAKE_PROFIT_PCT",
-    "GAME_5M_TAKE_PROFIT_MIN_PCT",
-    "GAME_5M_COOLDOWN_MINUTES",
-    "GAME_5M_SESSION_END_EXIT_MINUTES",
-    "GAME_5M_SESSION_END_MIN_PROFIT_PCT",
-    "TICKERS_FAST",
-    "GAME_5M_TICKERS",
-    "GAME_5M_CORRELATION_CONTEXT",
-    "COMMISSION_RATE",
     "WEB_PORT",
     "LOG_LEVEL",
-    "PREMARKET_ALERT_TELEGRAM",
-    "PREMARKET_ENTRY_PREVIEW_5M",
-    "CRON_WATCHDOG_TELEGRAM",
-    "PORTFOLIO_TAKE_PROFIT_PCT",
-    "SENTIMENT_AUTO_CALCULATE",
-    "SENTIMENT_METHOD",
-    "RESTART_CMD",  # команда перезапуска сервиса (кнопка «Перезапустить с новыми параметрами»); пусто = docker compose restart lse
-]
+    "TICKERS_FAST",
+)
+
+
+def _path_config_env_example() -> Path:
+    return Path(__file__).resolve().parent / "config.env.example"
+
+
+def _parse_editable_base_keys_from_example() -> List[str]:
+    p = _path_config_env_example()
+    if not p.is_file():
+        logger.warning("config.env.example не найден (%s), fallback список ключей для /parameters", p)
+        return list(_FALLBACK_EDITABLE_BASE_KEYS)
+    keys: List[str] = []
+    seen: set[str] = set()
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("Не прочитать config.env.example: %s", e)
+        return list(_FALLBACK_EDITABLE_BASE_KEYS)
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        k = s.split("=", 1)[0].strip()
+        if not k or not k.replace("_", "").isalnum() or not k[0].isalpha():
+            continue
+        if not k[0].isupper():
+            continue
+        if k in CONFIG_ENV_WEB_BLOCKLIST:
+            continue
+        if k not in seen:
+            seen.add(k)
+            keys.append(k)
+    return keys
+
+
+_EDITABLE_BASE_KEYS_CACHE: Optional[List[str]] = None
+
+
+def get_editable_base_keys_from_example() -> List[str]:
+    """Ключи для веб-редактора: порядок как в config.env.example."""
+    global _EDITABLE_BASE_KEYS_CACHE
+    if _EDITABLE_BASE_KEYS_CACHE is None:
+        _EDITABLE_BASE_KEYS_CACHE = _parse_editable_base_keys_from_example()
+    return list(_EDITABLE_BASE_KEYS_CACHE)
+
+
+def editable_base_key_set() -> frozenset:
+    return frozenset(get_editable_base_keys_from_example())
+
+
+# Префиксы пер-тикерных ключей (суффикс = тикер из TICKERS_FAST, напр. GAME_5M_TAKE_PROFIT_PCT_SNDK)
+_GAME_5M_TICKER_KEY_PREFIXES = (
+    "GAME_5M_TAKE_PROFIT_PCT_",
+    "GAME_5M_MAX_POSITION_DAYS_",
+)
+
+
+def _tickers_fast_list(cfg: Optional[Dict[str, str]] = None) -> List[str]:
+    if cfg is None:
+        cfg = load_config()
+    raw = (cfg.get("TICKERS_FAST") or "").strip()
+    out: List[str] = []
+    for t in raw.split(","):
+        u = t.strip().upper()
+        if u and u not in out:
+            out.append(u)
+    return out
+
+
+def get_editable_config_keys_expanded() -> List[str]:
+    """
+    Базовые ключи из config.env.example (без blocklist) + для каждого тикера из TICKERS_FAST строки
+    GAME_5M_TAKE_PROFIT_PCT_<TICKER> и GAME_5M_MAX_POSITION_DAYS_<TICKER> (если ещё нет в базовом списке).
+    """
+    cfg = load_config()
+    base = list(get_editable_base_keys_from_example())
+    seen = set(base)
+    for ticker in _tickers_fast_list(cfg):
+        for prefix in _GAME_5M_TICKER_KEY_PREFIXES:
+            k = f"{prefix}{ticker}"
+            if k not in seen:
+                base.append(k)
+                seen.add(k)
+    return base
+
+
+def is_editable_config_env_key(key: str) -> bool:
+    """Можно ли править ключ через API /api/config/env."""
+    key = (key or "").strip()
+    if not key:
+        return False
+    if key in editable_base_key_set():
+        return True
+    for prefix in _GAME_5M_TICKER_KEY_PREFIXES:
+        if key.startswith(prefix) and len(key) > len(prefix):
+            suffix = key[len(prefix) :]
+            if re.fullmatch(r"[A-Z0-9=\^]+", suffix):
+                return True
+    return False
 
 
 def get_config_file_path(config_file: Optional[str] = None) -> Optional[Path]:

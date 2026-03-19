@@ -91,7 +91,6 @@ strategy = factory.select_strategy(technical_data, news_data, sentiment_score)
 
 - `strategies.py` - реализация фабрики стратегий
 - `analyst_agent.py` - интеграция с AnalystAgent
-- `templates/trading.html` - обновлен веб-интерфейс
 - `docs/STRATEGY_FACTORY.md` - подробная документация
 - `examples/strategy_example.py` - примеры использования
 

@@ -7,8 +7,8 @@ from config_loader import get_database_url
 logger = logging.getLogger(__name__)
 
 # Единый источник для CRUD параметров стратегий (таблица strategy_parameters).
-# Используйте get_parameter_store() и методы list_all / save / delete_by_id из веб-интерфейса,
-# API и любых других мест — не дублируйте SQL по проекту.
+# Используйте get_parameter_store() и методы list_all / save / delete_by_id из кода или SQL —
+# веб-редактор strategy_parameters снят; не дублируйте SQL по проекту.
 
 
 class ParameterStore:

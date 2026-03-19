@@ -57,7 +57,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
             { label: prolong.label || (prolong.forecast_defined ? 'Прогноз' : '…'), data: prolongData, borderColor: '#c62828', borderDash: prolong.forecast_defined ? [] : [4, 4], borderWidth: prolong.forecast_defined ? 1.2 : 0.8, fill: false, tension: 0, pointRadius: 0 }
         );
     }
-    if (!noOhlc && data.entry_price != null) {
+    if (data.entry_price != null && labels.length > 0) {
         datasets.push({ label: 'Вход @ ' + data.entry_price.toFixed(2), data: labels.map(() => data.entry_price), borderColor: '#2e7d32', borderDash: [6, 4], borderWidth: 1, fill: false, pointRadius: 0 });
     }
     if (!noOhlc && data.session_high != null) {

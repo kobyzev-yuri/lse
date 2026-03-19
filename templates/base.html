@@ -2,25 +2,50 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>{% block title %}LSE Trading System{% endblock %}</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* Ширина контента под телефон / планшет / десктоп (без «вечной» колонки 480px) */
+        :root {
+            --content-pad-x: clamp(0.5rem, 2.5vw, 1.5rem);
+            --content-max: 100%;
+        }
+        @media (min-width: 600px) {
+            :root { --content-max: min(100% - 1.5rem, 560px); }
+        }
+        @media (min-width: 768px) {
+            :root { --content-max: min(100% - 2rem, 720px); }
+        }
+        @media (min-width: 992px) {
+            :root { --content-max: min(100% - 2.5rem, 960px); }
+        }
+        @media (min-width: 1200px) {
+            :root { --content-max: min(100% - 3rem, 1140px); }
+        }
+        @media (min-width: 1440px) {
+            :root { --content-max: min(100% - 3rem, 1320px); }
+        }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #1a1a2e;
             color: #eaeaea;
-            padding: 0 0 2rem;
-            max-width: 480px;
+            padding: 0 var(--content-pad-x) 2rem;
+            padding-left: max(var(--content-pad-x), env(safe-area-inset-left, 0px));
+            padding-right: max(var(--content-pad-x), env(safe-area-inset-right, 0px));
+            padding-bottom: max(2rem, env(safe-area-inset-bottom, 0px));
+            max-width: var(--content-max);
             margin: 0 auto;
             min-height: 100vh;
+            min-height: 100dvh;
         }
         .navbar {
             position: sticky;
             top: 0;
             background: #16213e;
             padding: 0.6rem 0.8rem;
+            padding-top: max(0.6rem, env(safe-area-inset-top, 0px));
             z-index: 10;
             border-bottom: 1px solid #0f3460;
             display: flex;
@@ -36,7 +61,14 @@
             border-radius: 6px;
         }
         .navbar a:hover, .navbar a:focus { background: #0f3460; color: #e2e8f0; }
-        .container { padding: 0.8rem; }
+        @media (min-width: 992px) {
+            .navbar {
+                justify-content: center;
+                gap: 0.45rem;
+            }
+            .navbar a { font-size: 0.9rem; padding: 0.4rem 0.6rem; }
+        }
+        .container { padding: 0.8rem 0; }
         .card {
             background: #16213e;
             border-radius: 10px;
@@ -57,6 +89,12 @@
             gap: 0.6rem;
             margin-bottom: 1rem;
         }
+        @media (min-width: 600px) {
+            .stats { grid-template-columns: repeat(3, 1fr); }
+        }
+        @media (min-width: 992px) {
+            .stats { grid-template-columns: repeat(4, 1fr); gap: 0.75rem; }
+        }
         .stat-card {
             background: #16213e;
             border-radius: 10px;
@@ -74,7 +112,15 @@
         table td { color: #e2e8f0; }
         table .positive { color: #86efac; }
         table .negative { color: #fca5a5; }
-        table pre { margin: 0; font-size: 0.75rem; background: #0f172a; padding: 0.35rem; border-radius: 4px; overflow-x: auto; max-width: 200px; }
+        table pre { margin: 0; font-size: 0.75rem; background: #0f172a; padding: 0.35rem; border-radius: 4px; overflow-x: auto; max-width: min(200px, 42vw); }
+        @media (min-width: 768px) {
+            table { font-size: 0.85rem; }
+            table th, table td { padding: 0.5rem 0.6rem; }
+            table pre { max-width: min(420px, 55vw); font-size: 0.8rem; }
+        }
+        @media (min-width: 1200px) {
+            table pre { max-width: min(560px, 50vw); }
+        }
         button, .btn {
             background: #0f3460;
             color: #e2e8f0;
@@ -127,10 +173,13 @@
             border-radius: 10px;
             padding: 1rem;
             max-width: 100%;
-            width: 420px;
-            max-height: 90vh;
+            width: min(100%, 420px);
+            max-height: min(90vh, 90dvh);
             overflow-y: auto;
             border: 1px solid #0f3460;
+        }
+        @media (min-width: 768px) {
+            .modal-content { width: min(100%, 520px); }
         }
         .modal-header {
             display: flex;
@@ -164,7 +213,6 @@
 <body>
     <nav class="navbar">
         <a href="/">Портфель</a>
-        <a href="/trading">Торги</a>
         <a href="/knowledge">База знаний</a>
         <a href="/visualization">Графики</a>
         <a href="/parameters">Параметры</a>

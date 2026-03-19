@@ -209,10 +209,16 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
     return results
 
 
+def _canonical_ticker_for_positions(ticker) -> str:
+    """Единый ключ для агрегации позиций (как UPPER(TRIM) в SQL). Иначе SNDK и «SNDK » дают разные корзины и /pending теряет строку."""
+    return str(ticker or "").strip().upper()
+
+
 def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
     """
     Список открытых позиций (есть BUY без полного SELL).
     Использует ту же модель средневзвешенной цены входа.
+    Тикер нормализуется (strip + upper), чтобы BUY/SELL с разным написанием сходились.
     """
     result: List[OpenPosition] = []
 
@@ -233,7 +239,9 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
     position_context_json: Dict[str, Optional[str]] = {}
 
     for _, row in trades.iterrows():
-        ticker = row["ticker"]
+        ticker = _canonical_ticker_for_positions(row["ticker"])
+        if not ticker:
+            continue
         side = row["side"].upper()
         qty = float(row["quantity"])
         price = float(row["price"])

@@ -164,18 +164,22 @@ def _engine():
 def get_open_position(ticker: str) -> Optional[dict[str, Any]]:
     """
     Есть ли открытая позиция по тикеру в игре (GAME_5M).
+    Сравнение тикера через UPPER(TRIM(...)), как в get_open_position_any — чтобы график и /pending совпадали.
     """
+    ticker_upper = (ticker or "").strip().upper()
+    if not ticker_upper:
+        return None
     engine = _engine()
     with engine.connect() as conn:
         last_buy = conn.execute(
             text("""
                 SELECT id, ts, quantity, price, signal_type
                 FROM public.trade_history
-                WHERE ticker = :ticker AND strategy_name = :strategy AND side = 'BUY'
+                WHERE UPPER(TRIM(ticker)) = :ticker_upper AND strategy_name = :strategy AND side = 'BUY'
                 ORDER BY ts DESC, id DESC
                 LIMIT 1
             """),
-            {"ticker": ticker, "strategy": GAME_5M_STRATEGY},
+            {"ticker_upper": ticker_upper, "strategy": GAME_5M_STRATEGY},
         ).fetchone()
         if not last_buy:
             return None
@@ -184,11 +188,11 @@ def get_open_position(ticker: str) -> Optional[dict[str, Any]]:
         sell_after = conn.execute(
             text("""
                 SELECT 1 FROM public.trade_history
-                WHERE ticker = :ticker AND strategy_name = :strategy AND side = 'SELL'
+                WHERE UPPER(TRIM(ticker)) = :ticker_upper AND strategy_name = :strategy AND side = 'SELL'
                   AND (ts > :after_ts OR (ts = :after_ts AND id > :buy_id))
                 LIMIT 1
             """),
-            {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "after_ts": buy_ts, "buy_id": buy_id},
+            {"ticker_upper": ticker_upper, "strategy": GAME_5M_STRATEGY, "after_ts": buy_ts, "buy_id": buy_id},
         ).fetchone()
         if sell_after:
             return None

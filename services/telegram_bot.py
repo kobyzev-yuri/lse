@@ -3607,7 +3607,7 @@ class LSETelegramBot:
             trades = load_trade_history(engine)
             pending = compute_open_positions(trades)
             if ticker_filter:
-                pending = [p for p in pending if p.ticker == ticker_filter]
+                pending = [p for p in pending if _normalize_ticker(p.ticker) == ticker_filter]
             if not pending:
                 await update.message.reply_text(
                     f"📋 Открытых позиций по тикеру {ticker_filter} нет." if ticker_filter else "📋 Открытых позиций нет."

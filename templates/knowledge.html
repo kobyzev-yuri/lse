@@ -9,7 +9,7 @@
     <h2>Каналы новостей (за 14 дней)</h2>
     <p>Источники записей в базе знаний и количество новостей по каждому за последние 2 недели.</p>
     {% if sources_stats %}
-    <table id="sourcesTable" style="width: 100%; max-width: 500px;">
+    <table id="sourcesTable" style="width: 100%;">
         <thead>
             <tr>
                 <th>Источник</th>
@@ -36,7 +36,7 @@
     <p>Введите тему (например: эскалация Иран–Израиль–США, влияние на золото и полупроводники). LLM сформирует группу коротких новостей по нашим тикерам.</p>
     <form id="generateLlmForm">
         <label>Тема:</label>
-        <input type="text" name="topic" id="topicInput" placeholder="Иран, Израиль, США, золото, полупроводники" style="width: 100%; max-width: 400px;">
+        <input type="text" name="topic" id="topicInput" placeholder="Иран, Израиль, США, золото, полупроводники" style="width: 100%; max-width: min(100%, 36rem);">
         <button type="submit" id="btnGenerate">Сгенерировать</button>
     </form>
     <div id="generateLlmResult" style="margin-top: 1rem;"></div>

@@ -46,7 +46,7 @@ confidence = result['llm_guidance']['confidence']
 
 ### Через веб-интерфейс
 
-1. Откройте http://localhost:8000/trading
+1. Откройте http://localhost:8000/ (портфель) или используйте Telegram (`/recommend`, `/signal`)
 2. Выберите тикер
 3. Включите "Использовать LLM анализ"
 4. Нажмите "Анализировать"
@@ -80,7 +80,6 @@ confidence = result['llm_guidance']['confidence']
 ## Файлы
 
 - `analyst_agent.py` - метод `get_llm_guidance()` добавлен
-- `templates/trading.html` - обновлен для отображения стратегии
 - `docs/LLM_GUIDANCE.md` - подробная документация
 - `examples/llm_guidance_example.py` - примеры использования
 
