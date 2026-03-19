@@ -116,6 +116,7 @@ def process_ticker(
     close_ctx = build_5m_close_context(d5)
     decision = card.get("decision", "HOLD")
     price = card.get("price")
+    rsi_5m = card.get("rsi_5m")
     momentum_2h_pct = card.get("momentum_2h_pct")
     bar_high = close_ctx.get("bar_high")
     bar_low = close_ctx.get("bar_low")
@@ -147,6 +148,7 @@ def process_ticker(
             should_close, exit_type = should_close_position(
                 open_pos, decision, price_for_check, momentum_2h_pct=momentum_2h_pct,
                 bar_high=bar_high, bar_low=bar_low,
+                rsi_5m=rsi_5m,
             )
             entry = open_pos.get("entry_price")
             entry_f = float(entry) if entry is not None and entry > 0 else None
@@ -437,6 +439,7 @@ def main():
                         open_pos, d5.get("decision", "HOLD"), price_for_check,
                         momentum_2h_pct=close_ctx_ah.get("momentum_2h_pct"),
                         bar_high=bar_high, bar_low=bar_low,
+                        rsi_5m=close_ctx_ah.get("rsi_5m"),
                     )
                     if should_close and exit_type:
                         base_exit = close_ctx_ah.get("exit_bar_close") if isinstance(close_ctx_ah.get("exit_bar_close"), (int, float)) and close_ctx_ah.get("exit_bar_close") > 0 else price_for_check

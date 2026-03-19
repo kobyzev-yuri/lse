@@ -617,6 +617,7 @@ def should_close_position(
     momentum_2h_pct: Optional[float] = None,
     bar_high: Optional[float] = None,
     bar_low: Optional[float] = None,
+    rsi_5m: Optional[float] = None,
 ) -> tuple[bool, str]:
     """Закрывать ли позицию: по тейку/стопу (цена), по сигналу SELL, по истечении GAME_5M_MAX_POSITION_DAYS,
     либо в последние N минут сессии с минимальным профитом (TIME_EXIT). При сигнале STRONG_BUY выход в конец сессии не делаем — остаёмся в позиции.
@@ -686,6 +687,10 @@ def should_close_position(
         age = timedelta(0)
     if age > timedelta(days=_max_position_days(open_position.get("ticker"))):
         return True, "TIME_EXIT"
+    # Важное правило твоего сценария:
+    # SELL используем только как рекомендацию (в момент входа), но НЕ как причину выхода
+    # для уже открытой позиции. Автозакрытие происходит только по TAKE_PROFIT / TIME_EXIT
+    # (и STOP_LOSS, если он включён).
     if current_decision == "SELL":
-        return True, "SELL"
+        return False, ""
     return False, ""
