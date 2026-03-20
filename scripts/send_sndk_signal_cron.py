@@ -107,7 +107,11 @@ def process_ticker(
 
     d5 = d5_precomputed
     if d5 is None:
-        d5 = get_decision_5m(ticker, use_llm_news=True)
+        try:
+            d5 = get_decision_5m(ticker, use_llm_news=True)
+        except Exception as e:
+            logger.warning("get_decision_5m(%s): %s", ticker, e)
+            return False
     if not d5:
         logger.debug("Нет 5m данных по %s, пропуск", ticker)
         return False
