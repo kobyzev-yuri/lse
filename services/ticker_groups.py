@@ -51,13 +51,27 @@ def get_game_5m_correlation_context() -> List[str]:
 
 
 def get_tickers_for_5m_correlation() -> List[str]:
-    """Полный список тикеров для расчёта корреляции по игре 5m: торгуемые (game_5m) + контекст.
-    Используется для «корреляция всех со всеми» в /prompt_entry game5m, /recommend5m, кроне."""
+    """Универс для матрицы корреляции (игра 5m + LLM/крон): без дублей.
+
+    Состав:
+    1) тикеры игры 5m (`GAME_5M_TICKERS` / `TICKERS_FAST`);
+    2) портфельный цикл — как `/corr`: `TRADING_CYCLE_TICKERS` или MEDIUM+LONG;
+    3) `GAME_5M_CORRELATION_CONTEXT` (фон, VIX, нефть, forex и т.д.).
+
+    Тогда по каждому тикеру игры в промпте видны корреляции со **всеми** остальными
+    (портфель + макро), а не только внутри шестёрки игры.
+
+    Отключить портфель из универсa (старое поведение: только игра + контекст):
+    `GAME_5M_CORRELATION_EXCLUDE_PORTFOLIO=true` в config.env.
+    """
     game = get_tickers_game_5m()
     context = get_game_5m_correlation_context()
+    raw_ex = (get_config_value("GAME_5M_CORRELATION_EXCLUDE_PORTFOLIO", "") or "").strip().lower()
+    exclude_pf = raw_ex in ("1", "true", "yes")
+    portfolio = [] if exclude_pf else get_tickers_for_portfolio_game()
     seen: set = set()
     result: List[str] = []
-    for t in game + context:
+    for t in game + portfolio + context:
         if t and t not in seen:
             seen.add(t)
             result.append(t)

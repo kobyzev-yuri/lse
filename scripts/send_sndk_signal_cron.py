@@ -493,19 +493,16 @@ def main():
         logger.warning("Нет быстрых тикеров с 5m данными, выход")
         sys.exit(0)
 
-    # Кластерный анализ: решения по тикерам игры 5m; корреляция — по полному списку (игра + контекст MSFT, VIX, нефть и т.д.)
+    # Кластерный анализ: решения по игре 5m; корреляция — get_tickers_for_5m_correlation() (игра + портфель + контекст) внутри get_cluster_decisions_5m
     cluster_decisions = None
     try:
-        from services.cluster_recommend import get_cluster_decisions_5m, get_correlation_matrix
+        from services.cluster_recommend import get_cluster_decisions_5m
         cluster_decisions = get_cluster_decisions_5m(tickers, days=5, use_llm_news=True)
-        corr_tickers = get_tickers_for_5m_correlation()
-        if len(corr_tickers) >= 2:
-            full_corr = get_correlation_matrix(corr_tickers, days=30)
-            if full_corr and cluster_decisions:
-                cluster_decisions["correlation"] = full_corr
-                logger.info("[5m] Кластер: корреляция загружена для %s (игра + контекст)", corr_tickers)
-        elif cluster_decisions and cluster_decisions.get("correlation"):
-            logger.info("[5m] Кластер: корреляция загружена для %s", tickers)
+        if cluster_decisions and cluster_decisions.get("correlation"):
+            logger.info(
+                "[5m] Кластер: корреляция для универсa %s",
+                cluster_decisions.get("correlation_tickers") or get_tickers_for_5m_correlation(),
+            )
     except Exception as e:
         logger.debug("Кластер 5m (fallback на потикерный вызов): %s", e)
 

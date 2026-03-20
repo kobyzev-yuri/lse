@@ -58,9 +58,13 @@ def get_correlation_matrix(
     min_tickers_per_row: Optional[int] = None,
 ) -> Optional[Dict[str, Dict[str, float]]]:
     """
-    Матрица корреляций по тикерам (дневные доходности из quotes).
+    Матрица корреляций по тикерам: дневные log-returns, попарно min_periods=5.
+    Источник: сначала БД (quotes) с мягким выравниванием, при недостатке дней — yfinance
+    с outer join по датам (см. ClusterManager.get_price_data_with_fallback for_correlation).
+
     Возвращает dict[ticker1][ticker2] = correlation или None при ошибке.
-    min_tickers_per_row=2 — мягче (оставлять строки с данными хотя бы по 2 тикерам), чтобы матрица строилась чаще.
+    Параметр min_tickers_per_row передаётся в низкоуровневый расчёт только для совместимости;
+    для корреляции внутри всегда включён надёжный режим for_correlation=True.
     """
     if len(tickers) < 2:
         return None
@@ -86,8 +90,12 @@ def get_cluster_decisions_5m(
     """
     Решения по 5m для всех тикеров кластера + корреляция.
     Возвращает: {"decisions": {ticker: get_decision_5m(ticker)}, "correlation": {...}, "tickers": [...]}.
+
+    Матрица корреляции считается по `get_tickers_for_5m_correlation()` (игра + портфель + контекст),
+    а не только по `tickers`, чтобы LLM видел связи быстрых стоков с циклом и макро.
     """
     from services.recommend_5m import get_decision_5m
+    from services.ticker_groups import get_tickers_for_5m_correlation
 
     decisions = {}
     for t in tickers:
@@ -98,12 +106,35 @@ def get_cluster_decisions_5m(
         except Exception as e:
             logger.warning("5m решение для %s: %s", t, e)
 
-    correlation = get_correlation_matrix(tickers, days=min(30, days * 7))
+    corr_universe = get_tickers_for_5m_correlation()
+    if len(corr_universe) >= 2:
+        correlation = get_correlation_matrix(corr_universe, days=30)
+    else:
+        correlation = get_correlation_matrix(tickers, days=min(30, days * 7)) if len(tickers) >= 2 else None
     return {
         "decisions": decisions,
         "correlation": correlation,
         "tickers": tickers,
+        "correlation_tickers": corr_universe if len(corr_universe) >= 2 else list(tickers),
     }
+
+
+def _tickers_in_correlation_matrix(correlation_matrix: Dict[str, Dict[str, Any]]) -> set:
+    keys: set = set(correlation_matrix.keys())
+    for v in correlation_matrix.values():
+        if isinstance(v, dict):
+            keys.update(v.keys())
+    return keys
+
+
+def _correlation_peers_ordered(ticker: str, game_list: List[str], correlation_matrix: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Все символы из матрицы кроме `ticker`: сначала остальные из игры, затем остальные по имени."""
+    sym = _tickers_in_correlation_matrix(correlation_matrix)
+    sym.discard(ticker)
+    game_set = set(game_list)
+    game_others = [x for x in game_list if x != ticker and x in sym]
+    rest = sorted(x for x in sym if x not in game_set)
+    return game_others + rest
 
 
 def build_cluster_note_for_5m_llm(
@@ -115,10 +146,14 @@ def build_cluster_note_for_5m_llm(
     """Собирает текст «Кластер и корреляция» для промпта LLM в game_5m. Общий для крона и бота."""
     if not correlation_matrix or not full_list:
         return None
-    others = [x for x in full_list if x != ticker]
+    others = _correlation_peers_ordered(ticker, full_list, correlation_matrix)
     if not others:
         return None
-    lines = [f"Кластер тикеров: {', '.join(full_list)}. Анализируемый тикер: {ticker}."]
+    lines = [
+        f"Игра 5m (кластер): {', '.join(full_list)}. "
+        f"Корреляции — со всеми символами матрицы ({len(others)} пар к {ticker}). "
+        f"Анализируемый тикер: {ticker}."
+    ]
     corr_pairs = []
     for o in others:
         c = correlation_matrix.get(ticker, {}).get(o) or correlation_matrix.get(o, {}).get(ticker)
@@ -128,11 +163,9 @@ def build_cluster_note_for_5m_llm(
             except (TypeError, ValueError):
                 pass
     if corr_pairs:
-        lines.append(f"Корреляция с другими (30 дн.): {', '.join(corr_pairs[:15])}.")
+        lines.append(f"Корреляция с другими (30 дн., до 25 пар): {', '.join(corr_pairs[:25])}.")
     other_rows: List[Tuple[str, Optional[float], Optional[float], float]] = []
-    for t in full_list:
-        if t == ticker:
-            continue
+    for t in others:
         tech = tech_by_ticker.get(t) or {}
         pr = tech.get("price")
         rsi_o = tech.get("rsi")
