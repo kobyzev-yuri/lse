@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 # Сохранять HTML при ненайденной таблице для отладки (INVESTING_CALENDAR_DEBUG_HTML=1)
 DEBUG_SAVE_HTML = os.environ.get('INVESTING_CALENDAR_DEBUG_HTML', '').strip().lower() in ('1', 'true', 'yes')
 
+# Защита от 429 Too Many Requests (Investing.com)
+INVESTING_CALENDAR_429_BACKOFF = [45, 90]
+INVESTING_CALENDAR_429_MAX_RETRIES = 2
+_CALENDAR_RATE_LIMIT_HIT = False
+
 # Регионы для экономического календаря
 REGIONS = {
     'USA': {'code': '5', 'name': 'United States'},
@@ -133,6 +138,7 @@ def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
         'Upgrade-Insecure-Requests': '1'
     }
     
+    global _CALENDAR_RATE_LIMIT_HIT
     try:
         # Параметры для фильтрации
         params = {
@@ -141,8 +147,29 @@ def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
             'currentTab': 'today'
         }
         
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
+        response = None
+        for attempt in range(INVESTING_CALENDAR_429_MAX_RETRIES + 1):
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            if response.status_code == 429:
+                if attempt < INVESTING_CALENDAR_429_MAX_RETRIES:
+                    wait = INVESTING_CALENDAR_429_BACKOFF[attempt]
+                    logger.warning(
+                        "Investing.com calendar: 429 Too Many Requests, ждём %s с перед повтором (регион=%s, попытка %s)",
+                        wait, region, attempt + 1,
+                    )
+                    time.sleep(wait)
+                    continue
+                _CALENDAR_RATE_LIMIT_HIT = True
+                logger.warning(
+                    "Investing.com calendar: 429 после %s попыток (регион=%s). Останавливаем опрос регионов до следующего запуска.",
+                    INVESTING_CALENDAR_429_MAX_RETRIES + 1,
+                    region,
+                )
+                return []
+            response.raise_for_status()
+            break
+        if response is None:
+            return []
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
@@ -241,6 +268,14 @@ def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
         return events
         
     except requests.exceptions.RequestException as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status == 429:
+            _CALENDAR_RATE_LIMIT_HIT = True
+            logger.warning(
+                "Investing.com calendar: 429 (регион=%s). Прерываем опрос календаря до следующего запуска.",
+                region,
+            )
+            return []
         logger.error(f"❌ Ошибка запроса к Investing.com: {e}")
         return []
     except Exception as e:
@@ -255,9 +290,16 @@ def fetch_all_regions_calendar() -> List[Dict]:
     Returns:
         Список всех событий
     """
+    global _CALENDAR_RATE_LIMIT_HIT
+    _CALENDAR_RATE_LIMIT_HIT = False
     all_events = []
     
     for region in REGIONS.keys():
+        if _CALENDAR_RATE_LIMIT_HIT:
+            logger.warning(
+                "Investing.com calendar: дальнейший опрос регионов пропущен (получен 429 в этом запуске)."
+            )
+            break
         logger.info(f"📅 Получение календаря для {region}...")
         events = fetch_investing_calendar(region)
         all_events.extend(events)

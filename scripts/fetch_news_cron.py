@@ -11,6 +11,7 @@ sys.path.insert(0, str(project_root))
 
 import logging
 import time
+import argparse
 from datetime import datetime
 
 # Импорты модулей парсинга
@@ -37,7 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def fetch_all_news_sources():
+def fetch_all_news_sources(mode: str = "all"):
     """
     Получает новости из всех настроенных источников
     """
@@ -45,75 +46,83 @@ def fetch_all_news_sources():
     logger.info(f"🚀 Начало получения новостей - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
     
+    mode = (mode or "all").strip().lower()
+    if mode not in ("all", "core", "investing"):
+        mode = "all"
+
     sources_status = {}
     rss_saved, rss_skipped = 0, 0
     newsapi_saved = 0
     n_investing = 0
 
-    # 1. RSS фиды центральных банков (всегда работает, бесплатно)
-    try:
-        logger.info("\n📡 Источник 1/5: RSS фиды центральных банков")
-        rss_saved, rss_skipped = fetch_and_save_rss_news()
-        sources_status['RSS'] = f"✅ сохранено {rss_saved} новых, дубликатов {rss_skipped}" if (rss_saved or rss_skipped) else "✅ 0 записей из фидов"
-    except Exception as e:
-        logger.error("❌ Ошибка RSS фидов: %s", e)
-        sources_status['RSS'] = f'❌ Ошибка: {e}'
-    
-    # 2. Investing.com Economic Calendar (web scraping)
-    try:
-        logger.info("\n📅 Источник 2/5: Investing.com Economic Calendar")
-        fetch_and_save_investing_calendar()
-        sources_status['Investing.com Calendar'] = '✅ Успешно'
-    except Exception as e:
-        logger.error(f"❌ Ошибка Investing.com Calendar: {e}")
-        sources_status['Investing.com Calendar'] = f'❌ Ошибка: {e}'
-    time.sleep(10)  # пауза между источниками, склонными к 429
+    run_investing = mode in ("all", "investing")
+    run_core = mode in ("all", "core")
 
-    # 2b. Investing.com News (лента stock-market-news, по тикерам из ключевых слов)
-    try:
-        logger.info("\n📰 Источник 2b/5: Investing.com News")
-        from services.investing_news_fetcher import fetch_and_save_investing_news
-        n_investing = fetch_and_save_investing_news(max_articles=25) or 0
-        sources_status['Investing.com News'] = f'✅ сохранено {n_investing} новых' if n_investing else '✅ 0 новых'
-    except Exception as e:
-        logger.error(f"❌ Ошибка Investing.com News: {e}")
-        sources_status['Investing.com News'] = f'❌ Ошибка: {e}'
-    time.sleep(10)  # пауза перед NewsAPI/Alpha Vantage (снижение 429)
+    if run_core:
+        # 1. RSS фиды центральных банков (всегда работает, бесплатно)
+        try:
+            logger.info("\n📡 Источник core 1/3: RSS фиды центральных банков")
+            rss_saved, rss_skipped = fetch_and_save_rss_news()
+            sources_status['RSS'] = f"✅ сохранено {rss_saved} новых, дубликатов {rss_skipped}" if (rss_saved or rss_skipped) else "✅ 0 записей из фидов"
+        except Exception as e:
+            logger.error("❌ Ошибка RSS фидов: %s", e)
+            sources_status['RSS'] = f'❌ Ошибка: {e}'
 
-    # 3. Alpha Vantage (требует API ключ)
-    try:
-        logger.info("\n📊 Источник 3/5: Alpha Vantage API")
-        # Получаем тикеры из конфига или используем дефолтные
-        from config_loader import get_config_value
-        tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
-        tickers = [t.strip() for t in tickers_str.split(',')]
-        
-        # По умолчанию выключено: бесплатный план Alpha Vantage — 25 запросов/день и 1 запрос/сек;
-        # экономические и технические индикаторы быстро сжигают лимит. Включите в config.env при необходимости.
-        include_economic = get_config_value('ALPHAVANTAGE_FETCH_ECONOMIC', 'false').lower() == 'true'
-        include_technical = get_config_value('ALPHAVANTAGE_FETCH_TECHNICAL', 'false').lower() == 'true'
-        
-        fetch_all_alphavantage_data(
-            tickers=tickers,
-            include_economic=include_economic,
-            include_technical=include_technical
-        )
-        sources_status['Alpha Vantage'] = '✅ Успешно'
-    except Exception as e:
-        logger.error(f"❌ Ошибка Alpha Vantage: {e}")
-        sources_status['Alpha Vantage'] = f'❌ Ошибка: {e}'
-    time.sleep(15)  # пауза перед NewsAPI (лимиты бесплатного плана)
+        # 2. Alpha Vantage (требует API ключ)
+        try:
+            logger.info("\n📊 Источник core 2/3: Alpha Vantage API")
+            # Получаем тикеры из конфига или используем дефолтные
+            from config_loader import get_config_value
+            tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
+            tickers = [t.strip() for t in tickers_str.split(',')]
 
-    # 4. NewsAPI (требует API ключ)
-    try:
-        logger.info("\n📰 Источник 4/5: NewsAPI")
-        newsapi_saved = fetch_and_save_newsapi_news()
-        if newsapi_saved is None:
-            newsapi_saved = 0
-        sources_status['NewsAPI'] = f"✅ сохранено {newsapi_saved} новых" if newsapi_saved else "✅ 0 новых (ключ не задан или все дубликаты)"
-    except Exception as e:
-        logger.error("❌ Ошибка NewsAPI: %s", e)
-        sources_status['NewsAPI'] = f'❌ Ошибка: {e}'
+            # По умолчанию выключено: бесплатный план Alpha Vantage — 25 запросов/день и 1 запрос/сек;
+            # экономические и технические индикаторы быстро сжигают лимит. Включите в config.env при необходимости.
+            include_economic = get_config_value('ALPHAVANTAGE_FETCH_ECONOMIC', 'false').lower() == 'true'
+            include_technical = get_config_value('ALPHAVANTAGE_FETCH_TECHNICAL', 'false').lower() == 'true'
+
+            fetch_all_alphavantage_data(
+                tickers=tickers,
+                include_economic=include_economic,
+                include_technical=include_technical
+            )
+            sources_status['Alpha Vantage'] = '✅ Успешно'
+        except Exception as e:
+            logger.error(f"❌ Ошибка Alpha Vantage: {e}")
+            sources_status['Alpha Vantage'] = f'❌ Ошибка: {e}'
+        time.sleep(15)  # пауза перед NewsAPI (лимиты бесплатного плана)
+
+        # 3. NewsAPI (требует API ключ)
+        try:
+            logger.info("\n📰 Источник core 3/3: NewsAPI")
+            newsapi_saved = fetch_and_save_newsapi_news()
+            if newsapi_saved is None:
+                newsapi_saved = 0
+            sources_status['NewsAPI'] = f"✅ сохранено {newsapi_saved} новых" if newsapi_saved else "✅ 0 новых (ключ не задан или все дубликаты)"
+        except Exception as e:
+            logger.error("❌ Ошибка NewsAPI: %s", e)
+            sources_status['NewsAPI'] = f'❌ Ошибка: {e}'
+
+    if run_investing:
+        # 4. Investing.com Economic Calendar (web scraping)
+        try:
+            logger.info("\n📅 Источник investing 1/2: Investing.com Economic Calendar")
+            fetch_and_save_investing_calendar()
+            sources_status['Investing.com Calendar'] = '✅ Успешно'
+        except Exception as e:
+            logger.error(f"❌ Ошибка Investing.com Calendar: {e}")
+            sources_status['Investing.com Calendar'] = f'❌ Ошибка: {e}'
+        time.sleep(10)  # пауза между источниками, склонными к 429
+
+        # 5. Investing.com News (лента stock-market-news, по тикерам из ключевых слов)
+        try:
+            logger.info("\n📰 Источник investing 2/2: Investing.com News")
+            from services.investing_news_fetcher import fetch_and_save_investing_news
+            n_investing = fetch_and_save_investing_news(max_articles=25) or 0
+            sources_status['Investing.com News'] = f'✅ сохранено {n_investing} новых' if n_investing else '✅ 0 новых'
+        except Exception as e:
+            logger.error(f"❌ Ошибка Investing.com News: {e}")
+            sources_status['Investing.com News'] = f'❌ Ошибка: {e}'
 
     # Итоговый отчет
     total_new = rss_saved + newsapi_saved + n_investing
@@ -122,13 +131,21 @@ def fetch_all_news_sources():
     for source, status in sources_status.items():
         logger.info("   %s: %s", source, status)
     logger.info("=" * 60)
-    logger.info("📥 За этот запуск всего сохранено новых записей: %s", total_new)
+    logger.info("📥 За этот запуск (mode=%s) всего сохранено новых записей: %s", mode, total_new)
     logger.info("✅ Завершено получение новостей - %s\n", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Fetch news from sources")
+    parser.add_argument(
+        "--mode",
+        choices=("all", "core", "investing"),
+        default="all",
+        help="all=все источники, core=RSS+AlphaVantage+NewsAPI, investing=только Investing",
+    )
+    args = parser.parse_args()
     try:
-        fetch_all_news_sources()
+        fetch_all_news_sources(mode=args.mode)
     except Exception as e:
         logger.error(f"❌ Критическая ошибка получения новостей: {e}")
         sys.exit(1)
