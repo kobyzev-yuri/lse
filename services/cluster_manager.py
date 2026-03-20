@@ -53,7 +53,10 @@ class ClusterManager:
                 pt = pt.dropna(how="any")
 
             if pt.shape[0] < 5:
-                logger.warning("Меньше 5 общих дней с данными по котировкам, расчет невозможен.")
+                logger.debug(
+                    "БД: после выравнивания дат меньше 5 строк (%d); при fallback на yfinance корреляция всё ещё может быть посчитана.",
+                    pt.shape[0],
+                )
                 return None
 
             return pt
@@ -61,13 +64,87 @@ class ClusterManager:
             logger.error(f"Ошибка получения цен для кластеризации: {e}")
             return None
 
+    def _fetch_daily_closes_yfinance_outer(
+        self,
+        tickers: List[str],
+        max_days: int,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Дневные close с Yahoo: объединение по датам (outer), без dropna(thresh).
+        Корреляция log-returns считается попарно (pandas .corr(min_periods=…)), общие дни
+        для пары A–B не требуют наличия котировок по всем остальным символам в эту дату.
+        """
+        try:
+            import yfinance as yf
+
+            data = {}
+            period_days = max(int(max_days), 45)
+            for t in tickers:
+                try:
+                    hist = yf.Ticker(t).history(
+                        period=f"{period_days}d", interval="1d", auto_adjust=False
+                    )
+                    if hist is not None and not hist.empty and "Close" in hist.columns:
+                        s = hist["Close"].copy()
+                        idx = pd.to_datetime(s.index)
+                        if getattr(idx, "tz", None) is not None:
+                            idx = idx.tz_convert("UTC").tz_localize(None)
+                        s.index = idx.normalize()
+                        data[t] = s
+                except Exception:
+                    continue
+            if len(data) < 2:
+                return None
+            df = pd.DataFrame(data).sort_index()
+            df = df.replace(0, np.nan)
+            df = df.dropna(axis=1, how="all")
+            df = df.dropna(how="all")
+            if df.shape[1] < 2:
+                return None
+            if df.shape[0] < 5:
+                logger.warning(
+                    "yfinance (outer): в объединении индексов меньше 5 дат с данными хотя бы по одному тикеру."
+                )
+                return None
+            return df
+        except Exception as e:
+            logger.warning("yfinance outer: %s", e)
+            return None
+
     def get_price_data_with_fallback(
         self,
         tickers: List[str],
         max_days: int = 100,
         min_tickers_per_row: Optional[int] = None,
+        for_correlation: bool = False,
     ) -> Optional[pd.DataFrame]:
-        """БД → при недостатке строк fallback на yfinance. Для большого кластера можно задать min_tickers_per_row."""
+        """
+        БД → при недостатке строк fallback на yfinance.
+
+        for_correlation=True — режим для матрицы корреляций: из БД берём строки с данными
+        хотя бы по 2 тикерам (максимум пересечения дат); если строк < 5 — yfinance с
+        outer join по датам без dropna(thresh). Так снимается проблема «понедельник / смесь
+        акций+FX+фьючерсов», когда жёсткое требование «почти все тикеры в один день» даёт
+        пустую матрицу, хотя попарные корреляции по общим дням ещё возможны.
+        """
+        if for_correlation:
+            prices_db = self.get_price_data(
+                tickers, max_days, min_tickers_per_row=2
+            )
+            if (
+                prices_db is not None
+                and prices_db.shape[0] >= 5
+                and prices_db.shape[1] >= 2
+            ):
+                return prices_db
+            logger.debug(
+                "Корреляция: в БД недостаточно общих дней (%s); yfinance (outer).",
+                "нет матрицы"
+                if prices_db is None
+                else f"{prices_db.shape[0]} дн. × {prices_db.shape[1]} тик.",
+            )
+            return self._fetch_daily_closes_yfinance_outer(tickers, max_days)
+
         if min_tickers_per_row is None and len(tickers) > 4:
             # Смешанный кластер (акции + forex + товары): оставляем строки, где есть данные хотя бы по n-2 тикерам
             min_tickers_per_row = max(2, len(tickers) - 2)
@@ -119,11 +196,21 @@ class ClusterManager:
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Возвращает (corr_matrix, beta_matrix) за последние `days` дней.
-        min_tickers_per_row: при 2 — мягче (больше строк, матрица чаще строится); None — авто (для >4 тикеров = n-2).
+        Загрузка цен всегда в режиме for_correlation (БД с thresh=2, иначе yfinance outer).
+        Аргумент min_tickers_per_row оставлен для совместимости вызовов; на выбор источника не влияет.
         """
-        # Запрашиваем данные с небольшим запасом для shift(1)
+        # Окно загрузки как в Telegram /corr: при длинном списке (игра 5m + контекст) нужен большой
+        # горизонт yfinance, иначе outer-merge даёт мало строк и отличается от /corr5m (там только 6 тикеров и до 252 дн.).
+        n_sym = len(tickers)
+        if n_sym > 4:
+            max_days_load = max(int(days) + 30, 252)
+        else:
+            max_days_load = int(days) + 10
         prices = self.get_price_data_with_fallback(
-            tickers, max_days=days + 10, min_tickers_per_row=min_tickers_per_row
+            tickers,
+            max_days=max_days_load,
+            min_tickers_per_row=min_tickers_per_row,
+            for_correlation=True,
         )
         
         if prices is None or prices.shape[0] < 5:
