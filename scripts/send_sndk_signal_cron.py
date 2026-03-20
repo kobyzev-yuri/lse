@@ -493,7 +493,7 @@ def main():
         logger.warning("Нет быстрых тикеров с 5m данными, выход")
         sys.exit(0)
 
-    # Кластерный анализ: решения по игре 5m; корреляция — get_tickers_for_5m_correlation() (игра + портфель + контекст) внутри get_cluster_decisions_5m
+    # Кластерный анализ: корреляция для LLM — load_game5m_llm_correlation() внутри get_cluster_decisions_5m (как веб и Telegram GAME5M)
     cluster_decisions = None
     try:
         from services.cluster_recommend import get_cluster_decisions_5m

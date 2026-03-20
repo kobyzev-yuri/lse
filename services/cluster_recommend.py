@@ -5,6 +5,9 @@
 - Портфель (медленные/средние): тикеры из TRADING_CYCLE_TICKERS; рекомендации по каждому с кластерным контекстом.
 
 Используется в /recommend (без тикера), /recommend5m (без тикера) и в кронах для входов/закрытий.
+
+**Корреляция для LLM (игра 5m):** один вход `load_game5m_llm_correlation()` — веб-карточка LLM,
+Telegram (отчёт GAME5M), `get_cluster_decisions_5m` / крон; универс `get_tickers_for_5m_correlation()`.
 """
 
 from __future__ import annotations
@@ -14,6 +17,11 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Текст для отчётов/метаданных: один источник матрицы (игра + портфель + контекст).
+GAME5M_LLM_CORRELATION_NOTE = (
+    "Корреляция за 30 дн. (единый универс: игра 5m + портфель + GAME_5M_CORRELATION_CONTEXT)."
+)
 
 
 def get_avg_volatility_20_pct_from_quotes(ticker: str) -> Optional[float]:
@@ -82,6 +90,31 @@ def get_correlation_matrix(
         return None
 
 
+def load_game5m_llm_correlation(
+    days: int = 30,
+) -> Tuple[Optional[Dict[str, Dict[str, float]]], List[str], List[str]]:
+    """
+    Единый источник дневной корреляции (log-returns) для оценки LLM по игре 5m.
+
+    Используйте везде вместо локальных «водопадов» get_correlation_matrix(FAST/MEDIUM/…).
+
+    Returns:
+        (corr_matrix, universe_tickers, game_5m_tickers)
+        universe = `get_tickers_for_5m_correlation()`; game = `get_tickers_game_5m()`.
+        Если в универсe < 2 символов, матрица по одной только игре (если там ≥ 2 тикера).
+    """
+    from services.ticker_groups import get_tickers_for_5m_correlation, get_tickers_game_5m
+
+    universe = list(get_tickers_for_5m_correlation() or [])
+    game = list(get_tickers_game_5m() or [])
+    if len(universe) >= 2:
+        return get_correlation_matrix(universe, days=days), universe, game
+    if len(game) >= 2:
+        m = get_correlation_matrix(game, days=days)
+        return m, game, game
+    return None, universe, game
+
+
 def get_cluster_decisions_5m(
     tickers: List[str],
     days: int = 5,
@@ -91,11 +124,9 @@ def get_cluster_decisions_5m(
     Решения по 5m для всех тикеров кластера + корреляция.
     Возвращает: {"decisions": {ticker: get_decision_5m(ticker)}, "correlation": {...}, "tickers": [...]}.
 
-    Матрица корреляции считается по `get_tickers_for_5m_correlation()` (игра + портфель + контекст),
-    а не только по `tickers`, чтобы LLM видел связи быстрых стоков с циклом и макро.
+    Матрица корреляции — через `load_game5m_llm_correlation()` (тот же путь, что веб LLM и Telegram GAME5M).
     """
     from services.recommend_5m import get_decision_5m
-    from services.ticker_groups import get_tickers_for_5m_correlation
 
     decisions = {}
     for t in tickers:
@@ -106,16 +137,15 @@ def get_cluster_decisions_5m(
         except Exception as e:
             logger.warning("5m решение для %s: %s", t, e)
 
-    corr_universe = get_tickers_for_5m_correlation()
-    if len(corr_universe) >= 2:
-        correlation = get_correlation_matrix(corr_universe, days=30)
-    else:
-        correlation = get_correlation_matrix(tickers, days=min(30, days * 7)) if len(tickers) >= 2 else None
+    correlation, corr_universe, _game = load_game5m_llm_correlation(days=30)
+    if correlation is None and len(tickers) >= 2:
+        correlation = get_correlation_matrix(tickers, days=min(30, days * 7))
+        corr_universe = list(tickers)
     return {
         "decisions": decisions,
         "correlation": correlation,
         "tickers": tickers,
-        "correlation_tickers": corr_universe if len(corr_universe) >= 2 else list(tickers),
+        "correlation_tickers": corr_universe,
     }
 
 
@@ -143,7 +173,11 @@ def build_cluster_note_for_5m_llm(
     correlation_matrix: Optional[Dict[str, Dict[str, float]]],
     tech_by_ticker: Dict[str, Dict[str, Any]],
 ) -> Optional[str]:
-    """Собирает текст «Кластер и корреляция» для промпта LLM в game_5m. Общий для крона и бота."""
+    """Собирает текст «Кластер и корреляция» для промпта LLM в game_5m.
+
+    full_list — только тикеры **игры 5m** (подпись «кластер» и порядок: сначала пары внутри игры).
+    correlation_matrix — из `load_game5m_llm_correlation()` (полный универс: игра + портфель + контекст).
+    """
     if not correlation_matrix or not full_list:
         return None
     others = _correlation_peers_ordered(ticker, full_list, correlation_matrix)

@@ -1321,10 +1321,9 @@ async def get_game5m_cards(days: int = 5):
 
 def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
     """Синхронный расчёт вывода LLM для карточки 5m (запускается в потоке, чтобы не блокировать event loop)."""
-    from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation
     from services.recommend_5m import get_decision_5m
     from services.cluster_recommend import (
-        get_correlation_matrix,
+        load_game5m_llm_correlation,
         build_cluster_note_for_5m_llm,
         get_avg_volatility_20_pct_from_quotes,
     )
@@ -1334,10 +1333,9 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
     d5 = get_decision_5m(ticker, days=5, use_llm_news=True)
     if not d5:
         return {"_error": "Нет 5m данных", "_status": 404}
-    corr_tickers = get_tickers_for_5m_correlation() or []
-    corr_matrix = get_correlation_matrix(corr_tickers, days=30) if len(corr_tickers) >= 2 else None
+    corr_matrix, corr_universe, game_5m = load_game5m_llm_correlation(days=30)
     tech_by_ticker = {ticker: {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}}
-    for t in corr_tickers:
+    for t in corr_universe:
         if t == ticker:
             continue
         try:
@@ -1346,7 +1344,12 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
                 tech_by_ticker[t] = {"price": d.get("price"), "rsi": d.get("rsi_5m")}
         except Exception:
             pass
-    cluster_note = build_cluster_note_for_5m_llm(ticker, corr_tickers or [ticker], corr_matrix, tech_by_ticker) if corr_matrix else None
+    # Второй аргумент — только тикеры игры 5m (подпись и порядок в cluster_note); матрица — по полному универсу.
+    cluster_note = (
+        build_cluster_note_for_5m_llm(ticker, game_5m or [ticker], corr_matrix, tech_by_ticker)
+        if corr_matrix
+        else None
+    )
     llm_reasoning = None
     llm_key_factors = None
     avg_volatility_20 = get_avg_volatility_20_pct_from_quotes(ticker)

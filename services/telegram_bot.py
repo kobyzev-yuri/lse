@@ -3236,7 +3236,9 @@ class LSETelegramBot:
             cm = ClusterManager(engine)
             # Портфель (много тикеров): запрашиваем больше истории (до 252 дн.), чтобы после thresh осталось достаточно строк
             max_days_load = max(days + 30, 252) if len(all_tickers) > 4 else days + 30
-            prices = cm.get_price_data_with_fallback(all_tickers, max_days=max_days_load)
+            prices = cm.get_price_data_with_fallback(
+                all_tickers, max_days=max_days_load, for_correlation=True
+            )
             source_note = ""
             if prices is None or prices.shape[0] < 5:
                 await update.message.reply_text(
@@ -3838,40 +3840,19 @@ class LSETelegramBot:
             if is_game5m_cluster:
                 # Игра 5m: отчёт по кластеру (контекст + решение по правилам), не промпт к LLM
                 await update.message.reply_text("📋 Формирую отчёт по кластеру 5m…")
-                from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation, get_tickers_fast, get_all_ticker_groups
-                from services.cluster_recommend import get_correlation_matrix, get_avg_volatility_20_pct_from_quotes
+                from services.ticker_groups import get_tickers_game_5m
+                from services.cluster_recommend import (
+                    load_game5m_llm_correlation,
+                    GAME5M_LLM_CORRELATION_NOTE,
+                    get_avg_volatility_20_pct_from_quotes,
+                )
                 from services.recommend_5m import get_decision_5m
                 cluster_5m = list(get_tickers_game_5m() or [])
                 if not cluster_5m:
                     await update.message.reply_text("Нет тикеров в игре 5m (GAME_5M_TICKERS / TICKERS_FAST).")
                     return
-                correlation_tickers = get_tickers_for_5m_correlation()
-                correlation_note = None
-                corr_matrix: Optional[Dict[str, Dict[str, float]]] = None
-                corr_tickers_used: Optional[List[str]] = None  # список тикеров матрицы — полный контекст для промпта
-                full_context = [t for t in (get_all_ticker_groups() or []) if t]
-                if len(full_context) >= 2:
-                    corr_matrix = get_correlation_matrix(full_context, days=30, min_tickers_per_row=2)
-                    if corr_matrix:
-                        correlation_note = "Корреляция за 30 дн. (полный контекст: FAST + MEDIUM + LONG)."
-                        corr_tickers_used = full_context
-                if corr_matrix is None:
-                    fast_tickers = [t for t in (get_tickers_fast() or []) if t]
-                    if len(fast_tickers) >= 2:
-                        corr_matrix = get_correlation_matrix(fast_tickers, days=30, min_tickers_per_row=2)
-                        if corr_matrix:
-                            correlation_note = "Корреляция за 30 дн. (по FAST тикерам)."
-                            corr_tickers_used = fast_tickers
-                if corr_matrix is None and len(correlation_tickers) >= 2:
-                    corr_matrix = get_correlation_matrix(correlation_tickers, days=30, min_tickers_per_row=2)
-                    if corr_matrix:
-                        correlation_note = "Корреляция за 30 дн. (игра 5m + контекст: фон и индикаторы)."
-                        corr_tickers_used = correlation_tickers
-                if corr_matrix is None and len(cluster_5m) >= 2:
-                    corr_matrix = get_correlation_matrix(cluster_5m, days=30, min_tickers_per_row=2)
-                    if corr_matrix:
-                        correlation_note = "Корреляция за 30 дн. (по тикерам игры 5m)."
-                        corr_tickers_used = cluster_5m
+                corr_matrix, corr_tickers_used, _ = load_game5m_llm_correlation(days=30)
+                correlation_note = GAME5M_LLM_CORRELATION_NOTE if corr_matrix else None
                 # Тот же период, что и в /recommend5m по умолчанию (5 дн.), чтобы выводы совпадали
                 days_5m = 5
                 per_ticker_results: List[Dict[str, Any]] = []
@@ -3916,12 +3897,11 @@ class LSETelegramBot:
                 if get_use_llm_for_analyst() and corr_matrix and (corr_tickers_used or cluster_5m):
                     tech_by_ticker_5m = {r.get("ticker"): {"price": r.get("price"), "rsi": r.get("rsi_5m")} for r in per_ticker_results if r.get("ticker")}
                     tech_by_ticker_5m.update(extra_tech)
-                    full_list_5m = corr_tickers_used if corr_tickers_used else cluster_5m
                     for r in per_ticker_results:
-                        if r.get("decision") == "NO_DATA" or not full_list_5m:
+                        if r.get("decision") == "NO_DATA" or not cluster_5m:
                             continue
                         cluster_note = _build_cluster_note_for_5m_llm(
-                            r["ticker"], full_list_5m, corr_matrix, tech_by_ticker_5m,
+                            r["ticker"], cluster_5m, corr_matrix, tech_by_ticker_5m,
                         )
                         if not cluster_note:
                             continue
@@ -4218,41 +4198,20 @@ class LSETelegramBot:
             except (ValueError, IndexError):
                 pass
         try:
-            from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation, get_tickers_fast, get_all_ticker_groups
-            from services.cluster_recommend import get_correlation_matrix, get_avg_volatility_20_pct_from_quotes
+            from services.ticker_groups import get_tickers_game_5m
+            from services.cluster_recommend import (
+                load_game5m_llm_correlation,
+                GAME5M_LLM_CORRELATION_NOTE,
+                get_avg_volatility_20_pct_from_quotes,
+            )
             from services.recommend_5m import get_decision_5m, get_5m_card_payload
             cluster_5m = list(get_tickers_game_5m() or []) if not ticker else [ticker]
             if not cluster_5m:
                 await update.message.reply_text("❌ Тикеры не заданы (GAME_5M_TICKERS или TICKERS_FAST).")
                 return
             await update.message.reply_text("🔍 Готовлю рекомендации 5m (HTML)...")
-            correlation_tickers = get_tickers_for_5m_correlation() if not ticker else [ticker]
-            correlation_note = None
-            corr_matrix: Optional[Dict[str, Dict[str, float]]] = None
-            corr_tickers_used: Optional[List[str]] = None
-            full_context = [t for t in (get_all_ticker_groups() or []) if t]
-            if len(full_context) >= 2:
-                corr_matrix = get_correlation_matrix(full_context, days=30, min_tickers_per_row=2)
-                if corr_matrix:
-                    correlation_note = "Корреляция за 30 дн. (полный контекст: FAST + MEDIUM + LONG)."
-                    corr_tickers_used = full_context
-            if corr_matrix is None:
-                fast_tickers = [t for t in (get_tickers_fast() or []) if t]
-                if len(fast_tickers) >= 2:
-                    corr_matrix = get_correlation_matrix(fast_tickers, days=30, min_tickers_per_row=2)
-                    if corr_matrix:
-                        correlation_note = "Корреляция за 30 дн. (по FAST тикерам)."
-                        corr_tickers_used = fast_tickers
-            if corr_matrix is None and len(correlation_tickers) >= 2:
-                corr_matrix = get_correlation_matrix(correlation_tickers, days=30, min_tickers_per_row=2)
-                if corr_matrix:
-                    correlation_note = "Корреляция за 30 дн. (игра 5m + контекст)."
-                    corr_tickers_used = correlation_tickers
-            if corr_matrix is None and len(cluster_5m) >= 2:
-                corr_matrix = get_correlation_matrix(cluster_5m, days=30, min_tickers_per_row=2)
-                if corr_matrix:
-                    correlation_note = "Корреляция за 30 дн. (по тикерам игры 5m)."
-                    corr_tickers_used = cluster_5m
+            corr_matrix, corr_tickers_used, _ = load_game5m_llm_correlation(days=30)
+            correlation_note = GAME5M_LLM_CORRELATION_NOTE if corr_matrix else None
             per_ticker_results: List[Dict[str, Any]] = []
             for tkr in cluster_5m:
                 d5 = get_decision_5m(tkr, days=days, use_llm_news=True)
@@ -4279,12 +4238,11 @@ class LSETelegramBot:
             if get_use_llm_for_analyst() and corr_matrix and (corr_tickers_used or cluster_5m):
                 tech_by_ticker_5m = {r.get("ticker"): {"price": r.get("price"), "rsi": r.get("rsi_5m")} for r in per_ticker_results if r.get("ticker")}
                 tech_by_ticker_5m.update(extra_tech)
-                full_list_5m = corr_tickers_used if corr_tickers_used else cluster_5m
                 for r in per_ticker_results:
-                    if r.get("decision") == "NO_DATA" or not full_list_5m:
+                    if r.get("decision") == "NO_DATA" or not cluster_5m:
                         continue
                     cluster_note = _build_cluster_note_for_5m_llm(
-                        r["ticker"], full_list_5m, corr_matrix, tech_by_ticker_5m,
+                        r["ticker"], cluster_5m, corr_matrix, tech_by_ticker_5m,
                     )
                     if not cluster_note:
                         continue

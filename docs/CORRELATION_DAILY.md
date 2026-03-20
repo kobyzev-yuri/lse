@@ -22,6 +22,16 @@
 
 См. реализацию: `services/cluster_manager.py` (`_fetch_daily_closes_yfinance_outer`, `get_price_data_with_fallback`).
 
+## Единый источник для LLM (веб, Telegram, крон)
+
+Функция **`load_game5m_llm_correlation(days=30)`** в `services/cluster_recommend.py` возвращает `(матрица, universe, game_5m)` и используется:
+
+- веб: LLM-блок карточки 5m (`web_app._compute_game5m_card_llm_sync`);
+- Telegram: отчёт `prompt_entry … GAME5M` и HTML `recommend5m`;
+- крон: `get_cluster_decisions_5m` → `send_sndk_signal_cron`.
+
+Текст для подписи в отчётах: **`GAME5M_LLM_CORRELATION_NOTE`**.
+
 ## Универс корреляции для игры 5m (крон, LLM)
 
 `get_tickers_for_5m_correlation()` объединяет **без дублей**:
