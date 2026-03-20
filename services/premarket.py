@@ -9,6 +9,8 @@ import logging
 from datetime import datetime, time, timedelta
 from typing import Any, Dict, Optional
 
+import pandas as pd
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -137,6 +139,48 @@ def get_premarket_context(ticker: str, dt_utc: Optional[datetime] = None) -> Dic
         out["error"] = str(e)
 
     return out
+
+
+def get_premarket_intraday_momentum_pct(ticker: str) -> Optional[float]:
+    """
+    Импульс **внутри** премаркета (ET): первая vs последняя цена 1m со свечами строго до открытия RTH 9:30.
+    Не путать с premarket_gap_pct (к вчерашнему close): здесь только дрейф от начала премаркет-ленты до 9:30.
+
+    Используется в game 5m в первые минуты RTH, когда по 5m ещё мало баров текущей сессии —
+    чтобы не опираться на «вчера + гэп» в полном df, а на фактическое поведение до колокола.
+
+    Returns:
+        Процент изменения или None при недостатке данных.
+    """
+    df = get_premarket_ohlc(ticker)
+    if df is None or df.empty or "Close" not in df.columns:
+        return None
+    dt_col = "Datetime" if "Datetime" in df.columns else "Date"
+    try:
+        dts = pd.to_datetime(df[dt_col])
+        if dts.dt.tz is None:
+            try:
+                dts = dts.dt.tz_localize("America/New_York", ambiguous=True)
+            except Exception:
+                dts = dts.dt.tz_localize("UTC", ambiguous=True).dt.tz_convert("America/New_York")
+        else:
+            dts = dts.dt.tz_convert("America/New_York")
+        et_now = _et_now()
+        today = et_now.date() if et_now is not None else dts.max().date()
+        t_open = NYSE_OPEN_TIME
+        mask = (dts.dt.date == today) & (dts.dt.time < t_open)
+        sub = df.loc[mask].copy()
+        if len(sub) < 2:
+            return None
+        sub = sub.sort_values(dt_col).reset_index(drop=True)
+        c0 = float(sub["Close"].iloc[0])
+        c1 = float(sub["Close"].iloc[-1])
+        if c0 <= 0:
+            return None
+        return round((c1 / c0 - 1.0) * 100.0, 4)
+    except Exception as e:
+        logger.debug("premarket intraday momentum %s: %s", ticker, e)
+        return None
 
 
 def get_premarket_ohlc(ticker: str):

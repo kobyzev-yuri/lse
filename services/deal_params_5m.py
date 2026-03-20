@@ -15,7 +15,7 @@ REASONING_MAX_LEN = 500
 # Поля полного дампа (из get_decision_5m), без длинных текстов
 FULL_ENTRY_KEYS = (
     "decision", "reasoning", "price",
-    "momentum_2h_pct", "rsi_5m", "volatility_5m_pct", "session_high", "period_str",
+    "momentum_2h_pct", "premarket_intraday_momentum_pct", "rsi_5m", "volatility_5m_pct", "session_high", "period_str",
     "stop_loss_enabled", "stop_loss_pct", "take_profit_pct",
     "entry_advice", "entry_advice_reason",
     "high_5d", "low_5d", "pullback_from_high_pct",

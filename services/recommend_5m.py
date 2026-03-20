@@ -23,7 +23,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # Версия логики принятия решения в get_decision_5m (для фиксации в context_json сделки)
-GAME_5M_RULE_VERSION = "2026-03-20"
+GAME_5M_RULE_VERSION = "2026-03-21"
 
 # Макс. длина content в контексте KB (чтобы не раздувать ответ)
 KB_NEWS_CONTENT_MAX_LEN = 500
@@ -269,6 +269,41 @@ def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str
             momentum_2h_pct = ((price / price_2h_ago) - 1.0) * 100.0
         momentum_window_min = n * 5  # 5m бары → минуты
 
+    # Импульс только внутри последней календарной сессии RTH (ET) — не смешивать вчерашний подъём с сегодняшним открытием.
+    # Используется для импульсного BUY; иначе в первые минуты дня срабатывает «рост за 24 бара» = вчера + гэп.
+    momentum_rth_today_pct: Optional[float] = None
+    momentum_rth_today_window_min = 0
+    momentum_rth_today_bars = 0
+    try:
+        from datetime import time as dt_time
+
+        dts_et = pd.to_datetime(df["datetime"])
+        if dts_et.dt.tz is None:
+            try:
+                dts_et = dts_et.dt.tz_localize("America/New_York", ambiguous=True)
+            except Exception:
+                dts_et = dts_et.dt.tz_localize("UTC", ambiguous=True).dt.tz_convert("America/New_York")
+        else:
+            dts_et = dts_et.dt.tz_convert("America/New_York")
+        last_cal = dts_et.max().date()
+        t_start = dt_time(*US_SESSION_START)
+        t_end = dt_time(*US_SESSION_END)
+        rth_mask = (dts_et.dt.date == last_cal) & (dts_et.dt.time >= t_start) & (dts_et.dt.time <= t_end)
+        df_td = df.loc[rth_mask].sort_values("datetime")
+        closes_td = df_td["Close"].astype(float).reset_index(drop=True)
+        nt = len(closes_td)
+        if nt >= 2:
+            momentum_rth_today_bars = nt
+            n_sess = min(BARS_2H, nt - 1)
+            if n_sess >= 1 and nt >= n_sess + 1:
+                p_open_ref = float(closes_td.iloc[-(n_sess + 1)])
+                p_now = float(closes_td.iloc[-1])
+                if p_open_ref > 0:
+                    momentum_rth_today_pct = ((p_now / p_open_ref) - 1.0) * 100.0
+                    momentum_rth_today_window_min = n_sess * 5
+    except Exception as e:
+        logger.debug("momentum_rth_today %s: %s", ticker, e)
+
     dt_min, dt_max = df["datetime"].min(), df["datetime"].max()
     period_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}" if hasattr(dt_min, "strftime") else f"{dt_min} – {dt_max}"
 
@@ -307,6 +342,9 @@ def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str
         "volatility_5m_pct": volatility_5m_pct,
         "momentum_2h_pct": momentum_2h_pct,
         "momentum_window_min": momentum_window_min,  # фактическое окно импульса (мин), для подписи «импульс за N мин»
+        "momentum_rth_today_pct": momentum_rth_today_pct,
+        "momentum_rth_today_window_min": momentum_rth_today_window_min,
+        "momentum_rth_today_bars": momentum_rth_today_bars,
         "session_high": session_high,
         "pullback_from_high_pct": pullback_from_high_pct,
         "last_bar_high": last_bar_high,
@@ -401,7 +439,10 @@ def compute_premarket_features(df_1m: pd.DataFrame) -> Optional[Dict[str, Any]]:
 # Поля технического сигнала 5m: один источник правды для signal5m, recommend5m, веб-карточек и cron.
 # Все параметры считаются только в get_decision_5m(); здесь — список ключей для единого payload.
 TECHNICAL_SIGNAL_KEYS = (
-    "decision", "reasoning", "price", "rsi_5m", "momentum_2h_pct", "momentum_window_min", "volatility_5m_pct",
+    "decision", "reasoning", "price", "rsi_5m", "momentum_2h_pct", "momentum_window_min",
+    "momentum_rth_today_pct", "momentum_rth_today_window_min", "momentum_rth_today_bars",
+    "premarket_intraday_momentum_pct",
+    "volatility_5m_pct",
     "period_str", "bars_count", "stop_loss_pct", "take_profit_pct", "stop_loss_enabled",
     "estimated_upside_pct_day", "suggested_take_profit_price",
     "estimated_downside_pct_day", "prob_up", "prob_down",
@@ -566,6 +607,39 @@ def get_decision_5m(
     except (ValueError, TypeError):
         sell_confirm_bars = 2
     sell_confirm_bars = max(1, min(5, sell_confirm_bars))
+    try:
+        min_sess_bars = int((_gcv("GAME_5M_MOMENTUM_MIN_SESSION_BARS", "7") or "7").strip())
+    except (ValueError, TypeError):
+        min_sess_bars = 7
+    min_sess_bars = max(2, min(48, min_sess_bars))
+    allow_cross_day_mom_buy = (_gcv("GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY", "") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    early_use_premarket_mom = (_gcv("GAME_5M_EARLY_USE_PREMARKET_MOMENTUM", "true") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    try:
+        pm_mom_buy_min = float((_gcv("GAME_5M_PREMARKET_MOMENTUM_BUY_MIN", "0.5") or "0.5").strip())
+    except (ValueError, TypeError):
+        pm_mom_buy_min = 0.5
+    try:
+        pm_mom_block_below = float((_gcv("GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW", "-2.0") or "-2.0").strip())
+    except (ValueError, TypeError):
+        pm_mom_block_below = -2.0
+    mom_rth_pct = features.get("momentum_rth_today_pct")
+    mom_rth_bars = int(features.get("momentum_rth_today_bars") or 0)
+    premarket_intraday_momentum_pct: Optional[float] = None
+    if early_use_premarket_mom and mom_rth_bars < min_sess_bars:
+        try:
+            from services.premarket import get_premarket_intraday_momentum_pct
+
+            premarket_intraday_momentum_pct = get_premarket_intraday_momentum_pct(ticker)
+        except Exception as e:
+            logger.debug("premarket intraday momentum для %s: %s", ticker, e)
     # RSI на предыдущих барах для подтверждения SELL (2 бара по умолчанию)
     rsi_prev_values: List[float] = []
     for back in range(1, sell_confirm_bars + 1):
@@ -590,6 +664,11 @@ def get_decision_5m(
         "news_negative_min": 0.4,
         "news_very_negative_min": 0.35,
         "news_positive_min": 0.65,
+        "momentum_min_session_bars": min_sess_bars,
+        "momentum_allow_cross_day_buy": allow_cross_day_mom_buy,
+        "early_use_premarket_momentum": early_use_premarket_mom,
+        "premarket_momentum_buy_min": pm_mom_buy_min,
+        "premarket_momentum_block_below": pm_mom_block_below,
     }
 
     if rsi_5m is not None:
@@ -612,10 +691,42 @@ def get_decision_5m(
         elif rsi_5m >= 68:
             if decision == "HOLD":
                 reasons.append(f"RSI(5m)={rsi_5m:.1f} — ближе к перекупленности, ждать")
-        elif momentum_2h_pct > 0.5 and (rsi_5m is None or rsi_5m < 62):
+        elif (
+            mom_rth_pct is not None
+            and mom_rth_bars >= min_sess_bars
+            and float(mom_rth_pct) > 0.5
+            and (rsi_5m is None or rsi_5m < 62)
+        ):
+            if decision == "HOLD":
+                wmin = int(features.get("momentum_rth_today_window_min") or 0)
+                decision = "BUY"
+                reasons.append(
+                    f"импульс +{float(mom_rth_pct):.2f}% за текущую сессию RTH (~{wmin} мин), RSI не перекуплен"
+                )
+        elif (
+            early_use_premarket_mom
+            and mom_rth_bars < min_sess_bars
+            and premarket_intraday_momentum_pct is not None
+            and float(premarket_intraday_momentum_pct) >= pm_mom_block_below
+            and float(premarket_intraday_momentum_pct) > pm_mom_buy_min
+            and (rsi_5m is None or rsi_5m < 62)
+        ):
             if decision == "HOLD":
                 decision = "BUY"
-                reasons.append(f"импульс +{momentum_2h_pct:.2f}% за 2ч, RSI не перекуплен")
+                reasons.append(
+                    f"импульс премаркет +{float(premarket_intraday_momentum_pct):.2f}% "
+                    f"(1m до 9:30 ET; ранний RTH, баров 5m сессии {mom_rth_bars} < {min_sess_bars}), RSI не перекуплен"
+                )
+        elif (
+            allow_cross_day_mom_buy
+            and momentum_2h_pct > 0.5
+            and (rsi_5m is None or rsi_5m < 62)
+        ):
+            if decision == "HOLD":
+                decision = "BUY"
+                reasons.append(
+                    f"импульс +{momentum_2h_pct:.2f}% за окно до 2ч (кросс-дневной; GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY), RSI не перекуплен"
+                )
 
     if volatility_5m_pct > 0.4 and decision in ("BUY", "STRONG_BUY"):
         reasons.append(f"волатильность 5m высокая ({volatility_5m_pct:.2f}%) — предпочтительны лимитные ордера")
@@ -799,6 +910,8 @@ def get_decision_5m(
         "kb_news_impact": kb_news_impact,
         "market_session": market_session,
     }
+    if premarket_intraday_momentum_pct is not None:
+        out["premarket_intraday_momentum_pct"] = premarket_intraday_momentum_pct
     if premarket_context is not None:
         out["premarket_context"] = premarket_context
         out["premarket_last"] = premarket_context.get("premarket_last")
