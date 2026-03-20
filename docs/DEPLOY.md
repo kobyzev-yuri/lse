@@ -2,6 +2,22 @@
 
 Единая инструкция: регулярное обновление (часто) и развёртывание с нуля (редко). Детали переноса VM — в [MIGRATE_SERVER.md](MIGRATE_SERVER.md).
 
+### Всё в Docker
+
+- **Приложение** (Python, `web_app`, скрипты вроде `send_sndk_signal_cron.py`) выполняется **внутри контейнера** (`lse` / `lse-bot`), рабочий каталог в контейнере — `/app`.
+- **Код попадает в образ при сборке** (`docker compose build lse`). Одного `git pull` на хосте в `~/lse` **недостаточно**: контейнер продолжит работать со **старым** слоем образа, пока не выполните пересборку и перезапуск.
+- **Нормальный цикл обновления кода:** `git push` с вашей машины → на сервере `./scripts/deploy_from_github.sh` (или cron с тем же скриптом): `pull` + **`docker compose build lse`** + **`docker compose up -d lse`**.
+- **Конфиг** `config.env` обычно **монтируется с хоста** в `/app/config.env` — для смены только env достаточно правки на сервере и `docker compose restart lse` (пересборка не нужна).
+
+**Проверка кода внутри контейнера** (не на хосте: каталога `/app/...` на VM нет, он только в образе):
+
+```bash
+cd ~/lse   # каталог с docker-compose.yml
+docker compose exec lse grep -n 'closes = df' /app/services/recommend_5m.py
+```
+
+Должна найтись строка с `closes = df["Close"]...`. Пустой вывод — контейнер ещё на старом образе, нужен `./scripts/deploy_from_github.sh` или `--force`. Альтернатива по имени контейнера: `docker exec lse-bot grep -n 'closes = df' /app/services/recommend_5m.py`.
+
 ---
 
 ## Регулярный деплой (обновление кода и/или конфига)
