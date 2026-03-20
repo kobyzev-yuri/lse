@@ -47,7 +47,7 @@ def fetch_all_news_sources(mode: str = "all"):
     logger.info("=" * 60)
     
     mode = (mode or "all").strip().lower()
-    if mode not in ("all", "core", "investing"):
+    if mode not in ("all", "core", "core-fast", "newsapi", "investing"):
         mode = "all"
 
     sources_status = {}
@@ -56,12 +56,13 @@ def fetch_all_news_sources(mode: str = "all"):
     n_investing = 0
 
     run_investing = mode in ("all", "investing")
-    run_core = mode in ("all", "core")
+    run_core_fast = mode in ("all", "core", "core-fast")
+    run_newsapi = mode in ("all", "core", "newsapi")
 
-    if run_core:
+    if run_core_fast:
         # 1. RSS фиды центральных банков (всегда работает, бесплатно)
         try:
-            logger.info("\n📡 Источник core 1/3: RSS фиды центральных банков")
+            logger.info("\n📡 Источник core-fast 1/2: RSS фиды центральных банков")
             rss_saved, rss_skipped = fetch_and_save_rss_news()
             sources_status['RSS'] = f"✅ сохранено {rss_saved} новых, дубликатов {rss_skipped}" if (rss_saved or rss_skipped) else "✅ 0 записей из фидов"
         except Exception as e:
@@ -70,7 +71,7 @@ def fetch_all_news_sources(mode: str = "all"):
 
         # 2. Alpha Vantage (требует API ключ)
         try:
-            logger.info("\n📊 Источник core 2/3: Alpha Vantage API")
+            logger.info("\n📊 Источник core-fast 2/2: Alpha Vantage API")
             # Получаем тикеры из конфига или используем дефолтные
             from config_loader import get_config_value
             tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
@@ -90,11 +91,11 @@ def fetch_all_news_sources(mode: str = "all"):
         except Exception as e:
             logger.error(f"❌ Ошибка Alpha Vantage: {e}")
             sources_status['Alpha Vantage'] = f'❌ Ошибка: {e}'
-        time.sleep(15)  # пауза перед NewsAPI (лимиты бесплатного плана)
 
-        # 3. NewsAPI (требует API ключ)
+    if run_newsapi:
+        # NewsAPI (отдельный режим, чтобы не тормозить core-fast при 429 backoff)
         try:
-            logger.info("\n📰 Источник core 3/3: NewsAPI")
+            logger.info("\n📰 Источник newsapi 1/1: NewsAPI")
             newsapi_saved = fetch_and_save_newsapi_news()
             if newsapi_saved is None:
                 newsapi_saved = 0
@@ -139,9 +140,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fetch news from sources")
     parser.add_argument(
         "--mode",
-        choices=("all", "core", "investing"),
+        choices=("all", "core", "core-fast", "newsapi", "investing"),
         default="all",
-        help="all=все источники, core=RSS+AlphaVantage+NewsAPI, investing=только Investing",
+        help="all=все источники, core=RSS+AlphaVantage+NewsAPI, core-fast=RSS+AlphaVantage, newsapi=только NewsAPI, investing=только Investing",
     )
     args = parser.parse_args()
     try:
