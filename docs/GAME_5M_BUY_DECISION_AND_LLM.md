@@ -173,7 +173,7 @@ record_entry(ticker, price, decision, reasoning, entry_context=entry_context)
 
 ## 7. Чем техническое решение отличается от LLM-рекомендации (в отчётах 5m)
 
-В потоке prompt_entry game5m и /recommend5m при включённом USE_LLM вызывается не AnalystAgent, а **llm_service.analyze_trading_situation**: в него передаётся тот же технический результат (цена, RSI 5m, волатильность, **само правило-решение** как `technical_signal` и `strategy_signal`) и тот же новостной контекст из KB (`kb_news_summary` / `kb_news_impact`). Дополнительно в промпт попадает только **cluster_note** — текст с корреляциями и параметрами по другим тикерам кластера (цены, RSI, коэффициенты корреляции).
+В потоке prompt_entry game5m и /recommend5m при включённом USE_LLM вызывается не AnalystAgent, а **llm_service.analyze_trading_situation**: в него передаётся тот же технический результат (цена, RSI 5m, волатильность 5m, **само правило-решение** как `technical_signal` и `strategy_signal`) и тот же новостной контекст из KB (`kb_news_summary` / `kb_news_impact`). Дополнительно подмешивается **avg_volatility_20** из дневной таблицы `quotes` (средняя `volatility_5` за 20 последних дат, в %% от последнего close) — `services.cluster_recommend.get_avg_volatility_20_pct_from_quotes`; если в БД мало истории или нет строк по тикеру, в промпте остаётся N/A. Дополнительно в промпт попадает **cluster_note** — текст с корреляциями и параметрами по другим тикерам кластера (цены, RSI, коэффициенты корреляции).
 
 То есть **техническое решение для входа и LLM-рекомендация отличаются по сути только**:
 1. **Дополнительным анализом корреляционных параметров** — LLM получает cluster_note (корреляции и контекст по связанным тикерам) и может скорректировать или обосновать рекомендацию с учётом кластера.

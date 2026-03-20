@@ -279,7 +279,7 @@ def process_ticker(
     entry_strategy = (get_config_value("GAME_5M_ENTRY_STRATEGY", "technical") or "technical").strip().lower()
     if entry_strategy == "llm" and cluster_context and cluster_context.get("correlation"):
         try:
-            from services.cluster_recommend import build_cluster_note_for_5m_llm
+            from services.cluster_recommend import build_cluster_note_for_5m_llm, get_avg_volatility_20_pct_from_quotes
             from services.llm_service import get_llm_service
             decisions_map = cluster_context.get("decisions") or {}
             full_list = cluster_context.get("tickers") or list(decisions_map.keys())
@@ -295,6 +295,7 @@ def process_ticker(
                         "close": d5.get("price"),
                         "rsi": d5.get("rsi_5m"),
                         "volatility_5": d5.get("volatility_5m_pct"),
+                        "avg_volatility_20": get_avg_volatility_20_pct_from_quotes(ticker),
                         "technical_signal": decision,
                         "cluster_note": cluster_note,
                     }

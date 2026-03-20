@@ -343,7 +343,7 @@ async def get_recommend5m(ticker: str = None, days: int = 5):
     else:
         ticker = ticker.strip().upper()
     try:
-        from services.recommend_5m import get_decision_5m
+        from services.recommend_5m import get_decision_5m, get_5m_card_payload
     except ImportError:
         raise HTTPException(status_code=501, detail="Модуль recommend_5m недоступен")
     try:
@@ -372,19 +372,21 @@ async def get_recommend5m(ticker: str = None, days: int = 5):
         except Exception:
             pass
     try:
+        card = get_5m_card_payload(data_5m, ticker)
         out = {
+            **card,
             "ticker": ticker,
-            "decision": data_5m["decision"],
+            "decision": card.get("decision") or data_5m["decision"],
             "strategy": "5m (интрадей + 5д статистика)",
-            "price": data_5m["price"],
-            "rsi_5m": data_5m.get("rsi_5m"),
-            "reasoning": data_5m.get("reasoning", ""),
-            "period_str": data_5m.get("period_str", ""),
-            "momentum_2h_pct": data_5m.get("momentum_2h_pct"),
-            "volatility_5m_pct": data_5m.get("volatility_5m_pct"),
-            "stop_loss_pct": data_5m.get("stop_loss_pct", 2.5),
-            "take_profit_pct": data_5m.get("take_profit_pct", 5.0),
-            "bars_count": data_5m.get("bars_count"),
+            "price": card.get("price", data_5m["price"]),
+            "rsi_5m": card.get("rsi_5m", data_5m.get("rsi_5m")),
+            "reasoning": card.get("reasoning", data_5m.get("reasoning", "")),
+            "period_str": card.get("period_str", data_5m.get("period_str", "")),
+            "momentum_2h_pct": card.get("momentum_2h_pct", data_5m.get("momentum_2h_pct")),
+            "volatility_5m_pct": card.get("volatility_5m_pct", data_5m.get("volatility_5m_pct")),
+            "stop_loss_pct": card.get("stop_loss_pct", data_5m.get("stop_loss_pct", 2.5)),
+            "take_profit_pct": card.get("take_profit_pct", data_5m.get("take_profit_pct", 5.0)),
+            "bars_count": card.get("bars_count", data_5m.get("bars_count")),
             "has_position": has_position,
             "position": position_info,
             "alex_rule": alex_rule,
@@ -1300,7 +1302,11 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
     """Синхронный расчёт вывода LLM для карточки 5m (запускается в потоке, чтобы не блокировать event loop)."""
     from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation
     from services.recommend_5m import get_decision_5m
-    from services.cluster_recommend import get_correlation_matrix, build_cluster_note_for_5m_llm
+    from services.cluster_recommend import (
+        get_correlation_matrix,
+        build_cluster_note_for_5m_llm,
+        get_avg_volatility_20_pct_from_quotes,
+    )
     from services.llm_service import get_llm_service
     from report_generator import get_engine
 
@@ -1322,21 +1328,7 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
     cluster_note = build_cluster_note_for_5m_llm(ticker, corr_tickers or [ticker], corr_matrix, tech_by_ticker) if corr_matrix else None
     llm_reasoning = None
     llm_key_factors = None
-    avg_volatility_20 = None
-    try:
-        eng = get_engine()
-        with eng.connect() as conn:
-            row = conn.execute(
-                text("""
-                    SELECT (SELECT AVG(volatility_5) FROM (SELECT volatility_5 FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 20) s) AS avg_vol,
-                           (SELECT close FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 1) AS last_close
-                """),
-                {"ticker": ticker},
-            ).fetchone()
-        if row and row[0] is not None and row[1] is not None and float(row[1]) > 0:
-            avg_volatility_20 = round(float(row[0]) / float(row[1]) * 100, 2)
-    except Exception:
-        pass
+    avg_volatility_20 = get_avg_volatility_20_pct_from_quotes(ticker)
     if cluster_note:
         try:
             llm = get_llm_service()

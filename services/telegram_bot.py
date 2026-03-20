@@ -267,10 +267,10 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
         f"<h1>Рекомендация 5m (технический сигнал + LLM)</h1>",
         f"<p>Период: {days} дн. Подробный отчёт: /prompt_entry game5m</p>",
         "<table><thead><tr>",
-        "<th>Тикер</th><th>Решение</th><th>Цена</th><th>RSI</th><th>Имп. 2ч%</th><th>Вол%</th><th>Upside%</th><th>Downside%</th><th>P(up/down)</th><th>Период</th><th>Вход</th>",
+        "<th>Тикер</th><th>Решение</th><th>Цена</th><th>RSI</th><th>Qwen критерии</th><th>Имп. 2ч%</th><th>Откат%</th><th>Вол%</th><th>Upside%</th><th>Downside%</th><th>P(up/down)</th><th>Период</th><th>Вход</th>",
         "</tr></thead><tbody>",
     ]
-    n_cols = 11
+    n_cols = 13
     for r in per_ticker_results:
         ticker = r.get("ticker") or "—"
         decision = r.get("decision") or "—"
@@ -278,6 +278,8 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
         rsi = r.get("rsi_5m")
         mom = r.get("momentum_2h_pct")
         vol = r.get("volatility_5m_pct")
+        qwen_verdict = r.get("qwen_checklist_verdict")
+        pullback = r.get("pullback_from_high_pct")
         upside = r.get("estimated_upside_pct_day")
         downside = r.get("estimated_downside_pct_day")
         prob_up = r.get("prob_up")
@@ -292,6 +294,8 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
         rsi_s = f"{rsi:.1f}" if rsi is not None else "—"
         mom_s = f"{mom:+.2f}%" if mom is not None else "—"
         vol_s = f"{vol:.2f}%" if vol is not None else "—"
+        qwen_s = _pre(qwen_verdict)
+        pullback_s = f"{pullback:.2f}%" if pullback is not None else "—"
         upside_s = f"{upside:+.1f}%" if upside is not None else "—"
         downside_s = f"−{downside:.1f}%" if downside is not None else "—"
         prob_s = f"{prob_up:.2f}/{prob_down:.2f}" if (prob_up is not None and prob_down is not None) else "—"
@@ -300,7 +304,9 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
             f"<td class=\"{dec_cls}\">{_pre(decision)}</td>"
             f"<td>{price_s}</td>"
             f"<td>{rsi_s}</td>"
+            f"<td>{qwen_s}</td>"
             f"<td>{mom_s}</td>"
+            f"<td>{pullback_s}</td>"
             f"<td>{vol_s}</td>"
             f"<td>{upside_s}</td>"
             f"<td>{downside_s}</td>"
@@ -3787,7 +3793,7 @@ class LSETelegramBot:
                 # Игра 5m: отчёт по кластеру (контекст + решение по правилам), не промпт к LLM
                 await update.message.reply_text("📋 Формирую отчёт по кластеру 5m…")
                 from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation, get_tickers_fast, get_all_ticker_groups
-                from services.cluster_recommend import get_correlation_matrix
+                from services.cluster_recommend import get_correlation_matrix, get_avg_volatility_20_pct_from_quotes
                 from services.recommend_5m import get_decision_5m
                 cluster_5m = list(get_tickers_game_5m() or [])
                 if not cluster_5m:
@@ -3882,6 +3888,7 @@ class LSETelegramBot:
                                 "close": r.get("price"),
                                 "rsi": r.get("rsi_5m"),
                                 "volatility_5": r.get("volatility_5m_pct"),
+                                "avg_volatility_20": get_avg_volatility_20_pct_from_quotes(r["ticker"]),
                                 "technical_signal": r.get("decision"),
                                 "cluster_note": cluster_note,
                             }
@@ -4166,7 +4173,7 @@ class LSETelegramBot:
                 pass
         try:
             from services.ticker_groups import get_tickers_game_5m, get_tickers_for_5m_correlation, get_tickers_fast, get_all_ticker_groups
-            from services.cluster_recommend import get_correlation_matrix
+            from services.cluster_recommend import get_correlation_matrix, get_avg_volatility_20_pct_from_quotes
             from services.recommend_5m import get_decision_5m, get_5m_card_payload
             cluster_5m = list(get_tickers_game_5m() or []) if not ticker else [ticker]
             if not cluster_5m:
@@ -4244,6 +4251,7 @@ class LSETelegramBot:
                             "close": r.get("price"),
                             "rsi": r.get("rsi_5m"),
                             "volatility_5": r.get("volatility_5m_pct"),
+                            "avg_volatility_20": get_avg_volatility_20_pct_from_quotes(r["ticker"]),
                             "technical_signal": r.get("decision"),
                             "cluster_note": cluster_note,
                         }

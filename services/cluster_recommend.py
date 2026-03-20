@@ -16,6 +16,42 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def get_avg_volatility_20_pct_from_quotes(ticker: str) -> Optional[float]:
+    """
+    Средняя дневная volatility_5 за 20 последних дат в `quotes`, в процентах от последнего close.
+
+    Та же формула, что в web_app для LLM-карточки game5m: AVG(volatility_5) / last_close * 100.
+    Нужна для поля avg_volatility_20 в промпте analyze_trading_situation (GAME_5M).
+
+    Returns:
+        Число в %% или None, если в БД нет строк, нет close, или расчёт не удался.
+        (Отличается от volatility_5m_pct в recommend_5m — там интрадей-логвола по 5m барам.)
+    """
+    t = (ticker or "").strip().upper()
+    if not t:
+        return None
+    try:
+        from sqlalchemy import text
+        from report_generator import get_engine
+
+        eng = get_engine()
+        with eng.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT (SELECT AVG(volatility_5) FROM (
+                        SELECT volatility_5 FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 20
+                    ) s) AS avg_vol,
+                           (SELECT close FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 1) AS last_close
+                """),
+                {"ticker": t},
+            ).fetchone()
+        if row and row[0] is not None and row[1] is not None and float(row[1]) > 0:
+            return round(float(row[0]) / float(row[1]) * 100, 2)
+    except Exception as e:
+        logger.debug("avg_volatility_20 из quotes для %s: %s", t, e)
+    return None
+
+
 def get_correlation_matrix(
     tickers: List[str],
     days: int = 30,
