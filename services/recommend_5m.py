@@ -553,6 +553,24 @@ def get_decision_5m(
     # Правила решения (агрессивные под интрадей)
     decision = "HOLD"
     reasons = []
+    from config_loader import get_config_value as _gcv
+    try:
+        vol_wait_min = float((_gcv("GAME_5M_VOLATILITY_WAIT_MIN", "0.7") or "0.7").strip())
+    except (ValueError, TypeError):
+        vol_wait_min = 0.7
+    vol_wait_min = max(0.3, min(2.0, vol_wait_min))
+    try:
+        sell_confirm_bars = int((_gcv("GAME_5M_SELL_CONFIRM_BARS", "2") or "2").strip())
+    except (ValueError, TypeError):
+        sell_confirm_bars = 2
+    sell_confirm_bars = max(1, min(5, sell_confirm_bars))
+    # RSI на предыдущих барах для подтверждения SELL (2 бара по умолчанию)
+    rsi_prev_values: List[float] = []
+    for back in range(1, sell_confirm_bars + 1):
+        if len(closes) > back + RSI_PERIOD_5M:
+            rv = compute_rsi_5m(closes.iloc[: -back], period=RSI_PERIOD_5M)
+            if rv is not None:
+                rsi_prev_values.append(float(rv))
     decision_rule_params: Dict[str, Any] = {
         "rule_version": GAME_5M_RULE_VERSION,
         "source_fn": "services.recommend_5m.get_decision_5m",
@@ -565,7 +583,8 @@ def get_decision_5m(
         "momentum_buy_min": 0.5,
         "rsi_for_momentum_buy_max": 62.0,
         "volatility_warn_buy_min": 0.4,
-        "volatility_wait_min": 0.6,
+        "volatility_wait_min": vol_wait_min,
+        "sell_confirm_bars": sell_confirm_bars,
         "news_negative_min": 0.4,
         "news_very_negative_min": 0.35,
         "news_positive_min": 0.65,
@@ -579,8 +598,15 @@ def get_decision_5m(
             decision = "BUY"
             reasons.append(f"RSI(5m)={rsi_5m:.1f}, цена у 5д минимума")
         elif rsi_5m >= 76:
-            decision = "SELL"
-            reasons.append(f"RSI(5m)={rsi_5m:.1f} — перекупленность")
+            sell_confirmed = (
+                len(rsi_prev_values) >= sell_confirm_bars
+                and all(v >= 76.0 for v in rsi_prev_values[:sell_confirm_bars])
+            )
+            if sell_confirmed:
+                decision = "SELL"
+                reasons.append(f"RSI(5m)={rsi_5m:.1f} и подтверждение {sell_confirm_bars} баров — перекупленность")
+            else:
+                reasons.append(f"RSI(5m)={rsi_5m:.1f} — перекупленность без подтверждения {sell_confirm_bars} баров, ждём")
         elif rsi_5m >= 68:
             if decision == "HOLD":
                 reasons.append(f"RSI(5m)={rsi_5m:.1f} — ближе к перекупленности, ждать")
@@ -591,12 +617,11 @@ def get_decision_5m(
 
     if volatility_5m_pct > 0.4 and decision in ("BUY", "STRONG_BUY"):
         reasons.append(f"волатильность 5m высокая ({volatility_5m_pct:.2f}%) — предпочтительны лимитные ордера")
-    elif volatility_5m_pct > 0.6:
+    elif volatility_5m_pct > vol_wait_min:
         if decision == "HOLD":
-            reasons.append(f"волатильность 5m {volatility_5m_pct:.2f}% — выжидать")
+            reasons.append(f"волатильность 5m {volatility_5m_pct:.2f}% > порога {vol_wait_min:.2f}% — выжидать")
 
     # Опциональные пороги ATR 5m и объёма (оценка: scripts/estimate_5m_thresholds.py)
-    from config_loader import get_config_value as _gcv
     atr_5m_pct = features.get("atr_5m_pct")
     volume_vs_avg_pct = features.get("volume_vs_avg_pct")
     _min_vol = _gcv("GAME_5M_MIN_VOLUME_VS_AVG_PCT", "").strip()
@@ -870,12 +895,12 @@ def get_decision_5m(
     elif volatility_5m_pct is not None and volatility_5m_pct > 1.0:
         entry_advice = "AVOID"
         entry_advice_reason = f"Высокая волатильность 5m ({volatility_5m_pct:.2f}%) — вход рискован"
-    elif recent_negative or (volatility_5m_pct is not None and volatility_5m_pct > 0.6):
+    elif recent_negative or (volatility_5m_pct is not None and volatility_5m_pct > vol_wait_min):
         entry_advice = "CAUTION"
         if recent_negative:
             entry_advice_reason = "Негативные новости в базе — осторожность"
         else:
-            entry_advice_reason = f"Волатильность 5m {volatility_5m_pct:.2f}% — осторожность"
+            entry_advice_reason = f"Волатильность 5m {volatility_5m_pct:.2f}% > порога {vol_wait_min:.2f}% — осторожность"
     elif session_phase == "PRE_MARKET" and premarket_context and premarket_context.get("premarket_gap_pct") is not None and premarket_context["premarket_gap_pct"] < -2:
         entry_advice = "CAUTION"
         entry_advice_reason = f"Премаркет: гэп {premarket_context['premarket_gap_pct']:+.2f}% — лучше войти после открытия или лимитом"
