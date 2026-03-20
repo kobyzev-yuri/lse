@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -255,6 +256,35 @@ def _top_cases(effects: List[TradeEffect], limit: int = 8) -> Dict[str, List[Dic
     return {"top_missed_upside": [row(e) for e in by_missed], "top_losses": [row(e) for e in by_loss]}
 
 
+def _parse_llm_json_response(text: str) -> Any:
+    """
+    Парсит JSON из ответа модели: чистый JSON, ```json ... ```, или текст с JSON-объектом внутри.
+    """
+    if not text or not str(text).strip():
+        return {"raw_text": text}
+    s = str(text).strip()
+    # Блок markdown ```json ... ``` или ``` ... ```
+    fence = re.match(r"^```(?:json)?\s*\r?\n?", s, re.IGNORECASE)
+    if fence:
+        rest = s[fence.end() :]
+        end = rest.rfind("```")
+        if end != -1:
+            s = rest[:end].strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+    # Первый { ... последний } (если модель добавила пояснения)
+    start = s.find("{")
+    end = s.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(s[start : end + 1])
+        except Exception:
+            pass
+    return {"raw_text": text}
+
+
 def _build_llm_recommendations(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         from services.llm_service import get_llm_service
@@ -267,7 +297,8 @@ def _build_llm_recommendations(payload: Dict[str, Any]) -> Optional[Dict[str, An
             "Ты quant-аналитик. По статистике сделок предложи 5-8 конкретных улучшений "
             "для роста прибыльности и снижения убытков. Укажи приоритеты. "
             "Опирайся на метрики, не фантазируй. "
-            "Верни JSON с ключами: priorities, threshold_changes, new_features, monitoring_fixes, expected_impact."
+            "Верни только валидный JSON (без markdown, без ```, без пояснений до/после) "
+            "с ключами: priorities, threshold_changes, new_features, monitoring_fixes, expected_impact."
         )
         out = llm.generate_response(
             messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)}],
@@ -276,10 +307,7 @@ def _build_llm_recommendations(payload: Dict[str, Any]) -> Optional[Dict[str, An
             max_tokens=1600,
         )
         text = out.get("response") or ""
-        try:
-            parsed = json.loads(text)
-        except Exception:
-            parsed = {"raw_text": text}
+        parsed = _parse_llm_json_response(text)
         return {
             "status": "ok",
             "model": out.get("model"),
