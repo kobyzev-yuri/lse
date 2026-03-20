@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Анализатор сделок — LSE Trading System{% endblock %}
+
+{% block content %}
+<h1>Анализатор эффективности сделок</h1>
+<p class="muted">Единый расчёт с Telegram командой <code>/analyser</code>. Период 1-30 дней.</p>
+
+<div class="card">
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.6rem; align-items:end;">
+        <div>
+            <label for="days">Период (дней)</label>
+            <input id="days" type="number" min="1" max="30" value="7">
+        </div>
+        <div>
+            <label for="strategy">Стратегия</label>
+            <select id="strategy">
+                <option value="GAME_5M" selected>GAME_5M</option>
+                <option value="ALL">ALL</option>
+                <option value="Portfolio">Portfolio</option>
+            </select>
+        </div>
+        <div>
+            <label><input id="useLlm" type="checkbox"> Добавить LLM рекомендации</label>
+        </div>
+        <div>
+            <button id="runBtn" type="button">Запустить анализ</button>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Сводка</h2>
+    <div id="summary" class="dashboard-text">Нажмите "Запустить анализ".</div>
+</div>
+
+<div class="card">
+    <h2>Top losses</h2>
+    <div id="topLosses" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
+    <h2>Top missed upside</h2>
+    <div id="topMissed" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
+    <h2>LLM</h2>
+    <pre id="llmBlock">—</pre>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+}
+
+function toLine(r) {
+    return `• ${esc(r.ticker)} #${esc(r.trade_id)}: ${Number(r.realized_pct).toFixed(2)}% | missed ${Number(r.missed_upside_pct || 0).toFixed(2)}% | exit ${esc(r.exit_signal || '—')}`;
+}
+
+async function runAnalyzer() {
+    const days = document.getElementById('days').value || 7;
+    const strategy = document.getElementById('strategy').value || 'GAME_5M';
+    const useLlm = document.getElementById('useLlm').checked;
+    const summary = document.getElementById('summary');
+    const topLosses = document.getElementById('topLosses');
+    const topMissed = document.getElementById('topMissed');
+    const llmBlock = document.getElementById('llmBlock');
+    summary.innerHTML = 'Загрузка...';
+    topLosses.innerHTML = '—';
+    topMissed.innerHTML = '—';
+    llmBlock.textContent = '—';
+    try {
+        const q = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0' });
+        const r = await fetch('/api/analyzer?' + q.toString());
+        const data = await r.json();
+        if (!r.ok) {
+            summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(data.detail || r.statusText)}</span>`;
+            return;
+        }
+        const s = data.summary || {};
+        if (!s.total) {
+            summary.innerHTML = 'За период нет закрытых сделок.';
+            return;
+        }
+        summary.innerHTML =
+            `Сделок: <strong>${esc(s.total)}</strong><br>` +
+            `Win rate: <strong>${esc(s.win_rate_pct)}%</strong><br>` +
+            `Net PnL: <strong>${esc(s.sum_net_pnl_usd)}</strong><br>` +
+            `Avg: <strong>${esc(s.avg_realized_pct)}%</strong><br>` +
+            `Missed upside Σ: <strong>${esc(s.sum_missed_upside_pct)}%</strong><br>` +
+            `Avoidable loss Σ: <strong>${esc(s.sum_avoidable_loss_pct)}%</strong>`;
+        const losses = (data.top_cases && data.top_cases.top_losses) ? data.top_cases.top_losses : [];
+        const missed = (data.top_cases && data.top_cases.top_missed_upside) ? data.top_cases.top_missed_upside : [];
+        topLosses.innerHTML = losses.length ? losses.slice(0, 8).map(toLine).join('<br>') : '—';
+        topMissed.innerHTML = missed.length ? missed.slice(0, 8).map(toLine).join('<br>') : '—';
+        if (data.llm) {
+            llmBlock.textContent = JSON.stringify(data.llm, null, 2);
+        }
+    } catch (e) {
+        summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(e.message)}</span>`;
+    }
+}
+
+document.getElementById('runBtn').addEventListener('click', runAnalyzer);
+</script>
+{% endblock %}

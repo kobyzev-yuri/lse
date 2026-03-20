@@ -551,6 +551,27 @@ async def monitor_page(request: Request):
     return HTMLResponse(render_template("monitor.html", {"request": request}))
 
 
+@app.get("/analyzer", response_class=HTMLResponse)
+async def analyzer_page(request: Request):
+    """Страница анализатора эффективности сделок."""
+    return HTMLResponse(render_template("analyzer.html", {"request": request}))
+
+
+@app.get("/api/analyzer", response_class=JSONResponse)
+async def get_analyzer(days: int = 7, strategy: str = "GAME_5M", use_llm: bool = False):
+    """API: анализ эффективности закрытых сделок (единый код с /analyser в Telegram)."""
+    try:
+        from services.trade_effectiveness_analyzer import analyze_trade_effectiveness
+        payload = analyze_trade_effectiveness(
+            days=min(max(1, int(days)), 30),
+            strategy=(strategy or "GAME_5M").strip().upper(),
+            use_llm=bool(use_llm),
+        )
+        return _to_jsonable(payload)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка анализатора: {e!s}")
+
+
 @app.get("/trading")
 async def trading_page_removed():
     """Раздел «Торги» снят (дублировал портфель, отчёты и Telegram). Редирект на главную."""

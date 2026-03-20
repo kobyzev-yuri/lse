@@ -785,6 +785,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("game5m", self._handle_game5m))
         self.application.add_handler(CommandHandler("gameparams", self._handle_gameparams))
         self.application.add_handler(CommandHandler("dashboard", self._handle_dashboard))
+        self.application.add_handler(CommandHandler("analyser", self._handle_analyser))
         self.application.add_handler(CommandHandler("premarket", self._handle_premarket))
         self.application.add_handler(CommandHandler("corr", self._handle_corr))
         self.application.add_handler(CommandHandler("corr5m", self._handle_corr5m))
@@ -879,6 +880,7 @@ class LSETelegramBot:
 /game5m [ticker] — мониторинг игры 5m: позиция, сделки, win rate и PnL (по умолч. SNDK)
 /gameparams — все существенные параметры игр (5m и портфель): тикеры, тейк/стоп, cooldown
 /dashboard [5m|daily|all] — дашборд по тикерам: решения, 5m, новости (проактивный мониторинг)
+/analyser [days] [GAME_5M|ALL|Portfolio] [llm] — анализ эффективности закрытых сделок (единый код с web /analyzer)
 /ask <вопрос> — вопрос (работает в группах!)
 /tickers — список инструментов
 
@@ -979,6 +981,7 @@ class LSETelegramBot:
 `/game5m [ticker]` — мониторинг игры 5m: открытая позиция, последние сделки, win rate и PnL (по умолч. SNDK)
 `/gameparams` — все параметры игр (5m и портфель): тикеры, тейк/стоп, cooldown _(config.env)_
 `/dashboard [5m|daily|all]` — дашборд: все тикеры, сигналы, 5m (SNDK), новости за 7 дн. Для смены курса и решений.
+`/analyser [days] [GAME_5M|ALL|Portfolio] [llm]` — анализ эффективности закрытых сделок и зоны улучшений (тот же код, что web /analyzer).
   В /ask можно спросить: когда можно открыть позицию по SNDK и какие параметры советуешь.
   Пример: `/recommend SNDK`, `/buy GC=F 5`, `/sell MSFT`
 
@@ -2408,6 +2411,49 @@ class LSETelegramBot:
                 await update.message.reply_text(p)
         else:
             await update.message.reply_text(text)
+
+    async def _handle_analyser(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Анализатор эффективности закрытых сделок (единый код с web /analyzer)."""
+        if not self._check_access(update.effective_user.id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        days = 7
+        strategy = "GAME_5M"
+        use_llm = False
+        for a in (context.args or []):
+            aa = (a or "").strip()
+            if not aa:
+                continue
+            low = aa.lower()
+            if low.isdigit():
+                days = max(1, min(30, int(low)))
+                continue
+            if low in ("llm", "--llm"):
+                use_llm = True
+                continue
+            if low.upper() in ("GAME_5M", "ALL", "PORTFOLIO"):
+                strategy = low.upper()
+        await update.message.reply_text(f"📊 Запускаю анализатор сделок: {days} дн., стратегия={strategy}, LLM={'on' if use_llm else 'off'}...")
+        try:
+            from services.trade_effectiveness_analyzer import analyze_trade_effectiveness, format_trade_effectiveness_text
+            loop = asyncio.get_event_loop()
+            report = await loop.run_in_executor(
+                None,
+                lambda: analyze_trade_effectiveness(days=days, strategy=strategy, use_llm=use_llm),
+            )
+            text = format_trade_effectiveness_text(report)
+            if len(text) > 3900:
+                text = text[:3900] + "\n…"
+            await update.message.reply_text(text, parse_mode=None)
+            try:
+                payload_json = json.dumps(report, ensure_ascii=False, indent=2)
+                fn = f"analyser_{strategy}_{days}d_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.json"
+                await update.message.reply_document(document=BytesIO(payload_json.encode("utf-8")), filename=fn)
+            except Exception as e:
+                logger.debug("Не удалось отправить JSON анализатора: %s", e)
+        except Exception as e:
+            logger.exception("Ошибка /analyser")
+            await update.message.reply_text(f"❌ Ошибка анализатора: {e}")
     
     async def _handle_tickers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /tickers"""
