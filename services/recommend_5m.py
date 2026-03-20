@@ -533,6 +533,8 @@ def get_decision_5m(
     features = compute_5m_features(df, ticker)
     if features is None:
         return None
+    # Ряд закрытий для RSI на срезах (подтверждение SELL по нескольким барам)
+    closes = df["Close"].astype(float)
     price = features["price"]
     high_5d = features["high_5d"]
     low_5d = features["low_5d"]
