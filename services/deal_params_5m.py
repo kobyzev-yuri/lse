@@ -26,6 +26,7 @@ FULL_ENTRY_KEYS = (
     "premarket_gap_pct", "minutes_until_open", "prev_close",
     "llm_insight", "llm_sentiment",
     "atr_5m_pct", "volume_5m_last", "volume_vs_avg_pct",
+    "decision_rule_version", "decision_rule_params",
 )
 # session_phase берём из market_session
 SESSION_PHASE_KEY = "session_phase"

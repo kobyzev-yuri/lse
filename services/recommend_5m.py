@@ -22,6 +22,9 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# Версия логики принятия решения в get_decision_5m (для фиксации в context_json сделки)
+GAME_5M_RULE_VERSION = "2026-03-20"
+
 # Макс. длина content в контексте KB (чтобы не раздувать ответ)
 KB_NEWS_CONTENT_MAX_LEN = 500
 
@@ -550,6 +553,23 @@ def get_decision_5m(
     # Правила решения (агрессивные под интрадей)
     decision = "HOLD"
     reasons = []
+    decision_rule_params: Dict[str, Any] = {
+        "rule_version": GAME_5M_RULE_VERSION,
+        "source_fn": "services.recommend_5m.get_decision_5m",
+        "rsi_strong_buy_max": 32.0,
+        "momentum_for_strong_buy_min": -0.3,
+        "rsi_buy_max": 38.0,
+        "price_to_low5d_multiplier_max": 1.005,
+        "rsi_sell_min": 76.0,
+        "rsi_hold_overbought_min": 68.0,
+        "momentum_buy_min": 0.5,
+        "rsi_for_momentum_buy_max": 62.0,
+        "volatility_warn_buy_min": 0.4,
+        "volatility_wait_min": 0.6,
+        "news_negative_min": 0.4,
+        "news_very_negative_min": 0.35,
+        "news_positive_min": 0.65,
+    }
 
     if rsi_5m is not None:
         if rsi_5m <= 32 and momentum_2h_pct >= -0.3:
@@ -581,6 +601,8 @@ def get_decision_5m(
     volume_vs_avg_pct = features.get("volume_vs_avg_pct")
     _min_vol = _gcv("GAME_5M_MIN_VOLUME_VS_AVG_PCT", "").strip()
     _max_atr = _gcv("GAME_5M_MAX_ATR_5M_PCT", "").strip()
+    decision_rule_params["cfg_min_volume_vs_avg_pct"] = _min_vol or None
+    decision_rule_params["cfg_max_atr_5m_pct"] = _max_atr or None
     if _min_vol and volume_vs_avg_pct is not None and decision in ("BUY", "STRONG_BUY"):
         try:
             min_vol = float(_min_vol)
@@ -739,6 +761,8 @@ def get_decision_5m(
         **features,
         "decision": decision,
         "reasoning": reasoning,
+        "decision_rule_version": GAME_5M_RULE_VERSION,
+        "decision_rule_params": decision_rule_params,
         "exit_bar_close": exit_bar_close,
         "stop_loss_enabled": stop_loss_enabled,
         "stop_loss_pct": stop_loss_pct if stop_loss_enabled else None,

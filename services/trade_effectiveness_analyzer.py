@@ -41,6 +41,8 @@ class TradeEffect:
     entry_prob_down: Optional[float]
     entry_news_impact: Optional[str]
     entry_advice: Optional[str]
+    decision_rule_version: Optional[str]
+    decision_rule_params: Optional[Dict[str, Any]]
 
 
 def _safe_float(v: Any) -> Optional[float]:
@@ -179,6 +181,8 @@ def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Opti
                 entry_prob_down=_safe_float(entry_ctx.get("prob_down")),
                 entry_news_impact=(entry_ctx.get("kb_news_impact") or None),
                 entry_advice=(entry_ctx.get("entry_advice") or None),
+                decision_rule_version=(entry_ctx.get("decision_rule_version") or None),
+                decision_rule_params=(entry_ctx.get("decision_rule_params") if isinstance(entry_ctx.get("decision_rule_params"), dict) else None),
             )
         )
     return effects
@@ -212,6 +216,10 @@ def _aggregate(effects: List[TradeEffect]) -> Dict[str, Any]:
     weak_prob_entries = [e for e in losses if e.entry_prob_up is not None and e.entry_prob_up < 0.55]
     neg_news_losses = [e for e in losses if (e.entry_news_impact or "").lower().startswith("негатив")]
 
+    losses_with_allow = [e for e in losses if (e.entry_advice or "").upper() == "ALLOW"]
+    losses_with_high_prob = [e for e in losses if e.entry_prob_up is not None and e.entry_prob_up >= 0.60]
+    losses_with_high_rsi = [e for e in losses if e.entry_rsi_5m is not None and e.entry_rsi_5m >= 60]
+    rule_versions = sorted({(e.decision_rule_version or "unknown") for e in effects})
     return {
         "total": len(effects),
         "wins": len(wins),
@@ -229,6 +237,10 @@ def _aggregate(effects: List[TradeEffect]) -> Dict[str, Any]:
         "high_vol_losses_count": len(high_vol_losses),
         "weak_prob_up_losses_count": len(weak_prob_entries),
         "negative_news_losses_count": len(neg_news_losses),
+        "losses_with_allow_entry_count": len(losses_with_allow),
+        "losses_with_high_prob_up_count": len(losses_with_high_prob),
+        "losses_with_high_rsi_count": len(losses_with_high_rsi),
+        "decision_rule_versions": rule_versions,
         "by_exit_signal": by_exit,
     }
 
@@ -249,6 +261,8 @@ def _top_cases(effects: List[TradeEffect], limit: int = 8) -> Dict[str, List[Dic
             "entry_prob_up": e.entry_prob_up,
             "entry_news_impact": e.entry_news_impact,
             "entry_advice": e.entry_advice,
+            "decision_rule_version": e.decision_rule_version,
+            "decision_rule_params": e.decision_rule_params,
         }
 
     by_missed = sorted(effects, key=lambda x: x.missed_upside_pct or 0.0, reverse=True)[:limit]
@@ -318,6 +332,142 @@ def _build_llm_recommendations(payload: Dict[str, Any]) -> Optional[Dict[str, An
         return {"status": "error", "reason": str(e)}
 
 
+def _build_practical_parameter_suggestions(
+    effects: List[TradeEffect],
+    summary: Dict[str, Any],
+    current_rules: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Грубые, но практичные рекомендации по порогам на основе текущей выборки."""
+    if not effects:
+        return []
+    losses = [e for e in effects if e.realized_pct <= 0]
+    wins = [e for e in effects if e.realized_pct > 0]
+    suggestions: List[Dict[str, Any]] = []
+
+    # 1) Volatility gate
+    loss_high_vol = [e for e in losses if e.entry_vol_5m_pct is not None and e.entry_vol_5m_pct >= 0.6]
+    win_high_vol = [e for e in wins if e.entry_vol_5m_pct is not None and e.entry_vol_5m_pct >= 0.6]
+    if len(loss_high_vol) >= 3 and len(loss_high_vol) >= len(win_high_vol):
+        suggestions.append(
+            {
+                "parameter": "volatility_wait_min",
+                "current": current_rules.get("volatility_wait_min"),
+                "proposed": 0.7,
+                "why": f"Убыточных сделок при vol>=0.6: {len(loss_high_vol)} (выигрышных: {len(win_high_vol)}).",
+                "expected_effect": "Меньше входов в шуме, ниже avoidable loss.",
+            }
+        )
+
+    # 2) prob_up gate (если доступно)
+    losses_high_prob = [e for e in losses if e.entry_prob_up is not None and e.entry_prob_up >= 0.6]
+    if len(losses_high_prob) >= 2:
+        suggestions.append(
+            {
+                "parameter": "min_prob_up_for_entry",
+                "current": "not enforced",
+                "proposed": 0.65,
+                "why": f"Даже при prob_up>=0.6 есть {len(losses_high_prob)} убыточных кейсов: стоит повысить порог.",
+                "expected_effect": "Фильтрация ложных BUY в пограничной зоне.",
+            }
+        )
+
+    # 3) Early take / trailing hint based on missed upside
+    missed = [e.missed_upside_pct or 0.0 for e in effects]
+    if float(np.mean(missed)) >= 1.0 and summary.get("sum_missed_upside_pct", 0) >= 8:
+        suggestions.append(
+            {
+                "parameter": "take_profit_management",
+                "current": "fixed/early exit dominates",
+                "proposed": "partial TP + trailing on strong momentum",
+                "why": f"Средний missed_upside={float(np.mean(missed)):.2f}%, суммарно={summary.get('sum_missed_upside_pct', 0):.2f}%.",
+                "expected_effect": "Снижение недобора прибыли на сильных движениях.",
+            }
+        )
+
+    # 4) Polling cadence
+    late = int(summary.get("late_polling_signals", 0))
+    if late >= 3:
+        suggestions.append(
+            {
+                "parameter": "price_polling_interval",
+                "current": "5m checks",
+                "proposed": "faster checks near exit levels (e.g. 1m guard)",
+                "why": f"Обнаружено late_polling_signals={late}.",
+                "expected_effect": "Меньше запаздывающих выходов, лучше фиксация у high.",
+            }
+        )
+    return suggestions
+
+
+def _build_critical_case_analysis(effects: List[TradeEffect], limit: int = 5) -> List[Dict[str, Any]]:
+    """Разбор критичных кейсов: где одновременно большой убыток и/или большой missed upside."""
+    if not effects:
+        return []
+    ranked = sorted(
+        effects,
+        key=lambda e: ((-e.realized_pct if e.realized_pct < 0 else 0.0) + (e.missed_upside_pct or 0.0)),
+        reverse=True,
+    )
+    out: List[Dict[str, Any]] = []
+    for e in ranked[:limit]:
+        reason_parts = []
+        if e.realized_pct < 0:
+            reason_parts.append(f"loss {e.realized_pct:+.2f}%")
+        if (e.missed_upside_pct or 0) > 0.8:
+            reason_parts.append(f"missed {e.missed_upside_pct:+.2f}%")
+        if e.likely_late_polling:
+            reason_parts.append("late polling signal")
+        if e.entry_vol_5m_pct is not None and e.entry_vol_5m_pct >= 0.6:
+            reason_parts.append(f"high vol {e.entry_vol_5m_pct:.2f}%")
+        if (e.entry_news_impact or "").lower().startswith("негатив"):
+            reason_parts.append("negative news at entry")
+        action = "Проверить пороги входа/выхода и тайминг опроса для кейса."
+        if e.exit_signal == "TAKE_PROFIT" and (e.missed_upside_pct or 0) > 1.0:
+            action = "Рассмотреть частичный тейк + trailing вместо полного раннего выхода."
+        elif e.exit_signal == "SELL" and e.realized_pct < -1.5:
+            action = "Проверить условие SELL: добавить подтверждение/буфер перед выходом."
+        out.append(
+            {
+                "trade_id": e.trade_id,
+                "ticker": e.ticker,
+                "exit_signal": e.exit_signal,
+                "realized_pct": round(e.realized_pct, 3),
+                "missed_upside_pct": round(e.missed_upside_pct or 0.0, 3),
+                "diagnosis": ", ".join(reason_parts) if reason_parts else "key outlier",
+                "action": action,
+            }
+        )
+    return out
+
+
+def _get_current_decision_rule_params() -> Dict[str, Any]:
+    """Текущие параметры правил из кода/config (для LLM, даже если в старых сделках нет snapshot)."""
+    try:
+        from config_loader import get_config_value
+        from services.recommend_5m import GAME_5M_RULE_VERSION
+        return {
+            "rule_version": GAME_5M_RULE_VERSION,
+            "source_fn": "services.recommend_5m.get_decision_5m",
+            "rsi_strong_buy_max": 32.0,
+            "momentum_for_strong_buy_min": -0.3,
+            "rsi_buy_max": 38.0,
+            "price_to_low5d_multiplier_max": 1.005,
+            "rsi_sell_min": 76.0,
+            "rsi_hold_overbought_min": 68.0,
+            "momentum_buy_min": 0.5,
+            "rsi_for_momentum_buy_max": 62.0,
+            "volatility_warn_buy_min": 0.4,
+            "volatility_wait_min": 0.6,
+            "news_negative_min": 0.4,
+            "news_very_negative_min": 0.35,
+            "news_positive_min": 0.65,
+            "cfg_min_volume_vs_avg_pct": (get_config_value("GAME_5M_MIN_VOLUME_VS_AVG_PCT", "") or "").strip() or None,
+            "cfg_max_atr_5m_pct": (get_config_value("GAME_5M_MAX_ATR_5M_PCT", "") or "").strip() or None,
+        }
+    except Exception:
+        return {}
+
+
 def analyze_trade_effectiveness(days: int = 7, strategy: str = "GAME_5M", use_llm: bool = False) -> Dict[str, Any]:
     days = max(1, min(30, int(days)))
     closed = _load_closed_trades(days=days, strategy_name=strategy)
@@ -329,10 +479,22 @@ def analyze_trade_effectiveness(days: int = 7, strategy: str = "GAME_5M", use_ll
     effects = _estimate_trade_effects(closed, cache)
     summary = _aggregate(effects)
     tops = _top_cases(effects)
+    current_rules = _get_current_decision_rule_params()
+    practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
+    critical_cases = _build_critical_case_analysis(effects, limit=5)
     payload: Dict[str, Any] = {
-        "meta": {"days": days, "strategy": strategy, "trades_analyzed": len(effects)},
+        "meta": {
+            "days": days,
+            "strategy": strategy,
+            "trades_analyzed": len(effects),
+            "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness",
+            "decision_source_expected": "services.recommend_5m.get_decision_5m",
+            "current_decision_rule_params": current_rules,
+        },
         "summary": summary,
         "top_cases": tops,
+        "practical_parameter_suggestions": practical,
+        "critical_case_analysis": critical_cases,
     }
     if use_llm:
         payload["llm"] = _build_llm_recommendations(payload)
@@ -351,11 +513,28 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
         f"Средний результат: {summary['avg_realized_pct']:+.3f}% | Медиана: {summary['median_realized_pct']:+.3f}%",
         f"Упущенный upside: Σ {summary['sum_missed_upside_pct']:+.3f}% | Избежимый loss: Σ {summary['sum_avoidable_loss_pct']:+.3f}%",
         f"Сигналы риска: late polling={summary['late_polling_signals']}, high-vol losses={summary['high_vol_losses_count']}, weak P(up) losses={summary['weak_prob_up_losses_count']}",
+        f"Параметрические причины: losses@ALLOW={summary.get('losses_with_allow_entry_count', 0)}, losses@prob_up>=0.60={summary.get('losses_with_high_prob_up_count', 0)}, losses@RSI>=60={summary.get('losses_with_high_rsi_count', 0)}",
         "",
         "Top losses:",
     ]
     for r in (top.get("top_losses") or [])[:4]:
         lines.append(f"• {r['ticker']} #{r['trade_id']}: {r['realized_pct']:+.2f}% (exit={r['exit_signal']})")
+    practical = report.get("practical_parameter_suggestions") or []
+    if practical:
+        lines.append("")
+        lines.append("Практические изменения:")
+        for p in practical[:4]:
+            lines.append(
+                f"• {p.get('parameter')}: {p.get('current')} -> {p.get('proposed')} | {p.get('why')}"
+            )
+    critical = report.get("critical_case_analysis") or []
+    if critical:
+        lines.append("")
+        lines.append("Критичные кейсы:")
+        for c in critical[:4]:
+            lines.append(
+                f"• {c.get('ticker')} #{c.get('trade_id')}: {c.get('diagnosis')} | action: {c.get('action')}"
+            )
     if report.get("llm"):
         llm = report["llm"]
         lines.append("")
