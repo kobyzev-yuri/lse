@@ -965,6 +965,16 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
             entry_price = float(pos["entry_price"])
     except Exception:
         pass
+    pf5 = None
+    try:
+        from services.recommend_5m import get_decision_5m
+
+        d5_tr = get_decision_5m(ticker, days=days, use_llm_news=False)
+        if d5_tr:
+            pf5 = d5_tr.get("price_forecast_5m")
+    except Exception:
+        pass
+
     return {
         "ticker": str(ticker),
         "days": int(days),
@@ -979,6 +989,7 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
         "take_level": None,
         "trades": trades_out,
         "no_ohlc": True,
+        "price_forecast_5m": pf5,
     }
 
 
@@ -1128,6 +1139,10 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
                 return None
         return x
 
+    pf5 = None
+    if d5_chart:
+        pf5 = d5_chart.get("price_forecast_5m")
+
     return {
         "ticker": str(ticker),
         "days": int(days),
@@ -1154,6 +1169,7 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
             }
             for t in trades
         ],
+        "price_forecast_5m": pf5,
     }
 
 

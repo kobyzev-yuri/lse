@@ -20,7 +20,7 @@
         Обновлять графики каждые 5 мин
     </label>
     <div id="chart5mSymbolsLegend" class="muted" style="margin-top:0.75rem; margin-bottom:0.5rem; font-size:0.8rem; line-height:1.4;">
-        <strong style="color:#cbd5e1;">Обозначения:</strong> ▲ покупка · ● зелёный — тейк · ● красный — стоп · вертикальные линии — границы дней (9:30 ET).
+        <strong style="color:#cbd5e1;">Обозначения:</strong> ▲ покупка · ● зелёный — тейк · ● красный — стоп · вертикальные линии — границы дней (9:30 ET) · у правого края — стрелки <strong>p50</strong> прогноза цены (30/60/120 мин) относительно spot.
     </div>
     <div id="chart5mContainer"></div>
 </div>
@@ -127,7 +127,11 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                 x: { ticks: { maxTicksLimit: 12, callback: (v, i) => formatChart5mTime(labels[i]) } },
                 y: { title: { display: true, text: 'Цена' } }
             },
-            plugins: { legend: { position: 'top' }, dayBoundaries: dayBoundaries }
+            plugins: {
+                legend: { position: 'top' },
+                dayBoundaries: dayBoundaries,
+                priceForecast5m: data.price_forecast_5m || null
+            }
         },
         plugins: [{
             id: 'dayBoundaries',
@@ -146,12 +150,60 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                 });
                 c.restore();
             }
+        }, {
+            id: 'forecastArrows',
+            afterDraw(chart) {
+                const fc = chart.options.plugins?.priceForecast5m;
+                if (!fc || !fc.horizons || !fc.horizons.length) return;
+                const spot = parseFloat(fc.spot);
+                if (!Number.isFinite(spot) || spot <= 0) return;
+                const yScale = chart.scales.y, xScale = chart.scales.x;
+                if (!yScale || !xScale) return;
+                const labels = chart.data.labels || [];
+                if (!labels.length) return;
+                const lastLbl = labels[labels.length - 1];
+                let xEnd = xScale.getPixelForValue(lastLbl);
+                if (!Number.isFinite(xEnd)) xEnd = xScale.right;
+                xEnd = Math.min(xScale.right, xEnd + 14);
+                const area = chart.chartArea;
+                const ctx = chart.ctx;
+                ctx.save();
+                ctx.font = 'bold 12px system-ui, sans-serif';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                fc.horizons.forEach(function(h) {
+                    const p50 = parseFloat(h.p50_price);
+                    if (!Number.isFinite(p50)) return;
+                    let y = yScale.getPixelForValue(p50);
+                    if (!Number.isFinite(y)) return;
+                    y = Math.max(area.top + 2, Math.min(area.bottom - 2, y));
+                    let sym, col;
+                    if (p50 > spot) { sym = '▲'; col = 'rgba(46, 125, 50, 0.95)'; }
+                    else if (p50 < spot) { sym = '▼'; col = 'rgba(198, 40, 40, 0.95)'; }
+                    else { sym = '→'; col = 'rgba(148, 163, 184, 0.95)'; }
+                    ctx.fillStyle = col;
+                    const m = h.minutes != null ? String(h.minutes) : '';
+                    ctx.fillText(sym + ' ' + m + 'м p50', xEnd, y);
+                });
+                ctx.restore();
+            }
         }]
     });
     if (legendEl) {
-        legendEl.textContent = noOhlc
+        let base = noOhlc
             ? (data.trades && data.trades.length ? 'Нет свечей; сделки GAME_5M.' : 'Нет данных.')
             : (prolong.forecast_defined ? 'Пролонгация: ' + (prolong.label || '') : 'Тренд не определён (≥5 свечей).');
+        const pfc = data.price_forecast_5m;
+        if (pfc && pfc.horizons && pfc.horizons.length && Number.isFinite(parseFloat(pfc.spot))) {
+            const sp = parseFloat(pfc.spot);
+            const bits = pfc.horizons.map(function(h) {
+                const p50 = parseFloat(h.p50_price);
+                const a = p50 > sp ? '↑' : (p50 < sp ? '↓' : '→');
+                return (h.minutes != null ? h.minutes + 'м' : '') + a;
+            });
+            base += ' · Прогноз p50: ' + bits.join(' ');
+        }
+        legendEl.textContent = base;
     }
     return ch;
 }
