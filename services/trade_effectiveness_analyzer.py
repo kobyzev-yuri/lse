@@ -38,6 +38,7 @@ class TradeEffect:
     entry_rsi_5m: Optional[float]
     entry_vol_5m_pct: Optional[float]
     entry_momentum_2h_pct: Optional[float]
+    entry_price_forecast_5m_summary: Optional[str]
     entry_prob_up: Optional[float]
     entry_prob_down: Optional[float]
     entry_news_impact: Optional[str]
@@ -178,6 +179,11 @@ def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Opti
                 entry_rsi_5m=_safe_float(entry_ctx.get("rsi_5m")),
                 entry_vol_5m_pct=_safe_float(entry_ctx.get("volatility_5m_pct")),
                 entry_momentum_2h_pct=_safe_float(entry_ctx.get("momentum_2h_pct")),
+                entry_price_forecast_5m_summary=(
+                    (lambda v: (str(v).strip()[:2000] or None) if v is not None else None)(
+                        entry_ctx.get("price_forecast_5m_summary")
+                    )
+                ),
                 entry_prob_up=_safe_float(entry_ctx.get("prob_up")),
                 entry_prob_down=_safe_float(entry_ctx.get("prob_down")),
                 entry_news_impact=(entry_ctx.get("kb_news_impact") or None),
@@ -260,6 +266,7 @@ def _top_cases(effects: List[TradeEffect], limit: int = 8) -> Dict[str, List[Dic
             "entry_rsi_5m": e.entry_rsi_5m,
             "entry_vol_5m_pct": e.entry_vol_5m_pct,
             "entry_prob_up": e.entry_prob_up,
+            "entry_price_forecast_5m_summary": e.entry_price_forecast_5m_summary,
             "entry_news_impact": e.entry_news_impact,
             "entry_advice": e.entry_advice,
             "decision_rule_version": e.decision_rule_version,

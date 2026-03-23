@@ -314,6 +314,12 @@ def process_ticker(
                         "catboost_signal_status": d5.get("catboost_signal_status"),
                         "catboost_fusion_note": d5.get("catboost_fusion_note"),
                         "cluster_note": cluster_note,
+                        "momentum_2h_pct": d5.get("momentum_2h_pct"),
+                        "take_profit_pct": d5.get("take_profit_pct"),
+                        "stop_loss_pct": d5.get("stop_loss_pct"),
+                        "estimated_upside_pct_day": d5.get("estimated_upside_pct_day"),
+                        "price_forecast_5m": d5.get("price_forecast_5m"),
+                        "price_forecast_5m_summary": d5.get("price_forecast_5m_summary"),
                     }
                     kb_impact = d5.get("kb_news_impact") or ""
                     kb_news = d5.get("kb_news") or []

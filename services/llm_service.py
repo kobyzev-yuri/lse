@@ -13,6 +13,88 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
+
+def format_game5m_execution_context_for_llm(technical_data: Dict[str, Any]) -> str:
+    """
+    Строки для user-промпта: импульс 2ч и тейк/стоп по правилам GAME_5m,
+    чтобы LLM не подменял исполнение одной ячейкой таблицы прогноза.
+    """
+    lines: List[str] = []
+    mom = technical_data.get("momentum_2h_pct")
+    if mom is not None:
+        try:
+            lines.append(f"- Импульс 2ч (факт за ~2ч до spot): {float(mom):+.2f}%")
+        except (TypeError, ValueError):
+            pass
+    eff = technical_data.get("effective_take_profit_pct")
+    if eff is None:
+        eff = technical_data.get("estimated_upside_pct_day")
+    tp = technical_data.get("take_profit_pct")
+    if eff is not None:
+        try:
+            lines.append(
+                f"- Эффективный тейк по правилам GAME_5m (исполнение; в карточке часто «Upside день»): ≈{float(eff):.2f}%"
+            )
+        except (TypeError, ValueError):
+            pass
+    elif tp is not None:
+        try:
+            lines.append(f"- Базовый тейк из конфига (GAME_5m): ≈{float(tp):.2f}%")
+        except (TypeError, ValueError):
+            pass
+    sl = technical_data.get("stop_loss_pct")
+    if sl is not None:
+        try:
+            lines.append(f"- Стоп (если включён в стратегии): ≈{float(sl):.2f}%")
+        except (TypeError, ValueError):
+            pass
+    if not lines:
+        return ""
+    return "\n" + "\n".join(lines)
+
+
+def format_price_forecast_llm_block(technical_data: Dict[str, Any]) -> str:
+    """
+    Текст блока краткосрочного прогноза цены (price_forecast_5m) для промпта LLM.
+    p50 на 120 мин согласован с той же 2ч-осью, что и импульс 2ч (см. docs/GAME_5M_PRICE_FORECAST.md).
+    """
+    summ = (technical_data.get("price_forecast_5m_summary") or "").strip()
+    fc = technical_data.get("price_forecast_5m")
+    lines: List[str] = []
+    if summ:
+        lines.append(summ)
+    if isinstance(fc, dict) and fc.get("horizons"):
+        spot = fc.get("spot")
+        if spot is not None:
+            try:
+                lines.append(f"Реф. spot: {float(spot):.4f}")
+            except (TypeError, ValueError):
+                pass
+        for h in (fc.get("horizons") or [])[:4]:
+            m = h.get("minutes")
+            if m is None:
+                continue
+            lo, mid, hi = h.get("p10_pct_vs_spot"), h.get("p50_pct_vs_spot"), h.get("p90_pct_vs_spot")
+            ph = h.get("p_price_gt_spot")
+            if lo is not None and mid is not None and hi is not None:
+                try:
+                    lines.append(
+                        f"  {m} мин: [{float(lo):+.2f}% … {float(mid):+.2f}% … {float(hi):+.2f}%] P(>spot)≈{ph}"
+                    )
+                except (TypeError, ValueError):
+                    lines.append(f"  {m} мин: p50≈{h.get('p50_price')}")
+            else:
+                lines.append(f"  {m} мин: p50≈{h.get('p50_price')}")
+    if not lines:
+        return ""
+    return (
+        "\n\nКраткосрочный прогноз цены по 5m (лог-норм. модель на лог-доходностях; горизонты 30/60/120 мин — ориентир, не гарантия). "
+        "p50 на 120 мин — та же двухчасовая шкала (24×5м), что и оценка дрейфа/импульс 2ч; это согласованная математика, не две независимые метрики. "
+        "Для формулировок о тейке опирайся на строки импульса и эффективного тейка в разделе «Технические данные» (если есть); по прогнозу для быстрых ориентиров смотри 30/60 мин (p50 или p90 как верх коридора), p10 — пол риска; не подменяй число тейка из стратегии ячейкой p50@120м:\n"
+        + "\n".join(lines)
+    )
+
+
 # Базовые URL ProxyAPI по провайдерам (см. proxyapi.ru/docs)
 PROXYAPI_OPENAI_BASE = "https://api.proxyapi.ru/openai/v1"
 PROXYAPI_ANTHROPIC_BASE = "https://api.proxyapi.ru/anthropic/v1"
@@ -169,6 +251,7 @@ class LLMService:
 4. Риски
 5. Геополитический риск: при существенных геополитических изменениях (эскалация, военные действия, удары, санкции, risk-off) — предпочтительнее HOLD и в reasoning/risks укажи рекомендацию рассмотреть превентивный выход по открытым позициям даже с небольшой потерей (история: удержание через такое событие часто ведёт к большим потерям). Одновременно учитывай прогнозы о деэскалации или стабилизации: если в новостях звучит снижение напряжённости, переговоры, «рынок учёл», адаптация — риски могут быть терпимы, не исключай вход или удержание, когда рынок уже адаптировался, чтобы не оставаться вне игры без необходимости.
 6. Кластер и корреляция: если в контексте есть блок «Кластер и корреляция» (корреляция тикера с другими, цены и сигналы по ним) — обязательно учти его в key_factors и в reasoning. Высокая корреляция с другим активом означает, что они часто движутся вместе; при расхождении сигналов или падении коррелированного актива — осторожность; не дублируй риск по двум сильно коррелированным бумагам.
+7. Краткосрочный прогноз (30/60/120 мин) и тейк: p10/p50/p90 и P(>spot) — ориентир направления и ширины коридора (упрощённая статистика по недавним 5m, не гарантия). Если в данных есть «Импульс 2ч» и «Эффективный тейк по правилам GAME_5m» — число тейка для исполнения берётся из правил стратегии (и связано с импульсом), а не из таблицы прогноза. p50 на 120 мин математически на той же 2ч-оси, что импульс 2ч (не считай их двумя независимыми сигналами). Для словесных оценок кратких целей уместнее горизонты 30/60 мин (p50 или p90 как верх сценария); p10 — нижний хвост риска. Не подменяй исполняемый тейк одной ячейкой таблицы.
 
 Важно: в ответе должна быть одна чёткая итоговая рекомендация (BUY, STRONG_BUY или HOLD). В reasoning объясняй именно её: если HOLD — почему не входим сейчас (а не «есть возможность покупки, но держим»); если BUY — почему входим. Не смешивай противоположные выводы в одном тексте.
 
@@ -244,14 +327,16 @@ Sentiment анализ:
             else:
                 rsi_status = "нейтральная зона"
             rsi_text = f"\n- RSI: {rsi_value:.1f} ({rsi_status})"
+        exec_ctx = format_game5m_execution_context_for_llm(technical_data)
+        pf_block = format_price_forecast_llm_block(technical_data)
         user_message = f"""Анализ для тикера {ticker}:
 
 Технические данные:
 - Текущая цена: {technical_data.get('close', 'N/A')}
 - SMA_5: {technical_data.get('sma_5', 'N/A')}
 - Волатильность (5 дней): {technical_data.get('volatility_5', 'N/A')}
-- Средняя волатильность (20 дней): {technical_data.get('avg_volatility_20', 'N/A')}{rsi_text}
-- Технический сигнал: {technical_data.get('technical_signal', 'N/A')}
+- Средняя волатильность (20 дней): {technical_data.get('avg_volatility_20', 'N/A')}{rsi_text}{exec_ctx}
+- Технический сигнал: {technical_data.get('technical_signal', 'N/A')}{pf_block}
 
 Sentiment анализ:
 - Взвешенный sentiment: {sentiment_score:.3f}
@@ -403,14 +488,16 @@ Sentiment анализ:
             if cb_fusion:
                 cb_lines += f"\n  Слияние с тех. сигналом: {cb_fusion}"
 
+        exec_ctx = format_game5m_execution_context_for_llm(technical_data)
+        pf_block = format_price_forecast_llm_block(technical_data)
         user_message = f"""Анализ для тикера {ticker}:
 
 Технические данные:
 - Текущая цена: {technical_data.get('close', 'N/A')}
 - SMA_5: {technical_data.get('sma_5', 'N/A')}
 - Волатильность (5 дней): {technical_data.get('volatility_5', 'N/A')}
-- Средняя волатильность (20 дней): {technical_data.get('avg_volatility_20', 'N/A')}{rsi_text}
-- Итоговый технический сигнал (для стратегии входа): {tech_sig}{sig_extra}{cb_lines}
+- Средняя волатильность (20 дней): {technical_data.get('avg_volatility_20', 'N/A')}{rsi_text}{exec_ctx}
+- Итоговый технический сигнал (для стратегии входа): {tech_sig}{sig_extra}{cb_lines}{pf_block}
 
 Sentiment анализ:
 - Взвешенный sentiment: {sentiment_score:.3f}

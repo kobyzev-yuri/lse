@@ -29,6 +29,8 @@ FULL_ENTRY_KEYS = (
     "llm_insight", "llm_sentiment",
     "atr_5m_pct", "volume_5m_last", "volume_vs_avg_pct",
     "decision_rule_version", "decision_rule_params",
+    # Прогноз цены 30/60/120 мин (лог-норм. по 5m) — для LLM и истории входа
+    "price_forecast_5m", "price_forecast_5m_summary",
 ) + CORRELATION_CB_FEATURE_KEYS
 # session_phase берём из market_session
 SESSION_PHASE_KEY = "session_phase"
@@ -126,3 +128,12 @@ def get_entry_impulse_pct(ctx: Optional[Union[str, Dict[str, Any]]]) -> Optional
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def get_entry_price_forecast_summary(ctx: Optional[Union[str, Dict[str, Any]]]) -> Optional[str]:
+    """Краткая строка прогноза цены (30/60/120 мин) на момент входа, если сохранена в context_json."""
+    n = normalize_entry_context(ctx)
+    s = n.get("price_forecast_5m_summary")
+    if s and isinstance(s, str) and s.strip():
+        return s.strip()[:2000]
+    return None

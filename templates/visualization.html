@@ -20,7 +20,7 @@
         Обновлять графики каждые 5 мин
     </label>
     <div id="chart5mSymbolsLegend" class="muted" style="margin-top:0.75rem; margin-bottom:0.5rem; font-size:0.8rem; line-height:1.4;">
-        <strong style="color:#cbd5e1;">Обозначения:</strong> ▲ покупка · ● зелёный — тейк · ● красный — стоп · вертикальные линии — границы дней (9:30 ET) · справа внутри поля графика — медиана <strong>p50</strong> (<strong>30м / 1ч / 2ч</strong> на подложке; полные подписи — в строке под графиком).
+        <strong style="color:#cbd5e1;">Обозначения:</strong> <strong>* цена</strong> — сделки (цвет: вход / тейк / стоп / выход) · вертикальные линии — границы дней (9:30 ET) · справа — медиана <strong>p50</strong> с ценой (<strong>30м / 1ч / 2ч</strong>).
     </div>
     <div id="chart5mContainer"></div>
 </div>
@@ -112,11 +112,23 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
         });
         return best;
     }
-    function makeTradeDataset(trades, label, color, pointStyle) {
+    function makeTradeDataset(trades, label) {
         const arr = labels.map(() => null);
         trades.forEach(tr => { const i = findClosestLabelIndex(labels, tr.ts); arr[i] = tr.price; });
         if (arr.every(v => v == null)) return null;
-        return { label, data: arr, borderColor: color, backgroundColor: color, pointRadius: 5, pointHoverRadius: 7, pointStyle, fill: false, tension: 0, borderWidth: 0 };
+        return {
+            label,
+            data: arr,
+            borderColor: 'transparent',
+            backgroundColor: 'transparent',
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            pointHitRadius: 22,
+            fill: false,
+            tension: 0,
+            borderWidth: 0,
+            spanGaps: false
+        };
     }
     const trades = (data.trades || []).slice();
     trades.sort((a, b) => new Date(a.ts) - new Date(b.ts));
@@ -130,8 +142,17 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
             else otherTrades.push(t);
         }
     });
-    [[buyTrades, 'Вход (BUY)', '#2e7d32', 'triangle'], [takeTrades, 'Тейк', '#1b5e20', 'circle'], [stopTrades, 'Стоп', '#c62828', 'circle'], [otherTrades, 'Выход', '#757575', 'circle']].forEach(([arr, lbl, col, style]) => {
-        const ds = makeTradeDataset(arr, lbl, col, style);
+    const tradeStarItems = [];
+    function collectStars(tradesArr, color) {
+        tradesArr.forEach(tr => {
+            const i = findClosestLabelIndex(labels, tr.ts);
+            const p = parseFloat(tr.price);
+            if (Number.isFinite(p)) tradeStarItems.push({ index: i, price: p, color });
+        });
+    }
+    [[buyTrades, 'Вход *', '#4ade80'], [takeTrades, 'Тейк *', '#34d399'], [stopTrades, 'Стоп *', '#f87171'], [otherTrades, 'Выход *', '#94a3b8']].forEach(([arr, lbl, col]) => {
+        collectStars(arr, col);
+        const ds = makeTradeDataset(arr, lbl);
         if (ds) datasets.push(ds);
     });
 
@@ -150,7 +171,8 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
             plugins: {
                 legend: { position: 'top' },
                 dayBoundaries: dayBoundaries,
-                priceForecast5m: data.price_forecast_5m || null
+                priceForecast5m: data.price_forecast_5m || null,
+                tradeStarMarkers: { items: tradeStarItems }
             }
         },
         plugins: [{
@@ -203,12 +225,12 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                     let y = yScale.getPixelForValue(p50);
                     if (!Number.isFinite(y)) return;
                     y = Math.max(area.top + th / 2 + 2, Math.min(area.bottom - th / 2 - 2, y));
-                    let sym, col;
-                    if (p50 > spot) { sym = '▲'; col = 'rgba(74, 222, 128, 1)'; }
-                    else if (p50 < spot) { sym = '▼'; col = 'rgba(248, 113, 113, 1)'; }
-                    else { sym = '→'; col = 'rgba(203, 213, 225, 1)'; }
+                    let col;
+                    if (p50 > spot) { col = 'rgba(74, 222, 128, 1)'; }
+                    else if (p50 < spot) { col = 'rgba(248, 113, 113, 1)'; }
+                    else { col = 'rgba(203, 213, 225, 1)'; }
                     const hLab = horizonLabelCanvas(h.minutes);
-                    const text = sym + ' ' + hLab + ' p50';
+                    const text = '* ' + hLab + ' ' + p50.toFixed(2);
                     ctx.font = font;
                     let tw = ctx.measureText(text).width;
                     if (tw < 8 && text.length > 1) {
@@ -249,6 +271,44 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                     ctx.lineWidth = 1;
                     ctx.strokeStyle = 'transparent';
                     ctx.fillText(r.text, x0 + padX, r.y);
+                });
+                ctx.restore();
+            }
+        }, {
+            id: 'tradeStarMarkers',
+            afterDraw(chart) {
+                const cfg = chart.options.plugins?.tradeStarMarkers;
+                if (!cfg || !cfg.items || !cfg.items.length) return;
+                const xScale = chart.scales.x, yScale = chart.scales.y;
+                if (!xScale || !yScale) return;
+                const lbls = chart.data.labels || [];
+                const area = chart.chartArea;
+                const ctx = chart.ctx;
+                const font = 'bold 11px system-ui, -apple-system, "Segoe UI", sans-serif';
+                ctx.save();
+                try {
+                    if (typeof ctx.resetClip === 'function') {
+                        ctx.resetClip();
+                    }
+                } catch (_) {}
+                ctx.font = font;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                cfg.items.forEach(function(item) {
+                    const xi = item.index;
+                    if (xi < 0 || xi >= lbls.length) return;
+                    const px = xScale.getPixelForValue(lbls[xi]);
+                    const py = yScale.getPixelForValue(item.price);
+                    if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+                    if (px < area.left - 2 || px > area.right + 2 || py < area.top - 2 || py > area.bottom + 2) return;
+                    const txt = '* ' + item.price.toFixed(2);
+                    const ty = py - 5;
+                    ctx.strokeStyle = 'rgba(15, 23, 42, 0.92)';
+                    ctx.lineWidth = 4;
+                    ctx.strokeText(txt, px, ty);
+                    ctx.fillStyle = item.color;
+                    ctx.lineWidth = 1;
+                    ctx.fillText(txt, px, ty);
                 });
                 ctx.restore();
             }

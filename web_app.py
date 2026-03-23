@@ -1507,6 +1507,12 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
                     "catboost_signal_status": d5.get("catboost_signal_status"),
                     "catboost_fusion_note": d5.get("catboost_fusion_note"),
                     "cluster_note": cluster_note,
+                    "momentum_2h_pct": d5.get("momentum_2h_pct"),
+                    "take_profit_pct": d5.get("take_profit_pct"),
+                    "stop_loss_pct": d5.get("stop_loss_pct"),
+                    "estimated_upside_pct_day": d5.get("estimated_upside_pct_day"),
+                    "price_forecast_5m": d5.get("price_forecast_5m"),
+                    "price_forecast_5m_summary": d5.get("price_forecast_5m_summary"),
                 }
                 news_list = [{"source": "KB", "content": (d5.get("kb_news_impact") or "")[:500], "sentiment_score": 0.5}]
                 sentiment = 0.35 if "негатив" in (d5.get("kb_news_impact") or "").lower() else (0.65 if "позитив" in (d5.get("kb_news_impact") or "").lower() else 0.5)

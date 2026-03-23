@@ -3873,6 +3873,8 @@ class LSETelegramBot:
                         "price": d5.get("price"),
                         "rsi_5m": d5.get("rsi_5m"),
                         "momentum_2h_pct": d5.get("momentum_2h_pct"),
+                        "price_forecast_5m": d5.get("price_forecast_5m"),
+                        "price_forecast_5m_summary": d5.get("price_forecast_5m_summary"),
                         "volatility_5m_pct": d5.get("volatility_5m_pct"),
                         "stop_loss_pct": d5.get("stop_loss_pct"),
                         "take_profit_pct": d5.get("take_profit_pct"),
@@ -3884,6 +3886,7 @@ class LSETelegramBot:
                         "llm_sentiment": d5.get("llm_sentiment"),
                         "entry_advice": d5.get("entry_advice"),
                         "entry_advice_reason": d5.get("entry_advice_reason"),
+                        "estimated_upside_pct_day": d5.get("estimated_upside_pct_day"),
                     })
                 extra_tech: Dict[str, Dict[str, Any]] = {}
                 if corr_tickers_used:
@@ -3917,6 +3920,12 @@ class LSETelegramBot:
                                 "avg_volatility_20": get_avg_volatility_20_pct_from_quotes(r["ticker"]),
                                 "technical_signal": r.get("decision"),
                                 "cluster_note": cluster_note,
+                                "momentum_2h_pct": r.get("momentum_2h_pct"),
+                                "take_profit_pct": r.get("take_profit_pct"),
+                                "stop_loss_pct": r.get("stop_loss_pct"),
+                                "estimated_upside_pct_day": r.get("estimated_upside_pct_day"),
+                                "price_forecast_5m": r.get("price_forecast_5m"),
+                                "price_forecast_5m_summary": r.get("price_forecast_5m_summary"),
                             }
                             news_list = []
                             if r.get("kb_news_summary") or r.get("kb_news_impact"):
@@ -4258,6 +4267,12 @@ class LSETelegramBot:
                             "avg_volatility_20": get_avg_volatility_20_pct_from_quotes(r["ticker"]),
                             "technical_signal": r.get("decision"),
                             "cluster_note": cluster_note,
+                            "momentum_2h_pct": r.get("momentum_2h_pct"),
+                            "take_profit_pct": r.get("take_profit_pct"),
+                            "stop_loss_pct": r.get("stop_loss_pct"),
+                            "estimated_upside_pct_day": r.get("estimated_upside_pct_day"),
+                            "price_forecast_5m": r.get("price_forecast_5m"),
+                            "price_forecast_5m_summary": r.get("price_forecast_5m_summary"),
                         }
                         news_list = []
                         if r.get("kb_news_summary") or r.get("kb_news_impact"):
