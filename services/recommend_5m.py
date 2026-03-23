@@ -23,7 +23,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # Версия логики принятия решения в get_decision_5m (для фиксации в context_json сделки)
-GAME_5M_RULE_VERSION = "2026-03-03"
+GAME_5M_RULE_VERSION = "2026-03-23"
 
 # Макс. длина content в контексте KB (чтобы не раздувать ответ)
 KB_NEWS_CONTENT_MAX_LEN = 500
@@ -522,6 +522,8 @@ TECHNICAL_SIGNAL_KEYS = (
     "technical_decision_core", "technical_decision_effective",
     "catboost_fusion_mode", "catboost_fusion_note",
     "entry_quality_guard_triggered", "entry_quality_guard_reason", "entry_quality_guard_prev_decision",
+    # Прогноз цены на 30/60/120 мин (лог-нормаль по 5m лог-доходностям)
+    "price_forecast_5m", "price_forecast_5m_summary",
 )
 
 
@@ -1063,6 +1065,18 @@ def get_decision_5m(
         out["prob_down"] = round(down_score / s, 2)
     except Exception as e:
         logger.debug("estimated_downside для 5m: %s", e)
+
+    # Краткосрочный прогноз цены (квантили p10/p50/p90, P(>spot)) — docs/GAME_5M_PRICE_FORECAST.md
+    try:
+        from services.price_forecast_5m import compute_price_forecast_5m, format_price_forecast_one_line
+
+        p_spot = float(out.get("price") or price)
+        fc = compute_price_forecast_5m(closes, p_spot)
+        if fc:
+            out["price_forecast_5m"] = fc
+            out["price_forecast_5m_summary"] = format_price_forecast_one_line(fc)
+    except Exception as e:
+        logger.debug("price_forecast_5m: %s", e)
 
     # Совет по входу: ALLOW / CAUTION / AVOID — фильтр по новостям (KB), волатильности 5m и премаркет-гэпу.
     # Логика и согласование с чек-листом Квена (риск/ревард, мат. ожидание): docs/GAME_5M_WEB_CARDS.md

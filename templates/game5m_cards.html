@@ -181,6 +181,10 @@
             if (upside != null) html += '<div class="row"><span class="label">Upside день</span><span class="value positive">+' + fmt(upside, 1) + '%</span></div>';
             if (downsideRisk != null) html += '<div class="row"><span class="label">Downside риск</span><span class="value negative">−' + fmt(downsideRisk, 1) + '%</span></div>';
             if (c.prob_up != null && c.prob_down != null) html += '<div class="row"><span class="label">P(up/down)</span><span class="value">' + fmt(c.prob_up, 2) + '/' + fmt(c.prob_down, 2) + '</span></div>';
+            if (c.price_forecast_5m_summary) {
+                html += '<div class="block-title">Прогноз цены (30/60/120 м, p10–p50–p90)</div>';
+                html += '<div class="reasoning" style="font-size:0.78rem;">' + escapeHtml(c.price_forecast_5m_summary) + '</div>';
+            }
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
             html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">Вывод LLM</button>';
             html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';

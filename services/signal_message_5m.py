@@ -42,6 +42,9 @@ def build_5m_technical_short_text(tech: Dict[str, Any], ticker: str) -> str:
         lines.append(f"Период: {period}")
     if reasoning:
         lines.append(f"Обоснование: {reasoning}")
+    summ = tech.get("price_forecast_5m_summary")
+    if summ:
+        lines.append(f"Прогноз цены: {summ}")
     return "\n".join(s for s in lines if s)
 
 
@@ -99,9 +102,16 @@ def build_5m_entry_signal_text(
         f"Импульс 2ч: {mom:+.2f}%" if mom is not None else "",
         f"Волатильность 5m: {vol:.2f}%" if vol is not None else "",
         f"_Период данных: {period}_" if period else "",
+    ]
+    summ = d5.get("price_forecast_5m_summary")
+    if summ:
+        lines.append(f"📈 Прогноз цены (p10–p50–p90): {summ}")
+    lines.extend(
+        [
         "",
         params_line,
     ]
+    )
     if portfolio_stop_disabled:
         lines.append("⚠️ Стоп портфеля отключён (PORTFOLIO_STOP_LOSS_ENABLED=false): по портфельным позициям закрытие только по тейку.")
     if not game5m_stop_enabled:
