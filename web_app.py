@@ -572,6 +572,88 @@ async def get_analyzer(days: int = 7, strategy: str = "GAME_5M", use_llm: bool =
         raise HTTPException(status_code=500, detail=f"Ошибка анализатора: {e!s}")
 
 
+@app.post("/api/analyzer/apply-config", response_class=JSONResponse)
+async def apply_analyzer_config(request: Request):
+    """
+    Применяет предложенный анализатором блок параметров в config.env.
+    Формат JSON:
+      {
+        "updates": [{"env_key":"GAME_5M_VOLATILITY_WAIT_MIN","proposed":"0.7"}, ...],
+        "restart": true
+      }
+    """
+    import subprocess
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Ожидается JSON body")
+    updates = body.get("updates") if isinstance(body, dict) else None
+    do_restart = bool(body.get("restart")) if isinstance(body, dict) else False
+    if not isinstance(updates, list) or not updates:
+        raise HTTPException(status_code=400, detail="updates is required")
+
+    applied: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    for row in updates:
+        if not isinstance(row, dict):
+            continue
+        key = (row.get("env_key") or "").strip()
+        proposed = str(row.get("proposed") if row.get("proposed") is not None else "").strip()
+        if not key:
+            continue
+        if not is_editable_config_env_key(key):
+            skipped.append({"env_key": key, "reason": "not_editable"})
+            continue
+        ok = update_config_key(key, proposed)
+        if not ok:
+            skipped.append({"env_key": key, "reason": "write_failed"})
+            continue
+        applied.append({"env_key": key, "proposed": proposed})
+
+    restart_result: Dict[str, Any] = {"ok": False, "message": "Перезапуск не запрошен"}
+    if do_restart and applied:
+        config = load_config()
+        cmd = (config.get("RESTART_CMD") or "docker compose restart lse").strip()
+        if not cmd:
+            restart_result = {"ok": False, "message": "Выполните на сервере: docker compose restart lse"}
+        else:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    timeout=30,
+                    capture_output=True,
+                    text=True,
+                    cwd=Path(__file__).parent,
+                )
+                if result.returncode == 0:
+                    restart_result = {"ok": True, "message": "Перезапуск выполнен"}
+                else:
+                    restart_result = {
+                        "ok": False,
+                        "message": f"Команда вернула код {result.returncode}. Выполните на сервере: docker compose restart lse",
+                        "stderr": (result.stderr or "")[:500],
+                    }
+            except FileNotFoundError:
+                restart_result = {"ok": False, "message": "Выполните на сервере: docker compose restart lse"}
+            except subprocess.TimeoutExpired:
+                restart_result = {"ok": False, "message": "Таймаут. Проверьте на сервере: docker ps"}
+            except Exception as e:
+                restart_result = {"ok": False, "message": f"Ошибка: {e!s}. Выполните на сервере: docker compose restart lse"}
+
+    return _to_jsonable(
+        {
+            "ok": len(applied) > 0,
+            "applied_count": len(applied),
+            "skipped_count": len(skipped),
+            "applied": applied,
+            "skipped": skipped,
+            "restart": restart_result,
+        }
+    )
+
+
 @app.get("/trading")
 async def trading_page_removed():
     """Раздел «Торги» снят (дублировал портфель, отчёты и Telegram). Редирект на главную."""

@@ -48,10 +48,24 @@
     <h2>LLM</h2>
     <pre id="llmBlock">—</pre>
 </div>
+
+<div class="card">
+    <h2>Auto config override</h2>
+    <p class="muted">Анализатор может предложить изменения в <code>config.env</code> по текущему алгоритму.</p>
+    <pre id="envBlock">—</pre>
+    <div id="envSkip" class="dashboard-text muted">—</div>
+    <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <label><input id="restartAfterApply" type="checkbox" checked> Перезагрузить сервис после применения</label>
+        <button id="applyEnvBtn" type="button" disabled>Применить в config.env</button>
+    </div>
+    <div id="applyStatus" class="dashboard-text muted" style="margin-top:0.5rem;">—</div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
+let lastAutoUpdates = [];
+
 function esc(s) {
     const d = document.createElement('div');
     d.textContent = s == null ? '' : String(s);
@@ -70,10 +84,19 @@ async function runAnalyzer() {
     const topLosses = document.getElementById('topLosses');
     const topMissed = document.getElementById('topMissed');
     const llmBlock = document.getElementById('llmBlock');
+    const envBlock = document.getElementById('envBlock');
+    const envSkip = document.getElementById('envSkip');
+    const applyBtn = document.getElementById('applyEnvBtn');
+    const applyStatus = document.getElementById('applyStatus');
     summary.innerHTML = 'Загрузка...';
     topLosses.innerHTML = '—';
     topMissed.innerHTML = '—';
     llmBlock.textContent = '—';
+    envBlock.textContent = '—';
+    envSkip.textContent = '—';
+    applyBtn.disabled = true;
+    applyStatus.innerHTML = '—';
+    lastAutoUpdates = [];
     try {
         const q = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0' });
         const r = await fetch('/api/analyzer?' + q.toString());
@@ -101,11 +124,56 @@ async function runAnalyzer() {
         if (data.llm) {
             llmBlock.textContent = JSON.stringify(data.llm, null, 2);
         }
+        const auto = data.auto_config_override || {};
+        const updates = Array.isArray(auto.updates) ? auto.updates : [];
+        const skipped = Array.isArray(auto.skipped) ? auto.skipped : [];
+        lastAutoUpdates = updates;
+        if (updates.length) {
+            envBlock.textContent = auto.env_block || updates.map(u => `${u.env_key}=${u.proposed}`).join('\n');
+            applyBtn.disabled = false;
+            envSkip.textContent = skipped.length ? `Не применено автоматически: ${skipped.length}` : 'Все предложенные ключи можно применить.';
+        } else {
+            envBlock.textContent = 'Нет авто-применимых изменений.';
+            applyBtn.disabled = true;
+            envSkip.textContent = skipped.length ? `Не применено автоматически: ${skipped.length}` : '—';
+        }
     } catch (e) {
         summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(e.message)}</span>`;
     }
 }
 
 document.getElementById('runBtn').addEventListener('click', runAnalyzer);
+
+async function applyEnvOverride() {
+    const applyBtn = document.getElementById('applyEnvBtn');
+    const applyStatus = document.getElementById('applyStatus');
+    const restart = document.getElementById('restartAfterApply').checked;
+    if (!lastAutoUpdates.length) {
+        applyStatus.innerHTML = '<span class="text-danger">Нет данных для применения.</span>';
+        return;
+    }
+    applyBtn.disabled = true;
+    applyStatus.innerHTML = 'Применение...';
+    try {
+        const r = await fetch('/api/analyzer/apply-config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({updates: lastAutoUpdates, restart: restart}),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+            applyStatus.innerHTML = `<span class="text-danger">Ошибка: ${esc(data.detail || r.statusText)}</span>`;
+            applyBtn.disabled = false;
+            return;
+        }
+        const restartMsg = data.restart && data.restart.message ? data.restart.message : '—';
+        applyStatus.innerHTML = `Применено: <strong>${esc(data.applied_count)}</strong>, пропущено: <strong>${esc(data.skipped_count)}</strong><br>Рестарт: ${esc(restartMsg)}`;
+    } catch (e) {
+        applyStatus.innerHTML = `<span class="text-danger">Ошибка: ${esc(e.message)}</span>`;
+        applyBtn.disabled = false;
+    }
+}
+
+document.getElementById('applyEnvBtn').addEventListener('click', applyEnvOverride);
 </script>
 {% endblock %}

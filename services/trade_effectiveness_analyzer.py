@@ -12,6 +12,7 @@ import pandas as pd
 from report_generator import get_engine, load_trade_history, compute_closed_trade_pnls
 from services.recommend_5m import fetch_5m_ohlc
 from services.deal_params_5m import normalize_entry_context
+from config_loader import load_config, is_editable_config_env_key
 
 
 @dataclass
@@ -307,15 +308,70 @@ def _build_llm_recommendations(payload: Dict[str, Any]) -> Optional[Dict[str, An
         if not getattr(llm, "client", None):
             return {"status": "disabled", "reason": "LLM client unavailable"}
 
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        current_rules = (
+            meta.get("current_decision_rule_params")
+            if isinstance(meta.get("current_decision_rule_params"), dict)
+            else {}
+        )
+        algorithm_context = {
+            "decision_source_expected": meta.get("decision_source_expected"),
+            "current_decision_rule_params": current_rules,
+            "scope_for_in_algorithm_changes": [
+                "entry thresholds and guards from decision_rule_params",
+                "config flags and numeric limits from current_decision_rule_params.config",
+                "exit cadence and de-risk knobs from current_decision_rule_params.exit_strategy",
+            ],
+            "hard_constraints": [
+                "propose changes only with concrete fields from current_decision_rule_params",
+                "if there is no matching field, put proposal into algorithm_change_proposals",
+                "do not suggest vague ideas without target parameter or code area",
+            ],
+        }
+        llm_input = {"algorithm_context": algorithm_context, "report": payload}
         system_prompt = (
-            "Ты quant-аналитик. По статистике сделок предложи 5-8 конкретных улучшений "
-            "для роста прибыльности и снижения убытков. Укажи приоритеты. "
-            "Опирайся на метрики, не фантазируй. "
-            "Верни только валидный JSON (без markdown, без ```, без пояснений до/после) "
-            "с ключами: priorities, threshold_changes, new_features, monitoring_fixes, expected_impact."
+            "Ты senior quant и знаешь текущую реализацию стратегии.\n"
+            "Твоя задача: по отчету предложить улучшения, строго привязанные к текущему алгоритму и параметрам.\n"
+            "Сначала ищи решения В РАМКАХ текущего алгоритма (перенастройка существующих параметров), "
+            "и только затем предлагай изменения алгоритма.\n"
+            "Используй только данные из входного JSON, не фантазируй.\n\n"
+            "Верни ТОЛЬКО валидный JSON без markdown и без пояснений вне JSON со следующими ключами:\n"
+            "{\n"
+            "  \"priorities\": [\"...\"],\n"
+            "  \"in_algorithm_parameter_changes\": [\n"
+            "    {\n"
+            "      \"parameter\": \"...\",\n"
+            "      \"current\": \"...\",\n"
+            "      \"proposed\": \"...\",\n"
+            "      \"where_used\": \"services.recommend_5m.py|services.game_5m.py|config.env\",\n"
+            "      \"reason_from_metrics\": \"...\",\n"
+            "      \"expected_effect\": \"...\",\n"
+            "      \"confidence\": \"low|medium|high\"\n"
+            "    }\n"
+            "  ],\n"
+            "  \"algorithm_change_proposals\": [\n"
+            "    {\n"
+            "      \"change\": \"...\",\n"
+            "      \"why_current_algo_not_enough\": \"...\",\n"
+            "      \"code_areas\": [\"services/game_5m.py\", \"services/recommend_5m.py\"],\n"
+            "      \"risk\": \"low|medium|high\",\n"
+            "      \"expected_effect\": \"...\"\n"
+            "    }\n"
+            "  ],\n"
+            "  \"monitoring_fixes\": [\n"
+            "    {\"issue\": \"...\", \"proposed_fix\": \"...\", \"expected_effect\": \"...\"}\n"
+            "  ],\n"
+            "  \"expected_impact\": {\n"
+            "    \"win_rate_increase_pct\": 0,\n"
+            "    \"reduction_in_avg_loss_pct\": 0,\n"
+            "    \"increase_in_avg_realized_pct\": 0,\n"
+            "    \"reduction_in_missed_upside_pct\": 0\n"
+            "  },\n"
+            "  \"validation_plan\": [\"...\"]\n"
+            "}\n"
         )
         out = llm.generate_response(
-            messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)}],
+            messages=[{"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, indent=2)}],
             system_prompt=system_prompt,
             temperature=0.1,
             max_tokens=1600,
@@ -440,11 +496,176 @@ def _build_critical_case_analysis(effects: List[TradeEffect], limit: int = 5) ->
     return out
 
 
+PARAM_TO_ENV_KEY: Dict[str, str] = {
+    "volatility_wait_min": "GAME_5M_VOLATILITY_WAIT_MIN",
+    "sell_confirm_bars": "GAME_5M_SELL_CONFIRM_BARS",
+    "momentum_min_session_bars": "GAME_5M_MOMENTUM_MIN_SESSION_BARS",
+    "momentum_allow_cross_day_buy": "GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY",
+    "premarket_momentum_buy_min": "GAME_5M_PREMARKET_MOMENTUM_BUY_MIN",
+    "premarket_momentum_block_below": "GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW",
+    "cfg_min_volume_vs_avg_pct": "GAME_5M_MIN_VOLUME_VS_AVG_PCT",
+    "cfg_max_atr_5m_pct": "GAME_5M_MAX_ATR_5M_PCT",
+    "entry_quality_guard_enabled": "GAME_5M_ENTRY_QUALITY_GUARD_ENABLED",
+    "entry_quality_min_rr": "GAME_5M_ENTRY_QUALITY_MIN_RR",
+    "entry_quality_min_ev_pct": "GAME_5M_ENTRY_QUALITY_MIN_EV_PCT",
+    "max_position_minutes": "GAME_5M_MAX_POSITION_MINUTES",
+    "stop_loss_pct_effective": "GAME_5M_STOP_LOSS_PCT",
+    "take_profit_pct_effective": "GAME_5M_TAKE_PROFIT_PCT",
+    "GAME_5M_VOLATILITY_WAIT_MIN": "GAME_5M_VOLATILITY_WAIT_MIN",
+    "GAME_5M_SELL_CONFIRM_BARS": "GAME_5M_SELL_CONFIRM_BARS",
+    "GAME_5M_MOMENTUM_MIN_SESSION_BARS": "GAME_5M_MOMENTUM_MIN_SESSION_BARS",
+    "GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY": "GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY",
+    "GAME_5M_PREMARKET_MOMENTUM_BUY_MIN": "GAME_5M_PREMARKET_MOMENTUM_BUY_MIN",
+    "GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW": "GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW",
+    "GAME_5M_MIN_VOLUME_VS_AVG_PCT": "GAME_5M_MIN_VOLUME_VS_AVG_PCT",
+    "GAME_5M_MAX_ATR_5M_PCT": "GAME_5M_MAX_ATR_5M_PCT",
+    "GAME_5M_ENTRY_QUALITY_GUARD_ENABLED": "GAME_5M_ENTRY_QUALITY_GUARD_ENABLED",
+    "GAME_5M_ENTRY_QUALITY_MIN_RR": "GAME_5M_ENTRY_QUALITY_MIN_RR",
+    "GAME_5M_ENTRY_QUALITY_MIN_EV_PCT": "GAME_5M_ENTRY_QUALITY_MIN_EV_PCT",
+    "GAME_5M_MAX_POSITION_MINUTES": "GAME_5M_MAX_POSITION_MINUTES",
+    "GAME_5M_STOP_LOSS_PCT": "GAME_5M_STOP_LOSS_PCT",
+    "GAME_5M_TAKE_PROFIT_PCT": "GAME_5M_TAKE_PROFIT_PCT",
+}
+
+
+def _normalize_env_value(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float):
+        return f"{v:.4f}".rstrip("0").rstrip(".")
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = load_config()
+    llm = report.get("llm") if isinstance(report.get("llm"), dict) else {}
+    llm_ana = llm.get("analysis") if isinstance(llm.get("analysis"), dict) else {}
+    llm_changes = llm_ana.get("in_algorithm_parameter_changes")
+    if not isinstance(llm_changes, list):
+        llm_changes = llm_ana.get("threshold_changes")
+    llm_changes = llm_changes if isinstance(llm_changes, list) else []
+
+    updates: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for row in llm_changes:
+        if not isinstance(row, dict):
+            continue
+        parameter = str(row.get("parameter") or "").strip()
+        proposed = row.get("proposed")
+        if not parameter or proposed is None:
+            continue
+        env_key = PARAM_TO_ENV_KEY.get(parameter) or PARAM_TO_ENV_KEY.get(parameter.upper())
+        if not env_key:
+            skipped.append(
+                {
+                    "parameter": parameter,
+                    "reason": "no_env_mapping",
+                    "note": "Нужна доработка алгоритма/маппинга (ключ не найден).",
+                }
+            )
+            continue
+        if env_key in seen:
+            continue
+        seen.add(env_key)
+        if not is_editable_config_env_key(env_key):
+            skipped.append(
+                {
+                    "parameter": parameter,
+                    "env_key": env_key,
+                    "reason": "not_editable",
+                    "note": "Ключ не разрешён для веб-редактора config.env.",
+                }
+            )
+            continue
+        current = cfg.get(env_key, "")
+        proposed_str = _normalize_env_value(proposed)
+        updates.append(
+            {
+                "env_key": env_key,
+                "current": current,
+                "proposed": proposed_str,
+                "source_parameter": parameter,
+                "reason": row.get("reason_from_metrics") or row.get("why") or row.get("expected_effect") or "",
+            }
+        )
+
+    practical = report.get("practical_parameter_suggestions")
+    if isinstance(practical, list):
+        for row in practical:
+            if not isinstance(row, dict):
+                continue
+            parameter = str(row.get("parameter") or "").strip()
+            proposed = row.get("proposed")
+            if not parameter or proposed is None:
+                continue
+            env_key = PARAM_TO_ENV_KEY.get(parameter)
+            if not env_key or env_key in seen:
+                continue
+            if not is_editable_config_env_key(env_key):
+                continue
+            seen.add(env_key)
+            current = cfg.get(env_key, "")
+            proposed_str = _normalize_env_value(proposed)
+            updates.append(
+                {
+                    "env_key": env_key,
+                    "current": current,
+                    "proposed": proposed_str,
+                    "source_parameter": parameter,
+                    "reason": row.get("why") or row.get("expected_effect") or "",
+                }
+            )
+
+    env_lines = [f"{u['env_key']}={u['proposed']}" for u in updates]
+    return {
+        "updates": updates,
+        "skipped": skipped,
+        "env_block": "\n".join(env_lines),
+        "can_apply": len(updates) > 0,
+    }
+
+
 def _get_current_decision_rule_params() -> Dict[str, Any]:
     """Текущие параметры правил из кода/config (для LLM, даже если в старых сделках нет snapshot)."""
     try:
         from config_loader import get_config_value
         from services.recommend_5m import GAME_5M_RULE_VERSION
+        from services.game_5m import (
+            _max_position_minutes,
+            _stop_loss_enabled,
+            _strategy_stop_and_take,
+        )
+
+        def _cfg_str(key: str, default: str = "") -> Optional[str]:
+            v = (get_config_value(key, default) or "").strip()
+            return v or None
+
+        def _cfg_bool(key: str, default: str = "false") -> bool:
+            return (_cfg_str(key, default) or "").lower() in ("1", "true", "yes")
+
+        def _cfg_int(key: str, default: str) -> Optional[int]:
+            raw = _cfg_str(key, default)
+            if raw is None:
+                return None
+            try:
+                return int(raw)
+            except Exception:
+                return None
+
+        def _cfg_float(key: str, default: str) -> Optional[float]:
+            raw = _cfg_str(key, default)
+            if raw is None:
+                return None
+            try:
+                return float(raw)
+            except Exception:
+                return None
+
+        stop_pct, take_pct = _strategy_stop_and_take()
         return {
             "rule_version": GAME_5M_RULE_VERSION,
             "source_fn": "services.recommend_5m.get_decision_5m",
@@ -461,8 +682,34 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
             "news_negative_min": 0.4,
             "news_very_negative_min": 0.35,
             "news_positive_min": 0.65,
-            "cfg_min_volume_vs_avg_pct": (get_config_value("GAME_5M_MIN_VOLUME_VS_AVG_PCT", "") or "").strip() or None,
-            "cfg_max_atr_5m_pct": (get_config_value("GAME_5M_MAX_ATR_5M_PCT", "") or "").strip() or None,
+            "cfg_min_volume_vs_avg_pct": _cfg_str("GAME_5M_MIN_VOLUME_VS_AVG_PCT", ""),
+            "cfg_max_atr_5m_pct": _cfg_str("GAME_5M_MAX_ATR_5M_PCT", ""),
+            "config": {
+                "GAME_5M_VOLATILITY_WAIT_MIN": _cfg_float("GAME_5M_VOLATILITY_WAIT_MIN", "0.7"),
+                "GAME_5M_SELL_CONFIRM_BARS": _cfg_int("GAME_5M_SELL_CONFIRM_BARS", "2"),
+                "GAME_5M_MOMENTUM_MIN_SESSION_BARS": _cfg_int("GAME_5M_MOMENTUM_MIN_SESSION_BARS", "7"),
+                "GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY": _cfg_bool("GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY", "false"),
+                "GAME_5M_EARLY_USE_PREMARKET_MOMENTUM": _cfg_bool("GAME_5M_EARLY_USE_PREMARKET_MOMENTUM", "true"),
+                "GAME_5M_PREMARKET_MOMENTUM_BUY_MIN": _cfg_float("GAME_5M_PREMARKET_MOMENTUM_BUY_MIN", "0.5"),
+                "GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW": _cfg_float("GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW", "-2.0"),
+                "GAME_5M_MIN_VOLUME_VS_AVG_PCT": _cfg_float("GAME_5M_MIN_VOLUME_VS_AVG_PCT", ""),
+                "GAME_5M_MAX_ATR_5M_PCT": _cfg_float("GAME_5M_MAX_ATR_5M_PCT", ""),
+                "GAME_5M_ENTRY_QUALITY_GUARD_ENABLED": _cfg_bool("GAME_5M_ENTRY_QUALITY_GUARD_ENABLED", "false"),
+                "GAME_5M_ENTRY_QUALITY_MIN_RR": _cfg_float("GAME_5M_ENTRY_QUALITY_MIN_RR", "1.2"),
+                "GAME_5M_ENTRY_QUALITY_MIN_EV_PCT": _cfg_float("GAME_5M_ENTRY_QUALITY_MIN_EV_PCT", "0.0"),
+            },
+            "exit_strategy": {
+                "max_position_minutes": _max_position_minutes(),
+                "stop_loss_enabled": _stop_loss_enabled(),
+                "stop_loss_pct_effective": stop_pct,
+                "take_profit_pct_effective": take_pct,
+                "GAME_5M_SESSION_END_EXIT_MINUTES": _cfg_int("GAME_5M_SESSION_END_EXIT_MINUTES", "30"),
+                "GAME_5M_SESSION_END_MIN_PROFIT_PCT": _cfg_float("GAME_5M_SESSION_END_MIN_PROFIT_PCT", "0.3"),
+                "GAME_5M_EARLY_DERISK_ENABLED": _cfg_bool("GAME_5M_EARLY_DERISK_ENABLED", "false"),
+                "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES": _cfg_int("GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES", "180"),
+                "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT": _cfg_float("GAME_5M_EARLY_DERISK_MAX_LOSS_PCT", "-2.0"),
+                "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW": _cfg_float("GAME_5M_EARLY_DERISK_MOMENTUM_BELOW", "0.0"),
+            },
         }
     except Exception:
         return {}
@@ -498,6 +745,7 @@ def analyze_trade_effectiveness(days: int = 7, strategy: str = "GAME_5M", use_ll
     }
     if use_llm:
         payload["llm"] = _build_llm_recommendations(payload)
+    payload["auto_config_override"] = _build_auto_config_override(payload)
     return payload
 
 
