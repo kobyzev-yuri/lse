@@ -15,6 +15,10 @@
         <option value="5">5</option>
         <option value="7">7</option>
     </select>
+    <label class="muted" style="margin-left:0.75rem; font-size:0.9rem;">
+        <input type="checkbox" id="autoChartRefresh" checked style="vertical-align:middle;">
+        Обновлять графики каждые 5 мин
+    </label>
     <div id="chart5mSymbolsLegend" class="muted" style="margin-top:0.75rem; margin-bottom:0.5rem; font-size:0.8rem; line-height:1.4;">
         <strong style="color:#cbd5e1;">Обозначения:</strong> ▲ покупка · ● зелёный — тейк · ● красный — стоп · вертикальные линии — границы дней (9:30 ET).
     </div>
@@ -26,6 +30,18 @@
 {% block extra_js %}
 <script>
 let chart5mInstances = {};
+const CHART_REFRESH_MS = 5 * 60 * 1000;
+let chartRefreshTimer = null;
+function scheduleChartAutoRefresh() {
+    if (chartRefreshTimer) clearTimeout(chartRefreshTimer);
+    chartRefreshTimer = null;
+    const cb = document.getElementById('autoChartRefresh');
+    if (!cb || !cb.checked) return;
+    chartRefreshTimer = setTimeout(async function() {
+        await loadChart5mAll();
+        scheduleChartAutoRefresh();
+    }, CHART_REFRESH_MS);
+}
 
 function formatChart5mTime(iso) {
     if (!iso) return '';
@@ -175,8 +191,12 @@ async function loadChart5mAll() {
     }
 }
 
-document.getElementById('days5mSelect').addEventListener('change', loadChart5mAll);
-loadChart5mAll();
+document.getElementById('days5mSelect').addEventListener('change', async function() {
+    await loadChart5mAll();
+    scheduleChartAutoRefresh();
+});
+document.getElementById('autoChartRefresh').addEventListener('change', scheduleChartAutoRefresh);
+loadChart5mAll().then(function() { scheduleChartAutoRefresh(); });
 
 </script>
 {% endblock %}
