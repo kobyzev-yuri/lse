@@ -99,6 +99,58 @@ def _to_jsonable(obj: Any) -> Any:
         return [_to_jsonable(x) for x in obj]
     return obj
 
+
+def _subprocess_env_with_standard_paths() -> Dict[str, str]:
+    """
+    PATH для subprocess: у uvicorn/systemd часто «урезанный» PATH → `docker` не находится (код 127).
+    """
+    e = dict(os.environ)
+    extra = ("/usr/local/bin", "/usr/bin", "/bin", "/snap/bin")
+    cur = e.get("PATH", "")
+    for p in extra:
+        if p and p not in cur.split(":"):
+            cur = f"{cur}:{p}" if cur else p
+    e["PATH"] = cur.strip(":")
+    return e
+
+
+def _run_restart_shell(cmd: str, cwd: Path) -> Any:
+    """Запуск RESTART_CMD / docker compose с расширенным PATH."""
+    import subprocess
+
+    return subprocess.run(
+        cmd,
+        shell=True,
+        executable="/bin/bash",
+        timeout=30,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        env=_subprocess_env_with_standard_paths(),
+    )
+
+
+def _restart_result_from_completed(result: Any, cmd: str) -> Dict[str, Any]:
+    """Унифицированный ответ API для перезапуска."""
+    if result.returncode == 0:
+        return {"ok": True, "message": "Перезапуск выполнен"}
+    err_tail = ((result.stderr or "") + (result.stdout or ""))[:500]
+    hint_127 = ""
+    if result.returncode == 127:
+        hint_127 = (
+            " Часто причина: у процесса веба нет `docker` в PATH. "
+            "В config.env задайте RESTART_CMD с полным путём, например: "
+            "`RESTART_CMD=/usr/bin/docker compose -f /path/to/docker-compose.yml restart lse` "
+            "(или `sudo -n /usr/bin/docker ...`, если так настроено)."
+        )
+    return {
+        "ok": False,
+        "message": f"Команда вернула код {result.returncode}.{hint_127} Выполните на сервере вручную при необходимости.",
+        "stderr": err_tail,
+        "command": cmd[:200],
+    }
+
+
 # Настройка шаблонов
 templates_dir = Path(__file__).parent / "templates"
 templates_dir.mkdir(exist_ok=True)
@@ -619,22 +671,11 @@ async def apply_analyzer_config(request: Request):
             restart_result = {"ok": False, "message": "Выполните на сервере: docker compose restart lse"}
         else:
             try:
-                result = subprocess.run(
-                    cmd,
-                    shell=True,
-                    timeout=30,
-                    capture_output=True,
-                    text=True,
-                    cwd=Path(__file__).parent,
-                )
+                result = _run_restart_shell(cmd, Path(__file__).parent)
                 if result.returncode == 0:
                     restart_result = {"ok": True, "message": "Перезапуск выполнен"}
                 else:
-                    restart_result = {
-                        "ok": False,
-                        "message": f"Команда вернула код {result.returncode}. Выполните на сервере: docker compose restart lse",
-                        "stderr": (result.stderr or "")[:500],
-                    }
+                    restart_result = _restart_result_from_completed(result, cmd)
             except FileNotFoundError:
                 restart_result = {"ok": False, "message": "Выполните на сервере: docker compose restart lse"}
             except subprocess.TimeoutExpired:
@@ -1896,20 +1937,9 @@ async def restart_service_api():
     if not cmd:
         return _to_jsonable({"ok": False, "message": "Выполните на сервере: docker compose restart lse"})
     try:
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            timeout=30,
-            capture_output=True,
-            text=True,
-            cwd=Path(__file__).parent,
-        )
+        result = _run_restart_shell(cmd, Path(__file__).parent)
         if result.returncode != 0:
-            return _to_jsonable({
-                "ok": False,
-                "message": f"Команда вернула код {result.returncode}. Выполните на сервере: docker compose restart lse",
-                "stderr": (result.stderr or "")[:500],
-            })
+            return _to_jsonable(_restart_result_from_completed(result, cmd))
         return _to_jsonable({"ok": True, "message": "Перезапуск выполнен"})
     except FileNotFoundError:
         return _to_jsonable({"ok": False, "message": "Выполните на сервере: docker compose restart lse"})

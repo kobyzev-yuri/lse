@@ -8,6 +8,7 @@
 - **Код попадает в образ при сборке** (`docker compose build lse`). Одного `git pull` на хосте в `~/lse` **недостаточно**: контейнер продолжит работать со **старым** слоем образа, пока не выполните пересборку и перезапуск.
 - **Нормальный цикл обновления кода:** `git push` с вашей машины → на сервере `./scripts/deploy_from_github.sh` (или cron с тем же скриптом): `pull` + **`docker compose build lse`** + **`docker compose up -d lse`**.
 - **Конфиг** `config.env` обычно **монтируется с хоста** в `/app/config.env` — для смены только env достаточно правки на сервере и `docker compose restart lse` (пересборка не нужна).
+- **Кнопка «Перезапуск» в вебе** вызывает `RESTART_CMD` из `config.env` (по умолчанию `docker compose restart lse`). Если ответ **код 127** — у процесса веба нет `docker` в `PATH`. Задайте явно, например: `RESTART_CMD=/usr/bin/docker compose -f /home/user/lse/docker-compose.yml restart lse` (путь к compose-файлу — ваш). Либо перезапускайте вручную с хоста: `cd ~/lse && docker compose restart lse`.
 
 **Проверка кода внутри контейнера** (не на хосте: каталога `/app/...` на VM нет, он только в образе):
 
