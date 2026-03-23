@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional, Union
 
+from services.cluster_recommend import CORRELATION_CB_FEATURE_KEYS
+
 # Версия формата полного дампа (новые сделки)
 DEAL_PARAMS_VERSION = 1
 REASONING_MAX_LEN = 500
@@ -27,18 +29,25 @@ FULL_ENTRY_KEYS = (
     "llm_insight", "llm_sentiment",
     "atr_5m_pct", "volume_5m_last", "volume_vs_avg_pct",
     "decision_rule_version", "decision_rule_params",
-)
+) + CORRELATION_CB_FEATURE_KEYS
 # session_phase берём из market_session
 SESSION_PHASE_KEY = "session_phase"
 # Доп. поля при LLM-входе — сохраняются в том же JSON, единая схема для обоих стратегий
 LLM_EXTRA_KEYS = ("llm_key_factors",)
 
 
-def build_full_entry_context(d5: Dict[str, Any]) -> Dict[str, Any]:
+def build_full_entry_context(
+    d5: Dict[str, Any],
+    *,
+    correlation_entry_features: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
     """
     Строит полный дамп параметров на момент входа (как в prompt_entry game_5m).
     Единая схема для технического и LLM-входа: один и тот же набор полей;
     при entry_strategy=llm добавляются только entry_strategy и опционально llm_key_factors.
+
+    correlation_entry_features: агрегаты корреляции (как у LLM), те же ключи что в
+    cluster_recommend.CORRELATION_CB_FEATURE_KEYS — для CatBoost и воспроизводимости сделки.
     """
     if not d5:
         return {}
@@ -54,10 +63,12 @@ def build_full_entry_context(d5: Dict[str, Any]) -> Dict[str, Any]:
     mom = d5.get("momentum_2h_pct")
     if mom is not None:
         out["entry_impulse_pct"] = float(mom)
-    # Фаза сессии
+    # Фаза сессии (в get_decision_5m — market_session.session_phase)
     ms = d5.get("market_session")
-    if isinstance(ms, dict) and ms.get("phase") is not None:
-        out[SESSION_PHASE_KEY] = ms.get("phase")
+    if isinstance(ms, dict):
+        sp = ms.get("session_phase") or ms.get("phase")
+        if sp is not None:
+            out[SESSION_PHASE_KEY] = sp
     elif isinstance(ms, str):
         out[SESSION_PHASE_KEY] = ms
     # Стратегия входа — всегда в JSON (technical | llm), чтобы формат не отличался
@@ -67,6 +78,12 @@ def build_full_entry_context(d5: Dict[str, Any]) -> Dict[str, Any]:
         v = d5.get(k)
         if v is not None:
             out[k] = v
+    # Корреляция (кластерный прогон крона / тот же расчёт, что для LLM)
+    if correlation_entry_features:
+        for k in CORRELATION_CB_FEATURE_KEYS:
+            v = correlation_entry_features.get(k)
+            if v is not None and isinstance(v, (int, float)):
+                out[k] = float(v)
     return {k: v for k, v in out.items() if v is not None}
 
 

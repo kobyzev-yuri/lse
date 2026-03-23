@@ -5,6 +5,9 @@ config.env
 
 # Локальные данные о risk limits и capacity (не публикуем в git)
 local/risk_limits.json
+# Обученные модели CatBoost (игра 5m)
+local/models/*.cbm
+local/models/*.meta.json
 local/*.risk.json
 risk_config/
 risk_limits.json

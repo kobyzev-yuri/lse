@@ -450,6 +450,11 @@ TECHNICAL_SIGNAL_KEYS = (
     "kb_news_impact", "entry_advice", "entry_advice_reason", "market_session",
     "premarket_gap_pct", "premarket_last", "bars_count",
     "is_preliminary",
+    # CatBoost (опционально); итог для входа/LLM — technical_decision_effective
+    "catboost_entry_proba_good", "catboost_signal_status", "catboost_signal_note",
+    "technical_decision_core", "technical_decision_effective",
+    "catboost_fusion_mode", "catboost_fusion_note",
+    "entry_quality_guard_triggered", "entry_quality_guard_reason", "entry_quality_guard_prev_decision",
 )
 
 
@@ -1024,6 +1029,63 @@ def get_decision_5m(
     out["entry_advice"] = entry_advice
     out["entry_advice_reason"] = entry_advice_reason
 
+    # Дополнительный guard качества входа: по чек-листу R:R и матожиданию (конфигурируемо, по умолчанию выключено).
+    # Это ранний фильтр против сценариев "BUY -> не дошёл до тейка -> TIME_EXIT с убытком".
+    try:
+        from config_loader import get_config_value as _gcv_guard
+
+        use_guard = (_gcv_guard("GAME_5M_ENTRY_QUALITY_GUARD_ENABLED", "false") or "false").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        rr_min_raw = (_gcv_guard("GAME_5M_ENTRY_QUALITY_MIN_RR", "1.2") or "1.2").strip()
+        ev_min_raw = (_gcv_guard("GAME_5M_ENTRY_QUALITY_MIN_EV_PCT", "0.0") or "0.0").strip()
+        rr_min = float(rr_min_raw)
+        ev_min = float(ev_min_raw)
+    except Exception:
+        use_guard = False
+        rr_min = 1.2
+        ev_min = 0.0
+
+    if use_guard:
+        rr = None
+        ev = None
+        up = out.get("estimated_upside_pct_day")
+        down = out.get("estimated_downside_pct_day")
+        if isinstance(up, (int, float)) and isinstance(down, (int, float)) and float(down) > 0:
+            rr = float(up) / float(down)
+        pu = out.get("prob_up")
+        pdn = out.get("prob_down")
+        if (
+            isinstance(pu, (int, float))
+            and isinstance(pdn, (int, float))
+            and isinstance(up, (int, float))
+            and isinstance(down, (int, float))
+        ):
+            ev = float(pu) * float(up) - float(pdn) * float(down)
+
+        bad_rr = rr is not None and rr < rr_min
+        bad_ev = ev is not None and ev <= ev_min
+        if decision in ("BUY", "STRONG_BUY") and (bad_rr or bad_ev):
+            old_decision = decision
+            decision = "HOLD"
+            reason_parts: List[str] = []
+            if bad_rr and rr is not None:
+                reason_parts.append(f"R:R {rr:.2f} < {rr_min:.2f}")
+            if bad_ev and ev is not None:
+                reason_parts.append(f"EV {ev:+.2f}% <= {ev_min:+.2f}%")
+            guard_msg = "entry-quality guard: " + ", ".join(reason_parts)
+            reasons.append(guard_msg)
+            reasoning = (reasoning + " " + guard_msg).strip()
+            out["decision"] = decision
+            out["reasoning"] = reasoning
+            out["entry_quality_guard_triggered"] = True
+            out["entry_quality_guard_prev_decision"] = old_decision
+            out["entry_quality_guard_reason"] = guard_msg
+        else:
+            out["entry_quality_guard_triggered"] = False
+
     # Блок «LLM-новости» в решении 5m: по умолчанию выключен (GAME_5M_USE_LLM_NEWS=false).
     # Текущий источник — ответ модели по обучению, не в реальном времени; даты в тексте могут быть старыми.
     # Включать true имеет смысл только при наличии актуального источника (RAG по KB, web search API). См. docs/GAME_5M_NEWS.md.
@@ -1043,6 +1105,22 @@ def get_decision_5m(
                         out["llm_comparison"] = llm_data["llm_comparison"]
         except Exception as e:
             logger.debug("LLM новости перед решением %s: %s", ticker, e)
+
+    try:
+        from services.catboost_5m_signal import attach_catboost_signal
+
+        attach_catboost_signal(out, ticker)
+    except Exception as e:
+        logger.warning("attach_catboost_signal(%s): %s", ticker, e)
+    try:
+        from services.catboost_5m_signal import finalize_technical_decision_with_catboost
+
+        finalize_technical_decision_with_catboost(out)
+    except Exception as e:
+        logger.warning("finalize_technical_decision_with_catboost(%s): %s", ticker, e)
+        out.setdefault("technical_decision_core", out.get("decision"))
+        out.setdefault("technical_decision_effective", out.get("decision"))
+        out.setdefault("catboost_fusion_mode", "none")
 
     return out
 

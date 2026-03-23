@@ -114,6 +114,27 @@ def _max_position_days(ticker: Optional[str] = None) -> int:
         return 2
 
 
+def _max_position_minutes(ticker: Optional[str] = None) -> Optional[int]:
+    """Макс. срок удержания в минутах (если задан) — более точная альтернатива max_position_days."""
+    if ticker:
+        key_t = f"GAME_5M_MAX_POSITION_MINUTES_{ticker.upper()}"
+        raw_t = (get_config_value(key_t, "") or "").strip()
+        if raw_t:
+            try:
+                v_t = int(raw_t)
+                return max(15, v_t)
+            except (ValueError, TypeError):
+                pass
+    raw = (get_config_value("GAME_5M_MAX_POSITION_MINUTES", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        v = int(raw)
+        return max(15, v)
+    except (ValueError, TypeError):
+        return None
+
+
 def _game_5m_stop_loss_enabled() -> bool:
     """Стоп-лосс 5m включён (GAME_5M_STOP_LOSS_ENABLED). При false закрытие только по тейку/TIME_EXIT/SELL."""
     raw = (get_config_value("GAME_5M_STOP_LOSS_ENABLED", "true") or "true").strip().lower()
@@ -685,8 +706,49 @@ def should_close_position(
         age = datetime.now() - entry_ts
     else:
         age = timedelta(0)
+    max_min = _max_position_minutes(open_position.get("ticker"))
+    if max_min is not None and age > timedelta(minutes=max_min):
+        return True, "TIME_EXIT"
     if age > timedelta(days=_max_position_days(open_position.get("ticker"))):
         return True, "TIME_EXIT"
+
+    # Early de-risk: если позиция долго в просадке и импульс/сигнал не поддерживают — закрываем раньше TIME_EXIT.
+    # По умолчанию выключено.
+    try:
+        dr_enabled = (get_config_value("GAME_5M_EARLY_DERISK_ENABLED", "false") or "false").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+    except Exception:
+        dr_enabled = False
+    if dr_enabled and isinstance(entry_price, (int, float)) and entry_price > 0:
+        try:
+            min_age_min = int((get_config_value("GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES", "180") or "180").strip())
+        except (ValueError, TypeError):
+            min_age_min = 180
+        try:
+            max_loss_pct = float((get_config_value("GAME_5M_EARLY_DERISK_MAX_LOSS_PCT", "-2.0") or "-2.0").strip())
+        except (ValueError, TypeError):
+            max_loss_pct = -2.0
+        try:
+            weak_mom_below = float((get_config_value("GAME_5M_EARLY_DERISK_MOMENTUM_BELOW", "0.0") or "0.0").strip())
+        except (ValueError, TypeError):
+            weak_mom_below = 0.0
+        pnl_current_pct = (current_price - entry_price) / entry_price * 100.0
+        weak_mom = momentum_2h_pct is None or float(momentum_2h_pct) <= weak_mom_below
+        weak_decision = current_decision in ("HOLD", "SELL")
+        if age >= timedelta(minutes=max(15, min_age_min)) and pnl_current_pct <= max_loss_pct and weak_mom and weak_decision:
+            logger.info(
+                "GAME_5M %s: early de-risk — age=%s мин, PnL=%.2f%% <= %.2f%%, mom2h=%s, decision=%s",
+                open_position.get("ticker", "?"),
+                int(age.total_seconds() // 60),
+                pnl_current_pct,
+                max_loss_pct,
+                "—" if momentum_2h_pct is None else f"{float(momentum_2h_pct):+.2f}%",
+                current_decision,
+            )
+            return True, "TIME_EXIT_EARLY"
     # Важное правило твоего сценария:
     # SELL используем только как рекомендацию (в момент входа), но НЕ как причину выхода
     # для уже открытой позиции. Автозакрытие происходит только по TAKE_PROFIT / TIME_EXIT

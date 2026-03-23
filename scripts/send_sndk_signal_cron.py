@@ -118,7 +118,10 @@ def process_ticker(
 
     card = get_5m_card_payload(d5, ticker)
     close_ctx = build_5m_close_context(d5)
-    decision = card.get("decision", "HOLD")
+    # Выход (тейк/стоп/SELL) — по чистым правилам; вход и LLM — по technical_decision_effective (CatBoost fusion).
+    decision_exit = d5.get("technical_decision_core") or card.get("decision", "HOLD")
+    decision_entry = d5.get("technical_decision_effective") or card.get("decision", "HOLD")
+    decision = decision_entry
     price = card.get("price")
     rsi_5m = card.get("rsi_5m")
     momentum_2h_pct = card.get("momentum_2h_pct")
@@ -135,9 +138,12 @@ def process_ticker(
         has_pos = open_pos is not None
         price_ok = price is not None and price > 0
         strategy_label = (" [%s]" % open_pos.get("strategy_name")) if (has_pos and open_pos.get("strategy_name")) else ""
+        _dec_log = decision_exit
+        if decision_entry != decision_exit:
+            _dec_log = "%s (вход=%s)" % (decision_exit, decision_entry)
         logger.info(
             "[5m] %s: открытая_позиция=%s%s, цена_5m=%s, решение=%s",
-            ticker, "да" if has_pos else "нет", strategy_label, "%.2f" % price if price_ok else "нет", decision,
+            ticker, "да" if has_pos else "нет", strategy_label, "%.2f" % price if price_ok else "нет", _dec_log,
         )
 
         if has_pos and price_ok:
@@ -150,7 +156,7 @@ def process_ticker(
                 price_quotes = None
             price_for_check = max(price, price_quotes) if (price_quotes is not None and price_quotes > 0) else price
             should_close, exit_type = should_close_position(
-                open_pos, decision, price_for_check, momentum_2h_pct=momentum_2h_pct,
+                open_pos, decision_exit, price_for_check, momentum_2h_pct=momentum_2h_pct,
                 bar_high=bar_high, bar_low=bar_low,
                 rsi_5m=rsi_5m,
             )
@@ -221,8 +227,10 @@ def process_ticker(
         else:
             outcome_lines.append("позиции нет")
 
-        if decision not in ("BUY", "STRONG_BUY"):
-            outcome_lines.append("решение %s → нет сигнала на вход" % decision)
+        if decision_entry not in ("BUY", "STRONG_BUY"):
+            outcome_lines.append(
+                "сигнал на вход %s → нет рассылки (правила: %s)" % (decision_entry, decision_exit)
+            )
     except Exception as e:
         logger.warning("game_5m: проверка/закрытие %s: %s", ticker, e)
         outcome_lines.append("ошибка при проверке: %s" % e)
@@ -250,7 +258,7 @@ def process_ticker(
                 return True
         return True  # закрыли в этом запуске — не слать новый вход в том же запуске
 
-    if decision not in ("BUY", "STRONG_BUY"):
+    if decision_entry not in ("BUY", "STRONG_BUY"):
         return False
 
     # Вход только в регулярную сессию NYSE (9:30–16:00 ET). В премаркете/после закрытия торговля «плоская», ликвидность низкая.
@@ -300,7 +308,11 @@ def process_ticker(
                         "rsi": d5.get("rsi_5m"),
                         "volatility_5": d5.get("volatility_5m_pct"),
                         "avg_volatility_20": get_avg_volatility_20_pct_from_quotes(ticker),
-                        "technical_signal": decision,
+                        "technical_signal": decision_entry,
+                        "technical_signal_core": d5.get("technical_decision_core") or d5.get("decision"),
+                        "catboost_entry_proba_good": d5.get("catboost_entry_proba_good"),
+                        "catboost_signal_status": d5.get("catboost_signal_status"),
+                        "catboost_fusion_note": d5.get("catboost_fusion_note"),
                         "cluster_note": cluster_note,
                     }
                     kb_impact = d5.get("kb_news_impact") or ""
@@ -318,12 +330,15 @@ def process_ticker(
                         sentiment = 0.65
                     result = llm.analyze_trading_situation(
                         ticker, technical_data, news_list, sentiment,
-                        strategy_name="GAME_5M", strategy_signal=decision,
+                        strategy_name="GAME_5M", strategy_signal=decision_entry,
                     )
                     if result and result.get("llm_analysis"):
                         llm_decision = (result["llm_analysis"].get("decision") or "").strip().upper()
                         if llm_decision not in ("BUY", "STRONG_BUY"):
-                            logger.info("%s: стратегия входа=llm, LLM дал %s — вход не выполняем (технический был %s)", ticker, llm_decision or "—", decision)
+                            logger.info(
+                                "%s: стратегия входа=llm, LLM дал %s — вход не выполняем (тех.итог был %s, правила %s)",
+                                ticker, llm_decision or "—", decision_entry, decision_exit,
+                            )
                             return False
                         decision = llm_decision
                         ana = result["llm_analysis"]
@@ -352,7 +367,21 @@ def process_ticker(
     try:
         # Полный дамп параметров (prompt_entry-уровень) для новых сделок; старые — упрощённый формат
         from services.deal_params_5m import build_full_entry_context
-        entry_context = build_full_entry_context(d5) if d5 else None
+        from services.cluster_recommend import extract_correlation_features_for_5m_entry
+
+        corr_feats = None
+        if cluster_context and cluster_context.get("correlation"):
+            try:
+                corr_feats = extract_correlation_features_for_5m_entry(
+                    ticker,
+                    cluster_context["correlation"],
+                    get_tickers_game_5m(),
+                )
+            except Exception as e:
+                logger.debug("correlation features для context_json %s: %s", ticker, e)
+        entry_context = (
+            build_full_entry_context(d5, correlation_entry_features=corr_feats) if d5 else None
+        )
         if entry_context is not None and not entry_context:
             entry_context = None
         entry_id = record_entry(ticker, price, decision, reasoning, entry_context=entry_context)
@@ -441,7 +470,9 @@ def main():
                     bar_high = close_ctx_ah.get("bar_high")
                     bar_low = close_ctx_ah.get("bar_low")
                     should_close, exit_type = should_close_position(
-                        open_pos, d5.get("decision", "HOLD"), price_for_check,
+                        open_pos,
+                        d5.get("technical_decision_core") or d5.get("decision", "HOLD"),
+                        price_for_check,
                         momentum_2h_pct=close_ctx_ah.get("momentum_2h_pct"),
                         bar_high=bar_high, bar_low=bar_low,
                         rsi_5m=close_ctx_ah.get("rsi_5m"),

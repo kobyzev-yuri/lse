@@ -1362,14 +1362,19 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
                     "rsi": d5.get("rsi_5m"),
                     "volatility_5": d5.get("volatility_5m_pct"),
                     "avg_volatility_20": avg_volatility_20,
-                    "technical_signal": d5.get("decision"),
+                    "technical_signal": d5.get("technical_decision_effective") or d5.get("decision"),
+                    "technical_signal_core": d5.get("technical_decision_core") or d5.get("decision"),
+                    "catboost_entry_proba_good": d5.get("catboost_entry_proba_good"),
+                    "catboost_signal_status": d5.get("catboost_signal_status"),
+                    "catboost_fusion_note": d5.get("catboost_fusion_note"),
                     "cluster_note": cluster_note,
                 }
                 news_list = [{"source": "KB", "content": (d5.get("kb_news_impact") or "")[:500], "sentiment_score": 0.5}]
                 sentiment = 0.35 if "негатив" in (d5.get("kb_news_impact") or "").lower() else (0.65 if "позитив" in (d5.get("kb_news_impact") or "").lower() else 0.5)
                 result = llm.analyze_trading_situation(
                     ticker, technical_data, news_list, sentiment,
-                    strategy_name="GAME_5M", strategy_signal=d5.get("decision"),
+                    strategy_name="GAME_5M",
+                    strategy_signal=d5.get("technical_decision_effective") or d5.get("decision"),
                 )
                 if result and result.get("llm_analysis"):
                     ana = result["llm_analysis"]
@@ -1381,7 +1386,7 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
         "ticker": ticker,
         "llm_reasoning": llm_reasoning,
         "llm_key_factors": llm_key_factors,
-        "technical_signal": d5.get("decision"),
+        "technical_signal": d5.get("technical_decision_effective") or d5.get("decision"),
     }
 
 
@@ -1454,6 +1459,7 @@ def _exit_reason_caption(code: Optional[str]) -> str:
     return {
         "TAKE_PROFIT": "достигнут тейк",
         "TIME_EXIT": "конец сессии или макс. дней",
+        "TIME_EXIT_EARLY": "ранний de-risk выход",
         "SELL": "сигнал SELL (правила 5m)",
         "STOP_LOSS": "стоп-лосс",
     }.get(c, "")
@@ -1505,6 +1511,31 @@ def _closed_report_rows(limit: int = 50):
             "exit_reason_caption": _exit_reason_caption(exit_reason if exit_reason != "—" else None),
         })
     return rows
+
+
+def _closed_exit_diagnostics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Сводка по типам выхода (для контроля источника убытков TIME_EXIT vs TAKE_PROFIT)."""
+    if not rows:
+        return {"by_reason": [], "time_exit_loss_share_pct": None}
+    agg: Dict[str, Dict[str, Any]] = {}
+    total_loss_abs = 0.0
+    time_exit_loss_abs = 0.0
+    for r in rows:
+        reason = str(r.get("exit_reason") or "—").strip().upper() or "—"
+        pnl = float(r.get("profit_usd") or 0.0)
+        rec = agg.setdefault(reason, {"reason": reason, "count": 0, "pnl_usd": 0.0, "wins": 0, "losses": 0})
+        rec["count"] += 1
+        rec["pnl_usd"] += pnl
+        if pnl > 0:
+            rec["wins"] += 1
+        elif pnl < 0:
+            rec["losses"] += 1
+            total_loss_abs += abs(pnl)
+            if reason in ("TIME_EXIT", "TIME_EXIT_EARLY"):
+                time_exit_loss_abs += abs(pnl)
+    by_reason = sorted(agg.values(), key=lambda x: (x["count"], abs(x["pnl_usd"])), reverse=True)
+    share = (100.0 * time_exit_loss_abs / total_loss_abs) if total_loss_abs > 0 else None
+    return {"by_reason": by_reason, "time_exit_loss_share_pct": share}
 
 
 def _pending_report_rows(limit: int = 50):
@@ -1565,10 +1596,18 @@ async def report_closed(request: Request, limit: int = 50):
     limit = max(1, min(500, limit))
     rows = _closed_report_rows(limit=limit)
     total_pnl = sum(float(r["profit_usd"]) for r in rows) if rows else 0.0
+    diagnostics = _closed_exit_diagnostics(rows)
     return HTMLResponse(
         render_template(
             "reports_closed.html",
-            {"request": request, "rows": rows, "limit": limit, "total_pnl": total_pnl, "total_count": len(rows)},
+            {
+                "request": request,
+                "rows": rows,
+                "limit": limit,
+                "total_pnl": total_pnl,
+                "total_count": len(rows),
+                "diagnostics": diagnostics,
+            },
         )
     )
 

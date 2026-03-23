@@ -111,6 +111,17 @@ def build_5m_entry_signal_text(
     if reasoning:
         lines.insert(-2, f"💭 {reasoning}")
 
+    p_cb = d5.get("catboost_entry_proba_good")
+    st_cb = d5.get("catboost_signal_status")
+    if p_cb is not None and st_cb == "ok":
+        lines.append("")
+        lines.append(f"🤖 **CatBoost** P(благоприятный исход): {float(p_cb):.2f}")
+    core_d = d5.get("technical_decision_core")
+    eff_d = d5.get("technical_decision_effective")
+    if core_d and eff_d and str(core_d) != str(eff_d):
+        fn = d5.get("catboost_fusion_note") or ""
+        lines.append(f"⚙️ Тех. итог: {eff_d} (правила: {core_d}){(' — ' + fn) if fn else ''}")
+
     news_impact = d5.get("kb_news_impact") or "нейтрально"
     lines.append("")
     lines.append(f"📰 **Учёт новостей:** {news_impact}")

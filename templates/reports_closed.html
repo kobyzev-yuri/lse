@@ -8,12 +8,47 @@
 <p class="muted" style="margin-bottom: 0.75rem; font-size: 0.88rem; line-height: 1.45;">
     <strong>Entry / Exit</strong> в таблице — колонки стратегии (обычно GAME_5M).<br>
     <strong>Причина выхода</strong> — код из сделки SELL: <code>TAKE_PROFIT</code> (достигнут тейк),
-    <code>TIME_EXIT</code> (конец сессии или превышен макс. срок дней),
+    <code>TIME_EXIT</code> (конец сессии или превышен макс. срок дней/минут),
+    <code>TIME_EXIT_EARLY</code> (ранний de-risk выход),
     <code>SELL</code> (модель выдала SELL по правилам 5m),
     <code>STOP_LOSS</code> (стоп, если включён в config).
     Цель тейка при входе задаётся от импульса 2ч (например +6%), но выход может быть по другой причине — тогда P/L % ниже цели тейка.
 </p>
 <div class="card">
+    {% if diagnostics and diagnostics.by_reason %}
+    <p style="margin:0 0 0.5rem 0;"><strong>Диагностика выходов:</strong></p>
+    <div class="table-responsive" style="margin-bottom: 0.75rem;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Причина выхода</th>
+                    <th>Count</th>
+                    <th>Wins</th>
+                    <th>Losses</th>
+                    <th>PnL, $</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in diagnostics.by_reason %}
+                <tr>
+                    <td>{{ d.reason }}</td>
+                    <td>{{ d.count }}</td>
+                    <td>{{ d.wins }}</td>
+                    <td>{{ d.losses }}</td>
+                    <td class="{% if d.pnl_usd >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.2f"|format(d.pnl_usd) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if diagnostics.time_exit_loss_share_pct is not none %}
+    <p class="muted" style="margin-top:0;">
+        Доля убытков от <code>TIME_EXIT</code>/<code>TIME_EXIT_EARLY</code> среди всех убыточных сделок:
+        <strong>{{ "%.1f"|format(diagnostics.time_exit_loss_share_pct) }}%</strong>
+    </p>
+    {% endif %}
+    {% endif %}
+
     {% if rows %}
     <div class="table-responsive">
     <table>

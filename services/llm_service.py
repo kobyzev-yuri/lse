@@ -386,7 +386,23 @@ Sentiment анализ:
             else:
                 rsi_status = "нейтральная зона"
             rsi_text = f"\n- RSI: {rsi_value:.1f} ({rsi_status})"
-        
+
+        tech_sig = technical_data.get("technical_signal", "N/A")
+        tech_core = technical_data.get("technical_signal_core")
+        sig_extra = ""
+        if tech_core is not None and str(tech_core) != str(tech_sig):
+            sig_extra = f"\n- Базовый сигнал правил (до слоя CatBoost): {tech_core}"
+        cb_p = technical_data.get("catboost_entry_proba_good")
+        cb_st = technical_data.get("catboost_signal_status")
+        cb_fusion = technical_data.get("catboost_fusion_note")
+        cb_lines = ""
+        if cb_st and cb_st != "disabled":
+            cb_lines = f"\n- CatBoost: статус={cb_st}"
+            if cb_p is not None:
+                cb_lines += f", P(благоприятный исход по истории)≈{cb_p}"
+            if cb_fusion:
+                cb_lines += f"\n  Слияние с тех. сигналом: {cb_fusion}"
+
         user_message = f"""Анализ для тикера {ticker}:
 
 Технические данные:
@@ -394,7 +410,7 @@ Sentiment анализ:
 - SMA_5: {technical_data.get('sma_5', 'N/A')}
 - Волатильность (5 дней): {technical_data.get('volatility_5', 'N/A')}
 - Средняя волатильность (20 дней): {technical_data.get('avg_volatility_20', 'N/A')}{rsi_text}
-- Технический сигнал: {technical_data.get('technical_signal', 'N/A')}
+- Итоговый технический сигнал (для стратегии входа): {tech_sig}{sig_extra}{cb_lines}
 
 Sentiment анализ:
 - Взвешенный sentiment: {sentiment_score:.3f}

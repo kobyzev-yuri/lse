@@ -167,6 +167,96 @@ def _correlation_peers_ordered(ticker: str, game_list: List[str], correlation_ma
     return game_others + rest
 
 
+# Числовые агрегаты корреляции (тот же универс, что у LLM) — в context_json и CatBoost.
+CORRELATION_CB_FEATURE_KEYS: Tuple[str, ...] = (
+    "cb_corr_mean_game_peers",
+    "cb_corr_max_game_peer",
+    "cb_corr_min_game_peer",
+    "cb_corr_std_game_peers",
+    "cb_corr_n_game_peers",
+    "cb_corr_mean_universe",
+    "cb_corr_n_universe",
+)
+
+
+def _pair_corr(matrix: Dict[str, Dict[str, Any]], a: str, b: str) -> Optional[float]:
+    if not a or not b or a == b:
+        return None
+    raw = matrix.get(a, {}).get(b)
+    if raw is None:
+        raw = matrix.get(b, {}).get(a)
+    if raw is None:
+        return None
+    try:
+        x = float(raw)
+        return x if math.isfinite(x) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_correlation_features_for_5m_entry(
+    ticker: str,
+    correlation_matrix: Optional[Dict[str, Dict[str, Any]]],
+    game_tickers: Optional[List[str]] = None,
+) -> Dict[str, float]:
+    """
+    Агрегаты дневной корреляции (log-returns, см. load_game5m_llm_correlation).
+
+    - «game_peers» — пары с тикерами из списка игры 5m (GAME_5M_TICKERS / FAST), кроме себя;
+    - «universe» — все символы, присутствующие в матрице, кроме себя.
+
+    Результат кладётся в deal_params (context_json) при BUY и совпадает с тем, что может
+    досчитать CatBoost при инференсе, если в payload не передали кластер.
+    """
+    zeros = {k: 0.0 for k in CORRELATION_CB_FEATURE_KEYS}
+    t = (ticker or "").strip().upper()
+    if not t or not correlation_matrix:
+        return zeros
+    if game_tickers is None:
+        from services.ticker_groups import get_tickers_game_5m
+
+        game_tickers = list(get_tickers_game_5m() or [])
+    game_u = [str(x).strip().upper() for x in game_tickers if x]
+
+    game_vals: List[float] = []
+    for o in game_u:
+        if o == t:
+            continue
+        c = _pair_corr(correlation_matrix, t, o)
+        if c is not None:
+            game_vals.append(c)
+
+    uni_sym = {str(x).strip().upper() for x in _tickers_in_correlation_matrix(correlation_matrix)}
+    uni_sym.discard(t)
+    uni_vals: List[float] = []
+    for o in uni_sym:
+        c = _pair_corr(correlation_matrix, t, o)
+        if c is not None:
+            uni_vals.append(c)
+
+    def _mean_std(xs: List[float]) -> Tuple[float, float]:
+        if not xs:
+            return 0.0, 0.0
+        m = sum(xs) / len(xs)
+        if len(xs) < 2:
+            return m, 0.0
+        var = sum((x - m) ** 2 for x in xs) / len(xs)
+        return m, math.sqrt(var)
+
+    gm, gs = _mean_std(game_vals)
+    um, _ = _mean_std(uni_vals)
+
+    return {
+        "cb_corr_mean_game_peers": round(gm, 6),
+        "cb_corr_max_game_peer": round(max(game_vals), 6) if game_vals else 0.0,
+        "cb_corr_min_game_peer": round(min(game_vals), 6) if game_vals else 0.0,
+        "cb_corr_std_game_peers": round(gs, 6),
+        "cb_corr_n_game_peers": float(len(game_vals)),
+        "cb_corr_mean_universe": round(um, 6),
+        "cb_corr_n_universe": float(len(uni_vals)),
+    }
+
+
 def build_cluster_note_for_5m_llm(
     ticker: str,
     full_list: List[str],
