@@ -111,4 +111,6 @@
 
 - Источник правил входа/выхода для 5m: `services.recommend_5m.get_decision_5m`.
 - В отчёт анализатора всегда добавляется `meta.current_decision_rule_params` (актуальные пороги из кода/config).
+- Пороги RSI/импульса для `get_decision_5m` задаются в `config.env` (`GAME_5M_RSI_*`, `GAME_5M_RTH_MOMENTUM_BUY_MIN`, …) и функция `get_decision_5m_rule_thresholds()` — см. `config.env.example`.
+- Интервал опроса крона игры 5m: `GAME_5M_SIGNAL_CRON_MINUTES` (должен совпадать с `*/N` в crontab для `send_sndk_signal_cron.py`, см. `setup_cron.sh`).
 - Для новых сделок snapshot правил сохраняется в `context_json`, чтобы LLM и post-mortem анализ опирались на фактически применённые параметры, а не на предположения.

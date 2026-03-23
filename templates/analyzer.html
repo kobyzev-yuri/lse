@@ -53,6 +53,7 @@
     <h2>Auto config override</h2>
     <p class="muted">Анализатор может предложить изменения в <code>config.env</code> по текущему алгоритму.</p>
     <pre id="envBlock">—</pre>
+    <div id="envManual" class="dashboard-text muted">—</div>
     <div id="envSkip" class="dashboard-text muted">—</div>
     <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
         <label><input id="restartAfterApply" type="checkbox" checked> Перезагрузить сервис после применения</label>
@@ -85,6 +86,7 @@ async function runAnalyzer() {
     const topMissed = document.getElementById('topMissed');
     const llmBlock = document.getElementById('llmBlock');
     const envBlock = document.getElementById('envBlock');
+    const envManual = document.getElementById('envManual');
     const envSkip = document.getElementById('envSkip');
     const applyBtn = document.getElementById('applyEnvBtn');
     const applyStatus = document.getElementById('applyStatus');
@@ -93,6 +95,7 @@ async function runAnalyzer() {
     topMissed.innerHTML = '—';
     llmBlock.textContent = '—';
     envBlock.textContent = '—';
+    envManual.textContent = '—';
     envSkip.textContent = '—';
     applyBtn.disabled = true;
     applyStatus.innerHTML = '—';
@@ -131,10 +134,14 @@ async function runAnalyzer() {
         if (updates.length) {
             envBlock.textContent = auto.env_block || updates.map(u => `${u.env_key}=${u.proposed}`).join('\n');
             applyBtn.disabled = false;
+            const notes = Array.isArray(auto.manual_notes) ? auto.manual_notes : [];
+            envManual.textContent = notes.length ? notes.join('\n') : '—';
             envSkip.textContent = skipped.length ? `Не применено автоматически: ${skipped.length}` : 'Все предложенные ключи можно применить.';
         } else {
             envBlock.textContent = 'Нет авто-применимых изменений.';
             applyBtn.disabled = true;
+            const notes = Array.isArray(auto.manual_notes) ? auto.manual_notes : [];
+            envManual.textContent = notes.length ? notes.join('\n') : '—';
             envSkip.textContent = skipped.length ? `Не применено автоматически: ${skipped.length}` : '—';
         }
     } catch (e) {

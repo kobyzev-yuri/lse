@@ -317,6 +317,13 @@ def _build_llm_recommendations(payload: Dict[str, Any]) -> Optional[Dict[str, An
         algorithm_context = {
             "decision_source_expected": meta.get("decision_source_expected"),
             "current_decision_rule_params": current_rules,
+            "parameter_to_env_key_hint": {
+                "momentum_buy_min": "GAME_5M_RTH_MOMENTUM_BUY_MIN",
+                "rsi_buy_max": "GAME_5M_RSI_BUY_MAX",
+                "rsi_strong_buy_max": "GAME_5M_RSI_STRONG_BUY_MAX",
+                "volatility_wait_min": "GAME_5M_VOLATILITY_WAIT_MIN",
+                "price_polling_interval": "GAME_5M_SIGNAL_CRON_MINUTES",
+            },
             "scope_for_in_algorithm_changes": [
                 "entry thresholds and guards from decision_rule_params",
                 "config flags and numeric limits from current_decision_rule_params.config",
@@ -503,6 +510,17 @@ PARAM_TO_ENV_KEY: Dict[str, str] = {
     "momentum_allow_cross_day_buy": "GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY",
     "premarket_momentum_buy_min": "GAME_5M_PREMARKET_MOMENTUM_BUY_MIN",
     "premarket_momentum_block_below": "GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW",
+    "rsi_strong_buy_max": "GAME_5M_RSI_STRONG_BUY_MAX",
+    "momentum_for_strong_buy_min": "GAME_5M_MOMENTUM_STRONG_BUY_MIN",
+    "rsi_buy_max": "GAME_5M_RSI_BUY_MAX",
+    "price_to_low5d_multiplier_max": "GAME_5M_PRICE_TO_LOW5D_MULT_MAX",
+    "rsi_sell_min": "GAME_5M_RSI_SELL_MIN",
+    "rsi_hold_overbought_min": "GAME_5M_RSI_HOLD_OVERBOUGHT_MIN",
+    "momentum_buy_min": "GAME_5M_RTH_MOMENTUM_BUY_MIN",
+    "rsi_for_momentum_buy_max": "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX",
+    "volatility_warn_buy_min": "GAME_5M_VOLATILITY_WARN_BUY_MIN",
+    "price_polling_interval": "GAME_5M_SIGNAL_CRON_MINUTES",
+    "signal_cron_minutes": "GAME_5M_SIGNAL_CRON_MINUTES",
     "cfg_min_volume_vs_avg_pct": "GAME_5M_MIN_VOLUME_VS_AVG_PCT",
     "cfg_max_atr_5m_pct": "GAME_5M_MAX_ATR_5M_PCT",
     "entry_quality_guard_enabled": "GAME_5M_ENTRY_QUALITY_GUARD_ENABLED",
@@ -525,6 +543,16 @@ PARAM_TO_ENV_KEY: Dict[str, str] = {
     "GAME_5M_MAX_POSITION_MINUTES": "GAME_5M_MAX_POSITION_MINUTES",
     "GAME_5M_STOP_LOSS_PCT": "GAME_5M_STOP_LOSS_PCT",
     "GAME_5M_TAKE_PROFIT_PCT": "GAME_5M_TAKE_PROFIT_PCT",
+    "GAME_5M_RSI_STRONG_BUY_MAX": "GAME_5M_RSI_STRONG_BUY_MAX",
+    "GAME_5M_MOMENTUM_STRONG_BUY_MIN": "GAME_5M_MOMENTUM_STRONG_BUY_MIN",
+    "GAME_5M_RSI_BUY_MAX": "GAME_5M_RSI_BUY_MAX",
+    "GAME_5M_PRICE_TO_LOW5D_MULT_MAX": "GAME_5M_PRICE_TO_LOW5D_MULT_MAX",
+    "GAME_5M_RSI_SELL_MIN": "GAME_5M_RSI_SELL_MIN",
+    "GAME_5M_RSI_HOLD_OVERBOUGHT_MIN": "GAME_5M_RSI_HOLD_OVERBOUGHT_MIN",
+    "GAME_5M_RTH_MOMENTUM_BUY_MIN": "GAME_5M_RTH_MOMENTUM_BUY_MIN",
+    "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX": "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX",
+    "GAME_5M_VOLATILITY_WARN_BUY_MIN": "GAME_5M_VOLATILITY_WARN_BUY_MIN",
+    "GAME_5M_SIGNAL_CRON_MINUTES": "GAME_5M_SIGNAL_CRON_MINUTES",
 }
 
 
@@ -536,6 +564,23 @@ def _normalize_env_value(v: Any) -> str:
     if v is None:
         return ""
     return str(v).strip()
+
+
+def _coerce_polling_minutes(proposed: Any) -> Optional[str]:
+    """LLM часто возвращает '1m near exit levels' — извлекаем целые минуты для GAME_5M_SIGNAL_CRON_MINUTES."""
+    if isinstance(proposed, (int, float)) and not isinstance(proposed, bool):
+        m = int(round(float(proposed)))
+        return str(max(1, min(30, m)))
+    s = str(proposed).strip().lower()
+    if not s:
+        return None
+    m = re.search(r"(\d+)\s*m\b", s)
+    if m:
+        return str(max(1, min(30, int(m.group(1)))))
+    m2 = re.search(r"\b(\d+)\b", s)
+    if m2:
+        return str(max(1, min(30, int(m2.group(1)))))
+    return None
 
 
 def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
@@ -582,7 +627,20 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
             )
             continue
         current = cfg.get(env_key, "")
-        proposed_str = _normalize_env_value(proposed)
+        if env_key == "GAME_5M_SIGNAL_CRON_MINUTES":
+            proposed_str = _coerce_polling_minutes(proposed)
+            if proposed_str is None:
+                skipped.append(
+                    {
+                        "parameter": parameter,
+                        "env_key": env_key,
+                        "reason": "unparseable_polling",
+                        "note": "Ожидались минуты (например 1 или 1m).",
+                    }
+                )
+                continue
+        else:
+            proposed_str = _normalize_env_value(proposed)
         updates.append(
             {
                 "env_key": env_key,
@@ -609,7 +667,12 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             seen.add(env_key)
             current = cfg.get(env_key, "")
-            proposed_str = _normalize_env_value(proposed)
+            if env_key == "GAME_5M_SIGNAL_CRON_MINUTES":
+                proposed_str = _coerce_polling_minutes(proposed)
+                if proposed_str is None:
+                    continue
+            else:
+                proposed_str = _normalize_env_value(proposed)
             updates.append(
                 {
                     "env_key": env_key,
@@ -621,11 +684,18 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     env_lines = [f"{u['env_key']}={u['proposed']}" for u in updates]
+    manual_notes: List[str] = []
+    if any(u.get("env_key") == "GAME_5M_SIGNAL_CRON_MINUTES" for u in updates):
+        manual_notes.append(
+            "GAME_5M_SIGNAL_CRON_MINUTES должен совпадать с crontab (см. setup_cron.sh: */N * * * * ... send_sndk_signal_cron.py). "
+            "После смены N — обновите crontab вручную или запустите ./setup_cron.sh (перезапишет весь блок LSE)."
+        )
     return {
         "updates": updates,
         "skipped": skipped,
         "env_block": "\n".join(env_lines),
         "can_apply": len(updates) > 0,
+        "manual_notes": manual_notes,
     }
 
 
@@ -633,7 +703,7 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
     """Текущие параметры правил из кода/config (для LLM, даже если в старых сделках нет snapshot)."""
     try:
         from config_loader import get_config_value
-        from services.recommend_5m import GAME_5M_RULE_VERSION
+        from services.recommend_5m import GAME_5M_RULE_VERSION, get_decision_5m_rule_thresholds
         from services.game_5m import (
             _max_position_minutes,
             _stop_loss_enabled,
@@ -665,26 +735,35 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
             except Exception:
                 return None
 
+        th = get_decision_5m_rule_thresholds()
+        try:
+            cron_min = int((get_config_value("GAME_5M_SIGNAL_CRON_MINUTES", "5") or "5").strip())
+        except (ValueError, TypeError):
+            cron_min = 5
+        cron_min = max(1, min(30, cron_min))
+
         stop_pct, take_pct = _strategy_stop_and_take()
         return {
             "rule_version": GAME_5M_RULE_VERSION,
             "source_fn": "services.recommend_5m.get_decision_5m",
-            "rsi_strong_buy_max": 32.0,
-            "momentum_for_strong_buy_min": -0.3,
-            "rsi_buy_max": 38.0,
-            "price_to_low5d_multiplier_max": 1.005,
-            "rsi_sell_min": 76.0,
-            "rsi_hold_overbought_min": 68.0,
-            "momentum_buy_min": 0.5,
-            "rsi_for_momentum_buy_max": 62.0,
-            "volatility_warn_buy_min": 0.4,
-            "volatility_wait_min": 0.6,
+            **th,
+            "signal_cron_minutes": cron_min,
             "news_negative_min": 0.4,
             "news_very_negative_min": 0.35,
             "news_positive_min": 0.65,
             "cfg_min_volume_vs_avg_pct": _cfg_str("GAME_5M_MIN_VOLUME_VS_AVG_PCT", ""),
             "cfg_max_atr_5m_pct": _cfg_str("GAME_5M_MAX_ATR_5M_PCT", ""),
             "config": {
+                "GAME_5M_SIGNAL_CRON_MINUTES": cron_min,
+                "GAME_5M_RSI_STRONG_BUY_MAX": th.get("rsi_strong_buy_max"),
+                "GAME_5M_MOMENTUM_STRONG_BUY_MIN": th.get("momentum_for_strong_buy_min"),
+                "GAME_5M_RSI_BUY_MAX": th.get("rsi_buy_max"),
+                "GAME_5M_PRICE_TO_LOW5D_MULT_MAX": th.get("price_to_low5d_multiplier_max"),
+                "GAME_5M_RSI_SELL_MIN": th.get("rsi_sell_min"),
+                "GAME_5M_RSI_HOLD_OVERBOUGHT_MIN": th.get("rsi_hold_overbought_min"),
+                "GAME_5M_RTH_MOMENTUM_BUY_MIN": th.get("momentum_buy_min"),
+                "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX": th.get("rsi_for_momentum_buy_max"),
+                "GAME_5M_VOLATILITY_WARN_BUY_MIN": th.get("volatility_warn_buy_min"),
                 "GAME_5M_VOLATILITY_WAIT_MIN": _cfg_float("GAME_5M_VOLATILITY_WAIT_MIN", "0.7"),
                 "GAME_5M_SELL_CONFIRM_BARS": _cfg_int("GAME_5M_SELL_CONFIRM_BARS", "2"),
                 "GAME_5M_MOMENTUM_MIN_SESSION_BARS": _cfg_int("GAME_5M_MOMENTUM_MIN_SESSION_BARS", "7"),

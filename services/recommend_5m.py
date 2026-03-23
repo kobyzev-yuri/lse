@@ -23,7 +23,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # Версия логики принятия решения в get_decision_5m (для фиксации в context_json сделки)
-GAME_5M_RULE_VERSION = "2026-03-21"
+GAME_5M_RULE_VERSION = "2026-03-03"
 
 # Макс. длина content в контексте KB (чтобы не раздувать ответ)
 KB_NEWS_CONTENT_MAX_LEN = 500
@@ -38,6 +38,73 @@ BARS_2H = 24
 # Регулярная сессия US (NYSE/NASDAQ) в ET
 US_SESSION_START = (9, 30)  # 9:30
 US_SESSION_END = (16, 0)    # 16:00
+
+
+def _cfg_float_bracket(
+    _gcv,
+    key: str,
+    default: float,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> float:
+    try:
+        v = float((_gcv(key, str(default)) or str(default)).strip())
+    except (ValueError, TypeError):
+        v = default
+    if lo is not None:
+        v = max(lo, v)
+    if hi is not None:
+        v = min(hi, v)
+    return v
+
+
+def get_decision_5m_rule_thresholds() -> Dict[str, Any]:
+    """
+    Пороги технического решения 5m из config.env (раньше были константами в get_decision_5m).
+    Единый снимок для context_json, анализатора и документации.
+    """
+    from config_loader import get_config_value as _gcv
+
+    vol_wait = _cfg_float_bracket(_gcv, "GAME_5M_VOLATILITY_WAIT_MIN", 0.7, 0.3, 2.0)
+    try:
+        sell_confirm_bars = int((_gcv("GAME_5M_SELL_CONFIRM_BARS", "2") or "2").strip())
+    except (ValueError, TypeError):
+        sell_confirm_bars = 2
+    sell_confirm_bars = max(1, min(5, sell_confirm_bars))
+    try:
+        min_sess_bars = int((_gcv("GAME_5M_MOMENTUM_MIN_SESSION_BARS", "7") or "7").strip())
+    except (ValueError, TypeError):
+        min_sess_bars = 7
+    min_sess_bars = max(2, min(48, min_sess_bars))
+    pm_mom_buy_min = _cfg_float_bracket(_gcv, "GAME_5M_PREMARKET_MOMENTUM_BUY_MIN", 0.5, -5.0, 10.0)
+    pm_mom_block_below = _cfg_float_bracket(_gcv, "GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW", -2.0, -20.0, 10.0)
+
+    rsi_strong_buy_max = _cfg_float_bracket(_gcv, "GAME_5M_RSI_STRONG_BUY_MAX", 32.0, 5.0, 55.0)
+    momentum_for_strong_buy_min = _cfg_float_bracket(_gcv, "GAME_5M_MOMENTUM_STRONG_BUY_MIN", -0.3, -5.0, 5.0)
+    rsi_buy_max = _cfg_float_bracket(_gcv, "GAME_5M_RSI_BUY_MAX", 38.0, 5.0, 60.0)
+    price_to_low5d_multiplier_max = _cfg_float_bracket(_gcv, "GAME_5M_PRICE_TO_LOW5D_MULT_MAX", 1.005, 1.0001, 1.05)
+    rsi_sell_min = _cfg_float_bracket(_gcv, "GAME_5M_RSI_SELL_MIN", 76.0, 50.0, 92.0)
+    rsi_hold_overbought_min = _cfg_float_bracket(_gcv, "GAME_5M_RSI_HOLD_OVERBOUGHT_MIN", 68.0, 40.0, 88.0)
+    rth_momentum_buy_min = _cfg_float_bracket(_gcv, "GAME_5M_RTH_MOMENTUM_BUY_MIN", 0.5, 0.05, 10.0)
+    rsi_for_momentum_buy_max = _cfg_float_bracket(_gcv, "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX", 62.0, 35.0, 85.0)
+    volatility_warn_buy_min = _cfg_float_bracket(_gcv, "GAME_5M_VOLATILITY_WARN_BUY_MIN", 0.4, 0.05, 10.0)
+
+    return {
+        "volatility_wait_min": vol_wait,
+        "sell_confirm_bars": sell_confirm_bars,
+        "momentum_min_session_bars": min_sess_bars,
+        "premarket_momentum_buy_min": pm_mom_buy_min,
+        "premarket_momentum_block_below": pm_mom_block_below,
+        "rsi_strong_buy_max": rsi_strong_buy_max,
+        "momentum_for_strong_buy_min": momentum_for_strong_buy_min,
+        "rsi_buy_max": rsi_buy_max,
+        "price_to_low5d_multiplier_max": price_to_low5d_multiplier_max,
+        "rsi_sell_min": rsi_sell_min,
+        "rsi_hold_overbought_min": rsi_hold_overbought_min,
+        "momentum_buy_min": rth_momentum_buy_min,
+        "rsi_for_momentum_buy_max": rsi_for_momentum_buy_max,
+        "volatility_warn_buy_min": volatility_warn_buy_min,
+    }
 
 
 def filter_to_last_n_us_sessions(
@@ -602,21 +669,21 @@ def get_decision_5m(
     decision = "HOLD"
     reasons = []
     from config_loader import get_config_value as _gcv
-    try:
-        vol_wait_min = float((_gcv("GAME_5M_VOLATILITY_WAIT_MIN", "0.7") or "0.7").strip())
-    except (ValueError, TypeError):
-        vol_wait_min = 0.7
-    vol_wait_min = max(0.3, min(2.0, vol_wait_min))
-    try:
-        sell_confirm_bars = int((_gcv("GAME_5M_SELL_CONFIRM_BARS", "2") or "2").strip())
-    except (ValueError, TypeError):
-        sell_confirm_bars = 2
-    sell_confirm_bars = max(1, min(5, sell_confirm_bars))
-    try:
-        min_sess_bars = int((_gcv("GAME_5M_MOMENTUM_MIN_SESSION_BARS", "7") or "7").strip())
-    except (ValueError, TypeError):
-        min_sess_bars = 7
-    min_sess_bars = max(2, min(48, min_sess_bars))
+    th = get_decision_5m_rule_thresholds()
+    vol_wait_min = float(th["volatility_wait_min"])
+    sell_confirm_bars = int(th["sell_confirm_bars"])
+    min_sess_bars = int(th["momentum_min_session_bars"])
+    pm_mom_buy_min = float(th["premarket_momentum_buy_min"])
+    pm_mom_block_below = float(th["premarket_momentum_block_below"])
+    rsi_strong_buy_max = float(th["rsi_strong_buy_max"])
+    momentum_for_strong_buy_min = float(th["momentum_for_strong_buy_min"])
+    rsi_buy_max = float(th["rsi_buy_max"])
+    price_to_low5d_multiplier_max = float(th["price_to_low5d_multiplier_max"])
+    rsi_sell_min = float(th["rsi_sell_min"])
+    rsi_hold_overbought_min = float(th["rsi_hold_overbought_min"])
+    rth_momentum_buy_min = float(th["momentum_buy_min"])
+    rsi_for_momentum_buy_max = float(th["rsi_for_momentum_buy_max"])
+    volatility_warn_buy_min = float(th["volatility_warn_buy_min"])
     allow_cross_day_mom_buy = (_gcv("GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY", "") or "").strip().lower() in (
         "1",
         "true",
@@ -627,14 +694,6 @@ def get_decision_5m(
         "true",
         "yes",
     )
-    try:
-        pm_mom_buy_min = float((_gcv("GAME_5M_PREMARKET_MOMENTUM_BUY_MIN", "0.5") or "0.5").strip())
-    except (ValueError, TypeError):
-        pm_mom_buy_min = 0.5
-    try:
-        pm_mom_block_below = float((_gcv("GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW", "-2.0") or "-2.0").strip())
-    except (ValueError, TypeError):
-        pm_mom_block_below = -2.0
     mom_rth_pct = features.get("momentum_rth_today_pct")
     mom_rth_bars = int(features.get("momentum_rth_today_bars") or 0)
     premarket_intraday_momentum_pct: Optional[float] = None
@@ -655,15 +714,15 @@ def get_decision_5m(
     decision_rule_params: Dict[str, Any] = {
         "rule_version": GAME_5M_RULE_VERSION,
         "source_fn": "services.recommend_5m.get_decision_5m",
-        "rsi_strong_buy_max": 32.0,
-        "momentum_for_strong_buy_min": -0.3,
-        "rsi_buy_max": 38.0,
-        "price_to_low5d_multiplier_max": 1.005,
-        "rsi_sell_min": 76.0,
-        "rsi_hold_overbought_min": 68.0,
-        "momentum_buy_min": 0.5,
-        "rsi_for_momentum_buy_max": 62.0,
-        "volatility_warn_buy_min": 0.4,
+        "rsi_strong_buy_max": rsi_strong_buy_max,
+        "momentum_for_strong_buy_min": momentum_for_strong_buy_min,
+        "rsi_buy_max": rsi_buy_max,
+        "price_to_low5d_multiplier_max": price_to_low5d_multiplier_max,
+        "rsi_sell_min": rsi_sell_min,
+        "rsi_hold_overbought_min": rsi_hold_overbought_min,
+        "momentum_buy_min": rth_momentum_buy_min,
+        "rsi_for_momentum_buy_max": rsi_for_momentum_buy_max,
+        "volatility_warn_buy_min": volatility_warn_buy_min,
         "volatility_wait_min": vol_wait_min,
         "sell_confirm_bars": sell_confirm_bars,
         "news_negative_min": 0.4,
@@ -677,30 +736,30 @@ def get_decision_5m(
     }
 
     if rsi_5m is not None:
-        if rsi_5m <= 32 and momentum_2h_pct >= -0.3:
+        if rsi_5m <= rsi_strong_buy_max and momentum_2h_pct >= momentum_for_strong_buy_min:
             decision = "STRONG_BUY"
             reasons.append(f"RSI(5m)={rsi_5m:.1f} — перепроданность, отскок")
-        elif rsi_5m <= 38 and price <= low_5d * 1.005:
+        elif rsi_5m <= rsi_buy_max and price <= low_5d * price_to_low5d_multiplier_max:
             decision = "BUY"
             reasons.append(f"RSI(5m)={rsi_5m:.1f}, цена у 5д минимума")
-        elif rsi_5m >= 76:
+        elif rsi_5m >= rsi_sell_min:
             sell_confirmed = (
                 len(rsi_prev_values) >= sell_confirm_bars
-                and all(v >= 76.0 for v in rsi_prev_values[:sell_confirm_bars])
+                and all(v >= rsi_sell_min for v in rsi_prev_values[:sell_confirm_bars])
             )
             if sell_confirmed:
                 decision = "SELL"
                 reasons.append(f"RSI(5m)={rsi_5m:.1f} и подтверждение {sell_confirm_bars} баров — перекупленность")
             else:
                 reasons.append(f"RSI(5m)={rsi_5m:.1f} — перекупленность без подтверждения {sell_confirm_bars} баров, ждём")
-        elif rsi_5m >= 68:
+        elif rsi_5m >= rsi_hold_overbought_min:
             if decision == "HOLD":
                 reasons.append(f"RSI(5m)={rsi_5m:.1f} — ближе к перекупленности, ждать")
         elif (
             mom_rth_pct is not None
             and mom_rth_bars >= min_sess_bars
-            and float(mom_rth_pct) > 0.5
-            and (rsi_5m is None or rsi_5m < 62)
+            and float(mom_rth_pct) > rth_momentum_buy_min
+            and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
         ):
             if decision == "HOLD":
                 wmin = int(features.get("momentum_rth_today_window_min") or 0)
@@ -714,7 +773,7 @@ def get_decision_5m(
             and premarket_intraday_momentum_pct is not None
             and float(premarket_intraday_momentum_pct) >= pm_mom_block_below
             and float(premarket_intraday_momentum_pct) > pm_mom_buy_min
-            and (rsi_5m is None or rsi_5m < 62)
+            and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
         ):
             if decision == "HOLD":
                 decision = "BUY"
@@ -724,8 +783,8 @@ def get_decision_5m(
                 )
         elif (
             allow_cross_day_mom_buy
-            and momentum_2h_pct > 0.5
-            and (rsi_5m is None or rsi_5m < 62)
+            and momentum_2h_pct > rth_momentum_buy_min
+            and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
         ):
             if decision == "HOLD":
                 decision = "BUY"
@@ -733,7 +792,7 @@ def get_decision_5m(
                     f"импульс +{momentum_2h_pct:.2f}% за окно до 2ч (кросс-дневной; GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY), RSI не перекуплен"
                 )
 
-    if volatility_5m_pct > 0.4 and decision in ("BUY", "STRONG_BUY"):
+    if volatility_5m_pct > volatility_warn_buy_min and decision in ("BUY", "STRONG_BUY"):
         reasons.append(f"волатильность 5m высокая ({volatility_5m_pct:.2f}%) — предпочтительны лимитные ордера")
     elif volatility_5m_pct > vol_wait_min:
         if decision == "HOLD":
