@@ -34,7 +34,7 @@ mkdir -p "$PROJECT_DIR/logs"
 CRON_FILE=$(mktemp)
 
 # Удаляем из текущего crontab ВСЕ задачи и комментарии LSE, чтобы не оставались дубликаты или старые пути.
-REMOVE_PATTERNS="LSE Trading System|========== LSE|Проект:.*lse|update_prices_cron\.py|trading_cycle_cron\.py|fetch_news_cron\.py|sync_vector_kb_cron\.py|add_sentiment_to_news_cron\.py|analyze_event_outcomes_cron\.py|cleanup_calendar_noise\.py|update_rsi_local\.py|update_finviz_data\.py|update_finviz\.py|send_sndk_signal_cron\.py|premarket_cron\.py|cron_watchdog\.py"
+REMOVE_PATTERNS="LSE Trading System|========== LSE|Проект:.*lse|update_prices_cron\.py|trading_cycle_cron\.py|fetch_news_cron\.py|sync_vector_kb_cron\.py|add_sentiment_to_news_cron\.py|analyze_event_outcomes_cron\.py|cleanup_calendar_noise\.py|update_rsi_local\.py|update_finviz_data\.py|update_finviz\.py|send_sndk_signal_cron\.py|premarket_cron\.py|cron_watchdog\.py|daily_5m_params\.py"
 REMOVE_COMMENTS="Проект:|Обновление цен:|Локальный RSI|валюты/товары|вечернего обновления цен|RSI с Finviz|после дневной сессии|Торговый цикл|9:00, 13:00, 17:00|Новости \(RSS|Alpha Vantage\).*каждый час|Backfill embedding|Sentiment к новостям|Анализ исходов событий|Обновление RSI ежедневно|после обновления цен|после закрытия всех бирж|NYSE \(00:00 MSK\)|измените время|Если сервер не в MSK"
 crontab -l 2>/dev/null | grep -vE "$REMOVE_PATTERNS|$REMOVE_COMMENTS" | grep -v "$PROJECT_DIR" | grep -v "/mnt/ai/cnn/lse" > "$CRON_FILE" || true
 # Если crontab был пустой или только наши задачи — файл может быть пустым; тогда начинаем с пустого

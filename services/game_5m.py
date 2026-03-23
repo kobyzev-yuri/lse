@@ -20,9 +20,10 @@ from config_loader import get_database_url, get_config_value
 
 logger = logging.getLogger(__name__)
 
-# Кэш подсказок из local/suggested_5m_params.json (обновлённых ежедневным daily_5m_params.py)
+# Исторические подсказки suggested_5m_params отключены (параметры только из config.env).
 _SUGGESTED_5M_CACHE: Optional[dict] = None
 _SUGGESTED_5M_MAX_AGE_HOURS = 25
+_SUGGESTED_5M_DEPRECATION_LOGGED = False
 
 # Таймзона, в которой хранятся ts в trade_history (если naive — считаем Москвой)
 TRADE_HISTORY_TZ = "Europe/Moscow"
@@ -57,36 +58,21 @@ COMMISSION_RATE = 0.0  # 0% — оплаты брокеру нет
 
 def _get_suggested_5m_params() -> Optional[dict]:
     """
-    Подсказки из local/suggested_5m_params.json (ежедневный daily_5m_params.py).
+    Подсказки из local/suggested_5m_params.json (legacy-режим).
     Используются только при USE_SUGGESTED_5M_PARAMS=true и если файл обновлён не более 25 ч назад.
     Возвращает {"take_pct": {ticker: float}, "max_days": {ticker: int}} или None.
     """
-    global _SUGGESTED_5M_CACHE
+    # Автоподмена тейка/дней из daily_5m_params отключена: игра использует только явные значения из config.env.
+    # Это защищает от неявного дрейфа параметров между запусками и серверными кронами.
+    global _SUGGESTED_5M_DEPRECATION_LOGGED
     raw = (get_config_value("USE_SUGGESTED_5M_PARAMS", "") or "").strip().lower()
-    if raw not in ("1", "true", "yes"):
-        return None
-    if _SUGGESTED_5M_CACHE is not None:
-        return _SUGGESTED_5M_CACHE
-    path = Path(__file__).resolve().parent.parent / "local" / "suggested_5m_params.json"
-    if not path.is_file():
-        return None
-    try:
-        now = datetime.now(timezone.utc)
-        mtime = path.stat().st_mtime
-        from datetime import datetime as dt_from_ts
-        file_dt = dt_from_ts.fromtimestamp(mtime, tz=timezone.utc)
-        if (now - file_dt).total_seconds() > _SUGGESTED_5M_MAX_AGE_HOURS * 3600:
-            logger.debug("suggested_5m_params.json старше %s ч — не используем", _SUGGESTED_5M_MAX_AGE_HOURS)
-            return None
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        take_pct = data.get("take_pct") or {}
-        max_days = data.get("max_days") or {}
-        _SUGGESTED_5M_CACHE = {"take_pct": take_pct, "max_days": max_days}
-        return _SUGGESTED_5M_CACHE
-    except Exception as e:
-        logger.debug("Не удалось загрузить suggested_5m_params: %s", e)
-        return None
+    if raw in ("1", "true", "yes") and not _SUGGESTED_5M_DEPRECATION_LOGGED:
+        logger.warning(
+            "USE_SUGGESTED_5M_PARAMS=true, но автоподхват suggested_5m_params.json отключён. "
+            "Используются только GAME_5M_* из config.env."
+        )
+        _SUGGESTED_5M_DEPRECATION_LOGGED = True
+    return None
 
 
 def _max_position_days(ticker: Optional[str] = None) -> int:

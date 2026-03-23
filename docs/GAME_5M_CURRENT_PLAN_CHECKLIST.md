@@ -30,7 +30,7 @@
 
 3. **Данные**  
    - 5m-свечи приходят с yfinance при каждом вызове (в БД не обязательны для текущего плана).  
-   - Для KB-новостей и сессии: таблицы `knowledge_base`, контекст сессии (`market_session`); при использовании suggested params — скрипт `daily_5m_params.py` и (опционально) `USE_SUGGESTED_5M_PARAMS=true`.
+   - Для KB-новостей и сессии: таблицы `knowledge_base`, контекст сессии (`market_session`).
 
 4. **Проверка**  
    - Один тикер: вызвать `get_decision_5m(ticker)` или через Telegram/веб (например `/prompt_entry game5m` по тикеру).  

@@ -1,8 +1,8 @@
 """
 Расчёт рекомендуемых параметров игры 5m по данным 5m свечей: потолок тейка (PCT) и макс. дней (DAYS).
 
-Используется скриптами suggest_take_profit_caps_5m.py, suggest_max_position_days_5m.py
-и ежедневным daily_5m_params.py для пересчёта и сохранения в JSON (подстановка в игру при USE_SUGGESTED_5M_PARAMS).
+Используется диагностическими скриптами suggest_take_profit_caps_5m.py
+и suggest_max_position_days_5m.py для ручного анализа.
 """
 from __future__ import annotations
 

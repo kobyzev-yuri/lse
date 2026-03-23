@@ -49,7 +49,7 @@ def main() -> None:
     print()
     print("Предлаг. = округлённый p70 (макс. рост от открытия до хая сессии за 7 дней).")
     print("Можно задать в config.env: GAME_5M_TAKE_PROFIT_PCT_<TICKER>=<число> (например GAME_5M_TAKE_PROFIT_PCT_ASML=4).")
-    print("Ежедневный пересчёт: scripts/daily_5m_params.py (пишет local/suggested_5m_params.json; при USE_SUGGESTED_5M_PARAMS=true игра подхватит).")
+    print("Автоматический ежедневный пересчёт отключён; значения переносите в config.env вручную при необходимости.")
 
 
 if __name__ == "__main__":
