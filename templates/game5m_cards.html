@@ -86,6 +86,23 @@
         .chart-link a { color: #7dd3fc; }
         .no-data { color: #64748b; font-style: italic; }
         .muted { color: #94a3b8; }
+        .forecast-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.78rem;
+            margin-top: 0.35rem;
+            color: #cbd5e1;
+        }
+        .forecast-table th, .forecast-table td {
+            padding: 0.3rem 0.35rem;
+            text-align: right;
+            border-bottom: 1px solid #334155;
+        }
+        .forecast-table th:first-child, .forecast-table td:first-child { text-align: left; }
+        .forecast-table th { color: #94a3b8; font-weight: 600; }
+        .forecast-table tbody tr:last-child td { border-bottom: none; }
+        .forecast-table .num { font-variant-numeric: tabular-nums; }
+        .forecast-fallback { font-size: 0.78rem; color: #cbd5e1; line-height: 1.35; margin-top: 0.35rem; }
         @media (min-width: 900px) {
             #cardsContainer {
                 display: grid;
@@ -153,6 +170,30 @@
             if (d === 'SELL') return 'decision-sell';
             return 'decision-hold';
         }
+        function renderForecastTable(c) {
+            var fc = c.price_forecast_5m;
+            if (fc && Array.isArray(fc.horizons) && fc.horizons.length > 0) {
+                var rows = fc.horizons.map(function(h) {
+                    var label = h.minutes != null ? String(h.minutes) + 'м' : '—';
+                    function pctCell(v) {
+                        if (v == null || v === undefined) return '<td class="num">—</td>';
+                        var s = (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+                        return '<td class="num">' + escapeHtml(s) + '</td>';
+                    }
+                    var pgt = h.p_price_gt_spot != null ? fmt(h.p_price_gt_spot, 3) : '—';
+                    return '<tr><td>' + escapeHtml(label) + '</td>' +
+                        pctCell(h.p10_pct_vs_spot) + pctCell(h.p50_pct_vs_spot) + pctCell(h.p90_pct_vs_spot) +
+                        '<td class="num">' + escapeHtml(pgt) + '</td></tr>';
+                }).join('');
+                return '<table class="forecast-table" role="table"><thead><tr>' +
+                    '<th>Горизонт</th><th>p10</th><th>p50</th><th>p90</th><th>P(&gt;spot)</th></tr></thead><tbody>' +
+                    rows + '</tbody></table>';
+            }
+            if (c.price_forecast_5m_summary) {
+                return '<div class="forecast-fallback">' + escapeHtml(c.price_forecast_5m_summary) + '</div>';
+            }
+            return '';
+        }
         function renderCard(c) {
             const isNoData = c.decision === 'NO_DATA';
             const upside = c.estimated_upside_pct_day != null ? c.estimated_upside_pct_day : c.take_profit_pct;
@@ -181,9 +222,10 @@
             if (upside != null) html += '<div class="row"><span class="label">Upside день</span><span class="value positive">+' + fmt(upside, 1) + '%</span></div>';
             if (downsideRisk != null) html += '<div class="row"><span class="label">Downside риск</span><span class="value negative">−' + fmt(downsideRisk, 1) + '%</span></div>';
             if (c.prob_up != null && c.prob_down != null) html += '<div class="row"><span class="label">P(up/down)</span><span class="value">' + fmt(c.prob_up, 2) + '/' + fmt(c.prob_down, 2) + '</span></div>';
-            if (c.price_forecast_5m_summary) {
-                html += '<div class="block-title">Прогноз цены (30/60/120 м, p10–p50–p90)</div>';
-                html += '<div class="reasoning" style="font-size:0.78rem;">' + escapeHtml(c.price_forecast_5m_summary) + '</div>';
+            var fcBlock = renderForecastTable(c);
+            if (fcBlock) {
+                html += '<div class="block-title">Прогноз цены к spot (30/60/120 м, %)</div>';
+                html += fcBlock;
             }
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
             html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">Вывод LLM</button>';
