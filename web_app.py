@@ -782,7 +782,7 @@ async def knowledge_page(request: Request):
             text("""
                 SELECT id, ts, ticker, source, content, sentiment_score
                 FROM knowledge_base
-                ORDER BY ts DESC
+                ORDER BY COALESCE(ingested_at, ts) DESC
                 LIMIT 200
             """),
             conn
@@ -1825,7 +1825,9 @@ def _gather_service_status() -> Dict[str, Any]:
             ).fetchone()
             out["trades_24h"] = int(row[0]) if row and row[0] is not None else 0
             row = conn.execute(
-                text("SELECT COUNT(*) FROM knowledge_base WHERE ts >= CURRENT_DATE - INTERVAL '7 days'")
+                text(
+                    "SELECT COUNT(*) FROM knowledge_base WHERE COALESCE(ingested_at, ts) >= CURRENT_DATE - INTERVAL '7 days'"
+                )
             ).fetchone()
             out["news_7d"] = int(row[0]) if row and row[0] is not None else 0
     except Exception as e:

@@ -114,9 +114,9 @@ def fetch_and_save_llm_news(ticker: str = "SNDK") -> Tuple[Optional[int], Option
         ts = datetime.now()
 
         try:
-            from services.ticker_groups import get_tracked_tickers_for_kb
-            if ticker_upper not in set(get_tracked_tickers_for_kb()):
-                reason = "тикер не в списке для KB"
+            from services.ticker_groups import get_tracked_tickers_for_kb, kb_ingest_tracked_tickers_only
+            if kb_ingest_tracked_tickers_only() and ticker_upper not in set(get_tracked_tickers_for_kb()):
+                reason = "тикер не в списке для KB (KB_INGEST_TRACKED_TICKERS_ONLY=true)"
                 logger.info("LLM(%s): ⏭️ %s", ticker, reason)
                 return (None, reason)
         except Exception:

@@ -111,12 +111,22 @@ def get_all_ticker_groups() -> List[str]:
 
 
 def get_tracked_tickers_for_kb() -> List[str]:
-    """Тикеры, по которым храним новости/события в knowledge_base. Остальные — не сохраняем и можно удалить.
-    Всегда включаются MACRO и US_MACRO (макро-новости). Остальное — из TICKERS_FAST + TICKERS_MEDIUM + TICKERS_LONG."""
+    """Тикеры «нашего» списка для knowledge_base (FAST+MEDIUM+LONG + MACRO/US_MACRO).
+    Фильтрация при записи включается только если `KB_INGEST_TRACKED_TICKERS_ONLY=true` (см. `kb_ingest_tracked_tickers_only`)."""
     allowed = {"MACRO", "US_MACRO"}
     for t in get_all_ticker_groups():
         allowed.add(t.strip())
     return list(allowed)
+
+
+def kb_ingest_tracked_tickers_only() -> bool:
+    """
+    Если True — при сохранении в KB (Alpha Vantage earnings/news, LLM-новости) отбрасывать тикеры вне get_tracked_tickers_for_kb().
+    Если False (по умолчанию) — сохранять всё входящее; сентимент и отбор под LLM — позже.
+    Investing.com: см. INVESTING_NEWS_STRICT_TRACKED_ONLY (по умолчанию несохранённые матчи идут как MACRO).
+    """
+    raw = (get_config_value("KB_INGEST_TRACKED_TICKERS_ONLY", "false") or "false").strip().lower()
+    return raw in ("1", "true", "yes")
 
 
 def get_tickers_for_portfolio_game() -> List[str]:

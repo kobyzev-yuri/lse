@@ -15,6 +15,7 @@ import argparse
 from datetime import datetime
 
 # Импорты модулей парсинга
+from config_loader import get_config_value
 from services.rss_news_fetcher import fetch_and_save_rss_news
 from services.investing_calendar_parser import fetch_and_save_investing_calendar
 from services.alphavantage_fetcher import fetch_all_alphavantage_data
@@ -64,7 +65,15 @@ def fetch_all_news_sources(mode: str = "all"):
         try:
             logger.info("\n📡 Источник core-fast 1/2: RSS фиды центральных банков")
             rss_saved, rss_skipped = fetch_and_save_rss_news()
-            sources_status['RSS'] = f"✅ сохранено {rss_saved} новых, дубликатов {rss_skipped}" if (rss_saved or rss_skipped) else "✅ 0 записей из фидов"
+            if rss_saved or rss_skipped:
+                if rss_saved == 0 and rss_skipped > 0:
+                    sources_status['RSS'] = (
+                        f"✅ фидов обработано записей: {rss_skipped}, новых 0 (все link уже в knowledge_base)"
+                    )
+                else:
+                    sources_status['RSS'] = f"✅ сохранено {rss_saved} новых, дубликатов {rss_skipped}"
+            else:
+                sources_status['RSS'] = "✅ 0 записей из фидов"
         except Exception as e:
             logger.error("❌ Ошибка RSS фидов: %s", e)
             sources_status['RSS'] = f'❌ Ошибка: {e}'
@@ -119,7 +128,12 @@ def fetch_all_news_sources(mode: str = "all"):
         try:
             logger.info("\n📰 Источник investing 2/2: Investing.com News")
             from services.investing_news_fetcher import fetch_and_save_investing_news
-            n_investing = fetch_and_save_investing_news(max_articles=25) or 0
+            try:
+                max_inv = int((get_config_value("INVESTING_NEWS_MAX_ARTICLES", "40") or "40").strip())
+            except (ValueError, TypeError):
+                max_inv = 40
+            max_inv = max(10, min(max_inv, 120))
+            n_investing = fetch_and_save_investing_news(max_articles=max_inv) or 0
             sources_status['Investing.com News'] = f'✅ сохранено {n_investing} новых' if n_investing else '✅ 0 новых'
         except Exception as e:
             logger.error(f"❌ Ошибка Investing.com News: {e}")

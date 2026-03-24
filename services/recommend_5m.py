@@ -246,10 +246,10 @@ def fetch_kb_news_for_period(ticker: str, days: int) -> List[Dict[str, Any]]:
                     SELECT ts, ticker, source, content, sentiment_score, insight
                     FROM knowledge_base
                     WHERE (ticker = :ticker OR ticker IN ('MACRO', 'US_MACRO'))
-                      AND ts >= :cutoff
+                      AND COALESCE(ingested_at, ts) >= :cutoff
                       AND content IS NOT NULL
                       AND LENGTH(TRIM(content)) > 0
-                    ORDER BY ts DESC
+                    ORDER BY COALESCE(ingested_at, ts) DESC
                 """),
                 {"ticker": ticker, "cutoff": cutoff},
             )

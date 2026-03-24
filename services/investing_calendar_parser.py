@@ -28,6 +28,7 @@ from sqlalchemy import create_engine, text
 import time
 
 from config_loader import get_database_url
+from services.http_outbound import outbound_session
 
 logger = logging.getLogger(__name__)
 
@@ -147,9 +148,10 @@ def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
             'currentTab': 'today'
         }
         
+        sess = outbound_session("INVESTING_CALENDAR_USE_SYSTEM_PROXY")
         response = None
         for attempt in range(INVESTING_CALENDAR_429_MAX_RETRIES + 1):
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response = sess.get(url, headers=headers, params=params, timeout=30)
             if response.status_code == 429:
                 if attempt < INVESTING_CALENDAR_429_MAX_RETRIES:
                     wait = INVESTING_CALENDAR_429_BACKOFF[attempt]

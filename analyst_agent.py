@@ -286,11 +286,22 @@ class AnalystAgent:
     def get_recent_news(self, ticker: str, hours: int = None) -> pd.DataFrame:
         """
         Получает новости для тикера за последние N часов.
-        В выборку входят записи по самому тикеру и MACRO/US_MACRO. Окно по умолчанию — 7 дней (168 ч),
-        чтобы в боте /news соответствовало надписи «последние 7 дней».
+        В выборку входят записи по самому тикеру и MACRO/US_MACRO.
+
+        Окно по умолчанию — из KB_NEWS_LOOKBACK_HOURS (по умолчанию 336 ч = 14 дней), т.к. для LLM
+        нужен контекст 7–14 дней, а у RSS поле ts — дата публикации на сайте ЦБ (часто не «сегодня»).
+        Фильтр по «свежести для агента» — COALESCE(ingested_at, ts): когда запись впервые попала в KB
+        или дата публикации, если ingested_at не задан (старые строки).
         """
         if hours is None:
-            hours = 168  # 7 дней
+            try:
+                from config_loader import get_config_value
+
+                raw = (get_config_value("KB_NEWS_LOOKBACK_HOURS", "336") or "336").strip()
+                hours = int(raw)
+            except (ValueError, TypeError):
+                hours = 336
+            hours = max(24, min(hours, 24 * 45))
         cutoff_time = datetime.now() - timedelta(hours=hours)
 
         logger.info(f"📰 Поиск новостей за последние {hours} ч для {ticker} или MACRO/US_MACRO")
@@ -300,8 +311,8 @@ class AnalystAgent:
                 SELECT id, ts, ticker, source, content, sentiment_score, event_type, insight, link
                 FROM knowledge_base
                 WHERE (ticker = :ticker OR ticker = 'MACRO' OR ticker = 'US_MACRO')
-                  AND ts >= :cutoff_time
-                ORDER BY ts DESC
+                  AND COALESCE(ingested_at, ts) >= :cutoff_time
+                ORDER BY COALESCE(ingested_at, ts) DESC
             """)
             df = pd.read_sql(query, conn, params={
                 "ticker": ticker,
@@ -313,7 +324,7 @@ class AnalystAgent:
         else:
             logger.info(f"✅ Найдено {len(df)} новостей")
             # Сортируем: сначала NEWS и EARNINGS, потом остальное (ECONOMIC_INDICATOR в конец)
-            order_map = {'NEWS': 0, 'EARNINGS': 1}
+            order_map = {'NEWS': 0, 'MACRO_NEWS': 0, 'EQUITY_NEWS': 0, 'EARNINGS': 1}
             df['_sort_order'] = df['event_type'].map(order_map).fillna(2).astype(int)
             df = df.sort_values(by=['_sort_order', 'ts'], ascending=[True, False]).drop(columns=['_sort_order'], errors='ignore')
             

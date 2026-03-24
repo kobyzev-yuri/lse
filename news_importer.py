@@ -230,7 +230,7 @@ def get_news_sources_stats(engine, days=14):
             text("""
                 SELECT COALESCE(source, '—') AS source, COUNT(*) AS cnt
                 FROM knowledge_base
-                WHERE ts >= :cutoff
+                WHERE COALESCE(ingested_at, ts) >= :cutoff
                 GROUP BY source
                 ORDER BY cnt DESC
             """),

@@ -33,13 +33,21 @@ AV_MAX_RETRIES = int(os.environ.get('ALPHAVANTAGE_MAX_RETRIES', '3'))
 AV_RETRY_DELAY = float(os.environ.get('ALPHAVANTAGE_RETRY_DELAY', '10'))
 
 
+def _av_use_system_proxy() -> bool:
+    """True — учитывать HTTP(S)_PROXY из окружения. По умолчанию False: иначе при socks:// без PySocks падает «Missing dependencies for SOCKS support»."""
+    raw = (get_config_value("ALPHAVANTAGE_USE_SYSTEM_PROXY", "false") or "false").strip().lower()
+    return raw in ("1", "true", "yes")
+
+
 def _get_with_retry(url: str, params: Dict, timeout: int = None) -> Optional[requests.Response]:
     """GET с повторными попытками при таймауте или 5xx."""
     timeout = timeout or AV_REQUEST_TIMEOUT
     last_error = None
+    session = requests.Session()
+    session.trust_env = _av_use_system_proxy()
     for attempt in range(AV_MAX_RETRIES + 1):
         try:
-            response = requests.get(url, params=params, timeout=timeout)
+            response = session.get(url, params=params, timeout=timeout)
             if response.status_code >= 500 and attempt < AV_MAX_RETRIES:
                 last_error = f"HTTP {response.status_code}"
                 logger.warning(f"⚠️ Alpha Vantage {last_error}, повтор через {AV_RETRY_DELAY} с...")
@@ -53,6 +61,17 @@ def _get_with_retry(url: str, params: Dict, timeout: int = None) -> Optional[req
                 time.sleep(AV_RETRY_DELAY)
             else:
                 raise
+        except requests.exceptions.RequestException as e:
+            err = str(e).lower()
+            if "socks" in err and session.trust_env and attempt == 0:
+                logger.warning(
+                    "Alpha Vantage: ошибка SOCKS/proxy (%s) — повтор без system proxy (pip install pysocks или ALPHAVANTAGE_USE_SYSTEM_PROXY=false)",
+                    e,
+                )
+                session.trust_env = False
+                time.sleep(0.5)
+                continue
+            raise
     return None
 
 
@@ -223,8 +242,8 @@ def save_earnings_to_db(earnings: List[Dict]):
     error_count = 0
     
     try:
-        from services.ticker_groups import get_tracked_tickers_for_kb
-        tracked = set(get_tracked_tickers_for_kb())
+        from services.ticker_groups import get_tracked_tickers_for_kb, kb_ingest_tracked_tickers_only
+        tracked = set(get_tracked_tickers_for_kb()) if kb_ingest_tracked_tickers_only() else None
     except Exception:
         tracked = None  # если модуль недоступен — сохраняем всех (как раньше)
 
@@ -294,14 +313,14 @@ def save_earnings_to_db(earnings: List[Dict]):
 def save_news_to_db(news_items: List[Dict]):
     """
     Сохраняет новости из Alpha Vantage в БД.
-    Сохраняются только тикеры из списка «наших» (TICKERS_FAST/MEDIUM/LONG + MACRO, US_MACRO).
+    Фильтр по списку тикеров — только при KB_INGEST_TRACKED_TICKERS_ONLY=true.
     """
     if not news_items:
         return
 
     try:
-        from services.ticker_groups import get_tracked_tickers_for_kb
-        tracked = set(get_tracked_tickers_for_kb())
+        from services.ticker_groups import get_tracked_tickers_for_kb, kb_ingest_tracked_tickers_only
+        tracked = set(get_tracked_tickers_for_kb()) if kb_ingest_tracked_tickers_only() else None
     except Exception:
         tracked = None
 
@@ -351,8 +370,8 @@ def save_news_to_db(news_items: List[Dict]):
                     conn.execute(
                         text("""
                             INSERT INTO knowledge_base 
-                            (ts, ticker, source, content, sentiment_score, link, event_type)
-                            VALUES (:ts, :ticker, :source, :content, :sentiment_score, :link, :event_type)
+                            (ts, ticker, source, content, sentiment_score, link, event_type, ingested_at)
+                            VALUES (:ts, :ticker, :source, :content, :sentiment_score, :link, :event_type, NOW())
                         """),
                         {
                             "ts": item['published'],

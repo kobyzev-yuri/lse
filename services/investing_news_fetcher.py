@@ -31,6 +31,9 @@ INVESTING_BASE_URL = "https://www.investing.com"
 # При 429: паузы перед повтором (сек), макс. повторов
 INVESTING_429_BACKOFF = [45, 90]
 INVESTING_429_MAX_RETRIES = 2
+# Чтение HTML может занять >30 с при медленном канале / перегруженном сайте
+INVESTING_NEWS_READ_TIMEOUT = 55
+INVESTING_NEWS_READ_RETRIES = 2
 
 # Заголовки, максимально похожие на обычный браузер (снижает вероятность 403)
 HEADERS = {
@@ -75,6 +78,10 @@ def _ticker_keywords() -> Dict[str, List[str]]:
     """Тикеры из всех групп (FAST + MEDIUM + LONG) и ключевые слова: встроенные + опционально из config."""
     tickers = get_all_ticker_groups()
     if not tickers:
+        logger.warning(
+            "Investing.com News: TICKERS_FAST/MEDIUM/LONG пусты — используется полный BUILTIN_KEYWORDS; "
+            "сохранение строк, сопоставленных с тикером вне списка KB, уходит в MACRO (см. INVESTING_NEWS_STRICT_TRACKED_ONLY)."
+        )
         return {t: BUILTIN_KEYWORDS.get(t, [t]) for t in BUILTIN_KEYWORDS}
     out = {t: list(BUILTIN_KEYWORDS.get(t, [t])) for t in tickers}
     # Опционально: дополнение из config (формат SNDK:слово1,слово2;LITE:слово3)
@@ -134,14 +141,40 @@ def fetch_investing_news_list(max_articles: int = 30) -> List[Tuple[str, str]]:
 def _fetch_investing_news_list_impl(max_articles: int, use_proxy: bool) -> Optional[List[Tuple[str, str]]]:
     """Внутренняя реализация загрузки ленты. При SOCKS-ошибке возвращает None (вызовет повтор без прокси)."""
     session = _session_with_proxy(use_proxy=use_proxy)
+    read_to = INVESTING_NEWS_READ_TIMEOUT
     try:
-        session.get(INVESTING_BASE_URL + "/", timeout=15)
+        raw = get_config_value("INVESTING_NEWS_TIMEOUT", "").strip()
+        if raw:
+            read_to = max(25, min(int(raw), 120))
+    except (ValueError, TypeError):
+        pass
+    try:
+        session.get(INVESTING_BASE_URL + "/", timeout=(15, read_to))
     except Exception:
         pass
     resp = None
     for attempt in range(INVESTING_429_MAX_RETRIES + 1):
         try:
-            resp = session.get(INVESTING_NEWS_URL, timeout=25)
+            last_timeout_err = None
+            for read_try in range(INVESTING_NEWS_READ_RETRIES):
+                try:
+                    resp = session.get(INVESTING_NEWS_URL, timeout=(20, read_to))
+                    last_timeout_err = None
+                    break
+                except requests.exceptions.ReadTimeout as e:
+                    last_timeout_err = e
+                    if read_try < INVESTING_NEWS_READ_RETRIES - 1:
+                        logger.warning(
+                            "Investing.com news: ReadTimeout при загрузке ленты, повтор %s/%s (timeout=%ss)",
+                            read_try + 2,
+                            INVESTING_NEWS_READ_RETRIES,
+                            read_to,
+                        )
+                        time.sleep(4)
+                        continue
+                    raise
+            if last_timeout_err:
+                raise last_timeout_err
             if resp.status_code == 429:
                 if attempt < INVESTING_429_MAX_RETRIES:
                     wait = INVESTING_429_BACKOFF[attempt]
@@ -245,14 +278,28 @@ def fetch_and_save_investing_news(max_articles: int = 25) -> int:
                 ticker = _match_ticker(title, keyword_map)
                 if not ticker:
                     ticker = "MACRO"
+                # Раньше: continue — новости молча терялись, если заголовок матчился на тикер не из
+                # get_tracked_tickers_for_kb() (типично при пустом списке тикеров в конфиге + полный BUILTIN).
                 if tracked is not None and ticker not in tracked:
-                    continue
+                    strict = (get_config_value("INVESTING_NEWS_STRICT_TRACKED_ONLY", "false") or "false").strip().lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                    )
+                    if strict:
+                        logger.debug("Investing.com news: пропуск — тикер %s не в списке KB (STRICT)", ticker)
+                        continue
+                    logger.info(
+                        "Investing.com news: тикер %s вне списка отслеживания KB — сохраняем как MACRO (заголовок не отбрасываем)",
+                        ticker,
+                    )
+                    ticker = "MACRO"
                 content = title
                 try:
                     conn.execute(
                         text("""
-                            INSERT INTO knowledge_base (ts, ticker, source, content, event_type, importance, link)
-                            VALUES (:ts, :ticker, :source, :content, 'NEWS', 'MEDIUM', :link)
+                            INSERT INTO knowledge_base (ts, ticker, source, content, event_type, importance, link, ingested_at)
+                            VALUES (:ts, :ticker, :source, :content, 'NEWS', 'MEDIUM', :link, NOW())
                         """),
                         {
                             "ts": datetime.now(),

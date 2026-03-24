@@ -439,7 +439,7 @@ def get_recent_news_for_ticker(engine, ticker: str, days: int = 7) -> int:
                     SELECT COUNT(*)
                     FROM knowledge_base
                     WHERE ticker = :ticker
-                      AND ts >= :cutoff
+                      AND COALESCE(ingested_at, ts) >= :cutoff
                       AND content IS NOT NULL
                       AND LENGTH(content) > 10
                 """),

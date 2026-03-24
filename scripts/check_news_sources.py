@@ -34,8 +34,14 @@ def main():
         with engine.connect() as conn:
             r = conn.execute(text("SELECT COUNT(*) FROM knowledge_base")).scalar()
             last = conn.execute(text("SELECT MAX(ts) FROM knowledge_base")).scalar()
+            cb_rss = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM knowledge_base WHERE source LIKE '%Central Bank%'"
+                )
+            ).scalar()
         engine.dispose()
         print(f"   Записей в knowledge_base: {r}")
+        print(f"   Из них RSS центробанков (source …Central Bank…): {cb_rss}")
         print(f"   Последняя запись (ts):   {last or '—'}")
     except Exception as e:
         print(f"❌ Ошибка доступа к БД: {e}")
@@ -74,6 +80,14 @@ def main():
     # 2. Ключи источников
     newsapi_key = get_config_value("NEWSAPI_KEY", "")
     print(f"\n📰 NewsAPI: ключ {'задан' if newsapi_key else 'не задан'} (в config.env)")
+    try:
+        from services.newsapi_fetcher import newsapi_cooldown_active, newsapi_cooldown_until, _cooldown_file
+        if newsapi_cooldown_active():
+            print(f"   ⏳ Cooldown после 429 активен до {newsapi_cooldown_until()} — запросы пропускаются. Сброс: rm {_cooldown_file()}")
+        else:
+            print("   Cooldown после 429: не активен")
+    except Exception as e:
+        print(f"   (проверка cooldown: {e})")
     av_key = get_config_value("ALPHAVANTAGE_KEY", "") or get_config_value("ALPHAVANTAGE_API_KEY", "")
     print(f"📊 Alpha Vantage: ключ {'задан' if av_key else 'не задан'}")
 
@@ -82,7 +96,11 @@ def main():
     try:
         from services.rss_news_fetcher import fetch_and_save_rss_news
         saved, skipped = fetch_and_save_rss_news()
-        print(f"   RSS: сохранено новых {saved}, дубликатов пропущено {skipped}")
+        print(f"   RSS: сохранено новых {saved}, пропущено (link уже в БД): {skipped}")
+        if saved == 0 and skipped > 0:
+            print(
+                "   ℹ️ Это нормально: дедупликация по полю link. Новые статьи появятся, когда в фидах будут URL, которых ещё нет в knowledge_base."
+            )
         if saved == 0 and skipped == 0:
             print("   ⚠️ Из фидов получено 0 записей — проверьте сеть или доступность URL фидов (Fed, BoE, ECB, BoJ).")
     except Exception as e:
@@ -93,7 +111,8 @@ def main():
     print("Чтобы новости поступали регулярно:")
     print("  1. Cron: */15 * * * * ... fetch_news_cron.py (каждые 15 мин)")
     print("  2. Лог: tail -f logs/news_fetch.log — в конце каждого запуска строка «За этот запуск всего сохранено новых: N»")
-    print("  3. Если всегда 0 — проверьте сеть (Docker: доступ наружу), NEWSAPI_KEY для макро-новостей, блокировку Investing.com")
+    print("  3. RSS «0 новых» при пропуске N>0 — не сбой: статьи уже в БД. Если и получено 0 из фидов — сеть/URL.")
+    print("  4. Дополнительно: NEWSAPI, Investing — см. логи; Docker: доступ наружу.")
     print("=" * 60)
     return 0
 

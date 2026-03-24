@@ -12,12 +12,12 @@ sys.path.insert(0, str(project_root))
 import feedparser
 import logging
 import re
-import requests
 from datetime import datetime
 from typing import List, Dict, Optional
 from sqlalchemy import create_engine, text
 
 from config_loader import get_database_url
+from services.http_outbound import outbound_session
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,8 @@ def _fetch_rss_content(url: str, aggressive_sanitize: bool = False) -> Optional[
     aggressive_sanitize: для проблемных фидов (BOE) — дополнительная очистка.
     """
     try:
-        r = requests.get(url, timeout=30, headers={
+        sess = outbound_session("RSS_USE_SYSTEM_PROXY")
+        r = sess.get(url, timeout=30, headers={
             'User-Agent': 'Mozilla/5.0 (compatible; LSE-NewsBot/1.0)',
             'Accept': 'application/rss+xml, application/xml, text/xml',
         })
@@ -236,12 +237,12 @@ def save_news_to_db(news_items: List[Dict], check_duplicates: bool = True) -> tu
                         skipped_count += 1
                         continue
                 
-                # Вставляем новость
+                # Вставляем новость (ts = дата публикации в RSS; ingested_at = момент загрузки в БД)
                 conn.execute(
                     text("""
                         INSERT INTO knowledge_base 
-                        (ts, ticker, source, content, event_type, region, importance, link)
-                        VALUES (:ts, :ticker, :source, :content, :event_type, :region, :importance, :link)
+                        (ts, ticker, source, content, event_type, region, importance, link, ingested_at)
+                        VALUES (:ts, :ticker, :source, :content, :event_type, :region, :importance, :link, NOW())
                     """),
                     {
                         "ts": item['published'],
@@ -259,7 +260,11 @@ def save_news_to_db(news_items: List[Dict], check_duplicates: bool = True) -> tu
             except Exception as e:
                 logger.error(f"❌ Ошибка при сохранении новости '{item.get('title', '')[:50]}...': {e}")
     
-    logger.info("✅ Сохранено %s новостей, пропущено дубликатов: %s", saved_count, skipped_count)
+    logger.info("✅ Сохранено %s новостей, пропущено дубликатов (тот же link в knowledge_base): %s", saved_count, skipped_count)
+    if saved_count == 0 and skipped_count > 0:
+        logger.info(
+            "ℹ️ RSS: загрузка фидов сработала; новых вставок нет, потому что все URL уже сохранены ранее — так и должно быть при повторном кроне."
+        )
     engine.dispose()
     return (saved_count, skipped_count)
 
@@ -273,6 +278,11 @@ def fetch_and_save_rss_news() -> tuple:
     """
     logger.info("🚀 Начало получения новостей из RSS фидов центральных банков")
     news_items = fetch_all_rss_feeds()
+    logger.info(
+        "ℹ️ В ленте сейчас %s статей (полный снимок фидов). В БД попадут только новые URL; "
+        "повторный крон почти всегда даст «сохранено 0» — это дедупликация по link, а не сбой сети.",
+        len(news_items),
+    )
     if not news_items:
         logger.info("✅ Завершено: из фидов получено 0 записей")
         return (0, 0)

@@ -67,7 +67,8 @@ def build_dashboard_text(mode: str = "all") -> str:
         with engine.connect() as conn:
             r = conn.execute(
                 text(
-                    "SELECT COUNT(*) FROM knowledge_base WHERE ts::date >= current_date - 7 AND content IS NOT NULL AND LENGTH(TRIM(content)) > 5"
+                    "SELECT COUNT(*) FROM knowledge_base WHERE (COALESCE(ingested_at, ts))::date >= current_date - 7 "
+                    "AND content IS NOT NULL AND LENGTH(TRIM(content)) > 5"
                 ),
             ).fetchone()
             total_news_7d = int(r[0]) if r and r[0] is not None else 0
@@ -75,7 +76,7 @@ def build_dashboard_text(mode: str = "all") -> str:
                 text(
                     """
                     SELECT COUNT(*) FROM knowledge_base
-                    WHERE ts::date >= current_date - 7 AND content IS NOT NULL AND LENGTH(TRIM(content)) > 5
+                    WHERE (COALESCE(ingested_at, ts))::date >= current_date - 7 AND content IS NOT NULL AND LENGTH(TRIM(content)) > 5
                       AND ticker IS NOT NULL AND ticker NOT IN ('MACRO', 'US_MACRO')
                     """
                 ),
@@ -87,7 +88,8 @@ def build_dashboard_text(mode: str = "all") -> str:
             with engine.connect() as conn:
                 r = conn.execute(
                     text(
-                        "SELECT COUNT(*) FROM knowledge_base WHERE ts >= :cutoff AND content IS NOT NULL AND LENGTH(content) > 5"
+                        "SELECT COUNT(*) FROM knowledge_base WHERE COALESCE(ingested_at, ts) >= :cutoff "
+                        "AND content IS NOT NULL AND LENGTH(content) > 5"
                     ),
                     {"cutoff": cutoff},
                 ).fetchone()
@@ -96,7 +98,7 @@ def build_dashboard_text(mode: str = "all") -> str:
                     text(
                         """
                         SELECT COUNT(*) FROM knowledge_base
-                        WHERE ts >= :cutoff AND content IS NOT NULL AND LENGTH(content) > 5
+                        WHERE COALESCE(ingested_at, ts) >= :cutoff AND content IS NOT NULL AND LENGTH(content) > 5
                           AND ticker IS NOT NULL AND ticker NOT IN ('MACRO', 'US_MACRO')
                         """
                     ),
@@ -142,7 +144,7 @@ def build_dashboard_text(mode: str = "all") -> str:
                             text(
                                 """
                                 SELECT COUNT(*) FROM knowledge_base
-                                WHERE ticker = :ticker AND ts::date >= current_date - 7
+                                WHERE ticker = :ticker AND (COALESCE(ingested_at, ts))::date >= current_date - 7
                                   AND content IS NOT NULL AND LENGTH(TRIM(content)) > 5
                                 """
                             ),
@@ -154,7 +156,7 @@ def build_dashboard_text(mode: str = "all") -> str:
                             text(
                                 """
                                 SELECT COUNT(*) FROM knowledge_base
-                                WHERE ticker = :ticker AND ts >= :cutoff
+                                WHERE ticker = :ticker AND COALESCE(ingested_at, ts) >= :cutoff
                                   AND content IS NOT NULL AND LENGTH(content) > 5
                                 """
                             ),

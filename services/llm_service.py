@@ -250,7 +250,7 @@ class LLMService:
 3. Контекст новостей
 4. Риски
 5. Геополитический риск: при существенных геополитических изменениях (эскалация, военные действия, удары, санкции, risk-off) — предпочтительнее HOLD и в reasoning/risks укажи рекомендацию рассмотреть превентивный выход по открытым позициям даже с небольшой потерей (история: удержание через такое событие часто ведёт к большим потерям). Одновременно учитывай прогнозы о деэскалации или стабилизации: если в новостях звучит снижение напряжённости, переговоры, «рынок учёл», адаптация — риски могут быть терпимы, не исключай вход или удержание, когда рынок уже адаптировался, чтобы не оставаться вне игры без необходимости.
-6. Кластер и корреляция: если в контексте есть блок «Кластер и корреляция» (корреляция тикера с другими, цены и сигналы по ним) — обязательно учти его в key_factors и в reasoning. Высокая корреляция с другим активом означает, что они часто движутся вместе; при расхождении сигналов или падении коррелированного актива — осторожность; не дублируй риск по двум сильно коррелированным бумагам.
+6. Кластер, корреляция и геополитика: если есть блок «Кластер и корреляция» (корреляции, цены и тех. сигналы по нескольким тикерам) — обязательно учти его в key_factors и reasoning. Высокая корреляция означает совместные движения; при расхождении сигналов или слабости коррелированного актива — осторожность; не дублируй риск по двум сильно коррелированным бумагам. Если в новостях есть геополитика или sector-wide risk-off — **свяжи** её с трендами цен имен кластера: кто уже отразил стресс, кто отстаёт, куда может «дотянуться» цепочка (полупроводники, память, AI-инфра, энергия и т.д. по контексту тикеров). Не анализируй целевой тикер изолированно от кластера, когда гео-риск системный.
 7. Краткосрочный прогноз (30/60/120 мин) и тейк: p10/p50/p90 и P(>spot) — ориентир направления и ширины коридора (упрощённая статистика по недавним 5m, не гарантия). Если в данных есть «Импульс 2ч» и «Эффективный тейк по правилам GAME_5m» — число тейка для исполнения берётся из правил стратегии (и связано с импульсом), а не из таблицы прогноза. p50 на 120 мин математически на той же 2ч-оси, что импульс 2ч (не считай их двумя независимыми сигналами). Для словесных оценок кратких целей уместнее горизонты 30/60 мин (p50 или p90 как верх сценария); p10 — нижний хвост риска. Не подменяй исполняемый тейк одной ячейкой таблицы.
 
 Важно: в ответе должна быть одна чёткая итоговая рекомендация (BUY, STRONG_BUY или HOLD). В reasoning объясняй именно её: если HOLD — почему не входим сейчас (а не «есть возможность покупки, но держим»); если BUY — почему входим. Не смешивай противоположные выводы в одном тексте.
@@ -309,10 +309,17 @@ Sentiment анализ:
         Те же входы, что у analyze_trading_situation. Для /prompt_entry: всегда заполнять user_prompt в JSON.
         """
         system_prompt = LLMService.get_entry_decision_system_prompt()
+        from services.geopolitical_prompt import (
+            build_geopolitical_block,
+            geo_cluster_bridge_hint,
+            geopolitical_followup_hint,
+        )
+
         news_summary = "\n".join([
             f"- {news.get('source', 'Unknown')}: {news.get('content', '')[:200]}... (sentiment: {news.get('sentiment_score', 0)})"
             for news in (news_data or [])[:5]
         ])
+        geo_block, geo_blob = build_geopolitical_block(news_data or [])
         rsi_value = technical_data.get('rsi')
         rsi_text = ""
         if rsi_value is not None:
@@ -343,7 +350,7 @@ Sentiment анализ:
 - Количество новостей: {len(news_data or [])}
 
 Новости:
-{news_summary if news_summary else "Новостей не найдено"}
+{news_summary if news_summary else "Новостей не найдено"}{f"\n\n{geo_block}" if geo_block else ""}
 """
         cluster_note = technical_data.get("cluster_note")
         if not cluster_note:
@@ -365,16 +372,9 @@ Sentiment анализ:
             user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Дай одну итоговую рекомендацию (согласись или скорректируй). Если итог HOLD — в reasoning объясни, почему не входим, а не «есть возможность покупки, но держим»."
         if strategy_outcome_stats:
             user_message += f"\n\n{strategy_outcome_stats} Учти исходы в похожих ситуациях при рекомендации."
-        _geo_keywords = ("israel", "iran", "escalat", "war", "strike", "middle east", "geopolit", "военн", "эскалац", "конфликт")
-        _news_text = (news_summary or "").lower()
-        if any(kw in _news_text for kw in _geo_keywords):
-            _deesc_keywords = ("de-escalat", "deescalat", "stabiliz", "calm", "market priced", "уже учт", "стабилизац", "снижени", "переговор")
-            _has_deesc = any(d in _news_text for d in _deesc_keywords)
-            user_message += "\n\nВ новостях за период есть упоминания геополитической эскалации или военного конфликта."
-            if _has_deesc:
-                user_message += " Вместе с тем в новостях звучат деэскалация или стабилизация — учти: риски могут быть терпимы, адаптация рынка могла произойти; не исключай вход или удержание без необходимости."
-            else:
-                user_message += " Учти при рекомендации: при открытых позициях рассмотреть превентивный выход даже с небольшой потерей."
+        _geo_combined = ((news_summary or "").lower() + "\n" + geo_blob).strip()
+        user_message += geopolitical_followup_hint(_geo_combined)
+        user_message += geo_cluster_bridge_hint(cluster_note, _geo_combined)
         user_message += "\n\nДай рекомендацию на основе этих данных."
         return {"prompt_system": system_prompt, "prompt_user": user_message}
 
@@ -449,12 +449,18 @@ Sentiment анализ:
             Анализ от LLM с рекомендацией
         """
         system_prompt = self.get_entry_decision_system_prompt()
-        
+        from services.geopolitical_prompt import (
+            build_geopolitical_block,
+            geo_cluster_bridge_hint,
+            geopolitical_followup_hint,
+        )
+
         # Формируем контекст
         news_summary = "\n".join([
             f"- {news.get('source', 'Unknown')}: {news.get('content', '')[:200]}... (sentiment: {news.get('sentiment_score', 0)})"
             for news in news_data[:5]  # Берем топ-5 новостей
         ])
+        geo_block, geo_blob = build_geopolitical_block(news_data or [])
         
         # Форматируем RSI с интерпретацией
         rsi_value = technical_data.get('rsi')
@@ -504,7 +510,7 @@ Sentiment анализ:
 - Количество новостей: {len(news_data)}
 
 Новости:
-{news_summary if news_summary else "Новостей не найдено"}
+{news_summary if news_summary else "Новостей не найдено"}{f"\n\n{geo_block}" if geo_block else ""}
 """
         cluster_note = technical_data.get("cluster_note")
         if not cluster_note:
@@ -526,17 +532,9 @@ Sentiment анализ:
             user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Дай одну итоговую рекомендацию (согласись или скорректируй). Если итог HOLD — в reasoning объясни, почему не входим, а не «есть возможность покупки, но держим»."
         if strategy_outcome_stats:
             user_message += f"\n\n{strategy_outcome_stats} Учти исходы в похожих ситуациях при рекомендации."
-        # При намёках на геополитику в новостях — явно подсказываем учесть выход по открытым позициям
-        _geo_keywords = ("israel", "iran", "escalat", "war", "strike", "middle east", "geopolit", "военн", "эскалац", "конфликт")
-        _news_text = (news_summary or "").lower()
-        if any(kw in _news_text for kw in _geo_keywords):
-            _deesc_keywords = ("de-escalat", "deescalat", "stabiliz", "calm", "market priced", "уже учт", "стабилизац", "снижени", "переговор")
-            _has_deesc = any(d in _news_text for d in _deesc_keywords)
-            user_message += "\n\nВ новостях за период есть упоминания геополитической эскалации или военного конфликта."
-            if _has_deesc:
-                user_message += " Вместе с тем в новостях звучат деэскалация или стабилизация — учти: риски могут быть терпимы, адаптация рынка могла произойти; не исключай вход или удержание без необходимости."
-            else:
-                user_message += " Учти при рекомендации: при открытых позициях рассмотреть превентивный выход даже с небольшой потерей."
+        _geo_combined = ((news_summary or "").lower() + "\n" + geo_blob).strip()
+        user_message += geopolitical_followup_hint(_geo_combined)
+        user_message += geo_cluster_bridge_hint(cluster_note, _geo_combined)
         user_message += "\n\nДай рекомендацию на основе этих данных."
         
         messages = [{"role": "user", "content": user_message}]
