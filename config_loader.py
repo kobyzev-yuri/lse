@@ -214,6 +214,14 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
     if not config_path.exists():
         logger.debug("config.env не найден: %s", config_path)
         return {}
+    if config_path.is_dir():
+        # Docker: если на хосте не было файла, bind-mount мог создать каталог «config.env» — open() падал бы с IsADirectoryError.
+        logger.error(
+            "config.env существует как каталог, а не файл (%s). Удалите каталог на хосте, "
+            "создайте файл config.env (см. config.env.example). Иначе конфиг только из переменных окружения.",
+            config_path,
+        )
+        return {}
 
     config = {}
     with open(config_path, "r", encoding="utf-8") as f:
