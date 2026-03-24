@@ -320,6 +320,7 @@ Sentiment анализ:
             for news in (news_data or [])[:5]
         ])
         geo_block, geo_blob = build_geopolitical_block(news_data or [])
+        _geo_nl_block = ("\n\n" + geo_block) if geo_block else ""
         rsi_value = technical_data.get('rsi')
         rsi_text = ""
         if rsi_value is not None:
@@ -350,7 +351,7 @@ Sentiment анализ:
 - Количество новостей: {len(news_data or [])}
 
 Новости:
-{news_summary if news_summary else "Новостей не найдено"}{f"\n\n{geo_block}" if geo_block else ""}
+{news_summary if news_summary else "Новостей не найдено"}{_geo_nl_block}
 """
         cluster_note = technical_data.get("cluster_note")
         if not cluster_note:
@@ -461,7 +462,8 @@ Sentiment анализ:
             for news in news_data[:5]  # Берем топ-5 новостей
         ])
         geo_block, geo_blob = build_geopolitical_block(news_data or [])
-        
+        _geo_nl_block = ("\n\n" + geo_block) if geo_block else ""
+
         # Форматируем RSI с интерпретацией
         rsi_value = technical_data.get('rsi')
         rsi_text = ""
@@ -510,7 +512,7 @@ Sentiment анализ:
 - Количество новостей: {len(news_data)}
 
 Новости:
-{news_summary if news_summary else "Новостей не найдено"}{f"\n\n{geo_block}" if geo_block else ""}
+{news_summary if news_summary else "Новостей не найдено"}{_geo_nl_block}
 """
         cluster_note = technical_data.get("cluster_note")
         if not cluster_note:
