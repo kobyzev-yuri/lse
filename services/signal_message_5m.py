@@ -106,6 +106,21 @@ def build_5m_entry_signal_text(
     summ = d5.get("price_forecast_5m_summary")
     if summ:
         lines.append(f"📈 Прогноз цены (p10–p50–p90): {summ}")
+    entry_advice = d5.get("entry_advice")
+    if entry_advice == "ALLOW":
+        entry_rec = d5.get("entry_price_recommended")
+        entry_lo = d5.get("entry_price_range_low")
+        entry_hi = d5.get("entry_price_range_high")
+        exp_take = d5.get("expected_profit_pct_if_take")
+        parts = []
+        if entry_rec is not None:
+            parts.append(f"реком. вход: ${float(entry_rec):.2f}")
+        if entry_lo is not None and entry_hi is not None:
+            parts.append(f"диапазон: ${float(entry_lo):.2f}–${float(entry_hi):.2f}")
+        if exp_take is not None:
+            parts.append(f"ожид. прибыль до тейка: +{float(exp_take):.2f}%")
+        if parts:
+            lines.append("✅ План входа: " + "  ·  ".join(parts))
     lines.extend(
         [
         "",

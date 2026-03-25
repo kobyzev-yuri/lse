@@ -512,6 +512,7 @@ TECHNICAL_SIGNAL_KEYS = (
     "volatility_5m_pct",
     "period_str", "bars_count", "stop_loss_pct", "take_profit_pct", "stop_loss_enabled",
     "estimated_upside_pct_day", "suggested_take_profit_price",
+    "entry_price_recommended", "entry_price_range_low", "entry_price_range_high", "expected_profit_pct_if_take",
     "estimated_downside_pct_day", "prob_up", "prob_down",
     "pullback_from_high_pct", "session_high",
     "kb_news_impact", "entry_advice", "entry_advice_reason", "market_session",
@@ -1163,6 +1164,27 @@ def get_decision_5m(
         entry_advice_reason = "Нет явных ограничений на вход"
     out["entry_advice"] = entry_advice
     out["entry_advice_reason"] = entry_advice_reason
+    # Рекомендованный вход и ожидаемая прибыль при достижении цели (если цель/цена доступны).
+    try:
+        p_now = out.get("price") or price
+        p_now = float(p_now) if p_now is not None else None
+    except (TypeError, ValueError):
+        p_now = None
+    tp_price = out.get("suggested_take_profit_price")
+    if p_now is not None and p_now > 0:
+        out["entry_price_recommended"] = round(p_now, 2)
+        try:
+            vol_for_band = float(out.get("volatility_5m_pct")) if out.get("volatility_5m_pct") is not None else None
+        except (TypeError, ValueError):
+            vol_for_band = None
+        band_pct = 0.5 if vol_for_band is None else max(0.25, min(1.2, vol_for_band * 0.8))
+        out["entry_price_range_low"] = round(p_now * (1.0 - band_pct / 100.0), 2)
+        out["entry_price_range_high"] = round(p_now * (1.0 + band_pct / 100.0), 2)
+        try:
+            if tp_price is not None and float(tp_price) > p_now:
+                out["expected_profit_pct_if_take"] = round((float(tp_price) / p_now - 1.0) * 100.0, 2)
+        except (TypeError, ValueError):
+            pass
 
     # Дополнительный guard качества входа: по чек-листу R:R и матожиданию (конфигурируемо, по умолчанию выключено).
     # Это ранний фильтр против сценариев "BUY -> не дошёл до тейка -> TIME_EXIT с убытком".

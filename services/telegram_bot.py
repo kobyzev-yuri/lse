@@ -2898,6 +2898,21 @@ class LSETelegramBot:
             lines.append("• " + "  ·  ".join(parts))
         advice = data.get("entry_advice")
         advice_reason = data.get("entry_advice_reason")
+        entry_rec = data.get("entry_price_recommended")
+        entry_lo = data.get("entry_price_range_low")
+        entry_hi = data.get("entry_price_range_high")
+        exp_take = data.get("expected_profit_pct_if_take")
+        if advice == "ALLOW":
+            parts = []
+            if entry_rec is not None:
+                parts.append(f"реком. вход: ${float(entry_rec):.2f}")
+            if entry_lo is not None and entry_hi is not None:
+                parts.append(f"диапазон: ${float(entry_lo):.2f}–${float(entry_hi):.2f}")
+            if exp_take is not None:
+                parts.append(f"ожидаемая прибыль до тейка: +{float(exp_take):.2f}%")
+            if parts:
+                lines.append("")
+                lines.append("✅ **План входа:** " + "  ·  ".join(parts))
         if advice in ("CAUTION", "AVOID") and advice_reason:
             lines.append("")
             lines.append(f"⚠️ **Вход:** {advice} — _{_escape_markdown(advice_reason)}_")
