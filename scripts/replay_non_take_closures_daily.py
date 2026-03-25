@@ -160,7 +160,6 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
         "ignored_buys_while_open": 0,
         "skipped_buys_without_take_at_entry": 0,
     }
-    blocked_entries: list[dict[str, Any]] = []
     comparisons: list[dict[str, Any]] = []
 
     for ticker, g in trades.groupby("ticker", sort=True):
@@ -169,7 +168,6 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
         q_tkr["date"] = pd.to_datetime(q_tkr["date"])
 
         pos = None
-        # Для сравнения "как было": ждём SELL после BUY, чтобы записать оригинал
         pending_orig: Optional[dict[str, Any]] = None
         for _, row in g.iterrows():
             ts = pd.Timestamp(row["ts"])
@@ -221,17 +219,42 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
             if side == "BUY":
                 stats["buy_total"] += 1
                 if pos is not None:
-                    stats["ignored_buys_while_open"] += 1
-                    blocked_entries.append({
+                    # В replay-модели "входы независимы": новый BUY начинается как новый кейс.
+                    # Предыдущий кейс фиксируем как OPEN, если к этому моменту тейк не достигнут.
+                    comparisons.append({
                         "ticker": ticker,
-                        "buy_id": rid,
-                        "buy_ts": str(ts),
-                        "buy_price": float(row["price"]),
-                        "blocked_by_open_buy_id": int(pos["buy_id"]),
-                        "blocked_by_entry_ts": str(pos["entry_ts"]),
-                        "blocked_by_entry_price": float(pos["entry_price"]),
+                        "buy_id": int(pos["buy_id"]),
+                        "buy_ts": str(pos["entry_ts"]),
+                        "buy_price": float(pos["entry_price"]),
+                        "qty": float(pos["qty"]),
+                        "orig_sell_id": pending_orig.get("sell_id") if pending_orig else None,
+                        "orig_exit_ts": pending_orig.get("sell_ts") if pending_orig else None,
+                        "orig_exit_price": pending_orig.get("sell_price") if pending_orig else None,
+                        "orig_exit_reason": pending_orig.get("sell_reason") if pending_orig else None,
+                        "orig_pnl_pct": pending_orig.get("sell_pnl_pct") if pending_orig else None,
+                        "alt_status": "OPEN",
+                        "alt_exit_ts": None,
+                        "alt_exit_price": None,
+                        "alt_exit_reason": None,
+                        "alt_pnl_pct": None,
+                        "ignored_non_take_sell_ids": list(pos.get("ignored_sells") or []),
+                        "alt_take_level": float(pos["take_level"]),
+                        "alt_take_pct": float(pos["take_pct"]),
                     })
-                    continue
+                    open_positions.append(
+                        AltOpen(
+                            ticker=ticker,
+                            entry_ts=str(pos["entry_ts"]),
+                            entry_price=float(pos["entry_price"]),
+                            qty=float(pos["qty"]),
+                            take_pct=float(pos["take_pct"]),
+                            take_level=float(pos["take_level"]),
+                            source_buy_id=int(pos["buy_id"]),
+                            ignored_sells=[int(x) for x in pos["ignored_sells"]],
+                        )
+                    )
+                    pos = None
+                    pending_orig = None
                 price = float(row["price"])
                 qty = float(row["quantity"])
                 buy_take = None
@@ -418,7 +441,7 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
         "closed": [asdict(x) for x in closed],
         "open": [asdict(x) for x in open_positions],
         "comparisons": comparisons,
-        "blocked_entries": blocked_entries,
+        "blocked_entries": [],
     }
 
 
