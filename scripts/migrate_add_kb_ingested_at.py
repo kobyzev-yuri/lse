@@ -5,8 +5,15 @@
 Без неё падают запросы с ORDER BY COALESCE(ingested_at, ts).
 Тот же SQL: scripts/sql/add_knowledge_base_ingested_at.sql
 
-Запуск на сервере (контейнер с приложением):
-  docker exec lse-bot python scripts/migrate_add_kb_ingested_at.py
+На VM образ lse-bot собирается из репозитория: после git pull новый скрипт
+появляется только в ~/lse на диске, но не внутри старого контейнера, пока не
+сделать docker compose build lse (или ./scripts/deploy_from_github.sh).
+
+Варианты:
+  A) Без пересборки — SQL напрямую в Postgres:
+     docker exec lse-postgres psql -U postgres -d lse_trading -c "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMPTZ;"
+  B) После пересборки образа:
+     docker exec lse-bot python scripts/migrate_add_kb_ingested_at.py
 """
 
 import sys
