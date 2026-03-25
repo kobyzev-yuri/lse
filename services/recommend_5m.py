@@ -511,7 +511,10 @@ TECHNICAL_SIGNAL_KEYS = (
     "premarket_intraday_momentum_pct",
     "volatility_5m_pct",
     "period_str", "bars_count", "stop_loss_pct", "take_profit_pct", "stop_loss_enabled",
-    "estimated_upside_pct_day", "suggested_take_profit_price",
+    "estimated_upside_pct_day",
+    # Апсайд по смеси 60/120m до применения min 4% (и до записи в estimated_upside_pct_day)
+    "estimated_upside_forecast_raw_pct",
+    "suggested_take_profit_price",
     "entry_price_recommended", "entry_price_range_low", "entry_price_range_high", "expected_profit_pct_if_take",
     "estimated_downside_pct_day", "prob_up", "prob_down",
     "pullback_from_high_pct", "session_high",
@@ -1117,6 +1120,12 @@ def get_decision_5m(
                 ticker_cap = _take_profit_cap_pct(ticker)
                 target_pct = min(target_pct, float(ticker_cap))
                 min_target = 4.0
+                # До пола 4%: «реальный» апсайд модели (для карточки рядом с эффективным тейком).
+                if target_pct is not None:
+                    try:
+                        out["estimated_upside_forecast_raw_pct"] = round(float(target_pct), 2)
+                    except (TypeError, ValueError):
+                        pass
                 if ticker_cap < min_target:
                     if decision in ("BUY", "STRONG_BUY"):
                         decision_prev = decision

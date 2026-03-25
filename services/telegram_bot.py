@@ -282,6 +282,7 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
         qwen_verdict = r.get("qwen_checklist_verdict")
         pullback = r.get("pullback_from_high_pct")
         upside = r.get("estimated_upside_pct_day")
+        upside_raw = r.get("estimated_upside_forecast_raw_pct")
         downside = r.get("estimated_downside_pct_day")
         prob_up = r.get("prob_up")
         prob_down = r.get("prob_down")
@@ -297,7 +298,17 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
         vol_s = f"{vol:.2f}%" if vol is not None else "—"
         qwen_s = _pre(qwen_verdict)
         pullback_s = f"{pullback:.2f}%" if pullback is not None else "—"
-        upside_s = f"{upside:+.1f}%" if upside is not None else "—"
+        if upside is not None:
+            try:
+                ur = float(upside_raw) if upside_raw is not None else None
+                if ur is not None and abs(ur - float(upside)) > 0.02:
+                    upside_s = f"{upside:+.1f}% (прогн. {ur:+.1f}%)"
+                else:
+                    upside_s = f"{upside:+.1f}%"
+            except (TypeError, ValueError):
+                upside_s = f"{upside:+.1f}%"
+        else:
+            upside_s = "—"
         downside_s = f"−{downside:.1f}%" if downside is not None else "—"
         prob_s = f"{prob_up:.2f}/{prob_down:.2f}" if (prob_up is not None and prob_down is not None) else "—"
         parts.append(
@@ -2098,7 +2109,7 @@ class LSETelegramBot:
                                 linestyle=":",
                                 linewidth=1.0,
                                 alpha=0.7,
-                                label=f"Тейк +{take_pct:.1f}%",
+                                label=f"Тейк @ {take_level:.2f} (+{take_pct:.1f}%)",
                             )
                         except Exception:
                             pass
@@ -2396,7 +2407,14 @@ class LSETelegramBot:
                                 mom = d5_chart.get("momentum_2h_pct")
                                 take_pct = _effective_take_profit_pct(mom, ticker=ticker)
                                 take_level = entry_price * (1 + take_pct / 100.0)
-                                ax.axhline(take_level, color="#2e7d32", linestyle=":", linewidth=0.9, alpha=0.7, label=f"Тейк +{take_pct:.1f}%")
+                                ax.axhline(
+                                    take_level,
+                                    color="#2e7d32",
+                                    linestyle=":",
+                                    linewidth=0.9,
+                                    alpha=0.7,
+                                    label=f"Тейк @ {take_level:.2f} (+{take_pct:.1f}%)",
+                                )
                             except Exception:
                                 pass
                     def _in_range(ts, lo, hi):

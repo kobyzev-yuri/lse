@@ -100,7 +100,11 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
         datasets.push({ label: 'Хай ' + data.session_high.toFixed(2), data: labels.map(() => data.session_high), borderColor: '#f57c00', borderDash: [2, 4], borderWidth: 1, fill: false, pointRadius: 0 });
     }
     if (!noOhlc && data.take_level != null) {
-        datasets.push({ label: 'Тейк ' + data.take_level.toFixed(2), data: labels.map(() => data.take_level), borderColor: '#2e7d32', borderDash: [2, 2], borderWidth: 1, fill: false, pointRadius: 0 });
+        var takeLbl = 'Тейк @ ' + data.take_level.toFixed(2);
+        if (data.take_pct != null && data.take_pct !== undefined && !isNaN(Number(data.take_pct))) {
+            takeLbl += ' (+' + Number(data.take_pct).toFixed(1) + '%)';
+        }
+        datasets.push({ label: takeLbl, data: labels.map(() => data.take_level), borderColor: '#2e7d32', borderDash: [2, 2], borderWidth: 1, fill: false, pointRadius: 0 });
     }
 
     function findClosestLabelIndex(lbls, ts) {

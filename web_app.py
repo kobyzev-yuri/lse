@@ -987,6 +987,7 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
         "entry_price": entry_price,
         "session_high": None,
         "take_level": None,
+        "take_pct": None,
         "trades": trades_out,
         "no_ohlc": True,
         "price_forecast_5m": pf5,
@@ -1062,6 +1063,7 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
         d5_chart = None
     session_high = None
     take_level = None
+    take_pct_for_chart = None
     if d5_chart and entry_price and entry_price > 0:
         sh = d5_chart.get("session_high")
         session_high = float(sh) if sh is not None and (isinstance(sh, (int, float)) or hasattr(sh, "__float__")) else None
@@ -1069,6 +1071,7 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
             from services.game_5m import _effective_take_profit_pct
             mom = d5_chart.get("momentum_2h_pct")
             take_pct = _effective_take_profit_pct(mom, ticker=ticker)
+            take_pct_for_chart = float(take_pct)
             take_level = float(entry_price * (1 + take_pct / 100.0))
         except Exception:
             pass
@@ -1160,6 +1163,7 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
         "entry_price": _f(entry_price),
         "session_high": _f(session_high),
         "take_level": _f(take_level),
+        "take_pct": _f(take_pct_for_chart),
         "trades": [
             {
                 "ts": t["ts"],

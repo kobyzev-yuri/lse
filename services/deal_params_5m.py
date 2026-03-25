@@ -23,7 +23,7 @@ FULL_ENTRY_KEYS = (
     "high_5d", "low_5d", "pullback_from_high_pct",
     "last_bar_high", "last_bar_low", "recent_bars_high_max", "recent_bars_low_min",
     "bars_count", "kb_news_impact",
-    "estimated_upside_pct_day", "suggested_take_profit_price",
+    "estimated_upside_pct_day", "estimated_upside_forecast_raw_pct", "suggested_take_profit_price",
     "estimated_downside_pct_day", "prob_up", "prob_down",
     "premarket_gap_pct", "minutes_until_open", "prev_close",
     "llm_insight", "llm_sentiment",
