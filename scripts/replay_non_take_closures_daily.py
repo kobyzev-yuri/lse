@@ -57,6 +57,15 @@ class AltOpen:
     ignored_sells: list[int]
 
 
+def _pnl_pct(entry: float, exitp: float) -> Optional[float]:
+    try:
+        if entry and entry > 0 and exitp and exitp > 0:
+            return (exitp - entry) / entry * 100.0
+    except Exception:
+        pass
+    return None
+
+
 def _take_pct_for_buy(ticker: str, buy_take: Optional[float], allow_config_fallback: bool) -> Optional[float]:
     if buy_take is not None:
         return float(buy_take)
@@ -151,6 +160,8 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
         "ignored_buys_while_open": 0,
         "skipped_buys_without_take_at_entry": 0,
     }
+    blocked_entries: list[dict[str, Any]] = []
+    comparisons: list[dict[str, Any]] = []
 
     for ticker, g in trades.groupby("ticker", sort=True):
         g = g.sort_values(["ts", "id"]).reset_index(drop=True)
@@ -158,6 +169,8 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
         q_tkr["date"] = pd.to_datetime(q_tkr["date"])
 
         pos = None
+        # Для сравнения "как было": ждём SELL после BUY, чтобы записать оригинал
+        pending_orig: Optional[dict[str, Any]] = None
         for _, row in g.iterrows():
             ts = pd.Timestamp(row["ts"])
             side = str(row["side"] or "").upper()
@@ -168,25 +181,56 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
             if pos is not None:
                 hit = _first_take_hit(q_tkr, pos["last_check_ts"], pos["take_level"])
                 if hit is not None and hit[0] <= ts:
-                    closed.append(
-                        AltClosed(
-                            ticker=ticker,
-                            entry_ts=str(pos["entry_ts"]),
-                            entry_price=float(pos["entry_price"]),
-                            qty=float(pos["qty"]),
-                            exit_ts=str(hit[0]),
-                            exit_price=float(hit[1]),
-                            exit_reason="TAKE_PROFIT_REPLAY",
-                            source_buy_id=int(pos["buy_id"]),
-                            source_sell_id=None,
-                        )
+                    # альтернативное закрытие по тейку (до текущего события)
+                    alt = AltClosed(
+                        ticker=ticker,
+                        entry_ts=str(pos["entry_ts"]),
+                        entry_price=float(pos["entry_price"]),
+                        qty=float(pos["qty"]),
+                        exit_ts=str(hit[0]),
+                        exit_price=float(hit[1]),
+                        exit_reason="TAKE_PROFIT_REPLAY",
+                        source_buy_id=int(pos["buy_id"]),
+                        source_sell_id=None,
                     )
+                    closed.append(
+                        alt
+                    )
+                    if pending_orig is not None and pending_orig.get("buy_id") == int(pos["buy_id"]):
+                        comparisons.append({
+                            "ticker": ticker,
+                            "buy_id": int(pos["buy_id"]),
+                            "buy_ts": str(pos["entry_ts"]),
+                            "buy_price": float(pos["entry_price"]),
+                            "qty": float(pos["qty"]),
+                            "orig_sell_id": pending_orig.get("sell_id"),
+                            "orig_exit_ts": pending_orig.get("sell_ts"),
+                            "orig_exit_price": pending_orig.get("sell_price"),
+                            "orig_exit_reason": pending_orig.get("sell_reason"),
+                            "orig_pnl_pct": pending_orig.get("sell_pnl_pct"),
+                            "alt_status": "CLOSED",
+                            "alt_exit_ts": alt.exit_ts,
+                            "alt_exit_price": alt.exit_price,
+                            "alt_exit_reason": alt.exit_reason,
+                            "alt_pnl_pct": _pnl_pct(float(pos["entry_price"]), alt.exit_price),
+                            "ignored_non_take_sell_ids": list(pos.get("ignored_sells") or []),
+                        })
+                        pending_orig = None
                     pos = None
 
             if side == "BUY":
                 stats["buy_total"] += 1
                 if pos is not None:
                     stats["ignored_buys_while_open"] += 1
+                    blocked_entries.append({
+                        "ticker": ticker,
+                        "buy_id": rid,
+                        "buy_ts": str(ts),
+                        "buy_price": float(row["price"]),
+                        "blocked_by_open_buy_id": int(pos["buy_id"]),
+                        "blocked_by_entry_ts": str(pos["entry_ts"]),
+                        "blocked_by_entry_price": float(pos["entry_price"]),
+                    })
                     continue
                 price = float(row["price"])
                 qty = float(row["quantity"])
@@ -202,6 +246,8 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
                 )
                 if take_pct is None:
                     stats["skipped_buys_without_take_at_entry"] += 1
+                    # оригинальная сделка всё равно может иметь SELL; для сравнения пометим как SKIPPED (нет исторического спреда входа)
+                    pending_orig = {"buy_id": rid, "buy_ts": str(ts), "buy_price": price, "qty": qty, "sell_id": None, "sell_ts": None, "sell_price": None, "sell_reason": None, "sell_pnl_pct": None, "skipped": True}
                     continue
                 pos = {
                     "buy_id": rid,
@@ -213,6 +259,7 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
                     "last_check_ts": ts,
                     "ignored_sells": [],
                 }
+                pending_orig = {"buy_id": rid, "buy_ts": str(ts), "buy_price": price, "qty": qty, "sell_id": None, "sell_ts": None, "sell_price": None, "sell_reason": None, "sell_pnl_pct": None, "skipped": False}
                 continue
 
             if side == "SELL":
@@ -221,22 +268,71 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
                     stats["sell_take_total"] += 1
                 else:
                     stats["sell_non_take_total"] += 1
+                if pending_orig is not None and pending_orig.get("sell_id") is None:
+                    exit_price = float(row["price"]) if row.get("price") is not None else None
+                    pending_orig["sell_id"] = rid
+                    pending_orig["sell_ts"] = str(ts)
+                    pending_orig["sell_price"] = exit_price
+                    pending_orig["sell_reason"] = signal or "SELL"
+                    pending_orig["sell_pnl_pct"] = _pnl_pct(float(pending_orig.get("buy_price") or 0.0), float(exit_price or 0.0))
                 if pos is None:
+                    # если альт-позиции не было (например skipped), но оригинал закрылся — сравнение "как было" можно всё равно отдать
+                    if pending_orig is not None and pending_orig.get("skipped"):
+                        comparisons.append({
+                            "ticker": ticker,
+                            "buy_id": int(pending_orig.get("buy_id")),
+                            "buy_ts": pending_orig.get("buy_ts"),
+                            "buy_price": float(pending_orig.get("buy_price") or 0.0),
+                            "qty": float(pending_orig.get("qty") or 0.0),
+                            "orig_sell_id": pending_orig.get("sell_id"),
+                            "orig_exit_ts": pending_orig.get("sell_ts"),
+                            "orig_exit_price": pending_orig.get("sell_price"),
+                            "orig_exit_reason": pending_orig.get("sell_reason"),
+                            "orig_pnl_pct": pending_orig.get("sell_pnl_pct"),
+                            "alt_status": "SKIPPED_NO_TAKE_AT_ENTRY",
+                            "alt_exit_ts": None,
+                            "alt_exit_price": None,
+                            "alt_exit_reason": None,
+                            "alt_pnl_pct": None,
+                            "ignored_non_take_sell_ids": [],
+                        })
+                        pending_orig = None
                     continue
                 if signal == "TAKE_PROFIT":
-                    closed.append(
-                        AltClosed(
-                            ticker=ticker,
-                            entry_ts=str(pos["entry_ts"]),
-                            entry_price=float(pos["entry_price"]),
-                            qty=float(pos["qty"]),
-                            exit_ts=str(ts),
-                            exit_price=float(row["price"]),
-                            exit_reason="TAKE_PROFIT_FACT",
-                            source_buy_id=int(pos["buy_id"]),
-                            source_sell_id=rid,
-                        )
+                    alt = AltClosed(
+                        ticker=ticker,
+                        entry_ts=str(pos["entry_ts"]),
+                        entry_price=float(pos["entry_price"]),
+                        qty=float(pos["qty"]),
+                        exit_ts=str(ts),
+                        exit_price=float(row["price"]),
+                        exit_reason="TAKE_PROFIT_FACT",
+                        source_buy_id=int(pos["buy_id"]),
+                        source_sell_id=rid,
                     )
+                    closed.append(
+                        alt
+                    )
+                    if pending_orig is not None and pending_orig.get("buy_id") == int(pos["buy_id"]):
+                        comparisons.append({
+                            "ticker": ticker,
+                            "buy_id": int(pos["buy_id"]),
+                            "buy_ts": str(pos["entry_ts"]),
+                            "buy_price": float(pos["entry_price"]),
+                            "qty": float(pos["qty"]),
+                            "orig_sell_id": pending_orig.get("sell_id"),
+                            "orig_exit_ts": pending_orig.get("sell_ts"),
+                            "orig_exit_price": pending_orig.get("sell_price"),
+                            "orig_exit_reason": pending_orig.get("sell_reason"),
+                            "orig_pnl_pct": pending_orig.get("sell_pnl_pct"),
+                            "alt_status": "CLOSED",
+                            "alt_exit_ts": alt.exit_ts,
+                            "alt_exit_price": alt.exit_price,
+                            "alt_exit_reason": alt.exit_reason,
+                            "alt_pnl_pct": _pnl_pct(float(pos["entry_price"]), alt.exit_price),
+                            "ignored_non_take_sell_ids": list(pos.get("ignored_sells") or []),
+                        })
+                        pending_orig = None
                     pos = None
                 else:
                     stats["ignored_non_take_sells"] += 1
@@ -247,19 +343,40 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
         if pos is not None:
             hit = _first_take_hit(q_tkr, pos["last_check_ts"], pos["take_level"])
             if hit is not None:
-                closed.append(
-                    AltClosed(
-                        ticker=ticker,
-                        entry_ts=str(pos["entry_ts"]),
-                        entry_price=float(pos["entry_price"]),
-                        qty=float(pos["qty"]),
-                        exit_ts=str(hit[0]),
-                        exit_price=float(hit[1]),
-                        exit_reason="TAKE_PROFIT_REPLAY",
-                        source_buy_id=int(pos["buy_id"]),
-                        source_sell_id=None,
-                    )
+                alt = AltClosed(
+                    ticker=ticker,
+                    entry_ts=str(pos["entry_ts"]),
+                    entry_price=float(pos["entry_price"]),
+                    qty=float(pos["qty"]),
+                    exit_ts=str(hit[0]),
+                    exit_price=float(hit[1]),
+                    exit_reason="TAKE_PROFIT_REPLAY",
+                    source_buy_id=int(pos["buy_id"]),
+                    source_sell_id=None,
                 )
+                closed.append(
+                    alt
+                )
+                if pending_orig is not None and pending_orig.get("buy_id") == int(pos["buy_id"]):
+                    comparisons.append({
+                        "ticker": ticker,
+                        "buy_id": int(pos["buy_id"]),
+                        "buy_ts": str(pos["entry_ts"]),
+                        "buy_price": float(pos["entry_price"]),
+                        "qty": float(pos["qty"]),
+                        "orig_sell_id": pending_orig.get("sell_id"),
+                        "orig_exit_ts": pending_orig.get("sell_ts"),
+                        "orig_exit_price": pending_orig.get("sell_price"),
+                        "orig_exit_reason": pending_orig.get("sell_reason"),
+                        "orig_pnl_pct": pending_orig.get("sell_pnl_pct"),
+                        "alt_status": "CLOSED",
+                        "alt_exit_ts": alt.exit_ts,
+                        "alt_exit_price": alt.exit_price,
+                        "alt_exit_reason": alt.exit_reason,
+                        "alt_pnl_pct": _pnl_pct(float(pos["entry_price"]), alt.exit_price),
+                        "ignored_non_take_sell_ids": list(pos.get("ignored_sells") or []),
+                    })
+                    pending_orig = None
             else:
                 open_positions.append(
                     AltOpen(
@@ -273,11 +390,35 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
                         ignored_sells=[int(x) for x in pos["ignored_sells"]],
                     )
                 )
+                if pending_orig is not None and pending_orig.get("buy_id") == int(pos["buy_id"]):
+                    comparisons.append({
+                        "ticker": ticker,
+                        "buy_id": int(pos["buy_id"]),
+                        "buy_ts": str(pos["entry_ts"]),
+                        "buy_price": float(pos["entry_price"]),
+                        "qty": float(pos["qty"]),
+                        "orig_sell_id": pending_orig.get("sell_id"),
+                        "orig_exit_ts": pending_orig.get("sell_ts"),
+                        "orig_exit_price": pending_orig.get("sell_price"),
+                        "orig_exit_reason": pending_orig.get("sell_reason"),
+                        "orig_pnl_pct": pending_orig.get("sell_pnl_pct"),
+                        "alt_status": "OPEN",
+                        "alt_exit_ts": None,
+                        "alt_exit_price": None,
+                        "alt_exit_reason": None,
+                        "alt_pnl_pct": None,
+                        "ignored_non_take_sell_ids": list(pos.get("ignored_sells") or []),
+                        "alt_take_level": float(pos["take_level"]),
+                        "alt_take_pct": float(pos["take_pct"]),
+                    })
+                    pending_orig = None
 
     return {
         "stats": stats,
         "closed": [asdict(x) for x in closed],
         "open": [asdict(x) for x in open_positions],
+        "comparisons": comparisons,
+        "blocked_entries": blocked_entries,
     }
 
 

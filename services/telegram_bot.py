@@ -582,6 +582,45 @@ def _build_replay_closed_html(payload: Dict[str, Any]) -> str:
     stats = payload.get("stats") or {}
     closed = payload.get("closed") or []
     opened = payload.get("open") or []
+    comps = payload.get("comparisons") or []
+    blocked = payload.get("blocked_entries") or []
+
+    comp_rows: List[str] = []
+    for r in comps:
+        try:
+            ticker = html.escape(str(r.get("ticker") or "—"))
+            buy_id = html.escape(str(r.get("buy_id") or "—"))
+            entry = float(r.get("buy_price") or 0.0)
+            qty = r.get("qty")
+            qty_s = html.escape(
+                str(int(qty)) if qty is not None and float(qty) == int(float(qty))
+                else f"{float(qty):.2f}" if qty is not None
+                else "—"
+            )
+            orig_reason = html.escape(str(r.get("orig_exit_reason") or "—"))
+            orig_pnl = r.get("orig_pnl_pct")
+            orig_pnl_s = "—" if orig_pnl is None else f"{float(orig_pnl):+.2f}%"
+            alt_status = html.escape(str(r.get("alt_status") or "—"))
+            alt_reason = html.escape(str(r.get("alt_exit_reason") or "—"))
+            alt_pnl = r.get("alt_pnl_pct")
+            alt_pnl_s = "—" if alt_pnl is None else f"{float(alt_pnl):+.2f}%"
+            cls_o = "positive" if (orig_pnl is not None and float(orig_pnl) >= 0) else "negative" if orig_pnl is not None else ""
+            cls_a = "positive" if (alt_pnl is not None and float(alt_pnl) >= 0) else "negative" if alt_pnl is not None else ""
+            ignored_ids = r.get("ignored_non_take_sell_ids") or []
+            ignored_s = html.escape(",".join(str(x) for x in ignored_ids[:10]) + ("…" if len(ignored_ids) > 10 else "")) if ignored_ids else "—"
+            comp_rows.append(
+                "<tr>"
+                f"<td>{ticker}</td><td>{buy_id}</td><td>{entry:.2f}</td><td>{qty_s}</td>"
+                f"<td>{orig_reason}</td><td class=\"{cls_o}\">{orig_pnl_s}</td>"
+                f"<td>{alt_status}</td><td>{alt_reason}</td><td class=\"{cls_a}\">{alt_pnl_s}</td>"
+                f"<td>{ignored_s}</td>"
+                f"<td>{html.escape(str(r.get('buy_ts') or '—'))[:16]}</td>"
+                f"<td>{html.escape(str(r.get('orig_exit_ts') or '—'))[:16]}</td>"
+                f"<td>{html.escape(str(r.get('alt_exit_ts') or '—'))[:16]}</td>"
+                "</tr>"
+            )
+        except Exception:
+            continue
 
     closed_rows: List[str] = []
     for r in closed:
@@ -618,16 +657,46 @@ def _build_replay_closed_html(payload: Dict[str, Any]) -> str:
         )
     closed_body = "\n".join(closed_rows) if closed_rows else "<tr><td colspan='7'>Нет альтернативно закрытых позиций</td></tr>"
     open_body = "\n".join(open_rows) if open_rows else "<tr><td colspan='6'>Нет альтернативно открытых позиций</td></tr>"
+    comp_body = "\n".join(comp_rows) if comp_rows else "<tr><td colspan='13'>Нет строк сравнения</td></tr>"
+
+    blocked_body = ""
+    if blocked:
+        trs = []
+        for b in blocked[:200]:
+            trs.append(
+                "<tr>"
+                f"<td>{html.escape(str(b.get('ticker') or '—'))}</td>"
+                f"<td>{html.escape(str(b.get('buy_id') or '—'))}</td>"
+                f"<td>{html.escape(str(b.get('buy_ts') or '—'))[:16]}</td>"
+                f"<td>{float(b.get('buy_price') or 0.0):.2f}</td>"
+                f"<td>{html.escape(str(b.get('blocked_by_open_buy_id') or '—'))}</td>"
+                f"<td>{html.escape(str(b.get('blocked_by_entry_ts') or '—'))[:16]}</td>"
+                "</tr>"
+            )
+        blocked_body = (
+            "<h2>Входы, которые стали невозможны (позиция ещё открыта)</h2>"
+            "<table><thead><tr><th>Ticker</th><th>BUY id</th><th>BUY ts</th><th>BUY price</th><th>Blocked by BUY id</th><th>Open since</th></tr></thead>"
+            f"<tbody>{''.join(trs)}</tbody></table>"
+        )
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><title>Replay закрытий (TAKE-only)</title>
 <style>table{{border-collapse:collapse;width:100%;margin-bottom:14px}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}} .summary{{margin:8px 0}}</style>
 </head><body>
 <h1>Replay закрытий (только TAKE_PROFIT)</h1>
 <p class="summary">BUY: {int(stats.get('buy_total', 0))}, SELL: {int(stats.get('sell_total', 0))} (take={int(stats.get('sell_take_total', 0))}, non-take={int(stats.get('sell_non_take_total', 0))}), ignored non-take={int(stats.get('ignored_non_take_sells', 0))}, ignored BUY while open={int(stats.get('ignored_buys_while_open', 0))}, skipped BUY w/o take={int(stats.get('skipped_buys_without_take_at_entry', 0))}.</p>
+<h2>Сравнение: как было → как стало</h2>
+<table><thead><tr>
+<th>Ticker</th><th>BUY id</th><th>Entry</th><th>Qty</th>
+<th>Orig reason</th><th>Orig P/L %</th>
+<th>Alt status</th><th>Alt reason</th><th>Alt P/L %</th>
+<th>Ignored non-take SELL ids</th>
+<th>BUY ts</th><th>Orig exit ts</th><th>Alt exit ts</th>
+</tr></thead><tbody>{comp_body}</tbody></table>
 <h2>Альтернативно закрытые</h2>
 <table><thead><tr><th>Ticker</th><th>Open</th><th>Close</th><th>P/L %</th><th>Reason</th><th>Entry ts</th><th>Exit ts</th></tr></thead><tbody>{closed_body}</tbody></table>
 <h2>Остались открытыми</h2>
 <table><thead><tr><th>Ticker</th><th>Entry</th><th>Take level</th><th>Take %</th><th>Entry ts</th><th>Ignored non-take sells</th></tr></thead><tbody>{open_body}</tbody></table>
+{blocked_body}
 </body></html>"""
 
 
