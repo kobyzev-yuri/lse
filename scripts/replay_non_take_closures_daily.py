@@ -216,11 +216,17 @@ def _first_take_hit(quotes_tkr: pd.DataFrame, from_ts: pd.Timestamp, take_level:
     return pd.Timestamp(row["date"]), float(take_level)
 
 
-def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame, target_mode: str = "legacy") -> dict[str, Any]:
+def build_alt_history(
+    trades: pd.DataFrame,
+    quotes: pd.DataFrame,
+    target_mode: str = "legacy",
+    eligible_only: bool = False,
+) -> dict[str, Any]:
     closed: list[AltClosed] = []
     open_positions: list[AltOpen] = []
     stats = {
         "buy_total": 0,
+        "buy_considered": 0,
         "sell_total": 0,
         "sell_take_total": 0,
         "sell_non_take_total": 0,
@@ -325,8 +331,22 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame, target_mode: s
                     pending_orig = None
                 price = float(row["price"])
                 qty = float(row["quantity"])
+                adaptive_take = _adaptive_take_pct_from_context(row.get("context_json"))
                 if target_mode == "adaptive":
-                    take_pct = _adaptive_take_pct_from_context(row.get("context_json"))
+                    take_pct = adaptive_take
+                elif target_mode == "hybrid":
+                    take_pct = adaptive_take
+                    if take_pct is None:
+                        buy_take = None
+                        if "take_profit" in row and pd.notna(row["take_profit"]):
+                            buy_take = float(row["take_profit"])
+                        if buy_take is None:
+                            buy_take = _take_pct_from_context(row.get("context_json"))
+                        take_pct = _take_pct_for_buy(
+                            ticker,
+                            buy_take,
+                            allow_config_fallback=False,
+                        )
                 else:
                     buy_take = None
                     if "take_profit" in row and pd.notna(row["take_profit"]):
@@ -343,6 +363,11 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame, target_mode: s
                     # оригинальная сделка всё равно может иметь SELL; для сравнения пометим как SKIPPED (нет исторического спреда входа)
                     pending_orig = {"buy_id": rid, "buy_ts": str(ts), "buy_price": price, "qty": qty, "sell_id": None, "sell_ts": None, "sell_price": None, "sell_reason": None, "sell_pnl_pct": None, "skipped": True}
                     continue
+                if eligible_only and adaptive_take is None:
+                    stats["skipped_buys_without_take_at_entry"] += 1
+                    pending_orig = {"buy_id": rid, "buy_ts": str(ts), "buy_price": price, "qty": qty, "sell_id": None, "sell_ts": None, "sell_price": None, "sell_reason": None, "sell_pnl_pct": None, "skipped": True}
+                    continue
+                stats["buy_considered"] += 1
                 pos = {
                     "buy_id": rid,
                     "entry_ts": ts,
@@ -509,6 +534,7 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame, target_mode: s
 
     return {
         "target_mode": target_mode,
+        "eligible_only": bool(eligible_only),
         "stats": stats,
         "closed": [asdict(x) for x in closed],
         "open": [asdict(x) for x in open_positions],
@@ -520,7 +546,8 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame, target_mode: s
 def main() -> None:
     p = argparse.ArgumentParser(description="Replay non-TAKE closures with daily quotes")
     p.add_argument("--strategy", default="GAME_5M", help="strategy_name filter (default: GAME_5M)")
-    p.add_argument("--target-mode", default="legacy", choices=["legacy", "adaptive"], help="legacy: take as saved at entry; adaptive: recompute target from 30/60/120 forecast")
+    p.add_argument("--target-mode", default="legacy", choices=["legacy", "adaptive", "hybrid"], help="legacy: take as saved at entry; adaptive: target from 30/60/120 forecast only; hybrid: adaptive if available else legacy")
+    p.add_argument("--eligible-only", action="store_true", help="consider only buys with adaptive-forecast context (for fair retrospective subset)")
     p.add_argument("--json-out", default="local/replay_non_take_take_only.json", help="where to save JSON")
     args = p.parse_args()
 
@@ -530,12 +557,19 @@ def main() -> None:
         print(f"No trades for strategy={args.strategy}")
         return
     quotes = _load_quotes(engine)
-    payload = build_alt_history(trades, quotes, target_mode=args.target_mode)
+    payload = build_alt_history(
+        trades,
+        quotes,
+        target_mode=args.target_mode,
+        eligible_only=bool(args.eligible_only),
+    )
 
     stats = payload["stats"]
     print(f"Strategy: {args.strategy}")
     print(f"Target mode: {args.target_mode}")
+    print(f"Eligible only: {bool(args.eligible_only)}")
     print(f"BUY total: {stats['buy_total']}")
+    print(f"BUY considered: {stats['buy_considered']}")
     print(f"SELL total: {stats['sell_total']} (take={stats['sell_take_total']}, non_take={stats['sell_non_take_total']})")
     print(f"Ignored non-TAKE sells: {stats['ignored_non_take_sells']}")
     print(f"Ignored BUY while position still open: {stats['ignored_buys_while_open']}")
