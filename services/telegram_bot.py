@@ -11,6 +11,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import asyncio
+import json
 import html
 import logging
 import math
@@ -576,6 +577,60 @@ def _build_closed_html(closed: List[Any], total_pnl: float = 0, impulse_pct: boo
 <table>{thead}<tbody>{body}</tbody></table>{summary}</body></html>"""
 
 
+def _build_replay_closed_html(payload: Dict[str, Any]) -> str:
+    """HTML отчёт по результатам replay_non_take_closures_daily.py."""
+    stats = payload.get("stats") or {}
+    closed = payload.get("closed") or []
+    opened = payload.get("open") or []
+
+    closed_rows: List[str] = []
+    for r in closed:
+        try:
+            entry = float(r.get("entry_price") or 0.0)
+            exitp = float(r.get("exit_price") or 0.0)
+            pnl_pct = ((exitp - entry) / entry * 100.0) if entry > 0 else 0.0
+            cls = "positive" if pnl_pct >= 0 else "negative"
+            closed_rows.append(
+                "<tr>"
+                f"<td>{html.escape(str(r.get('ticker') or '—'))}</td>"
+                f"<td>{entry:.2f}</td>"
+                f"<td>{exitp:.2f}</td>"
+                f"<td class=\"{cls}\">{pnl_pct:+.2f}%</td>"
+                f"<td>{html.escape(str(r.get('exit_reason') or '—'))}</td>"
+                f"<td>{html.escape(str(r.get('entry_ts') or '—'))[:16]}</td>"
+                f"<td>{html.escape(str(r.get('exit_ts') or '—'))[:16]}</td>"
+                "</tr>"
+            )
+        except Exception:
+            continue
+    open_rows: List[str] = []
+    for r in opened:
+        ignored = r.get("ignored_sells") or []
+        open_rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(r.get('ticker') or '—'))}</td>"
+            f"<td>{float(r.get('entry_price') or 0.0):.2f}</td>"
+            f"<td>{float(r.get('take_level') or 0.0):.2f}</td>"
+            f"<td>{float(r.get('take_pct') or 0.0):.2f}%</td>"
+            f"<td>{html.escape(str(r.get('entry_ts') or '—'))[:16]}</td>"
+            f"<td>{len(ignored)}</td>"
+            "</tr>"
+        )
+    closed_body = "\n".join(closed_rows) if closed_rows else "<tr><td colspan='7'>Нет альтернативно закрытых позиций</td></tr>"
+    open_body = "\n".join(open_rows) if open_rows else "<tr><td colspan='6'>Нет альтернативно открытых позиций</td></tr>"
+    return f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8"><title>Replay закрытий (TAKE-only)</title>
+<style>table{{border-collapse:collapse;width:100%;margin-bottom:14px}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}} .summary{{margin:8px 0}}</style>
+</head><body>
+<h1>Replay закрытий (только TAKE_PROFIT)</h1>
+<p class="summary">BUY: {int(stats.get('buy_total', 0))}, SELL: {int(stats.get('sell_total', 0))} (take={int(stats.get('sell_take_total', 0))}, non-take={int(stats.get('sell_non_take_total', 0))}), ignored non-take={int(stats.get('ignored_non_take_sells', 0))}, ignored BUY while open={int(stats.get('ignored_buys_while_open', 0))}, skipped BUY w/o take={int(stats.get('skipped_buys_without_take_at_entry', 0))}.</p>
+<h2>Альтернативно закрытые</h2>
+<table><thead><tr><th>Ticker</th><th>Open</th><th>Close</th><th>P/L %</th><th>Reason</th><th>Entry ts</th><th>Exit ts</th></tr></thead><tbody>{closed_body}</tbody></table>
+<h2>Остались открытыми</h2>
+<table><thead><tr><th>Ticker</th><th>Entry</th><th>Take level</th><th>Take %</th><th>Entry ts</th><th>Ignored non-take sells</th></tr></thead><tbody>{open_body}</tbody></table>
+</body></html>"""
+
+
 def _build_pending_html(
     pending: List[Any],
     latest_prices: Dict[str, float],
@@ -774,6 +829,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("history", self._handle_history))
         self.application.add_handler(CommandHandler("closed", self._handle_closed))
         self.application.add_handler(CommandHandler("closed_impulse", self._handle_closed_impulse))
+        self.application.add_handler(CommandHandler("replay_closed", self._handle_replay_closed))
         self.application.add_handler(CommandHandler("pending", self._handle_pending))
         self.application.add_handler(CommandHandler("set_strategy", self._handle_set_strategy))
         self.application.add_handler(CommandHandler("prompt_entry", self._handle_prompt_entry))
@@ -3488,6 +3544,45 @@ class LSETelegramBot:
                 await update.message.reply_text(f"❌ Ошибка: {str(e)[:400]}")
             except Exception:
                 pass
+
+    async def _handle_replay_closed(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """HTML отчёт replay (TAKE-only) из local/replay_non_take_take_only.json.
+        Использование: /replay_closed [путь_к_json]
+        """
+        if update.message is None:
+            return
+        user_id = (update.effective_user or update.message.from_user).id if (update.effective_user or getattr(update.message, "from_user", None)) else None
+        if user_id is None or not self._check_access(user_id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        rel = str(context.args[0]).strip() if context.args else "local/replay_non_take_take_only.json"
+        p = Path(rel)
+        if not p.is_absolute():
+            p = project_root / p
+        if not p.exists():
+            await update.message.reply_text(
+                f"❌ Файл не найден: {p}\nСначала выполните replay-скрипт в контейнере."
+            )
+            return
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+            html_content = _build_replay_closed_html(payload)
+            filename = _unique_report_filename("Replay_closed_take_only")
+            stats = payload.get("stats") or {}
+            caption = (
+                "📋 Replay closed (TAKE-only): "
+                f"alt closed={len(payload.get('closed') or [])}, "
+                f"alt open={len(payload.get('open') or [])}, "
+                f"ignored non-take={int(stats.get('ignored_non_take_sells', 0))}."
+            )
+            await update.message.reply_document(
+                document=BytesIO(html_content.encode("utf-8")),
+                filename=filename,
+                caption=caption,
+            )
+        except Exception as e:
+            logger.error("Ошибка replay_closed: %s", e, exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка replay_closed: {str(e)[:300]}")
 
     async def _handle_closed_impulse(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Закрытые 5m: по умолчанию импульс при входе >5%, без стоп-лоссов. /closed_impulse [N] [pct|all] — pct порог в %, all = все сделки 5m (при отсутствии импульса показываем —)."""
