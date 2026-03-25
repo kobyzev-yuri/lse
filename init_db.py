@@ -153,6 +153,14 @@ def init_db():
                     if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
                         print(f"⚠️ Предупреждение при добавлении колонки {col_name}: {e}")
         
+        # Момент загрузки в KB (крон); ts — дата публикации из источника (см. scripts/sql/add_knowledge_base_ingested_at.sql)
+        try:
+            conn.execute(text("ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMPTZ"))
+            print("✅ Колонка knowledge_base.ingested_at добавлена/проверена")
+        except Exception as e:
+            if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
+                print(f"⚠️ Предупреждение при добавлении ingested_at: {e}")
+        
         # Векторный поиск и исходы событий — в той же таблице (одна сущность «новость/событие»)
         try:
             conn.execute(text("ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS embedding vector(768)"))
