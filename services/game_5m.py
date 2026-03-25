@@ -127,6 +127,12 @@ def _game_5m_stop_loss_enabled() -> bool:
     return raw in ("1", "true", "yes")
 
 
+def _game_5m_exit_only_take() -> bool:
+    """Если true — автовыход только по TAKE_PROFIT (без STOP_LOSS/TIME_EXIT/SELL)."""
+    raw = (get_config_value("GAME_5M_EXIT_ONLY_TAKE", "false") or "false").strip().lower()
+    return raw in ("1", "true", "yes")
+
+
 def get_strategy_params() -> dict[str, Any]:
     """Текущие параметры стратегии 5m из config.env (для мониторинга и варьирования)."""
     try:
@@ -650,6 +656,7 @@ def should_close_position(
         take_threshold = take_pct - 0.05
         if pnl_take_pct >= take_threshold:
             return True, "TAKE_PROFIT"
+        exit_only_take = _game_5m_exit_only_take()
         # DEBUG: всегда пишем pnl vs порог; INFO — только когда до тейка осталось ≤0.5%
         logger.debug(
             "GAME_5M %s: тейк не сработал — pnl=%.2f%%, порог тейка=%.2f%% (>= %.2f%% с допуском 0.05%%)",
@@ -660,8 +667,10 @@ def should_close_position(
                 "GAME_5M %s: тейк не достигнут — pnl=%.2f%%, порог=%.2f%% (с допуском 0.05%% сработает при >= %.2f%%)",
                 ticker, pnl_take_pct, take_pct, take_threshold,
             )
-        if _game_5m_stop_loss_enabled() and pnl_stop_pct <= -stop_pct:
+        if not exit_only_take and _game_5m_stop_loss_enabled() and pnl_stop_pct <= -stop_pct:
             return True, "STOP_LOSS"
+        if exit_only_take:
+            return False, ""
 
         # В последние N минут сессии: закрыть с минимальным профитом, чтобы не уходить через день в минус.
         # Исключение: если текущий сигнал STRONG_BUY — остаёмся (рискуем перейти в следующую сессию).
@@ -693,6 +702,8 @@ def should_close_position(
     else:
         age = timedelta(0)
     max_min = _max_position_minutes(open_position.get("ticker"))
+    if _game_5m_exit_only_take():
+        return False, ""
     if max_min is not None and age > timedelta(minutes=max_min):
         return True, "TIME_EXIT"
     if age > timedelta(days=_max_position_days(open_position.get("ticker"))):

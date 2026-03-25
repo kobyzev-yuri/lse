@@ -73,6 +73,8 @@ class ExecutionAgent:
         # Стоп-лосс портфеля: true = проверять по STOP_LOSS_LEVEL; false = отключён (только тейк). Из config или БД (strategy_parameters GLOBAL).
         _sl_raw = (get_dynamic_config_value("PORTFOLIO_STOP_LOSS_ENABLED", "true", engine=self.engine) or "true").strip().lower()
         self.stop_loss_enabled = _sl_raw in ("1", "true", "yes")
+        _exit_take_raw = (get_dynamic_config_value("PORTFOLIO_EXIT_ONLY_TAKE", "false", engine=self.engine) or "false").strip().lower()
+        self.exit_only_take = _exit_take_raw in ("1", "true", "yes")
 
         logger.info("✅ ExecutionAgent инициализирован, подключение к БД установлено")
         logger.info(f"   Risk Manager: загружены лимиты из {self.risk_manager.config_path}")
@@ -892,6 +894,8 @@ class ExecutionAgent:
                 "⚠️ Стоп-лосс отключён в настройках (PORTFOLIO_STOP_LOSS_ENABLED=false). "
                 "Закрытие по стопу не выполняется, проверяется только тейк-профит."
             )
+        if self.exit_only_take:
+            logger.info("ℹ️ Режим PORTFOLIO_EXIT_ONLY_TAKE=true: автозакрытие только по тейк-профиту.")
         logger.info("🛡  Проверка стоп‑лоссов по открытым позициям")
 
         try:
@@ -944,7 +948,7 @@ class ExecutionAgent:
                 stop_log_threshold,
             )
 
-            if self.stop_loss_enabled and log_ret <= stop_log_threshold:
+            if (not self.exit_only_take) and self.stop_loss_enabled and log_ret <= stop_log_threshold:
                 reason = (
                     f"Stop-loss triggered: log_return={log_ret:.4f} "
                     f"(entry={entry_price:.2f}, current={current_price:.2f})"
