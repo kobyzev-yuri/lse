@@ -995,11 +995,15 @@ def get_decision_5m(
         if premarket_suggested_limit_price is not None:
             out["premarket_suggested_limit_price"] = premarket_suggested_limit_price
 
-    # Оценка апсайда на день и рекомендуемый тейк (4.1)
+    # Оценка апсайда/тейка для входа:
+    # - база: эффективный тейк из действующей логики (импульс + тикерный cap);
+    # - при наличии прогноза 5m (60/120) — пересчитываем цель из p50, но ограничиваем тикерным cap;
+    # - минимально интересная цель для игры: 4%.
     try:
-        from services.game_5m import _effective_take_profit_pct
+        from services.game_5m import _effective_take_profit_pct, _take_profit_cap_pct
         effective_take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
         out["estimated_upside_pct_day"] = effective_take_pct
+        out["take_profit_pct"] = effective_take_pct
         p = out.get("price") or price
         if p is not None and p > 0:
             out["suggested_take_profit_price"] = round(p * (1 + effective_take_pct / 100.0), 2)
@@ -1075,6 +1079,64 @@ def get_decision_5m(
         if fc:
             out["price_forecast_5m"] = fc
             out["price_forecast_5m_summary"] = format_price_forecast_one_line(fc)
+            # Новая цель: 60/120 mix по p50, с ограничением достижимости и тикерным cap.
+            by_m = {}
+            for h in (fc.get("horizons") or []):
+                try:
+                    m = int(h.get("minutes"))
+                except (TypeError, ValueError):
+                    continue
+                by_m[m] = h
+            h60 = by_m.get(60)
+            h120 = by_m.get(120)
+            try:
+                p50_60 = float(h60.get("p50_pct_vs_spot")) if h60 else None
+            except (TypeError, ValueError):
+                p50_60 = None
+            try:
+                p50_120 = float(h120.get("p50_pct_vs_spot")) if h120 else None
+            except (TypeError, ValueError):
+                p50_120 = None
+            try:
+                p90_120 = float(h120.get("p90_pct_vs_spot")) if h120 else None
+            except (TypeError, ValueError):
+                p90_120 = None
+
+            vals = []
+            if p50_60 is not None:
+                vals.append((0.6, max(0.0, p50_60)))
+            if p50_120 is not None:
+                vals.append((0.4, max(0.0, p50_120)))
+            if vals:
+                w_sum = sum(w for w, _ in vals)
+                target_pct = sum(w * v for w, v in vals) / w_sum if w_sum > 0 else None
+                if target_pct is not None and p90_120 is not None and p90_120 > 0:
+                    # Не ставим цель на хвосте распределения.
+                    target_pct = min(target_pct, 0.60 * p90_120)
+                ticker_cap = _take_profit_cap_pct(ticker)
+                target_pct = min(target_pct, float(ticker_cap))
+                min_target = 4.0
+                if ticker_cap < min_target:
+                    if decision in ("BUY", "STRONG_BUY"):
+                        decision_prev = decision
+                        decision = "HOLD"
+                        note = (
+                            f"target guard: тикерный потолок тейка {ticker_cap:.2f}% < минимально интересного {min_target:.2f}%"
+                        )
+                        reasoning = (reasoning + " " + note).strip()
+                        out["decision"] = decision
+                        out["reasoning"] = reasoning
+                        out["entry_target_guard_prev_decision"] = decision_prev
+                        out["entry_target_guard_reason"] = note
+                    out["target_mode"] = "forecast_60_120_blocked_by_low_cap"
+                else:
+                    target_pct = max(min_target, target_pct)
+                    out["take_profit_pct"] = round(target_pct, 2)
+                    out["estimated_upside_pct_day"] = round(target_pct, 2)
+                    p = out.get("price") or price
+                    if p is not None and p > 0:
+                        out["suggested_take_profit_price"] = round(p * (1 + target_pct / 100.0), 2)
+                    out["target_mode"] = "forecast_60_120"
     except Exception as e:
         logger.debug("price_forecast_5m: %s", e)
 
