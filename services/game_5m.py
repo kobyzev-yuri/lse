@@ -300,9 +300,6 @@ def record_entry(
     if price <= 0:
         logger.warning("game_5m: record_entry %s с ценой <= 0, пропуск", ticker)
         return None
-    if get_open_position(ticker) is not None:
-        logger.info("game_5m: по %s уже есть открытая позиция, повторный вход не создаём", ticker)
-        return None
 
     quantity = max(1, int(GAME_NOTIONAL_USD / price))
     notional = quantity * price

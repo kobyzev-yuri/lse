@@ -279,14 +279,6 @@ def process_ticker(
             )
             return False
 
-    # Не слать «Сигнал на вход», если уже в позиции — это не новый вход, ждём закрытия
-    try:
-        if get_open_position_any(ticker) is not None:
-            logger.info("%s: решение BUY, но уже в позиции — пропуск рассылки (ожидаем закрытия по тейку/стопу)", ticker)
-            return False
-    except Exception as e:
-        logger.warning("game_5m: проверка открытой позиции %s: %s", ticker, e)
-
     # Стратегия входа: technical (по умолчанию) или llm — с учётом корреляций (для тестирования)
     entry_strategy = (get_config_value("GAME_5M_ENTRY_STRATEGY", "technical") or "technical").strip().lower()
     if entry_strategy == "llm" and cluster_context and cluster_context.get("correlation"):
@@ -361,7 +353,7 @@ def process_ticker(
         except Exception as e:
             logger.warning("game_5m: LLM для входа %s: %s — используем технический вход", ticker, e)
 
-    logger.info("[5m] %s: отправка сигнала на вход (BUY, позиции нет, cooldown пройден)", ticker)
+    logger.info("[5m] %s: отправка сигнала на вход (BUY, cooldown пройден)", ticker)
     from services.signal_message_5m import build_5m_entry_signal_text
     text = build_5m_entry_signal_text(d5, ticker, mentions=mentions)
 
