@@ -75,10 +75,33 @@ def _take_pct_for_buy(ticker: str, buy_take: Optional[float], allow_config_fallb
         return 7.0
 
 
+def _take_pct_from_context(context_json: Any) -> Optional[float]:
+    if context_json is None:
+        return None
+    ctx = context_json
+    if isinstance(ctx, str):
+        s = ctx.strip()
+        if not s:
+            return None
+        try:
+            ctx = json.loads(s)
+        except Exception:
+            return None
+    if not isinstance(ctx, dict):
+        return None
+    val = ctx.get("take_profit_pct")
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
 def _load_trades(engine, strategy: str) -> pd.DataFrame:
     q = text(
         """
-        SELECT id, ts, ticker, side, quantity, price, signal_type, strategy_name, take_profit
+        SELECT id, ts, ticker, side, quantity, price, signal_type, strategy_name, take_profit, context_json
         FROM trade_history
         WHERE strategy_name = :strategy
         ORDER BY ticker ASC, ts ASC, id ASC
@@ -170,6 +193,8 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
                 buy_take = None
                 if "take_profit" in row and pd.notna(row["take_profit"]):
                     buy_take = float(row["take_profit"])
+                if buy_take is None:
+                    buy_take = _take_pct_from_context(row.get("context_json"))
                 take_pct = _take_pct_for_buy(
                     ticker,
                     buy_take,
