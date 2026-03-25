@@ -105,13 +105,18 @@ def _take_pct_from_context(context_json: Any) -> Optional[float]:
     ctx = _ctx_dict(context_json)
     if ctx is None:
         return None
-    val = ctx.get("take_profit_pct")
-    if val is None:
-        return None
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return None
+    # Приоритет: эффективная/оценочная цель (с учётом тикера), затем базовый take_profit_pct.
+    for key in ("effective_take_profit_pct", "estimated_upside_pct_day", "take_profit_pct"):
+        val = ctx.get(key)
+        if val is None:
+            continue
+        try:
+            v = float(val)
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _adaptive_take_pct_from_context(context_json: Any) -> Optional[float]:
