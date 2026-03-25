@@ -1143,11 +1143,43 @@ def get_decision_5m(
 
     # Совет по входу: ALLOW / CAUTION / AVOID — фильтр по новостям (KB), волатильности 5m и премаркет-гэпу.
     # Логика и согласование с чек-листом Квена (риск/ревард, мат. ожидание): docs/GAME_5M_WEB_CARDS.md
+    p50_60 = p50_120 = None
+    try:
+        fc_h = (out.get("price_forecast_5m") or {}).get("horizons") or []
+        for _h in fc_h:
+            if not isinstance(_h, dict):
+                continue
+            m = _h.get("minutes")
+            if m == 60:
+                try:
+                    p50_60 = float(_h.get("p50_pct_vs_spot"))
+                except (TypeError, ValueError):
+                    p50_60 = None
+            elif m == 120:
+                try:
+                    p50_120 = float(_h.get("p50_pct_vs_spot"))
+                except (TypeError, ValueError):
+                    p50_120 = None
+    except Exception:
+        p50_60 = p50_120 = None
+    strong_forecast = (
+        isinstance(out.get("prob_up"), (int, float))
+        and float(out.get("prob_up")) >= 0.58
+        and isinstance(p50_60, (int, float))
+        and isinstance(p50_120, (int, float))
+        and p50_60 > 0
+        and p50_120 > 0
+    )
+
     entry_advice = "ALLOW"
     entry_advice_reason = ""
     if very_negative:
-        entry_advice = "AVOID"
-        entry_advice_reason = "Сильный негатив в новостях — вход отложен"
+        if strong_forecast:
+            entry_advice = "CAUTION"
+            entry_advice_reason = "Есть сильный негатив в новостях, но прогноз 60/120 и prob_up поддерживают осторожный вход"
+        else:
+            entry_advice = "AVOID"
+            entry_advice_reason = "Сильный негатив в новостях — вход отложен"
     elif volatility_5m_pct is not None and volatility_5m_pct > 1.0:
         entry_advice = "AVOID"
         entry_advice_reason = f"Высокая волатильность 5m ({volatility_5m_pct:.2f}%) — вход рискован"
