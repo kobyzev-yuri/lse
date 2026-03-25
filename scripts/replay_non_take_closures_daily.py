@@ -84,7 +84,7 @@ def _take_pct_for_buy(ticker: str, buy_take: Optional[float], allow_config_fallb
         return 7.0
 
 
-def _take_pct_from_context(context_json: Any) -> Optional[float]:
+def _ctx_dict(context_json: Any) -> Optional[dict[str, Any]]:
     if context_json is None:
         return None
     ctx = context_json
@@ -98,6 +98,13 @@ def _take_pct_from_context(context_json: Any) -> Optional[float]:
             return None
     if not isinstance(ctx, dict):
         return None
+    return ctx
+
+
+def _take_pct_from_context(context_json: Any) -> Optional[float]:
+    ctx = _ctx_dict(context_json)
+    if ctx is None:
+        return None
     val = ctx.get("take_profit_pct")
     if val is None:
         return None
@@ -105,6 +112,67 @@ def _take_pct_from_context(context_json: Any) -> Optional[float]:
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def _adaptive_take_pct_from_context(context_json: Any) -> Optional[float]:
+    """
+    Новый алгоритм цели (take %) по прогнозам 30/60/120м из context_json.price_forecast_5m.
+    Берём взвешенный p50 и ограничиваем его «достижимым» потолком через p90.
+    """
+    ctx = _ctx_dict(context_json)
+    if ctx is None:
+        return None
+    fc = ctx.get("price_forecast_5m")
+    if not isinstance(fc, dict):
+        return None
+    horizons = fc.get("horizons")
+    if not isinstance(horizons, list) or not horizons:
+        return None
+
+    p50_by_m: dict[int, float] = {}
+    p90_by_m: dict[int, float] = {}
+    for h in horizons:
+        if not isinstance(h, dict):
+            continue
+        try:
+            m = int(h.get("minutes"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            p50 = float(h.get("p50_pct_vs_spot"))
+            if p50 > 0:
+                p50_by_m[m] = p50
+        except (TypeError, ValueError):
+            pass
+        try:
+            p90 = float(h.get("p90_pct_vs_spot"))
+            if p90 > 0:
+                p90_by_m[m] = p90
+        except (TypeError, ValueError):
+            pass
+
+    weights = {30: 0.20, 60: 0.35, 120: 0.45}
+    num = 0.0
+    den = 0.0
+    for m, w in weights.items():
+        v = p50_by_m.get(m)
+        if v is None:
+            continue
+        num += w * v
+        den += w
+    if den <= 0:
+        return None
+    raw = num / den
+
+    # Ограничение достижимости: не выше ~70% от p90 (если есть),
+    # чтобы не ставить «идеальные» цели на хвосте распределения.
+    p90_candidates = [v for k, v in p90_by_m.items() if k in (60, 120)]
+    if p90_candidates:
+        cap = min(p90_candidates) * 0.70
+        raw = min(raw, cap)
+
+    # Рабочий диапазон для 5m игры (консервативнее, чем жесткие 7%).
+    return max(1.5, min(7.0, raw))
 
 
 def _load_trades(engine, strategy: str) -> pd.DataFrame:
@@ -148,7 +216,7 @@ def _first_take_hit(quotes_tkr: pd.DataFrame, from_ts: pd.Timestamp, take_level:
     return pd.Timestamp(row["date"]), float(take_level)
 
 
-def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, Any]:
+def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame, target_mode: str = "legacy") -> dict[str, Any]:
     closed: list[AltClosed] = []
     open_positions: list[AltOpen] = []
     stats = {
@@ -257,16 +325,19 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
                     pending_orig = None
                 price = float(row["price"])
                 qty = float(row["quantity"])
-                buy_take = None
-                if "take_profit" in row and pd.notna(row["take_profit"]):
-                    buy_take = float(row["take_profit"])
-                if buy_take is None:
-                    buy_take = _take_pct_from_context(row.get("context_json"))
-                take_pct = _take_pct_for_buy(
-                    ticker,
-                    buy_take,
-                    allow_config_fallback=False,
-                )
+                if target_mode == "adaptive":
+                    take_pct = _adaptive_take_pct_from_context(row.get("context_json"))
+                else:
+                    buy_take = None
+                    if "take_profit" in row and pd.notna(row["take_profit"]):
+                        buy_take = float(row["take_profit"])
+                    if buy_take is None:
+                        buy_take = _take_pct_from_context(row.get("context_json"))
+                    take_pct = _take_pct_for_buy(
+                        ticker,
+                        buy_take,
+                        allow_config_fallback=False,
+                    )
                 if take_pct is None:
                     stats["skipped_buys_without_take_at_entry"] += 1
                     # оригинальная сделка всё равно может иметь SELL; для сравнения пометим как SKIPPED (нет исторического спреда входа)
@@ -437,6 +508,7 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
                     pending_orig = None
 
     return {
+        "target_mode": target_mode,
         "stats": stats,
         "closed": [asdict(x) for x in closed],
         "open": [asdict(x) for x in open_positions],
@@ -448,6 +520,7 @@ def build_alt_history(trades: pd.DataFrame, quotes: pd.DataFrame) -> dict[str, A
 def main() -> None:
     p = argparse.ArgumentParser(description="Replay non-TAKE closures with daily quotes")
     p.add_argument("--strategy", default="GAME_5M", help="strategy_name filter (default: GAME_5M)")
+    p.add_argument("--target-mode", default="legacy", choices=["legacy", "adaptive"], help="legacy: take as saved at entry; adaptive: recompute target from 30/60/120 forecast")
     p.add_argument("--json-out", default="local/replay_non_take_take_only.json", help="where to save JSON")
     args = p.parse_args()
 
@@ -457,10 +530,11 @@ def main() -> None:
         print(f"No trades for strategy={args.strategy}")
         return
     quotes = _load_quotes(engine)
-    payload = build_alt_history(trades, quotes)
+    payload = build_alt_history(trades, quotes, target_mode=args.target_mode)
 
     stats = payload["stats"]
     print(f"Strategy: {args.strategy}")
+    print(f"Target mode: {args.target_mode}")
     print(f"BUY total: {stats['buy_total']}")
     print(f"SELL total: {stats['sell_total']} (take={stats['sell_take_total']}, non_take={stats['sell_non_take_total']})")
     print(f"Ignored non-TAKE sells: {stats['ignored_non_take_sells']}")
