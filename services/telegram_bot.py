@@ -164,7 +164,7 @@ def _build_platform_game_status_html(
     generated = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M")
     rows: List[str] = []
     if status_key == "closed":
-        headers = ("instrument", "direction", "entryType", "createdAt", "openPrice", "openTime", "closePrice", "closeTime", "profit", "accuracy")
+        headers = ("instrument", "direction", "entryType", "createdAt", "units", "openPrice", "openTime", "closePrice", "closeTime", "profit", "accuracy")
     elif status_key == "opened":
         headers = ("instrument", "direction", "entryType", "createdAt", "openPrice", "openTime", "takeProfit", "stopLoss", "units")
     else:
@@ -4709,6 +4709,10 @@ class LSETelegramBot:
                             take_pct = float(row.get("take_profit"))
                         except Exception:
                             take_pct = None
+                    if take_pct is None:
+                        # Фолбэк, чтобы не терять запись, если в старом контексте нет take:
+                        # используем базовый historical-safe тейк 5%.
+                        take_pct = 5.0
                     if take_pct is not None:
                         take_price = entry_price * (1.0 + take_pct / 100.0) if direction == "LONG" else entry_price * (1.0 - take_pct / 100.0)
                 try:
@@ -4789,23 +4793,26 @@ class LSETelegramBot:
             summary = (
                 "📊 /game5m platform\n"
                 f"Отправлено позиций: {len(positions)} (из тикеров {len(tickers)}), пропущено: {len(skipped)}\n"
-                f"Ответ: notOpened={len(not_opened)}, opened={len(opened)}, closed={len(closed)}, errors={len(errors)}\n"
-                "Ниже отправлены 3 HTML-файла (как close/pending)."
+                f"Ответ: pending={len(not_opened)}, opened={len(opened)}, closed={len(closed)}, errors={len(errors)}"
             )
             await update.message.reply_text(summary, parse_mode=None)
 
-            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-            for key, title, items in (
-                ("notOpened", "Game API — notOpened", not_opened),
-                ("opened", "Game API — opened", opened),
-                ("closed", "Game API — closed", closed),
+            sent_files = 0
+            for key, title, items, filename in (
+                ("notOpened", "Game API — pending", not_opened, "pending.html"),
+                ("opened", "Game API — opened", opened, "opened.html"),
+                ("closed", "Game API — closed", closed, "closed.html"),
             ):
+                if not items:
+                    continue
                 html_content = _build_platform_game_status_html(key, title, items)
-                filename = f"game5m_platform_{key}_{stamp}.html"
                 await update.message.reply_document(
                     document=BytesIO(html_content.encode("utf-8")),
                     filename=filename,
                 )
+                sent_files += 1
+            if sent_files == 0:
+                await update.message.reply_text("ℹ️ Все статусы пустые — HTML-файлы не отправлены.", parse_mode=None)
             if errors:
                 err_lines = ["Ошибки Platform /game по тикерам:"]
                 for e in errors[:20]:
