@@ -4655,27 +4655,17 @@ class LSETelegramBot:
                     take_pct = float(tech.get("take_profit_pct") or 5.0)
                 except (TypeError, ValueError):
                     take_pct = 5.0
-                try:
-                    stop_pct = float(tech.get("stop_loss_pct") or 2.0)
-                except (TypeError, ValueError):
-                    stop_pct = 2.0
                 units = max(1, int(GAME_NOTIONAL_USD / price))
                 if direction == "SHORT":
                     take_price = price * (1.0 - take_pct / 100.0)
-                    stop_price = price * (1.0 + stop_pct / 100.0)
-                    # Для SHORT тейк должен быть ниже входа, стоп — выше.
+                    # Для SHORT тейк должен быть ниже входа.
                     if take_price >= price:
                         take_price = price * 0.999
-                    if stop_price <= price:
-                        stop_price = price * 1.001
                 else:
                     take_price = price * (1.0 + take_pct / 100.0)
-                    stop_price = price * (1.0 - stop_pct / 100.0)
-                    # Для LONG тейк должен быть выше входа, стоп — ниже.
+                    # Для LONG тейк должен быть выше входа.
                     if take_price <= price:
                         take_price = price * 1.001
-                    if stop_price >= price:
-                        stop_price = price * 0.999
                 positions.append(
                     {
                         "orderType": "MARKET",
@@ -4684,7 +4674,7 @@ class LSETelegramBot:
                             "direction": direction,
                             "createdAt": created_at,
                             "takeProfit": float(round(take_price, 4)),
-                            "stopLoss": float(round(stop_price, 4)),
+                            "stopLoss": None,
                             "units": int(units),
                         },
                     }
