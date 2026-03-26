@@ -4612,8 +4612,9 @@ class LSETelegramBot:
             try:
                 from services.platform_game_api import is_platform_game_enabled, post_game_positions
                 from services.ticker_groups import get_tickers_game_5m
-                from services.recommend_5m import get_5m_technical_signal
-                from services.game_5m import GAME_NOTIONAL_USD
+                from report_generator import get_engine
+                from sqlalchemy import text
+                import pandas as pd
             except Exception as e:
                 await update.message.reply_text(f"❌ game5m/platform: import error: {e}")
                 return
@@ -4629,55 +4630,132 @@ class LSETelegramBot:
                 await update.message.reply_text("❌ GAME_5M тикеры не заданы.")
                 return
 
-            created_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
             positions: List[Dict[str, Any]] = []
             skipped: List[str] = []
-            for tkr in tickers:
-                try:
-                    tech = get_5m_technical_signal(tkr, days=5, use_llm_news=False)
-                except Exception:
-                    tech = None
-                if not tech:
-                    skipped.append(f"{tkr}: no tech")
+            try:
+                engine = get_engine()
+                with engine.connect() as conn:
+                    df_buy = pd.read_sql(
+                        text(
+                            """
+                            SELECT id, ts, ticker, quantity, price, signal_type, strategy_name,
+                                   take_profit, stop_loss, context_json
+                            FROM trade_history
+                            WHERE side='BUY' AND strategy_name='GAME_5M'
+                            ORDER BY ts ASC, id ASC
+                            """
+                        ),
+                        conn,
+                    )
+            except Exception as e:
+                await update.message.reply_text(f"❌ Не удалось загрузить BUY-историю GAME_5M: {e}")
+                return
+
+            if df_buy is None or df_buy.empty:
+                await update.message.reply_text("❌ В истории нет BUY-позиций GAME_5M.")
+                return
+
+            allowed = set(tickers)
+            for _, row in df_buy.iterrows():
+                tkr = str(row.get("ticker") or "").upper().strip()
+                if not tkr or tkr not in allowed:
                     continue
                 try:
-                    price = float(tech.get("price"))
-                    if price <= 0:
-                        raise ValueError("bad price")
+                    entry_price = float(row.get("price"))
+                    if entry_price <= 0:
+                        raise ValueError("bad entry price")
+                    units = max(1, int(float(row.get("quantity") or 0)))
                 except Exception:
-                    skipped.append(f"{tkr}: bad price")
+                    skipped.append(f"{tkr}: bad price/qty")
                     continue
-                decision = str(
-                    (tech.get("technical_decision_effective") or tech.get("decision") or "HOLD")
-                ).upper()
-                direction = "SHORT" if decision == "SELL" else "LONG"
+
+                # Исторический момент входа (как просили: параметры входа исторические).
+                ts = row.get("ts")
                 try:
-                    take_pct = float(tech.get("take_profit_pct") or 5.0)
-                except (TypeError, ValueError):
-                    take_pct = 5.0
-                units = max(1, int(GAME_NOTIONAL_USD / price))
-                if direction == "SHORT":
-                    take_price = price * (1.0 - take_pct / 100.0)
-                    # Для SHORT тейк должен быть ниже входа.
-                    if take_price >= price:
-                        take_price = price * 0.999
+                    t = pd.Timestamp(ts)
+                    if t.tzinfo is None:
+                        t = t.tz_localize("UTC")
+                    else:
+                        t = t.tz_convert("UTC")
+                    created_at = t.strftime("%Y-%m-%dT%H:%M:%SZ")
+                except Exception:
+                    created_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+                ctx = row.get("context_json")
+                if isinstance(ctx, str):
+                    try:
+                        ctx = json.loads(ctx)
+                    except Exception:
+                        ctx = {}
+                if not isinstance(ctx, dict):
+                    ctx = {}
+
+                # В GAME_5M входы BUY — LONG; SHORT только если явно сохранено в контексте.
+                direction = str(ctx.get("direction") or "LONG").upper()
+                if direction not in ("LONG", "SHORT"):
+                    direction = "LONG"
+
+                # Исторический take price: сперва явная цена, затем pct от цены входа.
+                take_price = ctx.get("suggested_take_profit_price")
+                if take_price is None:
+                    take_pct = None
+                    for k in ("take_profit_pct", "estimated_upside_pct_day", "effective_take_profit_pct"):
+                        v = ctx.get(k)
+                        if isinstance(v, (int, float)):
+                            take_pct = float(v)
+                            break
+                    if take_pct is None and row.get("take_profit") is not None:
+                        try:
+                            take_pct = float(row.get("take_profit"))
+                        except Exception:
+                            take_pct = None
+                    if take_pct is not None:
+                        take_price = entry_price * (1.0 + take_pct / 100.0) if direction == "LONG" else entry_price * (1.0 - take_pct / 100.0)
+                try:
+                    take_price_f = float(take_price)
+                except Exception:
+                    skipped.append(f"{tkr}: no take")
+                    continue
+
+                order_type = str(ctx.get("orderType") or ctx.get("order_type") or "MARKET").upper()
+                if order_type not in ("MARKET", "LIMIT"):
+                    order_type = "MARKET"
+                if order_type == "LIMIT":
+                    limit_in = ctx.get("limitIn")
+                    try:
+                        limit_in_f = float(limit_in)
+                    except Exception:
+                        # Нет исторического limitIn — деградация до MARKET, чтобы не ломать API.
+                        order_type = "MARKET"
+                        limit_in_f = None
+
+                if order_type == "LIMIT":
+                    positions.append(
+                        {
+                            "orderType": "LIMIT",
+                            "limit": {
+                                "instrument": tkr,
+                                "direction": direction,
+                                "createdAt": created_at,
+                                "takeProfit": float(round(take_price_f, 4)),
+                                "units": int(units),
+                                "limitIn": float(round(limit_in_f, 4)),
+                            },
+                        }
+                    )
                 else:
-                    take_price = price * (1.0 + take_pct / 100.0)
-                    # Для LONG тейк должен быть выше входа.
-                    if take_price <= price:
-                        take_price = price * 1.001
-                positions.append(
-                    {
-                        "orderType": "MARKET",
-                        "market": {
-                            "instrument": tkr,
-                            "direction": direction,
-                            "createdAt": created_at,
-                            "takeProfit": float(round(take_price, 4)),
-                            "units": int(units),
-                        },
-                    }
-                )
+                    positions.append(
+                        {
+                            "orderType": "MARKET",
+                            "market": {
+                                "instrument": tkr,
+                                "direction": direction,
+                                "createdAt": created_at,
+                                "takeProfit": float(round(take_price_f, 4)),
+                                "units": int(units),
+                            },
+                        }
+                    )
 
             if not positions:
                 await update.message.reply_text("❌ Нет валидных позиций для отправки в Platform /game.")
