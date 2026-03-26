@@ -416,36 +416,6 @@ def process_ticker(
         else:
             logger.error("Не удалось отправить %s в chat_id=%s", ticker, cid)
 
-    # Внешний Platform POST /game (kerimsrv): таблицы notOpened / opened / closed → Telegram
-    try:
-        from services.platform_game_api import (
-            is_platform_game_enabled,
-            build_market_position_long,
-            notify_platform_game_telegram,
-        )
-        from services.game_5m import GAME_NOTIONAL_USD
-
-        if is_platform_game_enabled() and chat_ids:
-            qty = max(1, int(GAME_NOTIONAL_USD / price))
-            tp = d5.get("suggested_take_profit_price") if d5 else None
-            if tp is None:
-                tp_pct = float((d5 or {}).get("take_profit_pct") or 5)
-                tp = price * (1.0 + tp_pct / 100.0)
-            mom = (d5 or {}).get("momentum_2h_pct")
-            sl_pct = _effective_stop_loss_pct(mom, ticker=ticker)
-            sl_price = price * (1.0 - float(sl_pct) / 100.0)
-            pos = build_market_position_long(
-                ticker,
-                price_entry=price,
-                units=qty,
-                take_profit_price=float(tp),
-                stop_loss_price=float(sl_price),
-            )
-            n_plat = notify_platform_game_telegram(token, chat_ids, [pos])
-            logger.info("Platform /game (%s): сообщений Telegram=%s", ticker, n_plat)
-    except Exception as e:
-        logger.warning("Platform /game (%s): %s", ticker, e)
-
     if ok > 0:
         mark_signal_sent(ticker)
     return ok > 0

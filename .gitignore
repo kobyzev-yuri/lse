@@ -62,3 +62,6 @@ Thumbs.db
 # Базы данных (если есть локальные)
 *.db
 *.sqlite
+
+# Kerim Platform: Docker-образ (platform.tar) не в git — копировать на сервер в отдельную директорию (scp/rsync), там docker load / run
+kerimsrv/*.tar

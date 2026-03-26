@@ -26,6 +26,8 @@ services:
     container_name: lse-bot
     restart: unless-stopped
     # Бот (polling) + веб (карточки 5m, мониторинг) в одном контейнере. Порт 8080 — веб.
+    # Внешний Platform (Kerim POST /game) поднимайте отдельным контейнером на другом хост-порту (напр. 18080),
+    # см. docs/PLATFORM_GAME_DOCKER.md — иначе конфликт с 8080 на хосте.
     # Для только webhook без веб-страниц замените на: command: ["uvicorn", "api.bot_app:app", ...]
     command: ["sh", "-c", "python scripts/run_telegram_bot.py & exec uvicorn web_app:app --host 0.0.0.0 --port 8080"]
     ports:

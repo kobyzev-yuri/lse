@@ -72,7 +72,20 @@ def post_game_positions(positions: List[Dict[str, Any]]) -> Dict[str, Any]:
     timeout = get_platform_game_timeout_sec()
     body = {"positions": positions}
     r = requests.post(url, json=body, timeout=timeout)
-    r.raise_for_status()
+    if r.status_code >= 500:
+        # У Platform иногда 500 на createdAt "сейчас" (вне их окна данных).
+        # Ретрай с безопасной исторической датой из примера документации.
+        safe_positions = _with_safe_created_at(positions, "2026-03-21T12:00:00Z")
+        r = requests.post(url, json={"positions": safe_positions}, timeout=timeout)
+    if r.status_code >= 400:
+        try:
+            body_text = (r.text or "").strip()
+        except Exception:
+            body_text = ""
+        msg = f"HTTP {r.status_code} {r.reason} for {url}"
+        if body_text:
+            msg += f" | body: {body_text[:600]}"
+        raise RuntimeError(msg)
     return r.json()
 
 
@@ -153,6 +166,25 @@ def _fmt_price(v: Any) -> str:
         return f"{float(v):.4f}".rstrip("0").rstrip(".")
     except (TypeError, ValueError):
         return str(v)
+
+
+def _with_safe_created_at(positions: List[Dict[str, Any]], created_at: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for p in positions or []:
+        if not isinstance(p, dict):
+            out.append(p)
+            continue
+        q = dict(p)
+        if q.get("orderType") == "MARKET" and isinstance(q.get("market"), dict):
+            m = dict(q["market"])
+            m["createdAt"] = created_at
+            q["market"] = m
+        elif q.get("orderType") == "LIMIT" and isinstance(q.get("limit"), dict):
+            m = dict(q["limit"])
+            m["createdAt"] = created_at
+            q["limit"] = m
+        out.append(q)
+    return out
 
 
 def notify_platform_game_telegram(

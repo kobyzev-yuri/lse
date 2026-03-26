@@ -153,6 +153,55 @@ def _ts_msk(ts) -> str:
         return str(ts)[:16] if ts else "—"
 
 
+def _build_platform_game_status_html(
+    status_key: str,
+    title: str,
+    items: List[Dict[str, Any]],
+    *,
+    generated_at: Optional[str] = None,
+) -> str:
+    """HTML-отчёт по одному статусу ответа Platform /game (notOpened/opened/closed)."""
+    generated = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M")
+    rows: List[str] = []
+    if status_key == "closed":
+        headers = ("instrument", "direction", "entryType", "createdAt", "openPrice", "openTime", "closePrice", "closeTime", "profit", "accuracy")
+    elif status_key == "opened":
+        headers = ("instrument", "direction", "entryType", "createdAt", "openPrice", "openTime", "takeProfit", "stopLoss", "units")
+    else:
+        headers = ("instrument", "direction", "entryType", "createdAt", "limitIn", "takeProfit", "stopLoss", "units")
+
+    if not items:
+        rows.append(f"<tr><td colspan='{len(headers)}'>Пусто</td></tr>")
+    else:
+        for it in items:
+            if not isinstance(it, dict):
+                rows.append(f"<tr><td colspan='{len(headers)}'>{html.escape(str(it))}</td></tr>")
+                continue
+            tds = []
+            for h in headers:
+                v = it.get(h)
+                if isinstance(v, float):
+                    s = f"{v:.4f}".rstrip("0").rstrip(".")
+                else:
+                    s = "—" if v is None else str(v)
+                tds.append(f"<td>{html.escape(s)}</td>")
+            rows.append("<tr>" + "".join(tds) + "</tr>")
+
+    th = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    body_rows = "".join(rows)
+    return (
+        "<!DOCTYPE html><html lang='ru'><head><meta charset='utf-8'>"
+        f"<title>{html.escape(title)}</title>"
+        "<style>body{font-family:Arial,sans-serif;margin:14px}table{border-collapse:collapse;width:100%}"
+        "th,td{border:1px solid #ddd;padding:6px 8px;font-size:12px}th{background:#f6f6f6;text-align:left}"
+        "h1{font-size:18px;margin:0 0 6px 0}.meta{color:#666;font-size:12px;margin:0 0 10px 0}</style></head><body>"
+        f"<h1>{html.escape(title)}</h1>"
+        f"<p class='meta'>Сформировано: {html.escape(generated)} · Статус: {html.escape(status_key)}</p>"
+        f"<table><thead><tr>{th}</tr></thead><tbody>{body_rows}</tbody></table>"
+        "</body></html>"
+    )
+
+
 def _build_prompt_entry_html(payload: Dict[str, Any]) -> str:
     """Шаблон принятия решения: отчёт для человека; для портфеля/тикера — в отчёте промпт для LLM (system, user, ответ)."""
     ticker = payload.get("ticker")
@@ -1013,7 +1062,7 @@ class LSETelegramBot:
 /recommend [ticker] — рекомендация по портфелю; без тикера — по кластеру
 /recommend5m [ticker] [days] — компактный прогноз 5m (технический + LLM при включении); без тикера — кластер
 /signal5m [ticker] [days] — только технический сигнал 5m (тот же источник, что крон)
-/game5m [ticker] — мониторинг игры 5m: позиция, сделки, win rate и PnL (по умолч. SNDK)
+/game5m [ticker|platform] — мониторинг 5m по тикеру; mode platform/sync/all: отправить массив GAME_5M в Kerim /game и вернуть 3 HTML (notOpened/opened/closed)
 /gameparams — все существенные параметры игр (5m и портфель): тикеры, тейк/стоп, cooldown
 /dashboard [5m|daily|all] — дашборд по тикерам: решения, 5m, новости (проактивный мониторинг)
 /analyser [days] [GAME_5M|ALL|Portfolio] [llm] — анализ эффективности закрытых сделок (единый код с web /analyzer)
@@ -1114,7 +1163,7 @@ class LSETelegramBot:
 `/corr` — матрица корреляций по кластеру портфеля (60 дн.). `/corr5m` — по кластеру 5m. С аргументами: строка по тикеру или пара T1 T2.
 `/set\_strategy <ticker> <стратегия>` — переназначить стратегию у открытой позиции (Manual, Portfolio)
 `/strategies` — описание стратегий (GAME\_5M, Portfolio, Manual, Momentum и др.)
-`/game5m [ticker]` — мониторинг игры 5m: открытая позиция, последние сделки, win rate и PnL (по умолч. SNDK)
+`/game5m [ticker|platform]` — мониторинг игры 5m по тикеру (по умолч. SNDK). Режим `platform`/`sync`/`all`: отправить массив GAME_5M в Kerim `/game` и получить 3 HTML-отчёта (`notOpened`, `opened`, `closed`).
 `/gameparams` — все параметры игр (5m и портфель): тикеры, тейк/стоп, cooldown _(config.env)_
 `/dashboard [5m|daily|all]` — дашборд: все тикеры, сигналы, 5m (SNDK), новости за 7 дн. Для смены курса и решений.
 `/analyser [days] [GAME_5M|ALL|Portfolio] [llm]` — анализ эффективности закрытых сделок и зоны улучшений (тот же код, что web /analyzer).
@@ -4556,6 +4605,164 @@ class LSETelegramBot:
         if not self._check_access(update.effective_user.id):
             await update.message.reply_text("❌ Доступ запрещен")
             return
+        mode = (context.args[0].strip().lower() if context.args else "")
+        # Новый режим: по /game5m [platform|sync|all] отправляем массив GAME_5M в Kerim /game,
+        # затем возвращаем 3 HTML-отчёта: notOpened/opened/closed.
+        if mode in ("platform", "sync", "all"):
+            try:
+                from services.platform_game_api import is_platform_game_enabled, post_game_positions
+                from services.ticker_groups import get_tickers_game_5m
+                from services.recommend_5m import get_5m_technical_signal
+                from services.game_5m import GAME_NOTIONAL_USD
+            except Exception as e:
+                await update.message.reply_text(f"❌ game5m/platform: import error: {e}")
+                return
+
+            if not is_platform_game_enabled():
+                await update.message.reply_text(
+                    "❌ PLATFORM_GAME_API_ENABLED=false. Включите интеграцию в config.env и перезапустите lse."
+                )
+                return
+
+            tickers = list(get_tickers_game_5m() or [])
+            if not tickers:
+                await update.message.reply_text("❌ GAME_5M тикеры не заданы.")
+                return
+
+            created_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+            positions: List[Dict[str, Any]] = []
+            skipped: List[str] = []
+            for tkr in tickers:
+                try:
+                    tech = get_5m_technical_signal(tkr, days=5, use_llm_news=False)
+                except Exception:
+                    tech = None
+                if not tech:
+                    skipped.append(f"{tkr}: no tech")
+                    continue
+                try:
+                    price = float(tech.get("price"))
+                    if price <= 0:
+                        raise ValueError("bad price")
+                except Exception:
+                    skipped.append(f"{tkr}: bad price")
+                    continue
+                decision = str(
+                    (tech.get("technical_decision_effective") or tech.get("decision") or "HOLD")
+                ).upper()
+                direction = "SHORT" if decision == "SELL" else "LONG"
+                try:
+                    take_pct = float(tech.get("take_profit_pct") or 5.0)
+                except (TypeError, ValueError):
+                    take_pct = 5.0
+                try:
+                    stop_pct = float(tech.get("stop_loss_pct") or 2.0)
+                except (TypeError, ValueError):
+                    stop_pct = 2.0
+                units = max(1, int(GAME_NOTIONAL_USD / price))
+                if direction == "SHORT":
+                    take_price = price * (1.0 - take_pct / 100.0)
+                    stop_price = price * (1.0 + stop_pct / 100.0)
+                    # Для SHORT тейк должен быть ниже входа, стоп — выше.
+                    if take_price >= price:
+                        take_price = price * 0.999
+                    if stop_price <= price:
+                        stop_price = price * 1.001
+                else:
+                    take_price = price * (1.0 + take_pct / 100.0)
+                    stop_price = price * (1.0 - stop_pct / 100.0)
+                    # Для LONG тейк должен быть выше входа, стоп — ниже.
+                    if take_price <= price:
+                        take_price = price * 1.001
+                    if stop_price >= price:
+                        stop_price = price * 0.999
+                positions.append(
+                    {
+                        "orderType": "MARKET",
+                        "market": {
+                            "instrument": tkr,
+                            "direction": direction,
+                            "createdAt": created_at,
+                            "takeProfit": float(round(take_price, 4)),
+                            "stopLoss": float(round(stop_price, 4)),
+                            "units": int(units),
+                        },
+                    }
+                )
+
+            if not positions:
+                await update.message.reply_text("❌ Нет валидных позиций для отправки в Platform /game.")
+                return
+
+            not_opened: List[Dict[str, Any]] = []
+            opened: List[Dict[str, Any]] = []
+            closed: List[Dict[str, Any]] = []
+            errors: List[Dict[str, Any]] = []
+            for pos in positions:
+                tkr = ((pos.get("market") or {}).get("instrument") or "?")
+                try:
+                    one = post_game_positions([pos])
+                    not_opened.extend(one.get("notOpened") or [])
+                    opened.extend(one.get("opened") or [])
+                    closed.extend(one.get("closed") or [])
+                except Exception as e:
+                    errors.append({
+                        "instrument": tkr,
+                        "error": str(e),
+                        "payload": pos,
+                    })
+
+            if not_opened == [] and opened == [] and closed == [] and errors:
+                first_err = errors[0]["error"]
+                await update.message.reply_text(f"❌ Platform /game: {first_err}", parse_mode=None)
+                payload_text = json.dumps({"positions": positions}, ensure_ascii=False, indent=2)
+                payload_preview = payload_text[:3500] + ("\n... (truncated)" if len(payload_text) > 3500 else "")
+                await update.message.reply_text("Request payload:\n" + payload_preview, parse_mode=None)
+                return
+            summary = (
+                "📊 /game5m platform\n"
+                f"Отправлено позиций: {len(positions)} (из тикеров {len(tickers)}), пропущено: {len(skipped)}\n"
+                f"Ответ: notOpened={len(not_opened)}, opened={len(opened)}, closed={len(closed)}, errors={len(errors)}\n"
+                "Ниже отправлены 3 HTML-файла (как close/pending)."
+            )
+            await update.message.reply_text(summary, parse_mode=None)
+
+            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+            for key, title, items in (
+                ("notOpened", "Game API — notOpened", not_opened),
+                ("opened", "Game API — opened", opened),
+                ("closed", "Game API — closed", closed),
+            ):
+                html_content = _build_platform_game_status_html(key, title, items)
+                filename = f"game5m_platform_{key}_{stamp}.html"
+                await update.message.reply_document(
+                    document=BytesIO(html_content.encode("utf-8")),
+                    filename=filename,
+                )
+            if errors:
+                err_lines = ["Ошибки Platform /game по тикерам:"]
+                for e in errors[:20]:
+                    payload_json = json.dumps(e.get("payload") or {}, ensure_ascii=False)
+                    err_lines.append(
+                        "• {inst}: {err}\n"
+                        "  json={payload}".format(
+                            inst=e.get("instrument", "?"),
+                            err=e.get("error", "unknown"),
+                            payload=payload_json,
+                        )
+                    )
+                msg = "\n".join(err_lines)
+                if len(msg) <= 3900:
+                    await update.message.reply_text(msg, parse_mode=None)
+                else:
+                    # Если ошибок/JSON много — отправим файлом.
+                    filename = f"game5m_platform_errors_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.txt"
+                    await update.message.reply_document(
+                        document=BytesIO(msg.encode("utf-8")),
+                        filename=filename,
+                    )
+            return
+
         ticker = "SNDK"
         if context.args and len(context.args) >= 1:
             ticker = _normalize_ticker(context.args[0])
