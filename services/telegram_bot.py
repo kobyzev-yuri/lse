@@ -163,6 +163,18 @@ def _build_platform_game_status_html(
     """HTML-отчёт по одному статусу ответа Platform /game (notOpened/opened/closed)."""
     generated = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M")
     rows: List[str] = []
+    # Сортировка как просили: instrument, createdAt.
+    if isinstance(items, list):
+        try:
+            items = sorted(
+                items,
+                key=lambda x: (
+                    str((x or {}).get("instrument") or ""),
+                    str((x or {}).get("createdAt") or ""),
+                ),
+            )
+        except Exception:
+            pass
     if status_key == "closed":
         headers = ("instrument", "direction", "entryType", "createdAt", "units", "openPrice", "openTime", "closePrice", "closeTime", "profit", "accuracy")
     elif status_key == "opened":
@@ -4660,14 +4672,18 @@ class LSETelegramBot:
                 tkr = str(row.get("ticker") or "").upper().strip()
                 if not tkr or tkr not in allowed:
                     continue
+                # quantity желателен, но при мусоре не пропускаем запись: fallback -> 1.
+                try:
+                    units = max(1, int(float(row.get("quantity") or 0)))
+                except Exception:
+                    units = 1
+                # entry_price для Kerim не обязателен; нужен только если считаем тейк из pct.
                 try:
                     entry_price = float(row.get("price"))
                     if entry_price <= 0:
-                        raise ValueError("bad entry price")
-                    units = max(1, int(float(row.get("quantity") or 0)))
+                        entry_price = None
                 except Exception:
-                    skipped.append(f"{tkr}: bad price/qty")
-                    continue
+                    entry_price = None
 
                 # Исторический момент входа (как просили: параметры входа исторические).
                 ts = row.get("ts")
@@ -4709,17 +4725,13 @@ class LSETelegramBot:
                             take_pct = float(row.get("take_profit"))
                         except Exception:
                             take_pct = None
-                    if take_pct is None:
-                        # Фолбэк, чтобы не терять запись, если в старом контексте нет take:
-                        # используем базовый historical-safe тейк 5%.
-                        take_pct = 5.0
-                    if take_pct is not None:
+                    if take_pct is not None and entry_price is not None:
                         take_price = entry_price * (1.0 + take_pct / 100.0) if direction == "LONG" else entry_price * (1.0 - take_pct / 100.0)
                 try:
                     take_price_f = float(take_price)
                 except Exception:
-                    skipped.append(f"{tkr}: no take")
-                    continue
+                    # Если тейк не восстановился из истории, используем безопасный широкий уровень.
+                    take_price_f = 1_000_000.0 if direction == "LONG" else 0.01
 
                 order_type = str(ctx.get("orderType") or ctx.get("order_type") or "MARKET").upper()
                 if order_type not in ("MARKET", "LIMIT"):
