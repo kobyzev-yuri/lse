@@ -183,10 +183,10 @@ def _with_safe_created_at(positions: List[Dict[str, Any]], created_at: str) -> L
             direction = str(m.get("direction") or "").upper()
             if direction == "SHORT":
                 m["takeProfit"] = 0.01
-                m["stopLoss"] = None
+                m.pop("stopLoss", None)
             else:
                 m["takeProfit"] = 1_000_000.0
-                m["stopLoss"] = None
+                m.pop("stopLoss", None)
             q["market"] = m
         elif q.get("orderType") == "LIMIT" and isinstance(q.get("limit"), dict):
             m = dict(q["limit"])
@@ -194,10 +194,10 @@ def _with_safe_created_at(positions: List[Dict[str, Any]], created_at: str) -> L
             direction = str(m.get("direction") or "").upper()
             if direction == "SHORT":
                 m["takeProfit"] = 0.01
-                m["stopLoss"] = None
+                m.pop("stopLoss", None)
             else:
                 m["takeProfit"] = 1_000_000.0
-                m["stopLoss"] = None
+                m.pop("stopLoss", None)
             q["limit"] = m
         out.append(q)
     return out

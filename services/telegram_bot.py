@@ -4674,7 +4674,6 @@ class LSETelegramBot:
                             "direction": direction,
                             "createdAt": created_at,
                             "takeProfit": float(round(take_price, 4)),
-                            "stopLoss": None,
                             "units": int(units),
                         },
                     }
