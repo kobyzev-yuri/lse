@@ -6,14 +6,14 @@
 
 ## 1. Экспорт дампа на старом сервере
 
-Скрипт экспортирует **только таблицы LSE**: `quotes`, `knowledge_base`, `portfolio_state`, `trade_history`, `strategy_parameters`. Чужие схемы (tbl_*, vanna_vectors и т.д.) в дамп не попадают.
+Скрипт экспортирует **только таблицы LSE**: `quotes`, `knowledge_base`, `portfolio_state`, `trade_history`, `strategy_parameters`. Чужие схемы (tbl_*, vanna_vectors и т.д.) в дамп не попадают. Описание колонок: [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md).
 
 На машине, где сейчас крутится LSE и есть доступ к текущей БД:
 
 ```bash
 cd /path/to/lse
 export DATABASE_URL="postgresql://USER:PASS@HOST:5432/lse_trading"   # или из config.env
-.с
+./scripts/export_pg_dump.sh
 # Создастся файл lse_trading_dump_YYYYMMDD_HHMMSS.sql.gz
 ```
 

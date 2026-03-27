@@ -1,5 +1,8 @@
 # Бизнес-процессы и потоки данных LSE Trading System
 
+> **Актуальная карта архитектуры и потоков (читать первым):** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).  
+> Ниже — развёрнутые пошаговые диаграммы (Mermaid) по инициализации, котировкам, новостям, исполнению, Telegram и деплою.
+
 Данный документ описывает основные бизнес-процессы и потоки данных системы автоматической торговли на Лондонской фондовой бирже в стандартной нотации [Mermaid](https://mermaid.js.org/), которая поддерживается в Markdown и GitHub.
 
 ## Содержание
@@ -889,20 +892,20 @@ flowchart LR
 - `update_prices.py` — обновление цен
 - `news_importer.py` — импорт новостей
 - `report_generator.py` — генерация отчетов
-- `vector_kb.py` — векторная БЗ (планируется)
+- `vector_kb` / sync cron — векторный поиск по `knowledge_base.embedding` (см. [docs/VECTOR_KB_USAGE.md](docs/VECTOR_KB_USAGE.md))
 - Telegram бот: webhook, handlers, команды `/signal`, `/news`, `/price`, `/chart`, `/ask`, `/tickers`, песочница: `/portfolio`, `/buy`, `/sell`, `/history`, `/recommend` (см. раздел 10)
 - Документация по сделкам: `docs/SANDBOX_TRADE_EXAMPLE.md` — пример цепочки изменений в `portfolio_state` и `trade_history`
 - Деплой: варианты «одна VM» или «Cloud Run + VM» (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`)
-- Премаркет и игры: `setup_cron.sh` — расписание (5m каждые 5 мин, портфельная 9/13/17, премаркет 16:30 MSK). Премаркет: `scripts/premarket_cron.py`, `services/premarket.py`; план и резюме — `docs/PREMARKET_PLAN.md`, `docs/RESUME_PREMARKET_AND_RECENT.md`
+- Премаркет и игры: `setup_cron.sh` — расписание (5m каждые 5 мин, портфельная 9/13/17, премаркет 16:30 MSK). Премаркет: `scripts/premarket_cron.py`, `services/premarket.py`; план — [docs/PREMARKET_PLAN.md](docs/PREMARKET_PLAN.md); старое резюме — [docs/archive/RESUME_PREMARKET_AND_RECENT.md](docs/archive/RESUME_PREMARKET_AND_RECENT.md)
 - Уведомления в Telegram: `services/telegram_signal.py` — общая рассылка (get_signal_chat_ids, send_telegram_message). Сигналы 5m — `send_sndk_signal_cron.py`; сделки портфельной игры — `trading_cycle_cron.py` после run_for_tickers (те же TELEGRAM_SIGNAL_CHAT_IDS). В боте `/history [тикер] [N]` — фильтр по тикеру, в ответе стратегия (GAME_5M / Portfolio / Manual).
 
 ### Обновление диаграмм
 
-При изменении бизнес-логики обновляйте соответствующие диаграммы в этом файле. Диаграммы должны быть синхронизированы с кодом.
+При изменении бизнес-логики обновляйте соответствующие диаграммы в этом файле и краткую схему в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Диаграммы должны быть согласованы с кодом.
 
 ---
 
-**Последнее обновление**: 2026-02-20  
+**Последнее обновление**: 2026-03-27  
 **Версия системы**: 1.4.0
 
 ### Изменения в версии 1.4.0:

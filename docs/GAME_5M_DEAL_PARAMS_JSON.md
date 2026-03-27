@@ -118,3 +118,143 @@ decision на момент закрытия (HOLD/SELL), session_phase, крат
 - **Построение полного дампа:** `services/deal_params_5m.py` — `build_full_entry_context(d5)`.
 - **Чтение в отчётах:** `normalize_entry_context(ctx)`, `get_entry_impulse_pct(ctx)` — один и тот же код работает с полным и упрощённым форматом.
 - **Запись при BUY:** `scripts/send_sndk_signal_cron.py` вызывает `build_full_entry_context(d5, correlation_entry_features=corr_feats)` (матрица из `get_cluster_decisions_5m`) и передаёт результат в `record_entry(..., entry_context=...)`.
+- **Контекст при SELL:** `services/recommend_5m.py` — `build_5m_close_context(d5)` → `close_position(..., context_json=...)`.
+
+---
+
+## 5. Примеры для подмешивания (обучение, анализ, replay)
+
+Ниже — **учебные** фрагменты: числа вымышленные, структура соответствует коду. В реальной БД смотрите `trade_history.context_json` и колонки `side`, `signal_type`, `price`, `strategy_name='GAME_5M'`.
+
+### 5.1. Строка BUY с полным дампом (новые сделки)
+
+Логически в `trade_history`:
+
+| Поле | Пример |
+|------|--------|
+| side | `BUY` |
+| signal_type | `BUY` или `STRONG_BUY` |
+| price | `681.30` |
+| strategy_name | `GAME_5M` |
+
+**`context_json`** (фрагмент; полный набор ключей — см. `FULL_ENTRY_KEYS` в `deal_params_5m.py`):
+
+```json
+{
+  "deal_params_version": 1,
+  "entry_strategy": "technical",
+  "decision": "BUY",
+  "reasoning": "RSI не перекуплен, импульс 2ч положительный, откат от хая сессии умеренный…",
+  "price": 681.3,
+  "momentum_2h_pct": 2.4,
+  "entry_impulse_pct": 2.4,
+  "rsi_5m": 41.2,
+  "volatility_5m_pct": 0.35,
+  "session_high": 690.0,
+  "period_str": "5m, 7d",
+  "stop_loss_enabled": false,
+  "stop_loss_pct": 1.2,
+  "take_profit_pct": 5.0,
+  "entry_advice": "ALLOW",
+  "entry_advice_reason": "…",
+  "high_5d": 695.0,
+  "low_5d": 640.0,
+  "pullback_from_high_pct": 1.2,
+  "bars_count": 420,
+  "kb_news_impact": "Нейтральный фон по KB.",
+  "session_phase": "REGULAR",
+  "estimated_upside_pct_day": 5.0,
+  "estimated_upside_forecast_raw_pct": 6.8,
+  "estimated_downside_pct_day": -1.3,
+  "suggested_take_profit_price": 715.4,
+  "price_forecast_5m_summary": "30m p50 …; 60m …",
+  "price_forecast_5m": {
+    "horizons": [
+      {"label": "30m", "p50_pct": 0.8, "p90_pct": 2.1}
+    ]
+  },
+  "cb_corr_mean_game_peers": 0.42,
+  "cb_corr_n_game_peers": 5.0,
+  "cb_corr_mean_universe": 0.38,
+  "cb_corr_n_universe": 12.0,
+  "decision_rule_version": "…"
+}
+```
+
+Поле **`price_forecast_5m`** в истории может быть **богаче** (лог-нормальная модель по горизонтам); для replay/adaptive take важно наличие хотя бы summary или структуры горизонтов — см. `replay_non_take_closures_daily.py`.
+
+### 5.2. Строка BUY «старая» / после частичной потери полей
+
+Типичный **упрощённый** JSON (раньше не писали `deal_params_version`, или запись создавалась до расширения дампа):
+
+```json
+{
+  "momentum_2h_pct": 1.8,
+  "rsi_5m": 44.0,
+  "volatility_5m_pct": 0.4,
+  "session_high": 680.0,
+  "period_str": "5m, 7d"
+}
+```
+
+После **`normalize_entry_context()`** к такому объекту добавляется **`entry_impulse_pct`** из `momentum_2h_pct`, если отдельного `entry_impulse_pct` не было.
+
+### 5.3. Строка SELL (закрытие)
+
+В `trade_history` у SELL в **`context_json`** — снимок **на момент выхода** (не дублирует входной JSON):
+
+```json
+{
+  "momentum_2h_pct": 0.5,
+  "rsi_5m": 52.0,
+  "bar_high": 718.5,
+  "bar_low": 710.0,
+  "exit_bar_close": 715.2,
+  "volatility_5m_pct": 0.28,
+  "period_str": "5m, 7d",
+  "session_high": 720.0
+}
+```
+
+`signal_type` в колонке: `TAKE_PROFIT` | `STOP_LOSS` | `TIME_EXIT` | `SELL` и т.д.
+
+---
+
+## 6. Эволюция и потеря параметров (замечания)
+
+Исторические сделки **неоднородны**: по мере развития логики мы добавляли поля в JSON и в `get_decision_5m`, но **старые строки** не всегда пересчитывались.
+
+| Период / тема | Что было | Риски для анализа |
+|----------------|----------|-------------------|
+| До полного дампа | Только часть техник (импульс, RSI, волатильность, период) | Нет `entry_advice`, прогноза `price_forecast_5m`, корреляций `cb_corr_*`, адаптивного тейка |
+| Введение `deal_params_version: 1` | Единый снимок уровня prompt_entry + корреляции для CatBoost | Старые BUY не получают версию автоматически |
+| Прогноз 30/60/120м, adaptive take | Поля `price_forecast_5m`, `estimated_upside_forecast_raw_pct` и др. | В replay без JSON — fallback на конфиг (`GAME_5M_TAKE_PROFIT_PCT_*`) |
+| Корреляция в JSON | `cb_corr_*` только если крон передал матрицу корреляций | Если крон упал или тикер вне кластера — ключи отсутствуют |
+| SELL | Отдельный компактный формат (`build_5m_close_context`) | **Нет копии входного BUY** внутри SELL-строки; связь только по тикеру и хронологии |
+
+**Почему «терялись» параметры:**
+
+1. **Нет записи в БД** — ранний код не вызывал `build_full_entry_context` или падал до `record_entry`.
+2. **NULL `context_json`** у BUY — импульс для `/closed_impulse` тогда недоступен; помогает **`scripts/backfill_entry_impulse_5m.py`** (дозаполнение из 5m Yahoo).
+3. **Миграция логики без backfill** — новые поля есть только у новых сделок.
+4. **Длинные поля** — `reasoning` обрезается до **500** символов (см. `REASONING_MAX_LEN` в `deal_params_5m.py`).
+
+**Практика для ML / подмешивания:**
+
+- Всегда прогонять входной JSON через **`normalize_entry_context()`** (`services/deal_params_5m.py`).
+- Для импульса использовать **`get_entry_impulse_pct()`**; не читать только `momentum_2h_pct` без нормализации.
+- Учитывать, что **колонка `take_profit`** в `trade_history` (если есть) и **доли тейка в процентах внутри JSON** — разные вещи; replay-скрипты берут тейк из JSON + контекст (см. `replay_non_take_closures_daily.py`).
+
+---
+
+## 7. Связанные файлы
+
+| Файл | Назначение |
+|------|------------|
+| `services/deal_params_5m.py` | `build_full_entry_context`, `normalize_entry_context`, `get_entry_impulse_pct` |
+| `services/recommend_5m.py` | `build_5m_close_context`, `get_decision_5m` |
+| `scripts/backfill_entry_impulse_5m.py` | Дозаполнение импульса для старых BUY |
+| `scripts/replay_non_take_closures_daily.py` | Counterfactual с чтением `take_profit` из JSON |
+| `docs/DATABASE_SCHEMA.md` | Общая схема БД, колонка `context_json` |
+
+Дополнительно: [docs/DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) — таблица `trade_history`.

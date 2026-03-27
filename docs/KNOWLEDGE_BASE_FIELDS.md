@@ -25,7 +25,8 @@
 | **event_type** | VARCHAR(50) | NEW, EARNINGS, ECONOMIC_INDICATOR, FOMC_STATEMENT и т.д. | Источник новостей | Старые записи до миграции |
 | **importance** | VARCHAR(10) | HIGH, MEDIUM, LOW | Источник новостей / парсеры | Не все источники передают |
 | **link** | TEXT | URL новости | Alpha Vantage News, NewsAPI, RSS | У календарей и экономических индикаторов нет |
-| **region** | VARCHAR(20) | USA, UK, EU, Japan и т.д. | RSS, NewsAPI, investing_calendar_parser | Добавляется миграцией; не все источники заполняют |
+| **region** | VARCHAR(20) | USA, UK, EU, Japan и т.д. | RSS, NewsAPI, investing_calendar_parser | Добавляется миграцией (`migrate_add_news_fields`); не все источники заполняют |
+| **ingested_at** | TIMESTAMPTZ | Когда запись попала в БД (крон) | Сборщики новостей при INSERT | У старых строк может быть NULL |
 | **embedding** | vector(768) | Вектор для семантического поиска (sentence-transformers) | **sync_vector_kb_cron.py** (backfill) или VectorKB.add_event() при ручном добавлении | У всех записей, созданных сборщиками новостей, пока не отработает sync_vector_kb_cron |
 | **outcome_json** | JSONB | Исход события: изменение цены через N дней, метка (UP/DOWN/FLAT) | **analyze_event_outcomes_cron.py** (NewsImpactAnalyzer) | У всех записей, пока не отработает анализ исходов (и только для событий с достаточной историей котировок) |
 

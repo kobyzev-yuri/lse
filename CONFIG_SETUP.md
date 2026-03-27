@@ -1,5 +1,7 @@
 # Настройка конфигурации LSE Trading System
 
+> Карта системы: [README.md](README.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Сводка опций: [docs/CONFIG_OPTIONS_ANALYSIS.md](docs/CONFIG_OPTIONS_ANALYSIS.md).
+
 ## Создание config.env
 
 1. Скопируйте шаблон:

@@ -1,5 +1,7 @@
 # Быстрый старт LSE Trading System
 
+Архитектура и потоки данных: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## 1. Установка зависимостей
 
 ```bash
@@ -8,13 +10,16 @@ pip install -r requirements.txt
 
 ## 2. Настройка конфигурации
 
-Убедитесь, что в `../brats/config.env` есть:
+Скопируйте пример и отредактируйте **`config.env`** в корне репозитория (`cp config.env.example config.env`):
+
 ```env
-DATABASE_URL=postgresql://postgres:1234@localhost:5432/brats
+DATABASE_URL=postgresql://postgres:1234@localhost:5432/lse_trading
 OPENAI_API_KEY=your_proxyapi_key_here  # Для LLM анализа
 OPENAI_BASE_URL=https://api.proxyapi.ru/openai/v1
 OPENAI_MODEL=gpt-4o
 ```
+
+Схема таблиц БД: [docs/DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md).
 
 ## 3. Инициализация базы данных
 
@@ -112,10 +117,10 @@ python report_generator.py
 
 ### Ошибка подключения к БД
 - Убедитесь, что PostgreSQL запущен
-- Проверьте параметры в `../brats/config.env`
+- Проверьте `DATABASE_URL` в **`config.env`** (см. [docs/DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md))
 
 ### LLM не работает
-- Проверьте наличие `OPENAI_API_KEY` в `../brats/config.env`
+- Проверьте наличие `OPENAI_API_KEY` в **`config.env`**
 - Убедитесь, что ключ валидный для proxyapi.ru
 
 ### Веб-интерфейс не запускается
@@ -124,6 +129,7 @@ python report_generator.py
 
 ## Дополнительная документация
 
+- [docs/DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md) - таблицы PostgreSQL (`lse_trading`)
 - [WEB_INTERFACE.md](WEB_INTERFACE.md) - Подробная документация веб-интерфейса
 - [BUSINESS_PROCESSES.md](BUSINESS_PROCESSES.md) - Описание бизнес-процессов
 - [ROADMAP.md](ROADMAP.md) - План развития системы

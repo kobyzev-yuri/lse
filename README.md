@@ -1,185 +1,132 @@
 # LSE Trading System
 
-Автоматическая торговая система для Лондонской фондовой биржи с использованием PostgreSQL, pgvector и LLM анализа.
-
-## 🚀 Быстрый старт
-
-```bash
-# 1. Установка зависимостей
-pip install -r requirements.txt
-
-# 2. Инициализация БД (создаст lse_trading и загрузит данные за 2 года)
-python init_db.py
-
-# 3. Запуск веб-интерфейса
-python web_app.py
-# Откройте http://localhost:8000
-```
-
-## 📋 Основные возможности
-
-- ✅ **Автоматический анализ** - технические индикаторы + sentiment анализ новостей
-- ✅ **Strategy Manager** - автоматический выбор стратегии (Momentum, Mean Reversion, Volatile Gap, Neutral)
-- ✅ **LLM интеграция** - анализ через GPT-4o (proxyapi.ru) для обработки вопросов
-- ✅ **Telegram бот** - удобный интерфейс для анализа, новостей, графиков и вопросов
-- ✅ **Бэктестинг** - симуляция торговли на исторических данных
-- ✅ **Веб-интерфейс** - управление торговлей, базой знаний, визуализация
-- ✅ **Автоматизация** - cron задачи для обновления цен и торговых циклов
-
-## 🏗️ Архитектура
-
-```
-AnalystAgent → Strategy Manager → ExecutionAgent → PostgreSQL
-     ↓              ↓                    ↓
-  LLM Service  4 стратегии        trade_history
-  Sentiment    (Momentum, Mean     portfolio_state
-  Analysis     Reversion, VolatileGap, Neutral)
-```
-
-## 📊 Тикеры по умолчанию
-
-- **MSFT** - стабильная акция (Mean Reversion)
-- **SNDK** - волатильная акция (Momentum/Volatile Gap)
-- **GBPUSD=X** - валютная пара (FX impact анализ)
-- **GC=F** - золото (фьючерс, Yahoo Finance; XAUUSD=X не поддерживается)
-
-## 🔧 Конфигурация
-
-Система использует `../brats/config.env` для:
-- `DATABASE_URL` - подключение к PostgreSQL
-- `OPENAI_API_KEY` - ключ для LLM (proxyapi.ru)
-- `OPENAI_BASE_URL` - https://api.proxyapi.ru/openai/v1
-- `OPENAI_MODEL` - gpt-4o
-
-## 📚 Документация
-
-- [QUICKSTART.md](QUICKSTART.md) - быстрый старт
-- [BUSINESS_PROCESSES.md](BUSINESS_PROCESSES.md) - бизнес-процессы и диаграммы
-- [ROADMAP.md](ROADMAP.md) - план развития
-- [docs/BACKTESTING_GUIDE.md](docs/BACKTESTING_GUIDE.md) - руководство по бэктестингу
-- [docs/TRADING_GLOSSARY.md](docs/TRADING_GLOSSARY.md) - терминология
-- [docs/NEWS.md](docs/NEWS.md) - новости: источники, knowledge_base, скрипты
-- [docs/RISK_MANAGEMENT.md](docs/RISK_MANAGEMENT.md) - управление рисками и лимиты компании
-
-## 🎯 Основные команды
-
-```bash
-# Обновление цен
-python update_prices.py MSFT,SNDK,GBPUSD=X,GC=F
-
-# Добавление новостей
-python news_importer.py add
-
-# Торговый цикл
-python execution_agent.py
-
-# Бэктестинг
-python examples/backtest_example.py
-
-# Отчеты
-python report_generator.py
-
-# Запуск Telegram бота
-python scripts/run_telegram_bot.py
-
-# Тест источников новостей (рекомендуется conda env py11)
-conda activate py11
-bash test_all_news_sources.sh
-# или по одному: python3 services/rss_news_fetcher.py и т.д.
-```
-
-## 🤖 Telegram бот
-
-Telegram бот предоставляет удобный интерфейс для работы с системой:
-
-**Основные команды:**
-- `/signal <ticker>` - полный анализ инструмента (решение, цена, RSI, sentiment, стратегия)
-- `/news <ticker> [N]` - новости за последние 7 дней (топ N, по умолчанию 10)
-- `/price <ticker>` - текущая цена инструмента
-- `/chart <ticker> [days]` - график цены за период (по умолчанию 1 день, макс. 30)
-- `/ask <вопрос>` - задать вопрос боту (работает в группах!)
-- `/tickers` - список отслеживаемых инструментов
-
-**Примеры:**
-- `/signal GC=F` - анализ золота
-- `/news MSFT 15` - 15 новостей по Microsoft
-- `/chart GBPUSD=X 7` - график фунта за 7 дней
-- `/ask какая цена золота` - вопрос на естественном языке
-- `/ask 2 самые важные новости по фунту и золоту` - множественные тикеры
-
-**Особенности:**
-- Автоматическая нормализация тикеров (GC-F → GC=F)
-- Распознавание естественных названий (золото → GC=F, фунт → GBPUSD=X)
-- LLM для понимания вопросов в команде `/ask`
-- Поддержка множественных тикеров в одном запросе
-- Работа в группах через команду `/ask`
-
-Подробнее: [docs/TELEGRAM_BOT_SETUP.md](docs/TELEGRAM_BOT_SETUP.md)
-
-## ⚙️ Автоматизация (Cron)
-
-```bash
-./setup_cron.sh
-```
-
-Установит:
-- **Обновление цен**: ежедневно в 22:00 MSK (после закрытия всех бирж)
-- **Торговый цикл**: в 9:00, 13:00, 17:00 MSK (пн-пт)
-- **Новости** (RSS, NewsAPI, Alpha Vantage): каждый час
-
-## 🔬 Бэктестинг
-
-Система поддерживает бэктестинг на исторических данных:
-
-```python
-from datetime import datetime, timedelta
-from backtest_engine import BacktestEngine
-
-engine = BacktestEngine(initial_cash=100_000.0)
-results = engine.run_backtest(
-    tickers=["MSFT", "SNDK"],
-    start_date=datetime.now() - timedelta(days=90),
-    end_date=datetime.now(),
-    use_llm=False
-)
-```
-
-Подробнее: [docs/BACKTESTING_GUIDE.md](docs/BACKTESTING_GUIDE.md)
-
-## 📈 Стратегии
-
-1. **MomentumStrategy** - следование тренду (низкая волатильность + позитив)
-2. **MeanReversionStrategy** - возврат к среднему (высокая волатильность + нейтрал)
-3. **VolatileGapStrategy** - торговля на гэпах (очень высокая волатильность + гэп)
-4. **NeutralStrategy** - нейтральный режим (когда ни одна стратегия не подходит, рекомендация HOLD)
-
-Strategy Manager автоматически выбирает оптимальную стратегию.
-
-## 🗄️ Структура БД
-
-- `quotes` - котировки с метриками (SMA, волатильность)
-- `knowledge_base` — новости с sentiment, insight, опционально **embedding** (pgvector) и **outcome_json**; одна таблица для списка новостей и семантического поиска. Кто заполняет поля и почему embedding/другие поля часто пустые: см. [docs/KNOWLEDGE_BASE_FIELDS.md](docs/KNOWLEDGE_BASE_FIELDS.md). Backfill embedding: `scripts/sync_vector_kb_cron.py`.
-- `trade_history` - история сделок со strategy_name
-- `portfolio_state` - состояние портфеля
-
-## ⚠️ Risk Management
-
-Система учитывает лимиты компании для торговли на **NYSE** через **швейцарского брокера**:
-- Лимиты хранятся локально в `local/risk_limits.json` (НЕ в git)
-- Автоматическая проверка размера позиций и экспозиции портфеля
-- Соблюдение торговых часов NYSE
-- Подробнее: [docs/RISK_MANAGEMENT.md](docs/RISK_MANAGEMENT.md)
-
-## 📝 Версия
-
-**Версия**: 1.3.0  
-**Последнее обновление**: 2026-02-20
-
-### Изменения в версии 1.3.0:
-- ✅ Telegram бот: команды `/chart`, `/ask`, улучшенная обработка тикеров
-- ✅ Стратегия Neutral для неопределённых рыночных режимов
-- ✅ Улучшена обработка новостей и sentiment анализ
+Торговая и аналитическая система: **PostgreSQL + pgvector**, дневные и **5m** данные (Yahoo), **новости** в `knowledge_base`, **песочница** (портфель + игра **GAME_5M**), **Telegram-бот** и **веб** (карточки 5m, мониторинг).
 
 ---
 
-Подробная документация: см. [docs/](docs/) и [QUICKSTART.md](QUICKSTART.md)
+## Быстрый старт
+
+```bash
+pip install -r requirements.txt
+cp config.env.example config.env   # задать DATABASE_URL, ключи Telegram/LLM по необходимости
+python init_db.py                  # БД lse_trading, начальные котировки
+python web_app.py                  # http://localhost:8080 (порт в compose может быть 8080)
+```
+
+Подробнее: [QUICKSTART.md](QUICKSTART.md).
+
+### Интерфейсы
+
+- **Telegram:** настройка, команды, чаты — [docs/TELEGRAM_BOT_SETUP.md](docs/TELEGRAM_BOT_SETUP.md)
+- **Веб:** карточки 5m, мониторинг — [WEB_INTERFACE.md](WEB_INTERFACE.md)
+
+---
+
+## Архитектура и потоки данных
+
+**С чего начать:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — компоненты, таблицы БД, обзорная схема dataflow.
+
+**Детальные бизнес-процессы (Mermaid):** [BUSINESS_PROCESSES.md](BUSINESS_PROCESSES.md).
+
+```
+Внешние API (Yahoo, RSS, News…) → cron / скрипты → PostgreSQL (quotes, knowledge_base)
+                                              ↓
+                    recommend_5m / game_5m / execution_agent → trade_history, portfolio_state
+                                              ↓
+                              Telegram · web_app · отчёты
+```
+
+---
+
+## Документация (иерархия)
+
+### Основа
+| Документ | Содержание |
+|----------|------------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Компоненты, хранилища, dataflow |
+| [BUSINESS_PROCESSES.md](BUSINESS_PROCESSES.md) | Пошаговые процессы и диаграммы |
+| [docs/DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md) | Таблицы `lse_trading`, поля |
+| [QUICKSTART.md](QUICKSTART.md) | Установка и первый запуск |
+
+### Конфигурация и данные
+| Документ | Содержание |
+|----------|------------|
+| [config.env.example](config.env.example) | Шаблон переменных окружения |
+| [DATA_UPDATES.md](DATA_UPDATES.md) | Обновление котировок, cron |
+| [docs/CONFIG_OPTIONS_ANALYSIS.md](docs/CONFIG_OPTIONS_ANALYSIS.md) | Обзор опций конфига |
+
+### Новости и база знаний
+| Документ | Содержание |
+|----------|------------|
+| [docs/NEWS.md](docs/NEWS.md) | Источники, пайплайн в `knowledge_base` |
+| [docs/KNOWLEDGE_BASE_FIELDS.md](docs/KNOWLEDGE_BASE_FIELDS.md) | Поля KB, кроны backfill |
+| [docs/VECTOR_KB_USAGE.md](docs/VECTOR_KB_USAGE.md) | Векторный поиск, embedding |
+
+### Игра 5m и кроны
+| Документ | Содержание |
+|----------|------------|
+| [docs/RUN_GAME_SERVICES.md](docs/RUN_GAME_SERVICES.md) | Запуск бота, крона 5m, SNDK |
+| [docs/CRONS_AND_TAKE_STOP.md](docs/CRONS_AND_TAKE_STOP.md) | Расписание, тейк/стоп, соответствие боту |
+| [docs/GAME_SNDK.md](docs/GAME_SNDK.md) | Сценарий GAME_5M по быстрым тикерам |
+| [docs/GAME_5M_DEAL_PARAMS_JSON.md](docs/GAME_5M_DEAL_PARAMS_JSON.md) | `context_json` сделок, примеры, эволюция полей |
+| [docs/TIMEZONES.md](docs/TIMEZONES.md) | `trade_history.ts` и отображение в ET |
+
+### Деплой и внешние сервисы
+| Документ | Содержание |
+|----------|------------|
+| [docs/DEPLOY_INSTRUCTIONS.md](docs/DEPLOY_INSTRUCTIONS.md) | VM, Docker, Cloud Run |
+| [docs/MIGRATE_SERVER.md](docs/MIGRATE_SERVER.md) | Перенос БД, дамп/restore |
+| [docs/PLATFORM_GAME_DOCKER.md](docs/PLATFORM_GAME_DOCKER.md) | Platform API (Kerim), сеть Docker |
+
+### Прочее
+| Документ | Содержание |
+|----------|------------|
+| [docs/TRADING_GLOSSARY.md](docs/TRADING_GLOSSARY.md) | Термины |
+| [docs/RISK_MANAGEMENT.md](docs/RISK_MANAGEMENT.md) | Лимиты, `risk_limits.json` |
+| [docs/BACKTESTING_GUIDE.md](docs/BACKTESTING_GUIDE.md) | Бэктестинг |
+| [docs/TELEGRAM_BOT_SETUP.md](docs/TELEGRAM_BOT_SETUP.md) | Настройка бота |
+| [WEB_INTERFACE.md](WEB_INTERFACE.md) | Веб-интерфейс |
+| [ROADMAP.md](ROADMAP.md) | Планы развития |
+| [docs/archive/README.md](docs/archive/README.md) | Устаревшие и разовые документы |
+
+---
+
+## Возможности (кратко)
+
+- **Портфельная игра:** Strategy Manager, `ExecutionAgent`, `trading_cycle_cron`, стратегии Momentum / Mean Reversion / Volatile Gap / Neutral.
+- **Игра 5m (GAME_5M):** `recommend_5m`, `game_5m`, крон `send_sndk_signal_cron.py`, записи в `trade_history` с `context_json`.
+- **LLM:** вопросы `/ask`, опционально вход 5m при `GAME_5M_ENTRY_STRATEGY=llm`, аналитика новостей.
+- **Telegram:** сигналы, `/recommend5m`, `/chart5m`, `/pending`, `/game5m`, отчёты.
+- **Веб:** карточки 5m, графики, мониторинг (см. `docker-compose.yml` — порт **8080**).
+
+---
+
+## Конфигурация
+
+Файл **`config.env`** в корне репозитория (см. `config_loader.py`). Ключевые переменные:
+
+- `DATABASE_URL` — PostgreSQL
+- `TELEGRAM_BOT_TOKEN`, чаты сигналов — для бота и кронов
+- `OPENAI_*` — при использовании LLM
+- `GAME_5M_*`, `TICKERS_FAST` — игра 5m
+
+Расширенные заметки: [CONFIG_SETUP.md](CONFIG_SETUP.md).
+
+---
+
+## Частые команды
+
+```bash
+python update_prices.py MSFT,SNDK
+python scripts/run_telegram_bot.py
+# или docker compose up -d
+```
+
+См. также [QUICKSTART.md](QUICKSTART.md), [docs/RUN_GAME_SERVICES.md](docs/RUN_GAME_SERVICES.md).
+
+---
+
+## Версия
+
+**Версия:** 1.4.0  
+**Обновление документации:** 2026-03-27 — выровнена иерархия README → ARCHITECTURE → тематические документы; устаревшие материалы перенесены в [docs/archive/](docs/archive/).

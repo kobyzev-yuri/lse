@@ -92,12 +92,12 @@
 
 | Поле | Кто заполняет |
 |------|----------------|
-| ts, ticker, source, content, event_type, link, region, importance | Источники при сборе |
+| ts, ticker, source, content, event_type, link, region, importance, ingested_at | Источники при сборе (`ingested_at` — обычно `NOW()` при вставке) |
 | sentiment_score, insight | Alpha Vantage (часть новостей); иначе `add_sentiment_to_news_cron.py` (LLM) |
 | embedding | `sync_vector_kb_cron.py` или `VectorKB.add_event()` |
 | outcome_json | `analyze_event_outcomes_cron.py` |
 
-Подробно: [KNOWLEDGE_BASE_FIELDS.md](KNOWLEDGE_BASE_FIELDS.md).
+Подробно: [KNOWLEDGE_BASE_FIELDS.md](KNOWLEDGE_BASE_FIELDS.md). Полная схема всех таблиц: [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md).
 
 ---
 

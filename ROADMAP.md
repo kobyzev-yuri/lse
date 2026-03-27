@@ -118,4 +118,4 @@
 - [docs/BACKTESTING_GUIDE.md](docs/BACKTESTING_GUIDE.md) - руководство по бэктестингу
 - [docs/DEBUGGING_GUIDE.md](docs/DEBUGGING_GUIDE.md) - отладка после прогона
 - [docs/TRADING_GLOSSARY.md](docs/TRADING_GLOSSARY.md) - терминология
-- [ClusterPlan.md](ClusterPlan.md) - План стратегии непрерывного обучения (RLM) и кластеризации активов
+- [docs/archive/ClusterPlan.md](docs/archive/ClusterPlan.md) — черновик плана RLM/кластеризации (архив)
