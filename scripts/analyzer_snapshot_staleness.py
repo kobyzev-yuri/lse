@@ -23,8 +23,9 @@ def snapshot_staleness_warnings(data: Dict[str, Any]) -> List[str]:
         )
     if w:
         w.append(
-            "Переснять снимок: venv + python3 scripts/snapshot_analyzer_report.py … "
-            "или HTTP к /api/analyzer после деплоя образа с новым кодом. "
-            "git pull обновляет только код на диске, не перезаписывает latest.json."
+            "Переснять снимок: если в shell задан ANALYZER_SNAPSHOT_URL, скрипт по умолчанию ходит по HTTP "
+            "и ответ будет от контейнера (часто без вашего git pull) — используйте "
+            "`python3 scripts/snapshot_analyzer_report.py --local --days 7` или `env -u ANALYZER_SNAPSHOT_URL ...`. "
+            "Иначе: HTTP после деплоя образа с новым кодом."
         )
     return w

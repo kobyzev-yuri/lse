@@ -9,6 +9,12 @@
   export ANALYZER_SNAPSHOT_URL=http://127.0.0.1:8080/api/analyzer
   cd ~/lse && python3 scripts/snapshot_analyzer_report.py --days 7
 
+Если в окружении задан ANALYZER_SNAPSHOT_URL, по умолчанию снимок всегда идёт по HTTP
+(ответ старого контейнера без git pull). Чтобы принудительно считать из кода на диске:
+  env -u ANALYZER_SNAPSHOT_URL python3 scripts/snapshot_analyzer_report.py --days 7
+  # или
+  python3 scripts/snapshot_analyzer_report.py --local --days 7
+
 Пример crontab (хост без venv, веб слушает 8080):
   30 6 * * * cd /home/USER/lse && ANALYZER_SNAPSHOT_URL=http://127.0.0.1:8080/api/analyzer \\
     python3 scripts/snapshot_analyzer_report.py --days 7 >> logs/analyzer_snapshot.log 2>&1
@@ -69,22 +75,28 @@ def _payload_local(
     strategy: str,
     use_llm: bool,
     include_trade_details: bool,
-) -> Dict[str, Any]:
+) -> tuple[Dict[str, Any], str]:
     sys.path.insert(0, str(project_root))
-    from services.trade_effectiveness_analyzer import analyze_trade_effectiveness
+    from services import trade_effectiveness_analyzer as tea
 
-    return analyze_trade_effectiveness(
+    payload = tea.analyze_trade_effectiveness(
         days=days,
         strategy=strategy,
         use_llm=use_llm,
         include_trade_details=include_trade_details,
     )
+    return payload, str(Path(tea.__file__).resolve())
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Сохранить JSON отчёт анализатора в каталог снимков")
     parser.add_argument("--days", type=int, default=7, help="Окно сделок, дней (1–30)")
     parser.add_argument("--strategy", type=str, default="GAME_5M", help="Стратегия")
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Считать отчёт импортом services.* на диске; игнорировать ANALYZER_SNAPSHOT_URL в env",
+    )
     parser.add_argument(
         "--url",
         type=str,
@@ -126,11 +138,19 @@ def main() -> None:
     name = f"analyzer_{strategy}_{days}d_{ts}.json"
     out_path = out_dir / name
 
-    http_url = (args.url or os.environ.get("ANALYZER_SNAPSHOT_URL") or "").strip()
+    env_url = (os.environ.get("ANALYZER_SNAPSHOT_URL") or "").strip()
+    if args.local:
+        http_url = ""
+    elif (args.url or "").strip():
+        http_url = (args.url or "").strip()
+    else:
+        http_url = env_url
     include_td = not bool(args.no_trade_details)
 
     try:
         if http_url:
+            if not args.quiet:
+                print(f"[snapshot] источник: HTTP {http_url}", file=sys.stderr)
             payload = _fetch_payload_via_http(
                 http_url,
                 days=days,
@@ -141,12 +161,15 @@ def main() -> None:
             )
         else:
             try:
-                payload = _payload_local(
+                payload, mod_path = _payload_local(
                     days=days,
                     strategy=strategy,
                     use_llm=bool(args.llm),
                     include_trade_details=include_td,
                 )
+                if not args.quiet:
+                    hint = f" (в env был ANALYZER_SNAPSHOT_URL — проигнорирован благодаря --local)" if args.local and env_url else ""
+                    print(f"[snapshot] источник: локальный модуль {mod_path}{hint}", file=sys.stderr)
             except ImportError as e:
                 print(
                     "Не хватает зависимостей Python (например numpy). Варианты:\n"
