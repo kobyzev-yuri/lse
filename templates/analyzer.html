@@ -4,27 +4,27 @@
 
 {% block content %}
 <h1>Анализатор эффективности сделок</h1>
-<p class="muted">Единый расчёт с Telegram командой <code>/analyser</code>. Период 1-30 дней. Ниже — человекочитаемая выжимка; <strong>полный отчёт всегда в JSON</strong> с того же API (удобно сохранить или отдать скрипту).</p>
+<p class="muted">Тот же расчёт, что и в Telegram: <code>/analyser</code>. Период — 1–30 дней. Ниже краткая выжимка на русском; <strong>полный отчёт</strong> — в JSON с <code>GET /api/analyzer</code> (удобно сохранить или скормить скрипту).</p>
 
 <details class="card" style="border:1px solid rgba(148,163,184,0.2);">
-    <summary style="cursor:pointer; font-weight:600; color:#e2e8f0; user-select:none;">Расшифровка метрик и «типов потерь»</summary>
+    <summary style="cursor:pointer; font-weight:600; color:#e2e8f0; user-select:none;">Справка по метрикам (поля JSON)</summary>
     <div style="margin-top:0.85rem; font-size:0.92rem; line-height:1.55; color:#cbd5e1;">
-        <p style="margin:0 0 0.65rem 0;">Все проценты по сделке считаются на <strong>5m-окне</strong> от входа до выхода (Yahoo 5m, ET), плюс фактический <code>realized_pct</code> с учётом комиссий. Подробные формулы: файл <code>docs/GAME_5M_CALCULATIONS_AND_REPORTING.md</code> в корне репозитория.</p>
+        <p style="margin:0 0 0.65rem 0;">Проценты по окну сделки считаются на <strong>5m-барах</strong> от входа до выхода (Yahoo 5m, ET). Фактический результат — <code>realized_pct</code> (с комиссиями). Формулы и контекст: <code>docs/GAME_5M_CALCULATIONS_AND_REPORTING.md</code> в репозитории.</p>
         <dl style="margin:0; display:grid; gap:0.55rem;">
-            <dt style="font-weight:600; color:#f1f5f9;">Реализованный % (realized)</dt>
-            <dd style="margin:0;">Фактический результат сделки в % к cost-basis (и log-return в JSON при детализации).</dd>
-            <dt style="font-weight:600; color:#f1f5f9;">Missed upside (недобор)</dt>
-            <dd style="margin:0;">Сколько ещё было «на столе» до максимума цены по окну: <code>max(0, potential_best_pct − realized_pct)</code> относительно <strong>high</strong> 5m-баров. <strong>Missed upside Σ</strong> в сводке — <strong>сумма</strong> по сделкам. Блок «По выигрышным missed Σ» — только по сделкам с <code>realized &gt; 0</code>.</dd>
-            <dt style="font-weight:600; color:#f1f5f9;">Avoidable loss Σ</dt>
-            <dd style="margin:0;">Насколько результат <strong>хуже</strong>, чем минимум по окну: <code>max(0, realized_pct − preventable_worst_pct)</code> относительно <strong>low</strong>. Показывает «лишнюю просадку» относительно худшей точки, видимой на 5m внутри сделки (не прогноз).</dd>
-            <dt style="font-weight:600; color:#f1f5f9;">Top losses</dt>
-            <dd style="margin:0;">Сделки с <strong>наименьшим</strong> <code>realized_pct</code> за период. При высоком win rate сюда попадают не обязательно убытки, а <strong>самые слабые плюсы</strong> — сравнивайте с колонкой <code>missed</code> и <code>exit</code>.</dd>
-            <dt style="font-weight:600; color:#f1f5f9;">Top missed upside</dt>
-            <dd style="margin:0;">Крупнейший <strong>недобор</strong> (сортировка по <code>missed</code>), без фильтра по знаку результата: и прибыльные, и убыточные сделки.</dd>
-            <dt style="font-weight:600; color:#f1f5f9;">Выигрышные с крупным недобором</dt>
-            <dd style="margin:0;">Только <code>realized &gt; 0</code>, упорядочены по <code>missed</code>: выход в плюсе при заметном запасе до high окна (ранний тейк / узкая цель).</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Фактический результат (<code>realized_pct</code>)</dt>
+            <dd style="margin:0;">Доходность сделки в % к cost-basis; в развёрнутом JSON также log-return.</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Недобор до максимума окна (<code>missed_upside_pct</code>)</dt>
+            <dd style="margin:0;">Сколько не дожали до лучшей цены по окну: <code>max(0, potential_best_pct − realized_pct)</code> по <strong>high</strong> 5m. В сводке <strong>сумма недоборов</strong> — поле <code>sum_missed_upside_pct</code>. Сумма только по прибыльным — <code>sum_missed_upside_pct_on_wins</code>.</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Избежимая просадка по окну (<code>sum_avoidable_loss_pct</code>)</dt>
+            <dd style="margin:0;">Насколько результат хуже минимума по тем же барам: <code>max(0, realized_pct − preventable_worst_pct)</code> относительно <strong>low</strong>. Не прогноз, а сравнение с худшей точкой, видимой на 5m внутри сделки.</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Худшие исходы (<code>top_cases.top_losses</code>)</dt>
+            <dd style="margin:0;">Сортировка по <strong>возрастанию</strong> <code>realized_pct</code>. При высоком win rate здесь часто «самые слабые плюсы», а не убытки.</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Крупнейший недобор — все сделки (<code>top_cases.top_missed_upside</code>)</dt>
+            <dd style="margin:0;">Сортировка по <strong>убыванию</strong> <code>missed_upside_pct</code>; без отбора по знаку результата (и убыток, и прибыль).</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Прибыльные с крупным недобором (<code>top_cases.top_profitable_missed_upside</code>)</dt>
+            <dd style="margin:0;">Только <code>realized_pct &gt; 0</code>, по убыванию <code>missed_upside_pct</code>: плюс по сделке, но заметный запас до <strong>high</strong> окна (типичный разбор тейка / потолка).</dd>
         </dl>
-        <p class="muted" style="margin:0.75rem 0 0 0; font-size:0.88rem;">В JSON также есть счётчики риска (например <code>late_polling_signals</code>, убыточные при высокой волатильности) — см. <code>summary</code> и <code>trade_effects</code>.</p>
+        <p class="muted" style="margin:0.75rem 0 0 0; font-size:0.88rem;">Дополнительно в <code>summary</code>: счётчики риска (<code>late_polling_signals</code>, <code>high_vol_losses_count</code>, …). Полный список сделок — <code>trade_effects</code> при <code>include_trade_details=1</code>.</p>
     </div>
 </details>
 
@@ -43,7 +43,7 @@
             </select>
         </div>
         <div>
-            <label><input id="useLlm" type="checkbox"> Добавить LLM рекомендации</label>
+            <label><input id="useLlm" type="checkbox"> Запросить рекомендации модели (<code>use_llm=1</code>)</label>
         </div>
         <div>
             <button id="runBtn" type="button">Запустить анализ</button>
@@ -52,11 +52,10 @@
 </div>
 
 <div class="card" style="border: 1px solid rgba(125, 211, 252, 0.35);">
-    <h2>Результирующий JSON (локально, скрипты, jq)</h2>
+    <h2>Скачать и открыть отчёт (JSON, <code>GET /api/analyzer</code>)</h2>
     <p style="color:#e2e8f0; font-size:0.95rem; margin-bottom:0.6rem;">
-        Один запрос <code style="color:#7dd3fc;">GET /api/analyzer</code> возвращает <strong>весь отчёт</strong>:
-        <code>meta</code>, <code>summary</code>, <code>top_cases</code>, <code>llm</code>, <code>auto_config_override</code>
-        и при необходимости <code>trade_effects</code>. Параметры формы выше (дни, стратегия, LLM) подставляются в ссылки и в скачивание.
+        Один запрос возвращает весь отчёт: <code>meta</code>, <code>summary</code>, <code>top_cases</code>, <code>llm</code>, <code>auto_config_override</code>;
+        при параметре детализации — массив <code>trade_effects</code> по сделкам. Дни, стратегия и флаг LLM из формы выше подставляются в ссылки и в кнопки скачивания.
     </p>
     <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.65rem;">
         <button type="button" id="analyzerDownloadJson" class="btn" style="padding:0.45rem 0.85rem;">Скачать .json</button>
@@ -73,37 +72,38 @@
 </div>
 
 <div class="card">
-    <h2>Сводка</h2>
-    <p class="muted"><strong>Missed upside Σ</strong> — сумма недоборов до high окна; <strong>Avoidable loss Σ</strong> — сумма «лишней просадки» относительно low окна (см. раскрывающийся блок выше).</p>
-    <div id="summary" class="dashboard-text">Нажмите "Запустить анализ".</div>
+    <h2>Сводка периода (<code>summary</code>)</h2>
+    <p class="muted">Сумма недоборов — <code>sum_missed_upside_pct</code>; сумма избежимых просадок по окну — <code>sum_avoidable_loss_pct</code>. Пояснения — в справке сверху.</p>
+    <div id="summary" class="dashboard-text">Нажмите «Запустить анализ».</div>
 </div>
 
 <div class="card">
-    <h2>Top losses</h2>
-    <p class="muted">Худшие по <code>realized %</code> (сортировка по возрастанию). При почти 100% win rate здесь часто «мелкие плюсы», а не убытки — смотрите <code>missed</code> и тип выхода.</p>
+    <h2>Худшие исходы (<code>top_cases.top_losses</code>)</h2>
+    <p class="muted">Сначала сделки с <strong>наименьшим</strong> <code>realized_pct</code> (до 8 строк на странице). При высоком win rate это часто самые маленькие плюсы; смотрите также <code>missed_upside_pct</code> и <code>exit_signal</code>.</p>
     <div id="topLosses" class="dashboard-text">—</div>
 </div>
 
 <div class="card">
-    <h2>Top missed upside</h2>
-    <p class="muted">Крупнейший недобор относительно high 5m-окна (по убыванию <code>missed</code>), любые сделки.</p>
+    <h2>Крупнейший недобор — все сделки (<code>top_cases.top_missed_upside</code>)</h2>
+    <p class="muted">Сортировка по убыванию <code>missed_upside_pct</code> (до 8 строк): максимальный «недожатый» запас до <strong>high</strong> 5m-окна, без фильтра по прибыли/убытку.</p>
     <div id="topMissed" class="dashboard-text">—</div>
 </div>
 
 <div class="card">
-    <h2>Выигрышные с крупным недобором</h2>
-    <p class="muted">Ранний выход в плюсе при заметном запасе до high окна сделки (см. <code>top_profitable_missed_upside</code> в JSON).</p>
+    <h2>Прибыльные с крупным недобором (<code>top_cases.top_profitable_missed_upside</code>)</h2>
+    <p class="muted">Только <code>realized_pct &gt; 0</code>; на странице — до 8 строк с <code>missed_upside_pct ≥ 0.25</code>. Полный список — в JSON с <code>include_trade_details=1</code> → фильтр по <code>trade_effects</code>.</p>
     <div id="topWinMissed" class="dashboard-text">—</div>
 </div>
 
 <div class="card">
-    <h2>LLM</h2>
+    <h2>Текстовые рекомендации модели (<code>llm</code>)</h2>
+    <p class="muted">Включается галочкой «Запросить рекомендации модели»; в ответе API — поле <code>llm</code>.</p>
     <pre id="llmBlock">—</pre>
 </div>
 
 <div class="card">
-    <h2>Auto config override</h2>
-    <p class="muted">Анализатор может предложить изменения в <code>config.env</code> по текущему алгоритму.</p>
+    <h2>Предложения для <code>config.env</code> (<code>auto_config_override</code>)</h2>
+    <p class="muted">Готовые пары ключ=значение и служебные пометки из того же JSON. Применение — кнопка ниже (только разрешённые ключи).</p>
     <pre id="envBlock">—</pre>
     <div id="envManual" class="dashboard-text muted">—</div>
     <div id="envSkip" class="dashboard-text muted">—</div>
@@ -193,7 +193,7 @@ function esc(s) {
 }
 
 function toLine(r) {
-    return `• ${esc(r.ticker)} #${esc(r.trade_id)}: ${Number(r.realized_pct).toFixed(2)}% | missed ${Number(r.missed_upside_pct || 0).toFixed(2)}% | exit ${esc(r.exit_signal || '—')}`;
+    return `• ${esc(r.ticker)} #${esc(r.trade_id)}: результат ${Number(r.realized_pct).toFixed(2)}% | недобор ${Number(r.missed_upside_pct || 0).toFixed(2)}% | выход ${esc(r.exit_signal || '—')}`;
 }
 
 async function runAnalyzer() {
@@ -236,17 +236,17 @@ async function runAnalyzer() {
             return;
         }
         summary.innerHTML =
-            `Сделок: <strong>${esc(s.total)}</strong><br>` +
-            `Win rate: <strong>${esc(s.win_rate_pct)}%</strong><br>` +
-            `Net PnL: <strong>${esc(s.sum_net_pnl_usd)}</strong><br>` +
-            `Avg: <strong>${esc(s.avg_realized_pct)}%</strong><br>` +
-            `Missed upside Σ: <strong>${esc(s.sum_missed_upside_pct)}%</strong><br>` +
-            `По выигрышным missed Σ: <strong>${esc(s.sum_missed_upside_pct_on_wins != null ? s.sum_missed_upside_pct_on_wins : '—')}%</strong> ` +
-            `(сделок с missed≥1%: <strong>${esc(s.wins_with_missed_upside_ge_1pct_count != null ? s.wins_with_missed_upside_ge_1pct_count : '—')}</strong>)<br>` +
-            `Avoidable loss Σ: <strong>${esc(s.sum_avoidable_loss_pct)}%</strong><br>` +
-            `<span class="muted" style="font-size:0.92em;">Риски по выборке: late polling=<strong>${esc(s.late_polling_signals != null ? s.late_polling_signals : '—')}</strong>, ` +
-            `убытки при vol≥0.6%=<strong>${esc(s.high_vol_losses_count != null ? s.high_vol_losses_count : '—')}</strong>, ` +
-            `убытки при низком prob_up=<strong>${esc(s.weak_prob_up_losses_count != null ? s.weak_prob_up_losses_count : '—')}</strong></span>`;
+            `Сделок: <strong>${esc(s.total)}</strong> (<code>summary.total</code>)<br>` +
+            `Доля прибыльных: <strong>${esc(s.win_rate_pct)}%</strong> (<code>win_rate_pct</code>)<br>` +
+            `Суммарный PnL: <strong>${esc(s.sum_net_pnl_usd)}</strong> (<code>sum_net_pnl_usd</code>)<br>` +
+            `Средний результат: <strong>${esc(s.avg_realized_pct)}%</strong> (<code>avg_realized_pct</code>)<br>` +
+            `Сумма недоборов: <strong>${esc(s.sum_missed_upside_pct)}%</strong> (<code>sum_missed_upside_pct</code>)<br>` +
+            `Сумма недоборов по прибыльным: <strong>${esc(s.sum_missed_upside_pct_on_wins != null ? s.sum_missed_upside_pct_on_wins : '—')}%</strong> (<code>sum_missed_upside_pct_on_wins</code>), ` +
+            `сделок с недобором ≥1%: <strong>${esc(s.wins_with_missed_upside_ge_1pct_count != null ? s.wins_with_missed_upside_ge_1pct_count : '—')}</strong> (<code>wins_with_missed_upside_ge_1pct_count</code>)<br>` +
+            `Сумма избежимых просадок по окну: <strong>${esc(s.sum_avoidable_loss_pct)}%</strong> (<code>sum_avoidable_loss_pct</code>)<br>` +
+            `<span class="muted" style="font-size:0.92em;">Счётчики риска: запаздывание опроса <strong>${esc(s.late_polling_signals != null ? s.late_polling_signals : '—')}</strong> (<code>late_polling_signals</code>), ` +
+            `убытки при волатильности ≥0.6% <strong>${esc(s.high_vol_losses_count != null ? s.high_vol_losses_count : '—')}</strong> (<code>high_vol_losses_count</code>), ` +
+            `убытки при слабом <code>prob_up</code> <strong>${esc(s.weak_prob_up_losses_count != null ? s.weak_prob_up_losses_count : '—')}</strong> (<code>weak_prob_up_losses_count</code>)</span>`;
         const losses = (data.top_cases && data.top_cases.top_losses) ? data.top_cases.top_losses : [];
         const missed = (data.top_cases && data.top_cases.top_missed_upside) ? data.top_cases.top_missed_upside : [];
         const winMissed = (data.top_cases && data.top_cases.top_profitable_missed_upside) ? data.top_cases.top_profitable_missed_upside : [];
