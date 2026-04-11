@@ -1802,15 +1802,25 @@ class LSETelegramBot:
                     ax1.tick_params(axis='both', labelsize=9)
 
                 def draw_trade_markers(ax):
-                    """Отметки сделок: вход (BUY), тейк, стоп, прочий выход."""
+                    """Отметки сделок: вход (BUY) — *, тейк/стоп — треугольники; серый — выход без P/L."""
                     if trades_buy_ts:
-                        ax.scatter(trades_buy_ts, trades_buy_p, color='#2e7d32', marker='^', s=80, zorder=5, label='Вход (BUY)', edgecolors='darkgreen', linewidths=1)
+                        ax.scatter(
+                            trades_buy_ts,
+                            trades_buy_p,
+                            color='#0284c7',
+                            marker='*',
+                            s=200,
+                            zorder=5,
+                            label='Вход * (BUY)',
+                            edgecolors='#0c4a6e',
+                            linewidths=0.9,
+                        )
                     if trades_take_ts:
                         ax.scatter(trades_take_ts, trades_take_p, color='#0277bd', marker='v', s=80, zorder=5, label='Тейк (прибыль)', edgecolors='#01579b', linewidths=1)
                     if trades_stop_ts:
                         ax.scatter(trades_stop_ts, trades_stop_p, color='#c62828', marker='v', s=80, zorder=5, label='Стоп (убыток)', edgecolors='#b71c1c', linewidths=1)
                     if trades_other_ts:
-                        ax.scatter(trades_other_ts, trades_other_p, color='#757575', marker='v', s=60, zorder=4, label='Выход (другое)', edgecolors='#616161', linewidths=0.8)
+                        ax.scatter(trades_other_ts, trades_other_p, color='#757575', marker='v', s=60, zorder=4, label='Выход (без P/L)', edgecolors='#616161', linewidths=0.8)
 
                 has_rsi = 'rsi' in df.columns and df['rsi'].notna().any()
                 if n_points <= 2 or not has_rsi:
@@ -1857,13 +1867,13 @@ class LSETelegramBot:
                 if n_trades > 0:
                     parts = []
                     if trades_buy_ts:
-                        parts.append("▲ вход (зел.)")
+                        parts.append("* вход (син.)")
                     if trades_take_ts:
                         parts.append("▼ тейк (голуб.)")
                     if trades_stop_ts:
                         parts.append("▼ стоп (красн.)")
                     if trades_other_ts:
-                        parts.append("▼ выход (син.)")
+                        parts.append("▼ выход без P/L (сер.)")
                     caption += f"\n📌 Сделки: {', '.join(parts)} — {n_trades} шт."
                 if has_ohlc:
                     caption += "\n\nℹ️ Свечи: open, high, low, close (дневные)"
@@ -2133,11 +2143,11 @@ class LSETelegramBot:
                 if entry_price is not None:
                     ax.axhline(
                         entry_price,
-                        color="#2e7d32",
+                        color="#0284c7",
                         linestyle="--",
                         linewidth=1.2,
                         alpha=0.9,
-                        label=f"Вход @ {entry_price:.2f}",
+                        label=f"Вход * @ {entry_price:.2f}",
                     )
                 is_last_session = idx == len(session_dates) - 1
                 if is_last_session and d5_chart:
@@ -2171,10 +2181,10 @@ class LSETelegramBot:
                             take_level = entry_price * (1 + take_pct / 100.0)
                             ax.axhline(
                                 take_level,
-                                color="#2e7d32",
+                                color="#15803d",
                                 linestyle=":",
                                 linewidth=1.0,
-                                alpha=0.7,
+                                alpha=0.85,
                                 label=f"Тейк @ {take_level:.2f} (+{take_pct:.1f}%)",
                             )
                         except Exception:
@@ -2198,13 +2208,23 @@ class LSETelegramBot:
                 stop_i = [(t, _clip_p(p)) for t, p in zip(stop_ts, stop_p) if _in_range(t, dt_i_min, dt_i_max)]
                 other_i = [(t, _clip_p(p)) for t, p in zip(other_ts, other_p) if _in_range(t, dt_i_min, dt_i_max)]
                 if buy_i:
-                    ax.scatter([x[0] for x in buy_i], [x[1] for x in buy_i], color="#4ade80", marker="^", s=70, zorder=5, label="Вход (BUY)", edgecolors="darkgreen", linewidths=1)
+                    ax.scatter(
+                        [x[0] for x in buy_i],
+                        [x[1] for x in buy_i],
+                        color="#0284c7",
+                        marker="*",
+                        s=200,
+                        zorder=5,
+                        label="Вход * (BUY)",
+                        edgecolors="#0c4a6e",
+                        linewidths=0.9,
+                    )
                 if take_i:
                     ax.scatter([x[0] for x in take_i], [x[1] for x in take_i], color="#22c55e", marker="^", s=70, zorder=5, label="Закрытие + (прибыль)", edgecolors="#14532d", linewidths=1)
                 if stop_i:
                     ax.scatter([x[0] for x in stop_i], [x[1] for x in stop_i], color="#ef4444", marker="v", s=70, zorder=5, label="Закрытие − (убыток)", edgecolors="#991b1b", linewidths=1)
                 if other_i:
-                    ax.scatter([x[0] for x in other_i], [x[1] for x in other_i], color="#94a3b8", marker="^", s=60, zorder=4, label="Выход (без базы)", edgecolors="#475569", linewidths=0.8)
+                    ax.scatter([x[0] for x in other_i], [x[1] for x in other_i], color="#94a3b8", marker="^", s=60, zorder=4, label="Выход (нет P/L к позиции)", edgecolors="#475569", linewidths=0.8)
                 ax.set_ylabel("Цена", fontsize=10)
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M"))
                 ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=10))
@@ -2232,14 +2252,14 @@ class LSETelegramBot:
             if n_markers > 0:
                 parts = []
                 if buy_ts:
-                    parts.append("▲ вход")
+                    parts.append("* вход")
                 if take_ts:
                     parts.append("▲ закрытие +")
                 if stop_ts:
                     parts.append("▼ закрытие −")
                 if other_ts:
-                    parts.append("▲ выход (сер.)")
-                caption += f"\n📌 Сделки: {', '.join(parts)} — {n_markers} шт. Время ET. Цвет выхода — по P/L к средней цене позиции."
+                    parts.append("▲ выход без P/L (сер.)")
+                caption += f"\n📌 Сделки: {', '.join(parts)} — {n_markers} шт. Время ET. Зелёный ▲ — прибыльное закрытие; серый — SELL без расчёта P/L к позиции; * — покупка."
             if entry_price is not None:
                 caption += f"\n📌 Позиция открыта @ ${entry_price:.2f}"
             buf.seek(0)
@@ -2459,7 +2479,7 @@ class LSETelegramBot:
                     if "Open" in df_i.columns:
                         ax.fill_between(dt_i, df_i["Low"], df_i["High"], alpha=0.12, color="#1565c0")
                     if entry_price is not None:
-                        ax.axhline(entry_price, color="#2e7d32", linestyle="--", linewidth=1.0, alpha=0.8, label=f"Вход {entry_price:.1f}")
+                        ax.axhline(entry_price, color="#0284c7", linestyle="--", linewidth=1.0, alpha=0.85, label=f"Вход * {entry_price:.1f}")
                     is_last_session = j == len(session_dates) - 1
                     if is_last_session and d5_chart:
                         session_high = d5_chart.get("session_high")
@@ -2473,10 +2493,10 @@ class LSETelegramBot:
                                 take_level = entry_price * (1 + take_pct / 100.0)
                                 ax.axhline(
                                     take_level,
-                                    color="#2e7d32",
+                                    color="#15803d",
                                     linestyle=":",
                                     linewidth=0.9,
-                                    alpha=0.7,
+                                    alpha=0.85,
                                     label=f"Тейк @ {take_level:.2f} (+{take_pct:.1f}%)",
                                 )
                             except Exception:
@@ -2498,7 +2518,16 @@ class LSETelegramBot:
                     stop_i = [(t, _clip(p)) for t, p in zip(stop_ts, stop_p) if _in_range(t, window_start, window_end)]
                     other_i = [(t, _clip(p)) for t, p in zip(other_ts, other_p) if _in_range(t, window_start, window_end)]
                     if buy_i:
-                        ax.scatter([x[0] for x in buy_i], [x[1] for x in buy_i], color="#4ade80", marker="^", s=40, zorder=5, edgecolors="darkgreen", linewidths=0.8)
+                        ax.scatter(
+                            [x[0] for x in buy_i],
+                            [x[1] for x in buy_i],
+                            color="#0284c7",
+                            marker="*",
+                            s=130,
+                            zorder=5,
+                            edgecolors="#0c4a6e",
+                            linewidths=0.8,
+                        )
                     if take_i:
                         ax.scatter([x[0] for x in take_i], [x[1] for x in take_i], color="#22c55e", marker="^", s=40, zorder=5, edgecolors="#14532d", linewidths=0.8)
                     if stop_i:

@@ -20,7 +20,7 @@
         Обновлять графики каждые 5 мин
     </label>
     <div id="chart5mSymbolsLegend" class="muted" style="margin-top:0.75rem; margin-bottom:0.5rem; font-size:0.8rem; line-height:1.4;">
-        <strong style="color:#cbd5e1;">Обозначения:</strong> <strong>▲</strong> покупка; <strong>▲/▼</strong> закрытие — зелёный при прибыли по средней цене на момент выхода, красный при убытке (как в учёте открытой позиции, не строгий FIFO) · вертикальные линии — границы дней (9:30 ET) · справа — медиана <strong>p50</strong> с ценой (<strong>30м / 1ч / 2ч</strong>).
+        <strong style="color:#cbd5e1;">Обозначения:</strong> <strong>*</strong> покупка (вход), не путать с линией тейка; <strong>▲/▼</strong> закрытие — зелёный при прибыли, красный при убытке; <strong>серый ▲</strong> — выход SELL, когда P/L к открытой позиции не посчитан (не вход). Горизонталь: <strong>синяя</strong> — уровень входа, <strong>зелёная</strong> — цель тейка. Вертикальные линии — границы дней (9:30 ET). Справа — медиана <strong>p50</strong> (<strong>30м / 1ч / 2ч</strong>).
     </div>
     <div id="chart5mContainer"></div>
 </div>
@@ -94,7 +94,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
         );
     }
     if (data.entry_price != null && labels.length > 0) {
-        datasets.push({ label: 'Вход @ ' + data.entry_price.toFixed(2), data: labels.map(() => data.entry_price), borderColor: '#2e7d32', borderDash: [6, 4], borderWidth: 1, fill: false, pointRadius: 0 });
+        datasets.push({ label: 'Вход * @ ' + data.entry_price.toFixed(2), data: labels.map(() => data.entry_price), borderColor: '#0284c7', borderDash: [6, 4], borderWidth: 1.2, fill: false, pointRadius: 0 });
     }
     if (!noOhlc && data.session_high != null) {
         datasets.push({ label: 'Хай ' + data.session_high.toFixed(2), data: labels.map(() => data.session_high), borderColor: '#f57c00', borderDash: [2, 4], borderWidth: 1, fill: false, pointRadius: 0 });
@@ -104,7 +104,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
         if (data.take_pct != null && data.take_pct !== undefined && !isNaN(Number(data.take_pct))) {
             takeLbl += ' (+' + Number(data.take_pct).toFixed(1) + '%)';
         }
-        datasets.push({ label: takeLbl, data: labels.map(() => data.take_level), borderColor: '#2e7d32', borderDash: [2, 2], borderWidth: 1, fill: false, pointRadius: 0 });
+        datasets.push({ label: takeLbl, data: labels.map(() => data.take_level), borderColor: '#15803d', borderDash: [3, 2], borderWidth: 1.2, fill: false, pointRadius: 0 });
     }
 
     function findClosestLabelIndex(lbls, ts) {
@@ -175,10 +175,10 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
     pushMarkers(sellLossTrades, 'sellLoss');
     pushMarkers(sellNeutralTrades, 'sellNeutral');
     [
-        [buyTrades, 'Вход ▲'],
+        [buyTrades, 'Вход *'],
         [sellWinTrades, 'Закрытие + ▲'],
         [sellLossTrades, 'Закрытие − ▼'],
-        [sellNeutralTrades, 'Закрытие (без P/L)'],
+        [sellNeutralTrades, 'Закрытие (нет P/L к позиции)'],
     ].forEach(([arr, lbl]) => {
         const ds = makeTradeDataset(arr, lbl);
         if (ds) datasets.push(ds);
@@ -357,7 +357,18 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                     } else if (k === 'sellWin') {
                         triUp(px, py - 10, '#22c55e');
                     } else if (k === 'buy') {
-                        triUp(px, py - 10, '#4ade80');
+                        ctx.save();
+                        ctx.font = 'bold 15px system-ui, -apple-system, "Segoe UI", sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        const starY = py - 2;
+                        ctx.lineWidth = 2.5;
+                        ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
+                        ctx.strokeText('*', px, starY);
+                        ctx.lineWidth = 1;
+                        ctx.fillStyle = '#0284c7';
+                        ctx.fillText('*', px, starY);
+                        ctx.restore();
                     } else {
                         triUp(px, py - 10, '#94a3b8');
                     }
