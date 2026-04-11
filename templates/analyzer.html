@@ -6,6 +6,28 @@
 <h1>Анализатор эффективности сделок</h1>
 <p class="muted">Единый расчёт с Telegram командой <code>/analyser</code>. Период 1-30 дней. Ниже — человекочитаемая выжимка; <strong>полный отчёт всегда в JSON</strong> с того же API (удобно сохранить или отдать скрипту).</p>
 
+<details class="card" style="border:1px solid rgba(148,163,184,0.2);">
+    <summary style="cursor:pointer; font-weight:600; color:#e2e8f0; user-select:none;">Расшифровка метрик и «типов потерь»</summary>
+    <div style="margin-top:0.85rem; font-size:0.92rem; line-height:1.55; color:#cbd5e1;">
+        <p style="margin:0 0 0.65rem 0;">Все проценты по сделке считаются на <strong>5m-окне</strong> от входа до выхода (Yahoo 5m, ET), плюс фактический <code>realized_pct</code> с учётом комиссий. Подробные формулы: файл <code>docs/GAME_5M_CALCULATIONS_AND_REPORTING.md</code> в корне репозитория.</p>
+        <dl style="margin:0; display:grid; gap:0.55rem;">
+            <dt style="font-weight:600; color:#f1f5f9;">Реализованный % (realized)</dt>
+            <dd style="margin:0;">Фактический результат сделки в % к cost-basis (и log-return в JSON при детализации).</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Missed upside (недобор)</dt>
+            <dd style="margin:0;">Сколько ещё было «на столе» до максимума цены по окну: <code>max(0, potential_best_pct − realized_pct)</code> относительно <strong>high</strong> 5m-баров. <strong>Missed upside Σ</strong> в сводке — <strong>сумма</strong> по сделкам. Блок «По выигрышным missed Σ» — только по сделкам с <code>realized &gt; 0</code>.</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Avoidable loss Σ</dt>
+            <dd style="margin:0;">Насколько результат <strong>хуже</strong>, чем минимум по окну: <code>max(0, realized_pct − preventable_worst_pct)</code> относительно <strong>low</strong>. Показывает «лишнюю просадку» относительно худшей точки, видимой на 5m внутри сделки (не прогноз).</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Top losses</dt>
+            <dd style="margin:0;">Сделки с <strong>наименьшим</strong> <code>realized_pct</code> за период. При высоком win rate сюда попадают не обязательно убытки, а <strong>самые слабые плюсы</strong> — сравнивайте с колонкой <code>missed</code> и <code>exit</code>.</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Top missed upside</dt>
+            <dd style="margin:0;">Крупнейший <strong>недобор</strong> (сортировка по <code>missed</code>), без фильтра по знаку результата: и прибыльные, и убыточные сделки.</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Выигрышные с крупным недобором</dt>
+            <dd style="margin:0;">Только <code>realized &gt; 0</code>, упорядочены по <code>missed</code>: выход в плюсе при заметном запасе до high окна (ранний тейк / узкая цель).</dd>
+        </dl>
+        <p class="muted" style="margin:0.75rem 0 0 0; font-size:0.88rem;">В JSON также есть счётчики риска (например <code>late_polling_signals</code>, убыточные при высокой волатильности) — см. <code>summary</code> и <code>trade_effects</code>.</p>
+    </div>
+</details>
+
 <div class="card">
     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.6rem; align-items:end;">
         <div>
@@ -52,16 +74,19 @@
 
 <div class="card">
     <h2>Сводка</h2>
+    <p class="muted"><strong>Missed upside Σ</strong> — сумма недоборов до high окна; <strong>Avoidable loss Σ</strong> — сумма «лишней просадки» относительно low окна (см. раскрывающийся блок выше).</p>
     <div id="summary" class="dashboard-text">Нажмите "Запустить анализ".</div>
 </div>
 
 <div class="card">
     <h2>Top losses</h2>
+    <p class="muted">Худшие по <code>realized %</code> (сортировка по возрастанию). При почти 100% win rate здесь часто «мелкие плюсы», а не убытки — смотрите <code>missed</code> и тип выхода.</p>
     <div id="topLosses" class="dashboard-text">—</div>
 </div>
 
 <div class="card">
     <h2>Top missed upside</h2>
+    <p class="muted">Крупнейший недобор относительно high 5m-окна (по убыванию <code>missed</code>), любые сделки.</p>
     <div id="topMissed" class="dashboard-text">—</div>
 </div>
 
@@ -218,7 +243,10 @@ async function runAnalyzer() {
             `Missed upside Σ: <strong>${esc(s.sum_missed_upside_pct)}%</strong><br>` +
             `По выигрышным missed Σ: <strong>${esc(s.sum_missed_upside_pct_on_wins != null ? s.sum_missed_upside_pct_on_wins : '—')}%</strong> ` +
             `(сделок с missed≥1%: <strong>${esc(s.wins_with_missed_upside_ge_1pct_count != null ? s.wins_with_missed_upside_ge_1pct_count : '—')}</strong>)<br>` +
-            `Avoidable loss Σ: <strong>${esc(s.sum_avoidable_loss_pct)}%</strong>`;
+            `Avoidable loss Σ: <strong>${esc(s.sum_avoidable_loss_pct)}%</strong><br>` +
+            `<span class="muted" style="font-size:0.92em;">Риски по выборке: late polling=<strong>${esc(s.late_polling_signals != null ? s.late_polling_signals : '—')}</strong>, ` +
+            `убытки при vol≥0.6%=<strong>${esc(s.high_vol_losses_count != null ? s.high_vol_losses_count : '—')}</strong>, ` +
+            `убытки при низком prob_up=<strong>${esc(s.weak_prob_up_losses_count != null ? s.weak_prob_up_losses_count : '—')}</strong></span>`;
         const losses = (data.top_cases && data.top_cases.top_losses) ? data.top_cases.top_losses : [];
         const missed = (data.top_cases && data.top_cases.top_missed_upside) ? data.top_cases.top_missed_upside : [];
         const winMissed = (data.top_cases && data.top_cases.top_profitable_missed_upside) ? data.top_cases.top_profitable_missed_upside : [];
