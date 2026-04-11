@@ -171,10 +171,23 @@ def main() -> None:
                     hint = f" (в env был ANALYZER_SNAPSHOT_URL — проигнорирован благодаря --local)" if args.local and env_url else ""
                     print(f"[snapshot] источник: локальный модуль {mod_path}{hint}", file=sys.stderr)
             except ImportError as e:
+                vpy = project_root / ".venv" / "bin" / "python3"
+                vhint = (
+                    f"\n  Уже есть venv: {vpy} scripts/snapshot_analyzer_report.py --local --days {days}\n"
+                    if vpy.is_file()
+                    else ""
+                )
                 print(
-                    "Не хватает зависимостей Python (например numpy). Варианты:\n"
-                    "  1) venv: python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt\n"
-                    "  2) HTTP без зависимостей: экспорт ANALYZER_SNAPSHOT_URL=http://127.0.0.1:ПОРТ/api/analyzer\n"
+                    "Локальный снимок (без ANALYZER_SNAPSHOT_URL / с --local) тянет анализатор из этого репо — "
+                    "нужны зависимости как в requirements.txt (numpy, pandas, …).\n"
+                    "  1) Один раз в корне репо:\n"
+                    "       cd ~/lse && python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt\n"
+                    "     затем всегда:\n"
+                    "       . .venv/bin/activate && env -u ANALYZER_SNAPSHOT_URL python3 scripts/snapshot_analyzer_report.py --days 7\n"
+                    f"{vhint}"
+                    "  2) Без venv на хосте: HTTP (только stdlib), но JSON = версия кода **в контейнере**:\n"
+                    "       export ANALYZER_SNAPSHOT_URL=http://127.0.0.1:ПОРТ/api/analyzer\n"
+                    "     После git pull на хосте пересоберите образ / перезапустите сервис, иначе отчёт останется старым.\n"
                     f"Исходная ошибка: {e}",
                     file=sys.stderr,
                 )
