@@ -27,14 +27,27 @@
             <button id="runBtn" type="button">Запустить анализ</button>
         </div>
     </div>
-    <p class="muted" style="margin-top:0.75rem; font-size:0.88rem; line-height:1.45;">
-        <strong>JSON:</strong>
-        <a id="analyzerJsonUrl" href="#" target="_blank" rel="noopener">отчёт (как на странице)</a>
-        ·
-        <a id="analyzerJsonFullUrl" href="#" target="_blank" rel="noopener">тот же отчёт + <code>trade_effects</code> по каждой сделке</a>
-        <br>
-        <span class="muted">Пример для копирования:</span> <code id="analyzerJsonUrlCode" style="font-size:0.8rem; word-break:break-all;">/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0</code>
+</div>
+
+<div class="card" style="border: 1px solid rgba(125, 211, 252, 0.35);">
+    <h2>Результирующий JSON (локально, скрипты, jq)</h2>
+    <p style="color:#e2e8f0; font-size:0.95rem; margin-bottom:0.6rem;">
+        Один запрос <code style="color:#7dd3fc;">GET /api/analyzer</code> возвращает <strong>весь отчёт</strong>:
+        <code>meta</code>, <code>summary</code>, <code>top_cases</code>, <code>llm</code>, <code>auto_config_override</code>
+        и при необходимости <code>trade_effects</code>. Параметры формы выше (дни, стратегия, LLM) подставляются в ссылки и в скачивание.
     </p>
+    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.65rem;">
+        <button type="button" id="analyzerDownloadJson" class="btn" style="padding:0.45rem 0.85rem;">Скачать .json</button>
+        <button type="button" id="analyzerDownloadJsonFull" class="btn" style="padding:0.45rem 0.85rem;">Скачать .json + trade_effects</button>
+    </div>
+    <p style="margin:0 0 0.35rem 0; font-size:0.9rem; color:#cbd5e1;">Открыть в браузере (можно «Сохранить как…»):</p>
+    <ul style="margin:0; padding-left:1.2rem; color:#e2e8f0; font-size:0.9rem; line-height:1.55;">
+        <li><a id="analyzerJsonUrl" href="/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0" target="_blank" rel="noopener">Полный отчёт</a> — как после «Запустить анализ»</li>
+        <li><a id="analyzerJsonFullUrl" href="/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0&amp;include_trade_details=1" target="_blank" rel="noopener">То же + массив <code>trade_effects</code></a> по каждой сделке</li>
+    </ul>
+    <p class="muted" style="margin-top:0.65rem; margin-bottom:0.25rem;">Путь для curl / копирования:</p>
+    <pre id="analyzerJsonCurl" style="font-size:0.78rem; overflow:auto; max-width:100%; padding:0.5rem 0.65rem; background:rgba(15,23,42,0.85); border-radius:6px; border:1px solid rgba(148,163,184,0.25); color:#cbd5e1; white-space:pre-wrap; word-break:break-all;">curl -sS &quot;https://ВАШ_ХОСТ/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0&quot; -o report.json</pre>
+    <p id="analyzerJsonDownloadStatus" class="muted" style="margin-top:0.5rem; min-height:1.2em;"></p>
 </div>
 
 <div class="card">
@@ -89,12 +102,63 @@ function updateAnalyzerJsonLinks() {
     const qFull = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0', include_trade_details: '1' });
     const path = '/api/analyzer?' + q.toString();
     const pathFull = '/api/analyzer?' + qFull.toString();
+    const origin = window.location.origin || '';
     const a = document.getElementById('analyzerJsonUrl');
     const b = document.getElementById('analyzerJsonFullUrl');
-    const c = document.getElementById('analyzerJsonUrlCode');
+    const curlEl = document.getElementById('analyzerJsonCurl');
     if (a) { a.href = path; }
     if (b) { b.href = pathFull; }
-    if (c) { c.textContent = path; }
+    if (curlEl) {
+        const base = origin ? origin : '';
+        curlEl.textContent =
+            'curl -sS "' + base + path + '" -o analyzer_report.json\n\n' +
+            '# С массивом trade_effects по каждой сделке:\n' +
+            'curl -sS "' + base + pathFull + '" -o analyzer_report_full.json';
+    }
+}
+
+async function downloadAnalyzerJson(includeDetails) {
+    const days = document.getElementById('days').value || 7;
+    const strategy = document.getElementById('strategy').value || 'GAME_5M';
+    const useLlm = document.getElementById('useLlm').checked;
+    const q = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0' });
+    if (includeDetails) {
+        q.set('include_trade_details', '1');
+    }
+    const statusEl = document.getElementById('analyzerJsonDownloadStatus');
+    if (statusEl) {
+        statusEl.textContent = 'Скачивание…';
+    }
+    try {
+        const r = await fetch('/api/analyzer?' + q.toString());
+        const data = await r.json();
+        if (!r.ok) {
+            throw new Error((data && data.detail) || r.statusText || 'ошибка API');
+        }
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const slug =
+            String(strategy).replace(/[^a-zA-Z0-9_-]/g, '_') +
+            '_' +
+            String(days) +
+            'd' +
+            (includeDetails ? '_trade_effects' : '') +
+            (useLlm ? '_llm' : '');
+        a.href = url;
+        a.download = 'analyzer_' + slug + '.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        if (statusEl) {
+            statusEl.textContent = 'Готово: analyzer_' + slug + '.json';
+        }
+    } catch (e) {
+        if (statusEl) {
+            statusEl.textContent = 'Ошибка: ' + (e.message || e);
+        }
+    }
 }
 
 function esc(s) {
@@ -191,6 +255,8 @@ document.getElementById('runBtn').addEventListener('click', runAnalyzer);
 document.getElementById('days').addEventListener('change', updateAnalyzerJsonLinks);
 document.getElementById('strategy').addEventListener('change', updateAnalyzerJsonLinks);
 document.getElementById('useLlm').addEventListener('change', updateAnalyzerJsonLinks);
+document.getElementById('analyzerDownloadJson').addEventListener('click', function() { downloadAnalyzerJson(false); });
+document.getElementById('analyzerDownloadJsonFull').addEventListener('click', function() { downloadAnalyzerJson(true); });
 updateAnalyzerJsonLinks();
 
 async function applyEnvOverride() {
