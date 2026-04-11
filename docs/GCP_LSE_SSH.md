@@ -25,6 +25,10 @@ Host gcp-lse
 ssh gcp-lse 'docker ps --format "{{.Names}}" | grep -q lse-postgres && echo OK'
 ```
 
+### Почему после «Exporting knowledge_base…» долго тишина
+
+`\copy … TO STDOUT` гонит весь CSV в один поток в локальный файл. Пока поток не закончился, **в терминале нет прогресса** — это нормально. Скрипт перед выгрузкой печатает **COUNT(*)** по окну дней; во время записи можно в другом окне: `watch -n2 ls -lh tradenews/datasets/lse_gcp_dump/knowledge_base_last*.csv` (последний файл).
+
 Выгрузка KB + quotes в **`tradenews/datasets/lse_gcp_dump/`** (из корня репозитория **`lse/`**):
 
 ```bash

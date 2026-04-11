@@ -22,21 +22,59 @@ META="$OUT_DIR/README_IMPORT.txt"
 
 echo "SSH_TARGET=$SSH_TARGET DAYS=$DAYS -> $OUT_DIR"
 
+precheck() {
+  echo "Checking SSH + Postgres container..."
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=no "$SSH_TARGET" \
+    "docker ps --format '{{.Names}}' | grep -q 'lse-postgres'"; then
+    echo "FAIL: ssh $SSH_TARGET OK but no container matching lse-postgres (see docker ps on VM)." >&2
+    exit 1
+  fi
+  echo "OK: Postgres container is running."
+}
+
+remote_scalar() {
+  # Одна ячейка результата (COUNT и т.д.)
+  local sql=$1
+  local q
+  q=$(printf '%q' "$sql")
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$SSH_TARGET" \
+    "docker exec lse-postgres psql -U postgres -d lse_trading -t -A -q -v ON_ERROR_STOP=1 -c $q" | tr -d ' \n\r' || true
+}
+
 run_remote_copy() {
   local sql_copy=$1
   local out=$2
+  local label=$3
+  rm -f "$out"
+  echo "Streaming $label -> $(basename "$out")"
+  echo "  (пока идёт поток CSV, в этом терминале тишина — это норма; большие выгрузки — минуты.)"
+  echo "  В другом терминале: watch -n2 ls -lh \"$out\""
   printf '%s\n' "$sql_copy" | ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$SSH_TARGET" \
     "docker exec -i lse-postgres psql -U postgres -d lse_trading -v ON_ERROR_STOP=1" \
     >"$out"
+  _sz=$(wc -c <"$out" | tr -d '[:space:]' || echo 0)
+  if command -v numfmt >/dev/null 2>&1; then
+    echo "  готово: $(numfmt --to=iec-i --suffix=B <<<"$_sz") на диске"
+  else
+    echo "  готово: ${_sz} байт на диске"
+  fi
 }
+
+precheck
+
+echo "Row counts (approx., quick):"
+KB_N=$(remote_scalar "SELECT count(*) FROM knowledge_base WHERE ts >= NOW() - interval '${DAYS} days';")
+QT_N=$(remote_scalar "SELECT count(*) FROM quotes WHERE date >= NOW() - interval '${DAYS} days';")
+echo "  knowledge_base rows in window: ${KB_N:-?}"
+echo "  quotes rows in window: ${QT_N:-?}"
 
 echo "Exporting knowledge_base (no embedding)..."
 KB_SQL="\\copy ( SELECT id, ts, ticker, source, content, sentiment_score, event_type, region, importance, link, insight, COALESCE(outcome_json::text, '') AS outcome_json_text, ingested_at FROM knowledge_base WHERE ts >= NOW() - interval '${DAYS} days' ORDER BY ts, id ) TO STDOUT WITH CSV HEADER"
-run_remote_copy "$KB_SQL" "$KB_CSV"
+run_remote_copy "$KB_SQL" "$KB_CSV" "knowledge_base"
 
 echo "Exporting quotes..."
 QT_SQL="\\copy ( SELECT id, date, ticker, \"open\", high, low, close, volume, sma_5, volatility_5, rsi, macd, macd_signal, macd_hist, bbands_upper, bbands_middle, bbands_lower, adx, stoch_k, stoch_d FROM quotes WHERE date >= NOW() - interval '${DAYS} days' ORDER BY ticker, date, id ) TO STDOUT WITH CSV HEADER"
-run_remote_copy "$QT_SQL" "$QT_CSV"
+run_remote_copy "$QT_SQL" "$QT_CSV" "quotes"
 
 wc -l "$KB_CSV" "$QT_CSV" | tee "$META"
 {
