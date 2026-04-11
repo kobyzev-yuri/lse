@@ -8,6 +8,9 @@
 
 Пропуск ключей: env ANALYZER_TUNE_SKIP_KEYS=GAME_5M_SIGNAL_CRON_MINUTES,OTHER_KEY
 (удобно, если крон уже поминутный и менять GAME_5M_SIGNAL_CRON_MINUTES не нужно).
+
+Устаревший снимок (старый анализатор): по умолчанию реальная запись в config.env блокируется;
+см. --force-stale-snapshot или сначала переснять JSON (snapshot_analyzer_report / API после деплоя).
 """
 from __future__ import annotations
 
@@ -20,8 +23,11 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 project_root = Path(__file__).resolve().parent.parent
+_scripts_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(_scripts_dir))
 
+from analyzer_snapshot_staleness import snapshot_staleness_warnings
 from config_loader import is_editable_config_env_key, update_config_key
 
 
@@ -32,9 +38,13 @@ def _skip_set() -> set[str]:
     return {x.strip().upper() for x in raw.split(",") if x.strip()}
 
 
-def _load_updates(path: Path) -> List[Dict[str, Any]]:
+def _load_report(path: Path) -> Dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    auto = data.get("auto_config_override") if isinstance(data, dict) else None
+    return data if isinstance(data, dict) else {}
+
+
+def _updates_from_report(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    auto = data.get("auto_config_override") if isinstance(data.get("auto_config_override"), dict) else None
     if not isinstance(auto, dict):
         return []
     upd = auto.get("updates")
@@ -59,6 +69,11 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true", help="Только показать, что сделали бы")
     parser.add_argument(
+        "--force-stale-snapshot",
+        action="store_true",
+        help="Разрешить запись в config.env, даже если JSON похож на снимок со старого анализатора",
+    )
+    parser.add_argument(
         "--state-dir",
         type=str,
         default="",
@@ -73,10 +88,29 @@ def main() -> None:
         print(f"Файл не найден: {src}", file=sys.stderr)
         sys.exit(1)
 
-    updates = _load_updates(src)
+    report = _load_report(src)
+    updates = _updates_from_report(report)
     if not updates:
         print("Нет auto_config_override.updates в JSON", file=sys.stderr)
         sys.exit(2)
+
+    stale = snapshot_staleness_warnings(report)
+    if stale and not args.dry_run and not args.force_stale_snapshot:
+        print(
+            "Отказ: снимок похож на устаревший (рекомендации могут не соответствовать текущему коду анализатора).",
+            file=sys.stderr,
+        )
+        for line in stale:
+            print(f"  • {line}", file=sys.stderr)
+        print(
+            "Переснимите JSON, затем повторите; или явно: --force-stale-snapshot",
+            file=sys.stderr,
+        )
+        sys.exit(5)
+    if stale and args.dry_run:
+        print("Предупреждение (устаревший снимок):", file=sys.stderr)
+        for line in stale:
+            print(f"  • {line}", file=sys.stderr)
 
     skip = _skip_set()
     if args.index >= 0:
