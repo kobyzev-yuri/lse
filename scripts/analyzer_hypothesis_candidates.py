@@ -37,6 +37,32 @@ def _load(path: Path) -> Dict[str, Any]:
     return data
 
 
+def _snapshot_staleness_warnings(data: Dict[str, Any]) -> List[str]:
+    """Снимок — артефакт; если его писал старый анализатор, поля и updates будут старыми."""
+    w: List[str] = []
+    if "game_5m_config_hints" not in data:
+        w.append(
+            "В JSON нет ключа game_5m_config_hints — отчёт снят анализатором старее ветки с глобальными hints "
+            "(или это не полный ответ /api/analyzer)."
+        )
+    practical = data.get("practical_parameter_suggestions")
+    if isinstance(practical, list) and any(
+        isinstance(p, dict) and str(p.get("parameter") or "").strip() == "take_profit_management"
+        for p in practical
+    ):
+        w.append(
+            "В practical есть take_profit_management (только текст) — в новой версии для missed upside "
+            "добавлен числовой take_momentum_factor → GAME_5M_TAKE_MOMENTUM_FACTOR в auto_config_override."
+        )
+    if w:
+        w.append(
+            "Действия: cd ~/lse && git pull; переснять снимок тем же способом, что и раньше "
+            "(локально: venv + scripts/snapshot_analyzer_report.py; или HTTP — после деплоя образа с новым кодом). "
+            "Скрипт analyzer_hypothesis_candidates.py не вызывает анализатор — он только читает JSON."
+        )
+    return w
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Кандидаты из снимка анализатора для ручного тюнинга")
     ap.add_argument(
@@ -89,9 +115,12 @@ def main() -> int:
     if not isinstance(critical, list):
         critical = []
 
+    staleness = _snapshot_staleness_warnings(data)
+
     if args.json:
         out = {
             "source": str(path),
+            "snapshot_warnings": staleness,
             "auto_config_updates": apply_rows,
             "practical_parameter_suggestions": practical,
             "game_5m_config_hints": hints,
@@ -101,6 +130,10 @@ def main() -> int:
         return 0
 
     print(f"Источник: {path}\n")
+    if staleness:
+        print("⚠ Снимок, похоже, не от текущего кода анализатора:\n")
+        for line in staleness:
+            print(f"  • {line}\n")
 
     summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
     meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
@@ -163,7 +196,10 @@ def main() -> int:
             print(f"  ... ещё {len(hints) - 20}")
         print()
     else:
-        print("  (нет game_5m_config_hints)\n")
+        if "game_5m_config_hints" in data:
+            print("  (пустой список — эвристики не сработали на этой выборке)\n")
+        else:
+            print("  (нет game_5m_config_hints — см. предупреждение выше)\n")
 
     print("=== Остальные practical (часть уже могла попасть в updates выше) ===\n")
     if practical:
