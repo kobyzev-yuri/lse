@@ -56,9 +56,11 @@
 
 ## 4. Доступ к Postgres на GCP (Docker на VM)
 
+Готовый фрагмент **`~/.ssh/config`** для alias **`gcp-lse`** (дамп через `export_lse_gcp_kb_quotes.sh`): **[`docs/GCP_LSE_SSH.md`](GCP_LSE_SSH.md)**.
+
 На VM в `docker-compose` порт Postgres часто проброшен как **`127.0.0.1:5432`** — с вашего ноутбука напрямую к БД не подключиться, только:
 
-1. **SSH-туннель** (пример, хост из вашего `~/.ssh/config`):
+1. **SSH-туннель** (пример, хост из вашего `~/.ssh/config`, напр. `gcp-lse`):
    ```bash
    ssh -N -L 15432:127.0.0.1:5432 gcp-lse
    ```
@@ -121,7 +123,7 @@ docker exec lse-postgres psql -U postgres -d lse_trading -c "\copy (...) TO STDO
 Из корня репозитория `lse/` (нужен SSH по ключу к VM, контейнер `lse-postgres`):
 
 ```bash
-export SSH_TARGET=user@host   # или Host из ~/.ssh/config
+export SSH_TARGET=gcp-lse   # см. docs/GCP_LSE_SSH.md — по умолчанию в скрипте уже gcp-lse
 export DAYS=90
 ./scripts/export_lse_gcp_kb_quotes.sh
 ```
@@ -134,5 +136,5 @@ export DAYS=90
 
 ## 8. Безопасность
 
-- Не коммитьте **IP**, **ключи**, **пароли**, полный **`DATABASE_URL`**.
-- Для команды используйте шаблон: SSH config alias + переменные окружения на машине разработчика.
+- Не коммитьте **приватные ключи**, **пароли**, полный **`DATABASE_URL`** в открытом виде.
+- **IP / пользователь SSH** зафиксированы для команды в **[`docs/GCP_LSE_SSH.md`](GCP_LSE_SSH.md)**; если репозиторий станет публичным — вынесите доступы из git или замените на шаблон.
