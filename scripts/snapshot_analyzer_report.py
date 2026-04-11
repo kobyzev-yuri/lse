@@ -3,9 +3,9 @@
 Снимок JSON отчёта анализатора (тот же расчёт, что /api/analyzer), без HTTP.
 Для cron: регулярно складывать отчёты на диск для диффов и внешних обработчиков.
 
-Пример crontab (каждый день 06:30 по серверу):
-  30 6 * * * cd /path/to/lse && ANALYZER_SNAPSHOT_DIR=/var/lib/lse/analyzer_snapshots \\
-    python3 scripts/snapshot_analyzer_report.py --days 7 >> logs/analyzer_snapshot.log 2>&1
+Пример crontab (каждый день 06:30 по серверу, каталог рядом с репо ~/lse):
+  30 6 * * * cd /home/USER/lse && python3 scripts/snapshot_analyzer_report.py --days 7 >> logs/analyzer_snapshot.log 2>&1
+  (по умолчанию снимки в local/analyzer_snapshots/; переопределение: ANALYZER_SNAPSHOT_DIR=...)
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def main() -> None:
         "--out-dir",
         type=str,
         default="",
-        help="Каталог для файлов (по умолчанию env ANALYZER_SNAPSHOT_DIR или logs/analyzer_snapshots)",
+        help="Каталог для файлов (по умолчанию env ANALYZER_SNAPSHOT_DIR или local/analyzer_snapshots в корне репо)",
     )
     parser.add_argument("--llm", action="store_true", help="Включить LLM (дорого для ежедневного cron)")
     parser.add_argument(
@@ -48,7 +48,7 @@ def main() -> None:
     if raw_dir:
         out_dir = Path(raw_dir)
     else:
-        out_dir = project_root / "logs" / "analyzer_snapshots"
+        out_dir = project_root / "local" / "analyzer_snapshots"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

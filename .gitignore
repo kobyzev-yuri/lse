@@ -10,6 +10,8 @@ local/risk_limits.json
 local/models/*.cbm
 local/models/*.meta.json
 local/*.risk.json
+# Снимки отчёта анализатора (cron)
+local/analyzer_snapshots/
 risk_config/
 risk_limits.json
 risk_limits.env
