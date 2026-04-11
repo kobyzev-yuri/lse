@@ -9,7 +9,7 @@
 ```ssh-config
 # Новый хост GCP для LSE — внешний IP см. HostName; ключ в authorized_keys на VM
 Host gcp-lse
-    HostName 104.197.235.201
+    HostName 104.154.205.58
     User ai8049520
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
@@ -51,7 +51,9 @@ export DAYS=90
 1. **VM запущена** в Google Cloud Console (Compute Engine → VM instances).
 2. **Внешний IP** — у инстанса может быть **ephemeral** и смениться после перезапуска; обновите **`HostName`** в `~/.ssh/config`.
 3. **Firewall GCP** — правило **ingress tcp:22** с подходящим source (0.0.0.0/0 или ваш IP). VPC network → Firewall.
-4. С вашей сети: **`nc -vz 104.x.x.x 22`** или **`ssh -v gcp-lse`** (последние строки лога).
+4. С вашей сети: **`nc -vz <External-IP> 22`** или **`ssh -v gcp-lse`** (последние строки лога).
+
+После **reboot** у инстанса с **ephemeral** IP часто меняется **HostName** — обновите блок `Host gcp-lse` (сейчас в примере ниже актуальный IP; при следующей смене поправьте снова).
 
 ## Безопасность
 
