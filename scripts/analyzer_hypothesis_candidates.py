@@ -101,6 +101,21 @@ def main() -> int:
         return 0
 
     print(f"Источник: {path}\n")
+
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    n = summary.get("total")
+    if n:
+        wr = summary.get("win_rate_pct")
+        sm = summary.get("sum_missed_upside_pct")
+        late = summary.get("late_polling_signals")
+        days = meta.get("days", "?")
+        strat = meta.get("strategy", "?")
+        print(
+            f"Сводка снимка: {n} сделок за {days}д ({strat}) | "
+            f"win_rate≈{wr}% | Σ missed_upside≈{sm}% | late_polling={late}\n"
+        )
+
     print("=== Применение через analyzer_tune_apply.py (один шаг за раз) ===\n")
     if not apply_rows:
         print("  (нет auto_config_override.updates в этом снимке)\n")
@@ -126,7 +141,31 @@ def main() -> int:
             )
             print()
 
-    print("=== Подсказки без готового env в updates (ручная правка / следующий отчёт) ===\n")
+    if any(r.get("env_key") == "GAME_5M_SIGNAL_CRON_MINUTES" for r in apply_rows):
+        print(
+            "В списке updates есть GAME_5M_SIGNAL_CRON_MINUTES (обычно последним). "
+            "Не трогать крон: `export ANALYZER_TUNE_SKIP_KEYS=GAME_5M_SIGNAL_CRON_MINUTES` и переснять отчёт.\n"
+        )
+
+    print("=== game_5m_config_hints (конкретные env + направление; число — вручную или LLM) ===\n")
+    if hints:
+        for h in hints[:20]:
+            if isinstance(h, dict):
+                ek = h.get("env_key") or "?"
+                direction = h.get("direction") or ""
+                ev = (h.get("evidence") or "")[:140]
+                print(f"  • {ek}  [{direction}]")
+                if ev:
+                    print(f"    {ev}")
+            else:
+                print(f"  • {h}")
+        if len(hints) > 20:
+            print(f"  ... ещё {len(hints) - 20}")
+        print()
+    else:
+        print("  (нет game_5m_config_hints)\n")
+
+    print("=== Остальные practical (часть уже могла попасть в updates выше) ===\n")
     if practical:
         print("  practical_parameter_suggestions:")
         for p in practical[:20]:
@@ -143,26 +182,13 @@ def main() -> int:
     else:
         print("  (нет practical_parameter_suggestions)\n")
 
-    if hints:
-        print("  game_5m_config_hints:")
-        for h in hints[:15]:
-            if isinstance(h, dict):
-                print(f"    - {h}")
-            else:
-                print(f"    - {h}")
-        if len(hints) > 15:
-            print(f"    ... ещё {len(hints) - 15}")
-        print()
-    else:
-        print("  (нет game_5m_config_hints в этом снимке)\n")
-
     if critical:
         print("  critical_case_analysis (выборочно):")
         for c in critical[:8]:
             if isinstance(c, dict):
                 tid = c.get("trade_id") or c.get("ticker")
                 act = c.get("action") or c.get("suggested_action") or ""
-                print(f"    - {tid}: {str(act)[:120]}")
+                print(f"    - {tid}: {str(act)[:200]}")
             else:
                 print(f"    - {str(c)[:120]}")
         if len(critical) > 8:

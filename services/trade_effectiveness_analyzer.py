@@ -558,18 +558,30 @@ def _build_practical_parameter_suggestions(
             }
         )
 
-    # 3) Early take / trailing hint based on missed upside
+    # 3) Missed upside → конкретный env (иначе practical не попадает в auto_config_override)
     missed = [e.missed_upside_pct or 0.0 for e in effects]
-    if float(np.mean(missed)) >= 1.0 and summary.get("sum_missed_upside_pct", 0) >= 8:
-        suggestions.append(
-            {
-                "parameter": "take_profit_management",
-                "current": "fixed/early exit dominates",
-                "proposed": "partial TP + trailing on strong momentum",
-                "why": f"Средний missed_upside={float(np.mean(missed)):.2f}%, суммарно={summary.get('sum_missed_upside_pct', 0):.2f}%.",
-                "expected_effect": "Снижение недобора прибыли на сильных движениях.",
-            }
-        )
+    mean_missed = float(np.mean(missed)) if missed else 0.0
+    sum_missed = float(summary.get("sum_missed_upside_pct", 0) or 0)
+    if mean_missed >= 1.0 and sum_missed >= 8:
+        cfg = load_config()
+        try:
+            cur_f = float(str(cfg.get("GAME_5M_TAKE_MOMENTUM_FACTOR") or "1.0").replace(",", "."))
+        except (ValueError, TypeError):
+            cur_f = 1.0
+        proposed_f = round(min(cur_f + 0.05, 1.35), 3)
+        if proposed_f > cur_f + 1e-9:
+            suggestions.append(
+                {
+                    "parameter": "take_momentum_factor",
+                    "current": cur_f,
+                    "proposed": proposed_f,
+                    "why": (
+                        f"Средний missed_upside={mean_missed:.2f}%, суммарно={sum_missed:.2f}% — "
+                        "поднять factor тейка от 2h-импульса (частичный недобор vs high окна)."
+                    ),
+                    "expected_effect": "Выше динамическая цель при сильном импульсе; согласовать с GAME_5M_TAKE_PROFIT_PCT / MIN_PCT.",
+                }
+            )
 
     # 4) Polling cadence
     late = int(summary.get("late_polling_signals", 0))
@@ -610,7 +622,10 @@ def _build_critical_case_analysis(effects: List[TradeEffect], limit: int = 5) ->
             reason_parts.append("negative news at entry")
         action = "Проверить пороги входа/выхода и тайминг опроса для кейса."
         if e.exit_signal == "TAKE_PROFIT" and (e.missed_upside_pct or 0) > 1.0:
-            action = "Рассмотреть частичный тейк + trailing вместо полного раннего выхода."
+            action = (
+                f"{e.ticker} #{e.trade_id}: при TAKE_PROFIT недобор {e.missed_upside_pct:.2f}% — "
+                "см. GAME_5M_TAKE_MOMENTUM_FACTOR / потолок тейка (в т.ч. per-ticker GAME_5M_TAKE_PROFIT_PCT_*)."
+            )
         elif e.exit_signal == "SELL" and e.realized_pct < -1.5:
             action = "Проверить условие SELL: добавить подтверждение/буфер перед выходом."
         out.append(
@@ -627,7 +642,7 @@ def _build_critical_case_analysis(effects: List[TradeEffect], limit: int = 5) ->
     return out
 
 
-def _build_focused_game5m_config_hints(
+def _build_game5m_config_hints(
     effects: List[TradeEffect],
     summary: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
@@ -721,6 +736,7 @@ PARAM_TO_ENV_KEY: Dict[str, str] = {
     "volatility_warn_buy_min": "GAME_5M_VOLATILITY_WARN_BUY_MIN",
     "price_polling_interval": "GAME_5M_SIGNAL_CRON_MINUTES",
     "signal_cron_minutes": "GAME_5M_SIGNAL_CRON_MINUTES",
+    "take_momentum_factor": "GAME_5M_TAKE_MOMENTUM_FACTOR",
     "cfg_min_volume_vs_avg_pct": "GAME_5M_MIN_VOLUME_VS_AVG_PCT",
     "cfg_max_atr_5m_pct": "GAME_5M_MAX_ATR_5M_PCT",
     "entry_quality_guard_enabled": "GAME_5M_ENTRY_QUALITY_GUARD_ENABLED",
@@ -753,6 +769,7 @@ PARAM_TO_ENV_KEY: Dict[str, str] = {
     "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX": "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX",
     "GAME_5M_VOLATILITY_WARN_BUY_MIN": "GAME_5M_VOLATILITY_WARN_BUY_MIN",
     "GAME_5M_SIGNAL_CRON_MINUTES": "GAME_5M_SIGNAL_CRON_MINUTES",
+    "GAME_5M_TAKE_MOMENTUM_FACTOR": "GAME_5M_TAKE_MOMENTUM_FACTOR",
 }
 
 
@@ -934,6 +951,14 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
 
+    # Крон — частый шум в индексе [0]; торговые пороги оставляем первыми.
+    updates.sort(
+        key=lambda u: (
+            u.get("env_key") == "GAME_5M_SIGNAL_CRON_MINUTES",
+            u.get("env_key") or "",
+        )
+    )
+
     env_lines = [f"{u['env_key']}={u['proposed']}" for u in updates]
     manual_notes: List[str] = []
     if any(u.get("env_key") == "GAME_5M_SIGNAL_CRON_MINUTES" for u in updates):
@@ -1065,6 +1090,7 @@ def analyze_trade_effectiveness(
     current_rules = _get_current_decision_rule_params()
     practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
     critical_cases = _build_critical_case_analysis(effects, limit=5)
+    game_5m_config_hints = _build_game5m_config_hints(effects, summary)
     payload: Dict[str, Any] = {
         "meta": {
             "days": days,
@@ -1079,6 +1105,7 @@ def analyze_trade_effectiveness(
         "top_cases": tops,
         "practical_parameter_suggestions": practical,
         "critical_case_analysis": critical_cases,
+        "game_5m_config_hints": game_5m_config_hints,
     }
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
@@ -1130,7 +1157,7 @@ def analyze_trade_effectiveness_focused(
     current_rules = _get_current_decision_rule_params()
     practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
     critical_cases = _build_critical_case_analysis(effects, limit=5)
-    game_5m_config_hints = _build_focused_game5m_config_hints(effects, summary)
+    game_5m_config_hints = _build_game5m_config_hints(effects, summary)
 
     payload: Dict[str, Any] = {
         "meta": {
