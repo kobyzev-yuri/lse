@@ -20,7 +20,7 @@
         Обновлять графики каждые 5 мин
     </label>
     <div id="chart5mSymbolsLegend" class="muted" style="margin-top:0.75rem; margin-bottom:0.5rem; font-size:0.8rem; line-height:1.4;">
-        <strong style="color:#cbd5e1;">Обозначения:</strong> <strong>* цена</strong> — сделки (цвет: вход / тейк / стоп / выход) · вертикальные линии — границы дней (9:30 ET) · справа — медиана <strong>p50</strong> с ценой (<strong>30м / 1ч / 2ч</strong>).
+        <strong style="color:#cbd5e1;">Обозначения:</strong> <strong>▲</strong> покупка; <strong>▲/▼</strong> закрытие — зелёный при прибыли по средней цене на момент выхода, красный при убытке (как в учёте открытой позиции, не строгий FIFO) · вертикальные линии — границы дней (9:30 ET) · справа — медиана <strong>p50</strong> с ценой (<strong>30м / 1ч / 2ч</strong>).
     </div>
     <div id="chart5mContainer"></div>
 </div>
@@ -136,26 +136,50 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
     }
     const trades = (data.trades || []).slice();
     trades.sort((a, b) => new Date(a.ts) - new Date(b.ts));
-    let lastBuyPrice = null;
-    const buyTrades = [], takeTrades = [], stopTrades = [], otherTrades = [];
+    const buyTrades = [], sellWinTrades = [], sellLossTrades = [], sellNeutralTrades = [];
+    let posQty = 0, posCost = 0;
     trades.forEach(t => {
-        const price = parseFloat(t.price) || 0;
-        if (t.side === 'BUY') { buyTrades.push(t); lastBuyPrice = price; }
-        else if (t.side === 'SELL') {
-            if (lastBuyPrice != null) { if (price >= lastBuyPrice) takeTrades.push(t); else stopTrades.push(t); }
-            else otherTrades.push(t);
+        const price = parseFloat(t.price);
+        if (!Number.isFinite(price) || price <= 0) return;
+        let q = parseFloat(t.quantity);
+        if (!Number.isFinite(q) || q <= 0) q = 1;
+        const side = (t.side || '').toUpperCase();
+        if (side === 'BUY') {
+            posQty += q;
+            posCost += q * price;
+            buyTrades.push(t);
+        } else if (side === 'SELL') {
+            let pnlPct = null;
+            if (posQty > 0 && posCost > 0) {
+                const avg = posCost / posQty;
+                pnlPct = ((price - avg) / avg) * 100;
+                const sq = Math.min(q, posQty);
+                posCost -= avg * sq;
+                posQty -= sq;
+            }
+            if (pnlPct == null || !Number.isFinite(pnlPct)) sellNeutralTrades.push(t);
+            else if (pnlPct >= 0) sellWinTrades.push(t);
+            else sellLossTrades.push(t);
         }
     });
-    const tradeStarItems = [];
-    function collectStars(tradesArr, color) {
-        tradesArr.forEach(tr => {
+    const tradeMarkerItems = [];
+    function pushMarkers(arr, kind) {
+        arr.forEach(tr => {
             const i = findClosestLabelIndex(labels, tr.ts);
             const p = parseFloat(tr.price);
-            if (Number.isFinite(p)) tradeStarItems.push({ index: i, price: p, color });
+            if (Number.isFinite(p)) tradeMarkerItems.push({ index: i, price: p, kind: kind });
         });
     }
-    [[buyTrades, 'Вход *', '#4ade80'], [takeTrades, 'Тейк *', '#34d399'], [stopTrades, 'Стоп *', '#f87171'], [otherTrades, 'Выход *', '#94a3b8']].forEach(([arr, lbl, col]) => {
-        collectStars(arr, col);
+    pushMarkers(buyTrades, 'buy');
+    pushMarkers(sellWinTrades, 'sellWin');
+    pushMarkers(sellLossTrades, 'sellLoss');
+    pushMarkers(sellNeutralTrades, 'sellNeutral');
+    [
+        [buyTrades, 'Вход ▲'],
+        [sellWinTrades, 'Закрытие + ▲'],
+        [sellLossTrades, 'Закрытие − ▼'],
+        [sellNeutralTrades, 'Закрытие (без P/L)'],
+    ].forEach(([arr, lbl]) => {
         const ds = makeTradeDataset(arr, lbl);
         if (ds) datasets.push(ds);
     });
@@ -176,7 +200,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                 legend: { position: 'top' },
                 dayBoundaries: dayBoundaries,
                 priceForecast5m: data.price_forecast_5m || null,
-                tradeStarMarkers: { items: tradeStarItems }
+                tradeTriangleMarkers: { items: tradeMarkerItems }
             }
         },
         plugins: [{
@@ -279,40 +303,64 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                 ctx.restore();
             }
         }, {
-            id: 'tradeStarMarkers',
+            id: 'tradeTriangleMarkers',
             afterDraw(chart) {
-                const cfg = chart.options.plugins?.tradeStarMarkers;
+                const cfg = chart.options.plugins?.tradeTriangleMarkers;
                 if (!cfg || !cfg.items || !cfg.items.length) return;
                 const xScale = chart.scales.x, yScale = chart.scales.y;
                 if (!xScale || !yScale) return;
                 const lbls = chart.data.labels || [];
                 const area = chart.chartArea;
                 const ctx = chart.ctx;
-                const font = 'bold 11px system-ui, -apple-system, "Segoe UI", sans-serif';
+                const stroke = 'rgba(15, 23, 42, 0.88)';
+                const h = 8, w = 7;
+                function triUp(cx, cyTip, fill) {
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cyTip);
+                    ctx.lineTo(cx - w, cyTip + h);
+                    ctx.lineTo(cx + w, cyTip + h);
+                    ctx.closePath();
+                    ctx.fillStyle = fill;
+                    ctx.strokeStyle = stroke;
+                    ctx.lineWidth = 1.2;
+                    ctx.fill();
+                    ctx.stroke();
+                }
+                function triDown(cx, cyTip, fill) {
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cyTip);
+                    ctx.lineTo(cx - w, cyTip - h);
+                    ctx.lineTo(cx + w, cyTip - h);
+                    ctx.closePath();
+                    ctx.fillStyle = fill;
+                    ctx.strokeStyle = stroke;
+                    ctx.lineWidth = 1.2;
+                    ctx.fill();
+                    ctx.stroke();
+                }
                 ctx.save();
                 try {
                     if (typeof ctx.resetClip === 'function') {
                         ctx.resetClip();
                     }
                 } catch (_) {}
-                ctx.font = font;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'bottom';
                 cfg.items.forEach(function(item) {
                     const xi = item.index;
                     if (xi < 0 || xi >= lbls.length) return;
                     const px = xScale.getPixelForValue(lbls[xi]);
                     const py = yScale.getPixelForValue(item.price);
                     if (!Number.isFinite(px) || !Number.isFinite(py)) return;
-                    if (px < area.left - 2 || px > area.right + 2 || py < area.top - 2 || py > area.bottom + 2) return;
-                    const txt = '* ' + item.price.toFixed(2);
-                    const ty = py - 5;
-                    ctx.strokeStyle = 'rgba(15, 23, 42, 0.92)';
-                    ctx.lineWidth = 4;
-                    ctx.strokeText(txt, px, ty);
-                    ctx.fillStyle = item.color;
-                    ctx.lineWidth = 1;
-                    ctx.fillText(txt, px, ty);
+                    if (px < area.left - 8 || px > area.right + 8 || py < area.top - 10 || py > area.bottom + 10) return;
+                    const k = item.kind;
+                    if (k === 'sellLoss') {
+                        triDown(px, py + 2, '#ef4444');
+                    } else if (k === 'sellWin') {
+                        triUp(px, py - 10, '#22c55e');
+                    } else if (k === 'buy') {
+                        triUp(px, py - 10, '#4ade80');
+                    } else {
+                        triUp(px, py - 10, '#94a3b8');
+                    }
                 });
                 ctx.restore();
             }

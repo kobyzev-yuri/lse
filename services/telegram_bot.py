@@ -799,11 +799,13 @@ def _build_pending_html(
         now_str = f"{now_price:.2f}" if now_price is not None else "—"
         tp_str = f"{p.take_profit}%" if getattr(p, "take_profit", None) is not None else "—"
         sl_str = f"{p.stop_loss}%" if getattr(p, "stop_loss", None) is not None else "—"
+        n_buys = int(getattr(p, "buy_leg_count", 1) or 1)
         rows_html.append(
             f"<tr><td>{html.escape(p.ticker)}</td><td>Long</td>"
             f"<td>{p.entry_price:.2f}</td><td>{now_str}</td><td>{int(p.quantity)}</td>"
             f'<td class="{pl_cls}">{html.escape(pl_str)}</td><td>{html.escape(strat)}</td>'
             f"<td>{tp_str}</td><td>{sl_str}</td>"
+            f"<td>{n_buys}</td>"
             f"<td>{_ts_msk(p.entry_ts)}</td></tr>"
         )
     body = "\n".join(rows_html)
@@ -814,7 +816,7 @@ def _build_pending_html(
 <html lang="ru"><head><meta charset="utf-8"><title>Открытые позиции</title>
 <style>table{{border-collapse:collapse;width:100%}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}} .summary{{margin-top:1em}}</style>
 </head><body><h1>Открытые позиции</h1><p>Даты в MSK. «5m вне» — тикер убран из игры 5m.</p>
-<table><thead><tr><th>Instrument</th><th>Dir</th><th>Open</th><th>Now</th><th>Units</th><th>P/L</th><th>Strategy</th><th>TP</th><th>SL</th><th>Open (MSK)</th></tr></thead>
+<table><thead><tr><th>Instrument</th><th>Dir</th><th>Open</th><th>Now</th><th>Units</th><th>P/L</th><th>Strategy</th><th>TP</th><th>SL</th><th>BUYs</th><th>Open (MSK)</th></tr></thead>
 <tbody>{body}</tbody></table>{summary}</body></html>"""
 
 
@@ -2066,10 +2068,14 @@ class LSETelegramBot:
             stop_ts, stop_p = [], []
             other_ts, other_p = [], []
             try:
-                from services.game_5m import get_trades_for_chart, trade_ts_to_et, TRADE_HISTORY_TZ
-                trades = get_trades_for_chart(ticker, dt_min, dt_max)
-                last_buy_price = None
-                for t in trades:
+                from services.game_5m import (
+                    get_trades_for_chart,
+                    partition_trades_for_chart_pnl,
+                    trade_ts_to_et,
+                    TRADE_HISTORY_TZ,
+                )
+
+                def _trade_ts_et(t):
                     ts = t["ts"]
                     try:
                         stored_tz = t.get("ts_timezone") or TRADE_HISTORY_TZ
@@ -2079,23 +2085,22 @@ class LSETelegramBot:
                             ts = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
                     except Exception:
                         pass
-                    p = float(t["price"])
-                    if t["side"] == "BUY":
-                        buy_ts.append(ts)
-                        buy_p.append(p)
-                        last_buy_price = p
-                    elif t["side"] == "SELL":
-                        # Прибыль/убыток по факту: выход >= входа → тейк (зел.), иначе → стоп (красн.)
-                        if last_buy_price is not None:
-                            if p >= last_buy_price:
-                                take_ts.append(ts)
-                                take_p.append(p)
-                            else:
-                                stop_ts.append(ts)
-                                stop_p.append(p)
-                        else:
-                            other_ts.append(ts)
-                            other_p.append(p)
+                    return ts
+
+                raw_trades = get_trades_for_chart(ticker, dt_min, dt_max)
+                buys, sell_win, sell_loss, sell_neutral = partition_trades_for_chart_pnl(raw_trades)
+                for t in buys:
+                    buy_ts.append(_trade_ts_et(t))
+                    buy_p.append(float(t["price"]))
+                for t in sell_win:
+                    take_ts.append(_trade_ts_et(t))
+                    take_p.append(float(t["price"]))
+                for t in sell_loss:
+                    stop_ts.append(_trade_ts_et(t))
+                    stop_p.append(float(t["price"]))
+                for t in sell_neutral:
+                    other_ts.append(_trade_ts_et(t))
+                    other_p.append(float(t["price"]))
             except Exception:
                 pass
             for idx, sd in enumerate(session_dates):
@@ -2193,13 +2198,13 @@ class LSETelegramBot:
                 stop_i = [(t, _clip_p(p)) for t, p in zip(stop_ts, stop_p) if _in_range(t, dt_i_min, dt_i_max)]
                 other_i = [(t, _clip_p(p)) for t, p in zip(other_ts, other_p) if _in_range(t, dt_i_min, dt_i_max)]
                 if buy_i:
-                    ax.scatter([x[0] for x in buy_i], [x[1] for x in buy_i], color="#2e7d32", marker="^", s=70, zorder=5, label="Вход (BUY)", edgecolors="darkgreen", linewidths=1)
+                    ax.scatter([x[0] for x in buy_i], [x[1] for x in buy_i], color="#4ade80", marker="^", s=70, zorder=5, label="Вход (BUY)", edgecolors="darkgreen", linewidths=1)
                 if take_i:
-                    ax.scatter([x[0] for x in take_i], [x[1] for x in take_i], color="#0277bd", marker="v", s=70, zorder=5, label="Тейк (прибыль)", edgecolors="#01579b", linewidths=1)
+                    ax.scatter([x[0] for x in take_i], [x[1] for x in take_i], color="#22c55e", marker="^", s=70, zorder=5, label="Закрытие + (прибыль)", edgecolors="#14532d", linewidths=1)
                 if stop_i:
-                    ax.scatter([x[0] for x in stop_i], [x[1] for x in stop_i], color="#c62828", marker="v", s=70, zorder=5, label="Стоп (убыток)", edgecolors="#b71c1c", linewidths=1)
+                    ax.scatter([x[0] for x in stop_i], [x[1] for x in stop_i], color="#ef4444", marker="v", s=70, zorder=5, label="Закрытие − (убыток)", edgecolors="#991b1b", linewidths=1)
                 if other_i:
-                    ax.scatter([x[0] for x in other_i], [x[1] for x in other_i], color="#757575", marker="v", s=60, zorder=4, label="Выход (другое)", edgecolors="#616161", linewidths=0.8)
+                    ax.scatter([x[0] for x in other_i], [x[1] for x in other_i], color="#94a3b8", marker="^", s=60, zorder=4, label="Выход (без базы)", edgecolors="#475569", linewidths=0.8)
                 ax.set_ylabel("Цена", fontsize=10)
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M"))
                 ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=10))
@@ -2227,14 +2232,14 @@ class LSETelegramBot:
             if n_markers > 0:
                 parts = []
                 if buy_ts:
-                    parts.append("▲ вход (зел.)")
+                    parts.append("▲ вход")
                 if take_ts:
-                    parts.append("▼ тейк (голуб.)")
+                    parts.append("▲ закрытие +")
                 if stop_ts:
-                    parts.append("▼ стоп (красн.)")
+                    parts.append("▼ закрытие −")
                 if other_ts:
-                    parts.append("▼ выход (син.)")
-                caption += f"\n📌 Сделки: {', '.join(parts)} — {n_markers} шт. Время ET."
+                    parts.append("▲ выход (сер.)")
+                caption += f"\n📌 Сделки: {', '.join(parts)} — {n_markers} шт. Время ET. Цвет выхода — по P/L к средней цене позиции."
             if entry_price is not None:
                 caption += f"\n📌 Позиция открыта @ ${entry_price:.2f}"
             buf.seek(0)
@@ -2396,10 +2401,9 @@ class LSETelegramBot:
             stop_ts, stop_p = [], []
             other_ts, other_p = [], []
             if df is not None and not df.empty and trades:
-                from services.game_5m import trade_ts_to_et, TRADE_HISTORY_TZ
-                dt_min, dt_max = res["dt_min"], res["dt_max"]
-                last_buy_price = None
-                for t in trades:
+                from services.game_5m import partition_trades_for_chart_pnl, trade_ts_to_et, TRADE_HISTORY_TZ
+
+                def _trade_ts_et_row(t):
                     ts = t["ts"]
                     try:
                         stored_tz = t.get("ts_timezone") or TRADE_HISTORY_TZ
@@ -2409,22 +2413,21 @@ class LSETelegramBot:
                             ts = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
                     except Exception:
                         pass
-                    p = float(t["price"])
-                    if t["side"] == "BUY":
-                        buy_ts.append(ts)
-                        buy_p.append(p)
-                        last_buy_price = p
-                    elif t["side"] == "SELL":
-                        if last_buy_price is not None:
-                            if p >= last_buy_price:
-                                take_ts.append(ts)
-                                take_p.append(p)
-                            else:
-                                stop_ts.append(ts)
-                                stop_p.append(p)
-                        else:
-                            other_ts.append(ts)
-                            other_p.append(p)
+                    return ts
+
+                buys, sell_win, sell_loss, sell_neutral = partition_trades_for_chart_pnl(trades)
+                for t in buys:
+                    buy_ts.append(_trade_ts_et_row(t))
+                    buy_p.append(float(t["price"]))
+                for t in sell_win:
+                    take_ts.append(_trade_ts_et_row(t))
+                    take_p.append(float(t["price"]))
+                for t in sell_loss:
+                    stop_ts.append(_trade_ts_et_row(t))
+                    stop_p.append(float(t["price"]))
+                for t in sell_neutral:
+                    other_ts.append(_trade_ts_et_row(t))
+                    other_p.append(float(t["price"]))
 
             for j in range(max_cols):
                 ax = axes[i, j]
@@ -2495,13 +2498,13 @@ class LSETelegramBot:
                     stop_i = [(t, _clip(p)) for t, p in zip(stop_ts, stop_p) if _in_range(t, window_start, window_end)]
                     other_i = [(t, _clip(p)) for t, p in zip(other_ts, other_p) if _in_range(t, window_start, window_end)]
                     if buy_i:
-                        ax.scatter([x[0] for x in buy_i], [x[1] for x in buy_i], color="#2e7d32", marker="^", s=40, zorder=5, edgecolors="darkgreen", linewidths=0.8)
+                        ax.scatter([x[0] for x in buy_i], [x[1] for x in buy_i], color="#4ade80", marker="^", s=40, zorder=5, edgecolors="darkgreen", linewidths=0.8)
                     if take_i:
-                        ax.scatter([x[0] for x in take_i], [x[1] for x in take_i], color="#0277bd", marker="v", s=40, zorder=5, edgecolors="#01579b", linewidths=0.8)
+                        ax.scatter([x[0] for x in take_i], [x[1] for x in take_i], color="#22c55e", marker="^", s=40, zorder=5, edgecolors="#14532d", linewidths=0.8)
                     if stop_i:
-                        ax.scatter([x[0] for x in stop_i], [x[1] for x in stop_i], color="#c62828", marker="v", s=40, zorder=5, edgecolors="#b71c1c", linewidths=0.8)
+                        ax.scatter([x[0] for x in stop_i], [x[1] for x in stop_i], color="#ef4444", marker="v", s=40, zorder=5, edgecolors="#991b1b", linewidths=0.8)
                     if other_i:
-                        ax.scatter([x[0] for x in other_i], [x[1] for x in other_i], color="#757575", marker="v", s=32, zorder=4, edgecolors="#616161", linewidths=0.6)
+                        ax.scatter([x[0] for x in other_i], [x[1] for x in other_i], color="#94a3b8", marker="^", s=32, zorder=4, edgecolors="#475569", linewidths=0.6)
                 try:
                     sd_str = pd.Timestamp(sd).strftime("%d.%m")
                 except Exception:
@@ -3958,6 +3961,7 @@ class LSETelegramBot:
             w_units = 6
             w_pl = 14
             w_strat = 10
+            w_buys = 5
             w_date = 16
 
             def _cell(s: str, w: int) -> str:
@@ -3966,7 +3970,7 @@ class LSETelegramBot:
             header = (
                 _cell("Instrument", w_inst) + sep + _cell("Dir", w_dir) + sep
                 + _cell("Open", w_open) + sep + _cell("Now", w_now) + sep + _cell("Units", w_units) + sep
-                + _cell("P/L", w_pl) + sep + _cell("Strategy", w_strat) + sep + "Open (MSK)"
+                + _cell("P/L", w_pl) + sep + _cell("Strategy", w_strat) + sep + _cell("BUYs", w_buys) + sep + "Open (MSK)"
             )
             rows = [header]
             for p in pending:
@@ -3982,11 +3986,12 @@ class LSETelegramBot:
                     pl_str = "—"
                     now_price = None
                 now_str = f"{now_price:.2f}" if now_price is not None else "—"
+                n_buys = int(getattr(p, "buy_leg_count", 1) or 1)
                 row = (
                     _cell(str(p.ticker), w_inst) + sep + _cell("Long", w_dir) + sep
                     + _cell(f"{p.entry_price:.2f}", w_open) + sep + _cell(now_str, w_now) + sep
                     + _cell(str(int(p.quantity)), w_units) + sep + _cell(pl_str, w_pl) + sep
-                    + _cell(strat, w_strat) + sep + _fmt_ts_msk(p.entry_ts)
+                    + _cell(strat, w_strat) + sep + _cell(str(n_buys), w_buys) + sep + _fmt_ts_msk(p.entry_ts)
                 )
                 rows.append(row)
             total_entry = sum(p.entry_price * p.quantity for p in pending if p.entry_price)

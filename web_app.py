@@ -953,8 +953,10 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
             trades_out.append({
                 "ts": ts,
                 "price": float(t.get("price", 0)),
+                "quantity": float(t.get("quantity") or 0),
                 "side": t.get("side"),
                 "signal_type": t.get("signal_type"),
+                "id": int(t.get("id") or 0),
             })
     except Exception:
         pass
@@ -1124,8 +1126,10 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
             trades.append({
                 "ts": ts,
                 "price": float(t.get("price", 0)),
+                "quantity": float(t.get("quantity") or 0),
                 "side": t.get("side"),
                 "signal_type": t.get("signal_type"),
+                "id": int(t.get("id") or 0),
             })
     except Exception:
         pass
@@ -1168,8 +1172,10 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
             {
                 "ts": t["ts"],
                 "price": _f(t.get("price")),
+                "quantity": float(t.get("quantity") or 0),
                 "side": t.get("side"),
                 "signal_type": t.get("signal_type"),
+                "id": int(t.get("id") or 0),
             }
             for t in trades
         ],
@@ -1735,6 +1741,7 @@ def _pending_report_rows(limit: int = 50):
             "pl": pl_str,
             "strategy": strat,
             "open_msk": open_msk,
+            "buy_legs": int(getattr(p, "buy_leg_count", 1) or 1),
         })
     return rows
 

@@ -53,6 +53,7 @@ class OpenPosition:
     take_profit: Optional[float] = None
     stop_loss: Optional[float] = None
     context_json: Optional[str] = None
+    buy_leg_count: int = 1  # число BUY подряд в текущей открытой позиции (до полного SELL)
 
 
 def get_engine():
@@ -237,6 +238,7 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
     position_take_profit: Dict[str, Optional[float]] = {}
     position_stop_loss: Dict[str, Optional[float]] = {}
     position_context_json: Dict[str, Optional[str]] = {}
+    position_buy_legs: Dict[str, int] = {}
 
     for _, row in trades.iterrows():
         ticker = _canonical_ticker_for_positions(row["ticker"])
@@ -257,6 +259,7 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
             position_take_profit[ticker] = None
             position_stop_loss[ticker] = None
             position_context_json[ticker] = None
+            position_buy_legs[ticker] = 0
 
         if side == "BUY":
             if position_qty[ticker] == 0:
@@ -264,6 +267,9 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
                 position_take_profit[ticker] = float(row["take_profit"]) if pd.notna(row.get("take_profit")) else None
                 position_stop_loss[ticker] = float(row["stop_loss"]) if pd.notna(row.get("stop_loss")) else None
                 position_context_json[ticker] = row.get("context_json")
+                position_buy_legs[ticker] = 1
+            else:
+                position_buy_legs[ticker] = position_buy_legs.get(ticker, 0) + 1
             position_qty[ticker] += qty
             position_cost[ticker] += qty * price + commission
             position_last_strategy[ticker] = strategy
@@ -276,9 +282,11 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
             position_cost[ticker] -= cost_for_sold
             if position_qty[ticker] <= 0:
                 position_open_ts[ticker] = None
+                position_buy_legs[ticker] = 0
 
     for ticker, qty in position_qty.items():
         if qty > 0 and position_cost.get(ticker, 0) > 0:
+            legs = max(1, int(position_buy_legs.get(ticker) or 1))
             result.append(
                 OpenPosition(
                     ticker=ticker,
@@ -289,6 +297,7 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
                     take_profit=position_take_profit.get(ticker),
                     stop_loss=position_stop_loss.get(ticker),
                     context_json=position_context_json.get(ticker),
+                    buy_leg_count=legs,
                 )
             )
 

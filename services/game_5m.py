@@ -449,7 +449,7 @@ def get_trades_for_chart(
 ) -> list[dict[str, Any]]:
     """Сделки GAME_5M по тикеру в заданном диапазоне времени (для нанесения на график 5m).
     dt_min, dt_max — диапазон графика в ET. В БД ts хранятся в Moscow, поэтому диапазон переводится в MSK.
-    Возвращает список dict: ts, price, side ('BUY'|'SELL'), signal_type, ts_timezone (если есть в таблице)."""
+    Возвращает список dict: ts, price, quantity, side ('BUY'|'SELL'), signal_type, ts_timezone (если есть в таблице)."""
     dt_lo, dt_hi = _chart_range_et_to_msk(dt_min, dt_max, margin_days=1)
     engine = _engine()
     params = {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "dt_min": dt_lo, "dt_max": dt_hi}
@@ -457,35 +457,102 @@ def get_trades_for_chart(
         try:
             rows = conn.execute(
                 text("""
-                    SELECT ts, side, price, signal_type, ts_timezone
+                    SELECT id, ts, side, price, quantity, signal_type, ts_timezone
                     FROM public.trade_history
                     WHERE ticker = :ticker AND strategy_name = :strategy
                       AND ts >= :dt_min AND ts <= :dt_max
-                    ORDER BY ts ASC
+                    ORDER BY ts ASC, id ASC
                 """),
                 params,
             ).fetchall()
             raw = [
-                {"ts": r[0], "price": float(r[2]), "side": r[1], "signal_type": r[3] or "", "ts_timezone": r[4]}
+                {
+                    "id": int(r[0]),
+                    "ts": r[1],
+                    "price": float(r[3]),
+                    "quantity": float(r[4] or 0),
+                    "side": r[2],
+                    "signal_type": r[5] or "",
+                    "ts_timezone": r[6],
+                }
                 for r in rows
             ]
         except Exception:
             rows = conn.execute(
                 text("""
-                    SELECT ts, side, price, signal_type
+                    SELECT id, ts, side, price, quantity, signal_type
                     FROM public.trade_history
                     WHERE ticker = :ticker AND strategy_name = :strategy
                       AND ts >= :dt_min AND ts <= :dt_max
-                    ORDER BY ts ASC
+                    ORDER BY ts ASC, id ASC
                 """),
                 params,
             ).fetchall()
             raw = [
-                {"ts": r[0], "price": float(r[2]), "side": r[1], "signal_type": r[3] or "", "ts_timezone": None}
+                {
+                    "id": int(r[0]),
+                    "ts": r[1],
+                    "price": float(r[3]),
+                    "quantity": float(r[4] or 0),
+                    "side": r[2],
+                    "signal_type": r[5] or "",
+                    "ts_timezone": None,
+                }
                 for r in rows
             ]
     # Не фильтруем по ET здесь: диапазон уже переведён в MSK с запасом, отрисовка по сессиям сама отсечёт лишнее
     return raw
+
+
+def partition_trades_for_chart_pnl(trades: list[dict[str, Any]]) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """Разнести сделки для маркеров на графике: BUY; SELL с P/L ≥ 0; SELL с P/L < 0; SELL без базы.
+
+    Учёт средней цены входа по нарастающей (как агрегированная открытая позиция), не строгий FIFO по лотам.
+    При полном закрытии позиции суммарный реализованный P/L совпадает с FIFO; распределение по частичным SELL может отличаться.
+    """
+    sorted_trades = sorted(
+        trades,
+        key=lambda t: (t.get("ts"), int(t.get("id") or 0)),
+    )
+    buy_trades: list[dict] = []
+    sell_win: list[dict] = []
+    sell_loss: list[dict] = []
+    sell_neutral: list[dict] = []
+    pos_qty = 0.0
+    pos_cost = 0.0
+    for t in sorted_trades:
+        try:
+            price = float(t.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        if price <= 0:
+            continue
+        try:
+            q = float(t.get("quantity") or 0)
+        except (TypeError, ValueError):
+            q = 0.0
+        if q <= 0:
+            q = 1.0
+        side = (t.get("side") or "").strip().upper()
+        if side == "BUY":
+            pos_qty += q
+            pos_cost += q * price
+            buy_trades.append(t)
+        elif side == "SELL":
+            pnl_pct: Optional[float] = None
+            if pos_qty > 0 and pos_cost > 0:
+                avg = pos_cost / pos_qty
+                pnl_pct = ((price - avg) / avg) * 100.0
+                sq = min(q, pos_qty)
+                pos_cost -= avg * sq
+                pos_qty -= sq
+            if pnl_pct is None or not math.isfinite(pnl_pct):
+                sell_neutral.append(t)
+            elif pnl_pct >= 0:
+                sell_win.append(t)
+            else:
+                sell_loss.append(t)
+    return buy_trades, sell_win, sell_loss, sell_neutral
 
 
 def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
