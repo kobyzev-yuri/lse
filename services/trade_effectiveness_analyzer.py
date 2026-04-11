@@ -88,6 +88,33 @@ def _load_closed_trades(days: int, strategy_name: Optional[str]) -> List[Any]:
     return out
 
 
+def _filter_closed_trades_for_focus(
+    closed: List[Any],
+    tickers: Optional[List[str]] = None,
+    trade_ids: Optional[List[int]] = None,
+) -> List[Any]:
+    """Узкая выборка: по списку тикеров и/или id закрывающей сделки (trade_id из TradePnL)."""
+    if not tickers and not trade_ids:
+        return closed
+    tid_set = {int(x) for x in trade_ids} if trade_ids else None
+    tkr_set = {str(t).strip().upper() for t in tickers if str(t).strip()} if tickers else None
+    out: List[Any] = []
+    for t in closed:
+        if tid_set is not None:
+            try:
+                tid = int(getattr(t, "trade_id", 0) or 0)
+            except (TypeError, ValueError):
+                tid = 0
+            if tid not in tid_set:
+                continue
+        if tkr_set is not None:
+            tkr = str(getattr(t, "ticker", "") or "").strip().upper()
+            if tkr not in tkr_set:
+                continue
+        out.append(t)
+    return out
+
+
 def _prepare_ohlc_cache(tickers: List[str], days: int) -> Dict[str, Optional[pd.DataFrame]]:
     cache: Dict[str, Optional[pd.DataFrame]] = {}
     fetch_days = min(7, max(3, days + 2))
@@ -227,6 +254,8 @@ def _aggregate(effects: List[TradeEffect]) -> Dict[str, Any]:
     losses_with_high_prob = [e for e in losses if e.entry_prob_up is not None and e.entry_prob_up >= 0.60]
     losses_with_high_rsi = [e for e in losses if e.entry_rsi_5m is not None and e.entry_rsi_5m >= 60]
     rule_versions = sorted({(e.decision_rule_version or "unknown") for e in effects})
+    missed_on_wins = [(e.missed_upside_pct or 0.0) for e in wins if e.missed_upside_pct is not None]
+    wins_missed_ge_1 = [e for e in wins if (e.missed_upside_pct or 0.0) >= 1.0]
     return {
         "total": len(effects),
         "wins": len(wins),
@@ -238,6 +267,9 @@ def _aggregate(effects: List[TradeEffect]) -> Dict[str, Any]:
         "avg_log_return": round(float(np.mean(logrets)), 5) if logrets else None,
         "sum_missed_upside_pct": round(float(sum(missed)), 3),
         "avg_missed_upside_pct": round(float(np.mean(missed)), 3) if missed else None,
+        "sum_missed_upside_pct_on_wins": round(float(sum(missed_on_wins)), 3) if missed_on_wins else 0.0,
+        "avg_missed_upside_pct_on_wins": round(float(np.mean(missed_on_wins)), 3) if missed_on_wins else None,
+        "wins_with_missed_upside_ge_1pct_count": len(wins_missed_ge_1),
         "sum_avoidable_loss_pct": round(float(sum(avoidable)), 3),
         "avg_avoidable_loss_pct": round(float(np.mean(avoidable)), 3) if avoidable else None,
         "late_polling_signals": late_polling_count,
@@ -275,7 +307,47 @@ def _top_cases(effects: List[TradeEffect], limit: int = 8) -> Dict[str, List[Dic
 
     by_missed = sorted(effects, key=lambda x: x.missed_upside_pct or 0.0, reverse=True)[:limit]
     by_loss = sorted(effects, key=lambda x: x.realized_pct)[:limit]
-    return {"top_missed_upside": [row(e) for e in by_missed], "top_losses": [row(e) for e in by_loss]}
+    winners = [e for e in effects if e.realized_pct > 0]
+    by_win_missed = sorted(winners, key=lambda x: x.missed_upside_pct or 0.0, reverse=True)[:limit]
+    return {
+        "top_missed_upside": [row(e) for e in by_missed],
+        "top_losses": [row(e) for e in by_loss],
+        "top_profitable_missed_upside": [row(e) for e in by_win_missed],
+    }
+
+
+def _trade_effect_detail_dict(e: TradeEffect) -> Dict[str, Any]:
+    """Полная сериализация сделки для внешнего JSON (локальный LLM, скрипты, jq)."""
+    return {
+        "trade_id": e.trade_id,
+        "ticker": e.ticker,
+        "entry_ts": e.entry_ts.isoformat(),
+        "exit_ts": e.exit_ts.isoformat(),
+        "hold_minutes": round(e.hold_minutes, 2),
+        "qty": e.qty,
+        "entry_price": e.entry_price,
+        "exit_price": e.exit_price,
+        "net_pnl": round(e.net_pnl, 4),
+        "realized_pct": round(e.realized_pct, 4),
+        "realized_log_return": round(e.realized_log_return, 6) if e.realized_log_return > -900 else None,
+        "exit_signal": e.exit_signal,
+        "exit_strategy": e.exit_strategy,
+        "potential_best_pct": None if e.potential_best_pct is None else round(e.potential_best_pct, 4),
+        "preventable_worst_pct": None if e.preventable_worst_pct is None else round(e.preventable_worst_pct, 4),
+        "missed_upside_pct": None if e.missed_upside_pct is None else round(e.missed_upside_pct, 4),
+        "avoidable_loss_pct": None if e.avoidable_loss_pct is None else round(e.avoidable_loss_pct, 4),
+        "likely_late_polling": e.likely_late_polling,
+        "entry_rsi_5m": e.entry_rsi_5m,
+        "entry_vol_5m_pct": e.entry_vol_5m_pct,
+        "entry_momentum_2h_pct": e.entry_momentum_2h_pct,
+        "entry_prob_up": e.entry_prob_up,
+        "entry_prob_down": e.entry_prob_down,
+        "entry_price_forecast_5m_summary": e.entry_price_forecast_5m_summary,
+        "entry_news_impact": e.entry_news_impact,
+        "entry_advice": e.entry_advice,
+        "decision_rule_version": e.decision_rule_version,
+        "decision_rule_params": e.decision_rule_params,
+    }
 
 
 def _parse_llm_json_response(text: str) -> Any:
@@ -307,7 +379,11 @@ def _parse_llm_json_response(text: str) -> Any:
     return {"raw_text": text}
 
 
-def _build_llm_recommendations(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _build_llm_recommendations(
+    payload: Dict[str, Any],
+    *,
+    game_5m_config_focus: bool = False,
+) -> Optional[Dict[str, Any]]:
     try:
         from services.llm_service import get_llm_service
 
@@ -342,7 +418,37 @@ def _build_llm_recommendations(payload: Dict[str, Any]) -> Optional[Dict[str, An
                 "do not suggest vague ideas without target parameter or code area",
             ],
         }
-        llm_input = {"algorithm_context": algorithm_context, "report": payload}
+        if game_5m_config_focus:
+            algorithm_context["game_5m_exit_and_tuning_env_keys"] = [
+                "GAME_5M_TAKE_PROFIT_PCT",
+                "GAME_5M_TAKE_PROFIT_PCT_<TICKER>",
+                "GAME_5M_TAKE_PROFIT_MIN_PCT",
+                "GAME_5M_TAKE_MOMENTUM_FACTOR",
+                "GAME_5M_MAX_POSITION_DAYS",
+                "GAME_5M_MAX_POSITION_DAYS_<TICKER>",
+                "GAME_5M_MAX_POSITION_MINUTES",
+                "GAME_5M_MAX_POSITION_MINUTES_<TICKER>",
+                "GAME_5M_SESSION_END_EXIT_MINUTES",
+                "GAME_5M_SESSION_END_MIN_PROFIT_PCT",
+                "GAME_5M_STOP_LOSS_ENABLED",
+                "GAME_5M_STOP_LOSS_PCT",
+                "GAME_5M_STOP_TO_TAKE_RATIO",
+                "GAME_5M_SIGNAL_CRON_MINUTES",
+                "GAME_5M_COOLDOWN_MINUTES",
+                "GAME_5M_MAX_ATR_5M_PCT",
+                "GAME_5M_MIN_VOLUME_VS_AVG_PCT",
+                "GAME_5M_SELL_CONFIRM_BARS",
+                "GAME_5M_VOLATILITY_WAIT_MIN",
+            ]
+            algorithm_context["focus_instruction"] = (
+                "Это УЗКИЙ отчёт по нескольким дням и/или выбранным тикерам/сделкам. "
+                "Приоритет: конкретные правки config.env из списка game_5m_exit_and_tuning_env_keys "
+                "(полное имя ключа, например GAME_5M_TAKE_PROFIT_PCT_SNDK). "
+                "Числа предлагай осторожно, с обоснованием по метрикам отчёта (missed_upside, exit_signal, losses)."
+            )
+        llm_input: Dict[str, Any] = {"algorithm_context": algorithm_context, "report": payload}
+        if isinstance(payload.get("game_5m_config_hints"), list):
+            llm_input["heuristic_hints"] = payload["game_5m_config_hints"]
         system_prompt = (
             "Ты senior quant и знаешь текущую реализацию стратегии.\n"
             "Твоя задача: по отчету предложить улучшения, строго привязанные к текущему алгоритму и параметрам.\n"
@@ -384,11 +490,22 @@ def _build_llm_recommendations(payload: Dict[str, Any]) -> Optional[Dict[str, An
             "  \"validation_plan\": [\"...\"]\n"
             "}\n"
         )
+        if game_5m_config_focus:
+            system_prompt += (
+                "\nФОКУС-РЕЖИМ: в том же корневом JSON добавь ключ \"config_env_proposals\" (массив 1–8 объектов) "
+                "ПЕРЕД финальной закрывающей скобкой документа — т.е. после \"validation_plan\" поставь запятую и массив:\n"
+                "\"config_env_proposals\": [\n"
+                "  {\"env_key\": \"GAME_5M_TAKE_PROFIT_PCT_SNDK\", \"proposed_value\": \"6.5\", "
+                "\"reason_from_metrics\": \"...\", \"confidence\": \"medium\"}\n"
+                "]\n"
+                "Ключи env_key только из algorithm_context.game_5m_exit_and_tuning_env_keys; для тикера — суффикс _TICKER.\n"
+            )
+        max_tok = 2200 if game_5m_config_focus else 1600
         out = llm.generate_response(
             messages=[{"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, indent=2)}],
             system_prompt=system_prompt,
             temperature=0.1,
-            max_tokens=1600,
+            max_tokens=max_tok,
         )
         text = out.get("response") or ""
         parsed = _parse_llm_json_response(text)
@@ -510,6 +627,82 @@ def _build_critical_case_analysis(effects: List[TradeEffect], limit: int = 5) ->
     return out
 
 
+def _build_focused_game5m_config_hints(
+    effects: List[TradeEffect],
+    summary: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Эвристики по выборке: какие ключи config.env разумно пересмотреть (без автоподстановки чисел)."""
+    hints: List[Dict[str, Any]] = []
+    if not effects:
+        return hints
+    from collections import defaultdict
+
+    take_by_ticker: Dict[str, List[TradeEffect]] = defaultdict(list)
+    for e in effects:
+        if e.exit_signal == "TAKE_PROFIT":
+            take_by_ticker[e.ticker].append(e)
+    for ticker, lst in take_by_ticker.items():
+        if len(lst) < 2:
+            continue
+        missed = [e.missed_upside_pct or 0.0 for e in lst]
+        if float(np.mean(missed)) >= 1.0:
+            tu = str(ticker).strip().upper()
+            hints.append(
+                {
+                    "env_key": f"GAME_5M_TAKE_PROFIT_PCT_{tu}",
+                    "direction": "review_raise_cap_or_min_pct",
+                    "evidence": f"{tu}: {len(lst)}× TAKE_PROFIT, средний missed_upside {float(np.mean(missed)):.2f}%",
+                    "rationale": "После тейка цена часто уходит существенно выше — потолок тейка или ранняя цель (импульсная ветка) могут быть узки.",
+                }
+            )
+
+    time_exit_loss = [e for e in effects if e.exit_signal == "TIME_EXIT" and e.realized_pct <= 0]
+    if len(time_exit_loss) >= 2:
+        hints.append(
+            {
+                "env_key": "GAME_5M_SESSION_END_MIN_PROFIT_PCT",
+                "direction": "review_with_SESSION_END_EXIT_MINUTES",
+                "evidence": f"{len(time_exit_loss)}× TIME_EXIT без плюса",
+                "rationale": "Закрытие в хвосте сессии даёт слабый или отрицательный результат — порог минимального профита или окно минут.",
+            }
+        )
+
+    late = int(summary.get("late_polling_signals", 0))
+    if late >= 2:
+        hints.append(
+            {
+                "env_key": "GAME_5M_SIGNAL_CRON_MINUTES",
+                "direction": "review_lower_if_crontab_allows",
+                "evidence": f"late_polling_signals={late} на выборке из {len(effects)} сделок",
+                "rationale": "Выход заметно ниже внутрисделочного high — чаще опрос у границ тейка; согласовать с crontab.",
+            }
+        )
+
+    sell_loss = [e for e in effects if e.exit_signal == "SELL" and e.realized_pct < -1.0]
+    if len(sell_loss) >= 2:
+        hints.append(
+            {
+                "env_key": "GAME_5M_SELL_CONFIRM_BARS",
+                "direction": "review_raise",
+                "evidence": f"{len(sell_loss)}× SELL с результатом < -1%",
+                "rationale": "Усилить подтверждение перед выходом по перекупленности (RSI).",
+            }
+        )
+
+    tp_all = [e for e in effects if e.exit_signal == "TAKE_PROFIT"]
+    tp_small = [e for e in tp_all if 0 < e.realized_pct < 2.5]
+    if len(tp_all) >= 3 and len(tp_small) >= max(3, int(0.6 * len(tp_all))):
+        hints.append(
+            {
+                "env_key": "GAME_5M_TAKE_PROFIT_MIN_PCT",
+                "direction": "review_vs_GAME_5M_TAKE_MOMENTUM_FACTOR",
+                "evidence": f"Мелкие TAKE_PROFIT (<2.5%): {len(tp_small)} из {len(tp_all)}",
+                "rationale": "Много ранних тейков — порог MIN_PCT для ветки «тейк от импульса» или factor тянут цель вниз относительно потолка.",
+            }
+        )
+    return hints
+
+
 PARAM_TO_ENV_KEY: Dict[str, str] = {
     "volatility_wait_min": "GAME_5M_VOLATILITY_WAIT_MIN",
     "sell_confirm_bars": "GAME_5M_SELL_CONFIRM_BARS",
@@ -611,6 +804,8 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
         if not parameter or proposed is None:
             continue
         env_key = PARAM_TO_ENV_KEY.get(parameter) or PARAM_TO_ENV_KEY.get(parameter.upper())
+        if not env_key and parameter.startswith("GAME_5M_") and is_editable_config_env_key(parameter):
+            env_key = parameter
         if not env_key:
             skipped.append(
                 {
@@ -658,6 +853,53 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
+    proposals = llm_ana.get("config_env_proposals")
+    if isinstance(proposals, list):
+        for row in proposals:
+            if not isinstance(row, dict):
+                continue
+            env_key = str(row.get("env_key") or "").strip()
+            proposed = row.get("proposed_value")
+            if not env_key or proposed is None:
+                continue
+            if env_key in seen:
+                continue
+            if not is_editable_config_env_key(env_key):
+                skipped.append(
+                    {
+                        "parameter": env_key,
+                        "env_key": env_key,
+                        "reason": "not_editable",
+                        "note": "Ключ не в списке редактируемых.",
+                    }
+                )
+                continue
+            seen.add(env_key)
+            current = cfg.get(env_key, "")
+            if env_key == "GAME_5M_SIGNAL_CRON_MINUTES":
+                proposed_str = _coerce_polling_minutes(proposed)
+                if proposed_str is None:
+                    skipped.append(
+                        {
+                            "parameter": env_key,
+                            "env_key": env_key,
+                            "reason": "unparseable_polling",
+                            "note": "Ожидались минуты.",
+                        }
+                    )
+                    continue
+            else:
+                proposed_str = _normalize_env_value(proposed)
+            updates.append(
+                {
+                    "env_key": env_key,
+                    "current": current,
+                    "proposed": proposed_str,
+                    "source_parameter": "config_env_proposals",
+                    "reason": str(row.get("reason_from_metrics") or row.get("reason") or ""),
+                }
+            )
+
     practical = report.get("practical_parameter_suggestions")
     if isinstance(practical, list):
         for row in practical:
@@ -668,6 +910,8 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
             if not parameter or proposed is None:
                 continue
             env_key = PARAM_TO_ENV_KEY.get(parameter)
+            if not env_key and parameter.startswith("GAME_5M_") and is_editable_config_env_key(parameter):
+                env_key = parameter
             if not env_key or env_key in seen:
                 continue
             if not is_editable_config_env_key(env_key):
@@ -801,7 +1045,13 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
         return {}
 
 
-def analyze_trade_effectiveness(days: int = 7, strategy: str = "GAME_5M", use_llm: bool = False) -> Dict[str, Any]:
+def analyze_trade_effectiveness(
+    days: int = 7,
+    strategy: str = "GAME_5M",
+    use_llm: bool = False,
+    *,
+    include_trade_details: bool = False,
+) -> Dict[str, Any]:
     days = max(1, min(30, int(days)))
     closed = _load_closed_trades(days=days, strategy_name=strategy)
     if not closed:
@@ -820,6 +1070,7 @@ def analyze_trade_effectiveness(days: int = 7, strategy: str = "GAME_5M", use_ll
             "days": days,
             "strategy": strategy,
             "trades_analyzed": len(effects),
+            "include_trade_details": bool(include_trade_details),
             "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness",
             "decision_source_expected": "services.recommend_5m.get_decision_5m",
             "current_decision_rule_params": current_rules,
@@ -829,30 +1080,146 @@ def analyze_trade_effectiveness(days: int = 7, strategy: str = "GAME_5M", use_ll
         "practical_parameter_suggestions": practical,
         "critical_case_analysis": critical_cases,
     }
+    if include_trade_details:
+        payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
     if use_llm:
         payload["llm"] = _build_llm_recommendations(payload)
     payload["auto_config_override"] = _build_auto_config_override(payload)
     return payload
 
 
+def analyze_trade_effectiveness_focused(
+    days: int = 4,
+    strategy: str = "GAME_5M",
+    *,
+    tickers: Optional[List[str]] = None,
+    trade_ids: Optional[List[int]] = None,
+    use_llm: bool = False,
+    include_trade_details: bool = False,
+) -> Dict[str, Any]:
+    """
+    Узкий анализ: последние ``days`` дней, опционально только выбранные тикеры и/или trade_id выхода.
+    Добавляет ``game_5m_config_hints`` и при ``use_llm`` — LLM с фокусом на ``config_env_proposals`` (GAME_5M_*).
+    """
+    days = max(1, min(30, int(days)))
+    closed = _load_closed_trades(days=days, strategy_name=strategy)
+    filtered = _filter_closed_trades_for_focus(closed, tickers=tickers, trade_ids=trade_ids)
+    if not filtered:
+        return {
+            "meta": {
+                "days": days,
+                "strategy": strategy,
+                "focused": True,
+                "trades_analyzed": 0,
+                "filter": {
+                    "tickers": [str(t).strip().upper() for t in (tickers or []) if str(t).strip()],
+                    "trade_ids": [int(x) for x in (trade_ids or [])],
+                },
+                "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness_focused",
+                "decision_source_expected": "services.recommend_5m.get_decision_5m",
+                "include_trade_details": bool(include_trade_details),
+            },
+            "summary": {"total": 0},
+        }
+
+    tickers_list = [str(t.ticker) for t in filtered if getattr(t, "ticker", None)]
+    cache = _prepare_ohlc_cache(tickers=tickers_list, days=days)
+    effects = _estimate_trade_effects(filtered, cache)
+    summary = _aggregate(effects)
+    tops = _top_cases(effects)
+    current_rules = _get_current_decision_rule_params()
+    practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
+    critical_cases = _build_critical_case_analysis(effects, limit=5)
+    game_5m_config_hints = _build_focused_game5m_config_hints(effects, summary)
+
+    payload: Dict[str, Any] = {
+        "meta": {
+            "days": days,
+            "strategy": strategy,
+            "focused": True,
+            "trades_analyzed": len(effects),
+            "filter": {
+                "tickers": [str(t).strip().upper() for t in (tickers or []) if str(t).strip()],
+                "trade_ids": [int(x) for x in (trade_ids or [])],
+            },
+            "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness_focused",
+            "decision_source_expected": "services.recommend_5m.get_decision_5m",
+            "current_decision_rule_params": current_rules,
+            "include_trade_details": bool(include_trade_details),
+        },
+        "summary": summary,
+        "top_cases": tops,
+        "practical_parameter_suggestions": practical,
+        "critical_case_analysis": critical_cases,
+        "game_5m_config_hints": game_5m_config_hints,
+    }
+    if include_trade_details:
+        payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
+    if use_llm:
+        payload["llm"] = _build_llm_recommendations(payload, game_5m_config_focus=True)
+    payload["auto_config_override"] = _build_auto_config_override(payload)
+    return payload
+
+
 def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
     summary = report.get("summary") or {}
+    meta = report.get("meta") or {}
     if summary.get("total", 0) == 0:
+        if meta.get("focused"):
+            flt = meta.get("filter") or {}
+            parts = []
+            if flt.get("tickers"):
+                parts.append("тикеры: " + ", ".join(str(x) for x in flt["tickers"]))
+            if flt.get("trade_ids"):
+                parts.append("trade_id: " + ", ".join(str(x) for x in flt["trade_ids"]))
+            extra = (" (" + "; ".join(parts) + ")") if parts else ""
+            return f"За выбранный период по узкому фильтру закрытых сделок не найдено{extra}."
         return "За выбранный период закрытых сделок не найдено."
     top = report.get("top_cases") or {}
+    title = (
+        "📊 Узкий анализ (выбранные сделки / окно)"
+        if meta.get("focused")
+        else "📊 Анализатор эффективности сделок"
+    )
+    filter_line = ""
+    if meta.get("focused"):
+        flt = meta.get("filter") or {}
+        if flt.get("tickers") or flt.get("trade_ids"):
+            filter_line = (
+                f"Фильтр: тикеры={flt.get('tickers') or '—'} | trade_id={flt.get('trade_ids') or '—'}"
+            )
     lines = [
-        "📊 Анализатор эффективности сделок",
-        f"Период: {report.get('meta', {}).get('days', '—')} дн. | Стратегия: {report.get('meta', {}).get('strategy', '—')}",
-        f"Сделок: {summary['total']} | Win rate: {summary['win_rate_pct']:.2f}% | Net PnL: ${summary['sum_net_pnl_usd']:+.2f}",
-        f"Средний результат: {summary['avg_realized_pct']:+.3f}% | Медиана: {summary['median_realized_pct']:+.3f}%",
-        f"Упущенный upside: Σ {summary['sum_missed_upside_pct']:+.3f}% | Избежимый loss: Σ {summary['sum_avoidable_loss_pct']:+.3f}%",
-        f"Сигналы риска: late polling={summary['late_polling_signals']}, high-vol losses={summary['high_vol_losses_count']}, weak P(up) losses={summary['weak_prob_up_losses_count']}",
-        f"Параметрические причины: losses@ALLOW={summary.get('losses_with_allow_entry_count', 0)}, losses@prob_up>=0.60={summary.get('losses_with_high_prob_up_count', 0)}, losses@RSI>=60={summary.get('losses_with_high_rsi_count', 0)}",
-        "",
-        "Top losses:",
+        title,
+        f"Период: {meta.get('days', '—')} дн. | Стратегия: {meta.get('strategy', '—')}",
     ]
+    if filter_line:
+        lines.append(filter_line)
+    lines.extend(
+        [
+            f"Сделок: {summary['total']} | Win rate: {summary['win_rate_pct']:.2f}% | Net PnL: ${summary['sum_net_pnl_usd']:+.2f}",
+            f"Средний результат: {summary['avg_realized_pct']:+.3f}% | Медиана: {summary['median_realized_pct']:+.3f}%",
+            f"Упущенный upside: Σ {summary['sum_missed_upside_pct']:+.3f}% | Избежимый loss: Σ {summary['sum_avoidable_loss_pct']:+.3f}%",
+            f"По выигрышным: Σ missed {summary.get('sum_missed_upside_pct_on_wins', 0):+.3f}% | "
+            f"сделок с missed≥1%: {summary.get('wins_with_missed_upside_ge_1pct_count', 0)}",
+            f"Сигналы риска: late polling={summary['late_polling_signals']}, high-vol losses={summary['high_vol_losses_count']}, weak P(up) losses={summary['weak_prob_up_losses_count']}",
+            f"Параметрические причины: losses@ALLOW={summary.get('losses_with_allow_entry_count', 0)}, losses@prob_up>=0.60={summary.get('losses_with_high_prob_up_count', 0)}, losses@RSI>=60={summary.get('losses_with_high_rsi_count', 0)}",
+            "",
+            "Top losses:",
+        ]
+    )
     for r in (top.get("top_losses") or [])[:4]:
         lines.append(f"• {r['ticker']} #{r['trade_id']}: {r['realized_pct']:+.2f}% (exit={r['exit_signal']})")
+    win_missed = top.get("top_profitable_missed_upside") or []
+    if win_missed and any((row.get("missed_upside_pct") or 0) >= 0.5 for row in win_missed[:4]):
+        lines.append("")
+        lines.append("Выигрышные, но с крупным недобором (ранний выход vs high окна):")
+        for r in win_missed[:4]:
+            if (r.get("missed_upside_pct") or 0) < 0.25:
+                continue
+            lines.append(
+                f"• {r['ticker']} #{r['trade_id']}: +{r['realized_pct']:.2f}%, missed {r.get('missed_upside_pct', 0):+.2f}% "
+                f"(exit={r['exit_signal']})"
+            )
     practical = report.get("practical_parameter_suggestions") or []
     if practical:
         lines.append("")
@@ -869,6 +1236,18 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             lines.append(
                 f"• {c.get('ticker')} #{c.get('trade_id')}: {c.get('diagnosis')} | action: {c.get('action')}"
             )
+    hints = report.get("game_5m_config_hints") or []
+    if hints:
+        lines.append("")
+        lines.append("Эвристики GAME_5M (что пересмотреть в config.env):")
+        for h in hints[:8]:
+            ek = h.get("env_key", "")
+            direction = h.get("direction", "")
+            evidence = h.get("evidence", "")
+            rationale = h.get("rationale", "")
+            lines.append(f"• {ek} ({direction}): {evidence}")
+            if rationale:
+                lines.append(f"  → {rationale}")
     if report.get("llm"):
         llm = report["llm"]
         lines.append("")

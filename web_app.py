@@ -610,7 +610,12 @@ async def analyzer_page(request: Request):
 
 
 @app.get("/api/analyzer", response_class=JSONResponse)
-async def get_analyzer(days: int = 7, strategy: str = "GAME_5M", use_llm: bool = False):
+async def get_analyzer(
+    days: int = 7,
+    strategy: str = "GAME_5M",
+    use_llm: bool = False,
+    include_trade_details: bool = False,
+):
     """API: анализ эффективности закрытых сделок (единый код с /analyser в Telegram)."""
     try:
         from services.trade_effectiveness_analyzer import analyze_trade_effectiveness
@@ -618,10 +623,56 @@ async def get_analyzer(days: int = 7, strategy: str = "GAME_5M", use_llm: bool =
             days=min(max(1, int(days)), 30),
             strategy=(strategy or "GAME_5M").strip().upper(),
             use_llm=bool(use_llm),
+            include_trade_details=bool(include_trade_details),
         )
         return _to_jsonable(payload)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка анализатора: {e!s}")
+
+
+def _parse_csv_str(s: str) -> List[str]:
+    s = (s or "").strip()
+    if not s:
+        return []
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+
+def _parse_csv_ints(s: str) -> List[int]:
+    out: List[int] = []
+    for x in _parse_csv_str(s):
+        try:
+            out.append(int(x))
+        except ValueError:
+            continue
+    return out
+
+
+@app.get("/api/analyzer/focused", response_class=JSONResponse)
+async def get_analyzer_focused(
+    days: int = 4,
+    strategy: str = "GAME_5M",
+    use_llm: bool = False,
+    include_trade_details: bool = False,
+    tickers: str = "",
+    trade_ids: str = "",
+):
+    """Узкий анализ: окно в днях + опционально тикеры и/или trade_id (как query-параметры)."""
+    try:
+        from services.trade_effectiveness_analyzer import analyze_trade_effectiveness_focused
+
+        t_list = _parse_csv_str(tickers)
+        id_list = _parse_csv_ints(trade_ids)
+        payload = analyze_trade_effectiveness_focused(
+            days=min(max(1, int(days)), 30),
+            strategy=(strategy or "GAME_5M").strip().upper(),
+            tickers=t_list if t_list else None,
+            trade_ids=id_list if id_list else None,
+            use_llm=bool(use_llm),
+            include_trade_details=bool(include_trade_details),
+        )
+        return _to_jsonable(payload)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка узкого анализатора: {e!s}")
 
 
 @app.post("/api/analyzer/apply-config", response_class=JSONResponse)

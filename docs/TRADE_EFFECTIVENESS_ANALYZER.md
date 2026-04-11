@@ -28,6 +28,34 @@
   - в Web: `/analyzer`, `/api/analyzer`
   - в Telegram: `/analyser`
   - в CLI: `scripts/analyze_trade_effectiveness_weekly.py`
+  - узкий режим (3–4 дня, фильтр по тикерам/`trade_id`): `scripts/analyze_trades_focused.py`, Web `GET /api/analyzer/focused`
+
+## Узкий анализ (выбранные сделки / короткое окно)
+
+Функция `analyze_trade_effectiveness_focused(days, strategy, tickers=..., trade_ids=..., use_llm=...)`:
+
+- Сначала загружаются закрытые сделки за `days` (как в глобальном отчёте), затем применяется фильтр:
+  - `tickers` — только эти тикеры (регистр не важен);
+  - `trade_ids` — только строки с указанным `trade_id` закрывающей сделки (как в `TradePnL`);
+  - если оба списка пустые, анализируется всё окно (как мини-версия недельного отчёта).
+- В JSON добавляется `game_5m_config_hints`: эвристики «какие ключи `GAME_5M_*` разумно пересмотреть» по паттернам выходов и метрикам выборки.
+- При `use_llm=True` LLM получает фокус-инструкцию и должен вернуть `config_env_proposals` с полными именами ключей `config.env` (в т.ч. пер-тикерные `GAME_5M_TAKE_PROFIT_PCT_<TICKER>`).
+- `format_trade_effectiveness_text` показывает заголовок «Узкий анализ», строку фильтра и блок эвристик, если они есть.
+
+CLI:
+
+```bash
+python3 scripts/analyze_trades_focused.py --days 4 --tickers SNDK --llm
+python3 scripts/analyze_trades_focused.py --days 3 --trade-ids 12041,12055 --json-out local/focused.json
+```
+
+Web: `GET /api/analyzer/focused?days=4&tickers=SNDK,AAPL&use_llm=0` (списки через запятую).
+
+### JSON для локального углублённого анализа (KB, Ollama, Qwen и т.д.)
+
+- Сохраните отчёт: `scripts/analyze_trades_focused.py ... --json-out report.json` или `GET /api/analyzer/focused?...` / `GET /api/analyzer?...`.
+- По умолчанию в JSON есть сводка и `top_cases` (ограниченные топы). Чтобы получить **все сделки окна/фильтра** с полями цен, PnL, `missed_upside`, снимком `decision_rule_params` и т.д., добавьте **`include_trade_details=1`** (Web) или флаг **`--include-trade-details`** в CLI — в корне появится массив **`trade_effects`**.
+- Дальше локальный пайплайн на вашей стороне: прочитать `report.json`, отфильтровать по тикеру (`jq '.trade_effects[] | select(.ticker=="SNDK")'`), к промпту приложить выдержки из `docs/GAME_5M_CALCULATIONS_AND_REPORTING.md` или фрагменты `services/recommend_5m.py` / `services/game_5m.py`, вызвать локальную модель. Серверный LLM анализатора при этом не обязателен (`use_llm=0`).
 
 ## 1) Какие сделки берём
 
@@ -74,7 +102,9 @@
 
 - Короткая сводка;
 - `top_losses`;
-- `top_missed_upside`;
+- `top_missed_upside` (любые сделки с большим недобором);
+- `top_profitable_missed_upside` — **только выигрышные** сделки с наибольшим `missed_upside` (ранний выход в плюсе при запасе до high окна);
+- в `summary`: `sum_missed_upside_pct_on_wins`, `avg_missed_upside_pct_on_wins`, `wins_with_missed_upside_ge_1pct_count`;
 - `practical_parameter_suggestions` (грубые, практичные изменения порогов);
 - `critical_case_analysis` (разбор критичных сделок с action item);
 - опционально LLM-блок с приоритетами улучшений (`--llm` / `use_llm=1`).
@@ -96,8 +126,10 @@
 3. Сравнивать `sum_net_pnl_usd`, `sum_missed_upside_pct`, `sum_avoidable_loss_pct`.
 4. Только после подтверждения эффекта двигаться к следующей тонкой настройке.
 
-## 6) Ограничения
+## 6) Ограничения и компромиссы параметров
 
+- Любое «подтянуть потолок тейка / ослабить выход» **одновременно** увеличивает риск отката на других тикерах и в других режимах рынка; в `docs/GAME_5M_CALCULATIONS_AND_REPORTING.md` зафиксирован смысл **потолка сверху** vs искусственного «пола» снизу. Смотреть согласованно **убытки**, **выигрыши с missed** и **by_exit_signal**.
+- **Kerim Platform** в репозитории — внешний HTTP `POST /game` для отчётов по спискам позиций (`services/platform_game_api.py`), а не встроенный в LSE горизонтный прогноз доходности/дропа. Чтобы калибровать глобальные константы по **вероятности ап/дроп на горизонте**, нужен отдельный контур: либо API/модель с явными `P(up_h)`, `P(drop_h)` и доверительными интервалами, либо офлайн-грид по истории сделок с учётом издержек и log-returns. Тогда пороги (`GAME_5M_*`, тейк/стоп/время) можно подстраивать под сегменты «высокий ап / высокий риск дропа» — это пока **не** часть анализатора, только идея интеграции.
 - 5m Yahoo ограничен коротким окном истории (до ~7 дней).
 - `missed_upside`/`avoidable_loss` — диагностические оценки, не «идеальный исполнимый» backtest.
 - LLM-рекомендации вспомогательные; решения о порогах подтверждать статистикой.

@@ -17,11 +17,21 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=7, help="Период анализа в днях (по умолчанию 7)")
     parser.add_argument("--strategy", type=str, default="GAME_5M", help="Стратегия (GAME_5M|ALL|...)")
     parser.add_argument("--llm", action="store_true", help="Добавить LLM-рекомендации")
+    parser.add_argument(
+        "--include-trade-details",
+        action="store_true",
+        help="В JSON добавить trade_effects — все сделки с метриками (для локального LLM/jq)",
+    )
     parser.add_argument("--json-out", type=str, default="", help="Путь для сохранения JSON отчёта")
     args = parser.parse_args()
 
     days = max(1, min(30, int(args.days)))
-    payload = analyze_trade_effectiveness(days=days, strategy=args.strategy, use_llm=bool(args.llm))
+    payload = analyze_trade_effectiveness(
+        days=days,
+        strategy=args.strategy,
+        use_llm=bool(args.llm),
+        include_trade_details=bool(args.include_trade_details),
+    )
     print(format_trade_effectiveness_text(payload))
 
     if args.json_out:

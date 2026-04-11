@@ -45,6 +45,12 @@
 </div>
 
 <div class="card">
+    <h2>Выигрышные с крупным недобором</h2>
+    <p class="muted">Ранний выход в плюсе при заметном запасе до high окна сделки (см. <code>top_profitable_missed_upside</code> в JSON).</p>
+    <div id="topWinMissed" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
     <h2>LLM</h2>
     <pre id="llmBlock">—</pre>
 </div>
@@ -84,6 +90,7 @@ async function runAnalyzer() {
     const summary = document.getElementById('summary');
     const topLosses = document.getElementById('topLosses');
     const topMissed = document.getElementById('topMissed');
+    const topWinMissed = document.getElementById('topWinMissed');
     const llmBlock = document.getElementById('llmBlock');
     const envBlock = document.getElementById('envBlock');
     const envManual = document.getElementById('envManual');
@@ -93,6 +100,7 @@ async function runAnalyzer() {
     summary.innerHTML = 'Загрузка...';
     topLosses.innerHTML = '—';
     topMissed.innerHTML = '—';
+    topWinMissed.innerHTML = '—';
     llmBlock.textContent = '—';
     envBlock.textContent = '—';
     envManual.textContent = '—';
@@ -119,11 +127,16 @@ async function runAnalyzer() {
             `Net PnL: <strong>${esc(s.sum_net_pnl_usd)}</strong><br>` +
             `Avg: <strong>${esc(s.avg_realized_pct)}%</strong><br>` +
             `Missed upside Σ: <strong>${esc(s.sum_missed_upside_pct)}%</strong><br>` +
+            `По выигрышным missed Σ: <strong>${esc(s.sum_missed_upside_pct_on_wins != null ? s.sum_missed_upside_pct_on_wins : '—')}%</strong> ` +
+            `(сделок с missed≥1%: <strong>${esc(s.wins_with_missed_upside_ge_1pct_count != null ? s.wins_with_missed_upside_ge_1pct_count : '—')}</strong>)<br>` +
             `Avoidable loss Σ: <strong>${esc(s.sum_avoidable_loss_pct)}%</strong>`;
         const losses = (data.top_cases && data.top_cases.top_losses) ? data.top_cases.top_losses : [];
         const missed = (data.top_cases && data.top_cases.top_missed_upside) ? data.top_cases.top_missed_upside : [];
+        const winMissed = (data.top_cases && data.top_cases.top_profitable_missed_upside) ? data.top_cases.top_profitable_missed_upside : [];
         topLosses.innerHTML = losses.length ? losses.slice(0, 8).map(toLine).join('<br>') : '—';
         topMissed.innerHTML = missed.length ? missed.slice(0, 8).map(toLine).join('<br>') : '—';
+        const winMissedLines = winMissed.filter(r => Number(r.missed_upside_pct || 0) >= 0.25).slice(0, 8);
+        topWinMissed.innerHTML = winMissedLines.length ? winMissedLines.map(toLine).join('<br>') : '—';
         if (data.llm) {
             llmBlock.textContent = JSON.stringify(data.llm, null, 2);
         }
