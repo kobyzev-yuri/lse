@@ -45,18 +45,50 @@ run_remote_copy() {
   local sql_copy=$1
   local out=$2
   local label=$3
-  rm -f "$out"
-  echo "Streaming $label -> $(basename "$out")"
+  local tmp err rc _sz
+  tmp="${out}.part.$$"
+  err="${out}.stderr.log"
+  rm -f "$out" "$tmp" "$err"
+  echo "Streaming $label -> $(basename "$out") (временный файл: $(basename "$tmp"))"
   echo "  (пока идёт поток CSV, в этом терминале тишина — это норма; большие выгрузки — минуты.)"
-  echo "  В другом терминале: watch -n2 ls -lh \"$out\""
+  echo "  В другом терминале: watch -n2 ls -lh \"$tmp\""
+  set +e
   printf '%s\n' "$sql_copy" | ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$SSH_TARGET" \
     "docker exec -i lse-postgres psql -U postgres -d lse_trading -v ON_ERROR_STOP=1" \
-    >"$out"
-  _sz=$(wc -c <"$out" | tr -d '[:space:]' || echo 0)
+    2>"$err" >"$tmp"
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    echo "FAIL: $label — ssh/psql завершились с кодом $rc" >&2
+    echo "  stderr сохранён: $err" >&2
+    [[ -s "$err" ]] && cat "$err" >&2
+    rm -f "$tmp"
+    exit "$rc"
+  fi
+  _sz=$(wc -c <"$tmp" | tr -d '[:space:]' || echo 0)
+  # COPY CSV HEADER даёт хотя бы строку заголовка; 0 байт = сбой без данных
+  if [[ "${_sz:-0}" -lt 30 ]]; then
+    echo "FAIL: $label — слишком мало данных (${_sz} байт), целевой CSV не создан." >&2
+    echo "  Смотрите: $err и первые байты потока:" >&2
+    [[ -s "$err" ]] && cat "$err" >&2
+    head -c 400 "$tmp" 2>/dev/null | cat -v >&2 || true
+    rm -f "$tmp"
+    exit 1
+  fi
+  if ! head -1 "$tmp" | grep -qi 'ticker'; then
+    echo "FAIL: $label — в первой строке нет ожидаемого CSV header (колонка ticker)." >&2
+    echo "  Первые 200 символов:" >&2
+    head -c 200 "$tmp" | cat -v >&2
+    echo >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  mv -f "$tmp" "$out"
+  rm -f "$err"
   if command -v numfmt >/dev/null 2>&1; then
-    echo "  готово: $(numfmt --to=iec-i --suffix=B <<<"$_sz") на диске"
+    echo "  готово: $(numfmt --to=iec-i --suffix=B <<<"$_sz") -> $(basename "$out")"
   else
-    echo "  готово: ${_sz} байт на диске"
+    echo "  готово: ${_sz} байт -> $(basename "$out")"
   fi
 }
 
