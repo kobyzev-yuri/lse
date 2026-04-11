@@ -4,7 +4,7 @@
 
 {% block content %}
 <h1>Анализатор эффективности сделок</h1>
-<p class="muted">Единый расчёт с Telegram командой <code>/analyser</code>. Период 1-30 дней.</p>
+<p class="muted">Единый расчёт с Telegram командой <code>/analyser</code>. Период 1-30 дней. Ниже — человекочитаемая выжимка; <strong>полный отчёт всегда в JSON</strong> с того же API (удобно сохранить или отдать скрипту).</p>
 
 <div class="card">
     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.6rem; align-items:end;">
@@ -27,6 +27,14 @@
             <button id="runBtn" type="button">Запустить анализ</button>
         </div>
     </div>
+    <p class="muted" style="margin-top:0.75rem; font-size:0.88rem; line-height:1.45;">
+        <strong>JSON:</strong>
+        <a id="analyzerJsonUrl" href="#" target="_blank" rel="noopener">отчёт (как на странице)</a>
+        ·
+        <a id="analyzerJsonFullUrl" href="#" target="_blank" rel="noopener">тот же отчёт + <code>trade_effects</code> по каждой сделке</a>
+        <br>
+        <span class="muted">Пример для копирования:</span> <code id="analyzerJsonUrlCode" style="font-size:0.8rem; word-break:break-all;">/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0</code>
+    </p>
 </div>
 
 <div class="card">
@@ -73,6 +81,22 @@
 <script>
 let lastAutoUpdates = [];
 
+function updateAnalyzerJsonLinks() {
+    const days = document.getElementById('days').value || 7;
+    const strategy = document.getElementById('strategy').value || 'GAME_5M';
+    const useLlm = document.getElementById('useLlm').checked;
+    const q = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0' });
+    const qFull = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0', include_trade_details: '1' });
+    const path = '/api/analyzer?' + q.toString();
+    const pathFull = '/api/analyzer?' + qFull.toString();
+    const a = document.getElementById('analyzerJsonUrl');
+    const b = document.getElementById('analyzerJsonFullUrl');
+    const c = document.getElementById('analyzerJsonUrlCode');
+    if (a) { a.href = path; }
+    if (b) { b.href = pathFull; }
+    if (c) { c.textContent = path; }
+}
+
 function esc(s) {
     const d = document.createElement('div');
     d.textContent = s == null ? '' : String(s);
@@ -110,6 +134,7 @@ async function runAnalyzer() {
     lastAutoUpdates = [];
     try {
         const q = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0' });
+        updateAnalyzerJsonLinks();
         const r = await fetch('/api/analyzer?' + q.toString());
         const data = await r.json();
         if (!r.ok) {
@@ -163,6 +188,10 @@ async function runAnalyzer() {
 }
 
 document.getElementById('runBtn').addEventListener('click', runAnalyzer);
+document.getElementById('days').addEventListener('change', updateAnalyzerJsonLinks);
+document.getElementById('strategy').addEventListener('change', updateAnalyzerJsonLinks);
+document.getElementById('useLlm').addEventListener('change', updateAnalyzerJsonLinks);
+updateAnalyzerJsonLinks();
 
 async function applyEnvOverride() {
     const applyBtn = document.getElementById('applyEnvBtn');
