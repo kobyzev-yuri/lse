@@ -42,6 +42,17 @@ export DAYS=90
 
 Другой ключ или пользователь: переопределите **`SSH_TARGET=user@104.x.x.x`** или поправьте `Host gcp-lse` локально.
 
+### «Connection timed out» / banner exchange
+
+Сообщение вроде **`Connection timed out during banner exchange`** значит, что **TCP до порта 22 не доходит** — это **не** ошибка Docker и не пустая база.
+
+Проверьте по порядку:
+
+1. **VM запущена** в Google Cloud Console (Compute Engine → VM instances).
+2. **Внешний IP** — у инстанса может быть **ephemeral** и смениться после перезапуска; обновите **`HostName`** в `~/.ssh/config`.
+3. **Firewall GCP** — правило **ingress tcp:22** с подходящим source (0.0.0.0/0 или ваш IP). VPC network → Firewall.
+4. С вашей сети: **`nc -vz 104.x.x.x 22`** или **`ssh -v gcp-lse`** (последние строки лога).
+
 ## Безопасность
 
 Если репозиторий **публичный** — не храните здесь реальные IP/имена пользователей; вынесите в wiki или шаблон с плейсхолдерами. Для **приватного** clone — по договорённости команды.

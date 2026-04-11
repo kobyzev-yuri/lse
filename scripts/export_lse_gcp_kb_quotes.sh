@@ -23,13 +23,36 @@ META="$OUT_DIR/README_IMPORT.txt"
 echo "SSH_TARGET=$SSH_TARGET DAYS=$DAYS -> $OUT_DIR"
 
 precheck() {
-  echo "Checking SSH + Postgres container..."
-  if ! ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=no "$SSH_TARGET" \
-    "docker ps --format '{{.Names}}' | grep -q 'lse-postgres'"; then
-    echo "FAIL: ssh $SSH_TARGET OK but no container matching lse-postgres (see docker ps on VM)." >&2
+  local out rc
+  echo "Checking SSH -> $SSH_TARGET (ConnectTimeout=25s)..."
+  set +e
+  out=$(ssh -o BatchMode=yes -o ConnectTimeout=25 -o ConnectionAttempts=1 -o StrictHostKeyChecking=no \
+    "$SSH_TARGET" "echo _ssh_ok" 2>&1)
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]] || [[ "$out" != *"_ssh_ok"* ]]; then
+    echo "FAIL: SSH к $SSH_TARGET не установлен (код $rc)." >&2
+    echo "$out" >&2
+    echo "" >&2
+    echo "Это не про Docker: до сервера не достучались (таймаут, firewall, другой IP, VM выключена)." >&2
+    echo "Проверьте: внешний IP в GCP, правило firewall tcp/22, ssh -v $SSH_TARGET" >&2
     exit 1
   fi
-  echo "OK: Postgres container is running."
+  echo "OK: SSH отвечает."
+  echo "Checking Postgres container (name contains lse-postgres)..."
+  set +e
+  ssh -o BatchMode=yes -o ConnectTimeout=25 -o StrictHostKeyChecking=no "$SSH_TARGET" \
+    "docker ps --format '{{.Names}}' | grep -q 'lse-postgres'" >/dev/null 2>&1
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    echo "FAIL: SSH есть, но контейнер с lse-postgres в имени не найден." >&2
+    echo "Список контейнеров на VM:" >&2
+    ssh -o BatchMode=yes -o ConnectTimeout=25 -o StrictHostKeyChecking=no "$SSH_TARGET" \
+      "docker ps --format 'table {{.Names}}\t{{.Status}}'" >&2 || true
+    exit 1
+  fi
+  echo "OK: контейнер Postgres запущен."
 }
 
 remote_scalar() {
