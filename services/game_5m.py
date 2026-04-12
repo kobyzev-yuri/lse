@@ -648,6 +648,7 @@ def _effective_take_profit_pct(
     - Если импульс_2ч >= GAME_5M_TAKE_PROFIT_MIN_PCT (4%): тейк = min(импульс_2ч × GAME_5M_TAKE_MOMENTUM_FACTOR, потолок).
     - Иначе: тейк = потолок (GAME_5M_TAKE_PROFIT_PCT или GAME_5M_TAKE_PROFIT_PCT_<TICKER>).
     Потолок не даёт тейку превысить заданный %; при импульсе 6% и factor=1 тейк = 6% (поэтому сработало на 6%, а не 7%).
+    Фактор может быть >1.0 (например 1.05): цель от импульса выше сырого %% до упора в потолок; в коде ограничен сверху константой ниже.
     """
     cap = _take_profit_cap_pct(ticker)
     try:
@@ -656,7 +657,8 @@ def _effective_take_profit_pct(
         min_take = 2.0
     try:
         momentum_factor = float(get_config_value("GAME_5M_TAKE_MOMENTUM_FACTOR", "1.0"))
-        momentum_factor = max(0.3, min(1.0, momentum_factor))
+        # >1.0 допустим (агрессивнее тейк от 2h-импульса); trade_effectiveness_analyzer предлагает до ~1.35.
+        momentum_factor = max(0.3, min(2.0, momentum_factor))
     except (ValueError, TypeError):
         momentum_factor = 1.0
     if momentum_2h_pct is not None and momentum_2h_pct >= min_take:

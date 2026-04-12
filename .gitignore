@@ -67,3 +67,6 @@ Thumbs.db
 
 # Kerim Platform: Docker-образ (platform.tar) не в git — копировать на сервер в отдельную директорию (scp/rsync), там docker load / run
 kerimsrv/*.tar
+
+# tradenews — отдельный подпроект (свой репозиторий / релизы); не трекать в lse до явного решения
+tradenews/

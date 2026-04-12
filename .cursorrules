@@ -1,1 +1,3 @@
-"Project use Python 3.11, PostgreSQL with pgvector, pandas for math, and yfinance for data seeding. Always account for transaction costs and use log-returns for financial calculations."
+Project use Python 3.11, PostgreSQL with pgvector, pandas for math, and yfinance for data seeding. Always account for transaction costs and use log-returns for financial calculations.
+
+Tradenews cloud LLM calls use ProxyAPI (proxyapi.ru): tradenews/config.env uses PROXYAPI_KEY (+ OPENAI_BASE_URL=https://api.proxyapi.ru/openai/v1, optional TRADENEWS_USE_PROXYAPI=1). OPENAI_GPT_KEY is optional fallback from lse only. See tradenews/tradenews/proxyapi.py.
