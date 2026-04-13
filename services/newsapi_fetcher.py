@@ -70,13 +70,9 @@ def newsapi_cooldown_until() -> Optional[datetime]:
         return None
 
 
-def _set_newsapi_cooldown_after_429() -> None:
-    """Пауза после исчерпания 429, чтобы cron не спамил логами и не жёг лимит."""
-    try:
-        hours = float((get_config_value("NEWSAPI_COOLDOWN_AFTER_429_HOURS", "12") or "12").strip())
-    except (ValueError, TypeError):
-        hours = 12.0
-    hours = max(1.0, min(hours, 168.0))
+def _write_newsapi_cooldown_hours(hours: float) -> None:
+    """Записывает момент окончания паузы в logs/.newsapi_cooldown_until (UTC)."""
+    hours = max(1.0, min(float(hours), 168.0))
     until = datetime.now(timezone.utc) + timedelta(hours=hours)
     path = _cooldown_file()
     try:
@@ -84,6 +80,28 @@ def _set_newsapi_cooldown_after_429() -> None:
         path.write_text(until.isoformat(), encoding="utf-8")
     except OSError as e:
         logger.warning("NewsAPI: не удалось записать cooldown-файл %s: %s", path, e)
+
+
+def _set_newsapi_cooldown_after_429() -> None:
+    """Пауза после исчерпания 429, чтобы cron не спамил логами и не жёг лимит."""
+    try:
+        hours = float((get_config_value("NEWSAPI_COOLDOWN_AFTER_429_HOURS", "12") or "12").strip())
+    except (ValueError, TypeError):
+        hours = 12.0
+    _write_newsapi_cooldown_hours(hours)
+
+
+def _set_newsapi_cooldown_after_426() -> float:
+    """
+    426 Upgrade Required от NewsAPI (часто: бесплатный план не даёт /everything или нужен апгрейд).
+    Длинная пауза, чтобы watchdog не дублировал одну и ту же ошибку каждый cron.
+    """
+    try:
+        hours = float((get_config_value("NEWSAPI_COOLDOWN_AFTER_426_HOURS", "24") or "24").strip())
+    except (ValueError, TypeError):
+        hours = 24.0
+    _write_newsapi_cooldown_hours(hours)
+    return hours
 
 
 def _max_pages_config() -> int:
@@ -162,6 +180,14 @@ def fetch_newsapi_articles(
         for attempt in range(NEWSAPI_429_MAX_RETRIES + 1):
             try:
                 response = http.get(url, params=params, timeout=45)
+                if response.status_code == 426:
+                    h = _set_newsapi_cooldown_after_426()
+                    logger.error(
+                        "❌ NewsAPI 426 Upgrade Required — для ключа недоступен запрос (часто /everything на бесплатном плане). "
+                        "Проверьте тариф на newsapi.org или выключите NEWSAPI_FETCH_EQUITY. Cooldown %s ч (NEWSAPI_COOLDOWN_AFTER_426_HOURS).",
+                        h,
+                    )
+                    return all_articles, True
                 if response.status_code == 429:
                     wait = _wait_429(response, attempt)
                     if wait is not None:
@@ -178,6 +204,13 @@ def fetch_newsapi_articles(
                 break
             except requests.exceptions.HTTPError as e:
                 last_err = e
+                if e.response is not None and e.response.status_code == 426:
+                    h = _set_newsapi_cooldown_after_426()
+                    logger.error(
+                        "❌ NewsAPI 426 Upgrade Required (HTTPError). Cooldown %s ч — см. NEWSAPI_COOLDOWN_AFTER_426_HOURS.",
+                        h,
+                    )
+                    return all_articles, True
                 if e.response is not None and e.response.status_code == 429:
                     wait = _wait_429(e.response, attempt)
                     if wait is not None:
@@ -417,7 +450,7 @@ def fetch_and_save_newsapi_news() -> int:
     if newsapi_cooldown_active():
         until = newsapi_cooldown_until()
         logger.info(
-            "NewsAPI: пропуск — cooldown после недавнего 429 до %s (UTC). Файл: %s — удалите для немедленного сброса.",
+            "NewsAPI: пропуск — cooldown после 429/426 до %s (UTC). Файл: %s — удалите для немедленного сброса.",
             until.isoformat() if until else "?",
             _cooldown_file(),
         )

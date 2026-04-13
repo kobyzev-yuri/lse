@@ -8,6 +8,11 @@
 #
 # Cron (каждые 10 минут):
 #   */10 * * * * /home/ai8049520/lse/scripts/deploy_from_github.sh >> /home/ai8049520/lse/logs/deploy.log 2>&1
+#
+# Опционально (мало RAM на VM: сборка + работающий контейнер lse):
+#   LSE_STOP_BEFORE_BUILD=1 ./scripts/deploy_from_github.sh --force
+# Подробный вывод шагов docker build (в deploy.log видно, что не «зависло»):
+#   LSE_DEPLOY_BUILD_PLAIN=1 ./scripts/deploy_from_github.sh --force
 
 set -e
 
@@ -36,17 +41,33 @@ cd "$REPO_DIR"
 
 # Сохраняем текущий коммит до pull
 OLD_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
+log "git fetch + pull..."
 git fetch origin
 git pull --rebase --autostash || { log "ERROR: git pull failed"; exit 3; }
 NEW_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
 
 if [ "$FORCE" -eq 1 ] || [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
     log "Changes detected (or --force). Rebuilding and restarting $CONTAINER_NAME..."
-    docker compose build lse
-    docker compose up -d lse
+    log "Commits: $OLD_HEAD -> $NEW_HEAD"
+    log "Note: docker compose build can take many minutes (torch/pip); output may be sparse — see LSE_DEPLOY_BUILD_PLAIN in script header."
+    export DOCKER_BUILDKIT=1
+    BUILD_ARGS=(build lse)
+    if [ -n "${LSE_DEPLOY_BUILD_PLAIN:-}" ]; then
+        BUILD_ARGS=(build --progress=plain lse)
+    fi
+    if [ "${LSE_STOP_BEFORE_BUILD:-0}" = "1" ]; then
+        log "LSE_STOP_BEFORE_BUILD=1: stopping service lse to free RAM for build (postgres stays up)..."
+        docker compose stop lse 2>/dev/null || true
+    fi
+    log "Starting: docker compose ${BUILD_ARGS[*]}"
+    time docker compose "${BUILD_ARGS[@]}"
+    log "docker compose build finished."
+    log "Starting: docker compose up -d lse"
+    time docker compose up -d lse
+    log "docker compose up finished."
     log "Deploy completed. Container: $CONTAINER_NAME"
 else
-    log "No changes. Skip rebuild."
+    log "No changes. Skip rebuild. HEAD=$NEW_HEAD"
 fi
 
 exit 0

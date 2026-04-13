@@ -81,8 +81,7 @@ def fetch_all_news_sources(mode: str = "all"):
         # 2. Alpha Vantage (требует API ключ)
         try:
             logger.info("\n📊 Источник core-fast 2/2: Alpha Vantage API")
-            # Получаем тикеры из конфига или используем дефолтные
-            from config_loader import get_config_value
+            # Получаем тикеры из конфига или используем дефолтные (get_config_value — импорт на уровне модуля)
             tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
             tickers = [t.strip() for t in tickers_str.split(',')]
 

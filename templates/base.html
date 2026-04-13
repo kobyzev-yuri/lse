@@ -139,6 +139,9 @@
             border: 1px solid #0f3460;
         }
         button.btn-sm, .btn.btn-sm { padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+        a.btn { text-decoration: none; display: inline-block; }
+        a.btn:hover, a.btn:focus { text-decoration: none; }
+        .card a.btn:hover { text-decoration: none; }
         input, select, textarea {
             width: 100%;
             padding: 0.5rem 0.6rem;
@@ -221,6 +224,7 @@
         <a href="/analyzer">Анализатор</a>
         <a href="/reports/pending">Открытые</a>
         <a href="/reports/closed">Закрытые</a>
+        <a href="/reports/closed/export" title="Excel: лимит по умолчанию из config">Закрытые → Excel</a>
     </nav>
 
     <div class="container">
