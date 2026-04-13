@@ -15,6 +15,25 @@ from typing import Any, Dict
 from config_loader import get_config_value, get_dynamic_config_value
 
 
+def _strip_leading_intuition_label(text: str) -> str:
+    """Убирает префикс «Интуиция:» — он уже задаётся в шаблоне сообщения."""
+    t = (text or "").strip()
+    low = t.lower()
+    if low.startswith("интуиция:"):
+        return t[9:].strip()
+    if low.startswith("интуиция :"):
+        return t[10:].strip()
+    return t
+
+
+def _kb_news_items_ticker_only(kb_news: list, ticker: str) -> list:
+    """Только строки KB с тем же тикером — без MACRO/US_MACRO в телеграм-списке."""
+    tu = (ticker or "").strip().upper()
+    if not tu:
+        return []
+    return [n for n in (kb_news or []) if (n.get("ticker") or "").strip().upper() == tu]
+
+
 def build_5m_technical_short_text(tech: Dict[str, Any], ticker: str) -> str:
     """
     Короткий технический сигнал 5m (одна карточка в чат).
@@ -45,7 +64,7 @@ def build_5m_technical_short_text(tech: Dict[str, Any], ticker: str) -> str:
     if cond:
         lines.append(f"Условие (формально): {cond[:400]}")
     if intu:
-        lines.append(f"Интуиция правила: {intu[:400]}")
+        lines.append(f"Смысл: {_strip_leading_intuition_label(intu)[:400]}")
     if reasoning:
         lines.append(f"Обоснование (факты/контекст): {reasoning}")
     summ = tech.get("price_forecast_5m_summary")
@@ -82,7 +101,11 @@ def build_5m_entry_signal_text(
     try:
         from services.game_5m import _effective_take_profit_pct, _effective_stop_loss_pct, _game_5m_stop_loss_enabled
         game5m_stop_enabled = _game_5m_stop_loss_enabled()
-        take_pct_msg = _effective_take_profit_pct(mom, ticker=ticker)
+        take_pct_msg = d5.get("take_profit_pct")
+        if take_pct_msg is None:
+            take_pct_msg = _effective_take_profit_pct(mom, ticker=ticker)
+        else:
+            take_pct_msg = float(take_pct_msg)
     except Exception:
         game5m_stop_enabled = True
         take_pct_msg = 5.0
@@ -104,12 +127,14 @@ def build_5m_entry_signal_text(
     lines = [
         headline,
         "",
-        f"Решение: {decision}",
     ]
     if cond_full:
-        lines.append(f"📌 Условие: {cond_full}")
+        lines.append(f"📌 {cond_full}")
     if intu_full:
-        lines.append(f"💡 Интуиция: {intu_full}")
+        _intu = _strip_leading_intuition_label(intu_full)
+        if len(_intu) > 240:
+            _intu = _intu[:237].rstrip() + "…"
+        lines.append(f"💡 {_intu}")
     lines.extend(
         [
         f"Цена: ${price:.2f}" if price is not None else "",
@@ -128,15 +153,28 @@ def build_5m_entry_signal_text(
         entry_lo = d5.get("entry_price_range_low")
         entry_hi = d5.get("entry_price_range_high")
         exp_take = d5.get("expected_profit_pct_if_take")
+        tp_rule_pct = d5.get("take_profit_pct")
+        try:
+            tp_rule_f = float(tp_rule_pct) if tp_rule_pct is not None else None
+        except (TypeError, ValueError):
+            tp_rule_f = None
         parts = []
         if entry_rec is not None:
-            parts.append(f"реком. вход: ${float(entry_rec):.2f}")
+            parts.append(f"вход ~${float(entry_rec):.2f}")
         if entry_lo is not None and entry_hi is not None:
-            parts.append(f"диапазон: ${float(entry_lo):.2f}–${float(entry_hi):.2f}")
-        if exp_take is not None:
-            parts.append(f"ожид. прибыль до тейка: +{float(exp_take):.2f}%")
+            parts.append(f"диапазон ${float(entry_lo):.2f}–${float(entry_hi):.2f}")
+        if exp_take is not None and tp_rule_f is not None:
+            diff = abs(float(exp_take) - tp_rule_f)
+            if diff < 0.35:
+                parts.append(f"цель тейка ~+{tp_rule_f:.1f}%")
+            else:
+                parts.append(f"+{float(exp_take):.2f}% до цены тейка (правило {tp_rule_f:.1f}%)")
+        elif exp_take is not None:
+            parts.append(f"+{float(exp_take):.2f}% до цены тейка")
+        elif tp_rule_f is not None:
+            parts.append(f"цель по правилу ~+{tp_rule_f:.1f}%")
         if parts:
-            lines.append("✅ План входа: " + "  ·  ".join(parts))
+            lines.append("✅ " + " · ".join(parts))
     lines.extend(
         [
         "",
@@ -148,9 +186,20 @@ def build_5m_entry_signal_text(
     if not game5m_stop_enabled:
         lines.append("⚠️ Стоп 5m отключён (GAME_5M_STOP_LOSS_ENABLED=false) — не рекомендуй стоп-лосс по 5m.")
     lines.append("")
+    try:
+        from services.recommend_5m import get_5m_card_payload
+
+        _card = get_5m_card_payload(d5, ticker)
+        _qv = (_card.get("qwen_checklist_verdict") or "").strip()
+        if _qv:
+            lines.append(f"📊 {_qv}")
+    except Exception:
+        pass
+
     lines.append(f"Подробнее: /recommend5m {ticker}")
     if reasoning:
-        lines.insert(-2, f"💭 {reasoning}")
+        r_short = reasoning if len(reasoning) <= 220 else reasoning[:217].rstrip() + "…"
+        lines.insert(-1, f"💭 {r_short}")
 
     p_cb = d5.get("catboost_entry_proba_good")
     st_cb = d5.get("catboost_signal_status")
@@ -168,19 +217,25 @@ def build_5m_entry_signal_text(
     lines.append(f"📰 **Учёт новостей:** {news_impact}")
 
     kb_news = d5.get("kb_news") or []
-    if kb_news:
-        recent = list(kb_news)[:3]
+    ticker_news = _kb_news_items_ticker_only(kb_news, ticker)
+    if ticker_news:
+        recent = list(ticker_news)[:3]
         parts = []
         for n in recent:
             sent = n.get("sentiment_score")
             sent_str = f" (тон {sent:.2f})" if sent is not None else ""
-            content = (n.get("content") or "").strip()[:80]
+            content = (n.get("content") or "").strip()[:90]
             if content:
                 parts.append(f"• {content}{sent_str}")
         if parts:
             lines.append("")
-            lines.append("📰 **Новости из базы (за период 5m):**")
+            lines.append(f"📰 **Новости по {ticker} (KB, период 5m):**")
             lines.extend(parts)
+    elif kb_news and (d5.get("kb_news_impact") or "").strip() not in ("нейтрально", ""):
+        lines.append("")
+        lines.append(
+            f"📰 По **{ticker}** в KB за период заголовков нет; тон «{d5.get('kb_news_impact')}» учтён по общему фону (без списка макро в алерте)."
+        )
 
     llm_insight = d5.get("llm_insight")
     llm_content = (d5.get("llm_news_content") or "").strip()[:400]

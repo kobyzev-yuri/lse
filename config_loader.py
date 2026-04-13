@@ -302,6 +302,25 @@ def get_closed_positions_report_limits() -> tuple[int, int]:
     return default_lim, max_lim
 
 
+def get_web_closed_positions_limits() -> tuple[int, int]:
+    """
+    Лимиты только для веба: /reports/closed и Excel.
+    Дефолт строк — как у TELEGRAM_CLOSED_REPORT_DEFAULT.
+    Верхняя граница — max(TELEGRAM_CLOSED_REPORT_MAX, WEB_CLOSED_REPORT_MAX), если WEB_* задан;
+    иначе совпадает с Telegram. Так можно выгружать в Excel больше строк, не меняя лимит бота.
+    """
+    default_lim, tg_max = get_closed_positions_report_limits()
+    raw = (get_config_value("WEB_CLOSED_REPORT_MAX") or "").strip()
+    if not raw:
+        return default_lim, tg_max
+    try:
+        w = int(raw)
+    except (ValueError, TypeError):
+        return default_lim, tg_max
+    w = max(1, min(w, 5000))
+    return default_lim, max(tg_max, w)
+
+
 def get_dynamic_config_value(key: str, default: Any = None, entity: str = 'GLOBAL', engine=None) -> Any:
     """
     Получает динамическое значение конфигурации из БД strategy_parameters (RLM).

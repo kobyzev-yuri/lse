@@ -75,8 +75,9 @@
     <p class="muted" style="margin-bottom: 0.5rem; font-size: 0.9rem;">
         Закрытые сделки (последние на странице).
         Полный отчёт: <a href="/reports/closed">Закрытые</a>.
-        Excel: <a href="/reports/closed/export?limit={{ closed_report_default }}">.xlsx (как здесь, {{ closed_report_default }})</a>
-        · <a href="/reports/closed/export?limit={{ closed_report_max }}">.xlsx до {{ closed_report_max }}</a>
+        Excel: <a href="/reports/closed/export?limit={{ closed_report_default }}">.xlsx ({{ closed_report_default }})</a>
+        · <a href="/reports/closed/export?limit={{ closed_report_web_max }}">.xlsx до {{ closed_report_web_max }}</a>
+        · <a href="/reports/closed#excel-export">настроить лимит</a>
     </p>
     {% if closed_positions %}
     <div class="table-responsive">

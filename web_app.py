@@ -33,6 +33,7 @@ from config_loader import (
     get_database_url,
     get_use_llm_for_analyst,
     get_closed_positions_report_limits,
+    get_web_closed_positions_limits,
     load_config,
     get_config_file_path,
     update_config_key,
@@ -246,6 +247,7 @@ async def index(request: Request):
 
         # Таблица закрытых позиций — те же лимиты и колонки, что /closed в Telegram
         closed_rep_def, closed_rep_max = get_closed_positions_report_limits()
+        _, closed_web_max = get_web_closed_positions_limits()
         closed_positions = []
         if trade_pnls:
             def _sort_key(x):
@@ -304,6 +306,7 @@ async def index(request: Request):
         "closed_positions": closed_positions,
         "closed_report_default": closed_rep_def,
         "closed_report_max": closed_rep_max,
+        "closed_report_web_max": closed_web_max,
         "cash": cash,
         "positions": positions,
         "total_pnl": total_pnl,
@@ -1697,10 +1700,10 @@ def _closed_ts_msk(ts) -> str:
 
 def _closed_report_rows(limit: Optional[int] = None):
     """Данные для отчёта закрытых позиций (как /closed): сортировка по дате закрытия, новые сверху."""
-    default_lim, max_lim = get_closed_positions_report_limits()
+    default_lim, web_max = get_web_closed_positions_limits()
     if limit is None:
         limit = default_lim
-    limit = max(1, min(max_lim, int(limit)))
+    limit = max(1, min(web_max, int(limit)))
     report_engine = get_engine()
     all_trades = load_trade_history(report_engine)
     trade_pnls = compute_closed_trade_pnls(all_trades)
@@ -1874,15 +1877,18 @@ def _pending_report_rows(limit: int = 50):
 
 @app.get("/reports/closed", response_class=HTMLResponse)
 async def report_closed(request: Request, limit: Optional[int] = None):
-    """HTML-отчёт: закрытые позиции (аналог /closed в Telegram). Лимиты TELEGRAM_CLOSED_REPORT_DEFAULT / _MAX."""
-    _def_l, _max_l = get_closed_positions_report_limits()
+    """HTML-отчёт: закрытые позиции. Веб-потолок — get_web_closed_positions_limits() (опц. WEB_CLOSED_REPORT_MAX)."""
+    _def_l, _tg_max = get_closed_positions_report_limits()
+    _, web_max = get_web_closed_positions_limits()
     if limit is None:
         limit = _def_l
     else:
-        limit = max(1, min(_max_l, int(limit)))
+        limit = max(1, min(web_max, int(limit)))
     rows = _closed_report_rows(limit=limit)
     total_pnl = sum(float(r["profit_usd"]) for r in rows) if rows else 0.0
     diagnostics = _closed_exit_diagnostics(rows)
+    preset_candidates = (25, 50, 100, 200, 500, 1000, web_max)
+    closed_limit_presets = sorted({n for n in preset_candidates if 1 <= n <= web_max})
     return HTMLResponse(
         render_template(
             "reports_closed.html",
@@ -1891,7 +1897,9 @@ async def report_closed(request: Request, limit: Optional[int] = None):
                 "rows": rows,
                 "limit": limit,
                 "closed_report_default": _def_l,
-                "closed_report_max": _max_l,
+                "closed_report_web_max": web_max,
+                "closed_report_telegram_max": _tg_max,
+                "closed_limit_presets": closed_limit_presets,
                 "total_pnl": total_pnl,
                 "total_count": len(rows),
                 "diagnostics": diagnostics,
@@ -1902,12 +1910,12 @@ async def report_closed(request: Request, limit: Optional[int] = None):
 
 @app.get("/reports/closed/export")
 async def report_closed_export(limit: Optional[int] = None):
-    """Выгрузка закрытых позиций в Excel (.xlsx). Лимит — как у /reports/closed (TELEGRAM_CLOSED_REPORT_*)."""
-    _def_l, _max_l = get_closed_positions_report_limits()
+    """Выгрузка закрытых позиций в Excel (.xlsx). Потолок строк — как у /reports/closed (WEB_CLOSED_REPORT_MAX / Telegram)."""
+    _def_l, web_max = get_web_closed_positions_limits()
     if limit is None:
         limit = _def_l
     else:
-        limit = max(1, min(_max_l, int(limit)))
+        limit = max(1, min(web_max, int(limit)))
     rows = _closed_report_rows(limit=limit)
     try:
         payload = _build_closed_positions_xlsx(rows)
