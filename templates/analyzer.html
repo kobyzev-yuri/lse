@@ -268,13 +268,35 @@ async function runAnalyzer() {
             applyBtn.disabled = false;
             const notes = Array.isArray(auto.manual_notes) ? auto.manual_notes : [];
             envManual.textContent = notes.length ? notes.join('\n') : '—';
-            envSkip.textContent = skipped.length ? `Не применено автоматически: ${skipped.length}` : 'Все предложенные ключи можно применить.';
+            if (skipped.length) {
+                const parts = skipped.slice(0, 6).map(function (s) {
+                    const k = s.env_key || s.parameter || '—';
+                    const n = (s.note || s.reason || '').trim();
+                    return n ? (k + ': ' + n) : k;
+                });
+                let t = 'Не применено автоматически: ' + skipped.length + '. ' + parts.join(' · ');
+                if (skipped.length > 6) {
+                    t += ' …';
+                }
+                envSkip.textContent = t;
+            } else {
+                envSkip.textContent = 'Все предложенные ключи можно применить.';
+            }
         } else {
             envBlock.textContent = 'Нет авто-применимых изменений.';
             applyBtn.disabled = true;
             const notes = Array.isArray(auto.manual_notes) ? auto.manual_notes : [];
             envManual.textContent = notes.length ? notes.join('\n') : '—';
-            envSkip.textContent = skipped.length ? `Не применено автоматически: ${skipped.length}` : '—';
+            if (skipped.length) {
+                const parts = skipped.slice(0, 6).map(function (s) {
+                    const k = s.env_key || s.parameter || '—';
+                    const n = (s.note || s.reason || '').trim();
+                    return n ? (k + ': ' + n) : k;
+                });
+                envSkip.textContent = 'Не применено: ' + skipped.length + '. ' + parts.join(' · ');
+            } else {
+                envSkip.textContent = '—';
+            }
         }
     } catch (e) {
         summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(e.message)}</span>`;
