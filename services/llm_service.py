@@ -14,6 +14,42 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 
+def _normalize_openai_model_id_for_heuristics(model: str) -> str:
+    """Убирает префиксы провайдера (openai/..., chatgpt-...) для эвристик по имени."""
+    m = (model or "").strip().lower()
+    if "/" in m:
+        m = m.split("/")[-1]
+    return m
+
+
+def chat_completion_token_limit_params(
+    model: str,
+    *,
+    max_tokens: Optional[int] = None,
+    max_completion_tokens: Optional[int] = None,
+    default_limit: int = 2000,
+) -> Dict[str, Any]:
+    """
+    Часть новых моделей OpenAI (gpt-5.x и др.) в chat.completions не принимает ``max_tokens`` —
+    только ``max_completion_tokens`` (ошибка 400 unsupported_parameter).
+
+    Принудительно: ``OPENAI_CHAT_USE_MAX_COMPLETION_TOKENS=1`` — всегда max_completion_tokens;
+    ``0`` — всегда max_tokens (старые модели / совместимые прокси).
+    """
+    if max_completion_tokens is not None:
+        return {"max_completion_tokens": int(max_completion_tokens)}
+    limit = int(max_tokens if max_tokens is not None else default_limit)
+    raw = (os.environ.get("OPENAI_CHAT_USE_MAX_COMPLETION_TOKENS") or "").strip().lower()
+    if raw in ("1", "true", "yes"):
+        return {"max_completion_tokens": limit}
+    if raw in ("0", "false", "no"):
+        return {"max_tokens": limit}
+    mid = _normalize_openai_model_id_for_heuristics(model)
+    if re.match(r"^gpt-5", mid) or mid.startswith("o1") or mid.startswith("o3") or mid.startswith("o4"):
+        return {"max_completion_tokens": limit}
+    return {"max_tokens": limit}
+
+
 def format_game5m_execution_context_for_llm(technical_data: Dict[str, Any]) -> str:
     """
     Строки для user-промпта: импульс 2ч и тейк/стоп по правилам GAME_5m,
@@ -205,11 +241,17 @@ class LLMService:
             formatted_messages.extend(messages)
             
             # Параметры запроса
+            token_kw = chat_completion_token_limit_params(
+                self.model,
+                max_tokens=kwargs.get("max_tokens"),
+                max_completion_tokens=kwargs.get("max_completion_tokens"),
+                default_limit=2000,
+            )
             request_params = {
                 "model": self.model,
                 "messages": formatted_messages,
                 "temperature": kwargs.get("temperature", self.temperature),
-                "max_tokens": kwargs.get("max_tokens", 2000),
+                **token_kw,
                 "timeout": self.timeout
             }
             
@@ -403,11 +445,17 @@ Sentiment анализ:
             if system_prompt:
                 formatted_messages.append({"role": "system", "content": system_prompt})
             formatted_messages.extend(messages)
+            _token_kw = chat_completion_token_limit_params(
+                model,
+                max_tokens=kwargs.get("max_tokens"),
+                max_completion_tokens=kwargs.get("max_completion_tokens"),
+                default_limit=2000,
+            )
             response = client.chat.completions.create(
                 model=model,
                 messages=formatted_messages,
                 temperature=kwargs.get("temperature", self.temperature),
-                max_tokens=kwargs.get("max_tokens", 2000),
+                **_token_kw,
             )
             msg = response.choices[0].message.content
             return {
