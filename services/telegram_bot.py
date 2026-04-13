@@ -42,6 +42,23 @@ TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 HELP_CHUNK_SIZE = 4000
 
 
+def _telegram_closed_report_limits() -> tuple[int, int]:
+    """Лимиты для /closed и /closed_impulse: (по умолчанию, максимум по аргументу). HTML-файл — можно больше, чем 50."""
+    raw_d = (get_config_value("TELEGRAM_CLOSED_REPORT_DEFAULT", "25") or "25").strip()
+    raw_m = (get_config_value("TELEGRAM_CLOSED_REPORT_MAX", "200") or "200").strip()
+    try:
+        default = int(raw_d)
+    except ValueError:
+        default = 25
+    try:
+        max_lim = int(raw_m)
+    except ValueError:
+        max_lim = 200
+    max_lim = max(1, max_lim)
+    default = max(1, min(default, max_lim))
+    return default, max_lim
+
+
 def _split_message_chunks(text: str, max_len: int = HELP_CHUNK_SIZE) -> List[str]:
     """Разбивает текст на части не длиннее max_len, по возможности по переносам строк."""
     if not text or len(text) <= max_len:
@@ -1088,8 +1105,8 @@ class LSETelegramBot:
 /buy <ticker> <кол-во> — купить
 /sell <ticker> [кол-во] — продать (без кол-ва — вся позиция)
 /history [тикер] [N] — последние сделки (с тикером — фильтр по тикеру)
-/closed [тикер] [N] — закрытые позиции; без аргументов — все (25); с тикером — фильтр (напр. /closed MU 10)
-/closed_impulse [N] [pct|all] — закрытые 5m без стоп-лоссов; pct=порог импульса при входе % (по умолч. 5), all=все сделки (при отсутствии импульса — в колонке)
+/closed [тикер] [N] — закрытые позиции; без аргументов — последние N (по умолч. из config, см. TELEGRAM_CLOSED_REPORT_DEFAULT); N не больше TELEGRAM_CLOSED_REPORT_MAX (по умолч. 200). Примеры: /closed 100, /closed MU 80
+/closed_impulse [N] [pct|all] — закрытые 5m без стоп-лоссов; N — лимит строк (как /closed, TELEGRAM_CLOSED_REPORT_*); pct=порог импульса при входе %% (по умолч. 5), all=все сделки
 /pending [тикер] [N] — открытые позиции; с тикером — только по нему (напр. /pending SNDK)
 /premarket [тикер] — премаркет: таблица + HTML; с тикером — ещё график 1m (как /chart5m)
 /corr [ticker1] [ticker2] — корреляции по кластеру портфеля (60 дн.). Без аргументов — матрица; один/два тикера — строка или пара.
@@ -1170,8 +1187,8 @@ class LSETelegramBot:
 `/buy <ticker> <кол-во>` — купить по последней цене из БД
 `/sell <ticker>` — закрыть всю позицию; `/sell <ticker> <кол-во>` — частичная продажа
 `/history [тикер] [N]` — последние сделки (по умолч. 15); с тикером — только по нему. В ответе — стратегия [GAME\_5M / Portfolio / Manual]
-`/closed [тикер] [N]` — закрытые позиции; с тикером — только по нему (напр. `/closed MU 10`). По умолч. 25.
-`/closed_impulse [N] [pct|all]` — закрытые 5m без стоп-лоссов. По умолч. импульс при входе >5%; pct=другой порог %; all=все сделки (импульс при входе в колонке или —). Внизу — открытые 5m.
+`/closed [тикер] [N]` — закрытые позиции; с тикером — только по нему (напр. `/closed MU 80`). Лимит: `TELEGRAM_CLOSED_REPORT_DEFAULT` / `TELEGRAM_CLOSED_REPORT_MAX` в config.env.
+`/closed_impulse [N] [pct|all]` — закрытые 5m без стоп-лоссов. Лимит N — те же `TELEGRAM_CLOSED_REPORT_*`, что у `/closed`. По умолч. импульс при входе >5%%; pct=другой порог; all=все сделки. Внизу — открытые 5m.
 `/pending [тикер] [N]` — открытые позиции; с тикером — фильтр (напр. `/pending SNDK`). «5m вне» — тикер убран из игры 5m.
 `/premarket` — таблица премаркета + HTML. `/premarket <тикер>` — дополнительно график 1m по тикеру (как /chart5m).
 `/corr` — матрица корреляций по кластеру портфеля (60 дн.). `/corr5m` — по кластеру 5m. С аргументами: строка по тикеру или пара T1 T2.
@@ -3601,7 +3618,7 @@ class LSETelegramBot:
                 pass
 
     async def _handle_closed(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Таблица закрытых позиций. /closed [тикер] [N] — фильтр по тикеру, затем лимит (по умолч. 25)."""
+        """Таблица закрытых позиций. /closed [тикер] [N] — фильтр по тикеру, затем лимит (см. TELEGRAM_CLOSED_REPORT_*)."""
         if update.message is None:
             return
         chat_id = update.effective_chat.id if update.effective_chat else None
@@ -3618,19 +3635,20 @@ class LSETelegramBot:
         if not self._check_access(user_id):
             await update.message.reply_text("❌ Доступ запрещен")
             return
-        limit = 25
+        default_lim, max_lim = _telegram_closed_report_limits()
+        limit = default_lim
         ticker_filter = None
         if context.args:
             a0 = str(context.args[0]).strip()
             a1 = str(context.args[1]).strip() if len(context.args) > 1 else None
             if a0.isdigit():
-                limit = min(int(a0), 50)
+                limit = min(int(a0), max_lim)
                 if a1 and not a1.isdigit():
                     ticker_filter = _normalize_ticker(a1)
             else:
                 ticker_filter = _normalize_ticker(a0)
                 if a1 and a1.isdigit():
-                    limit = min(int(a1), 50)
+                    limit = min(int(a1), max_lim)
         try:
             import pandas as pd
             from report_generator import get_engine, load_trade_history, compute_closed_trade_pnls
@@ -3780,19 +3798,20 @@ class LSETelegramBot:
             await update.message.reply_text(f"❌ Ошибка replay_closed: {str(e)[:300]}")
 
     async def _handle_closed_impulse(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Закрытые 5m: по умолчанию импульс при входе >5%, без стоп-лоссов. /closed_impulse [N] [pct|all] — pct порог в %, all = все сделки 5m (при отсутствии импульса показываем —)."""
+        """Закрытые 5m: по умолчанию импульс при входе >5%, без стоп-лоссов. Лимит N — TELEGRAM_CLOSED_REPORT_DEFAULT / MAX."""
         if update.message is None:
             return
         user_id = (update.effective_user or update.message.from_user).id if (update.effective_user or getattr(update.message, "from_user", None)) else None
         if user_id is None or not self._check_access(user_id):
             await update.message.reply_text("❌ Доступ запрещен")
             return
-        limit = 25
+        default_lim, max_lim = _telegram_closed_report_limits()
+        limit = default_lim
         show_all = False  # all = показывать все закрытые 5m без фильтра по импульсу
         impulse_min = 5.0
         args = [str(a).strip() for a in (context.args or [])]
         if args and args[0].isdigit():
-            limit = min(int(args[0]), 50)
+            limit = min(int(args[0]), max_lim)
             if len(args) > 1:
                 if args[1].lower() in ("all", "*", "все", "всё"):
                     show_all = True
@@ -3804,12 +3823,12 @@ class LSETelegramBot:
         elif args and args[0].lower() in ("all", "*", "все", "всё"):
             show_all = True
             if len(args) > 1 and args[1].isdigit():
-                limit = min(int(args[1]), 50)
+                limit = min(int(args[1]), max_lim)
         elif args and not args[0].isdigit():
             try:
                 impulse_min = float(args[0])
                 if len(args) > 1 and args[1].isdigit():
-                    limit = min(int(args[1]), 50)
+                    limit = min(int(args[1]), max_lim)
             except ValueError:
                 if args[0].lower() in ("all", "*", "все", "всё"):
                     show_all = True
