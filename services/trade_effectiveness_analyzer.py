@@ -118,6 +118,49 @@ ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
         "Если проблема в ветвлении/формуле, а не в пороге — algorithm_change_proposals с path из code_map и именем функции/ветки.",
         "Оценка impact в expected_impact — осторожные числа; validation_plan — повторный прогон анализатора на следующем окне или ограниченный paper-run.",
     ],
+    # Как крон решает тейк (без полного исходника — достаточно для подбора GAME_5M_*).
+    "game_5m_take_exit_runtime": {
+        "primary_code": "services/game_5m.py: _effective_take_profit_pct, _effective_stop_loss_pct, should_close_position",
+        "cron_entrypoint": "scripts/send_sndk_signal_cron.py вызывает should_close_position(..., momentum_2h_pct с карточки 5m)",
+        "take_threshold_formula": (
+            "cap = GAME_5M_TAKE_PROFIT_PCT или GAME_5M_TAKE_PROFIT_PCT_<TICKER> (потолок). "
+            "Если momentum_2h_pct >= GAME_5M_TAKE_PROFIT_MIN_PCT: "
+            "эффективный_тейк = min(momentum_2h_pct × GAME_5M_TAKE_MOMENTUM_FACTOR, cap). "
+            "Иначе эффективный_тейк = cap. "
+            "Закрытие TAKE_PROFIT если нереализованный % (по max(close, bar_high) vs entry) >= эффективный_тейк − 0.05."
+        ),
+        "env_keys_take": [
+            "GAME_5M_TAKE_PROFIT_PCT",
+            "GAME_5M_TAKE_PROFIT_PCT_<TICKER>",
+            "GAME_5M_TAKE_PROFIT_MIN_PCT",
+            "GAME_5M_TAKE_MOMENTUM_FACTOR",
+        ],
+        "env_keys_stop_time": [
+            "GAME_5M_STOP_LOSS_ENABLED",
+            "GAME_5M_STOP_LOSS_PCT",
+            "GAME_5M_STOP_TO_TAKE_RATIO",
+            "GAME_5M_STOP_LOSS_MIN_PCT",
+            "GAME_5M_MAX_POSITION_MINUTES",
+            "GAME_5M_MAX_POSITION_MINUTES_<TICKER>",
+            "GAME_5M_MAX_POSITION_DAYS",
+            "GAME_5M_MAX_POSITION_DAYS_<TICKER>",
+            "GAME_5M_SESSION_END_EXIT_MINUTES",
+            "GAME_5M_SESSION_END_MIN_PROFIT_PCT",
+            "GAME_5M_EXIT_ONLY_TAKE",
+            "GAME_5M_EARLY_DERISK_*",
+        ],
+        "note_on_meta_take": (
+            "В report.meta.current_decision_rule_params.exit_strategy числа take_profit_pct_effective / stop_loss_pct_effective "
+            "— снимок при momentum_2h=None (часто совпадает с потолком тейка). Реальный порог в кроне зависит от текущего momentum_2h на баре."
+        ),
+        "sell_does_not_close": (
+            "Сигнал решения SELL по 5m не закрывает уже открытый long; только TAKE_PROFIT / STOP_LOSS / TIME_EXIT / TIME_EXIT_EARLY (см. should_close_position)."
+        ),
+        "tuning_hint_from_report": (
+            "Много TAKE_PROFIT и высокий sum_missed_upside_pct → чаще трогают TAKE_MOMENTUM_FACTOR или потолок тейка; "
+            "много убытков при vol — VOLATILITY_*, SELL_CONFIRM_BARS; долгое удержание — MAX_POSITION_*."
+        ),
+    },
 }
 
 
@@ -720,7 +763,9 @@ def _build_llm_recommendations(
             "Для параметра из practical_parameter_suggestions или heuristic_hints подставь env_key из "
             "algorithm_context.parameter_to_env_key (или сам ключ GAME_5M_*).\n"
             "Никогда не связывай GAME_5M_SIGNAL_CRON_MINUTES с late_polling_signals: это разные вещи (см. llm_critical_notes). "
-            "Не пиши в priorities фразы про «late polling» как про инфраструктуру — говори «выход ниже MFE окна» или «недобор после тейка».\n\n"
+            "Не пиши в priorities фразы про «late polling» как про инфраструктуру — говори «выход ниже MFE окна» или «недобор после тейка».\n"
+            "Для тейка/стопа опирайся на algorithm_digest.game_5m_take_exit_runtime и "
+            "report.meta.current_decision_rule_params.exit_strategy (в т.ч. strategy_params_snapshot, TAKE_MOMENTUM_FACTOR).\n\n"
             "Верни ТОЛЬКО валидный JSON без markdown и без пояснений вне JSON со следующими ключами:\n"
             "{\n"
             "  \"priorities\": [\"...\"],\n"
@@ -1346,9 +1391,11 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
         from config_loader import get_config_value
         from services.recommend_5m import GAME_5M_RULE_VERSION, get_decision_5m_rule_thresholds
         from services.game_5m import (
+            _effective_stop_loss_pct,
+            _effective_take_profit_pct,
+            _game_5m_stop_loss_enabled,
             _max_position_minutes,
-            _stop_loss_enabled,
-            _strategy_stop_and_take,
+            get_strategy_params,
         )
 
         def _cfg_str(key: str, default: str = "") -> Optional[str]:
@@ -1383,7 +1430,10 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
             cron_min = 5
         cron_min = max(1, min(30, cron_min))
 
-        stop_pct, take_pct = _strategy_stop_and_take()
+        sp = get_strategy_params()
+        # Пороги при отсутствии momentum в снимке (= потолок тейка и стоп от него); в кроне подставляется живой momentum_2h.
+        take_pct = _effective_take_profit_pct(None, ticker=None)
+        stop_pct = _effective_stop_loss_pct(None, ticker=None)
         return {
             "rule_version": GAME_5M_RULE_VERSION,
             "source_fn": "services.recommend_5m.get_decision_5m",
@@ -1420,9 +1470,19 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
             },
             "exit_strategy": {
                 "max_position_minutes": _max_position_minutes(),
-                "stop_loss_enabled": _stop_loss_enabled(),
+                "stop_loss_enabled": _game_5m_stop_loss_enabled(),
                 "stop_loss_pct_effective": stop_pct,
                 "take_profit_pct_effective": take_pct,
+                "strategy_params_snapshot": {
+                    "take_profit_pct_cap": sp.get("take_profit_pct"),
+                    "take_profit_min_pct": sp.get("take_profit_min_pct"),
+                    "stop_loss_pct_config": sp.get("stop_loss_pct"),
+                    "stop_to_take_ratio": sp.get("stop_to_take_ratio"),
+                    "take_profit_rule": sp.get("take_profit_rule"),
+                    "stop_loss_rule": sp.get("stop_loss_rule"),
+                },
+                "GAME_5M_TAKE_MOMENTUM_FACTOR": _cfg_float("GAME_5M_TAKE_MOMENTUM_FACTOR", "1.0"),
+                "GAME_5M_EXIT_ONLY_TAKE": _cfg_bool("GAME_5M_EXIT_ONLY_TAKE", "false"),
                 "GAME_5M_SESSION_END_EXIT_MINUTES": _cfg_int("GAME_5M_SESSION_END_EXIT_MINUTES", "30"),
                 "GAME_5M_SESSION_END_MIN_PROFIT_PCT": _cfg_float("GAME_5M_SESSION_END_MIN_PROFIT_PCT", "0.3"),
                 "GAME_5M_EARLY_DERISK_ENABLED": _cfg_bool("GAME_5M_EARLY_DERISK_ENABLED", "false"),
