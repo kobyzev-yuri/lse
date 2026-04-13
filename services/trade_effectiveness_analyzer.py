@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -666,6 +667,25 @@ def _parse_llm_json_response(text: str) -> Any:
     return {"raw_text": text}
 
 
+def _llm_trade_analyzer_response_parsed_ok(parsed: Any) -> bool:
+    """Ожидаемый контракт ответа модели: объект с priorities или in_algorithm_parameter_changes."""
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("priorities") is not None:
+        return True
+    if parsed.get("in_algorithm_parameter_changes") is not None:
+        return True
+    return False
+
+
+def _analyzer_llm_max_output_tokens(*, game_5m_config_focus: bool) -> int:
+    """Лимит completion: большие промпты + длинный JSON; 2000 часто режет gpt-5.x на середине объекта."""
+    raw = (os.environ.get("ANALYZER_LLM_MAX_COMPLETION_TOKENS") or "").strip()
+    if raw.isdigit():
+        return max(1024, min(16384, int(raw)))
+    return 6144 if game_5m_config_focus else 4096
+
+
 def _build_llm_recommendations(
     payload: Dict[str, Any],
     *,
@@ -812,8 +832,7 @@ def _build_llm_recommendations(
                 "]\n"
                 "Ключи env_key только из algorithm_context.game_5m_exit_and_tuning_env_keys; для тикера — суффикс _TICKER.\n"
             )
-        # Чуть больше места под env_key, ссылки на trade_id и algorithm_change_proposals.
-        max_tok = 2600 if game_5m_config_focus else 2000
+        max_tok = _analyzer_llm_max_output_tokens(game_5m_config_focus=game_5m_config_focus)
         out = llm.generate_response(
             messages=[{"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, indent=2)}],
             system_prompt=system_prompt,
@@ -821,9 +840,31 @@ def _build_llm_recommendations(
             max_tokens=max_tok,
         )
         text = out.get("response") or ""
+        finish_reason = out.get("finish_reason")
         parsed = _parse_llm_json_response(text)
+        parse_ok = _llm_trade_analyzer_response_parsed_ok(parsed)
+        status = "ok" if parse_ok else "parse_failed"
+        warnings: List[str] = []
+        if finish_reason == "length":
+            warnings.append(
+                "Ответ обрезан по лимиту completion (finish_reason=length). "
+                "Задайте ANALYZER_LLM_MAX_COMPLETION_TOKENS или сократите отчёт (меньше дней / без trade_effects)."
+            )
+        if not parse_ok:
+            if not (text or "").strip():
+                warnings.append("Пустой ответ модели — проверьте лимиты API и ключ.")
+            elif finish_reason != "length":
+                warnings.append("Ответ не распознан как JSON с priorities — см. raw_fragment в analysis.")
+            frag = (text or "")[:4000]
+            if not isinstance(parsed, dict):
+                parsed = {"raw_text": text or ""}
+            if frag:
+                parsed["raw_fragment"] = frag
         return {
-            "status": "ok",
+            "status": status,
+            "parse_ok": parse_ok,
+            "finish_reason": finish_reason,
+            "warnings": warnings,
             "model": out.get("model"),
             "usage": out.get("usage"),
             "analysis": parsed,

@@ -262,7 +262,9 @@ class LLMService:
             
             # Извлекаем ответ
             assistant_message = response.choices[0].message.content
-            
+            if assistant_message is None:
+                assistant_message = ""
+
             return {
                 "response": assistant_message,
                 "model": response.model,
