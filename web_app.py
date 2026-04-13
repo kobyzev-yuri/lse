@@ -4,6 +4,7 @@ FastAPI: портфель, отчёты 5m, база знаний, график�
 """
 
 import asyncio
+import io
 import math
 import os
 import json
@@ -31,6 +32,7 @@ from analyst_agent import AnalystAgent
 from config_loader import (
     get_database_url,
     get_use_llm_for_analyst,
+    get_closed_positions_report_limits,
     load_config,
     get_config_file_path,
     update_config_key,
@@ -40,7 +42,14 @@ from config_loader import (
 from execution_agent import ExecutionAgent
 from services.ticker_groups import get_tickers_fast
 from news_importer import add_news, get_news_sources_stats
-from report_generator import compute_closed_trade_pnls, compute_open_positions, load_trade_history, get_engine, get_latest_prices
+from report_generator import (
+    compute_closed_trade_pnls,
+    compute_open_positions,
+    load_trade_history,
+    get_engine,
+    get_latest_prices,
+    human_trade_explanation_from_exit_context,
+)
 
 app = FastAPI(title="LSE Trading System", version="1.0.0")
 
@@ -235,7 +244,8 @@ async def index(request: Request):
         total_pnl = sum(_safe_net_pnl(t) for t in trade_pnls) if trade_pnls else 0.0
         win_rate = (sum(1 for t in trade_pnls if _safe_net_pnl(t) > 0) / len(trade_pnls) * 100) if trade_pnls else 0.0
 
-        # Таблица закрытых позиций (как /closed): все закрытые сделки, новые сверху
+        # Таблица закрытых позиций — те же лимиты и колонки, что /closed в Telegram
+        closed_rep_def, closed_rep_max = get_closed_positions_report_limits()
         closed_positions = []
         if trade_pnls:
             def _sort_key(x):
@@ -247,21 +257,15 @@ async def index(request: Request):
                 except Exception:
                     return pd.Timestamp.min
             try:
-                sorted_pnls = sorted(trade_pnls, key=_sort_key, reverse=True)[:50]
+                sorted_pnls = sorted(trade_pnls, key=_sort_key, reverse=True)[:closed_rep_max]
             except Exception:
-                sorted_pnls = list(trade_pnls)[:50]
-            for t in sorted_pnls:
+                sorted_pnls = list(trade_pnls)[:closed_rep_max]
+            for t in sorted_pnls[:closed_rep_def]:
                 try:
                     pts = t.exit_price - t.entry_price
                     pips = round(pts * 10000) if "=X" in t.ticker or "USD" in t.ticker or "EUR" in t.ticker else round(pts, 2)
-                    if hasattr(t, "entry_ts") and t.entry_ts is not None and hasattr(t.entry_ts, "strftime"):
-                        open_msk = t.entry_ts.strftime("%d.%m.%Y %H:%M")
-                    else:
-                        open_msk = str(getattr(t, "entry_ts", None))[:16] if getattr(t, "entry_ts", None) else "—"
-                    if hasattr(t, "ts") and t.ts is not None and hasattr(t.ts, "strftime"):
-                        close_msk = t.ts.strftime("%d.%m.%Y %H:%M")
-                    else:
-                        close_msk = str(getattr(t, "ts", None))[:16] if getattr(t, "ts", None) else "—"
+                    open_msk = _closed_ts_msk(getattr(t, "entry_ts", None))
+                    close_msk = _closed_ts_msk(getattr(t, "ts", None))
                     direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
                     raw = getattr(t, "signal_type", None)
                     if raw is None or (hasattr(pd, "isna") and pd.isna(raw)) or str(raw).strip() == "":
@@ -281,10 +285,15 @@ async def index(request: Request):
                         "profit_usd": profit_usd,
                         "pl_pct": pl_pct,
                         "units": int(t.quantity),
+                        "entry_strategy": getattr(t, "entry_strategy", None) or "—",
+                        "exit_strategy": getattr(t, "exit_strategy", None) or "—",
                         "open_msk": open_msk,
                         "close_msk": close_msk,
                         "exit_reason": exit_reason,
                         "exit_reason_caption": _exit_reason_caption(exit_reason if exit_reason != "—" else None),
+                        "trade_human_note": human_trade_explanation_from_exit_context(
+                            getattr(t, "exit_context_json", None)
+                        ),
                     })
                 except Exception as e:
                     import logging
@@ -292,7 +301,9 @@ async def index(request: Request):
 
     return HTMLResponse(render_template("index.html", {
         "request": request,
-        "closed_positions": closed_positions[:20],
+        "closed_positions": closed_positions,
+        "closed_report_default": closed_rep_def,
+        "closed_report_max": closed_rep_max,
         "cash": cash,
         "positions": positions,
         "total_pnl": total_pnl,
@@ -1671,31 +1682,38 @@ def _exit_reason_caption(code: Optional[str]) -> str:
     }.get(c, "")
 
 
-def _closed_report_rows(limit: int = 50):
+def _closed_ts_msk(ts) -> str:
+    """Дата/время для колонок Open (MSK) / Close (MSK) — как в Telegram /closed."""
+    if ts is None:
+        return "—"
+    try:
+        t = pd.Timestamp(ts)
+        if t.tzinfo is not None:
+            t = t.tz_convert("Europe/Moscow")
+        return t.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return str(ts)[:16] if ts else "—"
+
+
+def _closed_report_rows(limit: Optional[int] = None):
     """Данные для отчёта закрытых позиций (как /closed): сортировка по дате закрытия, новые сверху."""
+    default_lim, max_lim = get_closed_positions_report_limits()
+    if limit is None:
+        limit = default_lim
+    limit = max(1, min(max_lim, int(limit)))
     report_engine = get_engine()
     all_trades = load_trade_history(report_engine)
     trade_pnls = compute_closed_trade_pnls(all_trades)
     if not trade_pnls:
         return []
     sorted_pnls = sorted(trade_pnls, key=lambda t: pd.Timestamp(t.ts) if t.ts else pd.Timestamp.min, reverse=True)[:limit]
-    def _to_msk_str(ts):
-        if ts is None:
-            return "—"
-        try:
-            t = pd.Timestamp(ts)
-            if t.tzinfo is not None:
-                t = t.tz_convert("Europe/Moscow")
-            return t.strftime("%d.%m.%Y %H:%M")
-        except Exception:
-            return str(ts)[:16] if ts else "—"
 
     rows = []
     for t in sorted_pnls:
         pts = t.exit_price - t.entry_price
         pips = round(pts * 10000) if ("=X" in t.ticker or "USD" in t.ticker or "EUR" in t.ticker) else round(pts, 2)
-        open_msk = _to_msk_str(t.entry_ts)
-        close_msk = _to_msk_str(t.ts)
+        open_msk = _closed_ts_msk(t.entry_ts)
+        close_msk = _closed_ts_msk(t.ts)
         direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
         exit_reason = (t.signal_type or "—") if t.signal_type and str(t.signal_type).strip() else "—"
         entry_px = float(t.entry_price)
@@ -1715,6 +1733,7 @@ def _closed_report_rows(limit: int = 50):
             "close_msk": close_msk,
             "exit_reason": exit_reason,
             "exit_reason_caption": _exit_reason_caption(exit_reason if exit_reason != "—" else None),
+            "trade_human_note": human_trade_explanation_from_exit_context(getattr(t, "exit_context_json", None)),
         })
     return rows
 
@@ -1742,6 +1761,62 @@ def _closed_exit_diagnostics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     by_reason = sorted(agg.values(), key=lambda x: (x["count"], abs(x["pnl_usd"])), reverse=True)
     share = (100.0 * time_exit_loss_abs / total_loss_abs) if total_loss_abs > 0 else None
     return {"by_reason": by_reason, "time_exit_loss_share_pct": share}
+
+
+def _build_closed_positions_xlsx(rows: List[Dict[str, Any]]) -> bytes:
+    """Таблица закрытых позиций в .xlsx (те же поля, что на /reports/closed)."""
+    try:
+        from openpyxl import Workbook
+    except ImportError as e:
+        raise ImportError("openpyxl required for Excel export") from e
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "closed"
+    headers = [
+        "instrument",
+        "direction",
+        "open",
+        "close",
+        "pips",
+        "qty",
+        "profit_usd",
+        "pl_pct",
+        "entry_strategy",
+        "exit_strategy",
+        "exit_reason",
+        "exit_reason_caption",
+        "open_msk",
+        "close_msk",
+        "trade_note",
+    ]
+    ws.append(headers)
+    for r in rows:
+        note = (r.get("trade_human_note") or "") if isinstance(r.get("trade_human_note"), str) else ""
+        if len(note) > 32000:
+            note = note[:32000] + "…"
+        ws.append(
+            [
+                r.get("instrument"),
+                r.get("direction"),
+                r.get("open"),
+                r.get("close"),
+                r.get("profit_pips"),
+                r.get("units"),
+                r.get("profit_usd"),
+                r.get("pl_pct"),
+                r.get("entry_strategy"),
+                r.get("exit_strategy"),
+                r.get("exit_reason"),
+                r.get("exit_reason_caption") or "",
+                r.get("open_msk"),
+                r.get("close_msk"),
+                note,
+            ]
+        )
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def _pending_report_rows(limit: int = 50):
@@ -1798,9 +1873,13 @@ def _pending_report_rows(limit: int = 50):
 
 
 @app.get("/reports/closed", response_class=HTMLResponse)
-async def report_closed(request: Request, limit: int = 50):
-    """HTML-отчёт: закрытые позиции (аналог /closed в Telegram)."""
-    limit = max(1, min(500, limit))
+async def report_closed(request: Request, limit: Optional[int] = None):
+    """HTML-отчёт: закрытые позиции (аналог /closed в Telegram). Лимиты TELEGRAM_CLOSED_REPORT_DEFAULT / _MAX."""
+    _def_l, _max_l = get_closed_positions_report_limits()
+    if limit is None:
+        limit = _def_l
+    else:
+        limit = max(1, min(_max_l, int(limit)))
     rows = _closed_report_rows(limit=limit)
     total_pnl = sum(float(r["profit_usd"]) for r in rows) if rows else 0.0
     diagnostics = _closed_exit_diagnostics(rows)
@@ -1811,11 +1890,37 @@ async def report_closed(request: Request, limit: int = 50):
                 "request": request,
                 "rows": rows,
                 "limit": limit,
+                "closed_report_default": _def_l,
+                "closed_report_max": _max_l,
                 "total_pnl": total_pnl,
                 "total_count": len(rows),
                 "diagnostics": diagnostics,
             },
         )
+    )
+
+
+@app.get("/reports/closed/export")
+async def report_closed_export(limit: Optional[int] = None):
+    """Выгрузка закрытых позиций в Excel (.xlsx). Лимит — как у /reports/closed (TELEGRAM_CLOSED_REPORT_*)."""
+    _def_l, _max_l = get_closed_positions_report_limits()
+    if limit is None:
+        limit = _def_l
+    else:
+        limit = max(1, min(_max_l, int(limit)))
+    rows = _closed_report_rows(limit=limit)
+    try:
+        payload = _build_closed_positions_xlsx(rows)
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="Для выгрузки Excel установите пакет: pip install openpyxl",
+        )
+    fname = f"closed_positions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=payload,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
 

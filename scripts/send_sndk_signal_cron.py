@@ -103,8 +103,23 @@ def process_ticker(
     """Обрабатывает один тикер: игра (закрытие/вход) и при BUY/STRONG_BUY — рассылка. Возвращает True если хотя бы одно сообщение отправлено.
     d5_precomputed: при кластерном запуске — готовое решение из get_cluster_decisions_5m; иначе вызывается get_decision_5m(ticker).
     cluster_context: при GAME_5M_ENTRY_STRATEGY=llm — {decisions, correlation, tickers} для вызова LLM с контекстом корреляций."""
-    from services.recommend_5m import get_decision_5m, get_5m_card_payload, build_5m_close_context
-    from services.game_5m import get_open_position, get_open_position_any, close_position, should_close_position, record_entry, _effective_take_profit_pct, _effective_stop_loss_pct, _game_5m_stop_loss_enabled
+    from services.recommend_5m import (
+        get_decision_5m,
+        get_5m_card_payload,
+        build_5m_close_context,
+        merge_close_context_with_trade_narrative,
+    )
+    from services.game_5m import (
+        get_open_position,
+        get_open_position_any,
+        close_position,
+        should_close_position,
+        record_entry,
+        get_latest_buy_context_json,
+        _effective_take_profit_pct,
+        _effective_stop_loss_pct,
+        _game_5m_stop_loss_enabled,
+    )
 
     d5 = d5_precomputed
     if d5 is None:
@@ -132,6 +147,7 @@ def process_ticker(
     outcome_lines = []  # итоговая причина для лога
     closed_this_run = False  # закрыли позицию в этом запуске — отправим уведомление и сбросим cooldown
     close_price = close_exit_type = close_entry_price = None
+    close_narrative_ctx = None  # merge_close_context_with_trade_narrative — для текста в Telegram
 
     try:
         # Сначала «любая» позиция по тикеру (как в /pending), иначе только GAME_5M — чтобы видеть MU и др. при другой стратегии
@@ -156,7 +172,7 @@ def process_ticker(
             except Exception:
                 price_quotes = None
             price_for_check = max(price, price_quotes) if (price_quotes is not None and price_quotes > 0) else price
-            should_close, exit_type = should_close_position(
+            should_close, exit_type, exit_detail = should_close_position(
                 open_pos, decision_exit, price_for_check, momentum_2h_pct=momentum_2h_pct,
                 bar_high=bar_high, bar_low=bar_low,
                 rsi_5m=rsi_5m,
@@ -183,11 +199,31 @@ def process_ticker(
                     "[5m] %s закрытие: тип=%s, exit_bar_close=%s, price_5m=%.2f, bar_high=%s, bar_low=%s → exit_price=%.2f",
                     ticker, exit_type, close_ctx.get("exit_bar_close"), price, bar_high, bar_low, exit_price,
                 )
+                strat_nm = (open_pos.get("strategy_name") or "GAME_5M").strip() or "GAME_5M"
+                entry_ctx_db = get_latest_buy_context_json(ticker, strat_nm)
+                take_pct_e = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
+                stop_pct_e = (
+                    _effective_stop_loss_pct(momentum_2h_pct, ticker=ticker)
+                    if _game_5m_stop_loss_enabled()
+                    else 0.0
+                )
+                close_ctx_enriched = merge_close_context_with_trade_narrative(
+                    close_ctx,
+                    d5=d5,
+                    exit_type=exit_type,
+                    exit_detail=exit_detail or "",
+                    open_position=open_pos,
+                    entry_ctx=entry_ctx_db,
+                    exit_price=exit_price,
+                    take_pct=take_pct_e,
+                    stop_pct=stop_pct_e,
+                )
+                close_narrative_ctx = close_ctx_enriched
                 close_position(
                     ticker, exit_price, exit_type, position=open_pos,
                     bar_high=bar_high if exit_type == "TAKE_PROFIT" else None,
                     bar_low=bar_low if exit_type == "STOP_LOSS" else None,
-                    context_json=close_ctx,
+                    context_json=close_ctx_enriched,
                 )
                 outcome_lines.append("позиция закрыта по %s @ %.2f" % (exit_type, exit_price))
                 closed_this_run = True
@@ -250,6 +286,16 @@ def process_ticker(
             close_msg = "🔒 **5m:** %s закрыта по %s @ %.2f%s. Открытые позиции: /pending" % (
                 ticker, close_exit_type, close_price or 0, pnl_str,
             )
+            if close_narrative_ctx:
+                er = (close_narrative_ctx.get("entry_recap_for_human") or "").strip()
+                ex_c = (close_narrative_ctx.get("exit_condition") or "").strip()
+                ex_i = (close_narrative_ctx.get("exit_intuition") or "").strip()
+                if er:
+                    close_msg += "\n\n📥 " + er[:380] + ("…" if len(er) > 380 else "")
+                if ex_c:
+                    close_msg += "\n📌 Выход: " + ex_c[:420] + ("…" if len(ex_c) > 420 else "")
+                if ex_i:
+                    close_msg += "\n💡 " + ex_i[:380] + ("…" if len(ex_i) > 380 else "")
             ok = 0
             for cid in chat_ids:
                 if send_telegram_message(token, cid, close_msg, parse_mode=None):
@@ -439,8 +485,17 @@ def main():
     # чтобы не пропустить фиксацию, если цена ушла выше тейка в конце сессии (16:00 ET). Остальные фазы — пропуск.
     try:
         from services.market_session import get_market_session_context
-        from services.game_5m import get_open_position, get_open_position_any, close_position, should_close_position
-        from services.recommend_5m import get_decision_5m, has_5m_data, build_5m_close_context
+        from services.game_5m import (
+            get_open_position,
+            get_open_position_any,
+            close_position,
+            should_close_position,
+            get_latest_buy_context_json,
+            _effective_take_profit_pct,
+            _effective_stop_loss_pct,
+            _game_5m_stop_loss_enabled,
+        )
+        from services.recommend_5m import get_decision_5m, has_5m_data, build_5m_close_context, merge_close_context_with_trade_narrative
         ctx = get_market_session_context()
         phase = (ctx.get("session_phase") or "").strip()
         if phase in ("PRE_MARKET", "WEEKEND", "HOLIDAY"):
@@ -469,7 +524,7 @@ def main():
                     close_ctx_ah = build_5m_close_context(d5)
                     bar_high = close_ctx_ah.get("bar_high")
                     bar_low = close_ctx_ah.get("bar_low")
-                    should_close, exit_type = should_close_position(
+                    should_close, exit_type, exit_detail = should_close_position(
                         open_pos,
                         d5.get("technical_decision_core") or d5.get("decision", "HOLD"),
                         price_for_check,
@@ -484,11 +539,31 @@ def main():
                             exit_price = min(exit_price, bar_high)
                         elif exit_type == "STOP_LOSS" and bar_low is not None and bar_low > 0:
                             exit_price = max(exit_price, bar_low)
+                        strat_ah = (open_pos.get("strategy_name") or "GAME_5M").strip() or "GAME_5M"
+                        entry_ctx_ah = get_latest_buy_context_json(ticker, strat_ah)
+                        mom_ah = close_ctx_ah.get("momentum_2h_pct")
+                        take_ah = _effective_take_profit_pct(mom_ah, ticker=ticker)
+                        stop_ah = (
+                            _effective_stop_loss_pct(mom_ah, ticker=ticker)
+                            if _game_5m_stop_loss_enabled()
+                            else 0.0
+                        )
+                        close_ctx_ah_merged = merge_close_context_with_trade_narrative(
+                            close_ctx_ah,
+                            d5=d5,
+                            exit_type=exit_type,
+                            exit_detail=exit_detail or "",
+                            open_position=open_pos,
+                            entry_ctx=entry_ctx_ah,
+                            exit_price=exit_price,
+                            take_pct=take_ah,
+                            stop_pct=stop_ah,
+                        )
                         close_position(
                             ticker, exit_price, exit_type, position=open_pos,
                             bar_high=bar_high if exit_type == "TAKE_PROFIT" else None,
                             bar_low=bar_low if exit_type == "STOP_LOSS" else None,
-                            context_json=close_ctx_ah,
+                            context_json=close_ctx_ah_merged,
                         )
                         logger.info("AFTER_HOURS: закрыта позиция %s @ %.2f (%s)", ticker, exit_price, exit_type)
                 except Exception as e:

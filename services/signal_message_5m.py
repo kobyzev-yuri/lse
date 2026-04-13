@@ -28,6 +28,8 @@ def build_5m_technical_short_text(tech: Dict[str, Any], ticker: str) -> str:
     period = tech.get("period_str")
     entry = tech.get("entry_advice") or "—"
     reasoning = (tech.get("reasoning") or "")[:300]
+    cond = (tech.get("entry_condition") or "").strip()
+    intu = (tech.get("entry_intuition") or "").strip()
     kb = tech.get("kb_news_impact") or "—"
     lines = [
         f"5m · {ticker} — {decision}",
@@ -40,8 +42,12 @@ def build_5m_technical_short_text(tech: Dict[str, Any], ticker: str) -> str:
     ]
     if period:
         lines.append(f"Период: {period}")
+    if cond:
+        lines.append(f"Условие (формально): {cond[:400]}")
+    if intu:
+        lines.append(f"Интуиция правила: {intu[:400]}")
     if reasoning:
-        lines.append(f"Обоснование: {reasoning}")
+        lines.append(f"Обоснование (факты/контекст): {reasoning}")
     summ = tech.get("price_forecast_5m_summary")
     if summ:
         lines.append(f"Прогноз цены: {summ}")
@@ -93,16 +99,26 @@ def build_5m_entry_signal_text(
 
     price_str = f"${price:.2f}" if price is not None else "—"
     headline = f"🎯 ВХОД 5m: {ticker} — {decision} · {price_str}"
+    cond_full = (d5.get("entry_condition") or "").strip()
+    intu_full = (d5.get("entry_intuition") or "").strip()
     lines = [
         headline,
         "",
         f"Решение: {decision}",
+    ]
+    if cond_full:
+        lines.append(f"📌 Условие: {cond_full}")
+    if intu_full:
+        lines.append(f"💡 Интуиция: {intu_full}")
+    lines.extend(
+        [
         f"Цена: ${price:.2f}" if price is not None else "",
         f"RSI(5m): {rsi:.1f}" if rsi is not None else "",
         f"Импульс 2ч: {mom:+.2f}%" if mom is not None else "",
         f"Волатильность 5m: {vol:.2f}%" if vol is not None else "",
         f"_Период данных: {period}_" if period else "",
-    ]
+        ]
+    )
     summ = d5.get("price_forecast_5m_summary")
     if summ:
         lines.append(f"📈 Прогноз цены (p10–p50–p90): {summ}")

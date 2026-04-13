@@ -331,6 +331,39 @@ def record_entry(
     return new_id
 
 
+def get_latest_buy_context_json(
+    ticker: str,
+    strategy: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """
+    context_json последней записи BUY по тикеру (для связки «вход → выход» в одном narrative).
+    """
+    strat = (strategy or GAME_5M_STRATEGY).strip() or GAME_5M_STRATEGY
+    ticker_upper = (ticker or "").strip().upper()
+    if not ticker_upper:
+        return None
+    engine = _engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("""
+                SELECT context_json FROM public.trade_history
+                WHERE UPPER(TRIM(ticker)) = :ticker_upper AND strategy_name = :strategy AND side = 'BUY'
+                ORDER BY ts DESC, id DESC
+                LIMIT 1
+            """),
+            {"ticker_upper": ticker_upper, "strategy": strat},
+        ).fetchone()
+    if not row or row[0] is None:
+        return None
+    raw = row[0]
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw) if isinstance(raw, str) else None
+    except Exception:
+        return None
+
+
 def close_position(
     ticker: str,
     exit_price: float,
@@ -697,14 +730,14 @@ def should_close_position(
     bar_high: Optional[float] = None,
     bar_low: Optional[float] = None,
     rsi_5m: Optional[float] = None,
-) -> tuple[bool, str]:
-    """Закрывать ли позицию: по тейку/стопу (цена), по сигналу SELL, по истечении GAME_5M_MAX_POSITION_DAYS,
-    либо в последние N минут сессии с минимальным профитом (TIME_EXIT). При сигнале STRONG_BUY выход в конец сессии не делаем — остаёмся в позиции.
-    Тейк считается от импульса 2ч (как у модели), если он >= GAME_5M_TAKE_PROFIT_MIN_PCT, иначе из конфига.
-    bar_high/bar_low — макс. High / мин. Low по последним свечам (до 30 мин): не пропускаем фазу подъёма
-    при запуске крона каждые 5 мин (отскок в начале сессии и т.п.)."""
+) -> tuple[bool, str, str]:
+    """Закрывать ли позицию: по тейку/стопу (цена), по истечении срока/сессии (TIME_EXIT), early de-risk (TIME_EXIT_EARLY).
+
+    Возвращает (should_close, signal_type, exit_detail). exit_detail — уточнение для TIME_EXIT:
+    session_end | max_hold_minutes | max_hold_days; для TIME_EXIT_EARLY — early_derisk; иначе пустая строка.
+    """
     if current_price is None or current_price <= 0:
-        return False, ""
+        return False, "", ""
 
     entry_price = open_position.get("entry_price")
     if isinstance(entry_price, (int, float)) and entry_price > 0:
@@ -721,7 +754,7 @@ def should_close_position(
         # Допуск 0.05%: в pending может показываться 2.7%, а в кроне (5m/quotes) получается 2.67% — чтобы тейк сработал
         take_threshold = take_pct - 0.05
         if pnl_take_pct >= take_threshold:
-            return True, "TAKE_PROFIT"
+            return True, "TAKE_PROFIT", ""
         exit_only_take = _game_5m_exit_only_take()
         # DEBUG: всегда пишем pnl vs порог; INFO — только когда до тейка осталось ≤0.5%
         logger.debug(
@@ -734,9 +767,9 @@ def should_close_position(
                 ticker, pnl_take_pct, take_pct, take_threshold,
             )
         if not exit_only_take and _game_5m_stop_loss_enabled() and pnl_stop_pct <= -stop_pct:
-            return True, "STOP_LOSS"
+            return True, "STOP_LOSS", ""
         if exit_only_take:
-            return False, ""
+            return False, "", ""
 
         # В последние N минут сессии: закрыть с минимальным профитом, чтобы не уходить через день в минус.
         # Исключение: если текущий сигнал STRONG_BUY — остаёмся (рискуем перейти в следующую сессию).
@@ -758,7 +791,7 @@ def should_close_position(
                                 "GAME_5M %s: конец сессии через %s мин, PnL=%.2f%% >= %.2f%% — выход TIME_EXIT",
                                 ticker, mins_left, pnl_current_pct, min_profit,
                             )
-                            return True, "TIME_EXIT"
+                            return True, "TIME_EXIT", "session_end"
             except Exception as e:
                 logger.debug("GAME_5M session-end exit check: %s", e)
 
@@ -769,11 +802,11 @@ def should_close_position(
         age = timedelta(0)
     max_min = _max_position_minutes(open_position.get("ticker"))
     if _game_5m_exit_only_take():
-        return False, ""
+        return False, "", ""
     if max_min is not None and age > timedelta(minutes=max_min):
-        return True, "TIME_EXIT"
+        return True, "TIME_EXIT", "max_hold_minutes"
     if age > timedelta(days=_max_position_days(open_position.get("ticker"))):
-        return True, "TIME_EXIT"
+        return True, "TIME_EXIT", "max_hold_days"
 
     # Early de-risk: если позиция долго в просадке и импульс/сигнал не поддерживают — закрываем раньше TIME_EXIT.
     # По умолчанию выключено.
@@ -811,11 +844,11 @@ def should_close_position(
                 "—" if momentum_2h_pct is None else f"{float(momentum_2h_pct):+.2f}%",
                 current_decision,
             )
-            return True, "TIME_EXIT_EARLY"
+            return True, "TIME_EXIT_EARLY", "early_derisk"
     # Важное правило твоего сценария:
     # SELL используем только как рекомендацию (в момент входа), но НЕ как причину выхода
     # для уже открытой позиции. Автозакрытие происходит только по TAKE_PROFIT / TIME_EXIT
     # (и STOP_LOSS, если он включён).
     if current_decision == "SELL":
-        return False, ""
-    return False, ""
+        return False, "", ""
+    return False, "", ""

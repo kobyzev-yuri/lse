@@ -25,6 +25,130 @@ logger = logging.getLogger(__name__)
 # Версия логики принятия решения в get_decision_5m (для фиксации в context_json сделки)
 GAME_5M_RULE_VERSION = "2026-03-23"
 
+# Ветка технического входа → краткое обоснование стратегии (не прогноз цены, а смысл правила).
+ENTRY_BRANCH_INTUITION: Dict[str, str] = {
+    "strong_buy_rsi": (
+        "Интуиция: зона глубокой перепроданности на 5m при ограничении на силу недавнего снижения за 2ч. "
+        "Это не предсказание разворота на следующем баре, а допустимый коридор для краткосрочного long: "
+        "RSI отражает уже произошедшую распродажу на окне, порог по 2ч отсекает сценарий ускоренного обвала."
+    ),
+    "buy_5d_low": (
+        "Интуиция: цена у нижней границы нескольких дней при умеренно низком RSI — вход у опорной зоны диапазона, "
+        "а не ставка на продолжение тренда вниз без фильтров."
+    ),
+    "buy_rth_momentum": (
+        "Интуиция: в текущей RTH-сессии уже зафиксирован положительный импульс, RSI ещё не перекуплен — "
+        "вход по силе дня, а не по «отскоку после ливня»."
+    ),
+    "buy_premarket_momentum": (
+        "Интуиция: ранний день, мало 5m-баров регулярной сессии; положительный импульс по премаркету 1m — "
+        "осторожный вход до накопления полноценной картины RTH."
+    ),
+    "buy_cross_day_2h": (
+        "Интуиция: разрешён кросс-дневной импульс за 2ч — покупка на продолжении краткосрочного движения вверх "
+        "при RSI ниже порога перекупленности (см. GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY)."
+    ),
+    "buy_news_support": (
+        "Интуиция: при нейтральном RSI позитивный фон в KB снижает барьер для осторожного long — "
+        "контекст новостей в сторону покупки без технического экстремума."
+    ),
+}
+
+
+def _build_5m_entry_explanation(
+    *,
+    branch: str,
+    decision: str,
+    decision_rule_params: Dict[str, Any],
+    feats: Dict[str, Any],
+    strong_buy_downgraded: bool,
+) -> Dict[str, Optional[str]]:
+    """Формальное условие ветки + текст интуиции для алерта и context_json."""
+    drp = decision_rule_params
+    rsi = feats.get("rsi_5m")
+    mom2 = feats.get("momentum_2h_pct")
+    price = feats.get("price")
+    low5 = feats.get("low_5d")
+    mom_rth = feats.get("momentum_rth_today_pct")
+    mom_rth_bars = feats.get("momentum_rth_today_bars")
+    pm_id = feats.get("premarket_intraday_momentum_pct")
+    wmin = feats.get("momentum_rth_today_window_min")
+
+    def _f(v: Any, nd: int = 2) -> str:
+        if v is None:
+            return "—"
+        try:
+            return format(float(v), f".{nd}f")
+        except (TypeError, ValueError):
+            return str(v)
+
+    condition: Optional[str] = None
+    if branch == "strong_buy_rsi":
+        rsi_mx = drp.get("rsi_strong_buy_max")
+        mom_min = drp.get("momentum_for_strong_buy_min")
+        condition = (
+            f"Условие (ветка RSI + импульс 2ч): RSI(5m) ≤ {_f(rsi_mx, 1)}, импульс 2ч ≥ {_f(mom_min)}%. "
+            f"Факт: RSI {_f(rsi, 1)}, импульс {_f(mom2)}%."
+        )
+    elif branch == "buy_5d_low":
+        rsi_mx = drp.get("rsi_buy_max")
+        mult = drp.get("price_to_low5d_multiplier_max")
+        thr = None
+        try:
+            if low5 is not None and mult is not None:
+                thr = float(low5) * float(mult)
+        except (TypeError, ValueError):
+            thr = None
+        condition = (
+            f"Условие (ветка у 5д low): RSI(5m) ≤ {_f(rsi_mx, 1)}, цена ≤ low_5d×{_f(mult, 2)}. "
+            f"Факт: RSI {_f(rsi, 1)}, цена ${_f(price)}, low_5d ${_f(low5)}, порог цены ${_f(thr)}."
+        )
+    elif branch == "buy_rth_momentum":
+        rth_min = drp.get("momentum_buy_min")
+        min_sess = drp.get("momentum_min_session_bars")
+        rsi_cap = drp.get("rsi_for_momentum_buy_max")
+        condition = (
+            f"Условие (ветка импульс RTH): импульс сессии > {_f(rth_min)}%, "
+            f"число 5m-баров сессии ≥ {min_sess}, RSI(5m) < {_f(rsi_cap, 1)}. "
+            f"Факт: RTH {_f(mom_rth)}% (~{_f(wmin, 0)} мин), баров {mom_rth_bars}, RSI {_f(rsi, 1)}."
+        )
+    elif branch == "buy_premarket_momentum":
+        pm_hi = drp.get("premarket_momentum_block_below")
+        pm_lo = drp.get("premarket_momentum_buy_min")
+        min_sess = drp.get("momentum_min_session_bars")
+        rsi_cap = drp.get("rsi_for_momentum_buy_max")
+        condition = (
+            f"Условие (ветка премаркет 1m): импульс премаркета > {_f(pm_lo)}% и ≥ {_f(pm_hi)}%, "
+            f"баров 5m сессии < {min_sess}, RSI(5m) < {_f(rsi_cap, 1)}. "
+            f"Факт: премаркет {_f(pm_id)}%, баров {mom_rth_bars}, RSI {_f(rsi, 1)}."
+        )
+    elif branch == "buy_cross_day_2h":
+        rth_min = drp.get("momentum_buy_min")
+        rsi_cap = drp.get("rsi_for_momentum_buy_max")
+        condition = (
+            f"Условие (ветка кросс-день 2ч): импульс 2ч > {_f(rth_min)}%, RSI(5m) < {_f(rsi_cap, 1)}, "
+            f"MOMENTUM_ALLOW_CROSS_DAY_BUY включён. Факт: импульс {_f(mom2)}%, RSI {_f(rsi, 1)}."
+        )
+    elif branch == "buy_news_support":
+        condition = (
+            f"Условие (ветка новости + нейтральный RSI): RSI 38…52, импульс 2ч ≥ −0.5%, позитив в KB. "
+            f"Факт: RSI {_f(rsi, 1)}, импульс {_f(mom2)}%."
+        )
+    else:
+        condition = "Условие: см. reasoning и decision_rule_params."
+
+    intuition = ENTRY_BRANCH_INTUITION.get(
+        branch,
+        "Интуиция: правило из набора интрадей-условий 5m; детали — в reasoning и decision_rule_params.",
+    )
+    if branch == "strong_buy_rsi" and decision == "BUY" and strong_buy_downgraded:
+        intuition = (
+            intuition
+            + " Итоговое решение BUY (не STRONG_BUY): техническое ядро было перепродано сильнее, "
+            "но негативный фон в новостях ослабил сигнал."
+        )
+    return {"condition": condition, "intuition": intuition}
+
 # Макс. длина content в контексте KB (чтобы не раздувать ответ)
 KB_NEWS_CONTENT_MAX_LEN = 500
 
@@ -526,6 +650,8 @@ TECHNICAL_SIGNAL_KEYS = (
     "technical_decision_core", "technical_decision_effective",
     "catboost_fusion_mode", "catboost_fusion_note",
     "entry_quality_guard_triggered", "entry_quality_guard_reason", "entry_quality_guard_prev_decision",
+    # Явный разбор входа: формальное условие ветки + интуиция стратегии (не дублирует весь reasoning)
+    "technical_entry_branch", "entry_strong_buy_downgraded", "entry_condition", "entry_intuition",
     # Прогноз цены на 30/60/120 мин (лог-нормаль по 5m лог-доходностям)
     "price_forecast_5m", "price_forecast_5m_summary",
 )
@@ -619,6 +745,163 @@ def build_5m_close_context(d5: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def build_5m_trade_close_narrative(
+    *,
+    exit_type: str,
+    exit_detail: str,
+    entry_price: float,
+    exit_price: float,
+    take_pct: float,
+    stop_pct: float,
+    entry_ctx: Optional[Dict[str, Any]],
+    exit_reasoning_excerpt: str = "",
+) -> Dict[str, Optional[str]]:
+    """
+    Человекочитаемый разбор выхода и короткая сводка сделки (вход+выход) для context_json SELL и алертов.
+    entry_ctx — обычно context_json с BUY (entry_condition, entry_intuition, decision, reasoning).
+    """
+    try:
+        ep = float(entry_price)
+        xp = float(exit_price)
+        pnl_simple = ((xp / ep) - 1.0) * 100.0 if ep > 0 else 0.0
+    except (TypeError, ValueError, ZeroDivisionError):
+        pnl_simple = 0.0
+        ep, xp = entry_price, exit_price
+
+    exit_condition: str
+    exit_intuition: str
+
+    if exit_type == "TAKE_PROFIT":
+        exit_condition = (
+            f"Условие выхода (тейк): цель ~{take_pct:.2f}% от входа (импульс 2ч / потолок конфига; в кроне допуск 0.05 п.п.). "
+            f"Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+        )
+        exit_intuition = (
+            "Интуиция: зафиксировать запланированный апсайд. Учёт High последних баров уменьшает шанс «пропустить» "
+            "кратковременный всплеск между запусками крона по 5m Close."
+        )
+    elif exit_type == "STOP_LOSS":
+        exit_condition = (
+            f"Условие выхода (стоп): просадка от входа достигла ~{stop_pct:.2f}% (по логике Low бара). "
+            f"Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+        )
+        exit_intuition = (
+            "Интуиция: жёсткое ограничение убытка по правилам GAME_5M; размер стопа согласован с тейком "
+            "(STOP_TO_TAKE_RATIO и минимум из конфига)."
+        )
+    elif exit_type == "TIME_EXIT_EARLY":
+        exit_condition = (
+            "Условие выхода (ранний cut): долгое удержание, просадка и слабый импульс 2ч при HOLD/SELL — "
+            f"ветка GAME_5M_EARLY_DERISK. Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+        )
+        exit_intuition = (
+            "Интуиция: не ждать тайм-аута по дням/минутам, если позиция «застряла» в минусе без поддержки краткосрочного тренда."
+        )
+    elif exit_type == "TIME_EXIT":
+        if exit_detail == "session_end":
+            exit_condition = (
+                "Условие выхода (хвост сессии): до закрытия NYSE осталось ≤ GAME_5M_SESSION_END_EXIT_MINUTES "
+                "и PnL ≥ GAME_5M_SESSION_END_MIN_PROFIT_PCT; при STRONG_BUY по текущему сигналу такой выход не делается. "
+                f"Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+            )
+            exit_intuition = (
+                "Интуиция: не тащить интрадей через закрытие без сильного подтверждения — снизить overnight-гэп-риск."
+            )
+        elif exit_detail == "max_hold_minutes":
+            exit_condition = (
+                f"Условие выхода (лимит минут): превышен GAME_5M_MAX_POSITION_MINUTES. "
+                f"Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+            )
+            exit_intuition = "Интуиция: оборот капитала в быстрой 5m-игре; не держать позицию бесконечно без нового сигнала."
+        elif exit_detail == "max_hold_days":
+            exit_condition = (
+                f"Условие выхода (лимит дней): превышен GAME_5M_MAX_POSITION_DAYS. "
+                f"Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+            )
+            exit_intuition = (
+                "Интуиция: ограничить перенос позиции через несколько сессий — типичный контроль overnight-риска."
+            )
+        else:
+            exit_condition = (
+                f"Условие выхода (TIME_EXIT): лимит по времени удержания. "
+                f"Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+            )
+            exit_intuition = "Интуиция: принудительное закрытие по таймеру стратегии 5m."
+    else:
+        exit_condition = f"Условие выхода: тип {exit_type or '—'}. Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+        exit_intuition = "Интуиция: см. signal_type и логи game_5m.should_close_position."
+
+    entry_recap_parts: List[str] = []
+    if entry_ctx:
+        ed = entry_ctx.get("decision") or entry_ctx.get("signal_type")
+        if ed:
+            entry_recap_parts.append(f"вход по решению {ed}")
+        ec = (entry_ctx.get("entry_condition") or "").strip()
+        if ec:
+            entry_recap_parts.append(f"условие входа: {ec[:280]}{'…' if len(ec) > 280 else ''}")
+        ei = (entry_ctx.get("entry_intuition") or "").strip()
+        if ei:
+            entry_recap_parts.append(f"интуиция входа: {ei[:220]}{'…' if len(ei) > 220 else ''}")
+        if not ec and not ei:
+            rs = (entry_ctx.get("reasoning") or "").strip()
+            if rs:
+                entry_recap_parts.append(f"контекст входа (reasoning): {rs[:240]}{'…' if len(rs) > 240 else ''}")
+    entry_recap = " ".join(entry_recap_parts) if entry_recap_parts else "Вход: запись BUY без расшифрованного context_json (старые сделки)."
+
+    exit_ctx_line = ""
+    if exit_reasoning_excerpt.strip():
+        exit_ctx_line = f" Контекст на момент выхода (5m): {exit_reasoning_excerpt.strip()[:200]}"
+
+    trade_for_human = (
+        f"Сводка сделки: {entry_recap} → выход {exit_type}"
+        f"{(' / ' + exit_detail) if exit_detail else ''}: {exit_condition} {exit_intuition}{exit_ctx_line}"
+    )
+    if len(trade_for_human) > 3500:
+        trade_for_human = trade_for_human[:3490] + "…"
+
+    return {
+        "exit_signal": exit_type,
+        "exit_detail": exit_detail or None,
+        "exit_condition": exit_condition,
+        "exit_intuition": exit_intuition,
+        "trade_for_human": trade_for_human,
+        "entry_recap_for_human": entry_recap,
+    }
+
+
+def merge_close_context_with_trade_narrative(
+    base: Dict[str, Any],
+    *,
+    d5: Dict[str, Any],
+    exit_type: str,
+    exit_detail: str,
+    open_position: Dict[str, Any],
+    entry_ctx: Optional[Dict[str, Any]],
+    exit_price: float,
+    take_pct: float,
+    stop_pct: float,
+) -> Dict[str, Any]:
+    """Дополняет build_5m_close_context полями для человека; не мутирует исходный base."""
+    out = dict(base) if base else {}
+    try:
+        entry_p = float(open_position.get("entry_price") or 0)
+    except (TypeError, ValueError):
+        entry_p = 0.0
+    reasoning_excerpt = (d5.get("reasoning") or "") if isinstance(d5.get("reasoning"), str) else ""
+    narrative = build_5m_trade_close_narrative(
+        exit_type=exit_type,
+        exit_detail=exit_detail or "",
+        entry_price=entry_p,
+        exit_price=float(exit_price),
+        take_pct=float(take_pct),
+        stop_pct=float(stop_pct),
+        entry_ctx=entry_ctx,
+        exit_reasoning_excerpt=reasoning_excerpt[:400],
+    )
+    out.update(narrative)
+    return out
+
+
 def get_decision_5m(
     ticker: str,
     days: int = None,
@@ -637,6 +920,8 @@ def get_decision_5m(
     Returns:
         dict: decision, reasoning, price, rsi_5m, volatility_5m_pct, momentum_2h_pct,
         high_5d, low_5d, period_str, bars_count, stop_loss_pct, take_profit_pct;
+        при BUY/STRONG_BUY: technical_entry_branch, entry_condition (формальные пороги + факт),
+        entry_intuition (смысл ветки правила), entry_strong_buy_downgraded при ослаблении STRONG_BUY→BUY из‑за новостей;
         kb_news_days, kb_news — новости из KB за тот же период; market_session — открытие/закрытие биржи и праздники (отдельно для учёта особых процессов новостей);
         при use_llm_news — llm_news_content, llm_sentiment, llm_insight.
         None только если нет ни одного бара (Yahoo не вернул данных).
@@ -674,6 +959,8 @@ def get_decision_5m(
     # Правила решения (агрессивные под интрадей)
     decision = "HOLD"
     reasons = []
+    technical_entry_branch: Optional[str] = None
+    entry_strong_buy_downgraded = False
     from config_loader import get_config_value as _gcv
     th = get_decision_5m_rule_thresholds()
     vol_wait_min = float(th["volatility_wait_min"])
@@ -744,9 +1031,11 @@ def get_decision_5m(
     if rsi_5m is not None:
         if rsi_5m <= rsi_strong_buy_max and momentum_2h_pct >= momentum_for_strong_buy_min:
             decision = "STRONG_BUY"
+            technical_entry_branch = "strong_buy_rsi"
             reasons.append(f"RSI(5m)={rsi_5m:.1f} — перепроданность, отскок")
         elif rsi_5m <= rsi_buy_max and price <= low_5d * price_to_low5d_multiplier_max:
             decision = "BUY"
+            technical_entry_branch = "buy_5d_low"
             reasons.append(f"RSI(5m)={rsi_5m:.1f}, цена у 5д минимума")
         elif rsi_5m >= rsi_sell_min:
             sell_confirmed = (
@@ -770,6 +1059,7 @@ def get_decision_5m(
             if decision == "HOLD":
                 wmin = int(features.get("momentum_rth_today_window_min") or 0)
                 decision = "BUY"
+                technical_entry_branch = "buy_rth_momentum"
                 reasons.append(
                     f"импульс +{float(mom_rth_pct):.2f}% за текущую сессию RTH (~{wmin} мин), RSI не перекуплен"
                 )
@@ -783,6 +1073,7 @@ def get_decision_5m(
         ):
             if decision == "HOLD":
                 decision = "BUY"
+                technical_entry_branch = "buy_premarket_momentum"
                 reasons.append(
                     f"импульс премаркет +{float(premarket_intraday_momentum_pct):.2f}% "
                     f"(1m до 9:30 ET; ранний RTH, баров 5m сессии {mom_rth_bars} < {min_sess_bars}), RSI не перекуплен"
@@ -794,6 +1085,7 @@ def get_decision_5m(
         ):
             if decision == "HOLD":
                 decision = "BUY"
+                technical_entry_branch = "buy_cross_day_2h"
                 reasons.append(
                     f"импульс +{momentum_2h_pct:.2f}% за окно до 2ч (кросс-дневной; GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY), RSI не перекуплен"
                 )
@@ -846,6 +1138,7 @@ def get_decision_5m(
         # Негатив — смягчаем вход
         if decision == "STRONG_BUY":
             decision = "BUY"
+            entry_strong_buy_downgraded = True
             reasons.append("негативные новости в базе — вход без STRONG_BUY")
             kb_news_impact = "негатив (вход ослаблен)"
         elif decision == "BUY":
@@ -854,6 +1147,7 @@ def get_decision_5m(
     elif recent_positive and decision == "HOLD" and rsi_5m is not None and 38 <= rsi_5m <= 52 and momentum_2h_pct >= -0.5:
         # Позитив в новостях при пограничном RSI — разрешаем осторожный BUY
         decision = "BUY"
+        technical_entry_branch = "buy_news_support"
         reasons.append("позитив в новостях поддерживает вход при нейтральном RSI")
         kb_news_impact = "позитив (поддержка входа)"
     elif recent_positive and decision in ("BUY", "STRONG_BUY"):
@@ -971,6 +1265,8 @@ def get_decision_5m(
         "reasoning": reasoning,
         "decision_rule_version": GAME_5M_RULE_VERSION,
         "decision_rule_params": decision_rule_params,
+        "technical_entry_branch": technical_entry_branch,
+        "entry_strong_buy_downgraded": entry_strong_buy_downgraded,
         "exit_bar_close": exit_bar_close,
         "stop_loss_enabled": stop_loss_enabled,
         "stop_loss_pct": stop_loss_pct if stop_loss_enabled else None,
@@ -1319,6 +1615,22 @@ def get_decision_5m(
         out.setdefault("technical_decision_core", out.get("decision"))
         out.setdefault("technical_decision_effective", out.get("decision"))
         out.setdefault("catboost_fusion_mode", "none")
+
+    dec_eff = out.get("decision")
+    branch = out.get("technical_entry_branch")
+    if branch and dec_eff in ("BUY", "STRONG_BUY"):
+        expl = _build_5m_entry_explanation(
+            branch=str(branch),
+            decision=str(dec_eff),
+            decision_rule_params=out.get("decision_rule_params") or {},
+            feats=out,
+            strong_buy_downgraded=bool(out.get("entry_strong_buy_downgraded")),
+        )
+        out["entry_condition"] = expl["condition"]
+        out["entry_intuition"] = expl["intuition"]
+    else:
+        out["entry_condition"] = None
+        out["entry_intuition"] = None
 
     return out
 

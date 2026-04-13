@@ -282,6 +282,26 @@ def get_config_value(key: str, default: Optional[str] = None, config: Optional[D
     return value
 
 
+def get_closed_positions_report_limits() -> tuple[int, int]:
+    """
+    Единые лимиты отчёта закрытых позиций: /closed в Telegram, веб /reports/closed и блок на главной.
+    Ключи TELEGRAM_CLOSED_REPORT_* — историческое имя; веб использует те же значения.
+    """
+    raw_d = (get_config_value("TELEGRAM_CLOSED_REPORT_DEFAULT") or "25").strip()
+    raw_m = (get_config_value("TELEGRAM_CLOSED_REPORT_MAX") or "200").strip()
+    try:
+        max_lim = max(1, int(raw_m))
+    except (ValueError, TypeError):
+        max_lim = 200
+    try:
+        default_lim = max(1, int(raw_d))
+    except (ValueError, TypeError):
+        default_lim = 25
+    if default_lim > max_lim:
+        default_lim = max_lim
+    return default_lim, max_lim
+
+
 def get_dynamic_config_value(key: str, default: Any = None, entity: str = 'GLOBAL', engine=None) -> Any:
     """
     Получает динамическое значение конфигурации из БД strategy_parameters (RLM).

@@ -1,6 +1,7 @@
+import json
 import logging
 from dataclasses import dataclass
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,34 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def human_trade_explanation_from_exit_context(exit_ctx: Any) -> str:
+    """Текст для человека из context_json записи SELL (trade_for_human / выход / вход). Общий для веб и Telegram."""
+    if exit_ctx is None:
+        return ""
+    try:
+        if isinstance(exit_ctx, float) and pd.isna(exit_ctx):
+            return ""
+    except Exception:
+        pass
+    data = exit_ctx
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return ""
+    if not isinstance(data, dict):
+        return ""
+    tfh = data.get("trade_for_human")
+    if isinstance(tfh, str) and tfh.strip():
+        return tfh.strip()
+    parts: List[str] = []
+    for key in ("entry_recap_for_human", "exit_condition", "exit_intuition"):
+        v = data.get(key)
+        if isinstance(v, str) and v.strip():
+            parts.append(v.strip())
+    return " ".join(parts)
 
 
 @dataclass
@@ -39,6 +68,8 @@ class TradePnL:
     mfe: Optional[float] = None
     mae: Optional[float] = None
     context_json: Optional[str] = None
+    # context_json строки SELL (закрытие): exit_condition, exit_intuition, trade_for_human и т.д.
+    exit_context_json: Optional[Any] = None
     entry_impulse_pct: Optional[float] = None  # импульс при принятии решения об открытии (momentum_2h_pct на момент BUY)
 
 
@@ -203,6 +234,7 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
                     mfe=float(row.get("mfe")) if pd.notna(row.get("mfe")) else None,
                     mae=float(row.get("mae")) if pd.notna(row.get("mae")) else None,
                     context_json=entry_ctx,
+                    exit_context_json=row.get("context_json"),
                     entry_impulse_pct=entry_impulse_pct,
                 )
             )

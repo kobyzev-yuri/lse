@@ -4,7 +4,11 @@
 
 {% block content %}
 <h1>Закрытые позиции</h1>
-<p class="muted" style="margin-bottom: 0.35rem;">Аналог команды /closed в Telegram. Показано последних {{ rows|length }} (лимит {{ limit }}). Даты в MSK.</p>
+<p class="muted" style="margin-bottom: 0.35rem;">
+    Аналог команды /closed в Telegram. Показано последних {{ rows|length }} (лимит {{ limit }}, по умолчанию {{ closed_report_default }}, макс. {{ closed_report_max }}). Даты в MSK.
+    · <a href="/reports/closed/export?limit={{ limit }}">Скачать Excel (.xlsx)</a>
+    · <a href="/reports/closed/export?limit={{ closed_report_max }}">Excel, до {{ closed_report_max }} строк</a>
+</p>
 <p class="muted" style="margin-bottom: 0.75rem; font-size: 0.88rem; line-height: 1.45;">
     <strong>Entry / Exit</strong> в таблице — колонки стратегии (обычно GAME_5M).<br>
     <strong>Причина выхода</strong> — код из сделки SELL: <code>TAKE_PROFIT</code> (достигнут тейк),

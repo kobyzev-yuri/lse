@@ -14,6 +14,10 @@ from services.recommend_5m import fetch_5m_ohlc
 from services.deal_params_5m import normalize_entry_context
 from config_loader import load_config, is_editable_config_env_key
 
+# Дольше — считаем позицию «подвисшей» для пристрастного разбора порогов входа vs выхода.
+LONG_HOLD_MINUTES = 7 * 24 * 60
+ENTRY_REASONING_ANALYZER_MAX = 420
+
 
 @dataclass
 class TradeEffect:
@@ -43,6 +47,8 @@ class TradeEffect:
     entry_prob_down: Optional[float]
     entry_news_impact: Optional[str]
     entry_advice: Optional[str]
+    entry_decision: Optional[str]
+    entry_reasoning: Optional[str]
     decision_rule_version: Optional[str]
     decision_rule_params: Optional[Dict[str, Any]]
 
@@ -183,6 +189,16 @@ def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Opti
                 pass
 
         entry_ctx = normalize_entry_context(getattr(t, "context_json", None))
+        raw_decision = entry_ctx.get("decision")
+        entry_decision = str(raw_decision).strip() if raw_decision is not None and str(raw_decision).strip() else None
+        raw_reason = entry_ctx.get("reasoning")
+        entry_reasoning: Optional[str] = None
+        if isinstance(raw_reason, str):
+            rs = raw_reason.strip()
+            if rs:
+                entry_reasoning = (
+                    rs[:ENTRY_REASONING_ANALYZER_MAX] + "…" if len(rs) > ENTRY_REASONING_ANALYZER_MAX else rs
+                )
         effects.append(
             TradeEffect(
                 trade_id=int(t.trade_id),
@@ -215,6 +231,8 @@ def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Opti
                 entry_prob_down=_safe_float(entry_ctx.get("prob_down")),
                 entry_news_impact=(entry_ctx.get("kb_news_impact") or None),
                 entry_advice=(entry_ctx.get("entry_advice") or None),
+                entry_decision=entry_decision,
+                entry_reasoning=entry_reasoning,
                 decision_rule_version=(entry_ctx.get("decision_rule_version") or None),
                 decision_rule_params=(entry_ctx.get("decision_rule_params") if isinstance(entry_ctx.get("decision_rule_params"), dict) else None),
             )
@@ -256,6 +274,13 @@ def _aggregate(effects: List[TradeEffect]) -> Dict[str, Any]:
     rule_versions = sorted({(e.decision_rule_version or "unknown") for e in effects})
     missed_on_wins = [(e.missed_upside_pct or 0.0) for e in wins if e.missed_upside_pct is not None]
     wins_missed_ge_1 = [e for e in wins if (e.missed_upside_pct or 0.0) >= 1.0]
+    stuck_ge_7d = [e for e in effects if e.hold_minutes >= LONG_HOLD_MINUTES]
+    stuck_poor = [
+        e
+        for e in stuck_ge_7d
+        if e.realized_pct <= 0.15
+    ]
+    missing_entry_decision = sum(1 for e in effects if not (e.entry_decision or "").strip())
     return {
         "total": len(effects),
         "wins": len(wins),
@@ -281,7 +306,115 @@ def _aggregate(effects: List[TradeEffect]) -> Dict[str, Any]:
         "losses_with_high_rsi_count": len(losses_with_high_rsi),
         "decision_rule_versions": rule_versions,
         "by_exit_signal": by_exit,
+        "long_hold_ge_7d_count": len(stuck_ge_7d),
+        "long_hold_ge_7d_poor_outcome_count": len(stuck_poor),
+        "trades_missing_entry_decision_count": missing_entry_decision,
     }
+
+
+def _suggested_entry_env_keys(e: TradeEffect) -> List[str]:
+    """
+    Какие ключи config.env логично пересмотреть, если результат входа плохий или позиция долго «висела».
+    Тип входа (STRONG_BUY vs BUY) задаёт разные ветки в recommend_5m; точную ветку без reasoning не восстановить —
+    для BUY перечисляем оба семейства порогов.
+    """
+    d = (e.entry_decision or "").strip().upper()
+    keys: List[str] = []
+    if d == "STRONG_BUY":
+        keys = ["GAME_5M_MOMENTUM_STRONG_BUY_MIN", "GAME_5M_RSI_STRONG_BUY_MAX"]
+    elif d == "BUY":
+        keys = [
+            "GAME_5M_RTH_MOMENTUM_BUY_MIN",
+            "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX",
+            "GAME_5M_RSI_BUY_MAX",
+            "GAME_5M_PRICE_TO_LOW5D_MULT_MAX",
+            "GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY",
+            "GAME_5M_PREMARKET_MOMENTUM_BUY_MIN",
+            "GAME_5M_PREMARKET_MOMENTUM_BLOCK_BELOW",
+        ]
+    else:
+        keys = [
+            "GAME_5M_MOMENTUM_STRONG_BUY_MIN",
+            "GAME_5M_RSI_STRONG_BUY_MAX",
+            "GAME_5M_RTH_MOMENTUM_BUY_MIN",
+            "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX",
+        ]
+    if e.hold_minutes >= LONG_HOLD_MINUTES:
+        keys = keys + [
+            "GAME_5M_MAX_POSITION_DAYS",
+            "GAME_5M_MAX_POSITION_MINUTES",
+            "GAME_5M_SESSION_END_EXIT_MINUTES",
+            "GAME_5M_SESSION_END_MIN_PROFIT_PCT",
+        ]
+    seen: set[str] = set()
+    out: List[str] = []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out
+
+
+def _build_entry_underperformance_review(
+    effects: List[TradeEffect],
+    *,
+    limit: int = 8,
+) -> List[Dict[str, Any]]:
+    """
+    Сделки почти без профита / в минусе и особенно с удержанием ≥7 суток —
+    явная привязка к тексту причины входа и к порогам из decision_rule_params на момент BUY.
+    """
+    scored: List[tuple[float, TradeEffect]] = []
+    for e in effects:
+        long_hold = e.hold_minutes >= LONG_HOLD_MINUTES
+        poor = e.realized_pct <= 0.15
+        loss = e.realized_pct < 0
+        score = 0.0
+        if loss:
+            score += 2.0 + max(0.0, -e.realized_pct) / 15.0
+        elif poor:
+            score += 0.8
+        if long_hold:
+            score += 1.2
+            if poor or loss:
+                score += 1.5
+        if score < 0.75:
+            continue
+        scored.append((score, e))
+    scored.sort(key=lambda x: -x[0])
+    out: List[Dict[str, Any]] = []
+    for _, e in scored[:limit]:
+        hold_d = round(e.hold_minutes / (24 * 60), 2)
+        poor_out = e.realized_pct <= 0.15
+        long_hold = e.hold_minutes >= LONG_HOLD_MINUTES
+        if long_hold and poor_out:
+            note = (
+                "Долгое удержание (≥7 суток) при слабом или отрицательном результате: "
+                "в первую очередь проверить пороги входа и лимиты удержания (см. suggested_config_env_review)."
+            )
+        elif long_hold:
+            note = "Долгое удержание: даже при плюсе стоит проверить MAX_POSITION_* и условия выхода по времени."
+        else:
+            note = "Слабый или отрицательный результат — пересмотреть пороги ветки входа (см. suggested_config_env_review и reasoning)."
+        out.append(
+            {
+                "trade_id": e.trade_id,
+                "ticker": e.ticker,
+                "hold_days": hold_d,
+                "hold_minutes": round(e.hold_minutes, 1),
+                "long_hold_ge_7d": e.hold_minutes >= LONG_HOLD_MINUTES,
+                "realized_pct": round(e.realized_pct, 3),
+                "exit_signal": e.exit_signal,
+                "entry_decision": e.entry_decision,
+                "entry_reasoning_excerpt": (e.entry_reasoning or "")[:320],
+                "entry_momentum_2h_pct": e.entry_momentum_2h_pct,
+                "entry_rsi_5m": e.entry_rsi_5m,
+                "decision_rule_params_at_entry": e.decision_rule_params,
+                "suggested_config_env_review": _suggested_entry_env_keys(e),
+                "note": note,
+            }
+        )
+    return out
 
 
 def _top_cases(effects: List[TradeEffect], limit: int = 8) -> Dict[str, List[Dict[str, Any]]]:
@@ -291,12 +424,16 @@ def _top_cases(effects: List[TradeEffect], limit: int = 8) -> Dict[str, List[Dic
             "ticker": e.ticker,
             "entry_ts": e.entry_ts.isoformat(),
             "exit_ts": e.exit_ts.isoformat(),
+            "hold_minutes": round(e.hold_minutes, 1),
             "exit_signal": e.exit_signal,
             "realized_pct": round(e.realized_pct, 3),
             "missed_upside_pct": round(e.missed_upside_pct or 0.0, 3),
             "avoidable_loss_pct": round(e.avoidable_loss_pct or 0.0, 3),
+            "entry_decision": e.entry_decision,
+            "entry_reasoning": e.entry_reasoning,
             "entry_rsi_5m": e.entry_rsi_5m,
             "entry_vol_5m_pct": e.entry_vol_5m_pct,
+            "entry_momentum_2h_pct": e.entry_momentum_2h_pct,
             "entry_prob_up": e.entry_prob_up,
             "entry_price_forecast_5m_summary": e.entry_price_forecast_5m_summary,
             "entry_news_impact": e.entry_news_impact,
@@ -337,6 +474,8 @@ def _trade_effect_detail_dict(e: TradeEffect) -> Dict[str, Any]:
         "missed_upside_pct": None if e.missed_upside_pct is None else round(e.missed_upside_pct, 4),
         "avoidable_loss_pct": None if e.avoidable_loss_pct is None else round(e.avoidable_loss_pct, 4),
         "likely_late_polling": e.likely_late_polling,
+        "entry_decision": e.entry_decision,
+        "entry_reasoning": e.entry_reasoning,
         "entry_rsi_5m": e.entry_rsi_5m,
         "entry_vol_5m_pct": e.entry_vol_5m_pct,
         "entry_momentum_2h_pct": e.entry_momentum_2h_pct,
@@ -347,6 +486,7 @@ def _trade_effect_detail_dict(e: TradeEffect) -> Dict[str, Any]:
         "entry_advice": e.entry_advice,
         "decision_rule_version": e.decision_rule_version,
         "decision_rule_params": e.decision_rule_params,
+        "suggested_config_env_review_for_entry": _suggested_entry_env_keys(e),
     }
 
 
@@ -616,6 +756,8 @@ def _build_critical_case_analysis(effects: List[TradeEffect], limit: int = 5) ->
             reason_parts.append(f"missed {e.missed_upside_pct:+.2f}%")
         if e.likely_late_polling:
             reason_parts.append("late polling signal")
+        if e.hold_minutes >= LONG_HOLD_MINUTES:
+            reason_parts.append(f"long hold {e.hold_minutes / (24 * 60):.1f}d")
         if e.entry_vol_5m_pct is not None and e.entry_vol_5m_pct >= 0.6:
             reason_parts.append(f"high vol {e.entry_vol_5m_pct:.2f}%")
         if (e.entry_news_impact or "").lower().startswith("негатив"):
@@ -628,11 +770,21 @@ def _build_critical_case_analysis(effects: List[TradeEffect], limit: int = 5) ->
             )
         elif e.exit_signal == "SELL" and e.realized_pct < -1.5:
             action = "Проверить условие SELL: добавить подтверждение/буфер перед выходом."
+        entry_line = ""
+        if e.entry_decision or e.entry_reasoning:
+            ex = (e.entry_reasoning or "")[:160]
+            entry_line = f"entry={e.entry_decision or '?'}" + (f" | {ex}" if ex else "")
         out.append(
             {
                 "trade_id": e.trade_id,
                 "ticker": e.ticker,
                 "exit_signal": e.exit_signal,
+                "hold_days": round(e.hold_minutes / (24 * 60), 2),
+                "long_hold_ge_7d": e.hold_minutes >= LONG_HOLD_MINUTES,
+                "entry_decision": e.entry_decision,
+                "entry_reasoning_excerpt": (e.entry_reasoning or "")[:200],
+                "entry_context_line": entry_line or None,
+                "suggested_config_env_review": _suggested_entry_env_keys(e),
                 "realized_pct": round(e.realized_pct, 3),
                 "missed_upside_pct": round(e.missed_upside_pct or 0.0, 3),
                 "diagnosis": ", ".join(reason_parts) if reason_parts else "key outlier",
@@ -651,6 +803,25 @@ def _build_game5m_config_hints(
     if not effects:
         return hints
     from collections import defaultdict
+
+    stuck_poor = [
+        e for e in effects if e.hold_minutes >= LONG_HOLD_MINUTES and e.realized_pct <= 0.15
+    ]
+    if len(stuck_poor) >= 1:
+        hints.append(
+            {
+                "env_key": "GAME_5M_MAX_POSITION_DAYS",
+                "direction": "review_with_entry_thresholds",
+                "evidence": (
+                    f"{len(stuck_poor)}× удержание ≥7 суток при слабом/нулевом результате (≤0.15%) "
+                    f"из {len(effects)} сделок"
+                ),
+                "rationale": (
+                    "Долго «висит» без ощутимого плюса — чаще всего либо слишком мягкие пороги входа, "
+                    "либо слишком мягкие лимиты удержания; см. также entry_underperformance_review в JSON отчёта."
+                ),
+            }
+        )
 
     take_by_ticker: Dict[str, List[TradeEffect]] = defaultdict(list)
     for e in effects:
@@ -1091,6 +1262,7 @@ def analyze_trade_effectiveness(
     practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
     critical_cases = _build_critical_case_analysis(effects, limit=5)
     game_5m_config_hints = _build_game5m_config_hints(effects, summary)
+    entry_review = _build_entry_underperformance_review(effects, limit=8)
     payload: Dict[str, Any] = {
         "meta": {
             "days": days,
@@ -1100,12 +1272,14 @@ def analyze_trade_effectiveness(
             "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness",
             "decision_source_expected": "services.recommend_5m.get_decision_5m",
             "current_decision_rule_params": current_rules,
+            "long_hold_ge_7d_minutes": LONG_HOLD_MINUTES,
         },
         "summary": summary,
         "top_cases": tops,
         "practical_parameter_suggestions": practical,
         "critical_case_analysis": critical_cases,
         "game_5m_config_hints": game_5m_config_hints,
+        "entry_underperformance_review": entry_review,
     }
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
@@ -1158,6 +1332,7 @@ def analyze_trade_effectiveness_focused(
     practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
     critical_cases = _build_critical_case_analysis(effects, limit=5)
     game_5m_config_hints = _build_game5m_config_hints(effects, summary)
+    entry_review = _build_entry_underperformance_review(effects, limit=8)
 
     payload: Dict[str, Any] = {
         "meta": {
@@ -1173,12 +1348,14 @@ def analyze_trade_effectiveness_focused(
             "decision_source_expected": "services.recommend_5m.get_decision_5m",
             "current_decision_rule_params": current_rules,
             "include_trade_details": bool(include_trade_details),
+            "long_hold_ge_7d_minutes": LONG_HOLD_MINUTES,
         },
         "summary": summary,
         "top_cases": tops,
         "practical_parameter_suggestions": practical,
         "critical_case_analysis": critical_cases,
         "game_5m_config_hints": game_5m_config_hints,
+        "entry_underperformance_review": entry_review,
     }
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
@@ -1230,12 +1407,19 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             f"сделок с missed≥1%: {summary.get('wins_with_missed_upside_ge_1pct_count', 0)}",
             f"Сигналы риска: late polling={summary['late_polling_signals']}, high-vol losses={summary['high_vol_losses_count']}, weak P(up) losses={summary['weak_prob_up_losses_count']}",
             f"Параметрические причины: losses@ALLOW={summary.get('losses_with_allow_entry_count', 0)}, losses@prob_up>=0.60={summary.get('losses_with_high_prob_up_count', 0)}, losses@RSI>=60={summary.get('losses_with_high_rsi_count', 0)}",
+            f"Удержание ≥7 суток: {summary.get('long_hold_ge_7d_count', 0)} сделок, из них слабый результат (≤0.15%): {summary.get('long_hold_ge_7d_poor_outcome_count', 0)}; "
+            f"без decision в context_json: {summary.get('trades_missing_entry_decision_count', 0)}",
             "",
             "Top losses:",
         ]
     )
     for r in (top.get("top_losses") or [])[:4]:
-        lines.append(f"• {r['ticker']} #{r['trade_id']}: {r['realized_pct']:+.2f}% (exit={r['exit_signal']})")
+        ed = r.get("entry_decision") or "—"
+        hm = r.get("hold_minutes")
+        hm_s = f", hold {hm:.0f}m" if isinstance(hm, (int, float)) else ""
+        lines.append(
+            f"• {r['ticker']} #{r['trade_id']}: {r['realized_pct']:+.2f}% (exit={r['exit_signal']}, entry={ed}{hm_s})"
+        )
     win_missed = top.get("top_profitable_missed_upside") or []
     if win_missed and any((row.get("missed_upside_pct") or 0) >= 0.5 for row in win_missed[:4]):
         lines.append("")
@@ -1255,6 +1439,25 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             lines.append(
                 f"• {p.get('parameter')}: {p.get('current')} -> {p.get('proposed')} | {p.get('why')}"
             )
+    entry_rev = report.get("entry_underperformance_review") or []
+    if entry_rev:
+        lines.append("")
+        lines.append("Разбор входа (слабый результат / долгое удержание):")
+        for row in entry_rev[:5]:
+            tu = row.get("ticker")
+            tid = row.get("trade_id")
+            rc = row.get("realized_pct")
+            ed = row.get("entry_decision") or "—"
+            ex_full = str(row.get("entry_reasoning_excerpt") or "").replace("\n", " ").strip()
+            ex = ex_full[:140]
+            keys = row.get("suggested_config_env_review") or []
+            ks = ", ".join(str(k) for k in keys[:5]) if keys else "—"
+            lh = "да" if row.get("long_hold_ge_7d") else "нет"
+            lines.append(f"• {tu} #{tid}: {rc:+.2f}% | entry={ed} | ≥7d={lh} | env: {ks}")
+            if ex:
+                suffix = "…" if len(ex_full) > 140 else ""
+                lines.append(f"  reasoning: {ex}{suffix}")
+
     critical = report.get("critical_case_analysis") or []
     if critical:
         lines.append("")
