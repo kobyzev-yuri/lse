@@ -18,6 +18,29 @@ from config_loader import load_config, is_editable_config_env_key
 LONG_HOLD_MINUTES = 7 * 24 * 60
 ENTRY_REASONING_ANALYZER_MAX = 420
 
+# Пояснения для UI/LLM (исторически «late_polling» вводит в заблуждение — это не опрос Telegram/cron).
+ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
+    "late_polling_signals": (
+        "Число сделок, где одновременно: (1) цена выхода отстает от максимума High в 5m-окне "
+        "вход→выход более чем на ~0.4% (|exit−MFE|/MFE>0.004), (2) missed_upside_pct>0.3%. "
+        "Прокси «вышли заметно ниже пика окна» (часто норма для лимитного тейка). "
+        "НЕ связано с интервалом cron GAME_5M_SIGNAL_CRON_MINUTES."
+    ),
+    "exit_below_window_mfe_count": (
+        "То же значение, что late_polling_signals — предпочтительное имя для интерпретации."
+    ),
+    "sum_avoidable_loss_pct": (
+        "Сумма по сделкам max(0, realized_pct − preventable_worst_pct), "
+        "где preventable_worst_pct = (min Low окна / entry − 1)·100. "
+        "На прибыльных long сумма может быть большой: вы сильно лучше, чем «если бы вышли на минимуме окна» — "
+        "это не «сумма убытков, которых можно было избежать»."
+    ),
+    "sum_missed_upside_pct": (
+        "Сумма max(0, potential_best_pct − realized_pct), potential_best от max High окна; "
+        "характеризует недобор до пика окна после фиксации."
+    ),
+}
+
 
 @dataclass
 class TradeEffect:
@@ -184,6 +207,7 @@ def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Opti
                 preventable_worst_pct = ((mae_price / entry) - 1.0) * 100.0
                 missed_upside_pct = max(0.0, potential_best_pct - realized_pct)
                 avoidable_loss_pct = max(0.0, realized_pct - preventable_worst_pct)
+                # Историческое имя likely_late_polling: фактически «выход не у MFE high окна», не задержка cron.
                 likely_late_polling = abs(exit_p - mfe_price) / mfe_price > 0.004 if mfe_price > 0 else False
             except Exception:
                 pass
@@ -298,6 +322,7 @@ def _aggregate(effects: List[TradeEffect]) -> Dict[str, Any]:
         "sum_avoidable_loss_pct": round(float(sum(avoidable)), 3),
         "avg_avoidable_loss_pct": round(float(np.mean(avoidable)), 3) if avoidable else None,
         "late_polling_signals": late_polling_count,
+        "exit_below_window_mfe_count": late_polling_count,
         "high_vol_losses_count": len(high_vol_losses),
         "weak_prob_up_losses_count": len(weak_prob_entries),
         "negative_news_losses_count": len(neg_news_losses),
@@ -540,12 +565,18 @@ def _build_llm_recommendations(
         algorithm_context = {
             "decision_source_expected": meta.get("decision_source_expected"),
             "current_decision_rule_params": current_rules,
+            "metric_definitions": meta.get("metric_definitions") or ANALYZER_METRIC_DEFINITIONS,
+            "llm_critical_notes": [
+                "summary.late_polling_signals НЕ означает задержку опроса/cron. См. metric_definitions.late_polling_signals.",
+                "Не предлагай менять GAME_5M_SIGNAL_CRON_MINUTES только из-за late_polling_signals без других доказательств.",
+                "sum_avoidable_loss_pct на прибыльных сделках может быть велик — см. metric_definitions.sum_avoidable_loss_pct.",
+            ],
             "parameter_to_env_key_hint": {
                 "momentum_buy_min": "GAME_5M_RTH_MOMENTUM_BUY_MIN",
                 "rsi_buy_max": "GAME_5M_RSI_BUY_MAX",
                 "rsi_strong_buy_max": "GAME_5M_RSI_STRONG_BUY_MAX",
                 "volatility_wait_min": "GAME_5M_VOLATILITY_WAIT_MIN",
-                "price_polling_interval": "GAME_5M_SIGNAL_CRON_MINUTES",
+                "signal_cron_minutes": "GAME_5M_SIGNAL_CRON_MINUTES",
             },
             "scope_for_in_algorithm_changes": [
                 "entry thresholds and guards from decision_rule_params",
@@ -594,7 +625,9 @@ def _build_llm_recommendations(
             "Твоя задача: по отчету предложить улучшения, строго привязанные к текущему алгоритму и параметрам.\n"
             "Сначала ищи решения В РАМКАХ текущего алгоритма (перенастройка существующих параметров), "
             "и только затем предлагай изменения алгоритма.\n"
-            "Используй только данные из входного JSON, не фантазируй.\n\n"
+            "Используй только данные из входного JSON, не фантазируй.\n"
+            "Обязательно прочитай algorithm_context.metric_definitions и algorithm_context.llm_critical_notes "
+            "перед выводами про late_polling_signals и cron.\n\n"
             "Верни ТОЛЬКО валидный JSON без markdown и без пояснений вне JSON со следующими ключами:\n"
             "{\n"
             "  \"priorities\": [\"...\"],\n"
@@ -723,16 +756,19 @@ def _build_practical_parameter_suggestions(
                 }
             )
 
-    # 4) Polling cadence
+    # 4) Выход заметно ниже MFE окна (счётчик late_polling_signals — не про cron)
     late = int(summary.get("late_polling_signals", 0))
     if late >= 3:
         suggestions.append(
             {
-                "parameter": "price_polling_interval",
-                "current": "5m checks",
-                "proposed": "faster checks near exit levels (e.g. 1m guard)",
-                "why": f"Обнаружено late_polling_signals={late}.",
-                "expected_effect": "Меньше запаздывающих выходов, лучше фиксация у high.",
+                "parameter": "take_vs_window_mfe",
+                "current": "фиксированный % тейка",
+                "proposed": "пересмотреть тейк/трейлинг относительно intraday high (см. missed_upside)",
+                "why": (
+                    f"В {late} сделках цена выхода заметно ниже max High 5m-окна вход→выход при недоборе "
+                    f"(late_polling_signals / exit_below_window_mfe_count; это не метрика cron)."
+                ),
+                "expected_effect": "Меньше «недожатого» запаса после тейка, если цель — ближе к пику окна.",
             }
         )
     return suggestions
@@ -755,14 +791,14 @@ def _build_critical_case_analysis(effects: List[TradeEffect], limit: int = 5) ->
         if (e.missed_upside_pct or 0) > 0.8:
             reason_parts.append(f"missed {e.missed_upside_pct:+.2f}%")
         if e.likely_late_polling:
-            reason_parts.append("late polling signal")
+            reason_parts.append("exit below window MFE (not cron)")
         if e.hold_minutes >= LONG_HOLD_MINUTES:
             reason_parts.append(f"long hold {e.hold_minutes / (24 * 60):.1f}d")
         if e.entry_vol_5m_pct is not None and e.entry_vol_5m_pct >= 0.6:
             reason_parts.append(f"high vol {e.entry_vol_5m_pct:.2f}%")
         if (e.entry_news_impact or "").lower().startswith("негатив"):
             reason_parts.append("negative news at entry")
-        action = "Проверить пороги входа/выхода и тайминг опроса для кейса."
+        action = "Проверить пороги входа/выхода и цель тейка относительно high окна для кейса."
         if e.exit_signal == "TAKE_PROFIT" and (e.missed_upside_pct or 0) > 1.0:
             action = (
                 f"{e.ticker} #{e.trade_id}: при TAKE_PROFIT недобор {e.missed_upside_pct:.2f}% — "
@@ -857,10 +893,15 @@ def _build_game5m_config_hints(
     if late >= 2:
         hints.append(
             {
-                "env_key": "GAME_5M_SIGNAL_CRON_MINUTES",
-                "direction": "review_lower_if_crontab_allows",
-                "evidence": f"late_polling_signals={late} на выборке из {len(effects)} сделок",
-                "rationale": "Выход заметно ниже внутрисделочного high — чаще опрос у границ тейка; согласовать с crontab.",
+                "env_key": "GAME_5M_TAKE_MOMENTUM_FACTOR",
+                "direction": "review_with_TAKE_PROFIT_PCT_and_missed_upside",
+                "evidence": (
+                    f"exit_below_window_mfe_count={late} (legacy late_polling_signals) на {len(effects)} сделках"
+                ),
+                "rationale": (
+                    "Счётчик — цена выхода заметно ниже max High 5m-окна при недоборе; это не доказательство «медленного cron». "
+                    "Сначала тейк/потолок (TAKE_PROFIT_PCT*, TAKE_MOMENTUM_FACTOR), не интервал опроса."
+                ),
             }
         )
 
@@ -1251,7 +1292,15 @@ def analyze_trade_effectiveness(
     days = max(1, min(30, int(days)))
     closed = _load_closed_trades(days=days, strategy_name=strategy)
     if not closed:
-        return {"meta": {"days": days, "strategy": strategy, "trades_analyzed": 0}, "summary": {"total": 0}}
+        return {
+            "meta": {
+                "days": days,
+                "strategy": strategy,
+                "trades_analyzed": 0,
+                "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
+            },
+            "summary": {"total": 0},
+        }
 
     tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
     cache = _prepare_ohlc_cache(tickers=tickers, days=days)
@@ -1273,6 +1322,7 @@ def analyze_trade_effectiveness(
             "decision_source_expected": "services.recommend_5m.get_decision_5m",
             "current_decision_rule_params": current_rules,
             "long_hold_ge_7d_minutes": LONG_HOLD_MINUTES,
+            "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
         },
         "summary": summary,
         "top_cases": tops,
@@ -1319,6 +1369,7 @@ def analyze_trade_effectiveness_focused(
                 "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness_focused",
                 "decision_source_expected": "services.recommend_5m.get_decision_5m",
                 "include_trade_details": bool(include_trade_details),
+                "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
             },
             "summary": {"total": 0},
         }
@@ -1349,6 +1400,7 @@ def analyze_trade_effectiveness_focused(
             "current_decision_rule_params": current_rules,
             "include_trade_details": bool(include_trade_details),
             "long_hold_ge_7d_minutes": LONG_HOLD_MINUTES,
+            "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
         },
         "summary": summary,
         "top_cases": tops,
@@ -1405,7 +1457,8 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             f"Упущенный upside: Σ {summary['sum_missed_upside_pct']:+.3f}% | Избежимый loss: Σ {summary['sum_avoidable_loss_pct']:+.3f}%",
             f"По выигрышным: Σ missed {summary.get('sum_missed_upside_pct_on_wins', 0):+.3f}% | "
             f"сделок с missed≥1%: {summary.get('wins_with_missed_upside_ge_1pct_count', 0)}",
-            f"Сигналы риска: late polling={summary['late_polling_signals']}, high-vol losses={summary['high_vol_losses_count']}, weak P(up) losses={summary['weak_prob_up_losses_count']}",
+            f"Сигналы риска: выход ниже MFE окна={summary['late_polling_signals']} (см. exit_below_window_mfe_count), "
+            f"high-vol losses={summary['high_vol_losses_count']}, weak P(up) losses={summary['weak_prob_up_losses_count']}",
             f"Параметрические причины: losses@ALLOW={summary.get('losses_with_allow_entry_count', 0)}, losses@prob_up>=0.60={summary.get('losses_with_high_prob_up_count', 0)}, losses@RSI>=60={summary.get('losses_with_high_rsi_count', 0)}",
             f"Удержание ≥7 суток: {summary.get('long_hold_ge_7d_count', 0)} сделок, из них слабый результат (≤0.15%): {summary.get('long_hold_ge_7d_poor_outcome_count', 0)}; "
             f"без decision в context_json: {summary.get('trades_missing_entry_decision_count', 0)}",

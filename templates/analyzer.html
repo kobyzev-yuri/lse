@@ -15,8 +15,10 @@
             <dd style="margin:0;">Доходность сделки в % к cost-basis; в развёрнутом JSON также log-return.</dd>
             <dt style="font-weight:600; color:#f1f5f9;">Недобор до максимума окна (<code>missed_upside_pct</code>)</dt>
             <dd style="margin:0;">Сколько не дожали до лучшей цены по окну: <code>max(0, potential_best_pct − realized_pct)</code> по <strong>high</strong> 5m. В сводке <strong>сумма недоборов</strong> — поле <code>sum_missed_upside_pct</code>. Сумма только по прибыльным — <code>sum_missed_upside_pct_on_wins</code>.</dd>
-            <dt style="font-weight:600; color:#f1f5f9;">Избежимая просадка по окну (<code>sum_avoidable_loss_pct</code>)</dt>
-            <dd style="margin:0;">Насколько результат хуже минимума по тем же барам: <code>max(0, realized_pct − preventable_worst_pct)</code> относительно <strong>low</strong>. Не прогноз, а сравнение с худшей точкой, видимой на 5m внутри сделки.</dd>
+            <dt style="font-weight:600; color:#f1f5f9;">Сумма «избежимых просадок» по окну (<code>sum_avoidable_loss_pct</code>)</dt>
+            <dd style="margin:0;">По сделке: <code>max(0, realized_pct − preventable_worst_pct)</code>, где <code>preventable_worst_pct</code> — минимум по <strong>Low</strong> окна относительно входа. На <strong>прибыльных</strong> long сумма часто <strong>большая</strong>: вы зафиксировали плюс, а «худшая точка» окна была глубоко в минусе — это не «сумма убытков, которых можно было избежать».</dd>
+            <dt style="font-weight:600; color:#f1f5f9;"><code>late_polling_signals</code> / <code>exit_below_window_mfe_count</code></dt>
+            <dd style="margin:0;">Число сделок, где цена выхода отстаёт от <strong>max High</strong> 5m-окна вход→выход примерно &gt;0,4% <strong>и</strong> при этом <code>missed_upside_pct &gt; 0.3</code>. Прокси «вышли заметно ниже пика окна» (часто нормально для лимитного тейка). <strong>Не</strong> интервал опроса cron и <strong>не</strong> задержка Telegram.</dd>
             <dt style="font-weight:600; color:#f1f5f9;">Худшие исходы (<code>top_cases.top_losses</code>)</dt>
             <dd style="margin:0;">Сортировка по <strong>возрастанию</strong> <code>realized_pct</code>. При высоком win rate здесь часто «самые слабые плюсы», а не убытки.</dd>
             <dt style="font-weight:600; color:#f1f5f9;">Крупнейший недобор — все сделки (<code>top_cases.top_missed_upside</code>)</dt>
@@ -24,7 +26,7 @@
             <dt style="font-weight:600; color:#f1f5f9;">Прибыльные с крупным недобором (<code>top_cases.top_profitable_missed_upside</code>)</dt>
             <dd style="margin:0;">Только <code>realized_pct &gt; 0</code>, по убыванию <code>missed_upside_pct</code>: плюс по сделке, но заметный запас до <strong>high</strong> окна (типичный разбор тейка / потолка).</dd>
         </dl>
-        <p class="muted" style="margin:0.75rem 0 0 0; font-size:0.88rem;">Дополнительно в <code>summary</code>: счётчики риска (<code>late_polling_signals</code>, <code>high_vol_losses_count</code>, …). Полный список сделок — <code>trade_effects</code> при <code>include_trade_details=1</code>.</p>
+        <p class="muted" style="margin:0.75rem 0 0 0; font-size:0.88rem;">В <code>summary</code> также <code>exit_below_window_mfe_count</code> (= устаревшее имя <code>late_polling_signals</code>), <code>high_vol_losses_count</code>, … Полный список сделок — <code>trade_effects</code> при <code>include_trade_details=1</code>.</p>
     </div>
 </details>
 
@@ -244,7 +246,7 @@ async function runAnalyzer() {
             `Сумма недоборов по прибыльным: <strong>${esc(s.sum_missed_upside_pct_on_wins != null ? s.sum_missed_upside_pct_on_wins : '—')}%</strong> (<code>sum_missed_upside_pct_on_wins</code>), ` +
             `сделок с недобором ≥1%: <strong>${esc(s.wins_with_missed_upside_ge_1pct_count != null ? s.wins_with_missed_upside_ge_1pct_count : '—')}</strong> (<code>wins_with_missed_upside_ge_1pct_count</code>)<br>` +
             `Сумма избежимых просадок по окну: <strong>${esc(s.sum_avoidable_loss_pct)}%</strong> (<code>sum_avoidable_loss_pct</code>)<br>` +
-            `<span class="muted" style="font-size:0.92em;">Счётчики риска: запаздывание опроса <strong>${esc(s.late_polling_signals != null ? s.late_polling_signals : '—')}</strong> (<code>late_polling_signals</code>), ` +
+            `<span class="muted" style="font-size:0.92em;">Счётчики: выход ниже MFE окна <strong>${esc(s.exit_below_window_mfe_count != null ? s.exit_below_window_mfe_count : s.late_polling_signals != null ? s.late_polling_signals : '—')}</strong> (<code>exit_below_window_mfe_count</code> / <code>late_polling_signals</code>), ` +
             `убытки при волатильности ≥0.6% <strong>${esc(s.high_vol_losses_count != null ? s.high_vol_losses_count : '—')}</strong> (<code>high_vol_losses_count</code>), ` +
             `убытки при слабом <code>prob_up</code> <strong>${esc(s.weak_prob_up_losses_count != null ? s.weak_prob_up_losses_count : '—')}</strong> (<code>weak_prob_up_losses_count</code>)</span>`;
         const losses = (data.top_cases && data.top_cases.top_losses) ? data.top_cases.top_losses : [];
