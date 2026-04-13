@@ -774,7 +774,7 @@ def _build_llm_recommendations(
             "      \"parameter\": \"...\",\n"
             "      \"env_key\": \"GAME_5M_... или пусто если нет в parameter_to_env_key\",\n"
             "      \"current\": \"...\",\n"
-            "      \"proposed\": \"...\",\n"
+            "      \"proposed\": \"число или true/false — без фраз на русском/английском; для GAME_5M_*_PCT только цифры\",\n"
             "      \"where_used\": \"services/recommend_5m.py|services/game_5m.py|config.env\",\n"
             "      \"reason_from_metrics\": \"...\",\n"
             "      \"expected_effect\": \"...\",\n"
@@ -1135,6 +1135,61 @@ def _normalize_env_value(v: Any) -> str:
     return str(v).strip()
 
 
+def _game_5m_env_key_expects_bool(env_key: str) -> bool:
+    if "_ENABLED" in env_key:
+        return True
+    return env_key in (
+        "GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY",
+        "GAME_5M_EARLY_USE_PREMARKET_MOMENTUM",
+    )
+
+
+def _game_5m_env_key_expects_number(env_key: str) -> bool:
+    """Ключи GAME_5M с числовым значением в config.env (не bool)."""
+    if not env_key.startswith("GAME_5M_") or _game_5m_env_key_expects_bool(env_key):
+        return False
+    if env_key == "GAME_5M_SIGNAL_CRON_MINUTES":
+        return False
+    markers = (
+        "_PCT",
+        "_MIN",
+        "_MAX",
+        "_FACTOR",
+        "_RATIO",
+        "_MINUTES",
+        "_DAYS",
+        "_BARS",
+        "_EV_",
+        "_RR",
+    )
+    return any(m in env_key for m in markers)
+
+
+def _proposed_str_valid_for_env_key(env_key: str, proposed_str: str) -> tuple[bool, str]:
+    """
+    Отсекает ответы LLM вроде «слегка повысить тейк» для числовых ключей — иначе ломается config.env.
+    """
+    if not proposed_str or not proposed_str.strip():
+        return False, "пустое значение"
+    s = proposed_str.strip().replace(",", ".").rstrip("%").strip()
+    if _game_5m_env_key_expects_bool(env_key):
+        low = s.lower()
+        if low in ("true", "false", "1", "0", "yes", "no"):
+            return True, ""
+        return False, "ожидалось true/false"
+    if _game_5m_env_key_expects_number(env_key):
+        if len(proposed_str) > 48:
+            return False, "слишком длинная строка (похоже на текст, а не число)"
+        if re.search(r"[\u0400-\u04FF]", proposed_str):
+            return False, "в значении есть кириллица — укажите число"
+        try:
+            float(s)
+        except ValueError:
+            return False, "не число: задайте proposed числом (например 5.5), без пояснений"
+        return True, ""
+    return True, ""
+
+
 def _cron_row_ties_mfe_exit_metric_to_polling(row: dict) -> bool:
     """
     True, если текст строки ошибочно связывает cron с late_polling_signals / «запаздыванием опроса».
@@ -1232,7 +1287,6 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
             continue
         if env_key in seen:
             continue
-        seen.add(env_key)
         if not is_editable_config_env_key(env_key):
             skipped.append(
                 {
@@ -1258,6 +1312,18 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                 continue
         else:
             proposed_str = _normalize_env_value(proposed)
+        ok_pv, pv_note = _proposed_str_valid_for_env_key(env_key, proposed_str)
+        if not ok_pv:
+            skipped.append(
+                {
+                    "parameter": parameter,
+                    "env_key": env_key,
+                    "reason": "invalid_proposed",
+                    "note": pv_note,
+                }
+            )
+            continue
+        seen.add(env_key)
         updates.append(
             {
                 "env_key": env_key,
@@ -1301,7 +1367,6 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                     }
                 )
                 continue
-            seen.add(env_key)
             current = cfg.get(env_key, "")
             if env_key == "GAME_5M_SIGNAL_CRON_MINUTES":
                 proposed_str = _coerce_polling_minutes(proposed)
@@ -1317,6 +1382,18 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                     continue
             else:
                 proposed_str = _normalize_env_value(proposed)
+            ok_pv, pv_note = _proposed_str_valid_for_env_key(env_key, proposed_str)
+            if not ok_pv:
+                skipped.append(
+                    {
+                        "parameter": env_key,
+                        "env_key": env_key,
+                        "reason": "invalid_proposed",
+                        "note": pv_note,
+                    }
+                )
+                continue
+            seen.add(env_key)
             updates.append(
                 {
                     "env_key": env_key,
@@ -1343,7 +1420,6 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             if not is_editable_config_env_key(env_key):
                 continue
-            seen.add(env_key)
             current = cfg.get(env_key, "")
             if env_key == "GAME_5M_SIGNAL_CRON_MINUTES":
                 proposed_str = _coerce_polling_minutes(proposed)
@@ -1351,6 +1427,18 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                     continue
             else:
                 proposed_str = _normalize_env_value(proposed)
+            ok_pv, pv_note = _proposed_str_valid_for_env_key(env_key, proposed_str)
+            if not ok_pv:
+                skipped.append(
+                    {
+                        "parameter": parameter,
+                        "env_key": env_key,
+                        "reason": "invalid_proposed",
+                        "note": pv_note,
+                    }
+                )
+                continue
+            seen.add(env_key)
             updates.append(
                 {
                     "env_key": env_key,
