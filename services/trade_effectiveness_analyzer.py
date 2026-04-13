@@ -649,7 +649,8 @@ def _build_llm_recommendations(
             "parameter_to_env_key": dict(PARAM_TO_ENV_KEY),
             "llm_critical_notes": [
                 "summary.late_polling_signals НЕ означает задержку опроса/cron. См. metric_definitions.late_polling_signals.",
-                "Не предлагай менять GAME_5M_SIGNAL_CRON_MINUTES только из-за late_polling_signals без других доказательств.",
+                "Жёсткий запрет: не включать GAME_5M_SIGNAL_CRON_MINUTES в in_algorithm_parameter_changes, config_env_proposals и monitoring_fixes, если главное «доказательство» — late_polling_signals / exit_below_window_mfe_count / формулировки про «late polling» или «запаздывание опроса».",
+                "Для недобора до MFE при TAKE_PROFIT предлагай TAKE_PROFIT_*, TAKE_MOMENTUM_FACTOR, trailing/лимиты — не cron.",
                 "sum_avoidable_loss_pct на прибыльных сделках может быть велик — см. metric_definitions.sum_avoidable_loss_pct.",
                 "Корреляции в отчёте (vol, prob_up, exit_signal) не доказывают причинность — указывай confidence и validation_plan.",
             ],
@@ -667,6 +668,7 @@ def _build_llm_recommendations(
             ],
             "hard_constraints": [
                 "read algorithm_digest before interpreting summary and top_cases",
+                "FORBIDDEN: GAME_5M_SIGNAL_CRON_MINUTES or signal_cron_minutes in in_algorithm_parameter_changes / config_env_proposals / monitoring_fixes when the cited evidence is late_polling_signals, exit_below_window_mfe_count, or wording like 'late polling' / 'polling delay' — those metrics are exit vs 5m window MFE, not cron latency",
                 "tie at least one priority or parameter_change to concrete trade_id or ticker from the report when evidence exists",
                 "for each in_algorithm_parameter_changes include env_key from parameter_to_env_key when the parameter maps",
                 "propose changes only with concrete fields from current_decision_rule_params when tuning thresholds",
@@ -716,7 +718,9 @@ def _build_llm_recommendations(
             "В reason_from_metrics указывай trade_id и/или ticker, если опираешься на top_cases, entry_underperformance_review "
             "или trade_effects.\n"
             "Для параметра из practical_parameter_suggestions или heuristic_hints подставь env_key из "
-            "algorithm_context.parameter_to_env_key (или сам ключ GAME_5M_*).\n\n"
+            "algorithm_context.parameter_to_env_key (или сам ключ GAME_5M_*).\n"
+            "Никогда не связывай GAME_5M_SIGNAL_CRON_MINUTES с late_polling_signals: это разные вещи (см. llm_critical_notes). "
+            "Не пиши в priorities фразы про «late polling» как про инфраструктуру — говори «выход ниже MFE окна» или «недобор после тейка».\n\n"
             "Верни ТОЛЬКО валидный JSON без markdown и без пояснений вне JSON со следующими ключами:\n"
             "{\n"
             "  \"priorities\": [\"...\"],\n"
@@ -1086,6 +1090,34 @@ def _normalize_env_value(v: Any) -> str:
     return str(v).strip()
 
 
+def _cron_row_ties_mfe_exit_metric_to_polling(row: dict) -> bool:
+    """
+    True, если текст строки ошибочно связывает cron с late_polling_signals / «запаздыванием опроса».
+    Такие предложения не применяем в auto_config_override (метрика — выход vs MFE окна, не интервал cron).
+    """
+    parts = [
+        row.get("reason_from_metrics"),
+        row.get("why"),
+        row.get("expected_effect"),
+        row.get("parameter"),
+        row.get("proposed"),
+        row.get("issue"),
+        row.get("proposed_fix"),
+        row.get("reason"),
+    ]
+    blob = " ".join(str(p) for p in parts if p is not None and str(p).strip())
+    low = blob.lower()
+    if "late_polling" in low or "late polling" in low:
+        return True
+    if "polling signals" in low or "polling signal" in low or "signal polling" in low:
+        return True
+    if "запаздыван" in blob.lower():
+        return True
+    if "exit_below_window" in low.replace(" ", "_") and ("cron" in low or "polling" in low):
+        return True
+    return False
+
+
 def _coerce_polling_minutes(proposed: Any) -> Optional[str]:
     """LLM часто возвращает '1m near exit levels' — извлекаем целые минуты для GAME_5M_SIGNAL_CRON_MINUTES."""
     if isinstance(proposed, (int, float)) and not isinstance(proposed, bool):
@@ -1137,6 +1169,19 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                     "parameter": parameter,
                     "reason": "no_env_mapping",
                     "note": "Нужна доработка алгоритма/маппинга (ключ не найден).",
+                }
+            )
+            continue
+        if env_key == "GAME_5M_SIGNAL_CRON_MINUTES" and _cron_row_ties_mfe_exit_metric_to_polling(row):
+            skipped.append(
+                {
+                    "parameter": parameter,
+                    "env_key": env_key,
+                    "reason": "cron_blocked_late_polling_misread",
+                    "note": (
+                        "late_polling_signals / «запаздывание опроса» не доказывают интервал cron; "
+                        "см. metric_definitions. Предложение не применяется автоматически."
+                    ),
                 }
             )
             continue
@@ -1196,6 +1241,18 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                         "env_key": env_key,
                         "reason": "not_editable",
                         "note": "Ключ не в списке редактируемых.",
+                    }
+                )
+                continue
+            if env_key == "GAME_5M_SIGNAL_CRON_MINUTES" and _cron_row_ties_mfe_exit_metric_to_polling(row):
+                skipped.append(
+                    {
+                        "parameter": env_key,
+                        "env_key": env_key,
+                        "reason": "cron_blocked_late_polling_misread",
+                        "note": (
+                            "late_polling_signals не доказывает интервал cron; предложение из config_env_proposals отклонено."
+                        ),
                     }
                 )
                 continue
