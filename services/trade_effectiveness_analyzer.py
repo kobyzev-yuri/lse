@@ -39,6 +39,85 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Сумма max(0, potential_best_pct − realized_pct), potential_best от max High окна; "
         "характеризует недобор до пика окна после фиксации."
     ),
+    "likely_late_polling": (
+        "Поле по сделке (boolean): |exit−max High окна|/max High > 0.004. "
+        "Историческое имя; семантика — «выход не у пика MFE окна», не задержка опроса."
+    ),
+    "high_vol_losses_count": (
+        "Число убыточных сделок, где на входе entry_vol_5m_pct ≥ 0.6 (волатильность из context_json)."
+    ),
+    "weak_prob_up_losses_count": (
+        "Убыточные сделки с entry_prob_up < 0.55 — модель/прогноз на входе не давали высокой вероятности роста."
+    ),
+    "by_exit_signal": (
+        "Агрегаты по типу выхода (exit_signal): count, avg_realized_pct, avg_missed_pct. "
+        "Показывает, какой сигнал закрытия доминирует и насколько он «дорогой» по missed upside."
+    ),
+    "realized_pct": (
+        "Результат сделки в % от cost basis из net_pnl (как в отчёте); для рядов также считается realized_log_return = log(1+p/100)."
+    ),
+}
+
+# Краткий конспект для LLM: как устроен отчёт и где живёт торговая логика (без выдумывания путей).
+ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
+    "report_role": (
+        "Постфактум по закрытым сделкам: загрузка истории, 5m OHLC на интервал вход→выход, "
+        "сравнение факта выхода с max/min ценами окна и снимком context_json на входе."
+    ),
+    "not_in_report": (
+        "Отчёт не воспроизводит внутрибаровый тайминг исполнения лимитов и не знает реальной задержки брокера; "
+        "не выводить «медленный cron» из late_polling_signals / exit_below_window_mfe_count."
+    ),
+    "window_metrics": {
+        "ohlc_source": "services.recommend_5m.fetch_5m_ohlc, таймзона баров America/New_York",
+        "slice": "строки 5m где entry_ts <= datetime <= exit_ts",
+        "mfe_price": "max(High) окна → potential_best_pct = (mfe/entry−1)*100",
+        "mae_price": "min(Low) окна → preventable_worst_pct = (mae/entry−1)*100",
+        "missed_upside_pct": "max(0, potential_best_pct − realized_pct)",
+        "avoidable_loss_pct": "max(0, realized_pct − preventable_worst_pct)",
+        "exit_vs_mfe_flag": "|exit−mfe|/mfe > 0.004 → likely_late_polling (переименование в UI: ниже MFE окна)",
+        "late_polling_signals_summary": (
+            "число сделок с likely_late_polling И missed_upside_pct > 0.003 (0.3%)"
+        ),
+    },
+    "entry_snapshot": (
+        "Поля входа (rsi_5m, prob_up, decision_rule_params, …) из context_json сделки через "
+        "services.deal_params_5m.normalize_entry_context — это снимок на момент входа, не текущий config."
+    ),
+    "runtime_trading_logic": (
+        "Живые сигналы входа: services.recommend_5m.get_decision_5m (версия и пороги — "
+        "current_decision_rule_params в meta). Управление позицией/стоп/тейк/время: services.game_5m "
+        "(эффективные stop/take и max_position — в current_decision_rule_params.exit_strategy)."
+    ),
+    "code_map": [
+        {
+            "path": "services/trade_effectiveness_analyzer.py",
+            "role": "Сбор отчёта, агрегаты summary, эвристики practical_parameter_suggestions, game_5m_config_hints, вызов LLM.",
+        },
+        {
+            "path": "services/recommend_5m.py",
+            "role": "Правила STRONG_BUY/BUY/HOLD/SELL, чтение GAME_5M_* порогов, get_decision_5m_rule_thresholds.",
+        },
+        {
+            "path": "services/game_5m.py",
+            "role": "Стоп-лосс, тейк-профит, лимиты удержания, выход по времени сессии и связанные ветки.",
+        },
+        {
+            "path": "services/deal_params_5m.py",
+            "role": "Нормализация context_json при записи/чтении сделки.",
+        },
+        {
+            "path": "report_generator.py",
+            "role": "load_trade_history, compute_closed_trade_pnls — источник списка закрытых сделок.",
+        },
+    ],
+    "advice_discipline": [
+        "Сначала проверь metric_definitions и этот digest — не путай метрики окна с инфраструктурой cron.",
+        "Привязывай выводы к конкретным trade_id / ticker из top_cases, entry_underperformance_review или trade_effects.",
+        "Перенастройка: логическое имя параметра → env_key из algorithm_context.parameter_to_env_key (или полное GAME_5M_*).",
+        "Если проблема в ветвлении/формуле, а не в пороге — algorithm_change_proposals с path из code_map и именем функции/ветки.",
+        "Оценка impact в expected_impact — осторожные числа; validation_plan — повторный прогон анализатора на следующем окне или ограниченный paper-run.",
+    ],
 }
 
 
@@ -566,10 +645,13 @@ def _build_llm_recommendations(
             "decision_source_expected": meta.get("decision_source_expected"),
             "current_decision_rule_params": current_rules,
             "metric_definitions": meta.get("metric_definitions") or ANALYZER_METRIC_DEFINITIONS,
+            "algorithm_digest": ANALYZER_LLM_ALGORITHM_DIGEST,
+            "parameter_to_env_key": dict(PARAM_TO_ENV_KEY),
             "llm_critical_notes": [
                 "summary.late_polling_signals НЕ означает задержку опроса/cron. См. metric_definitions.late_polling_signals.",
                 "Не предлагай менять GAME_5M_SIGNAL_CRON_MINUTES только из-за late_polling_signals без других доказательств.",
                 "sum_avoidable_loss_pct на прибыльных сделках может быть велик — см. metric_definitions.sum_avoidable_loss_pct.",
+                "Корреляции в отчёте (vol, prob_up, exit_signal) не доказывают причинность — указывай confidence и validation_plan.",
             ],
             "parameter_to_env_key_hint": {
                 "momentum_buy_min": "GAME_5M_RTH_MOMENTUM_BUY_MIN",
@@ -584,9 +666,13 @@ def _build_llm_recommendations(
                 "exit cadence and de-risk knobs from current_decision_rule_params.exit_strategy",
             ],
             "hard_constraints": [
-                "propose changes only with concrete fields from current_decision_rule_params",
-                "if there is no matching field, put proposal into algorithm_change_proposals",
-                "do not suggest vague ideas without target parameter or code area",
+                "read algorithm_digest before interpreting summary and top_cases",
+                "tie at least one priority or parameter_change to concrete trade_id or ticker from the report when evidence exists",
+                "for each in_algorithm_parameter_changes include env_key from parameter_to_env_key when the parameter maps",
+                "propose changes only with concrete fields from current_decision_rule_params when tuning thresholds",
+                "if there is no matching field, put proposal into algorithm_change_proposals with code_areas from algorithm_digest.code_map",
+                "algorithm_change_proposals: name the function or branch (e.g. RSI sell branch), not only the file",
+                "do not suggest vague ideas without target parameter, env_key, or code area",
             ],
         }
         if game_5m_config_focus:
@@ -621,22 +707,26 @@ def _build_llm_recommendations(
         if isinstance(payload.get("game_5m_config_hints"), list):
             llm_input["heuristic_hints"] = payload["game_5m_config_hints"]
         system_prompt = (
-            "Ты senior quant и знаешь текущую реализацию стратегии.\n"
-            "Твоя задача: по отчету предложить улучшения, строго привязанные к текущему алгоритму и параметрам.\n"
-            "Сначала ищи решения В РАМКАХ текущего алгоритма (перенастройка существующих параметров), "
-            "и только затем предлагай изменения алгоритма.\n"
-            "Используй только данные из входного JSON, не фантазируй.\n"
-            "Обязательно прочитай algorithm_context.metric_definitions и algorithm_context.llm_critical_notes "
-            "перед выводами про late_polling_signals и cron.\n\n"
+            "Ты senior quant и инженер по торговым системам; у тебя есть только входной JSON (отчёт + algorithm_context).\n"
+            "Твоя задача: предложить дельные улучшения — в первую очередь перенастройка GAME_5M_* / порогов из "
+            "current_decision_rule_params, во вторую — точечные изменения кода (ветки входа/выхода), если порогом не лечится.\n"
+            "Сначала прочитай algorithm_context.algorithm_digest (как считаются метрики окна и откуда context_json), "
+            "затем metric_definitions и llm_critical_notes.\n"
+            "Используй только факты из отчёта; не выдумывай сделки, тикеры и значения, которых нет во входе.\n"
+            "В reason_from_metrics указывай trade_id и/или ticker, если опираешься на top_cases, entry_underperformance_review "
+            "или trade_effects.\n"
+            "Для параметра из practical_parameter_suggestions или heuristic_hints подставь env_key из "
+            "algorithm_context.parameter_to_env_key (или сам ключ GAME_5M_*).\n\n"
             "Верни ТОЛЬКО валидный JSON без markdown и без пояснений вне JSON со следующими ключами:\n"
             "{\n"
             "  \"priorities\": [\"...\"],\n"
             "  \"in_algorithm_parameter_changes\": [\n"
             "    {\n"
             "      \"parameter\": \"...\",\n"
+            "      \"env_key\": \"GAME_5M_... или пусто если нет в parameter_to_env_key\",\n"
             "      \"current\": \"...\",\n"
             "      \"proposed\": \"...\",\n"
-            "      \"where_used\": \"services.recommend_5m.py|services.game_5m.py|config.env\",\n"
+            "      \"where_used\": \"services/recommend_5m.py|services/game_5m.py|config.env\",\n"
             "      \"reason_from_metrics\": \"...\",\n"
             "      \"expected_effect\": \"...\",\n"
             "      \"confidence\": \"low|medium|high\"\n"
@@ -673,7 +763,8 @@ def _build_llm_recommendations(
                 "]\n"
                 "Ключи env_key только из algorithm_context.game_5m_exit_and_tuning_env_keys; для тикера — суффикс _TICKER.\n"
             )
-        max_tok = 2200 if game_5m_config_focus else 1600
+        # Чуть больше места под env_key, ссылки на trade_id и algorithm_change_proposals.
+        max_tok = 2600 if game_5m_config_focus else 2000
         out = llm.generate_response(
             messages=[{"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, indent=2)}],
             system_prompt=system_prompt,
@@ -1029,12 +1120,17 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(row, dict):
             continue
         parameter = str(row.get("parameter") or "").strip()
+        env_key_hint = str(row.get("env_key") or "").strip()
         proposed = row.get("proposed")
-        if not parameter or proposed is None:
+        if proposed is None:
+            continue
+        if not parameter and not env_key_hint:
             continue
         env_key = PARAM_TO_ENV_KEY.get(parameter) or PARAM_TO_ENV_KEY.get(parameter.upper())
         if not env_key and parameter.startswith("GAME_5M_") and is_editable_config_env_key(parameter):
             env_key = parameter
+        if not env_key and env_key_hint.startswith("GAME_5M_") and is_editable_config_env_key(env_key_hint):
+            env_key = env_key_hint
         if not env_key:
             skipped.append(
                 {
