@@ -172,10 +172,17 @@ def process_ticker(
             except Exception:
                 price_quotes = None
             price_for_check = max(price, price_quotes) if (price_quotes is not None and price_quotes > 0) else price
+            ms = d5.get("market_session") if isinstance(d5.get("market_session"), dict) else {}
             should_close, exit_type, exit_detail = should_close_position(
-                open_pos, decision_exit, price_for_check, momentum_2h_pct=momentum_2h_pct,
-                bar_high=bar_high, bar_low=bar_low,
+                open_pos,
+                decision_exit,
+                price_for_check,
+                momentum_2h_pct=momentum_2h_pct,
+                bar_high=bar_high,
+                bar_low=bar_low,
                 rsi_5m=rsi_5m,
+                pullback_from_high_pct=d5.get("pullback_from_high_pct"),
+                session_phase=ms.get("session_phase"),
             )
             entry = open_pos.get("entry_price")
             entry_f = float(entry) if entry is not None and entry > 0 else None
@@ -304,6 +311,20 @@ def process_ticker(
                 logger.info("[5m] %s: отправлено уведомление о закрытии по %s @ %.2f (в этом запуске новый вход не слать)", ticker, close_exit_type, close_price or 0)
                 return True
         return True  # закрыли в этом запуске — не слать новый вход в том же запуске
+
+    # Докуп вторым BUY запрещён по умолчанию: иначе при открытой прибыльной позиции крон снова пишет BUY в БД.
+    allow_pyramid = (get_config_value("GAME_5M_ALLOW_PYRAMID_BUY", "false") or "false").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if not closed_this_run and decision_entry in ("BUY", "STRONG_BUY") and not allow_pyramid:
+        if get_open_position_any(ticker) or get_open_position(ticker):
+            logger.info(
+                "[5m] %s: пропуск входа — уже есть открытая позиция (докуп выключен: GAME_5M_ALLOW_PYRAMID_BUY=false)",
+                ticker,
+            )
+            return False
 
     if decision_entry not in ("BUY", "STRONG_BUY"):
         return False
@@ -524,13 +545,17 @@ def main():
                     close_ctx_ah = build_5m_close_context(d5)
                     bar_high = close_ctx_ah.get("bar_high")
                     bar_low = close_ctx_ah.get("bar_low")
+                    ms_ah = d5.get("market_session") if isinstance(d5.get("market_session"), dict) else {}
                     should_close, exit_type, exit_detail = should_close_position(
                         open_pos,
                         d5.get("technical_decision_core") or d5.get("decision", "HOLD"),
                         price_for_check,
                         momentum_2h_pct=close_ctx_ah.get("momentum_2h_pct"),
-                        bar_high=bar_high, bar_low=bar_low,
+                        bar_high=bar_high,
+                        bar_low=bar_low,
                         rsi_5m=close_ctx_ah.get("rsi_5m"),
+                        pullback_from_high_pct=d5.get("pullback_from_high_pct"),
+                        session_phase=ms_ah.get("session_phase"),
                     )
                     if should_close and exit_type:
                         base_exit = close_ctx_ah.get("exit_bar_close") if isinstance(close_ctx_ah.get("exit_bar_close"), (int, float)) and close_ctx_ah.get("exit_bar_close") > 0 else price_for_check

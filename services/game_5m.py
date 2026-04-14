@@ -12,7 +12,7 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from sqlalchemy import create_engine, text
 
@@ -722,6 +722,21 @@ def _effective_stop_loss_pct(
     return max(min_stop, effective)
 
 
+def _game_5m_soft_take_near_high_params() -> tuple[bool, float, float]:
+    """Мягкий тейк у хая в NEAR_OPEN: вкл, мин. PnL %, макс. откат от session high %."""
+    raw = (get_config_value("GAME_5M_SOFT_TAKE_NEAR_HIGH_ENABLED", "true") or "true").strip().lower()
+    enabled = raw in ("1", "true", "yes")
+    try:
+        min_pnl = float((get_config_value("GAME_5M_SOFT_TAKE_NEAR_HIGH_MIN_PCT", "2.0") or "2.0").strip())
+    except (ValueError, TypeError):
+        min_pnl = 2.0
+    try:
+        max_pull = float((get_config_value("GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT", "0.35") or "0.35").strip())
+    except (ValueError, TypeError):
+        max_pull = 0.35
+    return enabled, max(0.5, min_pnl), max(0.05, max_pull)
+
+
 def should_close_position(
     open_position: dict,
     current_decision: str,
@@ -730,11 +745,15 @@ def should_close_position(
     bar_high: Optional[float] = None,
     bar_low: Optional[float] = None,
     rsi_5m: Optional[float] = None,
-) -> tuple[bool, str, str]:
+    *,
+    pullback_from_high_pct: Optional[float] = None,
+    session_phase: Optional[str] = None,
+) -> Tuple[bool, str, str]:
     """Закрывать ли позицию: по тейку/стопу (цена), по истечении срока/сессии (TIME_EXIT), early de-risk (TIME_EXIT_EARLY).
 
     Возвращает (should_close, signal_type, exit_detail). exit_detail — уточнение для TIME_EXIT:
     session_end | max_hold_minutes | max_hold_days; для TIME_EXIT_EARLY — early_derisk; иначе пустая строка.
+    Для мягкого тейка у хая: exit_detail = soft_near_high_open.
     """
     if current_price is None or current_price <= 0:
         return False, "", ""
@@ -766,6 +785,32 @@ def should_close_position(
                 "GAME_5M %s: тейк не достигнут — pnl=%.2f%%, порог=%.2f%% (с допуском 0.05%% сработает при >= %.2f%%)",
                 ticker, pnl_take_pct, take_pct, take_threshold,
             )
+        # Мягкий тейк: в первый час RTH цена у дневного high, PnL уже есть, но до полного тейка не дотянули —
+        # фиксируем, чтобы не ловить разворот после «погони» у хая (см. NEAR_OPEN в market_session).
+        st_en, st_min, st_pb = _game_5m_soft_take_near_high_params()
+        phase = (session_phase or "").strip()
+        if (
+            st_en
+            and not exit_only_take
+            and phase == "NEAR_OPEN"
+            and pullback_from_high_pct is not None
+            and pnl_take_pct >= st_min
+            and pnl_take_pct < take_threshold
+        ):
+            try:
+                pb = float(pullback_from_high_pct)
+            except (TypeError, ValueError):
+                pb = 999.0
+            if pb <= st_pb:
+                logger.info(
+                    "GAME_5M %s: мягкий тейк у хая (NEAR_OPEN) — pnl=%.2f%% ≥ %.2f%%, откат от high=%.3f%% ≤ %.2f%%",
+                    ticker,
+                    pnl_take_pct,
+                    st_min,
+                    pb,
+                    st_pb,
+                )
+                return True, "TAKE_PROFIT", "soft_near_high_open"
         if not exit_only_take and _game_5m_stop_loss_enabled() and pnl_stop_pct <= -stop_pct:
             return True, "STOP_LOSS", ""
         if exit_only_take:
