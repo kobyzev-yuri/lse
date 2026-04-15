@@ -102,6 +102,20 @@ def _external_id(exchange: str, symbol: str, link: str, title: str) -> str:
     return _sha256_hex(base)
 
 
+def _legacy_ticker_for_kb(symbol: str) -> str:
+    """Колонка knowledge_base.ticker VARCHAR(10): в фидах часто без '^', в Yahoo — '^VIX'."""
+    s = _norm_symbol(symbol)
+    return (s.lstrip("^")[:10] if s else "") or s[:10]
+
+
+def _ticker_match_pair(symbol: str) -> tuple[str, str]:
+    """Две формы для WHERE: как в JSONL и без ведущего '^'."""
+    s = _norm_symbol(symbol)
+    a = s[:10]
+    b = s.lstrip("^")[:10]
+    return (a, b if b != a else a)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Import news JSONL into knowledge_base with dedup")
     ap.add_argument("--in", dest="in_path", required=True, help="Путь к JSONL (1 строка = 1 JSON объект)")
@@ -183,8 +197,12 @@ def main() -> None:
           (
             :link IS NOT NULL
             AND length(trim(:link)) > 0
-            AND ticker = :ticker
             AND link = :link
+            AND (
+              ticker = :ticker_a
+              OR ticker = :ticker_b
+              OR (symbol IS NOT NULL AND BTRIM(symbol) = BTRIM(:symbol))
+            )
           )
         """
     )
@@ -226,9 +244,12 @@ def main() -> None:
                 content_sha = _sha256_hex(content)
                 source = str(_pick_first(item, ("source", "provider", "site")) or args.source or "NYSETickerNews").strip()[:120]
 
+                legacy_ticker = _legacy_ticker_for_kb(symbol) or symbol[:10]
+                ta, tb = _ticker_match_pair(symbol)
+
                 params = {
                     "ts": ts,
-                    "ticker": symbol[:10],  # legacy
+                    "ticker": legacy_ticker,
                     "source": source,
                     "content": content,
                     "event_type": str(args.event_type or "NEWS")[:32],
@@ -239,6 +260,8 @@ def main() -> None:
                     "external_id": ext[:512],
                     "content_sha256": content_sha,
                     "raw_payload": json.dumps(item, ensure_ascii=False),
+                    "ticker_a": ta,
+                    "ticker_b": tb,
                 }
                 if args.dry_run:
                     inserted += 1
