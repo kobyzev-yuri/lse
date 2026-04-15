@@ -12,7 +12,7 @@
   - source / provider / site
   - title / summary / content / body / text
   - url / link
-  - external_id (если нет — генерируем детерминированно из (exchange, symbol, url, title))
+  - external_id (если нет или это «slug» провайдера yfinance/newsapi — подменяем на SHA-256 от (exchange, symbol, url, title))
   - raw_payload (если нет — кладём исходный dict)
 
 Вставка: INSERT ... ON CONFLICT DO NOTHING (по unique index external_id или (ticker, link), если применены миграции knowledge_pg/010).
@@ -102,6 +102,32 @@ def _external_id(exchange: str, symbol: str, link: str, title: str) -> str:
     return _sha256_hex(base)
 
 
+# Yahoo/NewsAPI кладут в «id» не статью, а имя провайдера — у всех строк одинаково → ломает UNIQUE(external_id).
+_PROVIDER_SLUG_EXTERNAL_IDS = frozenset(
+    {
+        "yfinance",
+        "yahoo",
+        "newsapi",
+        "news_api",
+        "finnhub",
+        "alphavantage",
+        "alpha_vantage",
+        "marketaux",
+        "investing",
+        "rss",
+        "polygon",
+    }
+)
+
+
+def _resolved_external_id(raw: str, exchange: str, symbol: str, link: str, title: str) -> str:
+    r = (raw or "").strip()
+    rl = r.lower()
+    if not r or rl in _PROVIDER_SLUG_EXTERNAL_IDS or len(r) < 24:
+        return _external_id(exchange, symbol, link, title)
+    return r[:512]
+
+
 def _legacy_ticker_for_kb(symbol: str) -> str:
     """Колонка knowledge_base.ticker VARCHAR(10): в фидах часто без '^', в Yahoo — '^VIX'."""
     s = _norm_symbol(symbol)
@@ -188,21 +214,13 @@ def main() -> None:
           content_sha256 = COALESCE(NULLIF(BTRIM(content_sha256), ''), :content_sha256),
           {_raw_set}
         WHERE
-          (
-            :external_id IS NOT NULL
-            AND length(trim(:external_id)) > 0
-            AND external_id = :external_id
-          )
-          OR
-          (
-            :link IS NOT NULL
-            AND length(trim(:link)) > 0
-            AND link = :link
-            AND (
-              ticker = :ticker_a
-              OR ticker = :ticker_b
-              OR (symbol IS NOT NULL AND BTRIM(symbol) = BTRIM(:symbol))
-            )
+          :link IS NOT NULL
+          AND length(trim(:link)) > 0
+          AND link = :link
+          AND (
+            ticker = :ticker_a
+            OR ticker = :ticker_b
+            OR (symbol IS NOT NULL AND BTRIM(symbol) = BTRIM(:symbol))
           )
         """
     )
@@ -233,9 +251,8 @@ def main() -> None:
                 exchange = str(_pick_first(item, ("exchange",)) or args.exchange or "NYSE").strip().upper()[:16]
                 link = str(_pick_first(item, ("url", "link")) or "").strip()[:2000]
                 title = str(_pick_first(item, ("title", "headline")) or "").strip()
-                ext = str(_pick_first(item, ("external_id", "id", "provider_id")) or "").strip()
-                if not ext:
-                    ext = _external_id(exchange, symbol, link, title)
+                raw_ext = str(_pick_first(item, ("external_id", "id", "provider_id")) or "").strip()
+                ext = _resolved_external_id(raw_ext, exchange, symbol, link, title)
 
                 content = _build_content(item)[:8000]
                 if not content:
