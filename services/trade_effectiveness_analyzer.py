@@ -4,8 +4,10 @@ import json
 import math
 import os
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -149,6 +151,10 @@ ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
             "GAME_5M_SESSION_END_MIN_PROFIT_PCT",
             "GAME_5M_EXIT_ONLY_TAKE",
             "GAME_5M_EARLY_DERISK_*",
+            "GAME_5M_ALLOW_PYRAMID_BUY",
+            "GAME_5M_SOFT_TAKE_NEAR_HIGH_ENABLED",
+            "GAME_5M_SOFT_TAKE_NEAR_HIGH_MIN_PCT",
+            "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT",
         ],
         "note_on_meta_take": (
             "В report.meta.current_decision_rule_params.exit_strategy числа take_profit_pct_effective / stop_loss_pct_effective "
@@ -163,6 +169,92 @@ ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
         ),
     },
 }
+
+
+def _analyzer_state_path() -> Path:
+    """
+    Куда писать «память» анализатора о последних параметрах.
+    По умолчанию — local/analyzer_state.json (внутри repo). Можно переопределить env ANALYZER_STATE_PATH.
+    """
+    raw = (os.environ.get("ANALYZER_STATE_PATH") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    root = Path(__file__).resolve().parent.parent
+    return root / "local" / "analyzer_state.json"
+
+
+def _load_analyzer_state() -> Dict[str, Any]:
+    p = _analyzer_state_path()
+    try:
+        if not p.is_file():
+            return {}
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_analyzer_state(state: Dict[str, Any]) -> None:
+    p = _analyzer_state_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        # Не валим API из‑за невозможности сохранить «память» (read-only FS, sandbox, etc.)
+        return
+
+
+def _extract_game5m_config_snapshot(current_rules: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = current_rules.get("config") if isinstance(current_rules.get("config"), dict) else {}
+    exit_s = current_rules.get("exit_strategy") if isinstance(current_rules.get("exit_strategy"), dict) else {}
+    return {
+        "rule_version": current_rules.get("rule_version"),
+        "signal_cron_minutes": current_rules.get("signal_cron_minutes"),
+        "config": dict(cfg) if isinstance(cfg, dict) else {},
+        "exit_strategy": {
+            k: exit_s.get(k)
+            for k in (
+                "max_position_minutes",
+                "stop_loss_enabled",
+                "stop_loss_pct_effective",
+                "take_profit_pct_effective",
+                "GAME_5M_TAKE_MOMENTUM_FACTOR",
+                "GAME_5M_EXIT_ONLY_TAKE",
+                "GAME_5M_SESSION_END_EXIT_MINUTES",
+                "GAME_5M_SESSION_END_MIN_PROFIT_PCT",
+                "GAME_5M_EARLY_DERISK_ENABLED",
+                "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES",
+                "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT",
+                "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW",
+                "GAME_5M_ALLOW_PYRAMID_BUY",
+                "GAME_5M_SOFT_TAKE_NEAR_HIGH_ENABLED",
+                "GAME_5M_SOFT_TAKE_NEAR_HIGH_MIN_PCT",
+                "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT",
+            )
+        },
+    }
+
+
+def _diff_flat_config(prev: Dict[str, Any], cur: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Плоский diff по ключам GAME_5M_* в meta: что изменилось со времени прошлого прогона анализатора."""
+    out: List[Dict[str, Any]] = []
+    p_cfg = prev.get("config") if isinstance(prev.get("config"), dict) else {}
+    c_cfg = cur.get("config") if isinstance(cur.get("config"), dict) else {}
+    keys = sorted(set([*p_cfg.keys(), *c_cfg.keys()]))
+    for k in keys:
+        pv = p_cfg.get(k)
+        cv = c_cfg.get(k)
+        if pv != cv:
+            out.append({"env_key": k, "prev": pv, "current": cv})
+    p_ex = prev.get("exit_strategy") if isinstance(prev.get("exit_strategy"), dict) else {}
+    c_ex = cur.get("exit_strategy") if isinstance(cur.get("exit_strategy"), dict) else {}
+    keys2 = sorted(set([*p_ex.keys(), *c_ex.keys()]))
+    for k in keys2:
+        pv = p_ex.get(k)
+        cv = c_ex.get(k)
+        if pv != cv:
+            out.append({"env_key": f"exit_strategy.{k}", "prev": pv, "current": cv})
+    return out
 
 
 @dataclass
@@ -1618,6 +1710,12 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
                 "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES": _cfg_int("GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES", "180"),
                 "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT": _cfg_float("GAME_5M_EARLY_DERISK_MAX_LOSS_PCT", "-2.0"),
                 "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW": _cfg_float("GAME_5M_EARLY_DERISK_MOMENTUM_BELOW", "0.0"),
+                "GAME_5M_ALLOW_PYRAMID_BUY": _cfg_bool("GAME_5M_ALLOW_PYRAMID_BUY", "false"),
+                "GAME_5M_SOFT_TAKE_NEAR_HIGH_ENABLED": _cfg_bool("GAME_5M_SOFT_TAKE_NEAR_HIGH_ENABLED", "true"),
+                "GAME_5M_SOFT_TAKE_NEAR_HIGH_MIN_PCT": _cfg_float("GAME_5M_SOFT_TAKE_NEAR_HIGH_MIN_PCT", "2.0"),
+                "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT": _cfg_float(
+                    "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT", "0.35"
+                ),
             },
         }
     except Exception:
@@ -1650,6 +1748,12 @@ def analyze_trade_effectiveness(
     summary = _aggregate(effects)
     tops = _top_cases(effects)
     current_rules = _get_current_decision_rule_params()
+    prev_state = _load_analyzer_state()
+    cur_snap = _extract_game5m_config_snapshot(current_rules)
+    prev_snap = None
+    if isinstance(prev_state.get("last_run"), dict):
+        ps = prev_state["last_run"].get("game_5m_config_snapshot")
+        prev_snap = ps if isinstance(ps, dict) else None
     practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
     critical_cases = _build_critical_case_analysis(effects, limit=5)
     game_5m_config_hints = _build_game5m_config_hints(effects, summary)
@@ -1663,6 +1767,12 @@ def analyze_trade_effectiveness(
             "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness",
             "decision_source_expected": "services.recommend_5m.get_decision_5m",
             "current_decision_rule_params": current_rules,
+            "previous_run_at_utc": prev_state.get("last_run", {}).get("at_utc")
+            if isinstance(prev_state.get("last_run"), dict)
+            else None,
+            "current_game_5m_config_snapshot": cur_snap,
+            "previous_game_5m_config_snapshot": prev_snap,
+            "config_delta_from_previous": _diff_flat_config(prev_snap, cur_snap) if prev_snap else [],
             "long_hold_ge_7d_minutes": LONG_HOLD_MINUTES,
             "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
         },
@@ -1678,6 +1788,16 @@ def analyze_trade_effectiveness(
     if use_llm:
         payload["llm"] = _build_llm_recommendations(payload)
     payload["auto_config_override"] = _build_auto_config_override(payload)
+    _save_analyzer_state(
+        {
+            "last_run": {
+                "at_utc": datetime.now(timezone.utc).isoformat(),
+                "days": days,
+                "strategy": strategy,
+                "game_5m_config_snapshot": cur_snap,
+            }
+        }
+    )
     return payload
 
 
