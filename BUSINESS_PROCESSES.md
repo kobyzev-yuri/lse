@@ -497,6 +497,57 @@ sequenceDiagram
 
 **Комментарий**: Расчет PnL использует модель средневзвешенной цены входа (FIFO-подобный подход). Это позволяет корректно рассчитывать прибыль/убыток даже при частичном закрытии позиций.
 
+### 7.3. Анализатор эффективности сделок и автотюнинг (dataflow по времени)
+
+Ниже — бизнес-процесс анализатора как **временной цикл**: торговля → пост‑анализ → (опционально) применение параметров → ожидание эффекта → повтор.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Cron5m as send_sndk_signal_cron (*/N min)
+    participant DB as PostgreSQL (trade_history)
+    participant Analyzer as /api/analyzer (trade_effectiveness_analyzer)
+    participant Snapshot as snapshot_analyzer_report.py (опц.)
+    participant Tune as apply-config / analyzer_tune_apply.py
+    participant Autotune as analyzer_autotune.py (v0, опц.)
+    participant Restart as Restart (RESTART_CMD / manual)
+
+    Note over Cron5m,DB: Шаг 0 (в течение дня): сделки + context_json на входе/выходе
+    Cron5m->>DB: INSERT BUY/SELL (strategy_name=GAME_5M)\n+ context_json (entry/exit snapshot)
+
+    Note over Analyzer,DB: Шаг 1 (раз в день / по запросу): пост‑анализ окна 1–30 дней
+    Analyzer->>DB: load closed trades (days, strategy)
+    Analyzer->>Analyzer: fetch 5m OHLC per trade window\ncompute missed_upside/avoidable_loss\naggregate summary + top_cases
+    Analyzer-->>Analyzer: auto_config_override (whitelisted GAME_5M_*)\n(optional llm)
+
+    alt Снимок отчёта (рекомендуется)
+        Snapshot->>Analyzer: GET /api/analyzer (HTTP)\nили локальный импорт
+        Snapshot-->>Snapshot: write analyzer_*.json + latest.json
+    end
+
+    alt Ручной тюнинг (1 шаг)
+        Tune->>DB: (опц.) ничего, только читает JSON
+        Tune->>Tune: выбрать 1 update из auto_config_override
+        Tune->>Tune: update_config_key(key=value) → config.env
+        Tune->>Restart: restart service
+    end
+
+    alt Автотюнинг v0 (эволюционный, опц.)
+        Autotune->>Analyzer: GET /api/analyzer (HTTP) или latest.json
+        Autotune->>Autotune: pick 1 candidate by guardrails\npersist pending baseline in autotune_state.json
+        Autotune->>Tune: (если ANALYZER_AUTOTUNE_APPLY=1) update_config_key → config.env
+        Autotune->>Restart: restart service (v0: вручную/RESTART_CMD)
+        Note over Autotune: Следующие запуски: наблюдение пока\nнаберётся ANALYZER_AUTOTUNE_MIN_TRADES новых сделок
+    end
+
+    Note over Analyzer: Шаг 6–7: повторный прогон → сравнение с прошлым snapshot\n(meta.previous_game_5m_config_snapshot + config_delta)
+```
+
+**Комментарий**:
+- Анализатор — **постфактум** контур: он не “торгует”, а делает диагностику и предлагает изменения `GAME_5M_*`.
+- Применять изменения рекомендуется **по одному** (чтобы понимать причинность) и сравнивать эффект на следующем окне.
+- Для воспроизводимости анализатор возвращает текущие параметры в `meta.current_decision_rule_params` и “память” о прошлом прогоне (если включено).
+
 ---
 
 ## 8. Векторная база знаний
