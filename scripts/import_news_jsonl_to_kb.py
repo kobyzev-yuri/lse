@@ -119,6 +119,7 @@ def main() -> None:
 
     engine = create_engine(get_database_url())
     inserted = 0
+    enriched = 0
     skipped = 0
     errors = 0
     processed = 0
@@ -132,6 +133,30 @@ def main() -> None:
           (:ts, :ticker, :source, :content, :event_type, :importance, :link, NOW(),
            :exchange, :symbol, :external_id, :content_sha256, :raw_payload)
         ON CONFLICT DO NOTHING
+        """
+    )
+    sql_enrich = text(
+        """
+        UPDATE knowledge_base
+        SET
+          exchange = COALESCE(exchange, :exchange),
+          symbol = COALESCE(symbol, :symbol),
+          external_id = COALESCE(external_id, :external_id),
+          content_sha256 = COALESCE(content_sha256, :content_sha256),
+          raw_payload = COALESCE(raw_payload, CAST(:raw_payload AS jsonb))
+        WHERE
+          (
+            :external_id IS NOT NULL
+            AND length(trim(:external_id)) > 0
+            AND external_id = :external_id
+          )
+          OR
+          (
+            :link IS NOT NULL
+            AND length(trim(:link)) > 0
+            AND ticker = :ticker
+            AND link = :link
+          )
         """
     )
 
@@ -195,7 +220,16 @@ def main() -> None:
                     if getattr(res, "rowcount", 0) == 1:
                         inserted += 1
                     else:
-                        skipped += 1
+                        # Дубликат по unique (external_id или ticker+link). Обогащаем существующую строку
+                        # новыми полями exchange/symbol/raw_payload, чтобы “NYSE-поток” не терялся.
+                        try:
+                            up = conn.execute(sql_enrich, params)
+                            if getattr(up, "rowcount", 0) > 0:
+                                enriched += int(getattr(up, "rowcount", 0) or 0)
+                            else:
+                                skipped += 1
+                        except Exception:
+                            skipped += 1
                 except Exception:
                     errors += 1
 
@@ -205,6 +239,7 @@ def main() -> None:
                 "file": str(in_path),
                 "processed": processed,
                 "inserted": inserted,
+                "enriched": enriched,
                 "skipped": skipped,
                 "errors": errors,
                 "dry_run": bool(args.dry_run),
