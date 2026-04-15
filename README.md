@@ -59,6 +59,7 @@ python web_app.py                  # http://localhost:8080 (порт в compose 
 | Документ | Содержание |
 |----------|------------|
 | [docs/NEWS.md](docs/NEWS.md) | Источники, пайплайн в `knowledge_base` |
+| [docs/NEWS_SIGNAL_ARCHITECTURE.md](docs/NEWS_SIGNAL_ARCHITECTURE.md) | Целевая архитектура новостного сигнала, dataflow, этапы имплементации |
 | [docs/KNOWLEDGE_BASE_FIELDS.md](docs/KNOWLEDGE_BASE_FIELDS.md) | Поля KB, кроны backfill |
 | [docs/VECTOR_KB_USAGE.md](docs/VECTOR_KB_USAGE.md) | Векторный поиск, embedding |
 

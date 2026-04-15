@@ -2,6 +2,8 @@
 
 Одна таблица **knowledge_base** — все новости/события, опционально `embedding` (векторный поиск) и `outcome_json` (исход события). Источники пишут в неё через cron; backfill embedding и sentiment — отдельными скриптами.
 
+**Целевая архитектура агрегированного новостного сигнала, горизонтов, LLM и политики входа:** [NEWS_SIGNAL_ARCHITECTURE.md](NEWS_SIGNAL_ARCHITECTURE.md).
+
 **Лимиты бесплатных API и фильтрация по тикерам:** см. [docs/NEWS_LIMITS.md](NEWS_LIMITS.md). Конфиг: `KB_INGEST_TRACKED_TICKERS_ONLY` (по умолчанию сохраняем всё входящее от Alpha Vantage / LLM-новостей без отсечения по списку тикеров).
 
 ---

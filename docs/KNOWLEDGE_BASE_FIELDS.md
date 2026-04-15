@@ -1,5 +1,7 @@
 # Поля knowledge_base: назначение и кто заполняет
 
+Сводка по **агрегированному новостному сигналу** поверх KB (план): [NEWS_SIGNAL_ARCHITECTURE.md](NEWS_SIGNAL_ARCHITECTURE.md).
+
 ## Почему embedding и другие поля пустые
 
 Записи в `knowledge_base` создаются **разными процессами в разное время**:

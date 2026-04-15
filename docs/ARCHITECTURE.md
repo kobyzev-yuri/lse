@@ -8,7 +8,7 @@
 
 | Слой | Компоненты | Назначение |
 |------|------------|------------|
-| **Вход данных** | Yahoo / yfinance, RSS, NewsAPI, Alpha Vantage, парсеры | Котировки и новости |
+| **Вход данных** | Yahoo / yfinance, RSS, NewsAPI, Alpha Vantage, парсеры; опц. импорт внешнего JSONL (NYSE) | Котировки и новости |
 | **Ядро** | `execution_agent`, `services/game_5m`, `strategies/*`, `services/recommend_5m` | Решения портфельной игры, игры 5m, рекомендации |
 | **Интеллект** | `services/llm_service`, Analyst path, опционально LLM на входе 5m | Объяснения, `/ask`, при `GAME_5M_ENTRY_STRATEGY=llm` |
 | **Доставка** | `services/telegram_bot.py`, `web_app.py`, `scripts/send_sndk_signal_cron.py`, `trading_cycle_cron.py` | Telegram, веб-карточки 5m, кроны |
@@ -82,6 +82,7 @@ flowchart TB
 | Схема БД | [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) |
 | Игра 5m: сделки, JSON, крон | [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md), [CRONS_AND_TAKE_STOP.md](CRONS_AND_TAKE_STOP.md), [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md) |
 | Новости и KB | [NEWS.md](NEWS.md), [KNOWLEDGE_BASE_FIELDS.md](KNOWLEDGE_BASE_FIELDS.md) |
+| Новостной сигнал (план: этапы A/B, горизонты, кэш бэтчей) | [NEWS_SIGNAL_ARCHITECTURE.md](NEWS_SIGNAL_ARCHITECTURE.md) |
 | Деплой VM / Docker | [DEPLOY_INSTRUCTIONS.md](DEPLOY_INSTRUCTIONS.md), [MIGRATE_SERVER.md](MIGRATE_SERVER.md), [PLATFORM_GAME_DOCKER.md](PLATFORM_GAME_DOCKER.md) |
 | Риски и лимиты | [RISK_MANAGEMENT.md](RISK_MANAGEMENT.md) |
 | Устаревшие материалы | [archive/README.md](archive/README.md) |
