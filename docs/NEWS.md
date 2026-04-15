@@ -8,22 +8,67 @@
 
 ---
 
+## Миграция новостей в LSE (расширенная `knowledge_base`, NYSE-style тикерные ленты)
+
+Цель: привести запись в **`knowledge_base`** к одной расширенной схеме (миграция `db/knowledge_pg/sql/010_knowledge_base_nyse.sql`): `exchange`, `symbol`, `external_id`, `content_sha256`, `raw_payload`, плюс дедуп по `external_id` там, где он стабилен.
+
+### Что уже сделано в коде
+
+| Область | Изменение |
+|---------|-----------|
+| **Экономический календарь Investing.com** | `save_events_to_db` пишет расширенные поля; дедуп через `INSERT … ON CONFLICT DO NOTHING` по `external_id` (детерминированный ключ). См. `services/kb_extended_fields.py`, `services/investing_calendar_parser.py`. |
+| **Тикерные новости (как в NYSE `news_merge`)** | Модуль `services/ticker_news_merge_fetcher.py`: **Yahoo** (`yfinance.get_news`) + опционально **Marketaux** при `MARKETAUX_API_KEY`; merge/dedup; вставка с `external_id` / `content_sha256` / `raw_payload`. |
+| **Оркестратор** | `scripts/fetch_news_cron.py`: режимы `--mode tickers` (только TickerNews), `core` и `all` включают TickerNews; `core-fast` — по-прежнему RSS + Alpha Vantage **без** TickerNews. |
+| **Ключи и конфиг** | Имена `NEWSAPI_KEY`, `ALPHAVANTAGE_KEY`, `MARKETAUX_API_KEY` согласованы с NYSE; опционально `NYSE_CONFIG_PATH` подмешивает пустые ключи из `nyse/config.env` (`config_loader.py`). Шпаргалка — в `config.env.example` (блок «News: источники…»). |
+| **Диагностика** | `scripts/check_news_sources.py` показывает наличие ключа Marketaux и `NYSE_CONFIG_PATH`. |
+
+Импорт NYSE→LSE по JSONL по-прежнему: `nyse/scripts/export_news_jsonl.py` → `scripts/import_news_jsonl_to_kb.py` (отдельный путь, не заменяет cron LSE).
+
+### Развёртывание на сервере (осторожно, вне игровых окон)
+
+1. **Не обязательно менять cron в тот же день**, что и релиз кода: новый функционал не ломает старые режимы, пока вы не добавите задачи.
+2. **Проверка вручную:** `python scripts/fetch_news_cron.py --mode tickers` (в Docker: `docker compose exec <container> python scripts/fetch_news_cron.py --mode tickers`). Убедиться по `logs/news_fetch.log` и выборке из `knowledge_base`.
+3. **Cron:** типичный безопасный шаг — **добавить** отдельную строку с `--mode tickers` и **отдельным** `flock`-локом, не заменяя сразу `core-fast`. Не подменять `core-fast` на `core` без анализа: в `core` входит NewsAPI, и он может **дублировать** уже существующую задачу `--mode newsapi` по лимитам API.
+4. **Ключи:** `MARKETAUX_API_KEY` можно продублировать в `lse/config.env` на сервере или использовать `NYSE_CONFIG_PATH`.
+
+### Дальше (отдельная итерация)
+
+- Вынести общее ядро merge/dedup/`external_id` для репозиториев NYSE и LSE.
+- Поэтапно привести остальные fetchers (NewsAPI, RSS, Investing news) к той же схеме полей, где ещё не заполнены `raw_payload` / `external_id`.
+
+---
+
 ## 1. Источники
 
 | Источник | Реализовано | Работает | Ограничения |
 |----------|-------------|----------|-------------|
 | **RSS ЦБ** (Fed, BoE, ECB, BoJ) | Да | Да | — |
+| **Yahoo + Marketaux** (тикерные, merge) | Да | Да | Yahoo без ключа; Marketaux — по `MARKETAUX_API_KEY` (дополнение к Yahoo, не замена). См. `TICKER_NEWS_*`, режим cron `--mode tickers` / в `core`/`all`. |
 | **Investing.com Economic Calendar** | Да | Да | Страница может подгружать данные через JS |
 | **Investing.com News** | Да | Да | Лента stock-market-news; тикеры из TICKERS_FAST, ключевые слова встроенные + опционально из конфига (см. ниже) |
 | **NewsAPI** | Да | Да (ключ) | ~100 запросов/день (каждая страница /everything = отдельный запрос) |
 | **Alpha Vantage** (Earnings + News Sentiment) | Да | Да (ключ) | ~25 запросов/день |
 | **Alpha Vantage** (Economic) | Код есть | Нет | В cron выключено; free tier часто пусто |
-**Запуск сбора:** `python scripts/fetch_news_cron.py`. Рекомендуется в cron **каждые 15 минут** (`*/15 * * * *`), чтобы подтягивать новости за весь день с утра. В `config.env`: при необходимости `ALPHAVANTAGE_KEY`, `NEWSAPI_KEY`; опционально `INVESTING_NEWS_TICKER_KEYWORDS` (см. ниже).
+
+### 1.0. Ключи и имена (LSE и NYSE)
+
+Чтобы не плодить расхождения с репозиторием **NYSE**, в LSE используются **те же имена переменных**, где это возможно:
+
+| Переменная | Назначение |
+|------------|------------|
+| `NEWSAPI_KEY` | NewsAPI.org (и в NYSE, и в LSE) |
+| `ALPHAVANTAGE_KEY` | Alpha Vantage (в коде LSE также читается `ALPHAVANTAGE_API_KEY`) |
+| `MARKETAUX_API_KEY` | Marketaux (слой TickerNews в LSE; в NYSE — в merged news) |
+| `NYSE_CONFIG_PATH` | Опционально: путь к `nyse/config.env` — в LSE подмешиваются **только пустые** ключи (не дублировать секреты в двух файлах) |
+
+Полный список и тюнинг по префиксам (`NEWSAPI_*`, `INVESTING_NEWS_*`, `TICKER_NEWS_*`, …) — в **`config.env.example`** (блок «News: источники…»).
+
+**Запуск сбора:** `python scripts/fetch_news_cron.py`. Рекомендуется в cron **каждые 15 минут** (`*/15 * * * *`), чтобы подтягивать новости за весь день с утра. В `config.env`: при необходимости `ALPHAVANTAGE_KEY`, `NEWSAPI_KEY`, `MARKETAUX_API_KEY`; опционально `INVESTING_NEWS_TICKER_KEYWORDS` (см. ниже).
 
 **Проверка:**  
 `SELECT source, COUNT(*), MIN(ts), MAX(ts) FROM knowledge_base GROUP BY source ORDER BY 2 DESC;`
 
-### 1.0. Как обеспечить поступление новостей
+### 1.1. Как обеспечить поступление новостей
 
 1. **Cron** — запуск `fetch_news_cron.py` каждые 15 минут: `*/15 * * * * ... fetch_news_cron.py` (в `setup_cron.sh` / `setup_cron_docker.sh` уже так).
 2. **Лог** — в конце каждого запуска в `logs/news_fetch.log` появляется строка **«За этот запуск всего сохранено новых записей: N»** и по каждому источнику: «RSS: сохранено X новых, дубликатов Y», «NewsAPI: сохранено Z новых» и т.д. Если всегда 0 — см. п. 3–4.
@@ -36,7 +81,7 @@
 
 **Investing.com Read timeout:** при медленном ответе сайта увеличьте `INVESTING_NEWS_TIMEOUT` (сек); при таймауте лента запрашивается повторно один раз.
 
-### 1.1. Investing.com News — как реализовано
+### 1.2. Investing.com News — как реализовано
 
 - **Тикеры:** только из **TICKERS_FAST** (config.env). Других источников тикеров для этого модуля нет.
 
@@ -76,8 +121,8 @@
 
 | Скрипт | Назначение |
 |--------|------------|
-| `scripts/fetch_news_cron.py` | Сбор из RSS, Investing.com (календарь + лента новостей), NewsAPI, Alpha Vantage. |
-| `scripts/check_news_sources.py` | Диагностика: число записей в БД, один прогон RSS, наличие NEWSAPI_KEY/ALPHAVANTAGE_KEY. Запуск при «новостей нет». |
+| `scripts/fetch_news_cron.py` | Сбор из RSS, Investing.com (календарь + лента), NewsAPI, Alpha Vantage, TickerNews (Yahoo + Marketaux в режимах `core`/`all`/`tickers`). |
+| `scripts/check_news_sources.py` | Диагностика: число записей в БД, один прогон RSS, наличие ключей NEWSAPI / Alpha Vantage / Marketaux. Запуск при «новостей нет». |
 | `scripts/add_manual_news.py` | Разовая вставка новости в knowledge_base: `python scripts/add_manual_news.py "Заголовок или текст" "https://..." [SNDK]`. Полезно для важной breaking news, которая ещё не попала в автоматический сбор. |
 | `scripts/sync_vector_kb_cron.py` | Backfill `embedding` для записей с `embedding IS NULL`. |
 | `scripts/add_sentiment_to_news_cron.py` | LLM: заполнение `sentiment_score` и `insight` для новостей без sentiment. |
@@ -86,7 +131,7 @@
 | `scripts/cron_watchdog.py` | Сканирует логи cron (последние 500 строк каждого) на строки с ERROR, Exception, Traceback, failed и т.п. и пишет находки в `logs/cron_watchdog.log`. При `CRON_WATCHDOG_TELEGRAM=true` или `--telegram` при находках отправляет уведомление в Telegram (TELEGRAM_SIGNAL_CHAT_IDS). В cron: каждый час в :45. |
 | `scripts/cleanup_manual_duplicates.py` | Удаление записей с `source='MANUAL'`, дублирующих другую запись по (ts, ticker, content). `--dry-run` затем `--execute`. |
 
-Модули: `services/rss_news_fetcher.py`, `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`, `services/investing_news_fetcher.py` (лента Investing.com News, тикеры из TICKERS_FAST и встроенные ключевые слова).
+Модули: `services/rss_news_fetcher.py`, `services/ticker_news_merge_fetcher.py` (Yahoo + Marketaux), `services/newsapi_fetcher.py`, `services/alphavantage_fetcher.py`, `services/investing_calendar_parser.py`, `services/investing_news_fetcher.py` (лента Investing.com News, тикеры из TICKERS_FAST и встроенные ключевые слова).
 
 ---
 

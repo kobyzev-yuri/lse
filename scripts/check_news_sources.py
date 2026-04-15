@@ -90,6 +90,11 @@ def main():
         print(f"   (проверка cooldown: {e})")
     av_key = get_config_value("ALPHAVANTAGE_KEY", "") or get_config_value("ALPHAVANTAGE_API_KEY", "")
     print(f"📊 Alpha Vantage: ключ {'задан' if av_key else 'не задан'}")
+    mx_key = get_config_value("MARKETAUX_API_KEY", "")
+    print(f"🧩 Marketaux: ключ {'задан' if mx_key else 'не задан'} (TickerNews Yahoo+merge; см. TICKER_NEWS_* в config.env.example)")
+    nyse_cfg = (get_config_value("NYSE_CONFIG_PATH", "") or "").strip()
+    if nyse_cfg:
+        print(f"📎 NYSE_CONFIG_PATH={nyse_cfg} (LSE подмешивает отсутствующие ключи из этого файла)")
 
     # 3. Один прогон RSS (без ключей)
     print("\n📡 Запуск RSS фидов (один раз)...")

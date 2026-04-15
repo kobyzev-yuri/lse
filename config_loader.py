@@ -1,6 +1,8 @@
 """
 Универсальный загрузчик конфигурации для LSE Trading System
 Использует локальный config.env или fallback к ../brats/config.env.
+Опционально подмешивает ключи из NYSE_CONFIG_PATH (тот же env, что в репозитории nyse) —
+пустые/отсутствующие в LSE заполняются из nyse/config.env (например MARKETAUX_API_KEY).
 Если файла нет (например Cloud Run) — возвращает пустой dict, значения берутся из переменных окружения.
 """
 
@@ -20,6 +22,7 @@ CONFIG_ENV_WEB_BLOCKLIST = frozenset(
         "OPENAI_API_KEY",
         "OPENAI_GPT_KEY",
         "NEWSAPI_KEY",
+        "MARKETAUX_API_KEY",
         "ALPHAVANTAGE_KEY",
         "GEMINI_API_KEY",
         "TELEGRAM_BOT_TOKEN",
@@ -188,6 +191,52 @@ def update_config_key(key: str, value: str) -> bool:
         return False
 
 
+def _parse_env_file(path: Path) -> Dict[str, str]:
+    """Парсит KEY=value; кавычки у значения снимаем (совместимость с nyse/config.env)."""
+    out: Dict[str, str] = {}
+    if not path.is_file():
+        return out
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("Не прочитать config overlay %s: %s", path, e)
+        return out
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        key, value = s.split("=", 1)
+        k = key.strip()
+        v = value.strip().strip('"').strip("'")
+        if k:
+            out[k] = v
+    return out
+
+
+def _merge_nyse_config_overlay(config: Dict[str, str]) -> Dict[str, str]:
+    """
+    Подмешать nyse/config.env по NYSE_CONFIG_PATH: только ключи, которых нет в LSE или они пустые.
+    Совпадает по смыслу с nyse config_loader.load_config_env (не перетирает уже заданное).
+    """
+    raw = (os.environ.get("NYSE_CONFIG_PATH") or "").strip()
+    if not raw:
+        return config
+    overlay_path = Path(raw).expanduser()
+    if not overlay_path.is_file():
+        logger.debug("NYSE_CONFIG_PATH не файл или не найден: %s", overlay_path)
+        return config
+    overlay = _parse_env_file(overlay_path)
+    if not overlay:
+        return config
+    for k, v in overlay.items():
+        if not v:
+            continue
+        cur = (config.get(k) or "").strip()
+        if not cur:
+            config[k] = v
+    return config
+
+
 def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
     """
     Загружает конфигурацию из config.env
@@ -198,6 +247,7 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
     Returns:
         dict с параметрами конфигурации. Если файл не найден — пустой dict (для Cloud Run: только env).
     """
+    config: Dict[str, str] = {}
     if config_file is None:
         local_config = Path(__file__).parent / "config.env"
         if local_config.exists():
@@ -207,30 +257,31 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
             if brats_config.exists():
                 config_file = str(brats_config)
             else:
-                logger.debug("config.env не найден, конфиг только из переменных окружения")
-                return {}
+                config_file = None
 
-    config_path = Path(config_file)
-    if not config_path.exists():
-        logger.debug("config.env не найден: %s", config_path)
-        return {}
-    if config_path.is_dir():
-        # Docker: если на хосте не было файла, bind-mount мог создать каталог «config.env» — open() падал бы с IsADirectoryError.
-        logger.error(
-            "config.env существует как каталог, а не файл (%s). Удалите каталог на хосте, "
-            "создайте файл config.env (см. config.env.example). Иначе конфиг только из переменных окружения.",
-            config_path,
-        )
-        return {}
+    if config_file:
+        config_path = Path(config_file)
+        if not config_path.exists():
+            logger.debug("config.env не найден: %s", config_path)
+        elif config_path.is_dir():
+            # Docker: если на хосте не было файла, bind-mount мог создать каталог «config.env» — open() падал бы с IsADirectoryError.
+            logger.error(
+                "config.env существует как каталог, а не файл (%s). Удалите каталог на хосте, "
+                "создайте файл config.env (см. config.env.example). Иначе конфиг только из переменных окружения.",
+                config_path,
+            )
+        else:
+            with open(config_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
+                        config[key.strip()] = value.strip()
 
-    config = {}
-    with open(config_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, value = line.split("=", 1)
-                config[key.strip()] = value.strip()
-    return config
+    if not config:
+        logger.debug("Базовый config.env не загружен или пуст — возможен только env и NYSE_CONFIG_PATH")
+
+    return _merge_nyse_config_overlay(config)
 
 
 def get_database_url(config: Optional[Dict[str, str]] = None) -> str:

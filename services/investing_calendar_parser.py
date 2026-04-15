@@ -29,6 +29,11 @@ import time
 
 from config_loader import get_database_url
 from services.http_outbound import outbound_session
+from services.kb_extended_fields import (
+    investing_calendar_external_id,
+    investing_calendar_raw_payload,
+    kb_content_sha256,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -362,36 +367,28 @@ def save_events_to_db(events: List[Dict]):
                     skipped_noise += 1
                     continue
                 
-                # Определяем ticker
+                # Определяем ticker / symbol (макро: US_MACRO vs MACRO)
                 ticker = 'US_MACRO' if event['region'] == 'USA' else 'MACRO'
-                
-                # Проверяем дубликаты (по событию, дате и региону)
-                existing = conn.execute(
+                symbol = ticker
+                ext_id = investing_calendar_external_id(
+                    event["region"],
+                    event["event_date"],
+                    event.get("event") or "",
+                    event["event_type"],
+                )
+                content_sha = kb_content_sha256(content)
+                raw_json = investing_calendar_raw_payload(event)
+
+                # Вставка с расширенной схемой; дедуп по partial UNIQUE(external_id)
+                result = conn.execute(
                     text("""
-                        SELECT id FROM knowledge_base 
-                        WHERE event_type = :event_type
-                        AND region = :region
-                        AND DATE(ts) = DATE(:event_date)
-                        AND content LIKE :event_name
-                    """),
-                    {
-                        "event_type": event['event_type'],
-                        "region": event['region'],
-                        "event_date": event['event_date'],
-                        "event_name": f"%{event['event'][:50]}%"
-                    }
-                ).fetchone()
-                
-                if existing:
-                    skipped_count += 1
-                    continue
-                
-                # Вставляем событие
-                conn.execute(
-                    text("""
-                        INSERT INTO knowledge_base 
-                        (ts, ticker, source, content, event_type, region, importance)
-                        VALUES (:ts, :ticker, :source, :content, :event_type, :region, :importance)
+                        INSERT INTO knowledge_base
+                        (ts, ticker, source, content, event_type, region, importance, link, ingested_at,
+                         exchange, symbol, external_id, content_sha256, raw_payload)
+                        VALUES
+                        (:ts, :ticker, :source, :content, :event_type, :region, :importance, NULL, NOW(),
+                         NULL, :symbol, :external_id, :content_sha256, CAST(:raw_payload AS jsonb))
+                        ON CONFLICT DO NOTHING
                     """),
                     {
                         "ts": event['event_date'],
@@ -400,10 +397,17 @@ def save_events_to_db(events: List[Dict]):
                         "content": content,
                         "event_type": event['event_type'],
                         "region": event['region'],
-                        "importance": event['importance']
-                    }
+                        "importance": event['importance'],
+                        "symbol": symbol,
+                        "external_id": ext_id[:512],
+                        "content_sha256": content_sha,
+                        "raw_payload": raw_json,
+                    },
                 )
-                saved_count += 1
+                if result.rowcount and result.rowcount > 0:
+                    saved_count += 1
+                else:
+                    skipped_count += 1
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при сохранении события: {e}")

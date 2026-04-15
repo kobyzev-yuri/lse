@@ -20,6 +20,7 @@ from services.rss_news_fetcher import fetch_and_save_rss_news
 from services.investing_calendar_parser import fetch_and_save_investing_calendar
 from services.alphavantage_fetcher import fetch_all_alphavantage_data
 from services.newsapi_fetcher import fetch_and_save_newsapi_news
+from services.ticker_news_merge_fetcher import fetch_and_save_ticker_news
 
 # Настройка логирования (если /app/logs смонтирован :ro — пишем только в stderr)
 log_dir = project_root / 'logs'
@@ -48,17 +49,19 @@ def fetch_all_news_sources(mode: str = "all"):
     logger.info("=" * 60)
     
     mode = (mode or "all").strip().lower()
-    if mode not in ("all", "core", "core-fast", "newsapi", "investing"):
+    if mode not in ("all", "core", "core-fast", "newsapi", "investing", "tickers"):
         mode = "all"
 
     sources_status = {}
     rss_saved, rss_skipped = 0, 0
     newsapi_saved = 0
     n_investing = 0
+    ticker_news_saved = 0
 
     run_investing = mode in ("all", "investing")
     run_core_fast = mode in ("all", "core", "core-fast")
     run_newsapi = mode in ("all", "core", "newsapi")
+    run_tickers = mode in ("all", "core", "tickers")
 
     if run_core_fast:
         # 1. RSS фиды центральных банков (всегда работает, бесплатно)
@@ -112,6 +115,17 @@ def fetch_all_news_sources(mode: str = "all"):
             logger.error("❌ Ошибка NewsAPI: %s", e)
             sources_status['NewsAPI'] = f'❌ Ошибка: {e}'
 
+    if run_tickers:
+        try:
+            logger.info("\n🗞️ Источник tickers 1/1: Yahoo + Marketaux merge")
+            ticker_news_saved = fetch_and_save_ticker_news() or 0
+            sources_status["TickerNews"] = (
+                f"✅ сохранено {ticker_news_saved} новых" if ticker_news_saved else "✅ 0 новых"
+            )
+        except Exception as e:
+            logger.error("❌ Ошибка ticker news: %s", e)
+            sources_status["TickerNews"] = f"❌ Ошибка: {e}"
+
     if run_investing:
         # 4. Investing.com Economic Calendar (web scraping)
         try:
@@ -139,7 +153,7 @@ def fetch_all_news_sources(mode: str = "all"):
             sources_status['Investing.com News'] = f'❌ Ошибка: {e}'
 
     # Итоговый отчет
-    total_new = rss_saved + newsapi_saved + n_investing
+    total_new = rss_saved + newsapi_saved + n_investing + ticker_news_saved
     logger.info("\n" + "=" * 60)
     logger.info("📊 Итоговый статус источников:")
     for source, status in sources_status.items():
@@ -153,9 +167,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fetch news from sources")
     parser.add_argument(
         "--mode",
-        choices=("all", "core", "core-fast", "newsapi", "investing"),
+        choices=("all", "core", "core-fast", "newsapi", "investing", "tickers"),
         default="all",
-        help="all=все источники, core=RSS+AlphaVantage+NewsAPI, core-fast=RSS+AlphaVantage, newsapi=только NewsAPI, investing=только Investing",
+        help="all=все источники, core=RSS+AlphaVantage+NewsAPI+TickerNews, core-fast=RSS+AlphaVantage, newsapi=только NewsAPI, investing=только Investing, tickers=Yahoo+Marketaux merge",
     )
     args = parser.parse_args()
     try:
