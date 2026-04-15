@@ -128,6 +128,13 @@ def _resolved_external_id(raw: str, exchange: str, symbol: str, link: str, title
     return r[:512]
 
 
+def _raw_payload_json_str(item: Dict[str, Any], merge_nyse_jsonl: bool) -> str:
+    """Один формат с UPDATE: при merge кладём статью под ключ nyse_jsonl (удобно для raw_payload ? 'nyse_jsonl')."""
+    if merge_nyse_jsonl:
+        return json.dumps({"nyse_jsonl": item}, ensure_ascii=False)
+    return json.dumps(item, ensure_ascii=False)
+
+
 def _legacy_ticker_for_kb(symbol: str) -> str:
     """Колонка knowledge_base.ticker VARCHAR(10): в фидах часто без '^', в Yahoo — '^VIX'."""
     s = _norm_symbol(symbol)
@@ -276,7 +283,7 @@ def main() -> None:
                     "symbol": symbol,
                     "external_id": ext[:512],
                     "content_sha256": content_sha,
-                    "raw_payload": json.dumps(item, ensure_ascii=False),
+                    "raw_payload": _raw_payload_json_str(item, merge_nyse_jsonl),
                     "ticker_a": ta,
                     "ticker_b": tb,
                 }
