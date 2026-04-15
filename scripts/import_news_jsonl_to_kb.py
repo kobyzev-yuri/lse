@@ -139,10 +139,10 @@ def main() -> None:
         """
         UPDATE knowledge_base
         SET
-          exchange = COALESCE(exchange, :exchange),
-          symbol = COALESCE(symbol, :symbol),
-          external_id = COALESCE(external_id, :external_id),
-          content_sha256 = COALESCE(content_sha256, :content_sha256),
+          exchange = COALESCE(NULLIF(BTRIM(exchange), ''), :exchange),
+          symbol = COALESCE(NULLIF(BTRIM(symbol), ''), :symbol),
+          external_id = COALESCE(NULLIF(BTRIM(external_id), ''), :external_id),
+          content_sha256 = COALESCE(NULLIF(BTRIM(content_sha256), ''), :content_sha256),
           raw_payload = COALESCE(raw_payload, CAST(:raw_payload AS jsonb))
         WHERE
           (
