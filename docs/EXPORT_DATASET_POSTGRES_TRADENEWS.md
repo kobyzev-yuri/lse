@@ -116,6 +116,22 @@ docker exec lse-postgres psql -U postgres -d lse_trading -c "\copy (...) TO STDO
 
 Следующий шаг в коде (по желанию): скрипт `tradenews/scripts/import_lse_kb_csv.py` или SQL→JSONL в репозитории lse под ваш формат точек.
 
+### Импорт NYSE/tradenews → LSE `knowledge_base` (JSONL → upsert)
+
+Для постепенного переноса потока новостей (read-only на первом этапе) добавлен скрипт:
+
+- `scripts/import_news_jsonl_to_kb.py`
+
+Он читает JSONL (1 строка = 1 статья), маппит поля (`ts`, `ticker/symbol`, `title/content`, `url/link`) и пишет в `knowledge_base` с дедупом по `external_id` / `(ticker, link)` (после применения миграции `db/knowledge_pg/sql/010_knowledge_base_nyse.sql`).
+
+Пример:
+
+```bash
+cd ~/lse
+python3 scripts/import_news_jsonl_to_kb.py --in /path/to/nyse_news.jsonl --exchange NYSE --dry-run
+python3 scripts/import_news_jsonl_to_kb.py --in /path/to/nyse_news.jsonl --exchange NYSE
+```
+
 ---
 
 ## 7. Автоматический перенос в `tradenews/datasets/lse_gcp_dump/`
