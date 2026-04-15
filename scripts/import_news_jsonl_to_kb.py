@@ -16,6 +16,9 @@
   - raw_payload (если нет — кладём исходный dict)
 
 Вставка: INSERT ... ON CONFLICT DO NOTHING (по unique index external_id или (ticker, link), если применены миграции knowledge_pg/010).
+
+Обновление существующих строк: по умолчанию exchange заполняется только если в KB пусто; если импортёр уже проставил NASDAQ/NYSE,
+используйте --force-exchange. Для raw_payload по умолчанию мерж в raw_payload.nyse_jsonl (см. --no-merge-nyse-jsonl).
 """
 
 from __future__ import annotations
@@ -108,7 +111,21 @@ def main() -> None:
     ap.add_argument("--importance", default="MEDIUM", help="importance для knowledge_base")
     ap.add_argument("--dry-run", action="store_true", help="Ничего не писать в БД, только статистика")
     ap.add_argument("--limit", type=int, default=0, help="Ограничить число строк (0 = без лимита)")
+    ap.add_argument(
+        "--force-exchange",
+        action="store_true",
+        help=(
+            "При UPDATE всегда выставлять exchange из строки/--exchange. Иначе COALESCE: только если "
+            "в KB пусто (часто в KB уже NASDAQ/NYSE из импортёра — тогда без этого флага count(* WHERE exchange='NYSE') почти не растёт)."
+        ),
+    )
+    ap.add_argument(
+        "--no-merge-nyse-jsonl",
+        action="store_true",
+        help="Не мержить JSON строки в raw_payload.nyse_jsonl (по умолчанию мерж включён, чтобы не терять NYSE-данные при уже заполненном raw_payload).",
+    )
     args = ap.parse_args()
+    merge_nyse_jsonl = not bool(args.no_merge_nyse_jsonl)
 
     in_path = Path(args.in_path).expanduser()
     if not in_path.is_absolute():
@@ -135,15 +152,27 @@ def main() -> None:
         ON CONFLICT DO NOTHING
         """
     )
+    if args.force_exchange:
+        _ex_set = "exchange = :exchange"
+    else:
+        _ex_set = "exchange = COALESCE(NULLIF(BTRIM(exchange), ''), :exchange)"
+    if merge_nyse_jsonl:
+        _raw_set = (
+            "raw_payload = COALESCE(raw_payload, '{}'::jsonb) "
+            "|| jsonb_build_object('nyse_jsonl', CAST(:raw_payload AS jsonb))"
+        )
+    else:
+        _raw_set = "raw_payload = COALESCE(raw_payload, CAST(:raw_payload AS jsonb))"
+
     sql_enrich = text(
-        """
+        f"""
         UPDATE knowledge_base
         SET
-          exchange = COALESCE(NULLIF(BTRIM(exchange), ''), :exchange),
+          {_ex_set},
           symbol = COALESCE(NULLIF(BTRIM(symbol), ''), :symbol),
           external_id = COALESCE(NULLIF(BTRIM(external_id), ''), :external_id),
           content_sha256 = COALESCE(NULLIF(BTRIM(content_sha256), ''), :content_sha256),
-          raw_payload = COALESCE(raw_payload, CAST(:raw_payload AS jsonb))
+          {_raw_set}
         WHERE
           (
             :external_id IS NOT NULL
@@ -243,6 +272,8 @@ def main() -> None:
                 "skipped": skipped,
                 "errors": errors,
                 "dry_run": bool(args.dry_run),
+                "force_exchange": bool(args.force_exchange),
+                "merge_nyse_jsonl_into_raw_payload": merge_nyse_jsonl,
             },
             ensure_ascii=False,
             indent=2,
