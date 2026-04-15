@@ -1600,18 +1600,31 @@ def get_decision_5m(
         except Exception as e:
             logger.debug("LLM новости перед решением %s: %s", ticker, e)
 
+    # CatBoost (ML) — опционально. По умолчанию выключен; пока делаем тюнинг правилами/параметрами,
+    # не тащим лишние импорты/лог-варнинги, если GAME_5M_CATBOOST_ENABLED=false.
     try:
-        from services.catboost_5m_signal import attach_catboost_signal
+        from config_loader import get_config_value
 
-        attach_catboost_signal(out, ticker)
-    except Exception as e:
-        logger.warning("attach_catboost_signal(%s): %s", ticker, e)
-    try:
-        from services.catboost_5m_signal import finalize_technical_decision_with_catboost
+        cb_on = (get_config_value("GAME_5M_CATBOOST_ENABLED", "false") or "false").strip().lower() in ("1", "true", "yes")
+    except Exception:
+        cb_on = False
+    if cb_on:
+        try:
+            from services.catboost_5m_signal import attach_catboost_signal
 
-        finalize_technical_decision_with_catboost(out)
-    except Exception as e:
-        logger.warning("finalize_technical_decision_with_catboost(%s): %s", ticker, e)
+            attach_catboost_signal(out, ticker)
+        except Exception as e:
+            logger.warning("attach_catboost_signal(%s): %s", ticker, e)
+        try:
+            from services.catboost_5m_signal import finalize_technical_decision_with_catboost
+
+            finalize_technical_decision_with_catboost(out)
+        except Exception as e:
+            logger.warning("finalize_technical_decision_with_catboost(%s): %s", ticker, e)
+            out.setdefault("technical_decision_core", out.get("decision"))
+            out.setdefault("technical_decision_effective", out.get("decision"))
+            out.setdefault("catboost_fusion_mode", "none")
+    else:
         out.setdefault("technical_decision_core", out.get("decision"))
         out.setdefault("technical_decision_effective", out.get("decision"))
         out.setdefault("catboost_fusion_mode", "none")
