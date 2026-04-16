@@ -465,6 +465,8 @@ def _build_prompt_entry_game5m_html(
 ) -> str:
     """HTML для /prompt_entry game5m: тот же формат, что и portfolio.
     correlation_tickers: полный список для матрицы. extra_tech_by_ticker: цена/RSI для тикеров не из игры 5m (MEDIUM/LONG)."""
+    from services.llm_service import format_entry_fusion_news_influence_explanation_ru
+
     def _pre(s: str) -> str:
         return html.escape(s) if s else "—"
 
@@ -582,6 +584,7 @@ def _build_prompt_entry_game5m_html(
                 f"news_bias_kb {ef.get('news_bias_kb'):+.3f}, fused {ef.get('fused_bias_neg1'):+.3f}"
                 + (f", KB gate {ef.get('gate_mode_kb')}" if ef.get("gate_mode_kb") else "")
             )
+            context_parts.append(_pre(format_entry_fusion_news_influence_explanation_ru(ef)))
         if llm_news_content:
             context_parts.append("LLM-новости (по обучению модели, не в реальном времени; даты могут быть старыми):")
             context_parts.append(_pre(llm_news_content[:500]) + ('…' if len(llm_news_content or '') > 500 else ''))
@@ -1101,7 +1104,13 @@ class LSETelegramBot:
         )
 
         h = kb_news_lookback_hours()
-        metrics = compute_kb_news_bias_metrics(news_df, ticker, self.analyst, lookback_hours=h)
+        metrics = compute_kb_news_bias_metrics(
+            news_df,
+            ticker,
+            self.analyst,
+            lookback_hours=h,
+            engine=getattr(self.analyst, "engine", None),
+        )
         short_html = build_kb_news_short_html(ticker, news_df, metrics, top_n=top_n)
         full_html = build_kb_news_full_html(ticker, news_df, metrics, top_n=top_n)
 

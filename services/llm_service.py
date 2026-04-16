@@ -223,6 +223,76 @@ def format_entry_fusion_block_for_llm(
     return "\n".join(lines)
 
 
+# Пороги gate по черновику KB — как nyse PROFILE_GAME_5M (services/kb_news_report.decide_kb_gate)
+_ENTRY_GATE_T1 = 0.12
+_ENTRY_GATE_T1_STRONG = _ENTRY_GATE_T1 * 2.0  # t1×2, «сильный» draft в логике gate
+
+
+def format_entry_fusion_news_influence_explanation_ru(fm: Dict[str, Any]) -> str:
+    """
+    Текст для человека: направление news.bias, вклад в fused (0.55/0.45),
+    до каких порогов nyse-стиля не дотянул черновик / насколько новости тянут fused.
+    """
+    nb = float(fm.get("news_bias_kb") or 0.0)
+    rb = float(fm.get("rough_bias_kb") or 0.0)
+    tb = float(fm.get("tech_bias_neg1") or 0.0)
+    fb = float(fm.get("fused_bias_neg1") or 0.0)
+    mode = str(fm.get("gate_mode_kb") or "—")
+    nkb = int(fm.get("n_kb_rows") or 0)
+    w_t, w_n = ENTRY_FUSION_W_TECH, ENTRY_FUSION_W_NEWS
+    tech_part = w_t * tb
+    news_part = w_n * nb
+    t1 = _ENTRY_GATE_T1
+    t1x2 = _ENTRY_GATE_T1_STRONG
+    abs_r = abs(rb)
+
+    if abs(nb) < 0.05:
+        side_nb = "по сути нейтральный (|news.bias| < 0.05)"
+    elif nb > 0:
+        side_nb = "в сторону бычьего KB"
+        if nb < t1:
+            side_nb += f" (слабый: news.bias < t1={t1:.2f})"
+    else:
+        side_nb = "в сторону медвежьего KB"
+        if abs(nb) < t1:
+            side_nb += f" (слабый: |news.bias| < t1={t1:.2f})"
+
+    lines: List[str] = [
+        f"news.bias = {nb:+.4f} (−1…+1): {side_nb}. В fused: {w_n:.2f}×news.bias = {news_part:+.4f}, "
+        f"{w_t:.2f}×tech = {tech_part:+.4f} → fused = {fb:+.4f}. При таком |news.bias| вклад новостей в сумму мал, "
+        "знаком и величиной обычно правит техника.",
+        f"Черновик KB (rough, равные веса): {rb:+.4f}, |rough| = {abs_r:.4f}. Пороги gate (как nyse GAME_5M): "
+        f"t1 = {t1:.3f} (ниже — типичный SKIP по «тихому» draft), «сильный» черновик |rough| ≥ t1×2 = {t1x2:.3f}. "
+        f"Сейчас gate: {mode}. Строк KB в окне: {nkb}.",
+    ]
+    gr = fm.get("gate_reason_kb")
+    if isinstance(gr, str) and gr.strip():
+        gr_one = " ".join(gr.split())
+        if len(gr_one) > 240:
+            gr_one = gr_one[:237] + "…"
+        lines.append(f"Пояснение gate: {gr_one}")
+
+    if abs(nb) < 0.05 and abs_r < t1:
+        lines.append(
+            "Итог для отчёта: новостной слой и черновик KB пока ниже порогов, где в nyse включался бы полный LLM по draft "
+            "и где fused сильно перетягивал бы решение; итог по тикеру в первую очередь от правил GAME_5m и текста LLM, а не от «тяжёлого» KB."
+        )
+    elif abs_r < t1:
+        lines.append(
+            f"Итог: |rough| = {abs_r:.4f} < t1 = {t1:.3f} — черновик KB «тихий»; news.bias лишь слегка подкрашивает fused."
+        )
+    elif abs_r < t1x2:
+        lines.append(
+            f"Итог: черновик умеренный (t1 ≤ |rough| < t1×2); gate {mode} — смотри также число статей и regime в пояснении gate."
+        )
+    else:
+        lines.append(
+            f"Итог: |rough| ≥ {t1x2:.3f} — черновик по порогам nyse уже «сильный»; при этом fused и LLM всё равно смотрят на tech и полный контекст."
+        )
+
+    return "\n".join(lines)
+
+
 def format_price_forecast_llm_block(technical_data: Dict[str, Any]) -> str:
     """
     Текст блока краткосрочного прогноза цены (price_forecast_5m) для промпта LLM.
