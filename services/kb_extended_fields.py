@@ -69,7 +69,7 @@ def investing_calendar_external_id(
     event_name: str,
     event_type: str,
 ) -> str:
-    """Стабильный ключ дедупа для строк Investing.com economic calendar (нет нативного id в HTML)."""
+    """Стабильный ключ дедупа для строк Investing.com economic calendar (HTML и JSON API)."""
     base = (
         f"inv_cal|{region}|{event_dt.isoformat()}|{event_name.strip()}|{event_type}"
     )

@@ -161,11 +161,15 @@ def build_entry_fusion_metrics(
         return {
             "tech_bias_neg1": float(td["tech_bias_neg1"]),
             "rough_bias_kb": float(td.get("rough_bias_kb") or 0.0),
+            "row_mean_bias_kb": float(td.get("row_mean_bias_kb") or 0.0),
             "news_bias_kb": float(td["news_bias_kb"]),
             "fused_bias_neg1": float(td["fused_bias_neg1"]),
+            "regime_stress_kb": float(td.get("regime_stress_kb") or 0.0),
             "gate_mode_kb": td.get("gate_mode_kb"),
             "gate_reason_kb": td.get("gate_reason_kb"),
             "n_kb_rows": td.get("n_kb_rows"),
+            "draft_impulse_kb": td.get("draft_impulse_kb"),
+            "kb_reg_context": td.get("kb_reg_context"),
         }
     from services.kb_news_report import compute_kb_bias_from_article_dicts
 
@@ -175,6 +179,10 @@ def build_entry_fusion_metrics(
     gate_mode = None
     gate_reason = None
     n_kb = 0
+    row_mean = 0.0
+    regime_stress_kb = 0.0
+    draft_impulse_kb: Optional[Dict[str, Any]] = None
+    kb_reg_context: Optional[str] = None
     if news_data:
         lb = td.get("kb_lookback_hours")
         if lb is None:
@@ -182,25 +190,52 @@ def build_entry_fusion_metrics(
         m = compute_kb_bias_from_article_dicts(list(news_data), ticker, lookback_hours=lb)
         news_bias = float(m.get("news_bias") or 0.0)
         rough = float(m.get("rough_bias") or 0.0)
+        row_mean = float(m.get("row_mean_bias") or 0.0)
+        regime_stress_kb = float(m.get("regime_stress") or 0.0)
         gate_mode = m.get("gate_mode")
         gate_reason = m.get("gate_reason")
         n_kb = int(m.get("n_rows") or 0)
+        dip = m.get("draft_impulse")
+        if isinstance(dip, dict):
+            draft_impulse_kb = dip
+        geo = m.get("geopolitical") if isinstance(m.get("geopolitical"), dict) else {}
+        n_reg = int(geo.get("n_geo") or 0)
+        gstress = float(geo.get("geo_stress") or 0.0)
+        gsum = str(geo.get("summary_short") or "").strip()
+        gnote = str(geo.get("regime_cluster_note") or "").strip()
+        parts = [
+            f"REG-тем после TF-IDF merge: {n_reg}",
+            f"draft_impulse.regime_stress={gstress:.3f}",
+        ]
+        if gsum:
+            parts.append(f"кратко: {gsum[:160]}")
+        if gnote:
+            parts.append(f"кластер: {gnote[:200]}")
+        kb_reg_context = " · ".join(parts) if parts else None
     else:
         try:
             s = float(sentiment_score)
         except (TypeError, ValueError):
             s = 0.5
         news_bias = (s - 0.5) * 2.0
+        row_mean = news_bias
+        regime_stress_kb = 0.0
+        draft_impulse_kb = None
+        kb_reg_context = None
     fused = ENTRY_FUSION_W_TECH * tech + ENTRY_FUSION_W_NEWS * news_bias
     fused = max(-1.0, min(1.0, fused))
     return {
         "tech_bias_neg1": round(tech, 4),
         "rough_bias_kb": round(rough, 4),
+        "row_mean_bias_kb": round(row_mean, 4),
         "news_bias_kb": round(news_bias, 4),
         "fused_bias_neg1": round(fused, 4),
+        "regime_stress_kb": round(regime_stress_kb, 4),
         "gate_mode_kb": gate_mode,
         "gate_reason_kb": gate_reason,
         "n_kb_rows": n_kb,
+        "draft_impulse_kb": draft_impulse_kb,
+        "kb_reg_context": kb_reg_context,
     }
 
 
@@ -214,12 +249,25 @@ def format_entry_fusion_block_for_llm(
     lines = [
         "Слияние тех+новости (диагностика A/B; веса как в nyse: 0.55 тех + 0.45 новости):",
         f"- tech_bias_neg1 (эвристика по сигналу GAME_5m и импульсу 2ч): {m['tech_bias_neg1']:+.3f}",
-        f"- rough_bias_kb (draft KB, равные веса по строкам): {m['rough_bias_kb']:+.3f}",
+        f"- rough_bias_kb (nyse: single_scalar_draft_bias после TF-IDF REG-кластера): {m['rough_bias_kb']:+.3f}",
+        f"- row_mean_bias_kb (среднее cheap по строкам KB, справочно): {float(m.get('row_mean_bias_kb') or 0):+.3f}",
         f"- news_bias_kb (взвешенный KB −1..+1): {m['news_bias_kb']:+.3f}",
+        f"- regime_stress_kb (draft_impulse по каналу REG, exp-затухание): {float(m.get('regime_stress_kb') or 0):+.3f}",
         f"- fused_bias_neg1 = {ENTRY_FUSION_W_TECH}×tech + {ENTRY_FUSION_W_NEWS}×news: {m['fused_bias_neg1']:+.3f}",
     ]
     if m.get("gate_mode_kb"):
         lines.append(f"- KB gate: {m['gate_mode_kb']} ({m.get('gate_reason_kb') or ''})")
+    dip = m.get("draft_impulse_kb")
+    if isinstance(dip, dict) and dip:
+        lines.append(
+            f"- draft_impulse_kb: inc_mean={float(dip.get('draft_bias_incremental') or 0):+.3f}, "
+            f"REG/POL/INC count={int(dip.get('articles_regime', 0))}/"
+            f"{int(dip.get('articles_policy', 0))}/{int(dip.get('articles_incremental', 0))}, "
+            f"max|REG|={float(dip.get('max_abs_regime') or 0):.3f}"
+        )
+    kbr = m.get("kb_reg_context")
+    if isinstance(kbr, str) and kbr.strip():
+        lines.append(f"- KB REG/гео-контекст (после кластера): {kbr.strip()}")
     return "\n".join(lines)
 
 
@@ -235,6 +283,8 @@ def format_entry_fusion_news_influence_explanation_ru(fm: Dict[str, Any]) -> str
     """
     nb = float(fm.get("news_bias_kb") or 0.0)
     rb = float(fm.get("rough_bias_kb") or 0.0)
+    rmean = float(fm.get("row_mean_bias_kb") or 0.0)
+    rsk = float(fm.get("regime_stress_kb") or 0.0)
     tb = float(fm.get("tech_bias_neg1") or 0.0)
     fb = float(fm.get("fused_bias_neg1") or 0.0)
     mode = str(fm.get("gate_mode_kb") or "—")
@@ -261,8 +311,9 @@ def format_entry_fusion_news_influence_explanation_ru(fm: Dict[str, Any]) -> str
         f"news.bias = {nb:+.4f} (−1…+1): {side_nb}. В fused: {w_n:.2f}×news.bias = {news_part:+.4f}, "
         f"{w_t:.2f}×tech = {tech_part:+.4f} → fused = {fb:+.4f}. При таком |news.bias| вклад новостей в сумму мал, "
         "знаком и величиной обычно правит техника.",
-        f"Черновик KB (rough, равные веса): {rb:+.4f}, |rough| = {abs_r:.4f}. Пороги gate (как nyse GAME_5M): "
-        f"t1 = {t1:.3f} (ниже — типичный SKIP по «тихому» draft), «сильный» черновик |rough| ≥ t1×2 = {t1x2:.3f}. "
+        f"Черновик KB для гейта (nyse single_scalar после REG-кластера): {rb:+.4f}, |draft| = {abs_r:.4f}; "
+        f"среднее по строкам (справочно): {rmean:+.4f}. regime_stress (REG в draft_impulse): {rsk:.4f}. "
+        f"Пороги gate (как nyse GAME_5M): t1 = {t1:.3f}, «сильный» |draft| ≥ t1×2 = {t1x2:.3f}. "
         f"Сейчас gate: {mode}. Строк KB в окне: {nkb}.",
     ]
     gr = fm.get("gate_reason_kb")

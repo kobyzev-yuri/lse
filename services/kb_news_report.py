@@ -1,23 +1,30 @@
 """
-Отчёт /news для LSE-бота: данные из knowledge_base + метрики bias в духе nyse.
+Отчёт /news для LSE-бота: данные из knowledge_base + метрики как в nyse news pipeline.
 
-- **rough_bias** («черновой» / draft): среднее по строкам (sentiment_score−0.5)×2
-  с равными весами — аналог дешёвого скоринга до весов тикера/макро.
-- **news_bias** («итоговый» news.bias): взвешенное среднее как в AnalystAgent.calculate_weighted_sentiment
-  (тикер в строке или в тексте → вес 2.0, иначе 1.0; NaN → 0.5; затем normalize в [−1, 1]).
-- **Режим гейта** (SKIP / LITE / FULL): база как `nyse` PROFILE_GAME_5M (t1, t2, max_articles, regime_stress),
-  плюс **оверлеи CALENDAR / GEO**: ближайшие события Investing.com economic calendar в KB (ts вперёд)
-  и геополитические совпадения в окне новостей — могут поднять режим до LITE/FULL (см. `decide_kb_gate`).
+- **rough_bias**: скаляр ``single_scalar_draft_bias(draft_impulse)`` после TF-IDF кластеризации REG
+  и ``scored_from_news_articles`` / ``draft_impulse`` (см. ``services/nyse_news_pipeline.py``).
+- **row_mean_bias**: среднее (sentiment_score−0.5)×2 по строкам окна — для справки, не для гейта.
+- **news_bias**: взвешенное среднее как в AnalystAgent.calculate_weighted_sentiment.
+- **regime_stress**: ``draft_impulse.regime_stress`` (REG с exp-затуханием), не среднее по MACRO-строкам.
+- **Режим гейта**: как ``nyse`` ``decide_llm_mode`` + оверлей CALENDAR (KB); отдельной ветки GEO нет.
 """
 
 from __future__ import annotations
 
 import html
 import math
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+
+from services.nyse_news_pipeline import (
+    DraftImpulse,
+    NewsImpactChannel,
+    classify_channel,
+    run_kb_nyse_draft_bundle,
+)
 
 
 # Согласовано с nyse PROFILE_GAME5M (docs/calibration.md)
@@ -113,35 +120,13 @@ def summarize_calendar_context(cal_df: pd.DataFrame, *, ahead_hours: int) -> Dic
 
 
 def summarize_geopolitical_context(news_df: pd.DataFrame) -> Dict[str, Any]:
-    """Скан окна новостей на гео-ключи (тот же словарь, что для LLM)."""
-    from services.geopolitical_prompt import is_geopolitical_item
+    """
+    REG-контекст как в nyse: TF-IDF кластер REG → ``n_geo`` = число REG-тем после merge,
+    ``geo_stress`` = ``draft_impulse.regime_stress`` (не словарь geopolitical_prompt).
+    """
+    from services.nyse_news_pipeline import summarize_kb_regime_geopolitical
 
-    out: Dict[str, Any] = {
-        "n_geo": 0,
-        "geo_stress": 0.0,
-        "summary_short": "",
-        "lines": [],
-    }
-    if news_df is None or news_df.empty:
-        return out
-    biases: List[float] = []
-    lines: List[str] = []
-    for _, row in news_df.iterrows():
-        d = row.to_dict()
-        if not is_geopolitical_item(d):
-            continue
-        out["n_geo"] += 1
-        rb = _row_bias_neg1(row.get("sentiment_score"))
-        biases.append(abs(rb))
-        raw = str(row.get("content") or "")[:100].replace("\n", " ")
-        if raw and raw not in lines and len(lines) < 8:
-            lines.append(raw[:100])
-    if biases:
-        out["geo_stress"] = float(sum(biases) / len(biases))
-    out["lines"] = lines
-    if lines:
-        out["summary_short"] = lines[0][:120] + ("…" if len(lines[0]) > 120 else "")
-    return out
+    return summarize_kb_regime_geopolitical(news_df)
 
 
 def _h(s: Any) -> str:
@@ -179,28 +164,18 @@ def _row_bias_neg1(sentiment_score: Any) -> float:
 
 
 def _channel_for_row(row: pd.Series, ticker: str) -> Tuple[str, str]:
-    """
-    Псевдо-канал в стиле nyse (INC / REG / POL) для отображения.
-    """
-    t = str(row.get("ticker") or "").upper()
-    ev = str(row.get("event_type") or "").upper()
-    if t in ("MACRO", "US_MACRO"):
-        return "REG", "Макро / режим"
-    if ev == "ECONOMIC_INDICATOR":
-        return "POL", "Ставки / индикаторы"
-    if "MACRO" in ev or ev == "MACRO_NEWS":
-        return "REG", "Макро / режим"
-    return "INC", "Корп. / тикер"
-
-
-def _regime_stress(macro_df: pd.DataFrame) -> float:
-    """Среднее |row_bias| по макро-строкам (0 если пусто)."""
-    if macro_df is None or macro_df.empty:
-        return 0.0
-    vals = []
-    for _, r in macro_df.iterrows():
-        vals.append(abs(_row_bias_neg1(r.get("sentiment_score"))))
-    return sum(vals) / len(vals) if vals else 0.0
+    """Канал как ``nyse.pipeline.news.channels.classify_channel`` (REG / POL / INC)."""
+    _ = ticker
+    content = str(row.get("content") or row.get("title") or "").strip()
+    lines = content.split("\n", 1)
+    title = (lines[0][:200] if lines else "")[:200]
+    summary = lines[1][:1200] if len(lines) > 1 else ""
+    ch, _ = classify_channel(title, summary)
+    if ch == NewsImpactChannel.REGIME:
+        return "REG", "гео·энерго·режим"
+    if ch == NewsImpactChannel.POLICY_RATES:
+        return "POL", "ЦБ·ставки"
+    return "INC", "эмитент·отрасль"
 
 
 def decide_kb_gate(
@@ -212,20 +187,17 @@ def decide_kb_gate(
     geo_ctx: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, str]:
     """
-    Аналог nyse decide_llm_mode (PROFILE_GAME5M): draft = rough_bias, REGIME = regime_stress,
-    плюс оверлеи CALENDAR (HIGH / CPI/NFP/FOMC в KB) и GEO (гео-новости в окне).
+    Как ``nyse.pipeline.news.gates.decide_llm_mode`` (PROFILE_GAME5M): draft_scalar, REGIME,
+    плюс оверлей CALENDAR (KB). Параметр ``geo_ctx`` не влияет на решение (только для отчёта).
     """
+    _ = geo_ctx
     cal = dict(calendar_ctx or {})
-    geo = dict(geo_ctx or {})
     regime_present = regime_stress > _REGIME_STRESS_MIN
     regime_rule_confidence = 0.85 if regime_present else 0.0
     ab = abs(rough_bias)
     mega = bool(cal.get("mega_72h"))
     high48 = int(cal.get("high_48h") or 0)
     cal_sm = str(cal.get("summary_short") or "")[:160]
-    geo_n = int(geo.get("n_geo") or 0)
-    geo_stress = float(geo.get("geo_stress") or 0.0)
-    geo_sm = str(geo.get("summary_short") or "")[:160]
 
     if regime_present and regime_rule_confidence >= _T2:
         return (
@@ -240,13 +212,6 @@ def decide_kb_gate(
         return (
             "FULL",
             f"FULL: CALENDAR — {tag}. Кратко: {cal_sm} (как nyse: окно макро — полный разбор).",
-        )
-
-    if geo_n >= 3 and geo_stress >= _REGIME_STRESS_MIN:
-        return (
-            "FULL",
-            f"FULL: GEO — {geo_n} гео-релевантных строк, среднее |row_bias|={geo_stress:.3f} ≥ {_REGIME_STRESS_MIN}. "
-            f"Пример: {geo_sm} (как nyse: risk-off / полный LLM).",
         )
 
     if ab >= _T1 * _FULL_BIAS_MULT:
@@ -266,7 +231,7 @@ def decide_kb_gate(
     if ab < _T1 and not regime_present:
         return (
             "SKIP",
-            f"SKIP: |draft_bias|={ab:.3f} < t1={_T1:.3f}, нет REGIME/CALENDAR/GEO-триггеров для FULL "
+            f"SKIP: |draft_bias|={ab:.3f} < t1={_T1:.3f}, нет REGIME/CALENDAR-триггеров для FULL "
             f"(как nyse: дорогой LLM не нужен).",
         )
 
@@ -323,6 +288,7 @@ def compute_kb_bias_from_article_dicts(
     if not rows:
         return {
             "rough_bias": 0.0,
+            "row_mean_bias": 0.0,
             "news_bias": 0.0,
             "regime_stress": 0.0,
             "gate_mode": "SKIP",
@@ -330,6 +296,8 @@ def compute_kb_bias_from_article_dicts(
             "n_rows": 0,
             "n_macro": 0,
             "lookback_hours": lookback_hours,
+            "draft_impulse": asdict(DraftImpulse()),
+            "geopolitical": summarize_geopolitical_context(pd.DataFrame()),
         }
     df = pd.DataFrame(rows)
     if "content" not in df.columns:
@@ -345,6 +313,7 @@ def compute_kb_bias_from_article_dicts(
     if n == 0:
         return {
             "rough_bias": 0.0,
+            "row_mean_bias": 0.0,
             "news_bias": 0.0,
             "regime_stress": 0.0,
             "gate_mode": "SKIP",
@@ -352,15 +321,19 @@ def compute_kb_bias_from_article_dicts(
             "n_rows": 0,
             "n_macro": 0,
             "lookback_hours": lookback_hours,
+            "draft_impulse": asdict(DraftImpulse()),
+            "geopolitical": summarize_geopolitical_context(disp),
         }
-    biases = [_row_bias_neg1(r.get("sentiment_score")) for _, r in disp.iterrows()]
-    rough_bias = sum(biases) / len(biases)
+    di, _rmeta, _scored, row_mean_bias, draft_scalar, _merged = run_kb_nyse_draft_bundle(disp)
     macro_df = disp[disp["ticker"].isin(["MACRO", "US_MACRO"])]
-    regime_stress = _regime_stress(macro_df)
+    regime_stress = float(di.regime_stress)
+    rough_bias = float(draft_scalar)
     news_bias = weighted_news_bias_neg1_from_kb_df(disp, ticker)
-    mode, reason = decide_kb_gate(rough_bias, regime_stress, n)
+    geo_ctx = summarize_geopolitical_context(disp)
+    mode, reason = decide_kb_gate(rough_bias, regime_stress, n, calendar_ctx=None, geo_ctx=geo_ctx)
     return {
         "rough_bias": round(float(rough_bias), 4),
+        "row_mean_bias": round(float(row_mean_bias), 4),
         "news_bias": round(float(news_bias), 4),
         "regime_stress": round(float(regime_stress), 4),
         "gate_mode": mode,
@@ -368,6 +341,8 @@ def compute_kb_bias_from_article_dicts(
         "n_rows": n,
         "n_macro": len(macro_df),
         "lookback_hours": lookback_hours,
+        "draft_impulse": asdict(di),
+        "geopolitical": geo_ctx,
     }
 
 
@@ -381,21 +356,22 @@ def compute_kb_news_bias_metrics(
     calendar_ahead_hours: int = 72,
 ) -> dict:
     """
-    Считает rough_bias, news_bias (weighted), regime_stress, gate_mode, gate_reason,
-    плюс контекст календаря (KB, вперёд) и геополитики по окну новостей — для отчёта /news и gate.
+    Метрики как nyse news pipeline (REG TF-IDF кластер, draft_impulse, single_scalar_draft_bias),
+    news.bias по AnalystAgent, календарь KB, гейт как decide_llm_mode + оверлей календаря.
     """
     ndf = news_df if news_df is not None else pd.DataFrame()
     cal_df = fetch_kb_macro_calendar_upcoming(engine, calendar_ahead_hours) if engine is not None else pd.DataFrame()
     cal_ctx = summarize_calendar_context(cal_df, ahead_hours=calendar_ahead_hours)
-    geo_ctx = summarize_geopolitical_context(ndf)
 
     disp = filter_kb_display_rows(ndf)
     n = len(disp)
+    geo_ctx = summarize_geopolitical_context(disp)
 
     if n == 0:
         mode, reason = decide_kb_gate(0.0, 0.0, 0, calendar_ctx=cal_ctx, geo_ctx=geo_ctx)
         return {
             "rough_bias": 0.0,
+            "row_mean_bias": 0.0,
             "news_bias": 0.0,
             "regime_stress": 0.0,
             "gate_mode": mode,
@@ -405,13 +381,13 @@ def compute_kb_news_bias_metrics(
             "lookback_hours": lookback_hours,
             "calendar": cal_ctx,
             "geopolitical": geo_ctx,
+            "draft_impulse": asdict(DraftImpulse()),
         }
 
-    biases = [_row_bias_neg1(r.get("sentiment_score")) for _, r in disp.iterrows()]
-    rough_bias = sum(biases) / len(biases)
-
+    di, _rmeta, _scored, row_mean_bias, draft_scalar, _merged = run_kb_nyse_draft_bundle(disp)
     macro_df = disp[disp["ticker"].isin(["MACRO", "US_MACRO"])]
-    regime_stress = _regime_stress(macro_df)
+    regime_stress = float(di.regime_stress)
+    rough_bias = float(draft_scalar)
 
     news_bias = float(analyst.calculate_weighted_sentiment(disp, ticker))
 
@@ -419,6 +395,7 @@ def compute_kb_news_bias_metrics(
 
     return {
         "rough_bias": round(rough_bias, 4),
+        "row_mean_bias": round(row_mean_bias, 4),
         "news_bias": round(news_bias, 4),
         "regime_stress": round(regime_stress, 4),
         "gate_mode": mode,
@@ -428,6 +405,7 @@ def compute_kb_news_bias_metrics(
         "lookback_hours": lookback_hours,
         "calendar": cal_ctx,
         "geopolitical": geo_ctx,
+        "draft_impulse": asdict(di),
     }
 
 
@@ -461,15 +439,19 @@ def build_kb_news_short_html(
     tv = ticker.upper()
     disp = filter_kb_display_rows(news_df)
     rough = metrics["rough_bias"]
+    row_mean = float(metrics.get("row_mean_bias") or 0.0)
     nb = metrics["news_bias"]
     mode = metrics["gate_mode"]
     rs = metrics["regime_stress"]
 
     lines = [
         f"📰 <b>{_h(tv)}</b> — KB, последние <b>{metrics['lookback_hours']}</b> ч",
-        f"<b>draft_bias</b> (грубое среднее): <code>{rough:+.4f}</code> {_bias_arrow(rough)}",
+        f"<b>draft_bias</b> (<code>single_scalar_draft_bias</code> после nyse TF-IDF REG-кластера): "
+        f"<code>{rough:+.4f}</code> {_bias_arrow(rough)}",
+        f"<b>row_mean</b> (среднее row cheap по окну, справочно): <code>{row_mean:+.4f}</code>",
         f"<b>news.bias</b> (взвеш. KB): <code>{nb:+.4f}</code> {_bias_arrow(nb)}",
-        f"<b>Gate</b> (как nyse, по draft + календарь + GEO): <code>{_h(mode)}</code> · regime_stress=<code>{rs:.3f}</code>",
+        f"<b>Gate</b> (как nyse <code>decide_llm_mode</code> + календарь KB): <code>{_h(mode)}</code> · "
+        f"regime_stress=<code>{rs:.3f}</code>",
         f"<i>{_h(metrics['gate_reason'])}</i>",
     ]
     cal = metrics.get("calendar") or {}
@@ -485,9 +467,12 @@ def build_kb_news_short_html(
         lines.append(
             f"<b>Календарь KB</b> (вперёд до {ah}ч): нет строк в БД (cron <code>fetch_and_save_investing_calendar</code>, 429 или пусто)."
         )
+    rnote = str(geo.get("regime_cluster_note") or "")
     lines.append(
-        f"<b>Геополитика в окне</b> (словарь как у LLM): совпадений <code>{int(geo.get('n_geo', 0))}</code>, "
-        f"geo_stress=<code>{float(geo.get('geo_stress') or 0):.3f}</code> — {_h(geo.get('summary_short') or 'нет выдержек')}"
+        f"<b>REG (nyse channel + TF-IDF)</b>: REG-тем после merge <code>{int(geo.get('n_geo', 0))}</code>, "
+        f"<code>draft_impulse.regime_stress</code>=<code>{float(geo.get('geo_stress') or 0):.3f}</code> — "
+        f"{_h(geo.get('summary_short') or 'нет выдержек')}"
+        + (f"<br/><small>{_h(rnote)}</small>" if rnote else "")
     )
     lines.append("")
     shown = 0
@@ -530,31 +515,33 @@ def build_kb_news_full_html(
     nb = metrics["news_bias"]
     mode = metrics["gate_mode"]
 
+    di_html = ""
+    dip = metrics.get("draft_impulse")
+    if isinstance(dip, dict) and dip:
+        di_html = (
+            f"<br/><b>DraftImpulse</b> (nyse): inc_mean=<code>{dip.get('draft_bias_incremental', 0):.4f}</code>, "
+            f"regime_stress=<code>{dip.get('regime_stress', 0):.4f}</code>, policy_stress=<code>{dip.get('policy_stress', 0):.4f}</code>, "
+            f"articles REG/INC/POL = <code>{dip.get('articles_regime', 0)}</code>/"
+            f"<code>{dip.get('articles_incremental', 0)}</code>/<code>{dip.get('articles_policy', 0)}</code>."
+        )
     explain = f"""
 <div class="box">
-<b>Как считается draft_bias (грубый)</b><br>
-Для каждой строки после фильтра шума: <code>row_bias = (sentiment_score − 0.5) × 2</code>,
-где <code>sentiment_score</code> из PostgreSQL (0=негатив, 0.5=нейтр., 1=позитив), как после
-<code>add_sentiment_to_news_cron</code>. Пустое значение → нейтраль 0.<br>
-<b>draft_bias</b> = среднее арифметическое всех <code>row_bias</code> (равные веса) — аналог
-«дешёвого» чернового импульса до разделения тикер/макро.<br><br>
+<b>Как в nyse: каналы → TF-IDF кластер REG → scored → draft_impulse → single_scalar_draft_bias</b><br>
+Строки KB после фильтра шума преобразуются в «статьи» с <code>cheap_sentiment = (sentiment_score−0.5)×2</code>.
+Канал <b>REG / POL / INC</b> — правила из <code>nyse/pipeline/news/channels.py</code> (портаж в
+<code>services/nyse_news_pipeline.py</code>). Статьи REG кластеризуются по косинусу TF-IDF
+(<code>NYSE_REGIME_CLUSTER_THRESHOLD</code>, по умолчанию 0.88), один представитель на кластер —
+как <code>apply_regime_cluster_for_draft</code>. Затем <code>draft_impulse</code> с half-life 12ч
+и <b>draft_bias</b> для гейта = <code>single_scalar_draft_bias</code> (incremental − 0.15×regime_stress − 0.1×policy_stress).<br>
+<b>row_mean_bias</b> в метриках — среднее <code>cheap_sentiment</code> по всем строкам окна (справочно, не для гейта).{di_html}<br><br>
 <b>Как считается news.bias</b><br>
-То же, что <code>AnalystAgent.calculate_weighted_sentiment</code>: вес 2.0 если
-<code>ticker</code> строки = тикеру или тикер встречается в <code>content</code>, иначе 1.0 (макро).
-Пропуски <code>sentiment_score</code> заполняются 0.5 (нейтраль), затем взвешенное среднее в шкале 0..1
-и нормализация <code>(x−0.5)×2</code> в [−1, +1].<br><br>
+<code>AnalystAgent.calculate_weighted_sentiment</code>: вес 2.0 если тикер строки = тикеру или тикер в тексте, иначе 1.0.<br><br>
 <b>Почему режим {mode}</b><br>
 {_h(metrics["gate_reason"])}<br>
-Пороги совпадают с nyse <code>PROFILE_GAME5M</code>: t1={_T1}, t1×2={_T1*_FULL_BIAS_MULT},
-t2={_T2}, max_articles_full={_MAX_ARTICLES_FULL}, regime_stress_min={_REGIME_STRESS_MIN}.
-У LSE нет вызова LLM по этой команде — режим показывает, <i>какой шаг был бы выбран</i> в nyse-конвейере
-при таком черновом сигнале.<br><br>
-<b>Календарь и геополитика (как доп. ветки nyse)</b><br>
-После REGIME проверяется <b>CALENDAR</b>: события Investing.com economic calendar в KB с <code>ts</code> в будущем
-(горизонт в отчёте). FULL при «mega» (CPI/NFP/FOMC/ставки по тексту) в 72ч или при ≥2 HIGH в 48ч;
-LITE-overlay при 1×HIGH в 48ч и тихом draft (|rough|&lt;t1), чтобы не падать в SKIP.<br>
-Затем <b>GEO</b>: строки окна новостей, совпадающие с <code>services/geopolitical_prompt</code>. FULL при n_geo≥3 и
-geo_stress (среднее |row_bias| по гео-строкам) ≥ regime_stress_min={_REGIME_STRESS_MIN}.
+Пороги как <code>decide_llm_mode</code> / <code>PROFILE_GAME5M</code>: t1={_T1}, t1×2={_T1*_FULL_BIAS_MULT},
+t2={_T2}, max_articles_full={_MAX_ARTICLES_FULL}, regime_stress_min={_REGIME_STRESS_MIN}.<br><br>
+<b>Календарь KB</b> (оверлей LSE): события Investing economic calendar в горизонте. Отдельной ветки GEO в гейте нет —
+REG уже учтён в <code>regime_stress</code> и <code>draft_impulse</code>, как в nyse.
 </div>
 """
 
@@ -566,15 +553,17 @@ geo_stress (среднее |row_bias| по гео-строкам) ≥ regime_str
     )
     if not cal_body_rows:
         cal_body_rows = "<tr><td colspan=\"2\">Нет строк в горизонте (или календарь не пишется в KB).</td></tr>"
-    geo_li = "".join(f"<li>{_h(x)}</li>" for x in (geo.get("lines") or [])[:12]) or "<li>Нет совпадений с гео-словарём.</li>"
+    geo_li = "".join(f"<li>{_h(x)}</li>" for x in (geo.get("lines") or [])[:12]) or "<li>Нет REG-выдержек после кластера.</li>"
+    rnote = str(geo.get("regime_cluster_note") or "")
     cal_geo_html = f"""
 <div class="box">
 <h2 style="margin-top:0;border:none;padding:0">Календарь (KB, вперёд)</h2>
 <p class="meta">Горизонт до {int(cal.get('ahead_hours') or 72)}ч · записей: {int(cal.get('n_rows') or 0)} ·
 HIGH≤48ч: {int(cal.get('high_48h') or 0)} · mega: {cal.get('mega_72h')}</p>
 <table><thead><tr><th>#</th><th>Событие (UTC/как в KB)</th></tr></thead><tbody>{cal_body_rows}</tbody></table>
-<h2 style="border:none;padding:0">Геополитика (окно новостей)</h2>
-<p class="meta">n_geo={int(geo.get('n_geo') or 0)} · geo_stress={float(geo.get('geo_stress') or 0):.4f}</p>
+<h2 style="border:none;padding:0">REG / режим (nyse: TF-IDF кластер + draft_impulse)</h2>
+<p class="meta">REG-тем после merge: {int(geo.get('n_geo') or 0)} · regime_stress (draft_impulse REG) = {float(geo.get('geo_stress') or 0):.4f}</p>
+<p class="meta">{_h(rnote) if rnote else "Кластеризация не применялась (меньше 2 REG-строк или выключено)."}</p>
 <ul>{geo_li}</ul>
 </div>
 """

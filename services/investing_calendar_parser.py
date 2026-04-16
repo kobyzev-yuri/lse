@@ -1,8 +1,9 @@
 """
-Модуль для парсинга экономического календаря Investing.com.
+Модуль для экономического календаря Investing.com.
 
-Внимание: страница календаря может подгружать таблицу через JavaScript;
-если таблица не найдена, источник пропускается.
+По умолчанию — только JSON API (endpoints.investing.com, как nyse/sources/ecalendar.py), без
+скрытого fallback на HTML. Обход HTML по регионам только при INVESTING_CALENDAR_USE_HTML=true
+(legacy: таблица может подгружаться через JS; если таблица не найдена — пусто).
 
 Макро-события: в cron по умолчанию экономические индикаторы Alpha Vantage
 выключены (ALPHAVANTAGE_FETCH_ECONOMIC=false). Даже при включении бесплатный
@@ -27,7 +28,7 @@ from typing import List, Dict, Optional
 from sqlalchemy import create_engine, text
 import time
 
-from config_loader import get_database_url
+from config_loader import get_config_value, get_database_url
 from services.http_outbound import outbound_session
 from services.kb_extended_fields import (
     investing_calendar_external_id,
@@ -292,15 +293,42 @@ def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
 
 def fetch_all_regions_calendar() -> List[Dict]:
     """
-    Получает календарь для всех регионов
-    
-    Returns:
-        Список всех событий
+    Получает календарь для всех регионов.
+
+    По умолчанию — только JSON API (как nyse), без fallback на HTML.
+    INVESTING_CALENDAR_USE_HTML=true — только legacy-обход HTML по регионам.
     """
     global _CALENDAR_RATE_LIMIT_HIT
     _CALENDAR_RATE_LIMIT_HIT = False
+
+    use_html_only = (
+        str(get_config_value("INVESTING_CALENDAR_USE_HTML") or "")
+        .strip()
+        .lower()
+        in ("1", "true", "yes")
+    )
+    if not use_html_only:
+        try:
+            from services.investing_calendar_api import fetch_investing_calendar_api_events
+
+            api_events = fetch_investing_calendar_api_events(
+                days_back=2, days_forward=7, limit=500
+            )
+            logger.info(
+                "✅ Investing.com calendar: JSON API, %s событий",
+                len(api_events),
+            )
+            return api_events
+        except Exception as e:
+            logger.error(
+                "Investing.com calendar: ошибка JSON API (%s). HTML не используется; "
+                "для legacy-скрапинга задайте INVESTING_CALENDAR_USE_HTML=true.",
+                e,
+            )
+            return []
+
     all_events = []
-    
+
     for region in REGIONS.keys():
         if _CALENDAR_RATE_LIMIT_HIT:
             logger.warning(
@@ -422,7 +450,7 @@ def save_events_to_db(events: List[Dict]):
 def fetch_and_save_investing_calendar():
     """
     Главная функция: получает календарь из Investing.com и сохраняет в БД.
-    Если таблица не найдена (структура страницы или JS), события не сохраняются.
+    Источник: JSON API (по умолчанию, как nyse) или только при флаге — HTML (см. fetch_all_regions_calendar).
     Макро-события через Alpha Vantage: опционально (ALPHAVANTAGE_FETCH_ECONOMIC=true)
     и на бесплатном плане часто недоступны.
     """
@@ -435,8 +463,9 @@ def fetch_and_save_investing_calendar():
         logger.info("✅ Завершено получение календаря из Investing.com")
     else:
         logger.info(
-            "✅ Календарь Investing.com: событий нет (страница могла измениться или данные подгружаются через JS). "
-            "Макро: при необходимости включите ALPHAVANTAGE_FETCH_ECONOMIC=true в config.env (на бесплатном плане AV часто не отдаёт данные)."
+            "Календарь Investing.com: событий нет (JSON API вернуло пусто или была ошибка — см. лог выше; "
+            "legacy HTML только при INVESTING_CALENDAR_USE_HTML=true). "
+            "Доп. макро: ALPHAVANTAGE_FETCH_ECONOMIC=true (на free AV часто пусто)."
         )
 
 

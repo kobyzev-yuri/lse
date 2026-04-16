@@ -4343,11 +4343,15 @@ class LSETelegramBot:
                                     sentiment = 0.65
                             technical_data["tech_bias_neg1"] = fm.get("tech_bias_neg1")
                             technical_data["rough_bias_kb"] = fm.get("rough_bias_kb")
+                            technical_data["row_mean_bias_kb"] = fm.get("row_mean_bias_kb")
                             technical_data["news_bias_kb"] = fm.get("news_bias_kb")
                             technical_data["fused_bias_neg1"] = fm.get("fused_bias_neg1")
+                            technical_data["regime_stress_kb"] = fm.get("regime_stress_kb")
                             technical_data["gate_mode_kb"] = fm.get("gate_mode_kb")
                             technical_data["gate_reason_kb"] = fm.get("gate_reason_kb")
                             technical_data["n_kb_rows"] = fm.get("n_kb_rows")
+                            technical_data["draft_impulse_kb"] = fm.get("draft_impulse_kb")
+                            technical_data["kb_reg_context"] = fm.get("kb_reg_context")
                             result = llm.analyze_trading_situation(
                                 r["ticker"], technical_data, news_list, sentiment,
                                 strategy_name="GAME_5M", strategy_signal=r.get("decision"),

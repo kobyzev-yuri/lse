@@ -55,6 +55,11 @@
 | ALPHAVANTAGE_DELAY_BETWEEN_TICKERS | alphavantage_fetcher | 15 | Между тикерами. |
 | ALPHAVANTAGE_DELAY_BETWEEN_INDICATORS | alphavantage_fetcher | 13 | Между индикаторами. |
 | INVESTING_CALENDAR_DEBUG_HTML | investing_calendar_parser | — | true — сохранять HTML для отладки. |
+| INVESTING_CALENDAR_USE_HTML | investing_calendar_parser | false | true — только legacy-скрапинг HTML по регионам (по умолчанию календарь — JSON API, как NYSE). |
+| INVESTING_CALENDAR_USE_SYSTEM_PROXY | investing_calendar_parser, investing_calendar_api | false | true — trust_env для прокси из окружения. |
+| NYSE_REGIME_CLUSTER | nyse_news_pipeline | 1 | 0/false — отключить TF-IDF кластер REG перед draft (как в nyse). |
+| NYSE_REGIME_CLUSTER_THRESHOLD | nyse_news_pipeline | 0.88 | Порог косинусной близости TF-IDF для слияния REG-тем. |
+| NYSE_REGIME_CLUSTER_EMBED | nyse_news_pipeline | tfidf | В LSE при openai используется fallback на tfidf. |
 
 **Рекомендация:** вынести в config.env.example в секцию «Alpha Vantage (доп.)» как закомментированные строки, чтобы было понятно, что можно тонко настроить.
 

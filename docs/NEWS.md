@@ -4,7 +4,7 @@
 
 **Целевая архитектура агрегированного новостного сигнала, горизонтов, LLM и политики входа:** [NEWS_SIGNAL_ARCHITECTURE.md](NEWS_SIGNAL_ARCHITECTURE.md).
 
-**Проверка цепочки после cron в Telegram:** команда `/news TICKER` в LSE-боте (`services/telegram_bot.py`) читает `knowledge_base` и отдаёт ответ в стиле nyse `/news`: краткое HTML-сообщение с **draft_bias** (среднее `(sentiment_score−0.5)×2` по строкам), **news.bias** (как `AnalystAgent.calculate_weighted_sentiment`), режим **Gate** SKIP/LITE/FULL с теми же порогами, что `PROFILE_GAME5M` в nyse (пояснение — без вызова LLM, только диагностика). Полный отчёт с формулами и таблицей — HTML-файл вложением. Реализация: `services/kb_news_report.py`. Окно выборки: `KB_NEWS_LOOKBACK_HOURS` (по умолчанию 336 ч ≈ 14 дней).
+**Проверка цепочки после cron в Telegram:** команда `/news TICKER` в LSE-боте (`services/telegram_bot.py`) читает `knowledge_base` и отдаёт ответ в стиле nyse `/news`: **draft_bias** = `single_scalar_draft_bias(draft_impulse)` после каналов REG/POL/INC и **TF-IDF кластеризации REG** (`services/nyse_news_pipeline.py`, ключи `NYSE_REGIME_CLUSTER*`), **news.bias** как `AnalystAgent.calculate_weighted_sentiment`, **Gate** как `decide_llm_mode` + оверлей календаря KB (без отдельной ветки GEO по словарю). Полный отчёт — HTML-вложение. Реализация: `services/kb_news_report.py`. Окно: `KB_NEWS_LOOKBACK_HOURS` (по умолчанию 336 ч).
 
 **Лимиты бесплатных API и фильтрация по тикерам:** см. [docs/NEWS_LIMITS.md](NEWS_LIMITS.md). Конфиг: `KB_INGEST_TRACKED_TICKERS_ONLY` (по умолчанию сохраняем всё входящее от Alpha Vantage / LLM-новостей без отсечения по списку тикеров).
 
@@ -18,7 +18,7 @@
 
 | Область | Изменение |
 |---------|-----------|
-| **Экономический календарь Investing.com** | `save_events_to_db` пишет расширенные поля; дедуп через `INSERT … ON CONFLICT DO NOTHING` по `external_id` (детерминированный ключ). См. `services/kb_extended_fields.py`, `services/investing_calendar_parser.py`. |
+| **Экономический календарь Investing.com** | JSON API (`investing_calendar_api.py`), как NYSE; `save_events_to_db` и дедуп по `external_id`. См. `services/kb_extended_fields.py`, `services/investing_calendar_parser.py`. |
 | **Тикерные новости (как в NYSE `news_merge`)** | Модуль `services/ticker_news_merge_fetcher.py`: **Yahoo** (`yfinance.get_news`) + опционально **Marketaux** при `MARKETAUX_API_KEY`; merge/dedup; вставка с `external_id` / `content_sha256` / `raw_payload`. |
 | **Оркестратор** | `scripts/fetch_news_cron.py`: режимы `--mode tickers` (только TickerNews), `core` и `all` включают TickerNews; `core-fast` — по-прежнему RSS + Alpha Vantage **без** TickerNews. |
 | **Ключи и конфиг** | Имена `NEWSAPI_KEY`, `ALPHAVANTAGE_KEY`, `MARKETAUX_API_KEY` согласованы с NYSE; опционально `NYSE_CONFIG_PATH` подмешивает пустые ключи из `nyse/config.env` (`config_loader.py`). Шпаргалка — в `config.env.example` (блок «News: источники…»). |
