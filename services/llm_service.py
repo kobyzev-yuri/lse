@@ -7,11 +7,41 @@ import os
 import json
 import logging
 from typing import Dict, Any, List, Optional, Tuple
+
+# Веса слияния тех+новости (как nyse trade_builder: tech vs news)
+ENTRY_FUSION_W_TECH = 0.55
+ENTRY_FUSION_W_NEWS = 0.45
 from pathlib import Path
 import re
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_entry_decision_label(raw: Any, fallback: str = "HOLD") -> str:
+    """BUY | STRONG_BUY | HOLD для промпта входа; прочее → HOLD."""
+    s = str(raw or "").strip().upper()
+    if "SELL" in s:
+        return "HOLD"
+    if "STRONG" in s and "BUY" in s:
+        return "STRONG_BUY"
+    if s == "BUY" or s.startswith("BUY"):
+        return "BUY"
+    if s == "HOLD":
+        return "HOLD"
+    return fallback if fallback in ("BUY", "STRONG_BUY", "HOLD") else "HOLD"
+
+
+def _finalize_dual_entry_llm_analysis(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """Нормализует decision/decision_fused и ab_fusion_differs после парсинга JSON."""
+    a = dict(analysis)
+    leg = _coerce_entry_decision_label(a.get("decision"))
+    fused_raw = a.get("decision_fused")
+    fused = _coerce_entry_decision_label(fused_raw if fused_raw is not None else leg)
+    a["decision"] = leg
+    a["decision_fused"] = fused
+    a["ab_fusion_differs"] = bool(leg != fused)
+    return a
 
 
 def _normalize_openai_model_id_for_heuristics(model: str) -> str:
@@ -87,6 +117,110 @@ def format_game5m_execution_context_for_llm(technical_data: Dict[str, Any]) -> s
     if not lines:
         return ""
     return "\n" + "\n".join(lines)
+
+
+def game5m_technical_bias_neg1(technical_signal: Any, momentum_2h_pct: Any) -> float:
+    """
+    Грубая скалярная оценка «тех. импульса» в −1..+1 по сигналу GAME_5m и импульсу 2ч
+    (только для диагностического fused_bias в промпте, не для исполнения сделок).
+    """
+    s = str(technical_signal or "HOLD").strip().upper()
+    if "STRONG" in s and "BUY" in s:
+        base = 0.78
+    elif s == "BUY":
+        base = 0.48
+    elif s == "SELL":
+        base = -0.55
+    else:
+        base = 0.0
+    adj = 0.0
+    if momentum_2h_pct is not None:
+        try:
+            adj = max(-0.25, min(0.25, float(momentum_2h_pct) / 25.0))
+        except (TypeError, ValueError):
+            pass
+    return max(-1.0, min(1.0, base + adj))
+
+
+def build_entry_fusion_metrics(
+    ticker: str,
+    technical_data: Dict[str, Any],
+    news_data: List[Dict[str, Any]],
+    sentiment_score: float,
+) -> Dict[str, Any]:
+    """
+    Считает tech_bias, rough/news из KB (если есть статьи), fused = w_t*tech + w_n*news.
+    Если в technical_data уже переданы ключи — не пересчитывает.
+    """
+    td = technical_data or {}
+    if (
+        td.get("fused_bias_neg1") is not None
+        and td.get("news_bias_kb") is not None
+        and td.get("tech_bias_neg1") is not None
+    ):
+        return {
+            "tech_bias_neg1": float(td["tech_bias_neg1"]),
+            "rough_bias_kb": float(td.get("rough_bias_kb") or 0.0),
+            "news_bias_kb": float(td["news_bias_kb"]),
+            "fused_bias_neg1": float(td["fused_bias_neg1"]),
+            "gate_mode_kb": td.get("gate_mode_kb"),
+            "gate_reason_kb": td.get("gate_reason_kb"),
+            "n_kb_rows": td.get("n_kb_rows"),
+        }
+    from services.kb_news_report import compute_kb_bias_from_article_dicts
+
+    tech = game5m_technical_bias_neg1(td.get("technical_signal"), td.get("momentum_2h_pct"))
+    news_bias = 0.0
+    rough = 0.0
+    gate_mode = None
+    gate_reason = None
+    n_kb = 0
+    if news_data:
+        lb = td.get("kb_lookback_hours")
+        if lb is None:
+            lb = int(td.get("kb_news_days") or 0) * 24 if td.get("kb_news_days") else None
+        m = compute_kb_bias_from_article_dicts(list(news_data), ticker, lookback_hours=lb)
+        news_bias = float(m.get("news_bias") or 0.0)
+        rough = float(m.get("rough_bias") or 0.0)
+        gate_mode = m.get("gate_mode")
+        gate_reason = m.get("gate_reason")
+        n_kb = int(m.get("n_rows") or 0)
+    else:
+        try:
+            s = float(sentiment_score)
+        except (TypeError, ValueError):
+            s = 0.5
+        news_bias = (s - 0.5) * 2.0
+    fused = ENTRY_FUSION_W_TECH * tech + ENTRY_FUSION_W_NEWS * news_bias
+    fused = max(-1.0, min(1.0, fused))
+    return {
+        "tech_bias_neg1": round(tech, 4),
+        "rough_bias_kb": round(rough, 4),
+        "news_bias_kb": round(news_bias, 4),
+        "fused_bias_neg1": round(fused, 4),
+        "gate_mode_kb": gate_mode,
+        "gate_reason_kb": gate_reason,
+        "n_kb_rows": n_kb,
+    }
+
+
+def format_entry_fusion_block_for_llm(
+    ticker: str,
+    technical_data: Dict[str, Any],
+    news_data: List[Dict[str, Any]],
+    sentiment_score: float,
+) -> str:
+    m = build_entry_fusion_metrics(ticker, technical_data, news_data, sentiment_score)
+    lines = [
+        "Слияние тех+новости (диагностика A/B; веса как в nyse: 0.55 тех + 0.45 новости):",
+        f"- tech_bias_neg1 (эвристика по сигналу GAME_5m и импульсу 2ч): {m['tech_bias_neg1']:+.3f}",
+        f"- rough_bias_kb (draft KB, равные веса по строкам): {m['rough_bias_kb']:+.3f}",
+        f"- news_bias_kb (взвешенный KB −1..+1): {m['news_bias_kb']:+.3f}",
+        f"- fused_bias_neg1 = {ENTRY_FUSION_W_TECH}×tech + {ENTRY_FUSION_W_NEWS}×news: {m['fused_bias_neg1']:+.3f}",
+    ]
+    if m.get("gate_mode_kb"):
+        lines.append(f"- KB gate: {m['gate_mode_kb']} ({m.get('gate_reason_kb') or ''})")
+    return "\n".join(lines)
 
 
 def format_price_forecast_llm_block(technical_data: Dict[str, Any]) -> str:
@@ -297,15 +431,22 @@ class LLMService:
 6. Кластер, корреляция и геополитика: если есть блок «Кластер и корреляция» (корреляции, цены и тех. сигналы по нескольким тикерам) — обязательно учти его в key_factors и reasoning. Высокая корреляция означает совместные движения; при расхождении сигналов или слабости коррелированного актива — осторожность; не дублируй риск по двум сильно коррелированным бумагам. Если в новостях есть геополитика или sector-wide risk-off — **свяжи** её с трендами цен имен кластера: кто уже отразил стресс, кто отстаёт, куда может «дотянуться» цепочка (полупроводники, память, AI-инфра, энергия и т.д. по контексту тикеров). Не анализируй целевой тикер изолированно от кластера, когда гео-риск системный.
 7. Краткосрочный прогноз (30/60/120 мин) и тейк: p10/p50/p90 и P(>spot) — ориентир направления и ширины коридора (упрощённая статистика по недавним 5m, не гарантия). Если в данных есть «Импульс 2ч» и «Эффективный тейк по правилам GAME_5m» — число тейка для исполнения берётся из правил стратегии (и связано с импульсом), а не из таблицы прогноза. p50 на 120 мин математически на той же 2ч-оси, что импульс 2ч (не считай их двумя независимыми сигналами). Для словесных оценок кратких целей уместнее горизонты 30/60 мин (p50 или p90 как верх сценария); p10 — нижний хвост риска. Не подменяй исполняемый тейк одной ячейкой таблицы.
 
-Важно: в ответе должна быть одна чёткая итоговая рекомендация (BUY, STRONG_BUY или HOLD). В reasoning объясняй именно её: если HOLD — почему не входим сейчас (а не «есть возможность покупки, но держим»); если BUY — почему входим. Не смешивай противоположные выводы в одном тексте.
+Важно: два итоговых решения для сравнения подходов.
+1) Поле "decision" — классический итог (как раньше: техника + новости + кластер одним связным разбором). Его используют существующие интеграции (cron и т.д.) — это «legacy».
+2) Поле "decision_fused" — отдельная рекомендация с явным учётом числового блока «Слияние тех+новости» в user-промпте: при сильно отрицательном fused_bias_neg1 избегай агрессивного BUY/STRONG_BUY, предпочитай HOLD или снижай агрессию; при сильно положительном fused при поддерживающей технике можно усилить вход относительно нейтрального новостного фона. Не копируй decision машинально — покажи, меняется ли вывод при явном скаляре слияния.
+
+В "reasoning" объясняй именно "decision" (legacy): если HOLD — почему не входим сейчас; если BUY — почему входим. В "reasoning_fused" (1–2 предложения) — почему "decision_fused" таков и чем он отличается или совпадает с "decision". Поле "ab_fusion_differs": true, если decision и decision_fused логически различаются (любой из уровней BUY vs STRONG_BUY vs HOLD).
 
 Отвечай в формате JSON:
 {
     "decision": "BUY|STRONG_BUY|HOLD",
+    "decision_fused": "BUY|STRONG_BUY|HOLD",
+    "ab_fusion_differs": true,
     "confidence": 0.0-1.0,
-    "reasoning": "объяснение решения (один связный абзац)",
+    "reasoning": "объяснение legacy decision (один связный абзац)",
+    "reasoning_fused": "кратко про decision_fused и отличие от decision",
     "risks": ["список рисков"],
-    "key_factors": ["короткие метки 3–7 слов каждая, не дублируй текст из reasoning"]
+    "key_factors": ["короткие метки 3–7 слов каждая, к legacy decision"]
 }
 key_factors — только краткие метки для быстрого скана (например: «RSI перепродан», «слабость сектора», «нейтральный sentiment»), не повторяй в них полные фразы из reasoning.
 """
@@ -414,13 +555,23 @@ Sentiment анализ:
         if cluster_note:
             user_message += f"\n\nКластер и корреляция (обязательно учти в key_factors и reasoning):\n{cluster_note}"
         if strategy_name and strategy_signal:
-            user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Дай одну итоговую рекомендацию (согласись или скорректируй). Если итог HOLD — в reasoning объясни, почему не входим, а не «есть возможность покупки, но держим»."
+            user_message += (
+                f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. "
+                "Согласись или скорректируй в поле decision (legacy); decision_fused — отдельно с учётом блока слияния. "
+                "Если итог HOLD — в reasoning объясни, почему не входим, а не «есть возможность покупки, но держим»."
+            )
         if strategy_outcome_stats:
             user_message += f"\n\n{strategy_outcome_stats} Учти исходы в похожих ситуациях при рекомендации."
         _geo_combined = ((news_summary or "").lower() + "\n" + geo_blob).strip()
         user_message += geopolitical_followup_hint(_geo_combined)
         user_message += geo_cluster_bridge_hint(cluster_note, _geo_combined)
-        user_message += "\n\nДай рекомендацию на основе этих данных."
+        fusion_block = format_entry_fusion_block_for_llm(
+            ticker, technical_data, news_data or [], sentiment_score,
+        )
+        user_message += f"\n\n{fusion_block}"
+        user_message += (
+            "\n\nВерни JSON с полями decision (legacy) и decision_fused, как в system prompt."
+        )
         return {"prompt_system": system_prompt, "prompt_user": user_message}
 
     def generate_response_with_model(
@@ -581,14 +732,24 @@ Sentiment анализ:
         if cluster_note:
             user_message += f"\n\nКластер и корреляция (обязательно учти в key_factors и reasoning):\n{cluster_note}"
         if strategy_name and strategy_signal:
-            user_message += f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. Дай одну итоговую рекомендацию (согласись или скорректируй). Если итог HOLD — в reasoning объясни, почему не входим, а не «есть возможность покупки, но держим»."
+            user_message += (
+                f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. "
+                "Согласись или скорректируй в поле decision (legacy); decision_fused — отдельно с учётом блока слияния. "
+                "Если итог HOLD — в reasoning объясни, почему не входим, а не «есть возможность покупки, но держим»."
+            )
         if strategy_outcome_stats:
             user_message += f"\n\n{strategy_outcome_stats} Учти исходы в похожих ситуациях при рекомендации."
         _geo_combined = ((news_summary or "").lower() + "\n" + geo_blob).strip()
         user_message += geopolitical_followup_hint(_geo_combined)
         user_message += geo_cluster_bridge_hint(cluster_note, _geo_combined)
-        user_message += "\n\nДай рекомендацию на основе этих данных."
-        
+        fusion_block = format_entry_fusion_block_for_llm(
+            ticker, technical_data, news_data, sentiment_score,
+        )
+        user_message += f"\n\n{fusion_block}"
+        user_message += (
+            "\n\nВерни JSON с полями decision (legacy) и decision_fused, как в system prompt."
+        )
+
         messages = [{"role": "user", "content": user_message}]
         
         try:
@@ -605,20 +766,31 @@ Sentiment анализ:
                     # Если JSON не найден, создаем структуру из текста
                     analysis = {
                         "decision": "HOLD",
+                        "decision_fused": "HOLD",
+                        "ab_fusion_differs": False,
                         "confidence": 0.5,
                         "reasoning": response_text,
+                        "reasoning_fused": "",
                         "risks": [],
-                        "key_factors": []
+                        "key_factors": [],
                     }
             except json.JSONDecodeError:
                 # Если не удалось распарсить, используем текст как reasoning
                 analysis = {
                     "decision": "HOLD",
+                    "decision_fused": "HOLD",
+                    "ab_fusion_differs": False,
                     "confidence": 0.5,
                     "reasoning": response_text,
+                    "reasoning_fused": "",
                     "risks": [],
-                    "key_factors": []
+                    "key_factors": [],
                 }
+            analysis = _finalize_dual_entry_llm_analysis(analysis)
+            if not str(analysis.get("reasoning_fused") or "").strip():
+                analysis["reasoning_fused"] = (
+                    "Совпадает с legacy." if not analysis.get("ab_fusion_differs") else ""
+                )
             # Отслеживание: учитывает ли LLM контекст кластера/корреляции (для проверки промпта)
             if technical_data.get("cluster_note"):
                 reasoning_text = (analysis.get("reasoning") or "") + " " + " ".join(analysis.get("key_factors") or [])
@@ -648,13 +820,16 @@ Sentiment анализ:
             else:
                 reasoning = f"Ошибка анализа: {str(e)}"
             return {
-                "llm_analysis": {
+                "llm_analysis": _finalize_dual_entry_llm_analysis({
                     "decision": "HOLD",
+                    "decision_fused": "HOLD",
+                    "ab_fusion_differs": False,
                     "confidence": 0.0,
                     "reasoning": reasoning,
+                    "reasoning_fused": "",
                     "risks": ["Ошибка LLM анализа"],
-                    "key_factors": []
-                },
+                    "key_factors": [],
+                }),
                 "usage": {},
                 "prompt_system": system_prompt,
                 "prompt_user": user_message,

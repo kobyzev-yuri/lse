@@ -575,6 +575,13 @@ def _build_prompt_entry_game5m_html(
             context_parts.append(f"Влияние новостей (KB): {_pre(kb_news_impact)}")
         if kb_news_summary:
             context_parts.append(f"Новости из KB: {_pre(kb_news_summary)}")
+        ef = r.get("entry_fusion_metrics")
+        if isinstance(ef, dict) and ef.get("fused_bias_neg1") is not None:
+            context_parts.append(
+                f"Слияние (диагностика): tech_bias {ef.get('tech_bias_neg1'):+.3f}, "
+                f"news_bias_kb {ef.get('news_bias_kb'):+.3f}, fused {ef.get('fused_bias_neg1'):+.3f}"
+                + (f", KB gate {ef.get('gate_mode_kb')}" if ef.get("gate_mode_kb") else "")
+            )
         if llm_news_content:
             context_parts.append("LLM-новости (по обучению модели, не в реальном времени; даты могут быть старыми):")
             context_parts.append(_pre(llm_news_content[:500]) + ('…' if len(llm_news_content or '') > 500 else ''))
@@ -598,6 +605,17 @@ def _build_prompt_entry_game5m_html(
             kf = r.get("llm_key_factors")
             if kf:
                 parts.append(f"<p class=\"meta\">Ключевые факторы: {', '.join(_pre(str(x)) for x in kf[:10])}</p>")
+            dfu = r.get("llm_decision_fused")
+            if dfu:
+                diff = r.get("llm_ab_fusion_differs")
+                diff_s = "да" if diff else "нет"
+                parts.append(
+                    f"<p class=\"meta\"><strong>LLM decision_fused</strong> (явный учёт fused_bias): "
+                    f"{_pre(str(dfu))} · отличается от legacy: {diff_s}</p>"
+                )
+                rf = r.get("llm_reasoning_fused")
+                if rf:
+                    parts.append(f"<pre class=\"meta\">{_pre(str(rf))}</pre>")
         parts.append("</div>")
 
     parts.append("</body></html>")
@@ -4219,6 +4237,7 @@ class LSETelegramBot:
                         "period_str": d5.get("period_str"),
                         "kb_news_impact": d5.get("kb_news_impact"),
                         "kb_news_summary": kb_summary,
+                        "kb_news": kb_news,
                         "llm_news_content": d5.get("llm_news_content"),
                         "llm_sentiment": d5.get("llm_sentiment"),
                         "entry_advice": d5.get("entry_advice"),
@@ -4263,15 +4282,44 @@ class LSETelegramBot:
                                 "estimated_upside_pct_day": r.get("estimated_upside_pct_day"),
                                 "price_forecast_5m": r.get("price_forecast_5m"),
                                 "price_forecast_5m_summary": r.get("price_forecast_5m_summary"),
+                                "kb_news_days": days_5m,
                             }
+                            kb_rows = list(r.get("kb_news") or [])
                             news_list = []
-                            if r.get("kb_news_summary") or r.get("kb_news_impact"):
-                                news_list = [{"source": "KB", "content": (r.get("kb_news_summary") or r.get("kb_news_impact") or "")[:500], "sentiment_score": 0.5}]
+                            for n in kb_rows[:8]:
+                                news_list.append({
+                                    "source": (n.get("source") or "KB")[:80],
+                                    "content": (n.get("content") or "")[:500],
+                                    "sentiment_score": n.get("sentiment_score"),
+                                })
+                            from services.llm_service import build_entry_fusion_metrics
+
                             sentiment = 0.5
-                            if r.get("kb_news_impact") == "негативно":
-                                sentiment = 0.35
-                            elif r.get("kb_news_impact") == "позитивно":
-                                sentiment = 0.65
+                            if kb_rows:
+                                fm = build_entry_fusion_metrics(
+                                    r["ticker"], technical_data, kb_rows, 0.5,
+                                )
+                                sentiment = max(
+                                    0.0,
+                                    min(1.0, 0.5 + float(fm["news_bias_kb"]) / 2.0),
+                                )
+                            else:
+                                imp = str(r.get("kb_news_impact") or "")
+                                if "негатив" in imp:
+                                    sentiment = 0.35
+                                elif "позитив" in imp:
+                                    sentiment = 0.65
+                                fm = build_entry_fusion_metrics(
+                                    r["ticker"], technical_data, [], sentiment,
+                                )
+                            technical_data["tech_bias_neg1"] = fm["tech_bias_neg1"]
+                            technical_data["rough_bias_kb"] = fm["rough_bias_kb"]
+                            technical_data["news_bias_kb"] = fm["news_bias_kb"]
+                            technical_data["fused_bias_neg1"] = fm["fused_bias_neg1"]
+                            technical_data["gate_mode_kb"] = fm.get("gate_mode_kb")
+                            technical_data["gate_reason_kb"] = fm.get("gate_reason_kb")
+                            technical_data["n_kb_rows"] = fm.get("n_kb_rows")
+                            r["entry_fusion_metrics"] = fm
                             result = llm.analyze_trading_situation(
                                 r["ticker"], technical_data, news_list, sentiment,
                                 strategy_name="GAME_5M", strategy_signal=r.get("decision"),
@@ -4280,6 +4328,9 @@ class LSETelegramBot:
                                 ana = result["llm_analysis"]
                                 r["llm_correlation_reasoning"] = ana.get("reasoning") or ""
                                 r["llm_key_factors"] = ana.get("key_factors") or []
+                                r["llm_decision_fused"] = ana.get("decision_fused")
+                                r["llm_ab_fusion_differs"] = ana.get("ab_fusion_differs")
+                                r["llm_reasoning_fused"] = ana.get("reasoning_fused") or ""
                         except Exception as e:
                             logger.debug("LLM с корреляцией для 5m %s: %s", r.get("ticker"), e)
                 if output_json:

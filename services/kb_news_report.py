@@ -16,7 +16,7 @@ import html
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import pandas as pd
 
@@ -129,6 +129,95 @@ def decide_kb_gate(
         "LITE",
         f"LITE: умеренный сигнал |draft_bias|={ab:.3f} (t1 ≤ |x| < t1×2 или REGIME слабее порога).",
     )
+
+
+def weighted_news_bias_neg1_from_kb_df(news_df: pd.DataFrame, ticker: str) -> float:
+    """
+    Взвешенный news.bias в шкале −1..+1 без AnalystAgent (та же логика весов 2.0/1.0
+    и normalize_sentiment, что calculate_weighted_sentiment).
+    """
+    from utils.sentiment_utils import normalize_sentiment
+
+    if news_df is None or news_df.empty:
+        return 0.0
+    tk = (ticker or "").upper()
+
+    def _weight(row: pd.Series) -> float:
+        content = str(row.get("content") or row.get("title") or row.get("insight") or "")
+        t = str(row.get("ticker") or "")
+        if t.upper() == tk or tk in content.upper():
+            return 2.0
+        return 1.0
+
+    df = news_df.copy()
+    if "content" not in df.columns:
+        df["content"] = ""
+    df["weight"] = df.apply(_weight, axis=1)
+    sentiment_series = pd.to_numeric(df["sentiment_score"], errors="coerce").fillna(0.5).astype(float)
+    tw = float((sentiment_series * df["weight"]).sum())
+    wsum = float(df["weight"].sum())
+    weighted_0_1 = tw / wsum if wsum > 0 else 0.5
+    return float(normalize_sentiment(weighted_0_1))
+
+
+def compute_kb_bias_from_article_dicts(
+    rows: List[dict],
+    ticker: str,
+    lookback_hours: Optional[int] = None,
+) -> dict:
+    """
+    Метрики bias по списку статей KB (как get_decision_5m → kb_news), без AnalystAgent.
+    Совместимо по смыслу с compute_kb_news_bias_metrics (rough_bias, news_bias, gate).
+    """
+    if not rows:
+        return {
+            "rough_bias": 0.0,
+            "news_bias": 0.0,
+            "regime_stress": 0.0,
+            "gate_mode": "SKIP",
+            "gate_reason": "Нет статей KB.",
+            "n_rows": 0,
+            "n_macro": 0,
+            "lookback_hours": lookback_hours,
+        }
+    df = pd.DataFrame(rows)
+    if "content" not in df.columns:
+        df["content"] = ""
+    if "ticker" not in df.columns:
+        df["ticker"] = ""
+    if "sentiment_score" not in df.columns:
+        df["sentiment_score"] = None
+    if "event_type" not in df.columns:
+        df["event_type"] = ""
+    disp = filter_kb_display_rows(df)
+    n = len(disp)
+    if n == 0:
+        return {
+            "rough_bias": 0.0,
+            "news_bias": 0.0,
+            "regime_stress": 0.0,
+            "gate_mode": "SKIP",
+            "gate_reason": "Нет строк после фильтра шума.",
+            "n_rows": 0,
+            "n_macro": 0,
+            "lookback_hours": lookback_hours,
+        }
+    biases = [_row_bias_neg1(r.get("sentiment_score")) for _, r in disp.iterrows()]
+    rough_bias = sum(biases) / len(biases)
+    macro_df = disp[disp["ticker"].isin(["MACRO", "US_MACRO"])]
+    regime_stress = _regime_stress(macro_df)
+    news_bias = weighted_news_bias_neg1_from_kb_df(disp, ticker)
+    mode, reason = decide_kb_gate(rough_bias, regime_stress, n)
+    return {
+        "rough_bias": round(float(rough_bias), 4),
+        "news_bias": round(float(news_bias), 4),
+        "regime_stress": round(float(regime_stress), 4),
+        "gate_mode": mode,
+        "gate_reason": reason,
+        "n_rows": n,
+        "n_macro": len(macro_df),
+        "lookback_hours": lookback_hours,
+    }
 
 
 def compute_kb_news_bias_metrics(
