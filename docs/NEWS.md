@@ -4,6 +4,8 @@
 
 **Целевая архитектура агрегированного новостного сигнала, горизонтов, LLM и политики входа:** [NEWS_SIGNAL_ARCHITECTURE.md](NEWS_SIGNAL_ARCHITECTURE.md).
 
+**Проверка цепочки после cron в Telegram:** команда `/news TICKER` в LSE-боте (`services/telegram_bot.py`) читает `knowledge_base` и отдаёт ответ в стиле nyse `/news`: краткое HTML-сообщение с **draft_bias** (среднее `(sentiment_score−0.5)×2` по строкам), **news.bias** (как `AnalystAgent.calculate_weighted_sentiment`), режим **Gate** SKIP/LITE/FULL с теми же порогами, что `PROFILE_GAME5M` в nyse (пояснение — без вызова LLM, только диагностика). Полный отчёт с формулами и таблицей — HTML-файл вложением. Реализация: `services/kb_news_report.py`. Окно выборки: `KB_NEWS_LOOKBACK_HOURS` (по умолчанию 336 ч ≈ 14 дней).
+
 **Лимиты бесплатных API и фильтрация по тикерам:** см. [docs/NEWS_LIMITS.md](NEWS_LIMITS.md). Конфиг: `KB_INGEST_TRACKED_TICKERS_ONLY` (по умолчанию сохраняем всё входящее от Alpha Vantage / LLM-новостей без отсечения по списку тикеров).
 
 ---

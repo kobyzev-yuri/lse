@@ -1062,6 +1062,47 @@ class LSETelegramBot:
             loop.run_in_executor(None, self.analyst.get_recent_news, ticker),
             timeout=timeout,
         )
+
+    async def _send_kb_news_report(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        ticker: str,
+        news_df,
+        top_n: int,
+    ) -> None:
+        """
+        HTML в чат + полный HTML-файл (как nyse /news): draft_bias, news.bias, gate SKIP/LITE/FULL.
+        """
+        from services.kb_news_report import (
+            kb_news_lookback_hours,
+            compute_kb_news_bias_metrics,
+            build_kb_news_short_html,
+            build_kb_news_full_html,
+        )
+
+        h = kb_news_lookback_hours()
+        metrics = compute_kb_news_bias_metrics(news_df, ticker, self.analyst, lookback_hours=h)
+        short_html = build_kb_news_short_html(ticker, news_df, metrics, top_n=top_n)
+        full_html = build_kb_news_full_html(ticker, news_df, metrics, top_n=top_n)
+
+        if len(short_html) > TELEGRAM_MAX_MESSAGE_LENGTH - 80:
+            parts = self._split_long_message(short_html, max_length=TELEGRAM_MAX_MESSAGE_LENGTH - 80)
+            for part in parts:
+                await self._reply_to_update(update, context, part, parse_mode="HTML")
+        else:
+            await self._reply_to_update(update, context, short_html, parse_mode="HTML")
+
+        try:
+            if update.message is not None:
+                fn = f"news_{ticker}_{datetime.utcnow().strftime('%Y-%m-%d_%H-%M')}.html"
+                await update.message.reply_document(
+                    document=BytesIO(full_html.encode("utf-8")),
+                    filename=fn,
+                    caption="📎 Полный отчёт (формулы + таблица) — откройте в браузере",
+                )
+        except Exception as e:
+            logger.warning("Не удалось отправить HTML-документ /news: %s", e)
     
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -1085,7 +1126,7 @@ class LSETelegramBot:
 • Золото (GC=F), нефть (CL=F), валюты (GBPUSD=X), акции (MSFT, SNDK)
 
 **Команды:**
-/news <ticker> [N] — новости; /newssources — каналы и статистика за 14 дн.
+/news <ticker> [N] — KB (HTML + файл): draft_bias, news.bias, gate; /newssources — каналы за 14 дн.
 /price <ticker> — цена
 /chart <ticker> [days] — график дневной; /chart game_5m [days] — все тикеры игры 5m (горизонтально по сессиям, тикеры друг под другом)
 /chart5m <ticker> [days] — график 5 мин (по требованию)
@@ -1155,8 +1196,9 @@ class LSETelegramBot:
   Пример: `/signal MSFT` или `/signal GC=F`
 
 **Новости:**
-`/news <ticker> [N]` - Новости за последние 7 дней (топ N, по умолч. 10)
-  Пример: `/news MSFT` или `/news MSFT 15`
+`/news <ticker> [N]` - Новости из PostgreSQL knowledge_base (окно KB_NEWS_LOOKBACK_HOURS, по умолч. ~14 дней).
+  В чате: HTML как nyse — draft_bias (грубое среднее), news.bias (взвеш. как AnalystAgent), режим Gate FULL/LITE/SKIP (пороги как nyse GAME_5M).
+  Файл: полный отчёт с формулами и таблицей. Пример: `/news MSFT` или `/news MSFT 15`
   Показывает: последние новости с источником и sentiment
 `/newssources` — все каналы новостей и кол-во записей за последние 14 дней
 
@@ -1421,29 +1463,12 @@ class LSETelegramBot:
             if news_df.empty:
                 await self._reply_to_update(
                     update, context,
-                    f"ℹ️ Новостей для {ticker} не найдено за последние 7 дней",
+                    f"ℹ️ Новостей для {ticker} не найдено в knowledge_base за окно "
+                    f"(см. KB_NEWS_LOOKBACK_HOURS в config.env; по умолчанию ~14 дней).",
                 )
                 return
 
-            # Форматируем новости (top N по умолчанию 10)
-            response = self._format_news_response(ticker, news_df, top_n=limit)
-
-            async def _send_news_part(text: str):
-                try:
-                    await self._reply_to_update(update, context, text, parse_mode='Markdown')
-                except Exception as parse_err:
-                    if 'parse' in str(parse_err).lower() or 'entit' in str(parse_err).lower():
-                        await self._reply_to_update(update, context, text)
-                    else:
-                        raise
-
-            # Telegram имеет лимит 4096 символов на сообщение
-            if len(response) > 4000:
-                parts = self._split_long_message(response, max_length=4000)
-                for part in parts:
-                    await _send_news_part(part)
-            else:
-                await _send_news_part(response)
+            await self._send_kb_news_report(update, context, ticker, news_df, top_n=limit)
 
         except Exception as e:
             err_type = type(e).__name__
@@ -5282,11 +5307,14 @@ class LSETelegramBot:
                                 f"❌ Таймаут при получении новостей для {ticker}. Попробуйте позже."
                             )
                             return
-                        response = self._format_news_response(ticker, news_df, top_n=top_n)
-                        try:
-                            await update.message.reply_text(response, parse_mode='Markdown')
-                        except Exception:
-                            await update.message.reply_text(response)
+                        if news_df.empty:
+                            await update.message.reply_text(
+                                f"ℹ️ Новостей для {ticker} в knowledge_base за окно KB не найдено."
+                            )
+                        else:
+                            await self._send_kb_news_report(
+                                update, context, ticker, news_df, top_n=top_n
+                            )
                     elif is_price_query:
                         # Запрос цены
                         await self._handle_price_by_ticker(update, ticker)

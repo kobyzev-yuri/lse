@@ -799,7 +799,7 @@ flowchart TD
 
 **Доступные команды:**
 - `/signal <ticker>` - полный анализ (решение, цена, RSI, sentiment, стратегия)
-- `/news <ticker> [N]` - новости за последние 7 дней (топ N)
+- `/news <ticker> [N]` — новости из `knowledge_base` (окно `KB_NEWS_LOOKBACK_HOURS`, по умолч. ~14 дней): HTML в чат + файл; **draft_bias**, **news.bias**, режим Gate (как nyse GAME_5M); см. `services/kb_news_report.py`
 - `/price <ticker>` - текущая цена инструмента
 - `/chart <ticker> [days]` - график цены за период (дневные данные)
 - `/ask <вопрос>` - задать вопрос боту (LLM для понимания естественного языка)
