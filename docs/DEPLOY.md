@@ -8,6 +8,7 @@
 - **Код попадает в образ при сборке** (`docker compose build lse`). Одного `git pull` на хосте в `~/lse` **недостаточно**: контейнер продолжит работать со **старым** слоем образа, пока не выполните пересборку и перезапуск.
 - **Нормальный цикл обновления кода:** `git push` с вашей машины → на сервере `./scripts/deploy_from_github.sh` (или cron с тем же скриптом): `pull` + **`docker compose build lse`** + **`docker compose up -d lse`**.
 - **Конфиг** `config.env` обычно **монтируется с хоста** в `/app/config.env` — для смены только env достаточно правки на сервере и `docker compose restart lse` (пересборка не нужна).
+- **Секреты отдельно:** необязательный файл `config.secrets.env` (шаблон — `config.secrets.env.example`) с теми же `KEY=value`; он подхватывается автоматически, если лежит в корне рядом с `config.env`, и **перекрывает** совпадающие ключи. В Docker добавьте volume `./config.secrets.env:/app/config.secrets.env` (см. комментарий в `docker-compose.yml`). Иначе путь: `LSE_CONFIG_SECRETS` в окружении контейнера.
 - **Кнопка «Перезапуск» в вебе** вызывает `RESTART_CMD` из `config.env` (по умолчанию `docker compose restart lse`). Если ответ **код 127** — у процесса веба нет `docker` в `PATH`. Задайте явно, например: `RESTART_CMD=/usr/bin/docker compose -f /home/user/lse/docker-compose.yml restart lse` (путь к compose-файлу — ваш). Либо перезапускайте вручную с хоста: `cd ~/lse && docker compose restart lse`.
 
 ## Autotune анализатора (v0)

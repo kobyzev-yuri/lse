@@ -7,8 +7,8 @@
 | Группа | Стиль | Тикеры (по умолчанию) | Логика |
 |--------|--------|------------------------|--------|
 | **Быстрая игра** | Интрадей, 5m | SNDK, MU, LITE | Короткие интервалы (день–два), 5m индикаторы, GAME_5m (send_sndk_signal_cron). Нужны 5m данные Yahoo. |
-| **Средние дистанции** | Смешанный вариант | ALAB, MU, TER | Среднесрочный горизонт, портфельная игра (trading_cycle_cron). |
-| **Вдолгую** | Свинг, дневные | MSFT, GBPUSD=X, GC=F, ^VIX | Дневные/недельные решения, портфельная игра: акции, forex, товары, VIX. |
+| **Средние дистанции** | Смешанный вариант | ALAB, TER, AMD, ANET, INTC, DELL, AVGO, ORCL, PLTR | Среднесрочный горизонт, KB/прогнозы; портфельная игра при `TRADING_CYCLE_ENABLED`. Не путать с FAST 5m. |
+| **Вдолгую** | Свинг, дневные | MSFT, META, GOOGL, AMZN, NVDA, ANET, INTC, DELL, ALAB, AVGO, ORCL, PLTR, AMD, SNDK, GBPUSD=X, GC=F, ^VIX, CL=F, BZ=F | Мегакап + драйверы (в т.ч. список шефа + SNDK) + макро/гео; дневные решения и новости. |
 
 ## Конфигурация
 
@@ -18,11 +18,11 @@
 # Быстрая игра (5m) — только тикеры с 5m данными
 TICKERS_FAST=SNDK,MU,LITE
 
-# Средние дистанции
-TICKERS_MEDIUM=ALAB,MU,TER
+# Средние дистанции (драйверы / полупроводники — KB, не обязательно 5m игра)
+TICKERS_MEDIUM=ALAB,TER,AMD,ANET,INTC,DELL,AVGO,ORCL,PLTR
 
-# Вдолгую (свинг)
-TICKERS_LONG=MSFT,GBPUSD=X,GC=F,^VIX
+# Вдолгую (свинг + мегакап + драйверы + макро)
+TICKERS_LONG=MSFT,META,GOOGL,AMZN,NVDA,ANET,INTC,DELL,ALAB,AVGO,ORCL,PLTR,AMD,SNDK,GBPUSD=X,GC=F,^VIX,CL=F,BZ=F
 ```
 
 Если не задано — используются дефолты из `services/ticker_groups.py` (см. выше).

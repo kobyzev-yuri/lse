@@ -33,6 +33,8 @@ services:
     ports:
       - "8080:8080"
     # config.env с хоста — без :ro, чтобы веб-интерфейс (Параметры → config.env) мог сохранять правки на лету; после изменений — перезапуск (кнопка или docker compose restart lse).
+    # Опционально: рядом с config.env создайте config.secrets.env (см. config.secrets.env.example) и добавьте строку:
+    #   - ./config.secrets.env:/app/config.secrets.env
     # logs — без :ro, чтобы cron (fetch_news_cron и др.) мог писать в /app/logs; веб читает для страницы «Сервис / логи».
     volumes:
       - ./config.env:/app/config.env

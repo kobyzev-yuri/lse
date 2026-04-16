@@ -23,7 +23,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # Версия логики принятия решения в get_decision_5m (для фиксации в context_json сделки)
-GAME_5M_RULE_VERSION = "2026-03-23"
+GAME_5M_RULE_VERSION = "2026-04-17"
 
 # Ветка технического входа → краткое обоснование стратегии (не прогноз цены, а смысл правила).
 ENTRY_BRANCH_INTUITION: Dict[str, str] = {
@@ -902,6 +902,42 @@ def merge_close_context_with_trade_narrative(
     return out
 
 
+def _game5m_vix_context_snapshot() -> Dict[str, Any]:
+    """Latest ^VIX close from DB + ~5-row change % for 5m reasoning (optional)."""
+    from config_loader import get_config_value as gcv
+
+    raw = (gcv("GAME_5M_VIX_CONTEXT_ENABLED", "true") or "true").strip().lower()
+    if raw not in ("1", "true", "yes"):
+        return {"enabled": False, "vix": None, "vix_change_multiday_pct": None}
+    out: Dict[str, Any] = {"enabled": True, "vix": None, "vix_change_multiday_pct": None}
+    try:
+        from sqlalchemy import create_engine, text
+
+        from config_loader import get_database_url
+
+        eng = create_engine(get_database_url())
+        with eng.connect() as conn:
+            rows = conn.execute(
+                text("SELECT close FROM quotes WHERE ticker = '^VIX' ORDER BY date DESC LIMIT 8")
+            ).fetchall()
+        eng.dispose()
+    except Exception as e:
+        logger.debug("VIX snapshot: %s", e)
+        return out
+    if not rows:
+        return out
+    try:
+        spot = float(rows[0][0])
+        out["vix"] = spot
+        if len(rows) >= 6:
+            old = float(rows[5][0])
+            if old > 0:
+                out["vix_change_multiday_pct"] = (spot - old) / old * 100.0
+    except (TypeError, ValueError, IndexError):
+        pass
+    return out
+
+
 def get_decision_5m(
     ticker: str,
     days: int = None,
@@ -1128,9 +1164,36 @@ def get_decision_5m(
     recent_positive = [n for n, s in news_with_sentiment if s > 0.65]
     kb_news_impact = "нейтрально"  # для вывода в алерт
 
+    vix_snap = _game5m_vix_context_snapshot()
+    vv = vix_snap.get("vix")
+    try:
+        vix_c18 = float((_gcv("GAME_5M_VIX_STRONG_COMFORT_MAX", "18") or "18").strip())
+    except (ValueError, TypeError):
+        vix_c18 = 18.0
+    try:
+        vix_c20 = float((_gcv("GAME_5M_VIX_COMFORT_MAX", "20") or "20").strip())
+    except (ValueError, TypeError):
+        vix_c20 = 20.0
+    relax_news_on_vix = (_gcv("GAME_5M_VIX_RELAX_VERY_NEGATIVE_NEWS", "true") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    relax_very_neg = bool(
+        very_negative and relax_news_on_vix and vv is not None and float(vv) < vix_c18
+    )
+    decision_rule_params["vix_comfort_max"] = vix_c20
+    decision_rule_params["vix_strong_comfort_max"] = vix_c18
+    decision_rule_params["vix_relax_very_negative_news"] = relax_news_on_vix
+
     if very_negative:
-        # Сильный негатив (шорт, скандал и т.п.) — не входим
-        if decision in ("BUY", "STRONG_BUY"):
+        if relax_very_neg:
+            reasons.append(
+                "сильный негатив в новостях; VIX ниже порога «сильного спокойствия» — "
+                "вход не откладываем только из-за гео-шума (рынок слабее дисконтирует панику)"
+            )
+            kb_news_impact = "негатив (VIX — вход не отложен)"
+        elif decision in ("BUY", "STRONG_BUY"):
             decision = "HOLD"
             reasons.append("сильный негатив в новостях — вход отложен")
             kb_news_impact = "негатив (вход отложен)"
@@ -1152,6 +1215,17 @@ def get_decision_5m(
         kb_news_impact = "позитив (поддержка входа)"
     elif recent_positive and decision in ("BUY", "STRONG_BUY"):
         kb_news_impact = "позитив"
+
+    if vix_snap.get("enabled") and vv is not None:
+        vp = [f"VIX={float(vv):.2f}"]
+        chg = vix_snap.get("vix_change_multiday_pct")
+        if chg is not None:
+            vp.append(f"Δ≈5сессий {float(chg):+.1f}%")
+        if float(vv) < vix_c18:
+            vp.append("<18 — сжатая премия за риск")
+        elif float(vv) < vix_c20:
+            vp.append("<20 — ослабление паники по индексу")
+        reasons.append(" · ".join(vp))
 
     if not reasons:
         rsi_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "— (мало баров)"
@@ -1219,7 +1293,10 @@ def get_decision_5m(
         pm_last = premarket_context.get("premarket_last")
         prev_cl = premarket_context.get("prev_close")
         if gap is not None and pm_last is not None:
-            if gap < -1.5 and ((momentum_2h_pct is not None and momentum_2h_pct < 0) or very_negative):
+            if gap < -1.5 and (
+                (momentum_2h_pct is not None and momentum_2h_pct < 0)
+                or (very_negative and not relax_very_neg)
+            ):
                 limit_pct = 0.5
                 premarket_suggested_limit_price = round(pm_last * (1 - limit_pct / 100.0), 2) if pm_last else None
                 limit_str = f"${premarket_suggested_limit_price:.2f}" if premarket_suggested_limit_price is not None else "—"
@@ -1276,6 +1353,11 @@ def get_decision_5m(
         "kb_news_impact": kb_news_impact,
         "market_session": market_session,
     }
+    if vix_snap.get("enabled"):
+        out["vix_context"] = {
+            "vix": vix_snap.get("vix"),
+            "vix_change_multiday_pct": vix_snap.get("vix_change_multiday_pct"),
+        }
     if premarket_intraday_momentum_pct is not None:
         out["premarket_intraday_momentum_pct"] = premarket_intraday_momentum_pct
     if premarket_context is not None:
@@ -1479,7 +1561,12 @@ def get_decision_5m(
     entry_advice = "ALLOW"
     entry_advice_reason = ""
     if very_negative:
-        if strong_forecast:
+        if relax_very_neg:
+            entry_advice = "CAUTION"
+            entry_advice_reason = (
+                "Сильный негатив в новостях; VIX ниже порога — рынок слабее дисконтирует панику; вход только с дисциплиной"
+            )
+        elif strong_forecast:
             entry_advice = "CAUTION"
             entry_advice_reason = "Есть сильный негатив в новостях, но прогноз 60/120 и prob_up поддерживают осторожный вход"
         else:

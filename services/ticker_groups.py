@@ -16,14 +16,21 @@ from config_loader import get_config_value
 
 # Дефолты: распределение по группам (ваши зарегистрированные тикеры)
 DEFAULT_TICKERS_FAST = "SNDK,MU,LITE,MSFT"
-DEFAULT_TICKERS_MEDIUM = "ALAB,TER,AMD"
-# CL=F — WTI нефть: индикатор геополитической напряжённости, торговля, новости по тикеру
-DEFAULT_TICKERS_LONG = "MSFT,GBPUSD=X,GC=F,^VIX,CL=F"
+# Medium horizon / drivers for KB + forecasts (not 5m game unless also in TICKERS_FAST): semis, OEM, megacap tech names.
+DEFAULT_TICKERS_MEDIUM = "ALAB,TER,AMD,ANET,INTC,DELL,AVGO,ORCL,PLTR"
+# CL=F — WTI; BZ=F — Brent. Мегакап + макро + драйверы шефа (META, GOOGL, ANET, INTC, DELL, ALAB, AVGO, NVDA, ORCL, PLTR, AMD).
+DEFAULT_TICKERS_LONG = (
+    "MSFT,META,GOOGL,AMZN,NVDA,ANET,INTC,DELL,ALAB,AVGO,ORCL,PLTR,AMD,SNDK,"
+    "GBPUSD=X,GC=F,^VIX,CL=F,BZ=F"
+)
 
 # Быстрая игра 5m: целевые стоки для daily (Alex: SNDK, NBIS — лидеры; ASML, MU — AI bottlenecks; LITE, CIEN — волатильные)
 DEFAULT_GAME_5M_FAST = "SNDK,NBIS,ASML,MU,LITE,CIEN"
-# Тикеры для корреляции «все со всеми»: фон (MSFT, META, AMZN) + метрики (NVDA, SMH, QQQ, TLT, VIX) + геополитика (нефть, золото) + forex
-DEFAULT_GAME_5M_CORRELATION_CONTEXT = "MSFT,META,AMZN,NVDA,SMH,QQQ,TLT,^VIX,CL=F,GC=F,GBPUSD=X"
+# Correlation “all vs all”: megacap + semis + VIX/oil/gold/forex + extra drivers (ANET, INTC, DELL, …) for LLM/matrix context.
+DEFAULT_GAME_5M_CORRELATION_CONTEXT = (
+    "MSFT,META,GOOGL,AMZN,NVDA,SMH,QQQ,TLT,^VIX,CL=F,GC=F,GBPUSD=X,"
+    "ANET,INTC,DELL,ALAB,AVGO,ORCL,PLTR,AMD"
+)
 
 
 def get_tickers_fast() -> List[str]:

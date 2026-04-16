@@ -1,6 +1,7 @@
 # Конфигурационные файлы с секретами
 config.env
 config.env.lse
+config.secrets.env
 # Дампы БД (переносить на сервер через scp, не через git)
 *.sql.gz
 

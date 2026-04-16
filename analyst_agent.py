@@ -481,6 +481,7 @@ class AnalystAgent:
                 if open_price and open_price > 0 and latest is not None:
                     current_day_return_pct = (float(latest['close']) - open_price) / open_price * 100
 
+                vix_info = self.get_vix_regime()
                 technical_data_for_strategy = {
                     "close": float(latest['close']) if latest is not None else None,
                     "open_price": open_price,
@@ -490,6 +491,8 @@ class AnalystAgent:
                     "technical_signal": technical_signal,
                     "prev_day_return_pct": prev_day_return_pct,
                     "current_day_return_pct": current_day_return_pct,
+                    "vix_value": vix_info.get("vix_value"),
+                    "vix_regime": vix_info.get("regime"),
                 }
                 
                 news_list = news_df.to_dict('records') if not news_df.empty else []
@@ -638,14 +641,48 @@ class AnalystAgent:
         avg_volatility_20 = self.get_average_volatility_20_days(ticker)
         rsi_value = float(latest['rsi']) if latest is not None and pd.notna(latest.get('rsi')) else None
         
+        vix_info_llm = self.get_vix_regime()
         technical_data = {
             "close": float(latest['close']) if latest is not None else None,
             "sma_5": float(latest['sma_5']) if latest is not None else None,
             "volatility_5": float(latest['volatility_5']) if latest is not None else None,
             "avg_volatility_20": avg_volatility_20,
             "rsi": rsi_value,
-            "technical_signal": technical_signal
+            "technical_signal": technical_signal,
+            "vix_value": vix_info_llm.get("vix_value"),
+            "vix_regime": vix_info_llm.get("regime"),
         }
+        # Дневные поля для StrategyManager (как в get_decision): иначе Geopolitical/Momentum/Gap выбирались бы на неполных данных
+        if not df.empty and latest is not None:
+            op = None
+            if "open" in latest and latest.get("open") is not None and pd.notna(latest.get("open")):
+                try:
+                    op = float(latest["open"])
+                except (TypeError, ValueError):
+                    op = None
+            if op is None and len(df) > 1:
+                try:
+                    op = float(df.iloc[1]["close"])
+                except (TypeError, ValueError, KeyError):
+                    op = None
+            technical_data["open_price"] = op
+            prev_day_return_pct = None
+            if len(df) >= 3:
+                try:
+                    prev_close = float(df.iloc[1]["close"])
+                    prev_prev_close = float(df.iloc[2]["close"])
+                    if prev_prev_close and prev_prev_close > 0:
+                        prev_day_return_pct = (prev_close - prev_prev_close) / prev_prev_close * 100
+                except (TypeError, ValueError, KeyError):
+                    pass
+            technical_data["prev_day_return_pct"] = prev_day_return_pct
+            current_day_return_pct = None
+            if op and op > 0:
+                try:
+                    current_day_return_pct = (float(latest["close"]) - op) / op * 100
+                except (TypeError, ValueError, KeyError):
+                    pass
+            technical_data["current_day_return_pct"] = current_day_return_pct
         # Кластер по умолчанию: все тикеры (FAST + MEDIUM + LONG), чтобы в промпте была корреляция со всеми, а не только с MU
         if cluster_context is None:
             try:

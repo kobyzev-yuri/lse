@@ -19,7 +19,12 @@ logger = logging.getLogger(__name__)
 class StrategyManager:
     """
     Интеллектуальный диспетчер для выбора оптимальной стратегии
-    на основе волатильности, sentiment и ценовых гэпов
+    на основе волатильности, sentiment и ценовых гэпов.
+
+    Контекст: портфельный цикл и AnalystAgent работают по **дневным** котировкам
+    (последние дни, SMA/вола за 5 и 20 дней) и **KB-новостям** (взвешенный sentiment, insight).
+    Поля ``vix_value`` / ``vix_regime`` в ``technical_data`` (из ``AnalystAgent.get_vix_regime``)
+    смягчают выбор «панических» веток при низком VIX — в духе количественного risk-on/off.
     """
     
     def __init__(self):
@@ -73,8 +78,14 @@ class StrategyManager:
         if open_price and close and open_price > 0:
             gap_percent = abs((close - open_price) / open_price) * 100
 
+        vix_val = technical_data.get("vix_value")
+        vix_reg = technical_data.get("vix_regime")
+        vix_note = ""
+        if vix_val is not None:
+            vix_note = f", VIX={float(vix_val):.2f} ({vix_reg})"
+
         logger.info(f"📊 Анализ режима рынка для {ticker}:")
-        logger.info(f"   Волатильность: {vol_str} (порог: {self.high_volatility_threshold})")
+        logger.info(f"   Волатильность: {vol_str} (порог: {self.high_volatility_threshold}){vix_note}")
         logger.info(f"   Sentiment: {sentiment_score:.2f} (порог: ±{self.extreme_sentiment_threshold})")
         logger.info(f"   Гэп: {gap_percent:.2f}% (порог: {self.gap_threshold}%)")
         prev_day_return_pct = technical_data.get("prev_day_return_pct")
@@ -92,9 +103,13 @@ class StrategyManager:
                 )
                 return selected
         
-        # 2. VolatileGapStrategy: очень высокая волатильность + гэп или экстремальный sentiment
-        if volatility_ratio > self.high_volatility_threshold:
-            if gap_percent > self.gap_threshold or abs(sentiment_score) > self.extreme_sentiment_threshold:
+        # 2. VolatileGapStrategy: очень высокая волатильность + гэп или экстремальный sentiment.
+        # При низком VIX рынок чаще «переваривает» шум — требуем чуть более жёсткие условия для этой ветки.
+        vix_low = vix_val is not None and float(vix_val) < 20.0
+        vol_bar_volatile = self.high_volatility_threshold + (0.25 if vix_low else 0.0)
+        extreme_bar = self.extreme_sentiment_threshold + (0.08 if vix_low else 0.0)
+        if volatility_ratio > vol_bar_volatile:
+            if gap_percent > self.gap_threshold or abs(sentiment_score) > extreme_bar:
                 selected = self._get_strategy_by_name("Volatile Gap")
                 if selected and selected.is_suitable(technical_data, news_data, sentiment_score):
                     logger.info(f"🔄 Volatility is high ({volatility_ratio:.2f}x), Sentiment is Extreme ({sentiment_score:.2f}) -> Switching to VolatileGapStrategy for {ticker}")
@@ -102,8 +117,11 @@ class StrategyManager:
                 else:
                     logger.info(f"   ⚠️ VolatileGap не подходит для {ticker} (is_suitable вернул False)")
         
-        # 3. MomentumStrategy: низкая волатильность + положительный sentiment
-        if volatility_ratio < 1.0 and sentiment_score > 0.3:
+        # 3. MomentumStrategy: низкая волатильность + положительный sentiment (чуть шире окно при LOW_FEAR / VIX<18)
+        momentum_vol_cap = 1.0
+        if vix_reg == "LOW_FEAR" or (vix_val is not None and float(vix_val) < 18.0):
+            momentum_vol_cap = 1.12
+        if volatility_ratio < momentum_vol_cap and sentiment_score > 0.3:
             selected = self._get_strategy_by_name("Momentum")
             if selected and selected.is_suitable(technical_data, news_data, sentiment_score):
                 logger.info(f"🔄 Market is calm (volatility={volatility_ratio:.2f}x), Positive sentiment ({sentiment_score:.2f}) -> Using MomentumStrategy for {ticker}")

@@ -3,6 +3,9 @@
 Использует локальный config.env или fallback к ../brats/config.env.
 Опционально подмешивает ключи из NYSE_CONFIG_PATH (тот же env, что в репозитории nyse) —
 пустые/отсутствующие в LSE заполняются из nyse/config.env (например MARKETAUX_API_KEY).
+Опционально перекрывает значениями из config.secrets.env (или путь в LSE_CONFIG_SECRETS /
+CONFIG_SECRETS_FILE): удобно держать API-ключи и DATABASE_URL отдельно от основного конфига.
+Порядок приоритета для get_config_value: переменные окружения процесса, затем объединённый dict файлов.
 Если файла нет (например Cloud Run) — возвращает пустой dict, значения берутся из переменных окружения.
 """
 
@@ -157,6 +160,7 @@ def get_config_file_path(config_file: Optional[str] = None) -> Optional[Path]:
 def update_config_key(key: str, value: str) -> bool:
     """
     Обновляет или добавляет ключ в config.env. Сохраняет комментарии и порядок строк.
+    Секреты из config.secrets.env этим API не трогаются — правьте их вручную или отдельным деплоем.
     Возвращает True при успехе, False если файл недоступен для записи.
     """
     path = get_config_file_path()
@@ -211,6 +215,33 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
         if k:
             out[k] = v
     return out
+
+
+def _secrets_overlay_path() -> Optional[Path]:
+    """Файл с секретами: явный путь из env или ./config.secrets.env рядом с config_loader."""
+    raw = (os.environ.get("LSE_CONFIG_SECRETS") or os.environ.get("CONFIG_SECRETS_FILE") or "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        return p if p.is_file() else None
+    default = Path(__file__).resolve().parent / "config.secrets.env"
+    return default if default.is_file() else None
+
+
+def _merge_config_secrets_overlay(config: Dict[str, str]) -> Dict[str, str]:
+    """
+    Непустые ключи из secrets-файла перекрывают config.env (и NYSE overlay).
+    Пустые значения в secrets игнорируются.
+    """
+    path = _secrets_overlay_path()
+    if not path:
+        return config
+    overlay = _parse_env_file(path)
+    if not overlay:
+        return config
+    for k, v in overlay.items():
+        if v:
+            config[k] = v
+    return config
 
 
 def _merge_nyse_config_overlay(config: Dict[str, str]) -> Dict[str, str]:
@@ -281,7 +312,8 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
     if not config:
         logger.debug("Базовый config.env не загружен или пуст — возможен только env и NYSE_CONFIG_PATH")
 
-    return _merge_nyse_config_overlay(config)
+    merged = _merge_nyse_config_overlay(config)
+    return _merge_config_secrets_overlay(merged)
 
 
 def get_database_url(config: Optional[Dict[str, str]] = None) -> str:
