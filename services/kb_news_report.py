@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import html
 import math
+import re
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -131,6 +132,11 @@ def summarize_geopolitical_context(news_df: pd.DataFrame) -> Dict[str, Any]:
 
 def _h(s: Any) -> str:
     return html.escape(str(s) if s is not None else "")
+
+
+def _telegram_html_br_ok(s: str) -> str:
+    """Telegram HTML: self-closing ``<br/>`` / ``<br />`` не поддерживаются — только ``<br>``."""
+    return re.sub(r"<br\s*/>", "<br>", s, flags=re.IGNORECASE)
 
 
 def filter_kb_display_rows(news_df: pd.DataFrame) -> pd.DataFrame:
@@ -458,10 +464,10 @@ def build_kb_news_short_html(
     geo = metrics.get("geopolitical") or {}
     ah = int(cal.get("ahead_hours") or 72)
     if cal.get("n_rows"):
-        cal_lines = "<br/>".join(_h(x) for x in (cal.get("lines") or [])[:6])
+        cal_lines = "<br>".join(_h(x) for x in (cal.get("lines") or [])[:6])
         lines.append(
             f"<b>Календарь KB</b> (вперёд до {ah}ч): записей <code>{int(cal.get('n_rows', 0))}</code>, "
-            f"HIGH≤48ч: <code>{int(cal.get('high_48h', 0))}</code>, mega(CPI/NFP/FOMC/…): <code>{cal.get('mega_72h')}</code><br/>{cal_lines}"
+            f"HIGH≤48ч: <code>{int(cal.get('high_48h', 0))}</code>, mega(CPI/NFP/FOMC/…): <code>{cal.get('mega_72h')}</code><br>{cal_lines}"
         )
     else:
         lines.append(
@@ -472,7 +478,7 @@ def build_kb_news_short_html(
         f"<b>REG (nyse channel + TF-IDF)</b>: REG-тем после merge <code>{int(geo.get('n_geo', 0))}</code>, "
         f"<code>draft_impulse.regime_stress</code>=<code>{float(geo.get('geo_stress') or 0):.3f}</code> — "
         f"{_h(geo.get('summary_short') or 'нет выдержек')}"
-        + (f"<br/><small>{_h(rnote)}</small>" if rnote else "")
+        + (f"<br><small>{_h(rnote)}</small>" if rnote else "")
     )
     lines.append("")
     shown = 0
@@ -497,7 +503,7 @@ def build_kb_news_short_html(
         shown += 1
     lines.append("")
     lines.append("📎 <i>Полный HTML — в документе ниже</i>")
-    return "\n".join(lines)
+    return _telegram_html_br_ok("\n".join(lines))
 
 
 def build_kb_news_full_html(
@@ -519,7 +525,7 @@ def build_kb_news_full_html(
     dip = metrics.get("draft_impulse")
     if isinstance(dip, dict) and dip:
         di_html = (
-            f"<br/><b>DraftImpulse</b> (nyse): inc_mean=<code>{dip.get('draft_bias_incremental', 0):.4f}</code>, "
+            f"<br><b>DraftImpulse</b> (nyse): inc_mean=<code>{dip.get('draft_bias_incremental', 0):.4f}</code>, "
             f"regime_stress=<code>{dip.get('regime_stress', 0):.4f}</code>, policy_stress=<code>{dip.get('policy_stress', 0):.4f}</code>, "
             f"articles REG/INC/POL = <code>{dip.get('articles_regime', 0)}</code>/"
             f"<code>{dip.get('articles_incremental', 0)}</code>/<code>{dip.get('articles_policy', 0)}</code>."
