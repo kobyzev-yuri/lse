@@ -188,17 +188,27 @@ def build_entry_fusion_metrics(
         if lb is None:
             lb = int(td.get("kb_news_days") or 0) * 24 if td.get("kb_news_days") else None
         m = compute_kb_bias_from_article_dicts(list(news_data), ticker, lookback_hours=lb)
-        news_bias = float(m.get("news_bias") or 0.0)
-        rough = float(m.get("rough_bias") or 0.0)
-        row_mean = float(m.get("row_mean_bias") or 0.0)
-        regime_stress_kb = float(m.get("regime_stress") or 0.0)
+        n_rel = int(m.get("relevant_n_rows") or 0)
+        news_bias_full = float(m.get("news_bias") or 0.0)
+        if n_rel > 0:
+            news_bias = float(m.get("relevant_news_bias") or 0.0)
+            rough = float(m.get("relevant_rough_bias") or 0.0)
+            row_mean = float(m.get("relevant_row_mean_bias") or 0.0)
+            regime_stress_kb = float(m.get("relevant_regime_stress") or 0.0)
+            dip = m.get("relevant_draft_impulse")
+            geo = m.get("relevant_geopolitical") if isinstance(m.get("relevant_geopolitical"), dict) else {}
+        else:
+            news_bias = news_bias_full
+            rough = float(m.get("rough_bias") or 0.0)
+            row_mean = float(m.get("row_mean_bias") or 0.0)
+            regime_stress_kb = float(m.get("regime_stress") or 0.0)
+            dip = m.get("draft_impulse")
+            geo = m.get("geopolitical") if isinstance(m.get("geopolitical"), dict) else {}
         gate_mode = m.get("gate_mode")
         gate_reason = m.get("gate_reason")
         n_kb = int(m.get("n_rows") or 0)
-        dip = m.get("draft_impulse")
         if isinstance(dip, dict):
             draft_impulse_kb = dip
-        geo = m.get("geopolitical") if isinstance(m.get("geopolitical"), dict) else {}
         n_reg = int(geo.get("n_geo") or 0)
         gstress = float(geo.get("geo_stress") or 0.0)
         gsum = str(geo.get("summary_short") or "").strip()
@@ -207,6 +217,8 @@ def build_entry_fusion_metrics(
             f"REG-тем после TF-IDF merge: {n_reg}",
             f"draft_impulse.regime_stress={gstress:.3f}",
         ]
+        if n_rel > 0:
+            parts.insert(0, f"релевантных строк KB: {n_rel}")
         if gsum:
             parts.append(f"кратко: {gsum[:160]}")
         if gnote:
@@ -224,7 +236,7 @@ def build_entry_fusion_metrics(
         kb_reg_context = None
     fused = ENTRY_FUSION_W_TECH * tech + ENTRY_FUSION_W_NEWS * news_bias
     fused = max(-1.0, min(1.0, fused))
-    return {
+    out_fm = {
         "tech_bias_neg1": round(tech, 4),
         "rough_bias_kb": round(rough, 4),
         "row_mean_bias_kb": round(row_mean, 4),
@@ -237,6 +249,12 @@ def build_entry_fusion_metrics(
         "draft_impulse_kb": draft_impulse_kb,
         "kb_reg_context": kb_reg_context,
     }
+    if news_data:
+        n_rel2 = int(m.get("relevant_n_rows") or 0)
+        if n_rel2 > 0:
+            out_fm["relevant_n_kb_rows"] = n_rel2
+            out_fm["news_bias_kb_full_window"] = round(news_bias_full, 4)
+    return out_fm
 
 
 def format_entry_fusion_block_for_llm(
@@ -251,10 +269,15 @@ def format_entry_fusion_block_for_llm(
         f"- tech_bias_neg1 (эвристика по сигналу GAME_5m и импульсу 2ч): {m['tech_bias_neg1']:+.3f}",
         f"- rough_bias_kb (nyse: single_scalar_draft_bias после TF-IDF REG-кластера): {m['rough_bias_kb']:+.3f}",
         f"- row_mean_bias_kb (среднее cheap по строкам KB, справочно): {float(m.get('row_mean_bias_kb') or 0):+.3f}",
-        f"- news_bias_kb (взвешенный KB −1..+1): {m['news_bias_kb']:+.3f}",
-        f"- regime_stress_kb (draft_impulse по каналу REG, exp-затухание): {float(m.get('regime_stress_kb') or 0):+.3f}",
+        f"- news_bias_kb (взвешенный KB −1..+1; при наличии релевантных строк — только по ним): {m['news_bias_kb']:+.3f}",
+        f"- regime_stress_kb (draft_impulse по каналу REG, exp-затухание; при релевантных — по подмножеству): {float(m.get('regime_stress_kb') or 0):+.3f}",
         f"- fused_bias_neg1 = {ENTRY_FUSION_W_TECH}×tech + {ENTRY_FUSION_W_NEWS}×news: {m['fused_bias_neg1']:+.3f}",
     ]
+    if m.get("relevant_n_kb_rows"):
+        lines.append(
+            f"- релевантных строк KB: {int(m['relevant_n_kb_rows'])}; "
+            f"news_bias по полному окну (справка): {float(m.get('news_bias_kb_full_window') or 0):+.3f}"
+        )
     if m.get("gate_mode_kb"):
         lines.append(f"- KB gate: {m['gate_mode_kb']} ({m.get('gate_reason_kb') or ''})")
     dip = m.get("draft_impulse_kb")

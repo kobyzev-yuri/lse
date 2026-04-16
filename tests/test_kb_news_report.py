@@ -2,7 +2,28 @@
 
 import pandas as pd
 
-from services.kb_news_report import order_kb_display_rows_for_ticker
+from services.kb_news_report import (
+    filter_relevant_kb_rows_for_ticker,
+    kb_row_relevant_to_ticker,
+    order_kb_display_rows_for_ticker,
+)
+
+
+def test_kb_row_relevant_sandisk_alias_for_sndk():
+    row = {"ticker": "MACRO", "content": "Zacks: SanDisk flash", "insight": ""}
+    assert kb_row_relevant_to_ticker(pd.Series(row), "SNDK") is True
+
+
+def test_filter_relevant_keeps_only_ticker_and_matching_macro():
+    df = pd.DataFrame(
+        [
+            {"ticker": "MU", "content": "Micron", "insight": ""},
+            {"ticker": "SNDK", "content": "WDC", "insight": ""},
+            {"ticker": "MACRO", "content": "random tech", "insight": ""},
+        ]
+    )
+    out = filter_relevant_kb_rows_for_ticker(df, "SNDK")
+    assert set(out["ticker"].tolist()) == {"SNDK"}
 
 
 def test_order_prefers_exact_ticker_over_macro():
