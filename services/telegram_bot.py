@@ -485,7 +485,7 @@ def _build_prompt_entry_game5m_html(
         "<title>Шаблон решения: игра 5m</title>",
         "<style>", _PROMPT_ENTRY_REPORT_CSS, "</style></head><body>",
         "<h1>Шаблон принятия решения: игра «5m»</h1>",
-        '<p class="intro">Контекст по параметрам и тикерам игры 5m. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — контекст (входные данные), обоснование по правилам и блок «С учётом корреляции (LLM)» при USE_LLM=true (LLM получает тот же контекст корреляций). Решение по правилам и контексту (KB). Вход/выход и тейк/стоп из GAME_5M_*.</p>',
+        '<p class="intro">Контекст по параметрам и тикерам игры 5m. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — контекст (входные данные), строка «Слияние (диагностика)» (tech+KB, всегда при наличии данных), обоснование по правилам и блок «С учётом корреляции (LLM)» при USE_LLM=true и успешном контексте корреляции (LLM получает тот же контекст). Решение по правилам и контексту (KB). Вход/выход и тейк/стоп из GAME_5M_*.</p>',
         f'<p class="cluster"><strong>Кластер:</strong> {html.escape(", ".join(cluster_tickers))}</p>',
     ]
     if correlation_note:
@@ -599,13 +599,14 @@ def _build_prompt_entry_game5m_html(
         parts.append("<h3>Обоснование</h3>")
         parts.append(f"<pre>{_pre(reasoning) if reasoning else '—'}</pre>")
         llm_corr = r.get("llm_correlation_reasoning")
-        if llm_corr:
+        dfu = r.get("llm_decision_fused")
+        kf = r.get("llm_key_factors")
+        if llm_corr or dfu or kf:
             parts.append("<h3>С учётом корреляции (LLM)</h3>")
-            parts.append(f"<pre>{_pre(llm_corr)}</pre>")
-            kf = r.get("llm_key_factors")
+            if llm_corr:
+                parts.append(f"<pre>{_pre(llm_corr)}</pre>")
             if kf:
                 parts.append(f"<p class=\"meta\">Ключевые факторы: {', '.join(_pre(str(x)) for x in kf[:10])}</p>")
-            dfu = r.get("llm_decision_fused")
             if dfu:
                 diff = r.get("llm_ab_fusion_differs")
                 diff_s = "да" if diff else "нет"
@@ -4253,6 +4254,32 @@ class LSETelegramBot:
                         d5 = get_decision_5m(t, days=days_5m, use_llm_news=False)
                         if d5 and (d5.get("price") is not None or d5.get("rsi_5m") is not None):
                             extra_tech[t] = {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}
+                # Метрики tech+KB fusion — всегда в отчёте (HTML), не только при вызове LLM.
+                from services.llm_service import build_entry_fusion_metrics
+
+                for r in per_ticker_results:
+                    if r.get("decision") == "NO_DATA":
+                        continue
+                    td_min: Dict[str, Any] = {
+                        "technical_signal": r.get("decision"),
+                        "momentum_2h_pct": r.get("momentum_2h_pct"),
+                        "kb_news_days": days_5m,
+                    }
+                    kb_rows = list(r.get("kb_news") or [])
+                    if kb_rows:
+                        r["entry_fusion_metrics"] = build_entry_fusion_metrics(
+                            r["ticker"], td_min, kb_rows, 0.5,
+                        )
+                    else:
+                        imp = str(r.get("kb_news_impact") or "")
+                        sent = 0.5
+                        if "негатив" in imp:
+                            sent = 0.35
+                        elif "позитив" in imp:
+                            sent = 0.65
+                        r["entry_fusion_metrics"] = build_entry_fusion_metrics(
+                            r["ticker"], td_min, [], sent,
+                        )
                 if get_use_llm_for_analyst() and corr_matrix and (corr_tickers_used or cluster_5m):
                     tech_by_ticker_5m = {r.get("ticker"): {"price": r.get("price"), "rsi": r.get("rsi_5m")} for r in per_ticker_results if r.get("ticker")}
                     tech_by_ticker_5m.update(extra_tech)
@@ -4292,16 +4319,12 @@ class LSETelegramBot:
                                     "content": (n.get("content") or "")[:500],
                                     "sentiment_score": n.get("sentiment_score"),
                                 })
-                            from services.llm_service import build_entry_fusion_metrics
-
+                            fm = r.get("entry_fusion_metrics") or {}
                             sentiment = 0.5
                             if kb_rows:
-                                fm = build_entry_fusion_metrics(
-                                    r["ticker"], technical_data, kb_rows, 0.5,
-                                )
                                 sentiment = max(
                                     0.0,
-                                    min(1.0, 0.5 + float(fm["news_bias_kb"]) / 2.0),
+                                    min(1.0, 0.5 + float(fm.get("news_bias_kb") or 0.0) / 2.0),
                                 )
                             else:
                                 imp = str(r.get("kb_news_impact") or "")
@@ -4309,17 +4332,13 @@ class LSETelegramBot:
                                     sentiment = 0.35
                                 elif "позитив" in imp:
                                     sentiment = 0.65
-                                fm = build_entry_fusion_metrics(
-                                    r["ticker"], technical_data, [], sentiment,
-                                )
-                            technical_data["tech_bias_neg1"] = fm["tech_bias_neg1"]
-                            technical_data["rough_bias_kb"] = fm["rough_bias_kb"]
-                            technical_data["news_bias_kb"] = fm["news_bias_kb"]
-                            technical_data["fused_bias_neg1"] = fm["fused_bias_neg1"]
+                            technical_data["tech_bias_neg1"] = fm.get("tech_bias_neg1")
+                            technical_data["rough_bias_kb"] = fm.get("rough_bias_kb")
+                            technical_data["news_bias_kb"] = fm.get("news_bias_kb")
+                            technical_data["fused_bias_neg1"] = fm.get("fused_bias_neg1")
                             technical_data["gate_mode_kb"] = fm.get("gate_mode_kb")
                             technical_data["gate_reason_kb"] = fm.get("gate_reason_kb")
                             technical_data["n_kb_rows"] = fm.get("n_kb_rows")
-                            r["entry_fusion_metrics"] = fm
                             result = llm.analyze_trading_situation(
                                 r["ticker"], technical_data, news_list, sentiment,
                                 strategy_name="GAME_5M", strategy_signal=r.get("decision"),
