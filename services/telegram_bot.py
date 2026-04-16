@@ -5635,19 +5635,9 @@ class LSETelegramBot:
     
     def _format_news_response(self, ticker: str, news_df, top_n: int = 10) -> str:
         """Форматирует ответ с новостями. top_n — сколько записей показать. Шум (календарные числа) скрыт."""
-        def _is_noise(row) -> bool:
-            """Запись — шум: ECONOMIC_INDICATOR с контентом в виде короткого числа (19.60M и т.п.)."""
-            if row.get('event_type') != 'ECONOMIC_INDICATOR':
-                return False
-            raw = row.get('content') or row.get('insight') or ''
-            if raw is None or (isinstance(raw, float) and str(raw) == 'nan'):
-                return True
-            text = str(raw).strip()
-            if len(text) > 50 or ' ' in text:
-                return False
-            return True
+        from services.kb_news_report import filter_kb_display_rows, order_kb_display_rows_for_ticker
 
-        display_df = news_df[~news_df.apply(_is_noise, axis=1)].reset_index(drop=True)
+        display_df = order_kb_display_rows_for_ticker(filter_kb_display_rows(news_df), ticker)
         total_display = len(display_df)
         if total_display == 0:
             return (

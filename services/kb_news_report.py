@@ -33,6 +33,11 @@ _T1 = 0.12
 _T2 = 0.5
 _MAX_ARTICLES_FULL = 8
 _REGIME_STRESS_MIN = 0.05
+
+# Uppercase substrings: MACRO rows that mention the company name (not the ticker) still rank above generic MACRO.
+_DISPLAY_TEXT_NEEDLES: Dict[str, Tuple[str, ...]] = {
+    "SNDK": ("SNDK", "SANDISK", "SAN DISK"),
+}
 _FULL_BIAS_MULT = 2.0
 
 
@@ -159,6 +164,53 @@ def filter_kb_display_rows(news_df: pd.DataFrame) -> pd.DataFrame:
     if news_df.empty:
         return news_df
     return news_df[~news_df.apply(_is_noise, axis=1)].reset_index(drop=True)
+
+
+def order_kb_display_rows_for_ticker(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    """
+    Order rows for /news tables and Markdown news list: exact ticker first, then MACRO/US_MACRO
+    whose text mentions the ticker, then generic MACRO; within each tier prefer rows with
+    numeric sentiment_score, then newest COALESCE(ingested_at, ts). Does not affect bias metrics.
+    """
+    if df.empty:
+        return df
+    tk = (ticker or "").upper()
+
+    def _tier(row: pd.Series) -> int:
+        t = str(row.get("ticker") or "").upper()
+        if t == tk:
+            return 0
+        if t in ("MACRO", "US_MACRO"):
+            body = f"{row.get('content') or ''} {row.get('insight') or ''}".upper()
+            needles = (tk,) + _DISPLAY_TEXT_NEEDLES.get(tk, ())
+            return 1 if any(n in body for n in needles) else 2
+        return 1
+
+    def _has_score(row: pd.Series) -> int:
+        ss = row.get("sentiment_score")
+        if ss is None:
+            return 0
+        if isinstance(ss, float) and math.isnan(ss):
+            return 0
+        try:
+            float(ss)
+            return 1
+        except (TypeError, ValueError):
+            return 0
+
+    out = df.copy()
+    out["_tier"] = out.apply(_tier, axis=1)
+    out["_has_score"] = out.apply(_has_score, axis=1)
+    if "ingested_at" in out.columns:
+        ia = pd.to_datetime(out["ingested_at"], errors="coerce")
+        ts0 = pd.to_datetime(out["ts"], errors="coerce")
+        out["_ts"] = ia.fillna(ts0)
+    else:
+        out["_ts"] = pd.to_datetime(out["ts"], errors="coerce")
+    min_ts = pd.Timestamp("1970-01-01", tz="UTC")
+    out["_ts"] = out["_ts"].fillna(min_ts)
+    out = out.sort_values(by=["_tier", "_has_score", "_ts"], ascending=[True, False, False])
+    return out.drop(columns=["_tier", "_has_score", "_ts"], errors="ignore").reset_index(drop=True)
 
 
 def _row_bias_neg1(sentiment_score: Any) -> float:
@@ -446,7 +498,7 @@ def build_kb_news_short_html(
 ) -> str:
     """Краткое HTML для чата (nyse-стиль): bias + топ строк."""
     tv = ticker.upper()
-    disp = filter_kb_display_rows(news_df)
+    disp = order_kb_display_rows_for_ticker(filter_kb_display_rows(news_df), tv)
     rough = metrics["rough_bias"]
     row_mean = float(metrics.get("row_mean_bias") or 0.0)
     nb = metrics["news_bias"]
@@ -517,7 +569,7 @@ def build_kb_news_full_html(
 ) -> str:
     """Полный HTML-отчёт с формулами и таблицей."""
     tv = ticker.upper()
-    disp = filter_kb_display_rows(news_df)
+    disp = order_kb_display_rows_for_ticker(filter_kb_display_rows(news_df), tv)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     rough = metrics["rough_bias"]
@@ -622,7 +674,7 @@ HIGH≤48ч: {int(cal.get('high_48h') or 0)} · mega: {cal.get('mega_72h')}</p>
 <tbody>
 <tr><td>draft_bias (грубое среднее row_bias)</td><td class="mono">{rough:+.4f}</td></tr>
 <tr><td>news.bias (взвешенное KB)</td><td class="mono">{nb:+.4f}</td></tr>
-<tr><td>regime_stress (макро-строки)</td><td class="mono">{metrics['regime_stress']:.4f}</td></tr>
+<tr><td>regime_stress (<code>draft_impulse</code>)</td><td class="mono">{metrics['regime_stress']:.4f}</td></tr>
 <tr><td>Gate (аналог nyse)</td><td><b>{_h(mode)}</b></td></tr>
 <tr><td>Строк в отчёте</td><td>{metrics['n_rows']} (макро: {metrics['n_macro']})</td></tr>
 </tbody></table>
