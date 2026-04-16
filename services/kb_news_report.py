@@ -134,9 +134,12 @@ def _h(s: Any) -> str:
     return html.escape(str(s) if s is not None else "")
 
 
-def _telegram_html_br_ok(s: str) -> str:
-    """Telegram HTML: self-closing ``<br/>`` / ``<br />`` не поддерживаются — только ``<br>``."""
-    return re.sub(r"<br\s*/>", "<br>", s, flags=re.IGNORECASE)
+def _telegram_chat_html_sanitize(s: str) -> str:
+    """
+    Short /news messages use parse_mode=HTML. Some Telegram builds reject ``<br>`` / ``<br/>``;
+    plain newlines are preserved and avoid entity-parser errors. Also strips any ``<br>`` from KB text.
+    """
+    return re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
 
 
 def filter_kb_display_rows(news_df: pd.DataFrame) -> pd.DataFrame:
@@ -464,10 +467,10 @@ def build_kb_news_short_html(
     geo = metrics.get("geopolitical") or {}
     ah = int(cal.get("ahead_hours") or 72)
     if cal.get("n_rows"):
-        cal_lines = "<br>".join(_h(x) for x in (cal.get("lines") or [])[:6])
+        cal_lines = "\n".join(_h(x) for x in (cal.get("lines") or [])[:6])
         lines.append(
             f"<b>Календарь KB</b> (вперёд до {ah}ч): записей <code>{int(cal.get('n_rows', 0))}</code>, "
-            f"HIGH≤48ч: <code>{int(cal.get('high_48h', 0))}</code>, mega(CPI/NFP/FOMC/…): <code>{cal.get('mega_72h')}</code><br>{cal_lines}"
+            f"HIGH≤48ч: <code>{int(cal.get('high_48h', 0))}</code>, mega(CPI/NFP/FOMC/…): <code>{cal.get('mega_72h')}</code>\n{cal_lines}"
         )
     else:
         lines.append(
@@ -478,7 +481,7 @@ def build_kb_news_short_html(
         f"<b>REG (nyse channel + TF-IDF)</b>: REG-тем после merge <code>{int(geo.get('n_geo', 0))}</code>, "
         f"<code>draft_impulse.regime_stress</code>=<code>{float(geo.get('geo_stress') or 0):.3f}</code> — "
         f"{_h(geo.get('summary_short') or 'нет выдержек')}"
-        + (f"<br><small>{_h(rnote)}</small>" if rnote else "")
+        + (f"\n<i>{_h(rnote)}</i>" if rnote else "")
     )
     lines.append("")
     shown = 0
@@ -503,7 +506,7 @@ def build_kb_news_short_html(
         shown += 1
     lines.append("")
     lines.append("📎 <i>Полный HTML — в документе ниже</i>")
-    return _telegram_html_br_ok("\n".join(lines))
+    return _telegram_chat_html_sanitize("\n".join(lines))
 
 
 def build_kb_news_full_html(
