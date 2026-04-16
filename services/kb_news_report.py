@@ -317,9 +317,15 @@ def build_kb_news_short_html(
         rb = _row_bias_neg1(row.get("sentiment_score"))
         title = str(row.get("content") or "")[:72]
         src = str(row.get("source") or "?")[:20]
+        # Не :+.2f — при score≈0.5 row_bias микроскопический; шапка уже :+.4f.
+        try:
+            raw_s = float(row.get("sentiment_score"))
+            raw_bit = f"{raw_s:.3f}" if not math.isnan(raw_s) else "—"
+        except (TypeError, ValueError):
+            raw_bit = "—"
         lines.append(
             f"{bar} <code>{_h(ch)}</code> <code>{_h(src)}</code> "
-            f"<code>{rb:+.2f}</code> {_h(title)}"
+            f"<code>{rb:+.4f}</code> <code>s={_h(raw_bit)}</code> {_h(title)}"
         )
         shown += 1
     lines.append("")
@@ -376,7 +382,8 @@ t2={_T2}, max_articles_full={_MAX_ARTICLES_FULL}, regime_stress_min={_REGIME_STR
             if math.isnan(raw):
                 raw_s = "—"
             else:
-                raw_s = f"{raw:.2f}"
+                # :.2f давало «0.00» при score≈0.5 — не видно микросдвига, из-за которого draft≠0
+                raw_s = f"{raw:.4f}"
         except (TypeError, ValueError):
             raw_s = "—"
         rcls = "pos" if rb > 0.05 else ("neg" if rb < -0.05 else "neu")
@@ -392,7 +399,7 @@ t2={_T2}, max_articles_full={_MAX_ARTICLES_FULL}, regime_stress_min={_REGIME_STR
             f"<td>{_h(row.get('source') or '')}</td>"
             f"<td>{_h(str(row.get('event_type') or ''))}</td>"
             f"<td>{_h(str(row.get('ticker') or ''))}</td>"
-            f'<td class="mono {rcls}">{_bias_arrow(rb)} {rb:+.3f}</td>'
+            f'<td class="mono {rcls}">{_bias_arrow(rb)} {rb:+.4f}</td>'
             f'<td class="mono">{_h(raw_s)}</td>'
             f"<td>{_h(ts_str)}</td>"
             f"<td>{_h(title)}"
