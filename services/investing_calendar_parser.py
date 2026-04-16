@@ -24,7 +24,7 @@ import requests
 from bs4 import BeautifulSoup
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from sqlalchemy import create_engine, text
 import time
 
@@ -364,14 +364,16 @@ def _is_calendar_content_worth_saving(content: str, event_name: str) -> bool:
     return True
 
 
-def save_events_to_db(events: List[Dict]):
+def save_events_to_db(events: List[Dict]) -> int:
     """
     Сохраняет события календаря в БД.
     Записи без осмысленного текста (только число вроде 19.60M) не сохраняются.
+    Returns:
+        Число новых вставок (rowcount > 0), не считая дубликатов и «шум».
     """
     if not events:
-        return
-    
+        return 0
+
     db_url = get_database_url()
     engine = create_engine(db_url)
     
@@ -445,9 +447,10 @@ def save_events_to_db(events: List[Dict]):
         f"пропущено без текста: {skipped_noise}"
     )
     engine.dispose()
+    return saved_count
 
 
-def fetch_and_save_investing_calendar():
+def fetch_and_save_investing_calendar() -> Tuple[int, int]:
     """
     Главная функция: получает календарь из Investing.com и сохраняет в БД.
     Источник: JSON API (по умолчанию, как nyse) или только при флаге — HTML (см. fetch_all_regions_calendar).
@@ -455,18 +458,19 @@ def fetch_and_save_investing_calendar():
     и на бесплатном плане часто недоступны.
     """
     logger.info("🚀 Начало получения экономического календаря из Investing.com")
-    
+
     events = fetch_all_regions_calendar()
-    
+
     if events:
-        save_events_to_db(events)
+        saved = save_events_to_db(events)
         logger.info("✅ Завершено получение календаря из Investing.com")
-    else:
-        logger.info(
-            "Календарь Investing.com: событий нет (JSON API вернуло пусто или была ошибка — см. лог выше; "
-            "legacy HTML только при INVESTING_CALENDAR_USE_HTML=true). "
-            "Доп. макро: ALPHAVANTAGE_FETCH_ECONOMIC=true (на free AV часто пусто)."
-        )
+        return len(events), saved
+    logger.info(
+        "Календарь Investing.com: событий нет (JSON API вернуло пусто или была ошибка — см. лог выше; "
+        "legacy HTML только при INVESTING_CALENDAR_USE_HTML=true). "
+        "Доп. макро: ALPHAVANTAGE_FETCH_ECONOMIC=true (на free AV часто пусто)."
+    )
+    return 0, 0
 
 
 if __name__ == "__main__":

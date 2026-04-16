@@ -127,11 +127,19 @@ def fetch_all_news_sources(mode: str = "all"):
             sources_status["TickerNews"] = f"❌ Ошибка: {e}"
 
     if run_investing:
-        # 4. Investing.com Economic Calendar (web scraping)
+        # 4. Investing.com Economic Calendar (JSON API по умолчанию; legacy HTML — INVESTING_CALENDAR_USE_HTML)
         try:
             logger.info("\n📅 Источник investing 1/2: Investing.com Economic Calendar")
-            fetch_and_save_investing_calendar()
-            sources_status['Investing.com Calendar'] = '✅ Успешно'
+            n_ev, n_saved = fetch_and_save_investing_calendar()
+            if n_ev == 0:
+                sources_status["Investing.com Calendar"] = (
+                    "⚠️ 0 событий (проверьте JSON API/сеть; при 403 на HTML — отключите "
+                    "INVESTING_CALENDAR_USE_HTML или прокси INVESTING_CALENDAR_USE_SYSTEM_PROXY)"
+                )
+            else:
+                sources_status["Investing.com Calendar"] = (
+                    f"✅ событий в выборке: {n_ev}, новых строк в KB: {n_saved}"
+                )
         except Exception as e:
             logger.error(f"❌ Ошибка Investing.com Calendar: {e}")
             sources_status['Investing.com Calendar'] = f'❌ Ошибка: {e}'
