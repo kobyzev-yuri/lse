@@ -12,6 +12,7 @@ import re
 import shutil
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import List, Optional, Dict, Any, Tuple
 
 try:
@@ -87,6 +88,11 @@ def _to_jsonable(obj: Any) -> Any:
     """Приводит numpy/pandas типы к нативным Python для JSON-сериализации."""
     if obj is None:
         return None
+    if isinstance(obj, Decimal):
+        try:
+            return float(obj)
+        except (ValueError, TypeError, OverflowError):
+            return None
     # numpy/pandas скаляры (bool_, int64, float64 и т.д.) имеют .item()
     if hasattr(obj, "item") and callable(getattr(obj, "item")):
         try:
