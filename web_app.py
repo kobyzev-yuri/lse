@@ -1501,8 +1501,12 @@ async def get_game5m_cards(days: int = 5):
     })
 
 
-def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
-    """Карточки портфельной игры: дневные quotes + стратегия + LLM при USE_LLM (как ExecutionAgent / trading_cycle)."""
+def _compute_portfolio_cards_sync(corr_days: int, fuse_llm: bool = False) -> Dict[str, Any]:
+    """
+    Карточки портфельной игры: дневные quotes + стратегия.
+    По умолчанию без LLM (быстро): decision = сигнал стратегии, как при USE_LLM=false.
+    fuse_llm=True и USE_LLM=true — полный fusion по каждому тикеру (долго, N вызовов LLM).
+    """
     from services.portfolio_card import (
         get_portfolio_cluster_context,
         portfolio_card_payload,
@@ -1511,7 +1515,8 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
 
     ctx, trade = get_portfolio_cluster_context(days=min(max(5, corr_days), 120))
     take_fb = load_fallback_portfolio_take_pct()
-    agent = AnalystAgent(use_llm=get_use_llm_for_analyst(engine=engine))
+    use_llm = bool(fuse_llm) and get_use_llm_for_analyst(engine=engine)
+    agent = AnalystAgent(use_llm=use_llm)
     cards: List[Dict[str, Any]] = []
     for t in trade:
         try:
@@ -1527,12 +1532,15 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
                 cards.append(portfolio_card_payload(t, r, fallback_take_pct=take_fb))
         except Exception as e:
             cards.append({"ticker": t, "decision": "ERROR", "horizon": "daily", "error": str(e)})
-    return {
+    out = {
         "tickers": trade,
         "correlation_tickers": (ctx or {}).get("tickers"),
         "cards": cards,
         "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
     }
+    out["fuse_llm"] = bool(fuse_llm)
+    out["llm_applied_in_batch"] = use_llm
+    return out
 
 
 def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int) -> Dict[str, Any]:
@@ -1702,10 +1710,10 @@ async def game5m_cards_page(request: Request):
 
 
 @app.get("/api/portfolio/cards", response_class=JSONResponse)
-async def get_portfolio_cards(corr_days: int = 30):
-    """API: карточки портфельной игры (дневные quotes, стратегия; без 5m и без LLM)."""
+async def get_portfolio_cards(corr_days: int = 30, fuse_llm: bool = False):
+    """API: карточки портфельной игры (дневные quotes, стратегия). fuse_llm=1 — LLM fusion по всем тикерам (очень долго)."""
     try:
-        payload = await asyncio.to_thread(_compute_portfolio_cards_sync, corr_days)
+        payload = await asyncio.to_thread(_compute_portfolio_cards_sync, corr_days, fuse_llm)
     except Exception as e:
         logger.exception("GET /api/portfolio/cards corr_days=%s: %s", corr_days, e)
         raise HTTPException(status_code=500, detail=f"Ошибка карточек портфеля: {e!s}")

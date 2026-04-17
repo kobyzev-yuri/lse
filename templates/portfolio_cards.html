@@ -100,9 +100,13 @@
             <a href="/game5m/cards">5m</a>
         </div>
     </div>
-    <p class="muted" style="padding: 0.5rem 0.9rem 0;">Дневные данные из <strong>quotes</strong> (как AnalystAgent / trading_cycle). Не интрадей 5m. <strong>Цель портфельной игры</strong> — эффективный <strong>тейк %</strong> (стратегия или <code>PORTFOLIO_TAKE_PROFIT_PCT</code>); к нему привязана логика выхода; стоп движка — отдельно (<code>STOP_LOSS_LEVEL</code>). LLM — по кнопке.</p>
+    <p class="muted" style="padding: 0.5rem 0.9rem 0;">Дневные данные из <strong>quotes</strong> (как AnalystAgent / trading_cycle). Не интрадей 5m. <strong>Цель портфельной игры</strong> — эффективный <strong>тейк %</strong> (стратегия или <code>PORTFOLIO_TAKE_PROFIT_PCT</code>); к нему привязана логика выхода; стоп движка — отдельно (<code>STOP_LOSS_LEVEL</code>). Решение в шапке карточки — <strong>стратегия</strong> (быстро). Полный <strong>LLM fusion</strong> как у крона — галка ниже (долго, минуты) или кнопка <strong>LLM</strong> на карточке.</p>
     <div style="padding: 0.4rem 0.8rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem;">
         <button class="btn" id="refreshBtn">Обновить</button>
+        <label class="muted" style="cursor: pointer;" title="Один запрос на каждый тикер к LLM; страница может грузиться несколько минут">
+            <input type="checkbox" id="fuseLlmBatch" style="vertical-align: middle; margin-right: 0.35rem;">
+            Итог с LLM (как крон, долго)
+        </label>
         <label class="muted" style="cursor: pointer;">
             <input type="checkbox" id="autoRefresh" style="vertical-align: middle; margin-right: 0.35rem;">
             Авто каждые 30 мин
@@ -202,9 +206,16 @@
         async function loadCards(silent) {
             var container = document.getElementById('cardsContainer');
             var updatedEl = document.getElementById('updatedAt');
-            if (!silent) container.innerHTML = '<div class="muted" style="padding:1rem;">Загрузка…</div>';
+            /* Авто-обновление только быстрый путь; иначе каждые 30 мин N вызовов LLM */
+            var fuse = !silent && document.getElementById('fuseLlmBatch') && document.getElementById('fuseLlmBatch').checked;
+            if (!silent) {
+                container.innerHTML = fuse
+                    ? '<div class="muted" style="padding:1rem;">Загрузка с LLM по всем тикерам — может занять несколько минут…</div>'
+                    : '<div class="muted" style="padding:1rem;">Загрузка…</div>';
+            }
             try {
-                var r = await fetch('/api/portfolio/cards?corr_days=30');
+                var url = '/api/portfolio/cards?corr_days=30' + (fuse ? '&fuse_llm=true' : '');
+                var r = await fetch(url);
                 if (!r.ok) { container.innerHTML = '<div style="color:#fca5a5;">Ошибка ' + r.status + '</div>'; return; }
                 var data = await r.json();
                 updatedEl.textContent = data.updated_at ? new Date(data.updated_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—';
