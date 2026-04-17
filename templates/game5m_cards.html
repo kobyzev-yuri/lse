@@ -35,15 +35,14 @@
             min-height: 100dvh;
         }
         .header {
-            position: sticky;
-            top: 0;
+            position: relative;
             background: #16213e;
             padding: 0.6rem 0.8rem;
             padding-top: max(0.6rem, env(safe-area-inset-top, 0px));
             display: flex;
             justify-content: space-between;
             align-items: center;
-            z-index: 10;
+            z-index: 1;
             border-bottom: 1px solid #0f3460;
         }
         .header h1 { font-size: 1rem; font-weight: 600; }
@@ -118,11 +117,11 @@
     </style>
 </head>
 <body>
+{% include "partials/site_nav_standalone.html" %}
     <div class="header">
         <h1>5m карточки</h1>
         <div>
             <span class="updated" id="updatedAt">—</span>
-            <a href="/monitor" style="margin-left: 0.5rem;">Мониторинг</a>
         </div>
     </div>
     <div style="padding: 0.5rem 0.8rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;">

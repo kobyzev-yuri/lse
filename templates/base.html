@@ -46,7 +46,7 @@
             background: #16213e;
             padding: 0.6rem 0.8rem;
             padding-top: max(0.6rem, env(safe-area-inset-top, 0px));
-            z-index: 10;
+            z-index: 20;
             border-bottom: 1px solid #0f3460;
             display: flex;
             flex-wrap: wrap;
@@ -214,19 +214,8 @@
     {% block extra_css %}{% endblock %}
 </head>
 <body>
-    <nav class="navbar">
-        <a href="/" title="CASH и ссылки: портфельная игра vs отчёты по всем стратегиям">Портфель · сводка</a>
-        <a href="/knowledge">База знаний</a>
-        <a href="/visualization">Графики</a>
-        <a href="/parameters">Параметры</a>
-        <a href="/service">Сервис / логи</a>
-        <a href="/game5m/cards" title="Игра 5m (интрадей)">5m · карточки</a>
-        <a href="/portfolio/cards" title="Портфельная игра trading_cycle: daily из quotes">Портфель · карточки</a>
-        <a href="/portfolio/daily" title="Портфельная игра: дневной график из quotes">Портфель · графики</a>
-        <a href="/analyzer">Анализатор</a>
-        <a href="/reports/pending" title="Открытые сделки: GAME_5M, Portfolio, Manual, …">Сделки · открытые</a>
-        <a href="/reports/closed" title="Закрытые сделки по всем стратегиям">Сделки · закрытые</a>
-        <a href="/reports/closed#excel-export" title="Закрытые: таблица и Excel, выбор числа строк">Закрытые · Excel</a>
+    <nav class="navbar" aria-label="Основное меню">
+{% include "partials/site_nav_links.html" %}
     </nav>
 
     <div class="container">

@@ -25,8 +25,8 @@
             min-height: 100dvh;
         }
         .header {
-            position: sticky; top: 0; background: #16213e; padding: 0.6rem 0.8rem;
-            display: flex; justify-content: space-between; align-items: center; z-index: 10;
+            position: relative; background: #16213e; padding: 0.6rem 0.8rem;
+            display: flex; justify-content: space-between; align-items: center; z-index: 1;
             border-bottom: 1px solid #0f3460;
         }
         .header h1 { font-size: 1rem; font-weight: 600; }
@@ -91,13 +91,11 @@
     </style>
 </head>
 <body>
+{% include "partials/site_nav_standalone.html" %}
     <div class="header">
         <h1>Портфель · карточки</h1>
         <div>
             <span class="updated" id="updatedAt">—</span>
-            <a href="/">Дашборд</a>
-            <a href="/portfolio/daily">Графики daily</a>
-            <a href="/game5m/cards">5m</a>
         </div>
     </div>
     <p class="muted" style="padding: 0.5rem 0.9rem 0;">Дневные данные из <strong>quotes</strong> (как AnalystAgent / trading_cycle). Не интрадей 5m. <strong>Цель портфельной игры</strong> — эффективный <strong>тейк %</strong> (стратегия или <code>PORTFOLIO_TAKE_PROFIT_PCT</code>); к нему привязана логика выхода; стоп движка — отдельно (<code>STOP_LOSS_LEVEL</code>). Решение в шапке — <strong>стратегия</strong> (без LLM). <strong>LLM</strong> — только по кнопке под карточкой.</p>
