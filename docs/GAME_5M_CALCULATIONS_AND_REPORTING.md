@@ -83,4 +83,6 @@ MU — **4%**, LITE — **6%**, NBIS — **7.5%**; общий fallback **7%**; *
 - `services/recommend_5m.py` — расчёт `momentum_2h_pct`
 - `scripts/send_sndk_signal_cron.py` — вызов проверки позиции и записи сделок
 
+**Дополнение (самый сложный UX-кейс):** динамический `take_pct`, окно `recent_bars_high_max`, `session_high`, и почему `TAKE_PROFIT` в логах может сочетаться с `exit_bar_close`, сильно отличающимся от пика — см. `docs/GAME_5M_DYNAMIC_TAKE_EXIT_SEMANTICS.md`.
+
 *Секреты и ключи из `config.env` в документ не включались.*
