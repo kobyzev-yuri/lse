@@ -422,12 +422,48 @@ def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str
     recent_bars_high_max = float(df["High"].iloc[-n_tail:].max()) if n_tail else last_bar_high
     recent_bars_low_min = float(df["Low"].iloc[-n_tail:].min()) if n_tail else last_bar_low
 
+    # Время бара(ов), на котором достигнут max/min в «хвосте» последних N 5m — для диагностики тейка/стопа в кроне.
+    recent_bars_high_ts = None
+    recent_bars_low_ts = None
+    try:
+        tail = df.iloc[-n_tail:]
+        hi_idx = int(tail["High"].astype(float).idxmax())
+        lo_idx = int(tail["Low"].astype(float).idxmin())
+        dt_hi = df.loc[hi_idx, "datetime"]
+        dt_lo = df.loc[lo_idx, "datetime"]
+        dts_hi = pd.to_datetime(dt_hi)
+        dts_lo = pd.to_datetime(dt_lo)
+        if dts_hi.tzinfo is None:
+            dts_hi = dts_hi.tz_localize("America/New_York", ambiguous="infer")
+        else:
+            dts_hi = dts_hi.tz_convert("America/New_York")
+        if dts_lo.tzinfo is None:
+            dts_lo = dts_lo.tz_localize("America/New_York", ambiguous="infer")
+        else:
+            dts_lo = dts_lo.tz_convert("America/New_York")
+        recent_bars_high_ts = dts_hi.isoformat()
+        recent_bars_low_ts = dts_lo.isoformat()
+    except Exception:
+        pass
+
     session_high = high_5d
+    session_high_ts = None
     try:
         dts = pd.to_datetime(df["datetime"])
         last_date = dts.max().date()
         session_mask = dts.dt.date == last_date
         session_high_val = float(df.loc[session_mask, "High"].max())
+        try:
+            sh_idx = int(df.loc[session_mask, "High"].astype(float).idxmax())
+            dt_sh = df.loc[sh_idx, "datetime"]
+            dts_sh = pd.to_datetime(dt_sh)
+            if dts_sh.tzinfo is None:
+                dts_sh = dts_sh.tz_localize("America/New_York", ambiguous="infer")
+            else:
+                dts_sh = dts_sh.tz_convert("America/New_York")
+            session_high_ts = dts_sh.isoformat()
+        except Exception:
+            session_high_ts = None
     except Exception:
         session_high_val = high_5d
     if session_high_val > 0 and price < session_high_val:
@@ -537,11 +573,14 @@ def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str
         "momentum_rth_today_window_min": momentum_rth_today_window_min,
         "momentum_rth_today_bars": momentum_rth_today_bars,
         "session_high": session_high,
+        "session_high_ts": session_high_ts,
         "pullback_from_high_pct": pullback_from_high_pct,
         "last_bar_high": last_bar_high,
         "last_bar_low": last_bar_low,
         "recent_bars_high_max": recent_bars_high_max,
+        "recent_bars_high_ts": recent_bars_high_ts,
         "recent_bars_low_min": recent_bars_low_min,
+        "recent_bars_low_ts": recent_bars_low_ts,
         "curvature_5m_pct": curvature_5m_pct,
         "possible_bounce_to_high_pct": possible_bounce_to_high_pct,
         "estimated_bounce_pct": estimated_bounce_pct,
@@ -735,24 +774,37 @@ def build_5m_close_context(d5: Dict[str, Any]) -> Dict[str, Any]:
     # Исторически использовали max/min последних ~30 минут (recent_bars_*), но если крон/данные
     # были нестабильны, достижение тейка могло быть раньше и "выпасть" из этого окна.
     # Поэтому для safety-net учитываем также session_high (пик текущей RTH-сессии), если он есть.
-    bar_high = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
+    bar_high_recent = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
+    bar_high = bar_high_recent
     try:
         sh = float(d5.get("session_high")) if d5.get("session_high") is not None else None
     except (TypeError, ValueError):
         sh = None
+    bar_high_session_lifted = False
     if sh is not None and sh > 0 and (bar_high is None or float(bar_high) <= 0 or sh > float(bar_high)):
         bar_high = sh
+        bar_high_session_lifted = True
 
     bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
     return {
         "momentum_2h_pct": d5.get("momentum_2h_pct"),
         "rsi_5m": d5.get("rsi_5m"),
         "bar_high": bar_high,
+        "bar_high_recent_max": bar_high_recent,
+        "bar_high_session_lifted": bar_high_session_lifted,
         "bar_low": bar_low,
         "exit_bar_close": d5.get("exit_bar_close"),
+        "exit_bar_close_ts": d5.get("exit_bar_close_ts"),
+        "exit_bar_start_et": d5.get("exit_bar_start_et"),
+        "exit_bar_end_et": d5.get("exit_bar_end_et"),
+        "recent_bars_high_max": d5.get("recent_bars_high_max"),
+        "recent_bars_high_ts": d5.get("recent_bars_high_ts"),
+        "recent_bars_low_min": d5.get("recent_bars_low_min"),
+        "recent_bars_low_ts": d5.get("recent_bars_low_ts"),
         "volatility_5m_pct": d5.get("volatility_5m_pct"),
         "period_str": d5.get("period_str"),
         "session_high": d5.get("session_high"),
+        "session_high_ts": d5.get("session_high_ts"),
     }
 
 
@@ -1329,10 +1381,15 @@ def get_decision_5m(
 
     # Close бара, который только что завершился к текущему моменту (для записи цены выхода — без расхождений с корректором)
     exit_bar_close = None
+    exit_bar_close_ts = None
+    exit_bar_start_et = None
+    exit_bar_end_et = None
     try:
         now_et = pd.Timestamp.now(tz="America/New_York")
         bar_end = now_et.floor("5min")
         bar_start = bar_end - pd.Timedelta(minutes=5)
+        exit_bar_start_et = bar_start.isoformat()
+        exit_bar_end_et = bar_end.isoformat()
         dts = pd.to_datetime(df["datetime"])
         if dts.dt.tz is None:
             dts = dts.dt.tz_localize("America/New_York", ambiguous="infer")
@@ -1341,6 +1398,15 @@ def get_decision_5m(
         mask = (dts >= bar_start) & (dts < bar_end)
         if mask.any():
             exit_bar_close = float(df.loc[mask, "Close"].iloc[-1])
+            try:
+                t_exit = pd.to_datetime(df.loc[mask, "datetime"].iloc[-1])
+                if t_exit.tzinfo is None:
+                    t_exit = t_exit.tz_localize("America/New_York", ambiguous="infer")
+                else:
+                    t_exit = t_exit.tz_convert("America/New_York")
+                exit_bar_close_ts = t_exit.isoformat()
+            except Exception:
+                exit_bar_close_ts = None
         if exit_bar_close is None or exit_bar_close <= 0:
             exit_bar_close = price
     except Exception:
@@ -1356,6 +1422,9 @@ def get_decision_5m(
         "technical_entry_branch": technical_entry_branch,
         "entry_strong_buy_downgraded": entry_strong_buy_downgraded,
         "exit_bar_close": exit_bar_close,
+        "exit_bar_close_ts": exit_bar_close_ts,
+        "exit_bar_start_et": exit_bar_start_et,
+        "exit_bar_end_et": exit_bar_end_et,
         "stop_loss_enabled": stop_loss_enabled,
         "stop_loss_pct": stop_loss_pct if stop_loss_enabled else None,
         "take_profit_pct": take_profit_pct,

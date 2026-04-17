@@ -202,10 +202,6 @@ def process_ticker(
                     exit_price = max(base_exit, bar_low)
                 else:
                     exit_price = base_exit
-                logger.info(
-                    "[5m] %s закрытие: тип=%s, exit_bar_close=%s, price_5m=%.2f, bar_high=%s, bar_low=%s → exit_price=%.2f",
-                    ticker, exit_type, close_ctx.get("exit_bar_close"), price, bar_high, bar_low, exit_price,
-                )
                 strat_nm = (open_pos.get("strategy_name") or "GAME_5M").strip() or "GAME_5M"
                 entry_ctx_db = get_latest_buy_context_json(ticker, strat_nm)
                 take_pct_e = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
@@ -213,6 +209,41 @@ def process_ticker(
                     _effective_stop_loss_pct(momentum_2h_pct, ticker=ticker)
                     if _game_5m_stop_loss_enabled()
                     else 0.0
+                )
+                take_level = (
+                    entry_f * (1.0 + take_pct_e / 100.0)
+                    if (entry_f is not None and entry_f > 0 and take_pct_e is not None)
+                    else None
+                )
+                pnl_to_take_pct = (
+                    ((bar_high / entry_f) - 1.0) * 100.0
+                    if (exit_type == "TAKE_PROFIT" and entry_f and entry_f > 0 and bar_high and bar_high > 0)
+                    else None
+                )
+                logger.info(
+                    "[5m] %s закрытие: тип=%s, exit_bar_close=%s exit_bar_close_ts=%s exit_bar_et=[%s..%s), "
+                    "price_5m=%.2f, bar_high=%s bar_high_recent_max=%s bar_high_session_lifted=%s, "
+                    "recent_bars_high_ts=%s session_high=%s session_high_ts=%s recent_bars_low_ts=%s, "
+                    "bar_low=%s, take_pct=%.4f take_level=%s pnl_vs_take_from_bar_high_pct=%s → exit_price=%.2f",
+                    ticker,
+                    exit_type,
+                    close_ctx.get("exit_bar_close"),
+                    close_ctx.get("exit_bar_close_ts"),
+                    close_ctx.get("exit_bar_start_et"),
+                    close_ctx.get("exit_bar_end_et"),
+                    price,
+                    bar_high,
+                    close_ctx.get("bar_high_recent_max"),
+                    close_ctx.get("bar_high_session_lifted"),
+                    close_ctx.get("recent_bars_high_ts"),
+                    close_ctx.get("session_high"),
+                    close_ctx.get("session_high_ts"),
+                    close_ctx.get("recent_bars_low_ts"),
+                    bar_low,
+                    take_pct_e if take_pct_e is not None else -1.0,
+                    ("%.4f" % take_level) if take_level is not None else "n/a",
+                    ("%.4f" % pnl_to_take_pct) if pnl_to_take_pct is not None else "n/a",
+                    exit_price,
                 )
                 close_ctx_enriched = merge_close_context_with_trade_narrative(
                     close_ctx,
@@ -590,7 +621,43 @@ def main():
                             bar_low=bar_low if exit_type == "STOP_LOSS" else None,
                             context_json=close_ctx_ah_merged,
                         )
-                        logger.info("AFTER_HOURS: закрыта позиция %s @ %.2f (%s)", ticker, exit_price, exit_type)
+                        entry_ah = open_pos.get("entry_price")
+                        try:
+                            entry_f_ah = float(entry_ah) if entry_ah is not None and float(entry_ah) > 0 else None
+                        except (TypeError, ValueError):
+                            entry_f_ah = None
+                        take_lvl_ah = (
+                            entry_f_ah * (1.0 + take_ah / 100.0)
+                            if (entry_f_ah is not None and take_ah is not None)
+                            else None
+                        )
+                        pnl_take_ah = (
+                            ((bar_high / entry_f_ah) - 1.0) * 100.0
+                            if (exit_type == "TAKE_PROFIT" and entry_f_ah and bar_high and bar_high > 0)
+                            else None
+                        )
+                        logger.info(
+                            "AFTER_HOURS: закрыта позиция %s @ %.2f (%s) exit_bar_close=%s exit_bar_close_ts=%s "
+                            "exit_bar_et=[%s..%s) bar_high=%s bar_high_recent_max=%s bar_high_session_lifted=%s "
+                            "recent_bars_high_ts=%s session_high=%s session_high_ts=%s take_pct=%.4f take_level=%s "
+                            "pnl_vs_take_from_bar_high_pct=%s",
+                            ticker,
+                            exit_price,
+                            exit_type,
+                            close_ctx_ah.get("exit_bar_close"),
+                            close_ctx_ah.get("exit_bar_close_ts"),
+                            close_ctx_ah.get("exit_bar_start_et"),
+                            close_ctx_ah.get("exit_bar_end_et"),
+                            bar_high,
+                            close_ctx_ah.get("bar_high_recent_max"),
+                            close_ctx_ah.get("bar_high_session_lifted"),
+                            close_ctx_ah.get("recent_bars_high_ts"),
+                            close_ctx_ah.get("session_high"),
+                            close_ctx_ah.get("session_high_ts"),
+                            take_ah if take_ah is not None else -1.0,
+                            ("%.4f" % take_lvl_ah) if take_lvl_ah is not None else "n/a",
+                            ("%.4f" % pnl_take_ah) if pnl_take_ah is not None else "n/a",
+                        )
                 except Exception as e:
                     logger.warning("AFTER_HOURS проверка %s: %s", ticker, e)
             logger.info("Биржа закрыта (AFTER_HOURS), проверка открытых позиций выполнена, выход")
