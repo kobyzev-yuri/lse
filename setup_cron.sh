@@ -34,7 +34,7 @@ mkdir -p "$PROJECT_DIR/logs"
 CRON_FILE=$(mktemp)
 
 # Удаляем из текущего crontab ВСЕ задачи и комментарии LSE, чтобы не оставались дубликаты или старые пути.
-REMOVE_PATTERNS="LSE Trading System|========== LSE|Проект:.*lse|update_prices_cron\.py|trading_cycle_cron\.py|fetch_news_cron\.py|sync_vector_kb_cron\.py|add_sentiment_to_news_cron\.py|analyze_event_outcomes_cron\.py|cleanup_calendar_noise\.py|update_rsi_local\.py|update_finviz_data\.py|update_finviz\.py|send_sndk_signal_cron\.py|premarket_cron\.py|cron_watchdog\.py|daily_5m_params\.py"
+REMOVE_PATTERNS="LSE Trading System|========== LSE|Проект:.*lse|update_prices_cron\.py|trading_cycle_cron\.py|fetch_news_cron\.py|sync_vector_kb_cron\.py|add_sentiment_to_news_cron\.py|analyze_event_outcomes_cron\.py|cleanup_calendar_noise\.py|update_rsi_local\.py|update_finviz_data\.py|update_finviz\.py|send_sndk_signal_cron\.py|premarket_cron\.py|cron_watchdog\.py|daily_5m_params\.py|ingest_market_bars_intraday\.py"
 REMOVE_COMMENTS="Проект:|Обновление цен:|Локальный RSI|валюты/товары|вечернего обновления цен|RSI с Finviz|после дневной сессии|Торговый цикл|9:00, 13:00, 17:00|Новости \(RSS|Alpha Vantage\).*каждый час|Backfill embedding|Sentiment к новостям|Анализ исходов событий|Обновление RSI ежедневно|после обновления цен|после закрытия всех бирж|NYSE \(00:00 MSK\)|измените время|Если сервер не в MSK"
 crontab -l 2>/dev/null | grep -vE "$REMOVE_PATTERNS|$REMOVE_COMMENTS" | grep -v "$PROJECT_DIR" | grep -v "/mnt/ai/cnn/lse" > "$CRON_FILE" || true
 # Если crontab был пустой или только наши задачи — файл может быть пустым; тогда начинаем с пустого
@@ -89,6 +89,9 @@ cat >> "$CRON_FILE" << EOF
 
 # Watchdog: сканирование логов cron на ошибки, запись в logs/cron_watchdog.log
 45 * * * * cd $PROJECT_DIR && $PYTHON_PATH scripts/cron_watchdog.py --execute >> logs/cron_watchdog.log 2>&1
+
+# 5m/30m бары в Postgres (market_bars_5m, market_bars_30m) для бэктеста: Yahoo, окно по умолчанию 7 дн., UPSERT. Раз в сутки после вечернего обновления цен; flock — без параллельных запусков.
+25 23 * * * cd $PROJECT_DIR && flock -n /tmp/lse_market_bars_intraday.lock $PYTHON_PATH scripts/ingest_market_bars_intraday.py >> logs/cron_market_bars_intraday.log 2>&1
 EOF
 
 # Устанавливаем новый crontab
@@ -110,6 +113,7 @@ echo "  - Sentiment к новостям: каждый час в :20 (при USE_
 echo "  - Анализ исходов событий (outcome_json): ежедневно в 4:00"
 echo "  - Очистка мусора новостей (cleanup_calendar_noise): ежедневно в 4:30"
 echo "  - Watchdog логов cron (ошибки → logs/cron_watchdog.log): каждый час в :45"
+echo "  - Интрадей бары в БД (5m+30m, ingest_market_bars_intraday): ежедневно 23:25"
 echo ""
 echo "⚠️  Часовой пояс: cron использует системный (проверка: timedatectl | grep 'Time zone')."
 echo "   Для MSK убедитесь, что сервер в Europe/Moscow или подстройте часы в crontab -e"

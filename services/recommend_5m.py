@@ -154,6 +154,8 @@ KB_NEWS_CONTENT_MAX_LEN = 500
 
 # Максимум дней 5m по ограничениям Yahoo
 MAX_DAYS_5M = 7
+# 30m: у Yahoo обычно больший горизонт, чем у 5m; верхняя граница для fetch_30m_ohlc
+MAX_DAYS_30M = 60
 # Период RSI по 5m свечам (14 свечей ≈ 70 мин)
 RSI_PERIOD_5M = 14
 # Баров в «2 часа» для импульса
@@ -340,6 +342,74 @@ def fetch_5m_ohlc(ticker: str, days: int = None) -> Optional[pd.DataFrame]:
         except Exception as e:
             logger.debug("yfinance period=%s для %s: %s", period, ticker, e)
     logger.warning("Нет 5m данных для %s за %d дн. (Yahoo пустой ответ или биржа закрыта)", ticker, days)
+    return None
+
+
+def fetch_30m_ohlc(ticker: str, days: int = None) -> Optional[pd.DataFrame]:
+    """
+    30-минутные OHLC от Yahoo (yfinance). Горизонт по умолчанию до MAX_DAYS_30M календарных дней
+    (фактически для бэктеста обычно берут столько же дней, сколько и для 5m, например 7).
+    """
+    if days is None:
+        days = min(MAX_DAYS_5M, MAX_DAYS_30M)
+    try:
+        import yfinance as yf
+    except ImportError:
+        logger.warning("yfinance не установлен")
+        return None
+    days = min(max(1, days), MAX_DAYS_30M)
+    end_date = datetime.utcnow() + timedelta(days=1)
+    start_date = datetime.utcnow() - timedelta(days=days)
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = end_date.strftime("%Y-%m-%d")
+    t = yf.Ticker(ticker)
+
+    def _normalize(df_in):
+        if df_in is None or df_in.empty:
+            return None
+        df_in = df_in.rename_axis("datetime").reset_index()
+        for c in ("Open", "High", "Low", "Close"):
+            if c not in df_in.columns:
+                return None
+        return df_in
+
+    def _to_us_eastern(df_in):
+        if df_in is None or "datetime" not in df_in.columns:
+            return df_in
+        try:
+            d = pd.to_datetime(df_in["datetime"])
+            if d.dt.tz is None:
+                try:
+                    d = d.dt.tz_localize("America/New_York", ambiguous="infer")
+                except Exception:
+                    d = d.dt.tz_localize("UTC", ambiguous="infer").dt.tz_convert("America/New_York")
+            else:
+                d = d.dt.tz_convert("America/New_York")
+            df_in = df_in.copy()
+            df_in["datetime"] = d
+            return df_in
+        except Exception as e:
+            logger.debug("Приведение 30m к US/Eastern: %s", e)
+            return df_in
+
+    try:
+        df = t.history(start=start_str, end=end_str, interval="30m", auto_adjust=False)
+    except (TypeError, KeyError, AttributeError) as e:
+        logger.debug("yfinance history 30m для %s (start/end): %s", ticker, e)
+        df = None
+    df = _normalize(df)
+    if df is not None:
+        return _to_us_eastern(df)
+    for period in ("60d", "30d", "7d", "5d", "2d", "1d"):
+        try:
+            df = t.history(period=period, interval="30m", auto_adjust=False)
+            df = _normalize(df)
+            if df is not None and not df.empty:
+                logger.info("30m данные %s получены через period=%s", ticker, period)
+                return _to_us_eastern(df)
+        except Exception as e:
+            logger.debug("yfinance period=%s 30m для %s: %s", period, ticker, e)
+    logger.warning("Нет 30m данных для %s за %d дн.", ticker, days)
     return None
 
 

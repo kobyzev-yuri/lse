@@ -18,7 +18,7 @@ mkdir -p "$PROJECT_DIR/logs"
 CRON_FILE=$(mktemp)
 
 # Удаляем старые LSE docker cron-задачи
-crontab -l 2>/dev/null | grep -v "docker.*lse-bot\|LSE.*Docker\|send_sndk_signal_cron\|trading_cycle_cron\|premarket_cron\|update_prices_cron\|fetch_news_cron\|sync_vector_kb_cron\|add_sentiment_to_news\|analyze_event_outcomes\|cleanup_calendar_noise\|cron_watchdog\|update_rsi_local\|update_finviz" | grep -v "$PROJECT_DIR" > "$CRON_FILE" || true
+crontab -l 2>/dev/null | grep -v "docker.*lse-bot\|LSE.*Docker\|send_sndk_signal_cron\|trading_cycle_cron\|premarket_cron\|update_prices_cron\|fetch_news_cron\|sync_vector_kb_cron\|add_sentiment_to_news\|analyze_event_outcomes\|cleanup_calendar_noise\|cron_watchdog\|update_rsi_local\|update_finviz\|ingest_market_bars_intraday" | grep -v "$PROJECT_DIR" > "$CRON_FILE" || true
 if ! grep -q . "$CRON_FILE" 2>/dev/null; then
   : > "$CRON_FILE"
 fi
@@ -47,8 +47,11 @@ cat >> "$CRON_FILE" << EOF
 0 4 * * * docker exec $CONTAINER_NAME python scripts/analyze_event_outcomes_cron.py >> "$PROJECT_DIR/logs/analyze_event_outcomes.log" 2>&1
 30 4 * * * docker exec $CONTAINER_NAME python scripts/cleanup_calendar_noise.py --execute >> "$PROJECT_DIR/logs/cleanup_calendar_noise.log" 2>&1
 45 * * * * docker exec $CONTAINER_NAME python scripts/cron_watchdog.py --execute >> "$PROJECT_DIR/logs/cron_watchdog.log" 2>&1
+# 5m/30m в Postgres для бэктеста (Yahoo, UPSERT). Ежедневно 23:25 по системному TZ сервера (ожидается MSK).
+25 23 * * * flock -n /tmp/lse_market_bars_intraday.lock docker exec $CONTAINER_NAME python scripts/ingest_market_bars_intraday.py >> "$PROJECT_DIR/logs/cron_market_bars_intraday.log" 2>&1
 EOF
 
 crontab "$CRON_FILE"
 rm -f "$CRON_FILE"
 echo "✅ Cron для Docker установлен (контейнер: $CONTAINER_NAME). Проверка: crontab -l"
+echo "   В т.ч. ingest_market_bars_intraday: ежедневно 23:25 → logs/cron_market_bars_intraday.log (таблицы: migrate_market_bars_intraday.py один раз)"
