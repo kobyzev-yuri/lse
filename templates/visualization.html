@@ -7,13 +7,17 @@
 
 <div class="card">
     <h2>График 5m (интрадей + пролонгация)</h2>
-    <p class="muted" style="margin-bottom:0.5rem;">Все тикеры игры 5m (как в карточках). Те же функции, что в Telegram: зона прогноза, EMA, тренд при ≥5 свечах. Ось времени — US Eastern (NYSE/NASDAQ).</p>
+    <p class="muted" style="margin-bottom:0.5rem;">Тикеры игры 5m (как в карточках). Список <strong>Все</strong> — график по каждому; выберите тикер или откройте ссылку <code>/visualization?ticker=SNDK</code> с карточки. Ось времени — US Eastern (NYSE/NASDAQ).</p>
     <label>Дней:</label>
     <select id="days5mSelect">
         <option value="1" selected>1</option>
         <option value="3">3</option>
         <option value="5">5</option>
         <option value="7">7</option>
+    </select>
+    <label style="margin-left:0.75rem;">Тикер</label>
+    <select id="ticker5mFilter" style="min-width:8rem; margin-right:0.5rem;">
+        <option value="">Все (игра 5m)</option>
     </select>
     <label class="muted" style="margin-left:0.75rem; font-size:0.9rem;">
         <input type="checkbox" id="autoChartRefresh" checked style="vertical-align:middle;">
@@ -396,12 +400,52 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
     return ch;
 }
 
-async function loadChart5mAll() {
+function get5mTickerUniverse() {
     const listEl = document.getElementById('tickers5mList');
-    const tickers = listEl ? (JSON.parse(listEl.textContent || '[]') || []) : [];
+    return listEl ? (JSON.parse(listEl.textContent || '[]') || []) : [];
+}
+
+function init5mTickerFilterFromUrl() {
+    const sel = document.getElementById('ticker5mFilter');
+    if (!sel) return;
+    const universe = get5mTickerUniverse();
+    const urlRaw = new URLSearchParams(window.location.search).get('ticker');
+    const urlT = urlRaw ? String(urlRaw).trim().toUpperCase() : '';
+    while (sel.options.length > 1) sel.remove(1);
+    const seen = new Set(['']);
+    universe.forEach(function(t) {
+        if (!t || seen.has(t)) return;
+        seen.add(t);
+        const o = document.createElement('option');
+        o.value = t;
+        o.textContent = t;
+        sel.appendChild(o);
+    });
+    if (urlT && !seen.has(urlT)) {
+        const o = document.createElement('option');
+        o.value = urlT;
+        o.textContent = urlT + ' (из ссылки)';
+        sel.appendChild(o);
+    }
+    if (urlT) sel.value = urlT;
+}
+
+function get5mTickersToPlot() {
+    const sel = document.getElementById('ticker5mFilter');
+    const v = sel && sel.value ? String(sel.value).trim() : '';
+    if (v) return [v];
+    return get5mTickerUniverse();
+}
+
+async function loadChart5mAll() {
+    const tickers = get5mTickersToPlot();
     const days = parseInt(document.getElementById('days5mSelect').value, 10) || 1;
     const container = document.getElementById('chart5mContainer');
     if (!container) return;
+    if (!tickers.length) {
+        container.innerHTML = '<p class="muted" style="padding:0.5rem 0;">Нет тикеров для графика (проверьте GAME_5M / список игры в конфиге).</p>';
+        return;
+    }
 
     Object.keys(chart5mInstances).forEach(t => { try { chart5mInstances[t].destroy(); } catch (_) {} });
     chart5mInstances = {};
@@ -435,7 +479,15 @@ document.getElementById('days5mSelect').addEventListener('change', async functio
     await loadChart5mAll();
     scheduleChartAutoRefresh();
 });
+const ticker5mSel = document.getElementById('ticker5mFilter');
+if (ticker5mSel) {
+    ticker5mSel.addEventListener('change', async function() {
+        await loadChart5mAll();
+        scheduleChartAutoRefresh();
+    });
+}
 document.getElementById('autoChartRefresh').addEventListener('change', scheduleChartAutoRefresh);
+init5mTickerFilterFromUrl();
 loadChart5mAll().then(function() { scheduleChartAutoRefresh(); });
 
 </script>

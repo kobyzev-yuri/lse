@@ -1230,7 +1230,7 @@ async def get_chart5m(ticker: str, days: int = 5):
 
 @app.get("/visualization", response_class=HTMLResponse)
 async def visualization_page(request: Request):
-    """Страница визуализации. График 5m — по всем тикерам игры (как в карточках), фильтр — только дни."""
+    """Страница визуализации. График 5m по тикерам игры; query ``ticker=`` — один тикер (см. выпадающий список на странице)."""
     with engine.connect() as conn:
         tickers_df = pd.read_sql(
             text("SELECT DISTINCT ticker FROM quotes ORDER BY ticker"),
@@ -1602,6 +1602,22 @@ def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
     return {"ticker": ticker, "interval": "1d", "source": "quotes", "bars": records}
 
 
+def _build_portfolio_daily_charts_bulk(days: int) -> Dict[str, Any]:
+    """Дневные графики по всем тикерам портфельной игры (trading list), без LLM."""
+    from services.portfolio_card import get_portfolio_trade_tickers
+
+    tickers = list(get_portfolio_trade_tickers() or [])
+    charts: List[Dict[str, Any]] = []
+    for t in tickers:
+        one = _build_portfolio_daily_chart_data(t, days)
+        bars = one.get("bars") or []
+        entry: Dict[str, Any] = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
+        if not bars:
+            entry["error"] = "no_data"
+        charts.append(entry)
+    return {"days": days, "tickers": tickers, "charts": charts}
+
+
 def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
     """Синхронный расчёт вывода LLM для карточки 5m (запускается в потоке, чтобы не блокировать event loop)."""
     from services.recommend_5m import get_decision_5m
@@ -1731,6 +1747,18 @@ async def get_portfolio_card_llm(ticker: str, corr_days: int = 30):
     if result.get("_error"):
         raise HTTPException(status_code=int(result.get("_status", 404)), detail=result.get("_error", "Нет данных"))
     return JSONResponse(content=_api_json_body(result))
+
+
+@app.get("/api/portfolio/charts", response_class=JSONResponse)
+async def get_portfolio_charts_bulk(days: int = 180):
+    """Дневные графики по всем тикерам портфельной игры (MEDIUM+LONG без индикаторов)."""
+    try:
+        days_clamped = min(max(10, int(days)), 730)
+        payload = await asyncio.to_thread(_build_portfolio_daily_charts_bulk, days_clamped)
+        return JSONResponse(content=_api_json_body(payload))
+    except Exception as e:
+        logger.exception("GET /api/portfolio/charts days=%s: %s", days, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка графиков портфеля: {e!s}")
 
 
 @app.get("/api/portfolio/chart/{ticker}", response_class=JSONResponse)
