@@ -17,7 +17,11 @@ k=2: простой Lloyd в 2D по z-оценкам признаков; кла
 Примеры:
   python scripts/cluster_portfolio_leaders.py
   python scripts/cluster_portfolio_leaders.py --event-start 2026-02-15 --event-end 2026-03-31
-  python scripts/cluster_portfolio_leaders.py --stocks-only false --horizon 63 --csv out.csv
+  python scripts/cluster_portfolio_leaders.py --stocks-only false --horizon 63 --csv clusters.csv
+
+Зависимости (легкий набор, без torch/LLM из requirements.txt):
+  bash scripts/bootstrap_min_venv.sh              # .venv в корне репозитория
+  bash scripts/bootstrap_min_venv.sh ~/nyse/.venv # общий venv (не нужен chmod +x)
 """
 
 from __future__ import annotations

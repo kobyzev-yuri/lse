@@ -1,0 +1,9 @@
+# Минимум для оффлайн-скриптов (кластер портфеля, корреляции и т.п.) без полного стека веб/LLM.
+# Установка: pip install -r requirements-scripts-min.txt
+# Или venv целиком: bash scripts/bootstrap_min_venv.sh [путь/к/.venv]
+# (~десятки МБ вместо гигабайт torch/sentence-transformers)
+
+numpy>=1.24,<3
+pandas>=2,<3
+sqlalchemy>=2,<3
+psycopg2-binary>=2.9,<3
