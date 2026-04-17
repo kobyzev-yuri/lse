@@ -164,18 +164,18 @@ def portfolio_card_payload(
     if take_pct_exec is not None:
         if exec_stop_enabled:
             out["execution_params_line"] = (
-                f"Параметры исполнения (daily): стоп ~−{linear_drop_pct:.1f}% от цены входа "
-                f"(STOP_LOSS_LEVEL={stop_level}), тейк +{take_pct_exec:.1f}% "
-                f"(источник тейка: {take_source})."
+                f"Цель по прибыли (тейк): +{take_pct_exec:.1f}% ({take_source}); "
+                f"ограничение просадки: стоп движка ~−{linear_drop_pct:.1f}% от входа "
+                f"(STOP_LOSS_LEVEL={stop_level})."
             )
         else:
             out["execution_params_line"] = (
-                f"Параметры исполнения (daily): тейк +{take_pct_exec:.1f}% "
-                f"(источник: {take_source}); стоп портфеля выключён (PORTFOLIO_STOP_LOSS_ENABLED)."
+                f"Цель по прибыли (тейк): +{take_pct_exec:.1f}% ({take_source}); "
+                f"стоп портфеля выключён (PORTFOLIO_STOP_LOSS_ENABLED) — выход по тейку/сигналу/времени."
             )
     else:
         out["execution_params_line"] = (
-            "Тейк для авто-закрытия не задан: в стратегии нет take и PORTFOLIO_TAKE_PROFIT_PCT=0."
+            "Цель по прибыли (тейк) не задана: в стратегии нет take и PORTFOLIO_TAKE_PROFIT_PCT=0."
         )
         if exec_stop_enabled:
             out["execution_params_line"] += (

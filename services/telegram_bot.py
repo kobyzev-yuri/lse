@@ -5487,10 +5487,57 @@ class LSETelegramBot:
             )
             rsi_text = f"\n⚪ RSI: нет данных ({rsi_hint})"
 
+        # Тейк/стоп как на веб-карточке портфеля (дневная игра, trading_cycle)
+        take_stop_tail = ""
+        try:
+            from services.portfolio_card import portfolio_card_payload, load_fallback_portfolio_take_pct
+
+            pc = portfolio_card_payload(
+                ticker,
+                decision_result,
+                fallback_take_pct=load_fallback_portfolio_take_pct(),
+            )
+            tsl: List[str] = []
+            et = pc.get("effective_take_profit_pct")
+            if et is not None:
+                tsl.append(
+                    f"🎯 Ожидаемый тейк (цель по прибыли): +{float(et):.1f}% "
+                    f"(источник: {pc.get('take_profit_source') or '—'})"
+                )
+            else:
+                tsl.append("🎯 Ожидаемый тейк: не задан — см. строку «Исполнение» и PORTFOLIO_TAKE_PROFIT_PCT")
+            st_t = pc.get("strategy_take_profit_pct")
+            st_s = pc.get("strategy_stop_loss_pct")
+            try:
+                t_pct = f"{float(st_t):.2f}%" if st_t is not None else "—"
+            except (TypeError, ValueError):
+                t_pct = "—"
+            try:
+                s_pct = f"{float(st_s):.2f}%" if st_s is not None else "—"
+            except (TypeError, ValueError):
+                s_pct = "—"
+            tsl.append(
+                f"📐 В правилах стратегии % (справочно): стоп {s_pct} · тейк {t_pct} — параметры правил vs движок см. строку ниже"
+            )
+            stp = pc.get("suggested_take_profit_price_at_close")
+            if stp is not None:
+                tsl.append(f"📍 Цена цели тейка (~ от last close): ${float(stp):.2f}")
+            exl = pc.get("execution_params_line")
+            if exl:
+                tsl.append(f"🛡 Исполнение (daily): {exl}")
+            if tsl:
+                take_stop_tail = (
+                    "\n\n"
+                    "▶ ЦЕЛЬ ПОРТФЕЛЬНОЙ ИГРЫ — к этому тейку завязана логика выхода; стоп движка ограничивает просадку\n"
+                    + "\n".join(tsl)
+                )
+        except Exception as e:
+            logger.debug("take/stop lines for portfolio signal %s: %s", ticker, e)
+
         # Без Markdown: в тексте есть NO_DATA, update_prices.py, draft_bias, скобки [MEDIUM] из KB —
         # legacy parse_mode=Markdown ломается на «_» и «[]» (Can't parse entities).
         response = f"""
-{decision_emoji} {ticker} — {decision}
+{decision_emoji} {ticker} — {decision}{take_stop_tail}
 
 💰 Цена: {price}{rsi_text}
 📊 Технический сигнал: {technical_signal}

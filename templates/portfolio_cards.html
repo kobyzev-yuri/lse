@@ -57,6 +57,37 @@
         .chart-link { font-size: 0.78rem; margin-top: 0.35rem; }
         .chart-link a { color: #7dd3fc; }
         .no-data { color: #64748b; font-style: italic; }
+        .positive { color: #86efac; }
+        .negative { color: #fca5a5; }
+        .goals-block {
+            margin: 0.55rem 0 0.65rem;
+            padding: 0.65rem 0.75rem;
+            background: linear-gradient(160deg, #0c2544 0%, #132447 100%);
+            border-radius: 8px;
+            border: 1px solid #38bdf8;
+            box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.12);
+        }
+        .goals-block .goals-title {
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            color: #7dd3fc;
+            text-transform: uppercase;
+            margin-bottom: 0.4rem;
+            line-height: 1.35;
+        }
+        .goals-block .hero-take {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #e0f2fe;
+            margin-bottom: 0.35rem;
+        }
+        .goals-block .exec-line {
+            font-size: 0.8rem;
+            color: #bae6fd;
+            line-height: 1.4;
+            margin-top: 0.25rem;
+        }
     </style>
 </head>
 <body>
@@ -69,7 +100,7 @@
             <a href="/game5m/cards">5m</a>
         </div>
     </div>
-    <p class="muted" style="padding: 0.5rem 0.9rem 0;">Дневные данные из <strong>quotes</strong> (как AnalystAgent / trading_cycle). Не интрадей 5m. LLM — по кнопке (корреляции + новости + риск в промпте агента).</p>
+    <p class="muted" style="padding: 0.5rem 0.9rem 0;">Дневные данные из <strong>quotes</strong> (как AnalystAgent / trading_cycle). Не интрадей 5m. <strong>Цель портфельной игры</strong> — эффективный <strong>тейк %</strong> (стратегия или <code>PORTFOLIO_TAKE_PROFIT_PCT</code>); к нему привязана логика выхода; стоп движка — отдельно (<code>STOP_LOSS_LEVEL</code>). LLM — по кнопке.</p>
     <div style="padding: 0.4rem 0.8rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem;">
         <button class="btn" id="refreshBtn">Обновить</button>
         <label class="muted" style="cursor: pointer;">
@@ -116,25 +147,28 @@
             html += '<div class="row"><span class="label">VIX режим</span><span class="value">' + escapeHtml(String(c.vix_regime || '—')) + '</span></div>';
             html += '<div class="row"><span class="label">Sentiment (норм.)</span><span class="value">' + fmt(c.sentiment_normalized, 2) + '</span></div>';
             html += '<div class="row"><span class="label">Новостей (окно агента)</span><span class="value">' + escapeHtml(String(c.news_count != null ? c.news_count : '—')) + '</span></div>';
-            html += '<div class="block-title">Стратегия (справочно)</div>';
-            html += '<div class="row"><span class="label">Тейк в правилах стратегии %</span><span class="value">' + (c.strategy_take_profit_pct != null ? fmt(c.strategy_take_profit_pct, 2) : '—') + '</span></div>';
-            html += '<div class="row"><span class="label">Стоп в правилах стратегии %</span><span class="value">' + (c.strategy_stop_loss_pct != null ? fmt(c.strategy_stop_loss_pct, 2) : '—') + '</span></div>';
-            html += '<div class="block-title">Исполнение песочницы (как алерт 5m / крон)</div>';
-            if (c.execution_params_line) {
-                html += '<div class="reasoning muted">' + escapeHtml(c.execution_params_line) + '</div>';
+            html += '<div class="goals-block">';
+            html += '<div class="goals-title">Цель портфельной игры — ожидаемый тейк и исполнение</div>';
+            if (c.effective_take_profit_pct != null) {
+                html += '<div class="hero-take">Тейк (цель): +' + fmt(c.effective_take_profit_pct, 1) + '% <span class="muted" style="font-weight:500;font-size:0.78rem;">(' + escapeHtml(c.take_profit_source || '') + ')</span></div>';
+            } else {
+                html += '<div class="hero-take muted" style="font-size:0.88rem;font-weight:600;">Тейк не задан — проверьте правила стратегии и PORTFOLIO_TAKE_PROFIT_PCT</div>';
             }
-            html += '<div class="row"><span class="label">Тейк эффект. %</span><span class="value">' + (c.effective_take_profit_pct != null ? fmt(c.effective_take_profit_pct, 2) : '—') + ' <span class="muted">(' + escapeHtml(c.take_profit_source || '') + ')</span></span></div>';
+            if (c.execution_params_line) {
+                html += '<div class="exec-line">' + escapeHtml(c.execution_params_line) + '</div>';
+            }
+            html += '<div class="row" style="margin-top:0.45rem;"><span class="label">В правилах стратегии % (стоп / тейк)</span><span class="value">' + (c.strategy_stop_loss_pct != null ? fmt(c.strategy_stop_loss_pct, 2) : '—') + ' / ' + (c.strategy_take_profit_pct != null ? fmt(c.strategy_take_profit_pct, 2) : '—') + '</span></div>';
             if (c.suggested_take_profit_price_at_close != null) {
                 html += '<div class="row"><span class="label" title="От последнего close в quotes; при входе по другой цене пересчитайте">Цена цели тейка (~)</span><span class="value positive">$' + fmt(c.suggested_take_profit_price_at_close, 2) + '</span></div>';
             }
-            html += '<div class="row"><span class="label">Стоп движка вкл.</span><span class="value">' + (c.execution_stop_loss_enabled ? 'да' : 'нет') + '</span></div>';
-            html += '<div class="row"><span class="label">STOP_LOSS_LEVEL</span><span class="value">' + fmt(c.execution_stop_loss_level, 4) + '</span></div>';
+            html += '<div class="row"><span class="label">Стоп движка</span><span class="value">' + (c.execution_stop_loss_enabled ? 'вкл.' : 'выкл.') + ' · STOP_LOSS_LEVEL ' + fmt(c.execution_stop_loss_level, 4) + '</span></div>';
             html += '<div class="row"><span class="label">Просадка до стопа (~линейн. %)</span><span class="value negative">−' + fmt(c.execution_stop_linear_drop_pct_approx, 2) + '%</span></div>';
             if (c.execution_stop_trigger_price_at_close != null) {
                 html += '<div class="row"><span class="label" title="close×level; при входе умножайте цену входа на level">Цена стоп-триггера (~ от close)</span><span class="value negative">$' + fmt(c.execution_stop_trigger_price_at_close, 2) + '</span></div>';
             }
+            html += '</div>';
             if (c.execution_reference_note) {
-                html += '<div class="reasoning muted" style="margin-top:0.35rem;">' + escapeHtml(c.execution_reference_note) + '</div>';
+                html += '<div class="reasoning muted" style="margin-top:0.15rem;">' + escapeHtml(c.execution_reference_note) + '</div>';
             }
             if (c.execution_strategy_vs_engine_note) {
                 html += '<div class="reasoning muted" style="margin-top:0.25rem;">' + escapeHtml(c.execution_strategy_vs_engine_note) + '</div>';
