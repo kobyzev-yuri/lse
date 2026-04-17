@@ -30,6 +30,14 @@
   - в CLI: `scripts/analyze_trade_effectiveness_weekly.py`
   - узкий режим (3–4 дня, фильтр по тикерам/`trade_id`): `scripts/analyze_trades_focused.py`, Web `GET /api/analyzer/focused`
 
+### CatBoost в отчёте (`catboost_entry_backtest`)
+
+Первый шаг **проверки прогноза благоприятности входа** (до LLM и до ручной настройки порогов):
+
+- Для стратегий **`GAME_5M`** и **`ALL`** (в режиме ALL только сделки с `entry_strategy=GAME_5M`) по каждой закрытой сделке вызывается `predict_entry_favorability_from_saved_context` — та же модель, что в проде на входе, но признаки **только из `context_json` на BUY** (корреляция не дозаполняется из «текущей» матрицы).
+- В JSON: сводная **калибровка** (средний P при win/loss, квантили P vs win rate), массив **`per_trade`** (статус CatBoost, P, `realized_pct`, при наличии — `estimated_upside_pct_day_at_entry`, `prob_up_at_entry`, укороченный `price_forecast_5m_summary_excerpt`), опционально **`price_context_at_entry`** — корреляция сохранённого upside на входе с фактическим результатом (справочно).
+- Для **`PORTFOLIO`** блок осознанно **пропускается** (модель не про дневной портфель); отдельная модель — по плану в `docs/ML_GAME5M_CATBOOST.md` §8.
+
 ## Узкий анализ (выбранные сделки / короткое окно)
 
 Функция `analyze_trade_effectiveness_focused(days, strategy, tickers=..., trade_ids=..., use_llm=...)`:

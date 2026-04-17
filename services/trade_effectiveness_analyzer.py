@@ -1722,6 +1722,154 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
         return {}
 
 
+def _trade_qualifies_for_game5m_catboost(strategy: str, trade_pnl: Any) -> bool:
+    """CatBoost entry-модель только для сделок, открытых в игре GAME_5M."""
+    su = (strategy or "").strip().upper()
+    if su == "GAME_5M":
+        return True
+    if su == "ALL":
+        es = (getattr(trade_pnl, "entry_strategy", None) or "").strip()
+        return es == "GAME_5M"
+    return False
+
+
+def _build_catboost_entry_backtest(strategy: str, closed: List[Any], effects: List[TradeEffect]) -> Dict[str, Any]:
+    """
+    Бэктест скора CatBoost на закрытых сделках: сохранённый context_json на BUY → P(благоприятный исход)
+    vs фактический realized_pct (прибыль / не прибыль).
+
+    Не применяется к портфельной игре (другой контекст входа). При strategy=ALL учитываются только
+    сделки с entry_strategy GAME_5M.
+    """
+    from services.catboost_5m_signal import predict_entry_favorability_from_saved_context
+
+    su = (strategy or "").strip().upper()
+    if su == "PORTFOLIO":
+        return {
+            "mode": "skipped",
+            "note": "Модель CatBoost в репозитории обучена на входах GAME_5M; для портфеля отдельный контур не подключён.",
+        }
+    if su not in ("GAME_5M", "ALL"):
+        return {
+            "mode": "skipped",
+            "note": f"Стратегия {strategy!r}: бэктест CatBoost только при strategy=GAME_5M или ALL.",
+        }
+
+    by_tid: Dict[int, Any] = {}
+    for t in closed:
+        try:
+            tid = int(getattr(t, "trade_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if tid:
+            by_tid[tid] = t
+
+    per_trade: List[Dict[str, Any]] = []
+    paired: List[Tuple[float, bool]] = []  # (p_good, win) при status ok
+    skipped_reasons: Dict[str, int] = {}
+
+    for e in effects:
+        tp = by_tid.get(int(e.trade_id))
+        if not tp or not _trade_qualifies_for_game5m_catboost(strategy, tp):
+            continue
+        pred = predict_entry_favorability_from_saved_context(str(e.ticker), getattr(tp, "context_json", None))
+        st = pred.get("catboost_signal_status") or ""
+        row: Dict[str, Any] = {
+            "trade_id": e.trade_id,
+            "ticker": e.ticker,
+            "catboost_signal_status": st,
+            "catboost_entry_proba_good": pred.get("catboost_entry_proba_good"),
+            "realized_pct": round(e.realized_pct, 4),
+            "win": bool(e.realized_pct > 0),
+            "estimated_upside_pct_day_at_entry": None,
+            "prob_up_at_entry": None,
+            "price_forecast_5m_summary_excerpt": None,
+        }
+        if st == "ok" and pred.get("catboost_entry_proba_good") is not None:
+            try:
+                pg = float(pred["catboost_entry_proba_good"])
+                paired.append((pg, bool(e.realized_pct > 0)))
+            except (TypeError, ValueError):
+                pass
+        else:
+            skipped_reasons[st] = skipped_reasons.get(st, 0) + 1
+        try:
+            ctx = normalize_entry_context(getattr(tp, "context_json", None))
+            if ctx:
+                eu = ctx.get("estimated_upside_pct_day")
+                if eu is not None:
+                    row["estimated_upside_pct_day_at_entry"] = round(float(eu), 3)
+                pu = ctx.get("prob_up")
+                if pu is not None:
+                    row["prob_up_at_entry"] = round(float(pu), 4)
+                pfs = ctx.get("price_forecast_5m_summary")
+                if isinstance(pfs, str) and pfs.strip():
+                    row["price_forecast_5m_summary_excerpt"] = pfs.strip()[:120] + ("…" if len(pfs.strip()) > 120 else "")
+        except Exception:
+            pass
+        per_trade.append(row)
+
+    out: Dict[str, Any] = {
+        "mode": "game5m_entry_context",
+        "description": (
+            "По каждой закрытой сделке GAME_5M: CatBoostClassifier на признаках из context_json на BUY "
+            "(как train_game5m_catboost.py, без подмешивания текущей корреляции). Сравнение с фактом realized_pct."
+        ),
+        "trades_considered": len(per_trade),
+        "trades_scored_ok": len(paired),
+        "skipped_by_status": skipped_reasons,
+        "per_trade": per_trade,
+    }
+
+    if len(paired) < 2:
+        out["calibration"] = {
+            "note": f"Мало пар «скор vs исход» (n={len(paired)}); включите GAME_5M_CATBOOST_ENABLED и наличие .cbm, либо накопите закрытия.",
+        }
+        return out
+
+    wins_p = [p for p, w in paired if w]
+    loss_p = [p for p, w in paired if not w]
+    out["calibration"] = {
+        "mean_p_given_win": round(float(np.mean(wins_p)), 4) if wins_p else None,
+        "mean_p_given_loss": round(float(np.mean(loss_p)), 4) if loss_p else None,
+        "win_rate_pct": round(100.0 * sum(1 for _, w in paired if w) / len(paired), 2),
+        "buckets": [],
+    }
+    edges = [(0.0, 0.25), (0.25, 0.5), (0.5, 0.75), (0.75, 1.0001)]
+    for lo, hi in edges:
+        sub = [(p, w) for p, w in paired if lo <= p < hi]
+        if not sub:
+            out["calibration"]["buckets"].append(
+                {"p_range": f"[{lo:.2f},{hi:.2f})", "n": 0, "win_rate_pct": None}
+            )
+            continue
+        wr = 100.0 * sum(1 for _, w in sub if w) / len(sub)
+        out["calibration"]["buckets"].append(
+            {"p_range": f"[{lo:.2f},{hi:.2f})", "n": len(sub), "win_rate_pct": round(wr, 2)}
+        )
+
+    # Простая связь «прогноз upside на входе» vs результат (только где поле было)
+    ups_pairs: List[Tuple[float, float]] = []
+    for row in per_trade:
+        eu = row.get("estimated_upside_pct_day_at_entry")
+        if eu is None:
+            continue
+        try:
+            ups_pairs.append((float(eu), float(row["realized_pct"])))
+        except (TypeError, ValueError):
+            pass
+    if len(ups_pairs) >= 3:
+        xs = np.array([a[0] for a in ups_pairs], dtype=float)
+        ys = np.array([a[1] for a in ups_pairs], dtype=float)
+        corr = float(np.corrcoef(xs, ys)[0, 1]) if np.std(xs) > 1e-9 and np.std(ys) > 1e-9 else None
+        out["price_context_at_entry"] = {
+            "n_with_estimated_upside_pct_day": len(ups_pairs),
+            "corr_estimated_upside_vs_realized_pct": round(corr, 4) if corr is not None and math.isfinite(corr) else None,
+            "note": "Корреляция справочная: estimated_upside_pct_day из входа vs итог сделки; не замена CatBoost.",
+        }
+    return out
+
+
 def analyze_trade_effectiveness(
     days: int = 7,
     strategy: str = "GAME_5M",
@@ -1740,6 +1888,7 @@ def analyze_trade_effectiveness(
                 "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
             },
             "summary": {"total": 0},
+            "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
         }
 
     tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
@@ -1758,6 +1907,7 @@ def analyze_trade_effectiveness(
     critical_cases = _build_critical_case_analysis(effects, limit=5)
     game_5m_config_hints = _build_game5m_config_hints(effects, summary)
     entry_review = _build_entry_underperformance_review(effects, limit=8)
+    catboost_entry_backtest = _build_catboost_entry_backtest(strategy, closed, effects)
     payload: Dict[str, Any] = {
         "meta": {
             "days": days,
@@ -1782,6 +1932,7 @@ def analyze_trade_effectiveness(
         "critical_case_analysis": critical_cases,
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
+        "catboost_entry_backtest": catboost_entry_backtest,
     }
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
@@ -1834,6 +1985,7 @@ def analyze_trade_effectiveness_focused(
                 "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
             },
             "summary": {"total": 0},
+            "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
         }
 
     tickers_list = [str(t.ticker) for t in filtered if getattr(t, "ticker", None)]
@@ -1846,6 +1998,7 @@ def analyze_trade_effectiveness_focused(
     critical_cases = _build_critical_case_analysis(effects, limit=5)
     game_5m_config_hints = _build_game5m_config_hints(effects, summary)
     entry_review = _build_entry_underperformance_review(effects, limit=8)
+    catboost_entry_backtest = _build_catboost_entry_backtest(strategy, filtered, effects)
 
     payload: Dict[str, Any] = {
         "meta": {
@@ -1870,6 +2023,7 @@ def analyze_trade_effectiveness_focused(
         "critical_case_analysis": critical_cases,
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
+        "catboost_entry_backtest": catboost_entry_backtest,
     }
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
@@ -1954,6 +2108,30 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             lines.append(
                 f"• {p.get('parameter')}: {p.get('current')} -> {p.get('proposed')} | {p.get('why')}"
             )
+    cb = report.get("catboost_entry_backtest") or {}
+    if cb.get("mode") == "game5m_entry_context":
+        cal = cb.get("calibration") or {}
+        lines.append("")
+        lines.append("CatBoost (бэктест P(благоприятный исход) на context_json входа):")
+        lines.append(
+            f"• Сделок со скором: {cb.get('trades_scored_ok', 0)} / учтено в отчёте: {cb.get('trades_considered', 0)}"
+        )
+        if cal.get("mean_p_given_win") is not None:
+            mpl = cal.get("mean_p_given_loss")
+            if mpl is not None:
+                lines.append(f"• Средний P | win: {cal['mean_p_given_win']:.3f} | Средний P | loss: {mpl:.3f}")
+            else:
+                lines.append(f"• Средний P | win: {cal['mean_p_given_win']:.3f}")
+        for b in cal.get("buckets") or []:
+            if b.get("n"):
+                lines.append(
+                    f"  {b.get('p_range')}: n={b['n']}, win_rate={b.get('win_rate_pct')}%"
+                )
+        if cal.get("note"):
+            lines.append(f"• {cal['note']}")
+    elif cb.get("note"):
+        lines.append("")
+        lines.append(f"CatBoost: {cb.get('note')}")
     entry_rev = report.get("entry_underperformance_review") or []
     if entry_rev:
         lines.append("")

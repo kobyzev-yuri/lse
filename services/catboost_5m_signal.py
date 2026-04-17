@@ -173,72 +173,137 @@ def _load_model_bundle(model_path: str, model_mtime: float) -> Tuple[Any, Dict[s
     return model, meta
 
 
-def attach_catboost_signal(out: Dict[str, Any], ticker: str) -> None:
+def _catboost_predict_proba_row(
+    model: Any,
+    meta: Dict[str, Any],
+    colnames: List[str],
+    row: List[Any],
+) -> Tuple[str, Optional[float], str]:
+    """Один прогон Pool.predict_proba. Возвращает (status, p_good_or_none, note)."""
+    expected = meta.get("feature_names")
+    cat_idx = meta.get("cat_feature_indices", [0])
+    if not expected:
+        return "bad_meta", None, "meta.json без feature_names."
+    if list(expected) != colnames:
+        logger.warning(
+            "CatBoost: несовпадение признаков (переобучите модель). meta=%s текущие=%s",
+            expected,
+            colnames,
+        )
+        return "feature_mismatch", None, "Список признаков не совпадает с meta.json — переобучите модель."
+    try:
+        from catboost import Pool
+
+        pool = Pool([row], cat_features=cat_idx)
+        proba = model.predict_proba(pool)[0]
+        p_good = float(proba[1]) if len(proba) > 1 else float(proba[0])
+        return "ok", round(p_good, 4), ""
+    except Exception as e:
+        logger.warning("CatBoost predict: %s", e)
+        return "predict_error", None, str(e)
+
+
+def _catboost_runtime_guards() -> Tuple[str, str, Optional[str], Optional[Tuple[Any, Dict[str, Any]]]]:
     """
-    Добавляет в out поля catboost_*; не бросает исключений наружу.
+    Проверки включения / пакета / файла модели.
+    Возвращает (status, note, model_path_or_None, (model, meta)_or_None).
     """
     from config_loader import get_config_value
 
     raw = (get_config_value("GAME_5M_CATBOOST_ENABLED", "false") or "false").strip().lower()
     if raw not in ("1", "true", "yes"):
-        out["catboost_signal_status"] = "disabled"
-        out["catboost_signal_note"] = "CatBoost выключен (GAME_5M_CATBOOST_ENABLED)."
-        return
+        return "disabled", "CatBoost выключен (GAME_5M_CATBOOST_ENABLED).", None, None
 
     try:
         import catboost  # noqa: F401
     except ImportError:
-        out["catboost_signal_status"] = "no_package"
-        out["catboost_signal_note"] = "Пакет catboost не установлен (pip install catboost)."
-        return
+        return "no_package", "Пакет catboost не установлен (pip install catboost).", None, None
 
     model_path = (get_config_value("GAME_5M_CATBOOST_MODEL_PATH", "") or "").strip()
     if not model_path:
         root = Path(__file__).resolve().parents[1]
         model_path = str(root / "local" / "models" / "game5m_entry_catboost.cbm")
     if not os.path.isfile(model_path):
-        out["catboost_signal_status"] = "no_model_file"
-        out["catboost_signal_note"] = f"Нет файла модели: {model_path}"
-        return
+        return "no_model_file", f"Нет файла модели: {model_path}", model_path, None
 
     try:
         try:
             mtime = os.path.getmtime(model_path)
         except OSError:
             mtime = 0.0
-        model, meta = _load_model_bundle(model_path, mtime)
+        bundle = _load_model_bundle(model_path, mtime)
     except Exception as e:
         logger.warning("CatBoost load %s: %s", model_path, e)
-        out["catboost_signal_status"] = "load_error"
-        out["catboost_signal_note"] = f"Ошибка загрузки модели: {e}"
+        return "load_error", f"Ошибка загрузки модели: {e}", model_path, None
+
+    return "ready", "", model_path, bundle
+
+
+def predict_entry_favorability_from_saved_context(ticker: str, entry_context: Any) -> Dict[str, Any]:
+    """
+    CatBoost P(благоприятный исход) по сохранённому context_json на BUY.
+
+    Используется анализатором сделок: признаки только из JSON на момент входа
+    (``row_from_entry_context_dict`` — без дозаполнения корреляции из текущей матрицы).
+    """
+    from services.deal_params_5m import normalize_entry_context
+
+    out: Dict[str, Any] = {
+        "catboost_signal_status": "skipped",
+        "catboost_signal_note": "",
+        "catboost_entry_proba_good": None,
+    }
+    ctx = normalize_entry_context(entry_context)
+    if not ctx:
+        out["catboost_signal_status"] = "no_entry_context"
+        out["catboost_signal_note"] = "Пустой или неразбираемый context_json на BUY."
+        return out
+
+    st_g, note_g, _mp, bundle = _catboost_runtime_guards()
+    if st_g != "ready" or bundle is None:
+        out["catboost_signal_status"] = st_g
+        out["catboost_signal_note"] = note_g
+        return out
+
+    model, meta = bundle
+    try:
+        colnames, row = row_from_entry_context_dict(ctx, ticker)
+        p_st, p_good, p_note = _catboost_predict_proba_row(model, meta, colnames, row)
+        out["catboost_signal_status"] = p_st
+        out["catboost_entry_proba_good"] = p_good
+        out["catboost_signal_note"] = p_note or (
+            f"P(благоприятный исход)≈{p_good:.2f} — по признакам на входе (как при обучении)."
+            if p_good is not None
+            else ""
+        )
+    except Exception as e:
+        logger.warning("predict_entry_favorability_from_saved_context: %s", e)
+        out["catboost_signal_status"] = "predict_error"
+        out["catboost_signal_note"] = str(e)
+    return out
+
+
+def attach_catboost_signal(out: Dict[str, Any], ticker: str) -> None:
+    """
+    Добавляет в out поля catboost_*; не бросает исключений наружу.
+    """
+    from config_loader import get_config_value
+
+    st_g, note_g, _mp, bundle = _catboost_runtime_guards()
+    if st_g != "ready" or bundle is None:
+        out["catboost_signal_status"] = st_g
+        out["catboost_signal_note"] = note_g
         return
 
-    expected = meta.get("feature_names")
-    cat_idx = meta.get("cat_feature_indices", [0])
-    if not expected:
-        out["catboost_signal_status"] = "bad_meta"
-        out["catboost_signal_note"] = "meta.json без feature_names."
-        return
-
+    model, meta = bundle
     try:
         colnames, row = build_catboost_feature_row(ticker, out)
-        if list(expected) != colnames:
-            logger.warning(
-                "CatBoost: несовпадение признаков (переобучите модель). meta=%s текущие=%s",
-                expected,
-                colnames,
-            )
-            out["catboost_signal_status"] = "feature_mismatch"
-            out["catboost_signal_note"] = "Список признаков не совпадает с meta.json — переобучите модель."
+        p_st, p_good, p_note = _catboost_predict_proba_row(model, meta, colnames, row)
+        out["catboost_signal_status"] = p_st
+        out["catboost_entry_proba_good"] = p_good
+        if p_st != "ok":
+            out["catboost_signal_note"] = p_note
             return
-        from catboost import Pool
-
-        pool = Pool([row], cat_features=cat_idx)
-        proba = model.predict_proba(pool)[0]
-        # класс 1 = «хороший» исход (как при обучении)
-        p_good = float(proba[1]) if len(proba) > 1 else float(proba[0])
-        out["catboost_entry_proba_good"] = round(p_good, 4)
-        out["catboost_signal_status"] = "ok"
         out["catboost_signal_note"] = (
             f"CatBoost: оценка P(благоприятный исход по истории)≈{p_good:.2f} — "
             f"только справочно, правила входа не меняются."

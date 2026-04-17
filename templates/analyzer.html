@@ -80,6 +80,12 @@
 </div>
 
 <div class="card">
+    <h2>CatBoost на входе (бэктест) <code>catboost_entry_backtest</code></h2>
+    <p class="muted" style="font-size:0.9rem;">Для <strong>GAME_5M</strong> и <strong>ALL</strong> (только сделки с <code>entry_strategy=GAME_5M</code>): та же модель, что при живом входе, но признаки <strong>только из сохранённого <code>context_json</code> на BUY</strong> — проверка благоприятности входа vs факт <code>realized_pct</code>. Опционально: корреляция <code>estimated_upside_pct_day</code> на входе с результатом. Портфельная игра — блок пропускается (другой контекст).</p>
+    <div id="catboostBlock" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
     <h2>Худшие исходы (<code>top_cases.top_losses</code>)</h2>
     <p class="muted">Сначала сделки с <strong>наименьшим</strong> <code>realized_pct</code> (до 8 строк на странице). При высоком win rate это часто самые маленькие плюсы; смотрите также <code>missed_upside_pct</code> и <code>exit_signal</code>.</p>
     <div id="topLosses" class="dashboard-text">—</div>
@@ -198,6 +204,60 @@ function toLine(r) {
     return `• ${esc(r.ticker)} #${esc(r.trade_id)}: результат ${Number(r.realized_pct).toFixed(2)}% | недобор ${Number(r.missed_upside_pct || 0).toFixed(2)}% | выход ${esc(r.exit_signal || '—')}`;
 }
 
+function renderCatboostBlock(data) {
+    const el = document.getElementById('catboostBlock');
+    if (!el) {
+        return;
+    }
+    const cb = data.catboost_entry_backtest || {};
+    if (cb.mode === 'skipped') {
+        el.innerHTML = '<span class="muted">' + esc(cb.note || '—') + '</span>';
+        return;
+    }
+    if (cb.mode !== 'game5m_entry_context') {
+        el.textContent = '—';
+        return;
+    }
+    const cal = cb.calibration || {};
+    let html = '<p style="margin:0 0 0.5rem 0;font-size:0.9rem;color:#cbd5e1;">' + esc(cb.description || '') + '</p>';
+    html += '<p style="margin:0.35rem 0;">Скор <code>ok</code>: <strong>' + esc(cb.trades_scored_ok) + '</strong> из <strong>' + esc(cb.trades_considered) + '</strong> сделок в выборке.</p>';
+    if (cal.mean_p_given_win != null) {
+        const mpl = cal.mean_p_given_loss;
+        html += '<p style="margin:0.35rem 0;">Средний P | win: <strong>' + esc(cal.mean_p_given_win) + '</strong>';
+        if (mpl != null) {
+            html += ' · Средний P | loss: <strong>' + esc(mpl) + '</strong>';
+        }
+        html += ' · Win rate (в подвыборке со скором): <strong>' + esc(cal.win_rate_pct) + '%</strong></p>';
+    }
+    const buckets = Array.isArray(cal.buckets) ? cal.buckets : [];
+    if (buckets.length) {
+        html += '<p style="margin:0.5rem 0 0.25rem 0;font-size:0.88rem;color:#94a3b8;">Калибровка по квантилям P:</p><ul style="margin:0;padding-left:1.2rem;">';
+        buckets.forEach(function (b) {
+            if (b.n) {
+                html += '<li><code>' + esc(b.p_range) + '</code> n=' + esc(b.n) + ', win_rate=' + esc(b.win_rate_pct) + '%</li>';
+            }
+        });
+        html += '</ul>';
+    }
+    if (cal.note) {
+        html += '<p class="muted" style="margin-top:0.5rem;">' + esc(cal.note) + '</p>';
+    }
+    const pc = cb.price_context_at_entry;
+    if (pc && pc.n_with_estimated_upside_pct_day != null) {
+        html += '<p style="margin-top:0.65rem;font-size:0.88rem;">Прогноз upside на входе: n=' + esc(pc.n_with_estimated_upside_pct_day) +
+            ', corr(upside, realized)=' + esc(pc.corr_estimated_upside_vs_realized_pct != null ? pc.corr_estimated_upside_vs_realized_pct : '—') + '</p>';
+        if (pc.note) {
+            html += '<p class="muted" style="font-size:0.85rem;">' + esc(pc.note) + '</p>';
+        }
+    }
+    const skip = cb.skipped_by_status || {};
+    const sk = Object.keys(skip).length ? JSON.stringify(skip) : '';
+    if (sk) {
+        html += '<p class="muted" style="margin-top:0.45rem;font-size:0.82rem;">Пропуски по статусу CatBoost: ' + esc(sk) + '</p>';
+    }
+    el.innerHTML = html;
+}
+
 async function runAnalyzer() {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
@@ -232,6 +292,7 @@ async function runAnalyzer() {
             summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(data.detail || r.statusText)}</span>`;
             return;
         }
+        renderCatboostBlock(data);
         const s = data.summary || {};
         if (!s.total) {
             summary.innerHTML = 'За период нет закрытых сделок.';
