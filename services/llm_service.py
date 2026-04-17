@@ -18,8 +18,8 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 
-def _coerce_entry_decision_label(raw: Any, fallback: str = "HOLD") -> str:
-    """BUY | STRONG_BUY | HOLD для промпта входа; прочее → HOLD."""
+def coerce_entry_decision_label(raw: Any, fallback: str = "HOLD") -> str:
+    """BUY | STRONG_BUY | HOLD для промпта входа; прочее → HOLD (публичный алиас)."""
     s = str(raw or "").strip().upper()
     if "SELL" in s:
         return "HOLD"
@@ -32,6 +32,9 @@ def _coerce_entry_decision_label(raw: Any, fallback: str = "HOLD") -> str:
     return fallback if fallback in ("BUY", "STRONG_BUY", "HOLD") else "HOLD"
 
 
+_coerce_entry_decision_label = coerce_entry_decision_label
+
+
 def _finalize_dual_entry_llm_analysis(analysis: Dict[str, Any]) -> Dict[str, Any]:
     """Нормализует decision/decision_fused и ab_fusion_differs после парсинга JSON."""
     a = dict(analysis)
@@ -42,6 +45,151 @@ def _finalize_dual_entry_llm_analysis(analysis: Dict[str, Any]) -> Dict[str, Any
     a["decision_fused"] = fused
     a["ab_fusion_differs"] = bool(leg != fused)
     return a
+
+
+def get_portfolio_entry_fusion_system_prompt() -> str:
+    """
+    Короткий system для портфельного daily-входа: без длинного «аналитика»-мануала.
+    Структура user — как у recommend5m: техника, KB-сигнал, скаляры слияния, стратегия; LLM даёт итог JSON.
+    """
+    return (
+        "Ты модератор входа в портфель (дневные котировки). На входе — уже посчитанные блоки: "
+        "техника, KB (bias/gate), слияние тех+новости, сигнал выбранной стратегии.\n"
+        "Не выдумывай числа; не подменяй дневную картину 5m-прогнозом (его в данных нет).\n"
+        "Верни ТОЛЬКО JSON без markdown:\n"
+        "{\n"
+        '  "decision": "BUY|STRONG_BUY|HOLD",\n'
+        '  "decision_fused": "то же, что decision (согласованное итоговое мнение)",\n'
+        '  "ab_fusion_differs": false,\n'
+        '  "confidence": 0.0-1.0,\n'
+        '  "reasoning": "1–3 предложения: техника + KB + fused + стратегия",\n'
+        '  "reasoning_fused": "коротко",\n'
+        '  "risks": ["кратко"],\n'
+        '  "key_factors": ["3–7 меток"]\n'
+        "}\n"
+        "Правила: при fused_bias_neg1 < -0.25 или явном медвежьем KB gate не ставь STRONG_BUY; "
+        "при конфликте «стратегия BUY» и сильно медвежьем KB — предпочти HOLD или обычный BUY без агрессии."
+    )
+
+
+def build_portfolio_fusion_user_message(
+    ticker: str,
+    technical_data: Dict[str, Any],
+    news_data: List[Dict[str, Any]],
+    sentiment_score: float,
+    strategy_name: Optional[str] = None,
+    strategy_signal: Optional[str] = None,
+    strategy_outcome_stats: Optional[str] = None,
+) -> str:
+    """User-промпт портфеля: секции техника / KB / слияние / стратегия / задача (как логика recommend5m)."""
+    td = technical_data or {}
+    rsi_value = td.get("rsi")
+    rsi_line = ""
+    if rsi_value is not None:
+        try:
+            rv = float(rsi_value)
+            if rv >= 70:
+                st = "перекупленность"
+            elif rv <= 30:
+                st = "перепроданность"
+            elif rv >= 60:
+                st = "близко к перекупленности"
+            elif rv <= 40:
+                st = "близко к перепроданности"
+            else:
+                st = "нейтральная зона"
+            rsi_line = f"\n- RSI: {rv:.1f} ({st})"
+        except (TypeError, ValueError):
+            rsi_line = ""
+    vix_line = ""
+    _vx = td.get("vix_value")
+    _vr = td.get("vix_regime")
+    if _vx is not None:
+        try:
+            vix_line = f"\n- ^VIX: {float(_vx):.2f} ({_vr or 'N/A'})"
+        except (TypeError, ValueError):
+            pass
+
+    parts: List[str] = [
+        f"=== ТЕХНИКА (daily, {ticker}) ===",
+        f"- Close: {td.get('close', 'N/A')}",
+        f"- SMA_5: {td.get('sma_5', 'N/A')}",
+        f"- Волатильность 5д: {td.get('volatility_5', 'N/A')}",
+        f"- Средняя волатильность 20д: {td.get('avg_volatility_20', 'N/A')}{rsi_line}{vix_line}",
+        f"- Технический сигнал (правила аналитика): {td.get('technical_signal', 'N/A')}",
+    ]
+    pdr = td.get("prev_day_return_pct")
+    cdr = td.get("current_day_return_pct")
+    if pdr is not None:
+        try:
+            parts.append(f"- Доходность предыдущего дня (оценка): {float(pdr):+.2f}%")
+        except (TypeError, ValueError):
+            pass
+    if cdr is not None:
+        try:
+            parts.append(f"- Доходность текущего дня от open: {float(cdr):+.2f}%")
+        except (TypeError, ValueError):
+            pass
+    pm = td.get("premarket_note")
+    if pm:
+        parts.append(f"- Премаркет/сессия: {str(pm)[:400]}")
+
+    kb_plain = (td.get("kb_news_signal_plain") or "").strip()
+    parts.append("")
+    parts.append("=== НОВОСТИ KB (единый пайплайн bias / gate, как /news и recommend5m) ===")
+    parts.append(kb_plain if kb_plain else "(нет текста KB — окно пустое или ошибка сбора)")
+
+    from services.geopolitical_prompt import build_geopolitical_block
+
+    geo_block, _geo_blob = build_geopolitical_block(news_data or [])
+    if geo_block:
+        parts.append("")
+        parts.append("=== Геополитика / риски из ленты (кратко) ===")
+        parts.append(geo_block[:900])
+
+    parts.append("")
+    parts.append("=== Sentiment (агент, 0..1 для промпта) ===")
+    parts.append(f"- score: {sentiment_score:.3f}")
+    parts.append(f"- строк новостей в выборке: {len(news_data or [])}")
+
+    parts.append("")
+    parts.append("=== СЛИЯНИЕ техника + новости (скаляры −1..+1) ===")
+    parts.append(
+        format_entry_fusion_block_for_llm(ticker, td, news_data or [], sentiment_score)
+    )
+
+    parts.append("")
+    parts.append("=== СТРАТЕГИЯ (StrategyManager) ===")
+    if strategy_name and strategy_signal:
+        parts.append(f"- Имя: {strategy_name}")
+        parts.append(f"- Сигнал: {strategy_signal}")
+        sr = td.get("strategy_manager_reasoning")
+        if sr:
+            parts.append(f"- Обоснование стратегии (фрагмент): {str(sr)[:520]}")
+        stp = td.get("strategy_take_pct")
+        ssp = td.get("strategy_stop_pct")
+        if stp is not None or ssp is not None:
+            parts.append(f"- take/stop из стратегии (%): take={stp}, stop={ssp}")
+    else:
+        parts.append("(стратегия не выбрана — только техника + KB)")
+
+    cn = td.get("cluster_note")
+    if cn:
+        parts.append("")
+        parts.append("=== Кластер / корреляция ===")
+        parts.append(str(cn)[:3500])
+
+    if strategy_outcome_stats:
+        parts.append("")
+        parts.append("=== Статистика исходов стратегий (справочно) ===")
+        parts.append(str(strategy_outcome_stats)[:1200])
+
+    parts.append("")
+    parts.append(
+        "=== ЗАДАЧА ===\n"
+        "Дай итоговое решение о входе в JSON (см. system). Поля decision и decision_fused должны совпадать."
+    )
+    return "\n".join(parts)
 
 
 def _normalize_openai_model_id_for_heuristics(model: str) -> str:
@@ -633,11 +781,25 @@ Sentiment анализ:
         strategy_name: Optional[str] = None,
         strategy_signal: Optional[str] = None,
         strategy_outcome_stats: Optional[str] = None,
+        entry_prompt_profile: str = "legacy_full",
     ) -> Dict[str, str]:
         """
         Собирает промпт (system + user) для решения о входе без вызова LLM.
         Те же входы, что у analyze_trading_situation. Для /prompt_entry: всегда заполнять user_prompt в JSON.
         """
+        if entry_prompt_profile == "portfolio_fusion":
+            return {
+                "prompt_system": get_portfolio_entry_fusion_system_prompt(),
+                "prompt_user": build_portfolio_fusion_user_message(
+                    ticker,
+                    technical_data,
+                    news_data,
+                    sentiment_score,
+                    strategy_name,
+                    strategy_signal,
+                    strategy_outcome_stats,
+                ),
+            }
         system_prompt = LLMService.get_entry_decision_system_prompt()
         from services.geopolitical_prompt import (
             build_geopolitical_block,
@@ -787,6 +949,7 @@ Sentiment анализ:
         strategy_name: Optional[str] = None,
         strategy_signal: Optional[str] = None,
         strategy_outcome_stats: Optional[str] = None,
+        entry_prompt_profile: str = "legacy_full",
     ) -> Dict[str, Any]:
         """
         Анализ торговой ситуации с помощью LLM
@@ -799,69 +962,84 @@ Sentiment анализ:
             strategy_name: Имя выбранной стратегии (Momentum, Mean Reversion и т.д.), если есть
             strategy_signal: Сигнал стратегии (BUY/HOLD/SELL), если есть
             strategy_outcome_stats: Текст со статистикой исходов по стратегиям (закрытые сделки), если есть
-            
+            entry_prompt_profile: ``legacy_full`` — длинный system-промпт входа; ``portfolio_fusion`` —
+                короткий system и структурированный user (техника, KB, слияние, стратегия), как логика recommend5m.
+
         Returns:
             Анализ от LLM с рекомендацией
         """
-        system_prompt = self.get_entry_decision_system_prompt()
         from services.geopolitical_prompt import (
             build_geopolitical_block,
             geo_cluster_bridge_hint,
             geopolitical_followup_hint,
         )
 
-        # Формируем контекст
-        news_summary = "\n".join([
-            f"- {news.get('source', 'Unknown')}: {news.get('content', '')[:200]}... (sentiment: {news.get('sentiment_score', 0)})"
-            for news in news_data[:5]  # Берем топ-5 новостей
-        ])
-        geo_block, geo_blob = build_geopolitical_block(news_data or [])
-        _geo_nl_block = ("\n\n" + geo_block) if geo_block else ""
+        if entry_prompt_profile == "portfolio_fusion":
+            system_prompt = get_portfolio_entry_fusion_system_prompt()
+            user_message = build_portfolio_fusion_user_message(
+                ticker,
+                technical_data,
+                news_data,
+                sentiment_score,
+                strategy_name,
+                strategy_signal,
+                strategy_outcome_stats,
+            )
+        else:
+            system_prompt = self.get_entry_decision_system_prompt()
+            news_summary = "\n".join([
+                f"- {news.get('source', 'Unknown')}: {news.get('content', '')[:200]}... (sentiment: {news.get('sentiment_score', 0)})"
+                for news in news_data[:5]
+            ])
+            geo_block, geo_blob = build_geopolitical_block(news_data or [])
+            _geo_nl_block = ("\n\n" + geo_block) if geo_block else ""
 
-        # Форматируем RSI с интерпретацией
-        rsi_value = technical_data.get('rsi')
-        rsi_text = ""
-        if rsi_value is not None:
-            if rsi_value >= 70:
-                rsi_status = "перекупленность"
-            elif rsi_value <= 30:
-                rsi_status = "перепроданность"
-            elif rsi_value >= 60:
-                rsi_status = "близко к перекупленности"
-            elif rsi_value <= 40:
-                rsi_status = "близко к перепроданности"
-            else:
-                rsi_status = "нейтральная зона"
-            rsi_text = f"\n- RSI: {rsi_value:.1f} ({rsi_status})"
+            rsi_value = technical_data.get("rsi")
+            rsi_text = ""
+            if rsi_value is not None:
+                if rsi_value >= 70:
+                    rsi_status = "перекупленность"
+                elif rsi_value <= 30:
+                    rsi_status = "перепроданность"
+                elif rsi_value >= 60:
+                    rsi_status = "близко к перекупленности"
+                elif rsi_value <= 40:
+                    rsi_status = "близко к перепроданности"
+                else:
+                    rsi_status = "нейтральная зона"
+                rsi_text = f"\n- RSI: {rsi_value:.1f} ({rsi_status})"
 
-        tech_sig = technical_data.get("technical_signal", "N/A")
-        tech_core = technical_data.get("technical_signal_core")
-        sig_extra = ""
-        if tech_core is not None and str(tech_core) != str(tech_sig):
-            sig_extra = f"\n- Базовый сигнал правил (до слоя CatBoost): {tech_core}"
-        cb_p = technical_data.get("catboost_entry_proba_good")
-        cb_st = technical_data.get("catboost_signal_status")
-        cb_fusion = technical_data.get("catboost_fusion_note")
-        cb_lines = ""
-        if cb_st and cb_st != "disabled":
-            cb_lines = f"\n- CatBoost: статус={cb_st}"
-            if cb_p is not None:
-                cb_lines += f", P(благоприятный исход по истории)≈{cb_p}"
-            if cb_fusion:
-                cb_lines += f"\n  Слияние с тех. сигналом: {cb_fusion}"
+            tech_sig = technical_data.get("technical_signal", "N/A")
+            tech_core = technical_data.get("technical_signal_core")
+            sig_extra = ""
+            if tech_core is not None and str(tech_core) != str(tech_sig):
+                sig_extra = f"\n- Базовый сигнал правил (до слоя CatBoost): {tech_core}"
+            cb_p = technical_data.get("catboost_entry_proba_good")
+            cb_st = technical_data.get("catboost_signal_status")
+            cb_fusion = technical_data.get("catboost_fusion_note")
+            cb_lines = ""
+            if cb_st and cb_st != "disabled":
+                cb_lines = f"\n- CatBoost: статус={cb_st}"
+                if cb_p is not None:
+                    cb_lines += f", P(благоприятный исход по истории)≈{cb_p}"
+                if cb_fusion:
+                    cb_lines += f"\n  Слияние с тех. сигналом: {cb_fusion}"
 
-        exec_ctx = format_game5m_execution_context_for_llm(technical_data)
-        pf_block = format_price_forecast_llm_block(technical_data)
-        vix_line = ""
-        _vx = technical_data.get("vix_value")
-        _vr = technical_data.get("vix_regime")
-        if _vx is not None:
-            try:
-                vix_line = f"\n- ^VIX (рынок): {float(_vx):.2f}, режим {_vr or 'N/A'} — индикатор премии за риск; низкий VIX нередко согласуется со слабой реакцией на разовый гео-шум при отсутствии нового катализатора."
-            except (TypeError, ValueError):
-                vix_line = ""
+            exec_ctx = format_game5m_execution_context_for_llm(technical_data)
+            pf_block = format_price_forecast_llm_block(technical_data)
+            vix_line = ""
+            _vx = technical_data.get("vix_value")
+            _vr = technical_data.get("vix_regime")
+            if _vx is not None:
+                try:
+                    vix_line = (
+                        f"\n- ^VIX (рынок): {float(_vx):.2f}, режим {_vr or 'N/A'} — индикатор премии за риск; "
+                        "низкий VIX нередко согласуется со слабой реакцией на разовый гео-шум при отсутствии нового катализатора."
+                    )
+                except (TypeError, ValueError):
+                    vix_line = ""
 
-        user_message = f"""Анализ для тикера {ticker}:
+            user_message = f"""Анализ для тикера {ticker}:
 
 Технические данные:
 - Текущая цена: {technical_data.get('close', 'N/A')}
@@ -877,40 +1055,44 @@ Sentiment анализ:
 Новости:
 {news_summary if news_summary else "Новостей не найдено"}{_geo_nl_block}
 """
-        cluster_note = technical_data.get("cluster_note")
-        if not cluster_note:
-            corr_val = technical_data.get("corr_with_benchmark")
-            corr_label = technical_data.get("corr_label")
-            benchmark_signal = technical_data.get("benchmark_signal")
-            if corr_val is not None and corr_label:
-                user_message += f"\n\nКорреляция с бенчмарком (MU, 14 дн.): {corr_val:.2f} ({corr_label})."
-                if benchmark_signal:
-                    user_message += f" Текущий сигнал по MU: {benchmark_signal}. При высокой корреляции (In-Sync) движение бенчмарка может поддерживать или давить на тикер — учти при рекомендации."
-                else:
-                    user_message += " Учти при рекомендации: при In-Sync бумага движется с сектором; при Independent — на собственных драйверах."
-        premarket_note = technical_data.get("premarket_note")
-        if premarket_note:
-            user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
-        if cluster_note:
-            user_message += f"\n\nКластер и корреляция (обязательно учти в key_factors и reasoning):\n{cluster_note}"
-        if strategy_name and strategy_signal:
-            user_message += (
-                f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. "
-                "Согласись или скорректируй в поле decision (legacy); decision_fused — отдельно с учётом блока слияния. "
-                "Если итог HOLD — в reasoning объясни, почему не входим, а не «есть возможность покупки, но держим»."
+            cluster_note = technical_data.get("cluster_note")
+            if not cluster_note:
+                corr_val = technical_data.get("corr_with_benchmark")
+                corr_label = technical_data.get("corr_label")
+                benchmark_signal = technical_data.get("benchmark_signal")
+                if corr_val is not None and corr_label:
+                    user_message += f"\n\nКорреляция с бенчмарком (MU, 14 дн.): {corr_val:.2f} ({corr_label})."
+                    if benchmark_signal:
+                        user_message += (
+                            f" Текущий сигнал по MU: {benchmark_signal}. При высокой корреляции (In-Sync) движение бенчмарка может поддерживать или давить на тикер — учти при рекомендации."
+                        )
+                    else:
+                        user_message += (
+                            " Учти при рекомендации: при In-Sync бумага движется с сектором; при Independent — на собственных драйверах."
+                        )
+            premarket_note = technical_data.get("premarket_note")
+            if premarket_note:
+                user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
+            if cluster_note:
+                user_message += f"\n\nКластер и корреляция (обязательно учти в key_factors и reasoning):\n{cluster_note}"
+            if strategy_name and strategy_signal:
+                user_message += (
+                    f"\n\nКонтекст стратегии: выбранная стратегия — {strategy_name}, её сигнал — {strategy_signal}. "
+                    "Согласись или скорректируй в поле decision (legacy); decision_fused — отдельно с учётом блока слияния. "
+                    "Если итог HOLD — в reasoning объясни, почему не входим, а не «есть возможность покупки, но держим»."
+                )
+            if strategy_outcome_stats:
+                user_message += f"\n\n{strategy_outcome_stats} Учти исходы в похожих ситуациях при рекомендации."
+            _geo_combined = ((news_summary or "").lower() + "\n" + geo_blob).strip()
+            user_message += geopolitical_followup_hint(_geo_combined)
+            user_message += geo_cluster_bridge_hint(cluster_note, _geo_combined)
+            fusion_block = format_entry_fusion_block_for_llm(
+                ticker, technical_data, news_data, sentiment_score,
             )
-        if strategy_outcome_stats:
-            user_message += f"\n\n{strategy_outcome_stats} Учти исходы в похожих ситуациях при рекомендации."
-        _geo_combined = ((news_summary or "").lower() + "\n" + geo_blob).strip()
-        user_message += geopolitical_followup_hint(_geo_combined)
-        user_message += geo_cluster_bridge_hint(cluster_note, _geo_combined)
-        fusion_block = format_entry_fusion_block_for_llm(
-            ticker, technical_data, news_data, sentiment_score,
-        )
-        user_message += f"\n\n{fusion_block}"
-        user_message += (
-            "\n\nВерни JSON с полями decision (legacy) и decision_fused, как в system prompt."
-        )
+            user_message += f"\n\n{fusion_block}"
+            user_message += (
+                "\n\nВерни JSON с полями decision (legacy) и decision_fused, как в system prompt."
+            )
 
         messages = [{"role": "user", "content": user_message}]
         

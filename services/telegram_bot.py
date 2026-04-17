@@ -221,6 +221,8 @@ def _build_platform_game_status_html(
 
 def _build_prompt_entry_html(payload: Dict[str, Any]) -> str:
     """Шаблон принятия решения: отчёт для человека; для портфеля/тикера — в отчёте промпт для LLM (system, user, ответ)."""
+    from services.game_report_html import esc, render_game_report_document
+
     ticker = payload.get("ticker")
     game_label = payload.get("game_label")
     if game_label is None and ticker:
@@ -240,47 +242,30 @@ def _build_prompt_entry_html(payload: Dict[str, Any]) -> str:
     decision = payload.get("decision")
     technical_signal = payload.get("technical_signal")
 
-    def _pre(s: str) -> str:
-        return html.escape(s) if s else "—"
-
-    parts = [
-        "<!DOCTYPE html>",
-        '<html lang="ru"><head><meta charset="utf-8">',
-        f"<title>{html.escape(title)}</title>",
-        "<style>",
-        "body { font-family: sans-serif; max-width: 900px; margin: 1em auto; padding: 0 1em; }",
-        "h1 { font-size: 1.2em; }",
-        "h2 { font-size: 1em; margin-top: 1.2em; color: #333; }",
-        "pre { white-space: pre-wrap; word-break: break-word; background: #f8f8f8; padding: 0.8em; border-radius: 4px; border: 1px solid #eee; overflow-x: auto; }",
-        ".note { background: #fff3cd; padding: 0.6em; border-radius: 4px; margin-bottom: 1em; }",
-        ".meta { color: #666; font-size: 0.9em; margin-top: 0.5em; }",
-        "ul { margin: 0.3em 0; }",
-        "</style></head><body>",
-        f"<h1>{html.escape(title)}</h1>",
-    ]
+    parts: List[str] = []
     if note:
-        parts.append(f'<p class="note">{_pre(note)}</p>')
+        parts.append(f'<p class="note">{esc(note)}</p>')
     if decision is not None or technical_signal is not None:
         meta_parts = []
         if decision is not None:
-            meta_parts.append(f"Решение: {html.escape(str(decision))}")
+            meta_parts.append(f"Решение: {esc(str(decision))}")
         if technical_signal is not None:
-            meta_parts.append(f"Тех. сигнал: {html.escape(str(technical_signal))}")
+            meta_parts.append(f"Тех. сигнал: {esc(str(technical_signal))}")
         parts.append(f'<p class="meta">{"; ".join(meta_parts)}</p>')
 
     kb_news_sig = payload.get("kb_news_signal_plain")
     if kb_news_sig:
         parts.append("<h2>Сигнал из новостей (KB)</h2>")
-        parts.append(f"<pre>{_pre(kb_news_sig)}</pre>")
+        parts.append(f"<pre>{esc(kb_news_sig)}</pre>")
 
     parts.append("<h2>System prompt</h2>")
-    parts.append(f"<pre>{_pre(system)}</pre>")
+    parts.append(f"<pre>{esc(system)}</pre>")
     parts.append("<h2>User prompt</h2>")
-    parts.append(f"<pre>{_pre(user)}</pre>")
+    parts.append(f"<pre>{esc(user)}</pre>")
 
     if llm_response:
         parts.append("<h2>Ответ LLM</h2>")
-        parts.append(f"<pre>{_pre(llm_response)}</pre>")
+        parts.append(f"<pre>{esc(llm_response)}</pre>")
     if llm_analysis and isinstance(llm_analysis, dict):
         parts.append("<h2>LLM analysis (parsed)</h2>")
         parts.append("<ul>")
@@ -289,55 +274,24 @@ def _build_prompt_entry_html(payload: Dict[str, Any]) -> str:
                 continue
             if isinstance(v, list):
                 v = ", ".join(str(x) for x in v)
-            parts.append(f"<li><strong>{html.escape(str(k))}:</strong> {html.escape(str(v))}</li>")
+            parts.append(f"<li><strong>{esc(str(k))}:</strong> {esc(str(v))}</li>")
         parts.append("</ul>")
 
-    parts.append("</body></html>")
-    return "\n".join(parts)
-
-
-# Общие стили для отчётов prompt_entry (portfolio и game5m) — единый формат
-_PROMPT_ENTRY_REPORT_CSS = """
-body { font-family: sans-serif; max-width: 900px; margin: 1em auto; padding: 0 1em; }
-h1,h2,h3 { font-size: 1.1em; margin-top: 1em; color: #333; }
-h2 { border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
-h3 { font-size: 1em; margin-top: 0.8em; color: #444; }
-pre { white-space: pre-wrap; word-break: break-word; background: #f8f8f8; padding: 0.6em; border-radius: 4px; font-size: 0.9em; }
-.cluster { background: #e8f4f8; padding: 0.8em; border-radius: 4px; margin-bottom: 1em; }
-.ticker-section { margin-top: 1.5em; }
-.meta { color: #666; font-size: 0.9em; margin: 0.3em 0; }
-.corr { font-size: 0.85em; color: #555; margin: 0.2em 0; }
-.context-block { background: #fafafa; border-left: 3px solid #ccc; padding: 0.5em 0.8em; margin: 0.5em 0; font-size: 0.9em; white-space: pre-wrap; word-break: break-word; }
-.intro { color: #555; font-size: 0.9em; margin-bottom: 1em; }
-"""
-
-# Компактный отчёт recommend5m: таблица технический + краткий LLM, без списков корреляций
-_RECOMMEND5M_COMPACT_CSS = """
-body { font-family: sans-serif; max-width: 820px; margin: 1em auto; padding: 0 1em; }
-h1 { font-size: 1.15em; color: #333; margin-bottom: 0.5em; }
-table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
-th, td { border: 1px solid #ddd; padding: 0.4em 0.6em; text-align: left; }
-th { background: #e8f4f8; font-weight: 600; }
-tr:nth-child(even) { background: #fafafa; }
-.llm-cell { font-size: 0.85em; color: #555; max-width: 28em; }
-.decision-buy { color: #0a6; }
-.decision-hold { color: #666; }
-.decision-sell { color: #c33; }
-"""
+    return render_game_report_document(
+        title=title,
+        subtitle="Блоки: KB (если есть) → system → user → ответ и разбор LLM",
+        body_html="\n".join(parts),
+    )
 
 
 def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], days: int = 5) -> str:
     """Компактный HTML для /recommend5m: таблица технический сигнал + краткий вывод LLM при наличии."""
+    from services.game_report_html import esc, render_game_report_document
+
     def _pre(s: str) -> str:
-        return html.escape(str(s)) if s is not None and s != "" else "—"
+        return esc(s)
 
     parts = [
-        "<!DOCTYPE html>",
-        '<html lang="ru"><head><meta charset="utf-8">',
-        "<title>Рекомендация 5m</title>",
-        "<style>", _RECOMMEND5M_COMPACT_CSS, "</style></head><body>",
-        f"<h1>Рекомендация 5m (технический сигнал + LLM)</h1>",
-        f"<p>Период: {days} дн. Подробный отчёт: /prompt_entry game5m</p>",
         "<table><thead><tr>",
         "<th>Тикер</th><th>Решение</th><th>Цена</th><th>RSI</th><th>Qwen критерии</th><th>Имп. 2ч%</th><th>Откат%</th><th>Вол%</th><th>Upside%</th><th>Downside%</th><th>P(up/down)</th><th>Период</th><th>Вход</th>",
         "</tr></thead><tbody>",
@@ -405,8 +359,12 @@ def _build_recommend5m_compact_html(per_ticker_results: List[Dict[str, Any]], da
                 llm_text += " " + ", ".join(str(f)[:80] for f in llm_factors[:5])
             if llm_text.strip():
                 parts.append(f'<tr><td colspan="{n_cols}" class="llm-cell">LLM: {_pre(llm_text.strip())}</td></tr>')
-    parts.append("</tbody></table></body></html>")
-    return "\n".join(parts)
+    parts.append("</tbody></table>")
+    return render_game_report_document(
+        title="Рекомендация GAME_5m",
+        subtitle=f"Период: {days} дн. · Подробный шаблон: /prompt_entry game5m · Таблица = технический сигнал; строка LLM = корреляция при USE_LLM",
+        body_html="\n".join(parts),
+    )
 
 
 def _build_prompt_entry_all_html(
@@ -415,20 +373,14 @@ def _build_prompt_entry_all_html(
     per_ticker_payloads: List[Dict[str, Any]],
 ) -> str:
     """HTML для /prompt_entry portfolio: тот же формат, что и game5m (тикер — решение, контекст, ответ)."""
-    def _pre(s: str) -> str:
-        return html.escape(s) if s else "—"
+    from services.game_report_html import esc, render_game_report_document
 
     parts = [
-        "<!DOCTYPE html>",
-        '<html lang="ru"><head><meta charset="utf-8">',
-        "<title>Шаблон решения: игра Портфель</title>",
-        "<style>", _PROMPT_ENTRY_REPORT_CSS, "</style></head><body>",
-        "<h1>Шаблон принятия решения: игра «Портфель»</h1>",
         '<p class="intro">Контекст по параметрам и тикерам портфельной игры. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — блок «Сигнал из новостей (KB)» (как /news и game5m prompt_entry), контекст (вход в LLM) и ответ модели. Вход/выход и тейк/стоп — портфельные.</p>',
-        f'<p class="cluster"><strong>Кластер:</strong> {html.escape(", ".join(cluster_tickers))}</p>',
+        f'<p class="cluster"><strong>Кластер:</strong> {esc(", ".join(cluster_tickers))}</p>',
     ]
     if correlation_note:
-        parts.append(f'<p class="cluster">{_pre(correlation_note)}</p>')
+        parts.append(f'<p class="cluster">{esc(correlation_note)}</p>')
 
     for p in per_ticker_payloads:
         ticker = p.get("ticker") or "—"
@@ -436,21 +388,26 @@ def _build_prompt_entry_all_html(
         user = (p.get("user_prompt") or "").strip()
         llm_response = (p.get("llm_response") or "").strip()
         note = p.get("note")
-        parts.append(f'<div class="ticker-section"><h2>{html.escape(str(ticker))} — {html.escape(str(decision) if decision is not None else "—")}</h2>')
+        parts.append(
+            f'<div class="ticker-section"><h2>{esc(str(ticker))} — {esc(str(decision) if decision is not None else "—")}</h2>'
+        )
         if note:
-            parts.append(f'<p class="meta">{_pre(note)}</p>')
+            parts.append(f'<p class="meta">{esc(note)}</p>')
         parts.append("<h3>Контекст (входные данные для решения)</h3>")
-        parts.append(f'<div class="context-block">{_pre(user)}</div>')
+        parts.append(f'<div class="context-block">{esc(user)}</div>')
         kb_sig = p.get("kb_news_signal_plain")
         if kb_sig:
             parts.append("<h3>Сигнал из новостей (KB)</h3>")
-            parts.append(f"<pre>{_pre(kb_sig)}</pre>")
+            parts.append(f"<pre>{esc(kb_sig)}</pre>")
         parts.append("<h3>Ответ LLM</h3>")
-        parts.append(f"<pre>{_pre(llm_response) if llm_response else _pre('—')}</pre>")
+        parts.append(f"<pre>{esc(llm_response)}</pre>")
         parts.append("</div>")
 
-    parts.append("</body></html>")
-    return "\n".join(parts)
+    return render_game_report_document(
+        title="Шаблон принятия решения: игра «Портфель»",
+        subtitle="prompt_entry portfolio · KB → контекст → ответ LLM",
+        body_html="\n".join(parts),
+    )
 
 
 def _build_cluster_note_for_5m_llm(
@@ -475,9 +432,7 @@ def _build_prompt_entry_game5m_html(
     """HTML для /prompt_entry game5m: тот же формат, что и portfolio.
     correlation_tickers: полный список для матрицы. extra_tech_by_ticker: цена/RSI для тикеров не из игры 5m (MEDIUM/LONG)."""
     from services.llm_service import format_entry_fusion_news_influence_explanation_ru
-
-    def _pre(s: str) -> str:
-        return html.escape(s) if s else "—"
+    from services.game_report_html import esc, render_game_report_document
 
     def _corr_row(ticker: str, others: List[str], corr: Dict[str, Dict[str, float]]) -> List[str]:
         out = []
@@ -491,16 +446,11 @@ def _build_prompt_entry_game5m_html(
         return out[:12]
 
     parts = [
-        "<!DOCTYPE html>",
-        '<html lang="ru"><head><meta charset="utf-8">',
-        "<title>Шаблон решения: игра 5m</title>",
-        "<style>", _PROMPT_ENTRY_REPORT_CSS, "</style></head><body>",
-        "<h1>Шаблон принятия решения: игра «5m»</h1>",
         '<p class="intro">Контекст по параметрам и тикерам игры 5m. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — контекст (входные данные), строка «Слияние (диагностика)» (tech+KB, всегда при наличии данных), обоснование по правилам и блок «С учётом корреляции (LLM)» при USE_LLM=true и успешном контексте корреляции (LLM получает тот же контекст). Решение по правилам и контексту (KB). Вход/выход и тейк/стоп из GAME_5M_*.</p>',
-        f'<p class="cluster"><strong>Кластер:</strong> {html.escape(", ".join(cluster_tickers))}</p>',
+        f'<p class="cluster"><strong>Кластер:</strong> {esc(", ".join(cluster_tickers))}</p>',
     ]
     if correlation_note:
-        parts.append(f'<p class="cluster">{_pre(correlation_note)}</p>')
+        parts.append(f'<p class="cluster">{esc(correlation_note)}</p>')
 
     tech_by_ticker = {r.get("ticker"): {"price": r.get("price"), "rsi": r.get("rsi_5m")} for r in per_ticker_results if r.get("ticker")}
     if extra_tech_by_ticker:
@@ -537,7 +487,7 @@ def _build_prompt_entry_game5m_html(
             meta_parts.append(f"Стоп: −{sl:.1f}%  ·  Тейк: +{tp:.1f}%")
         elif tp is not None:
             meta_parts.append("Стоп: выкл.  ·  Тейк: +{:.1f}%".format(tp))
-        parts.append(f'<div class="ticker-section"><h2>{html.escape(str(ticker))} — {html.escape(str(decision) if decision else "—")}</h2>')
+        parts.append(f'<div class="ticker-section"><h2>{esc(str(ticker))} — {esc(str(decision) if decision else "—")}</h2>')
         if meta_parts:
             parts.append(f'<p class="meta">{"  ·  ".join(meta_parts)}</p>')
         # Полный контекст: тикеры матрицы (FAST + MEDIUM + LONG при успешном расчёте)
@@ -546,7 +496,7 @@ def _build_prompt_entry_game5m_html(
             others = [x for x in full_list if x != ticker]
             corr_pairs = _corr_row(ticker, others, correlation_matrix)
             if corr_pairs:
-                parts.append(f'<p class="corr">Корреляция с другими (30 дн.): {", ".join(corr_pairs)}</p>')
+                parts.append(f'<p class="corr">Корреляция с другими (30 дн.): {esc(", ".join(corr_pairs))}</p>')
         # Только тикеры с известной корреляцией (из полного списка матрицы), по убыванию коэффициента
         other_rows: List[Tuple[str, Optional[float], Optional[float], float]] = []
         for t in full_list:
@@ -578,14 +528,17 @@ def _build_prompt_entry_game5m_html(
             seg.append(f"corr {c_val:+.2f}")
             cluster_context_lines.append(" ".join(seg))
         if cluster_context_lines:
-            parts.append(f'<p class="corr">По тикерам с известной корреляцией (по убыванию корр.): {", ".join(cluster_context_lines)}</p>')
+            parts.append(
+                f'<p class="corr">По тикерам с известной корреляцией (по убыванию корр.): '
+                f"{esc(', '.join(cluster_context_lines))}</p>"
+            )
         context_parts = []
         if period_str:
-            context_parts.append(f"Период данных: {_pre(period_str)}")
+            context_parts.append(f"Период данных: {esc(period_str)}")
         if kb_news_impact:
-            context_parts.append(f"Влияние новостей (KB): {_pre(kb_news_impact)}")
+            context_parts.append(f"Влияние новостей (KB): {esc(kb_news_impact)}")
         if kb_news_summary:
-            context_parts.append(f"Новости из KB: {_pre(kb_news_summary)}")
+            context_parts.append(f"Новости из KB: {esc(kb_news_summary)}")
         ef = r.get("entry_fusion_metrics")
         if isinstance(ef, dict) and ef.get("fused_bias_neg1") is not None:
             context_parts.append(
@@ -593,14 +546,16 @@ def _build_prompt_entry_game5m_html(
                 f"news_bias_kb {ef.get('news_bias_kb'):+.3f}, fused {ef.get('fused_bias_neg1'):+.3f}"
                 + (f", KB gate {ef.get('gate_mode_kb')}" if ef.get("gate_mode_kb") else "")
             )
-            context_parts.append(_pre(format_entry_fusion_news_influence_explanation_ru(ef)))
+            context_parts.append(esc(format_entry_fusion_news_influence_explanation_ru(ef)))
         if llm_news_content:
             context_parts.append("LLM-новости (по обучению модели, не в реальном времени; даты могут быть старыми):")
-            context_parts.append(_pre(llm_news_content[:500]) + ('…' if len(llm_news_content or '') > 500 else ''))
+            context_parts.append(esc(llm_news_content[:500]) + ("…" if len(llm_news_content or "") > 500 else ""))
         if llm_sentiment is not None:
-            context_parts.append(f"LLM sentiment: {llm_sentiment}")
+            context_parts.append(f"LLM sentiment: {esc(llm_sentiment)}")
         if entry_advice and entry_advice != "ALLOW":
-            context_parts.append(f"Совет по входу: {entry_advice}" + (f" — {_pre(entry_advice_reason)}" if entry_advice_reason else ""))
+            context_parts.append(
+                f"Совет по входу: {esc(entry_advice)}" + (f" — {esc(entry_advice_reason)}" if entry_advice_reason else "")
+            )
         parts.append("<h3>Контекст (входные данные для решения)</h3>")
         if context_parts:
             parts.append('<div class="context-block">')
@@ -609,30 +564,33 @@ def _build_prompt_entry_game5m_html(
         else:
             parts.append('<div class="context-block">—</div>')
         parts.append("<h3>Обоснование</h3>")
-        parts.append(f"<pre>{_pre(reasoning) if reasoning else '—'}</pre>")
+        parts.append(f"<pre>{esc(reasoning)}</pre>")
         llm_corr = r.get("llm_correlation_reasoning")
         dfu = r.get("llm_decision_fused")
         kf = r.get("llm_key_factors")
         if llm_corr or dfu or kf:
             parts.append("<h3>С учётом корреляции (LLM)</h3>")
             if llm_corr:
-                parts.append(f"<pre>{_pre(llm_corr)}</pre>")
+                parts.append(f"<pre>{esc(llm_corr)}</pre>")
             if kf:
-                parts.append(f"<p class=\"meta\">Ключевые факторы: {', '.join(_pre(str(x)) for x in kf[:10])}</p>")
+                parts.append(f"<p class=\"meta\">Ключевые факторы: {', '.join(esc(str(x)) for x in kf[:10])}</p>")
             if dfu:
                 diff = r.get("llm_ab_fusion_differs")
                 diff_s = "да" if diff else "нет"
                 parts.append(
                     f"<p class=\"meta\"><strong>LLM decision_fused</strong> (явный учёт fused_bias): "
-                    f"{_pre(str(dfu))} · отличается от legacy: {diff_s}</p>"
+                    f"{esc(str(dfu))} · отличается от legacy: {diff_s}</p>"
                 )
                 rf = r.get("llm_reasoning_fused")
                 if rf:
-                    parts.append(f"<pre class=\"meta\">{_pre(str(rf))}</pre>")
+                    parts.append(f"<pre class=\"meta\">{esc(str(rf))}</pre>")
         parts.append("</div>")
 
-    parts.append("</body></html>")
-    return "\n".join(parts)
+    return render_game_report_document(
+        title="Шаблон принятия решения: игра «5m»",
+        subtitle="prompt_entry game5m · контекст → обоснование → LLM при USE_LLM",
+        body_html="\n".join(parts),
+    )
 
 
 def _human_trade_explanation_from_exit_ctx(exit_ctx: Any) -> str:
@@ -1409,12 +1367,11 @@ class LSETelegramBot:
         try:
             # Если тикер в игре 5m — технический сигнал 5m (тот же источник, что signal5m и cron)
             try:
-                from services.ticker_groups import get_tickers_game_5m
-                from services.recommend_5m import get_5m_technical_signal
-                game5m_set = set(get_tickers_game_5m() or [])
-                if ticker in game5m_set:
+                from services.game_commands_pipeline import ticker_in_game_5m, run_game5m_technical_rows
+                if ticker_in_game_5m(ticker):
                     await update.message.reply_text(f"🔍 Сигнал 5m для {ticker}...")
-                    tech = get_5m_technical_signal(ticker, days=5, use_llm_news=False)
+                    rows = run_game5m_technical_rows([ticker], days=5)
+                    tech = rows[0] if rows else None
                     if tech:
                         response = self._format_5m_technical_signal(ticker, tech)
                         await update.message.reply_text(response, parse_mode=None)
@@ -4565,44 +4522,14 @@ class LSETelegramBot:
         if context.args and len(context.args) >= 1:
             ticker = _normalize_ticker(context.args[0])
         try:
-            from services.llm_service import LLMService
-            t = LLMService.get_entry_decision_prompt_template()
             if not ticker:
                 await update.message.reply_text("🔍 Готовлю рекомендации по кластеру портфеля (HTML)...")
-                from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_indicator_only
-                from services.cluster_recommend import get_correlation_matrix
-                full_list = list(get_tickers_for_portfolio_game() or [])
-                indicator_only = set(get_tickers_indicator_only())
-                tickers_to_run = [x for x in full_list if x not in indicator_only]
-                if not tickers_to_run:
+                from services.game_commands_pipeline import run_portfolio_cluster_recommend_payloads
+
+                full_list, correlation_note, per_ticker_payloads = run_portfolio_cluster_recommend_payloads(self.analyst)
+                if not per_ticker_payloads:
                     await update.message.reply_text("❌ Тикеры не заданы (TRADING_CYCLE_TICKERS или TICKERS_MEDIUM/TICKERS_LONG).")
                     return
-                cluster_ctx = None
-                if len(full_list) >= 2:
-                    corr = get_correlation_matrix(full_list, days=30)
-                    if corr:
-                        cluster_ctx = {"tickers": full_list, "correlation": corr, "other_signals": {}}
-                correlation_note = "Корреляция по кластеру за 30 дн. (контекст общий). Вход/выход — портфельная игра."
-                per_ticker_payloads: List[Dict[str, Any]] = []
-                other_signals: Dict[str, str] = {}
-                for tkr in tickers_to_run:
-                    ctx = {**cluster_ctx, "other_signals": dict(other_signals)} if cluster_ctx else None
-                    result = self.analyst.get_decision_with_llm(tkr, cluster_context=ctx)
-                    dec = result.get("decision", "HOLD")
-                    other_signals[tkr] = dec
-                    try:
-                        kb_sig = self._portfolio_kb_news_plain(tkr)
-                    except Exception as e:
-                        logger.debug("recommend portfolio cluster KB %s: %s", tkr, e)
-                        kb_sig = f"📰 KB: ошибка ({e!s})"
-                    per_ticker_payloads.append({
-                        "ticker": tkr,
-                        "user_prompt": result.get("prompt_user"),
-                        "llm_response": result.get("llm_response_raw"),
-                        "decision": dec,
-                        "note": None,
-                        "kb_news_signal_plain": kb_sig,
-                    })
                 html_content = _build_prompt_entry_all_html(full_list, correlation_note, per_ticker_payloads)
                 filename = f"recommend_portfolio_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
                 await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
@@ -4610,25 +4537,12 @@ class LSETelegramBot:
                 await update.message.reply_text(f"✅ Рекомендации по портфелю выгружены (HTML). Решения: {decisions_str}")
             else:
                 await update.message.reply_text(f"🔍 Готовлю рекомендацию по {ticker} (HTML)...")
-                from services.ticker_groups import get_tickers_for_portfolio_game
-                from services.cluster_recommend import get_correlation_matrix
-                cluster_tickers = list(get_tickers_for_portfolio_game() or [])
-                if ticker not in cluster_tickers:
-                    cluster_tickers = [ticker] + cluster_tickers
-                cluster_ctx = None
-                if len(cluster_tickers) >= 2:
-                    corr = get_correlation_matrix(cluster_tickers, days=30)
-                    if corr:
-                        cluster_ctx = {"tickers": cluster_tickers, "correlation": corr, "other_signals": {}}
-                decision_result = self.analyst.get_decision_with_llm(ticker, cluster_context=cluster_ctx)
-                try:
-                    kb_sig = self._portfolio_kb_news_plain(ticker)
-                except Exception as e:
-                    logger.debug("recommend portfolio KB %s: %s", ticker, e)
-                    kb_sig = f"📰 KB: ошибка ({e!s})"
+                from services.game_commands_pipeline import run_portfolio_single_recommend
+
+                decision_result, kb_sig = run_portfolio_single_recommend(self.analyst, ticker)
                 payload = {
                     "ticker": ticker,
-                    "system_prompt": decision_result.get("prompt_system") or t["system"].strip(),
+                    "system_prompt": (decision_result.get("prompt_system") or "").strip(),
                     "user_prompt": decision_result.get("prompt_user"),
                     "llm_response": decision_result.get("llm_response_raw"),
                     "llm_analysis": decision_result.get("llm_analysis"),
@@ -4662,100 +4576,19 @@ class LSETelegramBot:
             await update.message.reply_text("❌ Доступ запрещен")
             return
         ticker = None
-        days = 5
         if context.args and len(context.args) >= 1:
             ticker = _normalize_ticker(context.args[0])
-        if len(context.args) >= 2:
-            try:
-                days = max(1, min(7, int(context.args[1].strip())))
-            except (ValueError, IndexError):
-                pass
+        from services.game_commands_pipeline import parse_days_arg, run_game5m_recommend_card_rows
+
+        days = parse_days_arg(context.args, index=1, default=5, lo=1, hi=7)
         try:
-            from services.ticker_groups import get_tickers_game_5m
-            from services.cluster_recommend import (
-                load_game5m_llm_correlation,
-                GAME5M_LLM_CORRELATION_NOTE,
-                get_avg_volatility_20_pct_from_quotes,
+            cluster_5m, correlation_note, per_ticker_results = run_game5m_recommend_card_rows(
+                days, ticker, apply_llm_correlation=True,
             )
-            from services.recommend_5m import get_decision_5m, get_5m_card_payload
-            cluster_5m = list(get_tickers_game_5m() or []) if not ticker else [ticker]
             if not cluster_5m:
                 await update.message.reply_text("❌ Тикеры не заданы (GAME_5M_TICKERS или TICKERS_FAST).")
                 return
             await update.message.reply_text("🔍 Готовлю рекомендации 5m (HTML)...")
-            corr_matrix, corr_tickers_used, _ = load_game5m_llm_correlation(days=30)
-            correlation_note = GAME5M_LLM_CORRELATION_NOTE if corr_matrix else None
-            per_ticker_results: List[Dict[str, Any]] = []
-            for tkr in cluster_5m:
-                d5 = get_decision_5m(tkr, days=days, use_llm_news=True)
-                item = get_5m_card_payload(d5, tkr)
-                if d5:
-                    kb_news = d5.get("kb_news") or []
-                    kb_summary = ""
-                    if kb_news:
-                        titles = [n.get("title") or (n.get("content", "")[:80] if n.get("content") else "") for n in kb_news[:5]]
-                        kb_summary = "; ".join((t[:100] + ("…" if len(t) > 100 else "")) for t in titles if t)
-                    item["kb_news_summary"] = kb_summary
-                    item["llm_news_content"] = d5.get("llm_news_content")
-                    item["llm_sentiment"] = d5.get("llm_sentiment")
-                per_ticker_results.append(item)
-            extra_tech = {}
-            if corr_tickers_used:
-                cluster_set = set(cluster_5m)
-                for t in corr_tickers_used:
-                    if t in cluster_set:
-                        continue
-                    d5 = get_decision_5m(t, days=days, use_llm_news=False)
-                    if d5 and (d5.get("price") is not None or d5.get("rsi_5m") is not None):
-                        extra_tech[t] = {"price": d5.get("price"), "rsi": d5.get("rsi_5m")}
-            if get_use_llm_for_analyst() and corr_matrix and (corr_tickers_used or cluster_5m):
-                tech_by_ticker_5m = {r.get("ticker"): {"price": r.get("price"), "rsi": r.get("rsi_5m")} for r in per_ticker_results if r.get("ticker")}
-                tech_by_ticker_5m.update(extra_tech)
-                for r in per_ticker_results:
-                    if r.get("decision") == "NO_DATA" or not cluster_5m:
-                        continue
-                    cluster_note = _build_cluster_note_for_5m_llm(
-                        r["ticker"], cluster_5m, corr_matrix, tech_by_ticker_5m,
-                    )
-                    if not cluster_note:
-                        continue
-                    try:
-                        from services.llm_service import get_llm_service
-                        llm = get_llm_service()
-                        if not getattr(llm, "client", None):
-                            continue
-                        technical_data = {
-                            "close": r.get("price"),
-                            "rsi": r.get("rsi_5m"),
-                            "volatility_5": r.get("volatility_5m_pct"),
-                            "avg_volatility_20": get_avg_volatility_20_pct_from_quotes(r["ticker"]),
-                            "technical_signal": r.get("decision"),
-                            "cluster_note": cluster_note,
-                            "momentum_2h_pct": r.get("momentum_2h_pct"),
-                            "take_profit_pct": r.get("take_profit_pct"),
-                            "stop_loss_pct": r.get("stop_loss_pct"),
-                            "estimated_upside_pct_day": r.get("estimated_upside_pct_day"),
-                            "price_forecast_5m": r.get("price_forecast_5m"),
-                            "price_forecast_5m_summary": r.get("price_forecast_5m_summary"),
-                        }
-                        news_list = []
-                        if r.get("kb_news_summary") or r.get("kb_news_impact"):
-                            news_list = [{"source": "KB", "content": (r.get("kb_news_summary") or r.get("kb_news_impact") or "")[:500], "sentiment_score": 0.5}]
-                        sentiment = 0.5
-                        if r.get("kb_news_impact") == "негативно":
-                            sentiment = 0.35
-                        elif r.get("kb_news_impact") == "позитивно":
-                            sentiment = 0.65
-                        result = llm.analyze_trading_situation(
-                            r["ticker"], technical_data, news_list, sentiment,
-                            strategy_name="GAME_5M", strategy_signal=r.get("decision"),
-                        )
-                        if result and result.get("llm_analysis"):
-                            ana = result["llm_analysis"]
-                            r["llm_correlation_reasoning"] = ana.get("reasoning") or ""
-                            r["llm_key_factors"] = ana.get("key_factors") or []
-                    except Exception as e:
-                        logger.debug("LLM с корреляцией для 5m %s: %s", r.get("ticker"), e)
             html_content = _build_recommend5m_compact_html(per_ticker_results, days)
             filename = f"recommend_5m_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
             await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
@@ -4770,35 +4603,23 @@ class LSETelegramBot:
         if not self._check_access(update.effective_user.id):
             await update.message.reply_text("❌ Доступ запрещен")
             return
-        from services.ticker_groups import get_tickers_game_5m
-        from services.recommend_5m import get_5m_technical_signal
+        from services.game_commands_pipeline import (
+            game5m_cluster_or_error,
+            parse_days_arg,
+            run_game5m_technical_rows,
+        )
 
         ticker = None
-        days = 5
         if context.args and len(context.args) >= 1:
             ticker = _normalize_ticker(context.args[0])
-        if len(context.args) >= 2:
-            try:
-                days = max(1, min(7, int(context.args[1].strip())))
-            except (ValueError, IndexError):
-                pass
-        cluster_5m = list(get_tickers_game_5m() or [])
-        if not cluster_5m:
-            await update.message.reply_text("❌ Тикеры игры 5m не заданы (GAME_5M_TICKERS / TICKERS_FAST).")
-            return
-        if ticker and ticker not in cluster_5m:
-            await update.message.reply_text(f"❌ {ticker} не в игре 5m. Кластер: {', '.join(cluster_5m)}")
+        days = parse_days_arg(context.args, index=1, default=5, lo=1, hi=7)
+        err, cluster_5m = game5m_cluster_or_error(ticker)
+        if err:
+            await update.message.reply_text(err)
             return
         tickers_to_show = [ticker] if ticker else cluster_5m
         try:
-            results = []
-            for tkr in tickers_to_show:
-                tech = get_5m_technical_signal(tkr, days=days, use_llm_news=False)
-                if tech:
-                    tech["ticker"] = tkr
-                    results.append(tech)
-                else:
-                    results.append({"ticker": tkr, "decision": "NO_DATA"})
+            results = run_game5m_technical_rows(tickers_to_show, days)
             if not results:
                 await update.message.reply_text("❌ Нет 5m данных по выбранным тикерам.")
                 return
@@ -5570,21 +5391,10 @@ class LSETelegramBot:
         # Можно добавить логику для кнопок позже
 
     def _portfolio_kb_news_plain(self, ticker: str) -> str:
-        """Краткий сигнал из KB (draft_bias, news.bias, gate) — тот же пайплайн, что /news."""
-        from report_generator import get_engine
-        from services.kb_news_report import (
-            kb_news_lookback_hours,
-            compute_kb_news_bias_metrics,
-            build_kb_news_signal_plaintext,
-        )
+        """Краткий сигнал из KB — делегирование в services.game_commands_pipeline."""
+        from services.game_commands_pipeline import kb_news_plain_for_ticker
 
-        eng = get_engine()
-        news_df = self.analyst.get_recent_news(ticker)
-        if news_df is None or getattr(news_df, "empty", True):
-            return "📰 Новости (KB): нет записей в окне (см. KB_NEWS_LOOKBACK_HOURS)."
-        h = kb_news_lookback_hours()
-        metrics = compute_kb_news_bias_metrics(news_df, ticker, self.analyst, h, engine=eng)
-        return build_kb_news_signal_plaintext(ticker, metrics)
+        return kb_news_plain_for_ticker(self.analyst, ticker)
 
     def _format_5m_technical_signal(self, ticker: str, tech: Dict[str, Any]) -> str:
         """Технический сигнал 5m — единый формат из services.signal_message_5m."""

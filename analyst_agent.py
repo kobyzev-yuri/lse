@@ -769,7 +769,26 @@ class AnalystAgent:
         if not news_df.empty:
             weighted_sentiment = self.calculate_weighted_sentiment(news_df, ticker)
             news_list = news_df.to_dict('records')
-        
+
+        # KB-сигнал (тот же пайплайн, что /news и recommend5m) — в technical_data для LLM fusion
+        try:
+            from services.kb_news_report import (
+                kb_news_lookback_hours,
+                compute_kb_news_bias_metrics,
+                build_kb_news_signal_plaintext,
+            )
+
+            _h = kb_news_lookback_hours()
+            technical_data["kb_lookback_hours"] = _h
+            if news_df is not None and not news_df.empty:
+                _m = compute_kb_news_bias_metrics(news_df, ticker, self, _h, engine=self.engine)
+                technical_data["kb_news_signal_plain"] = build_kb_news_signal_plaintext(ticker, _m)
+            else:
+                technical_data["kb_news_signal_plain"] = ""
+        except Exception as e:
+            logger.debug("KB signal plain для portfolio LLM %s: %s", ticker, e)
+            technical_data["kb_news_signal_plain"] = ""
+
         # Базовое решение (через менеджер стратегий или базовую логику)
         base_decision = "HOLD"
         strategy_result = None
@@ -811,6 +830,9 @@ class AnalystAgent:
                     )
                     base_decision = strategy_result.get('signal', 'HOLD')
                     logger.info(f"📋 Стратегия {selected_strategy.name}: {base_decision}")
+                    technical_data["strategy_manager_reasoning"] = (strategy_result.get("reasoning") or "")[:800]
+                    technical_data["strategy_take_pct"] = strategy_result.get("take_profit")
+                    technical_data["strategy_stop_pct"] = strategy_result.get("stop_loss")
             except Exception as e:
                 logger.warning(f"⚠️ Ошибка при использовании менеджера стратегий: {e}")
         
@@ -862,7 +884,7 @@ class AnalystAgent:
         
         if self.use_llm and self.llm_service:
             try:
-                logger.info("\n🤖 ШАГ 3: LLM анализ торговой ситуации")
+                logger.info("\n🤖 ШАГ 3: LLM анализ торговой ситуации (portfolio_fusion: тех + KB + слияние + стратегия)")
                 llm_result = self.llm_service.analyze_trading_situation(
                     ticker=ticker,
                     technical_data=technical_data,
@@ -871,6 +893,7 @@ class AnalystAgent:
                     strategy_name=selected_strategy.name if selected_strategy else None,
                     strategy_signal=base_decision if base_decision else None,
                     strategy_outcome_stats=strategy_outcome_stats if strategy_outcome_stats else None,
+                    entry_prompt_profile="portfolio_fusion",
                 )
                 logger.info(f"✅ LLM анализ завершен: {llm_result.get('llm_analysis', {}).get('decision', 'N/A')}")
                 llm_guidance = None
@@ -879,12 +902,17 @@ class AnalystAgent:
                 llm_result = None
                 llm_guidance = None
         
-        # Финальное решение (приоритет LLM, если доступен)
+        # Финальное решение: итог LLM (fused приоритетнее) может отменить BUY стратегии (как recommend5m + LLM)
+        from services.llm_service import coerce_entry_decision_label
+
         if llm_result and llm_result.get('llm_analysis'):
-            llm_decision = llm_result['llm_analysis'].get('decision', base_decision)
-            # Маппинг LLM решений к нашим
-            if llm_decision in ['BUY', 'STRONG_BUY']:
-                final_decision = llm_decision
+            la = llm_result["llm_analysis"]
+            fused_c = coerce_entry_decision_label(la.get("decision_fused"))
+            leg_c = coerce_entry_decision_label(la.get("decision"))
+            if fused_c in ("BUY", "STRONG_BUY", "HOLD"):
+                final_decision = fused_c
+            elif leg_c in ("BUY", "STRONG_BUY", "HOLD"):
+                final_decision = leg_c
             else:
                 final_decision = base_decision
         else:
@@ -917,7 +945,7 @@ class AnalystAgent:
             if "llm_response_raw" in llm_result:
                 result["llm_response_raw"] = llm_result["llm_response_raw"]
         elif self.llm_service:
-            # LLM не вызывался или ошибка — всё равно подставляем собранный промпт для экспорта
+            # LLM не вызывался или ошибка — тот же structured промпт, что и при portfolio_fusion
             built = self.llm_service.build_entry_prompt(
                 ticker=ticker,
                 technical_data=technical_data,
@@ -926,6 +954,7 @@ class AnalystAgent:
                 strategy_name=selected_strategy.name if selected_strategy else None,
                 strategy_signal=base_decision if base_decision else None,
                 strategy_outcome_stats=strategy_outcome_stats if strategy_outcome_stats else None,
+                entry_prompt_profile="portfolio_fusion",
             )
             result["prompt_system"] = built["prompt_system"]
             result["prompt_user"] = built["prompt_user"]
