@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Портфель — карточки (daily)</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --content-pad-x: clamp(0.5rem, 2.5vw, 1.5rem); --content-max: 100%; }
+        @media (min-width: 900px) {
+            :root { --content-max: min(100% - 1.5rem, 960px); }
+            #cardsContainer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 0.75rem; padding: 0 0.25rem; }
+            .card-pf { margin-left: 0; margin-right: 0; }
+        }
+        @media (min-width: 1200px) {
+            #cardsContainer { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eaeaea;
+            padding: 0 var(--content-pad-x) 2rem;
+            max-width: var(--content-max);
+            margin: 0 auto;
+            min-height: 100dvh;
+        }
+        .header {
+            position: sticky; top: 0; background: #16213e; padding: 0.6rem 0.8rem;
+            display: flex; justify-content: space-between; align-items: center; z-index: 10;
+            border-bottom: 1px solid #0f3460;
+        }
+        .header h1 { font-size: 1rem; font-weight: 600; }
+        .header a { color: #7dd3fc; text-decoration: none; font-size: 0.85rem; margin-left: 0.5rem; }
+        .updated { font-size: 0.75rem; color: #94a3b8; }
+        .btn { background: #0f3460; color: #e2e8f0; border: none; padding: 0.4rem 0.8rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; }
+        .card-pf {
+            background: #16213e; border-radius: 10px; margin: 0.8rem 0.8rem 0; padding: 0.9rem;
+            border-left: 4px solid #475569;
+        }
+        .card-pf.decision-buy { border-left-color: #22c55e; }
+        .card-pf.decision-sell { border-left-color: #ef4444; }
+        .card-pf.decision-hold { border-left-color: #eab308; }
+        .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+        .card-head .ticker { font-weight: 700; font-size: 1.05rem; }
+        .card-head .decision { font-size: 0.8rem; padding: 0.2rem 0.45rem; border-radius: 6px; }
+        .card-head .decision.BUY, .card-head .decision.STRONG_BUY { background: #14532d; color: #86efac; }
+        .card-head .decision.SELL { background: #7f1d1d; color: #fca5a5; }
+        .card-head .decision.HOLD { background: #422006; color: #fde047; }
+        .row { display: flex; justify-content: space-between; margin: 0.3rem 0; font-size: 0.82rem; }
+        .row .label { color: #94a3b8; max-width: 58%; }
+        .block-title { font-size: 0.72rem; color: #64748b; text-transform: uppercase; margin: 0.45rem 0 0.2rem; }
+        .reasoning { font-size: 0.78rem; color: #cbd5e1; margin-top: 0.35rem; line-height: 1.35; }
+        .llm-btn { margin-top: 0.55rem; width: 100%; font-size: 0.78rem; }
+        .llm-block { margin-top: 0.45rem; padding: 0.55rem; background: #0f172a; border-radius: 6px; font-size: 0.78rem; color: #cbd5e1; white-space: pre-wrap; display: none; }
+        .llm-block.open { display: block; }
+        .muted { color: #94a3b8; font-size: 0.78rem; }
+        .chart-link { font-size: 0.78rem; margin-top: 0.35rem; }
+        .chart-link a { color: #7dd3fc; }
+        .no-data { color: #64748b; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Портфель · карточки</h1>
+        <div>
+            <span class="updated" id="updatedAt">—</span>
+            <a href="/">Дашборд</a>
+            <a href="/game5m/cards">5m</a>
+        </div>
+    </div>
+    <p class="muted" style="padding: 0.5rem 0.9rem 0;">Дневные данные из <strong>quotes</strong> (как AnalystAgent / trading_cycle). Не интрадей 5m. LLM — по кнопке (корреляции + новости + риск в промпте агента).</p>
+    <div style="padding: 0.4rem 0.8rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem;">
+        <button class="btn" id="refreshBtn">Обновить</button>
+        <label class="muted" style="cursor: pointer;">
+            <input type="checkbox" id="autoRefresh" style="vertical-align: middle; margin-right: 0.35rem;">
+            Авто каждые 30 мин
+        </label>
+    </div>
+    <div id="cardsContainer"></div>
+
+    <script>
+        var REFRESH_MS = 30 * 60 * 1000;
+        var refreshTimer = null;
+        function escapeHtml(s) {
+            if (s == null || s === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(s);
+            return div.innerHTML;
+        }
+        function fmt(v, d) {
+            if (v == null || v === undefined) return '—';
+            if (typeof v === 'number' && d != null) return v.toFixed(d);
+            return String(v);
+        }
+        function decisionClass(dec) {
+            if (!dec) return '';
+            if (dec === 'BUY' || dec === 'STRONG_BUY') return 'decision-buy';
+            if (dec === 'SELL') return 'decision-sell';
+            return 'decision-hold';
+        }
+        function renderCard(c) {
+            if (c.decision === 'NO_DATA' || c.decision === 'ERROR') {
+                return '<div class="card-pf" data-ticker="' + escapeHtml(c.ticker) + '">' +
+                    '<div class="card-head"><span class="ticker">' + escapeHtml(c.ticker) + '</span><span class="decision">' + escapeHtml(c.decision) + '</span></div>' +
+                    '<p class="no-data">' + escapeHtml(c.reasoning || c.error || '—') + '</p></div>';
+            }
+            var d = c.decision || '—';
+            var html = '<div class="card-pf ' + decisionClass(d) + '" data-ticker="' + escapeHtml(c.ticker) + '">';
+            html += '<div class="card-head"><span class="ticker">' + escapeHtml(c.ticker) + '</span><span class="decision ' + escapeHtml(d) + '">' + escapeHtml(d) + '</span></div>';
+            html += '<div class="row"><span class="label">Стратегия</span><span class="value">' + escapeHtml(c.selected_strategy || '—') + '</span></div>';
+            html += '<div class="row"><span class="label">Close (daily)</span><span class="value">' + fmt(c.close, 2) + '</span></div>';
+            html += '<div class="row"><span class="label">SMA5</span><span class="value">' + fmt(c.sma_5, 2) + '</span></div>';
+            html += '<div class="row"><span class="label">RSI</span><span class="value">' + fmt(c.rsi, 1) + '</span></div>';
+            html += '<div class="row"><span class="label">Vol5 / AvgVol20</span><span class="value">' + fmt(c.volatility_5, 3) + ' / ' + fmt(c.avg_volatility_20, 3) + '</span></div>';
+            html += '<div class="row"><span class="label">VIX режим</span><span class="value">' + escapeHtml(String(c.vix_regime || '—')) + '</span></div>';
+            html += '<div class="row"><span class="label">Sentiment (норм.)</span><span class="value">' + fmt(c.sentiment_normalized, 2) + '</span></div>';
+            html += '<div class="row"><span class="label">Новостей (окно агента)</span><span class="value">' + escapeHtml(String(c.news_count != null ? c.news_count : '—')) + '</span></div>';
+            html += '<div class="block-title">Цели (как в trading_cycle)</div>';
+            html += '<div class="row"><span class="label">Тейк стратегии %</span><span class="value">' + (c.strategy_take_profit_pct != null ? fmt(c.strategy_take_profit_pct, 2) : '—') + '</span></div>';
+            html += '<div class="row"><span class="label">Стоп стратегии %</span><span class="value">' + (c.strategy_stop_loss_pct != null ? fmt(c.strategy_stop_loss_pct, 2) : '—') + '</span></div>';
+            html += '<div class="row"><span class="label">Эффект. тейк %</span><span class="value">' + fmt(c.effective_take_profit_pct, 2) + ' <span class="muted">(' + escapeHtml(c.take_profit_source || '') + ')</span></span></div>';
+            if (c.strategy_reasoning) {
+                html += '<div class="reasoning">' + escapeHtml(c.strategy_reasoning) + '</div>';
+            }
+            if (c.cluster_note) {
+                html += '<div class="block-title">Корреляция (фрагмент)</div><div class="reasoning">' + escapeHtml(c.cluster_note) + '</div>';
+            }
+            if (c.risk_limits) {
+                html += '<div class="block-title">Риск (лимиты)</div>';
+                html += '<div class="row"><span class="label">Max позиция $</span><span class="value">' + fmt(c.risk_limits.max_position_usd, 0) + '</span></div>';
+                html += '<div class="row"><span class="label">Max % на тикер</span><span class="value">' + fmt(c.risk_limits.max_ticker_exposure_pct, 1) + '</span></div>';
+            }
+            html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">LLM (полный контекст)</button>';
+            html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';
+            html += '<div class="chart-link"><a href="/portfolio/daily?ticker=' + encodeURIComponent(c.ticker) + '">График daily (quotes)</a></div>';
+            html += '</div>';
+            return html;
+        }
+        function scheduleAuto() {
+            if (refreshTimer) clearTimeout(refreshTimer);
+            refreshTimer = null;
+            var cb = document.getElementById('autoRefresh');
+            if (!cb || !cb.checked) return;
+            refreshTimer = setTimeout(function() {
+                loadCards(true).then(scheduleAuto);
+            }, REFRESH_MS);
+        }
+        async function loadCards(silent) {
+            var container = document.getElementById('cardsContainer');
+            var updatedEl = document.getElementById('updatedAt');
+            if (!silent) container.innerHTML = '<div class="muted" style="padding:1rem;">Загрузка…</div>';
+            try {
+                var r = await fetch('/api/portfolio/cards?corr_days=30');
+                if (!r.ok) { container.innerHTML = '<div style="color:#fca5a5;">Ошибка ' + r.status + '</div>'; return; }
+                var data = await r.json();
+                updatedEl.textContent = data.updated_at ? new Date(data.updated_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—';
+                container.innerHTML = (data.cards || []).map(renderCard).join('');
+                document.querySelectorAll('.llm-btn').forEach(function(btn) {
+                    btn.addEventListener('click', function() { onLlm(this.getAttribute('data-ticker')); });
+                });
+            } catch (e) {
+                container.innerHTML = '<div style="color:#fca5a5;">' + escapeHtml(e.message) + '</div>';
+            }
+        }
+        async function onLlm(ticker) {
+            var block = document.getElementById('llm-' + ticker);
+            if (!block) return;
+            block.classList.add('open');
+            block.innerHTML = '<span class="muted">Загрузка LLM…</span>';
+            var controller = new AbortController();
+            var tid = setTimeout(function() { controller.abort(); }, 180000);
+            try {
+                var r = await fetch('/api/portfolio/card/' + encodeURIComponent(ticker) + '/llm?corr_days=30', { signal: controller.signal });
+                clearTimeout(tid);
+                if (!r.ok) {
+                    var err = await r.json().catch(function() { return {}; });
+                    block.textContent = 'Ошибка ' + r.status + ': ' + (err.detail || r.statusText);
+                    return;
+                }
+                var data = await r.json();
+                var ana = data.llm_analysis || {};
+                var parts = [];
+                if (ana.reasoning) parts.push(ana.reasoning);
+                if (ana.decision) parts.push('Решение LLM: ' + ana.decision + (ana.confidence != null ? ' (уверенность ' + fmt(ana.confidence, 2) + ')' : ''));
+                if (Array.isArray(ana.key_factors) && ana.key_factors.length) parts.push('Ключевое: ' + ana.key_factors.join(' · '));
+                block.textContent = parts.length ? parts.join('\n\n') : JSON.stringify(ana, null, 2);
+            } catch (e) {
+                clearTimeout(tid);
+                block.textContent = e.name === 'AbortError' ? 'Таймаут запроса.' : ('Ошибка: ' + e.message);
+            }
+        }
+        document.getElementById('refreshBtn').addEventListener('click', function() { loadCards(false).then(scheduleAuto); });
+        document.getElementById('autoRefresh').addEventListener('change', scheduleAuto);
+        loadCards(false).then(scheduleAuto);
+    </script>
+</body>
+</html>

@@ -268,6 +268,11 @@ def _build_prompt_entry_html(payload: Dict[str, Any]) -> str:
             meta_parts.append(f"Тех. сигнал: {html.escape(str(technical_signal))}")
         parts.append(f'<p class="meta">{"; ".join(meta_parts)}</p>')
 
+    kb_news_sig = payload.get("kb_news_signal_plain")
+    if kb_news_sig:
+        parts.append("<h2>Сигнал из новостей (KB)</h2>")
+        parts.append(f"<pre>{_pre(kb_news_sig)}</pre>")
+
     parts.append("<h2>System prompt</h2>")
     parts.append(f"<pre>{_pre(system)}</pre>")
     parts.append("<h2>User prompt</h2>")
@@ -419,7 +424,7 @@ def _build_prompt_entry_all_html(
         "<title>Шаблон решения: игра Портфель</title>",
         "<style>", _PROMPT_ENTRY_REPORT_CSS, "</style></head><body>",
         "<h1>Шаблон принятия решения: игра «Портфель»</h1>",
-        '<p class="intro">Контекст по параметрам и тикерам портфельной игры. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — контекст (вход в LLM) и ответ модели. Вход/выход и тейк/стоп — портфельные.</p>',
+        '<p class="intro">Контекст по параметрам и тикерам портфельной игры. <strong>Отчёт для человека:</strong> ниже по каждому тикеру — блок «Сигнал из новостей (KB)» (как /news и game5m prompt_entry), контекст (вход в LLM) и ответ модели. Вход/выход и тейк/стоп — портфельные.</p>',
         f'<p class="cluster"><strong>Кластер:</strong> {html.escape(", ".join(cluster_tickers))}</p>',
     ]
     if correlation_note:
@@ -436,6 +441,10 @@ def _build_prompt_entry_all_html(
             parts.append(f'<p class="meta">{_pre(note)}</p>')
         parts.append("<h3>Контекст (входные данные для решения)</h3>")
         parts.append(f'<div class="context-block">{_pre(user)}</div>')
+        kb_sig = p.get("kb_news_signal_plain")
+        if kb_sig:
+            parts.append("<h3>Сигнал из новостей (KB)</h3>")
+            parts.append(f"<pre>{_pre(kb_sig)}</pre>")
         parts.append("<h3>Ответ LLM</h3>")
         parts.append(f"<pre>{_pre(llm_response) if llm_response else _pre('—')}</pre>")
         parts.append("</div>")
@@ -1159,8 +1168,8 @@ class LSETelegramBot:
 /chart <ticker> [days] — график дневной; /chart game_5m [days] — все тикеры игры 5m (горизонтально по сессиям, тикеры друг под другом)
 /chart5m <ticker> [days] — график 5 мин (по требованию)
 /table5m <ticker> [days] — таблица 5m свечей
-/signal <ticker> — технический сигнал по тикеру: для игры 5m — 5m; иначе портфель (решение, RSI, sentiment)
-/recommend [ticker] — рекомендация по портфелю; без тикера — по кластеру
+/signal <ticker> — технический сигнал по тикеру: для игры 5m — 5m; иначе портфель (решение, RSI, sentiment + блок KB как /news)
+/recommend [ticker] — рекомендация по портфелю (HTML: LLM + сигнал из KB); без тикера — по кластеру
 /recommend5m [ticker] [days] — компактный прогноз 5m (технический + LLM при включении); без тикера — кластер
 /signal5m [ticker] [days] — только технический сигнал 5m (тот же источник, что крон)
 /game5m [ticker|platform] — мониторинг 5m по тикеру; mode platform/sync/all: отправить массив GAME_5M в Kerim /game и вернуть 3 HTML (notOpened/opened/closed)
@@ -1183,7 +1192,7 @@ class LSETelegramBot:
 /corr5m [ticker1] [ticker2] — то же по кластеру игры 5m.
 /set_strategy <ticker> <стратегия> — переназначить стратегию у открытой позиции (напр. «5m вне» → Manual)
 /strategies — описание стратегий (GAME_5M, Portfolio, Manual, Momentum и др.)
-/prompt_entry [portfolio|game5m|5m|тикер] — отчёт: как получено решение (контекст + ответ); 5m = game5m; для портфеля — ещё промпт для LLM. Коротко: /pe_5m = /prompt_entry 5m.
+/prompt_entry [portfolio|game5m|5m|тикер] — отчёт: как получено решение (контекст + ответ); portfolio — по кластеру с блоком KB на тикер (как game5m); 5m = game5m. Коротко: /pe_5m = /prompt_entry 5m.
 
 /help — полная справка
         """
@@ -1214,10 +1223,10 @@ class LSETelegramBot:
 
 **Рекомендации (итог по игре) и отчёт (как получено решение):**
 Одна цепочка решений; разница — форма вывода. При USE_LLM=false итог = только тех. рекомендация; при USE_LLM=true LLM учитывает тех. сигнал и может скорректировать.
-`/signal <ticker>` — технический сигнал: если тикер в игре 5m — 5m (как signal5m); иначе портфель (цена, RSI, решение, sentiment).
-`/recommend [ticker]` — рекомендация по игре портфель: когда входить, стоп/тейк; без тикера — по кластеру. Итоговая рекомендация.
+`/signal <ticker>` — технический сигнал: если тикер в игре 5m — 5m (как signal5m); иначе портфель (цена, RSI, решение, sentiment + сигнал из KB как /news).
+`/recommend [ticker]` — рекомендация по портфелю (HTML: промпт LLM + блок KB на тикер); без тикера — по кластеру.
 `/recommend5m [ticker] [days]` — компактный прогноз 5m (таблица: технический + LLM). `/signal5m [ticker]` — только технический 5m.
-`/prompt_entry [portfolio|game5m|5m|тикер]` — не рекомендация, а отчёт: контекст и ответ по каждому тикеру. Коротко: `5m` = game5m, `/pe_5m` = то же. Для портфеля в выгрузке также промпт для LLM. Без аргумента — пустой шаблон.
+`/prompt_entry [portfolio|game5m|5m|тикер]` — отчёт: для portfolio — по кластеру, на каждый тикер блок KB + контекст LLM и ответ (как game5m по структуре). `5m` = game5m, `/pe_5m` = то же. Без аргумента — пустой шаблон.
 
 **Анализ (справка по signal):**
 `/signal` — справка и список доступных тикеров
@@ -4427,12 +4436,18 @@ class LSETelegramBot:
                     result = self.analyst.get_decision_with_llm(tkr, cluster_context=ctx)
                     dec = result.get("decision", "HOLD")
                     other_signals[tkr] = dec
+                    try:
+                        kb_sig_pe = self._portfolio_kb_news_plain(tkr)
+                    except Exception as e:
+                        logger.debug("prompt_entry portfolio KB %s: %s", tkr, e)
+                        kb_sig_pe = f"📰 KB: ошибка ({e!s})"
                     per_ticker_payloads.append({
                         "ticker": tkr,
                         "user_prompt": result.get("prompt_user"),
                         "llm_response": result.get("llm_response_raw"),
                         "decision": dec,
                         "note": None,
+                        "kb_news_signal_plain": kb_sig_pe,
                     })
                 if output_json:
                     import json
@@ -4475,6 +4490,11 @@ class LSETelegramBot:
                 except Exception:
                     cluster_ctx = None
                 decision_result = self.analyst.get_decision_with_llm(ticker, cluster_context=cluster_ctx)
+                try:
+                    kb_sig_one = self._portfolio_kb_news_plain(ticker)
+                except Exception as e:
+                    logger.debug("prompt_entry single portfolio KB %s: %s", ticker, e)
+                    kb_sig_one = f"📰 KB: ошибка ({e!s})"
                 payload = {
                     "ticker": ticker,
                     "system_prompt": decision_result.get("prompt_system") or t["system"].strip(),
@@ -4483,6 +4503,7 @@ class LSETelegramBot:
                     "llm_analysis": decision_result.get("llm_analysis"),
                     "decision": decision_result.get("decision"),
                     "technical_signal": decision_result.get("technical_signal"),
+                    "kb_news_signal_plain": kb_sig_one,
                 }
                 if decision_result.get("decision") == "NO_DATA":
                     payload["note"] = "Недостаточно данных по тикеру."
@@ -4568,12 +4589,18 @@ class LSETelegramBot:
                     result = self.analyst.get_decision_with_llm(tkr, cluster_context=ctx)
                     dec = result.get("decision", "HOLD")
                     other_signals[tkr] = dec
+                    try:
+                        kb_sig = self._portfolio_kb_news_plain(tkr)
+                    except Exception as e:
+                        logger.debug("recommend portfolio cluster KB %s: %s", tkr, e)
+                        kb_sig = f"📰 KB: ошибка ({e!s})"
                     per_ticker_payloads.append({
                         "ticker": tkr,
                         "user_prompt": result.get("prompt_user"),
                         "llm_response": result.get("llm_response_raw"),
                         "decision": dec,
                         "note": None,
+                        "kb_news_signal_plain": kb_sig,
                     })
                 html_content = _build_prompt_entry_all_html(full_list, correlation_note, per_ticker_payloads)
                 filename = f"recommend_portfolio_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
@@ -4593,6 +4620,11 @@ class LSETelegramBot:
                     if corr:
                         cluster_ctx = {"tickers": cluster_tickers, "correlation": corr, "other_signals": {}}
                 decision_result = self.analyst.get_decision_with_llm(ticker, cluster_context=cluster_ctx)
+                try:
+                    kb_sig = self._portfolio_kb_news_plain(ticker)
+                except Exception as e:
+                    logger.debug("recommend portfolio KB %s: %s", ticker, e)
+                    kb_sig = f"📰 KB: ошибка ({e!s})"
                 payload = {
                     "ticker": ticker,
                     "system_prompt": decision_result.get("prompt_system") or t["system"].strip(),
@@ -4601,6 +4633,7 @@ class LSETelegramBot:
                     "llm_analysis": decision_result.get("llm_analysis"),
                     "decision": decision_result.get("decision"),
                     "technical_signal": decision_result.get("technical_signal"),
+                    "kb_news_signal_plain": kb_sig,
                 }
                 if decision_result.get("decision") == "NO_DATA":
                     payload["note"] = "Недостаточно данных по тикеру."
@@ -5525,6 +5558,23 @@ class LSETelegramBot:
         data = query.data
         # Можно добавить логику для кнопок позже
 
+    def _portfolio_kb_news_plain(self, ticker: str) -> str:
+        """Краткий сигнал из KB (draft_bias, news.bias, gate) — тот же пайплайн, что /news."""
+        from report_generator import get_engine
+        from services.kb_news_report import (
+            kb_news_lookback_hours,
+            compute_kb_news_bias_metrics,
+            build_kb_news_signal_plaintext,
+        )
+
+        eng = get_engine()
+        news_df = self.analyst.get_recent_news(ticker)
+        if news_df is None or getattr(news_df, "empty", True):
+            return "📰 Новости (KB): нет записей в окне (см. KB_NEWS_LOOKBACK_HOURS)."
+        h = kb_news_lookback_hours()
+        metrics = compute_kb_news_bias_metrics(news_df, ticker, self.analyst, h, engine=eng)
+        return build_kb_news_signal_plaintext(ticker, metrics)
+
     def _format_5m_technical_signal(self, ticker: str, tech: Dict[str, Any]) -> str:
         """Технический сигнал 5m — единый формат из services.signal_message_5m."""
         from services.signal_message_5m import build_5m_technical_short_text
@@ -5623,14 +5673,27 @@ class LSETelegramBot:
 📊 **Технический сигнал:** {technical_signal}
 {sentiment_emoji} **Sentiment:** {sentiment:.2f} ({sentiment_label})
 📋 **Стратегия:** {strategy}
-📰 **Новостей:** {news_count}
+📰 **Новостей (учёт агента):** {news_count}
         """
         
         # Добавляем reasoning если есть (экранируем)
-        if decision_result.get('reasoning'):
-            reasoning_escaped = _escape_markdown(str(decision_result.get('reasoning')[:200]))
+        if decision_result.get("reasoning"):
+            reasoning_escaped = _escape_markdown(str(decision_result.get("reasoning")[:200]))
             response += f"\n💭 **Обоснование:**\n{reasoning_escaped}..."
-        
+        else:
+            sr = decision_result.get("strategy_result") or {}
+            if isinstance(sr, dict) and sr.get("reasoning"):
+                reasoning_escaped = _escape_markdown(str(sr.get("reasoning"))[:280])
+                response += f"\n💭 **Стратегия:**\n{reasoning_escaped}..."
+
+        try:
+            news_sig = self._portfolio_kb_news_plain(ticker)
+            if news_sig:
+                response += "\n\n" + _escape_markdown(news_sig)
+        except Exception as e:
+            logger.debug("KB news signal for /signal %s: %s", ticker, e)
+            response += f"\n\n📰 Новости (KB): не удалось посчитать ({e!s})"
+
         return response.strip()
     
     def _format_news_response(self, ticker: str, news_df, top_n: int = 10) -> str:

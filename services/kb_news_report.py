@@ -581,6 +581,46 @@ def _bias_arrow(b: float) -> str:
     return "▲" if b > 0.05 else ("▼" if b < -0.05 else "■")
 
 
+def build_kb_news_signal_plaintext(ticker: str, metrics: dict) -> str:
+    """
+    Краткий текстовый «сигнал из новостей» (как короткий /news, без HTML) —
+    для /signal портфеля, recommend, prompt_entry portfolio.
+    """
+    tv = (ticker or "").strip().upper() or "?"
+    h = int(metrics.get("lookback_hours") or 0)
+    lines = [f"📰 Новости (KB), окно ~{h} ч — {tv}"]
+    nrel = int(metrics.get("relevant_n_rows") or 0)
+    if nrel > 0:
+        rrb = float(metrics.get("relevant_rough_bias") or 0.0)
+        rnb = float(metrics.get("relevant_news_bias") or 0.0)
+        rrm = float(metrics.get("relevant_row_mean_bias") or 0.0)
+        rrs = float(metrics.get("relevant_regime_stress") or 0.0)
+        nm = int(metrics.get("relevant_n_macro") or 0)
+        dipr = metrics.get("relevant_draft_impulse") if isinstance(metrics.get("relevant_draft_impulse"), dict) else {}
+        reg = int(dipr.get("articles_regime", 0)) if dipr else 0
+        inc = int(dipr.get("articles_incremental", 0)) if dipr else 0
+        pol = int(dipr.get("articles_policy", 0)) if dipr else 0
+        lines.append(
+            f"Релевантные к тикеру: n={nrel} (MACRO в тексте: {nm}), "
+            f"draft_bias={rrb:+.4f} {_bias_arrow(rrb)}, news.bias={rnb:+.4f} {_bias_arrow(rnb)}, "
+            f"row_mean={rrm:+.4f}, regime_stress={rrs:.3f}, REG/INC/POL={reg}/{inc}/{pol}."
+        )
+    else:
+        lines.append("Релевантные к тикеру: нет строк (ни тикер, ни MACRO с упоминанием в тексте).")
+    rough = float(metrics.get("rough_bias") or 0.0)
+    nb = float(metrics.get("news_bias") or 0.0)
+    rm = float(metrics.get("row_mean_bias") or 0.0)
+    rs = float(metrics.get("regime_stress") or 0.0)
+    mode = str(metrics.get("gate_mode") or "—")
+    reason = str(metrics.get("gate_reason") or "—")
+    lines.append(
+        f"Полное окно (гейт): draft_bias={rough:+.4f} {_bias_arrow(rough)}, news.bias={nb:+.4f} {_bias_arrow(nb)}, "
+        f"row_mean={rm:+.4f}, regime_stress={rs:.3f}."
+    )
+    lines.append(f"Gate: {mode} — {reason}")
+    return "\n".join(lines)
+
+
 _CSS = """
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: #0d1117; color: #e6edf3; margin: 0; padding: 16px; }

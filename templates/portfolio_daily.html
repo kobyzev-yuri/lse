@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Портфель — daily график</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e2e8f0; margin: 0; padding: 1rem; max-width: 960px; margin-left: auto; margin-right: auto; }
+        a { color: #7dd3fc; }
+        h1 { font-size: 1.1rem; }
+        .muted { color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.75rem; }
+        select, button { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; padding: 0.35rem 0.6rem; border-radius: 6px; margin-right: 0.5rem; }
+        #chartWrap { position: relative; height: 360px; margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <h1>Daily — quotes</h1>
+    <p class="muted">Интервал <strong>1d</strong> из таблицы <code>quotes</code> (не Yahoo 5m / 1h). Для почасовки нужен отдельный ingest — сейчас в проекте нет.</p>
+    <div>
+        <label>Тикер <input type="text" id="tickerInput" style="width:120px; padding:0.35rem;"></label>
+        <label>Дней <select id="daysSel"><option value="90">90</option><option value="180" selected>180</option><option value="365">365</option></select></label>
+        <button type="button" id="loadBtn">Показать</button>
+        <a href="/portfolio/cards">← Карточки портфеля</a>
+    </div>
+    <div id="chartWrap"><canvas id="c1"></canvas></div>
+    <script>
+        function qs(name) {
+            var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+            return m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : '';
+        }
+        var chart;
+        async function loadChart() {
+            var t = (document.getElementById('tickerInput').value || 'MSFT').trim().toUpperCase();
+            var days = document.getElementById('daysSel').value;
+            var r = await fetch('/api/portfolio/chart/' + encodeURIComponent(t) + '?days=' + days);
+            if (!r.ok) {
+                var err = await r.json().catch(function() { return {}; });
+                alert(err.detail || r.statusText);
+                return;
+            }
+            var data = await r.json();
+            var bars = data.bars || [];
+            var labels = bars.map(function(b) { return b.date.slice(0, 10); });
+            var closes = bars.map(function(b) { return b.close != null ? Number(b.close) : null; });
+            var sma = bars.map(function(b) { return b.sma_5 != null ? Number(b.sma_5) : null; });
+            if (chart) chart.destroy();
+            chart = new Chart(document.getElementById('c1'), {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'Close', data: closes, borderColor: '#38bdf8', tension: 0.1, spanGaps: true, pointRadius: 0 },
+                        { label: 'SMA5', data: sma, borderColor: '#a78bfa', tension: 0.1, spanGaps: true, pointRadius: 0 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#cbd5e1' } } },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 12 } },
+                        y: { ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+        document.getElementById('tickerInput').value = qs('ticker') || 'MSFT';
+        document.getElementById('loadBtn').addEventListener('click', loadChart);
+        loadChart();
+    </script>
+</body>
+</html>

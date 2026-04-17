@@ -1580,6 +1580,104 @@ async def get_game5m_cards(days: int = 5):
     })
 
 
+def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
+    """Карточки портфельной игры: AnalystAgent без LLM, дневные quotes + стратегия (как trading_cycle)."""
+    from services.portfolio_card import (
+        get_portfolio_cluster_context,
+        portfolio_card_payload,
+        load_fallback_portfolio_take_pct,
+    )
+
+    ctx, trade = get_portfolio_cluster_context(days=min(max(5, corr_days), 120))
+    take_fb = load_fallback_portfolio_take_pct()
+    agent = AnalystAgent(use_llm=False)
+    cards: List[Dict[str, Any]] = []
+    for t in trade:
+        try:
+            r = agent.get_decision_with_llm(t, cluster_context=ctx)
+            if r.get("decision") == "NO_DATA":
+                cards.append({
+                    "ticker": t,
+                    "decision": "NO_DATA",
+                    "horizon": "daily",
+                    "reasoning": "Нет данных в quotes (или недостаточно истории).",
+                })
+            else:
+                cards.append(portfolio_card_payload(t, r, fallback_take_pct=take_fb))
+        except Exception as e:
+            cards.append({"ticker": t, "decision": "ERROR", "horizon": "daily", "error": str(e)})
+    return {
+        "tickers": trade,
+        "correlation_tickers": (ctx or {}).get("tickers"),
+        "cards": cards,
+        "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
+    }
+
+
+def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int) -> Dict[str, Any]:
+    """LLM по одному тикеру портфеля: полный контекст (корреляция кластера, новости, риск-лимиты в карточке)."""
+    from services.portfolio_card import (
+        get_portfolio_cluster_context,
+        portfolio_card_payload,
+        portfolio_llm_public_payload,
+        load_fallback_portfolio_take_pct,
+        get_portfolio_trade_tickers,
+    )
+
+    trade = get_portfolio_trade_tickers()
+    if ticker not in trade:
+        return {"_error": "Тикер не в списке портфельной игры", "_status": 404}
+    ctx, _ = get_portfolio_cluster_context(days=min(max(5, corr_days), 120))
+    agent = AnalystAgent(use_llm=get_use_llm_for_analyst(engine=engine))
+    r = agent.get_decision_with_llm(ticker, cluster_context=ctx)
+    if r.get("decision") == "NO_DATA":
+        return {"_error": "Нет данных quotes", "_status": 404}
+    base = portfolio_card_payload(ticker, r, fallback_take_pct=load_fallback_portfolio_take_pct())
+    merged = {
+        **base,
+        "llm_analysis": _make_json_safe(r.get("llm_analysis")),
+        "technical_data": _make_json_safe(r.get("technical_data")),
+        "strategy_result": _make_json_safe(r.get("strategy_result")),
+        "news_count": r.get("news_count"),
+        "base_decision": r.get("base_decision"),
+    }
+    return portfolio_llm_public_payload(merged)
+
+
+def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
+    """Дневной график из БД quotes (open/high/low/close), не intraday 5m."""
+    days = min(max(10, int(days)), 730)
+    cutoff = datetime.now() - timedelta(days=days)
+    with engine.connect() as conn:
+        df = pd.read_sql(
+            text("""
+                SELECT date, open, high, low, close, volume, sma_5, rsi, volatility_5
+                FROM quotes
+                WHERE ticker = :ticker AND date >= :cutoff
+                ORDER BY date ASC
+            """),
+            conn,
+            params={"ticker": ticker, "cutoff": cutoff},
+        )
+    if df.empty:
+        return {}
+    records = []
+    for _, row in df.iterrows():
+        d = row["date"]
+        records.append({
+            "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+            "open": _to_jsonable(row.get("open")),
+            "high": _to_jsonable(row.get("high")),
+            "low": _to_jsonable(row.get("low")),
+            "close": _to_jsonable(row.get("close")),
+            "volume": _to_jsonable(row.get("volume")),
+            "sma_5": _to_jsonable(row.get("sma_5")),
+            "rsi": _to_jsonable(row.get("rsi")),
+            "volatility_5": _to_jsonable(row.get("volatility_5")),
+        })
+    return {"ticker": ticker, "interval": "1d", "source": "quotes", "bars": records}
+
+
 def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
     """Синхронный расчёт вывода LLM для карточки 5m (запускается в потоке, чтобы не блокировать event loop)."""
     from services.recommend_5m import get_decision_5m
@@ -1680,6 +1778,54 @@ async def get_game5m_card_llm(ticker: str):
 async def game5m_cards_page(request: Request):
     """Страница карточек 5m для мониторинга в Telegram (компактный скролл, LLM по кнопке)."""
     return HTMLResponse(render_template("game5m_cards.html", {"request": request}))
+
+
+@app.get("/api/portfolio/cards", response_class=JSONResponse)
+async def get_portfolio_cards(corr_days: int = 30):
+    """API: карточки портфельной игры (дневные quotes, стратегия; без 5m и без LLM)."""
+    try:
+        payload = await asyncio.to_thread(_compute_portfolio_cards_sync, corr_days)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка карточек портфеля: {e!s}")
+    return _to_jsonable(payload)
+
+
+@app.get("/api/portfolio/card/{ticker}/llm", response_class=JSONResponse)
+async def get_portfolio_card_llm(ticker: str, corr_days: int = 30):
+    """API: LLM-разбор по тикеру портфеля (корреляции, новости, техника, риск)."""
+    t = ticker.strip().upper()
+    try:
+        result = await asyncio.to_thread(_compute_portfolio_card_llm_sync, t, corr_days)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка LLM портфеля: {e!s}")
+    if result.get("_error"):
+        raise HTTPException(status_code=int(result.get("_status", 404)), detail=result.get("_error", "Нет данных"))
+    return _to_jsonable(result)
+
+
+@app.get("/api/portfolio/chart/{ticker}", response_class=JSONResponse)
+async def get_portfolio_chart(ticker: str, days: int = 180):
+    """API: дневные бары из quotes для графика (не 5m)."""
+    t = ticker.strip().upper()
+    try:
+        data = await asyncio.to_thread(_build_portfolio_daily_chart_data, t, days)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка графика: {e!s}")
+    if not data.get("bars"):
+        raise HTTPException(status_code=404, detail=f"Нет дневных котировок в quotes для {t}")
+    return _to_jsonable(data)
+
+
+@app.get("/portfolio/cards", response_class=HTMLResponse)
+async def portfolio_cards_page(request: Request):
+    """Карточки портфельной игры (MEDIUM+LONG): цели стратегии / запасной тейк, дневной контекст."""
+    return HTMLResponse(render_template("portfolio_cards.html", {"request": request}))
+
+
+@app.get("/portfolio/daily", response_class=HTMLResponse)
+async def portfolio_daily_chart_page(request: Request):
+    """Дневной график по тикеру портфеля (таблица quotes)."""
+    return HTMLResponse(render_template("portfolio_daily.html", {"request": request}))
 
 
 @app.get("/api/pnl", response_class=JSONResponse)
