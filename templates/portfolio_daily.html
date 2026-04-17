@@ -11,6 +11,7 @@
         h1 { font-size: 1.1rem; }
         .muted { color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.75rem; }
         select, button { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; padding: 0.35rem 0.6rem; border-radius: 6px; margin-right: 0.5rem; }
+        #tickerPortfolioFilter { min-width: 10rem; }
         .chart-section { position: relative; height: 300px; margin-top: 1rem; }
         .chart-section h2 { font-size: 0.95rem; margin: 0 0 0.35rem 0; color: #cbd5e1; }
         #statusLine { font-size: 0.8rem; color: #94a3b8; min-height: 1.2em; margin-top: 0.5rem; }
@@ -18,14 +19,18 @@
 </head>
 <body>
     <h1>Daily — quotes</h1>
-    <p class="muted">Интервал <strong>1d</strong> из таблицы <code>quotes</code>. Поле <strong>Тикер</strong> пустое — графики по <strong>всем</strong> тикерам портфельной игры. Ссылка с карточки <code>?ticker=…</code> подставляет тикер.</p>
+    <p class="muted">Интервал <strong>1d</strong> из таблицы <code>quotes</code>. <strong>Все</strong> — график по каждому тикеру портфельной игры; иначе выберите тикер в списке. Ссылка с карточки <code>?ticker=…</code> выставляет список.</p>
     <div>
-        <label>Тикер <input type="text" id="tickerInput" placeholder="все" style="width:140px; padding:0.35rem;" autocomplete="off"></label>
+        <label>Тикер</label>
+        <select id="tickerPortfolioFilter">
+            <option value="">Все (портфель)</option>
+        </select>
         <label>Дней <select id="daysSel"><option value="90">90</option><option value="180" selected>180</option><option value="365">365</option></select></label>
         <button type="button" id="loadBtn">Показать</button>
         <a href="/">Дашборд</a>
         <a href="/portfolio/cards">Карточки</a>
     </div>
+    <script type="application/json" id="portfolioTickersList">{{ portfolio_trade_tickers_json or "[]" }}</script>
     <div id="statusLine"></div>
     <div id="chartsRoot"></div>
     <script>
@@ -38,6 +43,43 @@
         function destroyCharts() {
             chartInstances.forEach(function(ch) { try { ch.destroy(); } catch (e) {} });
             chartInstances = [];
+        }
+
+        function getPortfolioTickerUniverse() {
+            var listEl = document.getElementById('portfolioTickersList');
+            return listEl ? (JSON.parse(listEl.textContent || '[]') || []) : [];
+        }
+
+        function initPortfolioTickerFilterFromUrl() {
+            var sel = document.getElementById('tickerPortfolioFilter');
+            if (!sel) return;
+            var universe = getPortfolioTickerUniverse();
+            var urlRaw = qs('ticker');
+            var urlT = urlRaw ? String(urlRaw).trim().toUpperCase() : '';
+            while (sel.options.length > 1) sel.remove(1);
+            var seen = new Set(['']);
+            universe.forEach(function(t) {
+                if (!t || seen.has(t)) return;
+                seen.add(t);
+                var o = document.createElement('option');
+                o.value = t;
+                o.textContent = t;
+                sel.appendChild(o);
+            });
+            if (urlT && !seen.has(urlT)) {
+                var o2 = document.createElement('option');
+                o2.value = urlT;
+                o2.textContent = urlT + ' (из ссылки)';
+                sel.appendChild(o2);
+            }
+            if (urlT) sel.value = urlT;
+            else sel.value = '';
+        }
+
+        function getPortfolioTickerSelection() {
+            var sel = document.getElementById('tickerPortfolioFilter');
+            var v = sel && sel.value ? String(sel.value).trim() : '';
+            return v.toUpperCase();
         }
 
         function buildLineChart(canvas, title, bars) {
@@ -71,8 +113,7 @@
         async function loadChart() {
             var statusEl = document.getElementById('statusLine');
             var root = document.getElementById('chartsRoot');
-            var raw = (document.getElementById('tickerInput').value || '').trim();
-            var t = raw.toUpperCase();
+            var t = getPortfolioTickerSelection();
             var days = document.getElementById('daysSel').value;
             statusEl.textContent = 'Загрузка…';
             destroyCharts();
@@ -142,10 +183,11 @@
         }
 
         (function init() {
-            var fromUrl = qs('ticker');
-            document.getElementById('tickerInput').value = fromUrl ? fromUrl.trim() : '';
+            initPortfolioTickerFilterFromUrl();
             document.getElementById('loadBtn').addEventListener('click', loadChart);
             document.getElementById('daysSel').addEventListener('change', loadChart);
+            var tf = document.getElementById('tickerPortfolioFilter');
+            if (tf) tf.addEventListener('change', loadChart);
             loadChart();
         })();
     </script>

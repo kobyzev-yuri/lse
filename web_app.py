@@ -1783,7 +1783,21 @@ async def portfolio_cards_page(request: Request):
 @app.get("/portfolio/daily", response_class=HTMLResponse)
 async def portfolio_daily_chart_page(request: Request):
     """Дневной график по тикеру портфеля (таблица quotes)."""
-    return HTMLResponse(render_template("portfolio_daily.html", {"request": request}))
+    try:
+        from services.portfolio_card import get_portfolio_trade_tickers
+
+        portfolio_trade = list(get_portfolio_trade_tickers() or [])
+    except Exception:
+        portfolio_trade = []
+    return HTMLResponse(
+        render_template(
+            "portfolio_daily.html",
+            {
+                "request": request,
+                "portfolio_trade_tickers_json": json.dumps(portfolio_trade),
+            },
+        )
+    )
 
 
 @app.get("/api/pnl", response_class=JSONResponse)
