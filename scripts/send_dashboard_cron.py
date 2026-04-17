@@ -66,7 +66,7 @@ def main():
 
     token = get_config_value("TELEGRAM_BOT_TOKEN")
     if not token:
-        logger.error("TELEGRAM_BOT_TOKEN не задан в config.env")
+        logger.warning("TELEGRAM_BOT_TOKEN не задан в config.env — дашборд в Telegram пропущен")
         sys.exit(1)
 
     chat_id = get_config_value("TELEGRAM_DASHBOARD_CHAT_ID", "").strip()

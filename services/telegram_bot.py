@@ -1435,19 +1435,9 @@ class LSETelegramBot:
             response = self._format_signal_response(ticker, decision_result)
             logger.info(f"Ответ сформирован для {ticker}, длина: {len(response)} символов")
             
-            # Пытаемся отправить с Markdown, при ошибке парсинга — без форматирования
-            try:
-                logger.info(f"Отправка ответа для {ticker} с Markdown")
-                await update.message.reply_text(response, parse_mode='Markdown')
-                logger.info(f"✅ Ответ для {ticker} успешно отправлен")
-            except Exception as parse_err:
-                if 'parse' in str(parse_err).lower() or 'entit' in str(parse_err).lower():
-                    logger.warning(f"Ошибка парсинга Markdown для {ticker}, отправляем без форматирования: {parse_err}")
-                    await update.message.reply_text(response)
-                    logger.info(f"✅ Ответ для {ticker} отправлен без форматирования")
-                else:
-                    logger.error(f"Ошибка отправки для {ticker}: {parse_err}", exc_info=True)
-                    raise
+            # parse_mode=None: ответ содержит NO_DATA, update_prices.py, KB с [MEDIUM] — Markdown даёт «Can't parse entities»
+            await update.message.reply_text(response.strip(), parse_mode=None)
+            logger.info("✅ Ответ для %s отправлен (plain text)", ticker)
             
         except Exception as e:
             logger.error(f"Ошибка анализа сигнала для {ticker}: {e}", exc_info=True)
@@ -4506,7 +4496,14 @@ class LSETelegramBot:
                     "kb_news_signal_plain": kb_sig_one,
                 }
                 if decision_result.get("decision") == "NO_DATA":
-                    payload["note"] = "Недостаточно данных по тикеру."
+                    payload["note"] = (
+                        "Недостаточно данных в quotes для AnalystAgent (техника/стратегия). "
+                        "Блок «Сигнал из новостей (KB)» ниже — по knowledge_base отдельно от дневных котировок; LLM при NO_DATA не вызывается."
+                    )
+                    if kb_sig_one and not (decision_result.get("prompt_user") or "").strip():
+                        payload["user_prompt"] = (
+                            "(Технический user-промпт не собран при NO_DATA.)\n\n" + kb_sig_one
+                        )
                 elif not decision_result.get("prompt_user"):
                     payload["note"] = "Промпт не заполнен (нет данных для сборки)."
                 elif not decision_result.get("llm_response_raw"):
@@ -4520,7 +4517,11 @@ class LSETelegramBot:
             )
             if ticker:
                 dec = payload.get("decision", "—")
-                await update.message.reply_text(f"✅ Промпт и ответ LLM для **{ticker}** выгружены. Решение: {dec}", parse_mode="Markdown")
+                # NO_DATA / STRONG_BUY / GAME_5M содержат «_» — ломают legacy Markdown
+                await update.message.reply_text(
+                    f"✅ Промпт и ответ LLM для {ticker} выгружены. Решение: {dec}",
+                    parse_mode=None,
+                )
         except Exception as e:
             logger.exception("Ошибка prompt_entry")
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
@@ -4636,11 +4637,21 @@ class LSETelegramBot:
                     "kb_news_signal_plain": kb_sig,
                 }
                 if decision_result.get("decision") == "NO_DATA":
-                    payload["note"] = "Недостаточно данных по тикеру."
+                    payload["note"] = (
+                        "Недостаточно данных в quotes для AnalystAgent. "
+                        "Блок KB ниже — для контекста; полный LLM-промпт при NO_DATA не строится."
+                    )
+                    if kb_sig and not (decision_result.get("prompt_user") or "").strip():
+                        payload["user_prompt"] = (
+                            "(Технический user-промпт не собран при NO_DATA.)\n\n" + kb_sig
+                        )
                 html_content = _build_prompt_entry_html(payload)
                 filename = f"recommend_portfolio_{ticker}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.html"
                 await update.message.reply_document(document=BytesIO(html_content.encode("utf-8")), filename=filename)
-                await update.message.reply_text(f"✅ Рекомендация по **{ticker}** выгружена (HTML). Решение: {payload.get('decision', '—')}", parse_mode="Markdown")
+                await update.message.reply_text(
+                    f"✅ Рекомендация по {ticker} выгружена (HTML). Решение: {payload.get('decision', '—')}",
+                    parse_mode=None,
+                )
         except Exception as e:
             logger.exception("Ошибка рекомендации портфеля")
             await update.message.reply_text(f"❌ Ошибка: {e}")
@@ -5657,39 +5668,38 @@ class LSETelegramBot:
             else:
                 rsi_emoji = "⚪"
                 rsi_status = "нейтральная зона"
-            rsi_text = f"\n{rsi_emoji} **RSI:** {rsi_to_show:.1f} ({rsi_status})"
+            rsi_text = f"\n{rsi_emoji} RSI: {rsi_to_show:.1f} ({rsi_status})"
         else:
             # Локальный расчёт уже пробовали (get_or_compute_rsi); нет данных = мало истории close
-            rsi_hint = "недостаточно данных (нужно 15 дней close) или запустите update_prices.py"
-            rsi_text = f"\n⚪ **RSI:** нет данных ({rsi_hint})"
-        
-        # Экранируем ticker для Markdown (GBPUSD=X содержит =)
-        ticker_escaped = _escape_markdown(ticker)
-        
-        response = f"""
-{decision_emoji} **{ticker_escaped}** - {decision}
+            rsi_hint = (
+                "мало дневных свечей в quotes (нужно ≥15 close); подгрузите: "
+                "python3 update_prices.py <тикер> (в контейнере: docker exec -w /app lse-bot python update_prices.py …)"
+            )
+            rsi_text = f"\n⚪ RSI: нет данных ({rsi_hint})"
 
-💰 **Цена:** {price}{rsi_text}
-📊 **Технический сигнал:** {technical_signal}
-{sentiment_emoji} **Sentiment:** {sentiment:.2f} ({sentiment_label})
-📋 **Стратегия:** {strategy}
-📰 **Новостей (учёт агента):** {news_count}
+        # Без Markdown: в тексте есть NO_DATA, update_prices.py, draft_bias, скобки [MEDIUM] из KB —
+        # legacy parse_mode=Markdown ломается на «_» и «[]» (Can't parse entities).
+        response = f"""
+{decision_emoji} {ticker} — {decision}
+
+💰 Цена: {price}{rsi_text}
+📊 Технический сигнал: {technical_signal}
+{sentiment_emoji} Sentiment: {sentiment:.2f} ({sentiment_label})
+📋 Стратегия: {strategy}
+📰 Новостей (учёт агента): {news_count}
         """
-        
-        # Добавляем reasoning если есть (экранируем)
+
         if decision_result.get("reasoning"):
-            reasoning_escaped = _escape_markdown(str(decision_result.get("reasoning")[:200]))
-            response += f"\n💭 **Обоснование:**\n{reasoning_escaped}..."
+            response += f"\n💭 Обоснование:\n{str(decision_result.get('reasoning')[:200]).strip()}..."
         else:
             sr = decision_result.get("strategy_result") or {}
             if isinstance(sr, dict) and sr.get("reasoning"):
-                reasoning_escaped = _escape_markdown(str(sr.get("reasoning"))[:280])
-                response += f"\n💭 **Стратегия:**\n{reasoning_escaped}..."
+                response += f"\n💭 Стратегия:\n{str(sr.get('reasoning'))[:280].strip()}..."
 
         try:
             news_sig = self._portfolio_kb_news_plain(ticker)
             if news_sig:
-                response += "\n\n" + _escape_markdown(news_sig)
+                response += "\n\n" + news_sig
         except Exception as e:
             logger.debug("KB news signal for /signal %s: %s", ticker, e)
             response += f"\n\n📰 Новости (KB): не удалось посчитать ({e!s})"

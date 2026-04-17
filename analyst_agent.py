@@ -327,10 +327,21 @@ class AnalystAgent:
             order_map = {'NEWS': 0, 'MACRO_NEWS': 0, 'EQUITY_NEWS': 0, 'EARNINGS': 1}
             df['_sort_order'] = df['event_type'].map(order_map).fillna(2).astype(int)
             df = df.sort_values(by=['_sort_order', 'ts'], ascending=[True, False]).drop(columns=['_sort_order'], errors='ignore')
-            
-            for idx, row in df.iterrows():
-                event_type = "MACRO" if row['ticker'] in ['MACRO', 'US_MACRO'] else "TICKER"
-                logger.info(f"   [{row['ts']}] {event_type} ({row['ticker']}): {row['content'][:50]}... (sentiment: {row['sentiment_score']})")
+            # Не логировать каждую строку на INFO: при тысячах записей KB (336ч окно) это грузит диск/CPU,
+            # /api/portfolio/cards и крон зависают или получают 500 по таймауту.
+            if logger.isEnabledFor(logging.DEBUG):
+                for _, row in df.head(25).iterrows():
+                    event_type = "MACRO" if row['ticker'] in ['MACRO', 'US_MACRO'] else "TICKER"
+                    logger.debug(
+                        "   [%s] %s (%s): %s... (sentiment: %s)",
+                        row['ts'],
+                        event_type,
+                        row['ticker'],
+                        (str(row.get('content') or '')[:50]),
+                        row['sentiment_score'],
+                    )
+                if len(df) > 25:
+                    logger.debug("   ... ещё %s строк KB (не показаны)", len(df) - 25)
         
         return df
     

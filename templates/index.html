@@ -4,6 +4,10 @@
 
 {% block content %}
 <h1>Портфель</h1>
+<p class="muted" style="margin-bottom: 1rem; font-size: 0.9rem;">
+    Сводка по кэшу в <code>portfolio_state</code>. Дневной анализ портфельной игры (trading_cycle) — отдельные страницы ниже.
+    Таблицы открытых/закрытых сделок по всем стратегиям — в разделах <a href="/reports/pending">Открытые</a> и <a href="/reports/closed">Закрытые</a>.
+</p>
 
 <section aria-label="Баланс">
 <div class="card">
@@ -13,107 +17,29 @@
 </div>
 </section>
 
-<section aria-label="Статистика по закрытым сделкам">
+<section aria-label="Портфельная игра">
 <div class="card">
-    <h2>Статистика</h2>
-    <p class="muted" style="margin-bottom: 0.5rem; font-size: 0.9rem;">Сводка по закрытым позициям (вся история).</p>
-    <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.75rem;">
-        <div>
-            <div class="muted" style="font-size: 0.8rem;">Общий PnL</div>
-            <div class="value {% if total_pnl >= 0 %}positive{% else %}negative{% endif %}">${{ "{:,.2f}".format(total_pnl) }}</div>
-        </div>
-        <div>
-            <div class="muted" style="font-size: 0.8rem;">Win Rate</div>
-            <div class="value">{{ "{:.1f}".format(win_rate) }}%</div>
-        </div>
-        <div>
-            <div class="muted" style="font-size: 0.8rem;">Всего сделок</div>
-            <div class="value">{{ total_trades }}</div>
-        </div>
-    </div>
-</div>
-</section>
-
-<section aria-label="Открытые позиции">
-<div class="card">
-    <h2>Открытые позиции</h2>
-    <p class="muted" style="margin-bottom: 0.5rem; font-size: 0.9rem;">Текущие позиции по trade_history. Полный отчёт: <a href="/reports/pending">Открытые</a>.</p>
-    {% if positions %}
-    <div class="table-responsive">
-    <table>
-        <thead>
-            <tr>
-                <th>Тикер</th>
-                <th>Кол-во</th>
-                <th>Вход</th>
-                <th>Текущая</th>
-                <th>PnL</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for pos in positions %}
-            <tr>
-                <td>{{ pos.ticker }}</td>
-                <td>{{ "{:.2f}".format(pos.quantity) }}</td>
-                <td>${{ "{:.2f}".format(pos.avg_entry_price) }}</td>
-                <td>${{ "{:.2f}".format(pos.current_price) }}</td>
-                <td class="{% if pos.pnl >= 0 %}positive{% else %}negative{% endif %}">${{ "{:,.2f}".format(pos.pnl) }} ({{ "{:+.2f}".format(pos.pnl_pct) }}%)</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    </div>
-    {% else %}
-    <p>Нет открытых позиций. <a href="/reports/pending">Открытые</a></p>
-    {% endif %}
-</div>
-</section>
-
-<section aria-label="Закрытые позиции">
-<div class="card">
-    <h2>Закрытые позиции</h2>
-    <p class="muted" style="margin-bottom: 0.5rem; font-size: 0.9rem;">
-        Закрытые сделки (последние на странице).
-        Полный отчёт: <a href="/reports/closed">Закрытые</a>.
-        Excel: <a href="/reports/closed/export?limit={{ closed_report_default }}">.xlsx ({{ closed_report_default }})</a>
-        · <a href="/reports/closed/export?limit={{ closed_report_web_max }}">.xlsx до {{ closed_report_web_max }}</a>
-        · <a href="/reports/closed#excel-export">настроить лимит</a>
+    <h2>Портфельная игра (trading_cycle)</h2>
+    <p class="muted" style="margin-bottom: 0.75rem; font-size: 0.9rem;">
+        Дневные котировки из <strong>quotes</strong>, AnalystAgent и стратегии — как в кроне портфеля. Не путать с игрой 5m (<a href="/game5m/cards">5m карточки</a>).
     </p>
-    {% if closed_positions %}
-    <div class="table-responsive">
-    <table>
-        <thead>
-            <tr>
-                <th>Тикер</th>
-                <th>Вход</th>
-                <th>Выход</th>
-                <th>P/L</th>
-                <th>P/L %</th>
-                <th>Причина</th>
-                <th>Выход (MSK)</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for row in closed_positions %}
-            <tr>
-                <td>{{ row.instrument }}</td>
-                <td>${{ "%.2f"|format(row.open) }}</td>
-                <td>${{ "%.2f"|format(row.close) }}</td>
-                <td class="{% if row.profit_usd >= 0 %}positive{% else %}negative{% endif %}">${{ "%+.2f"|format(row.profit_usd) }}</td>
-                <td class="{% if row.pl_pct >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.2f"|format(row.pl_pct) }}%</td>
-                <td><span title="{{ row.exit_reason_caption }}">{{ row.exit_reason }}</span></td>
-                <td>{{ row.close_msk }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    </div>
-    {% else %}
-    <p>Закрытых позиций пока нет. <a href="/reports/closed">Закрытые</a></p>
-    {% endif %}
+    <p style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
+        <a href="/portfolio/cards" class="value" style="display: inline-block; padding: 0.5rem 1rem; background: #0f3460; border-radius: 8px; text-decoration: none; color: #7dd3fc; font-size: 0.95rem;">Портфель · карточки (daily)</a>
+        <a href="/portfolio/daily" class="value" style="display: inline-block; padding: 0.5rem 1rem; background: #0f3460; border-radius: 8px; text-decoration: none; color: #7dd3fc; font-size: 0.95rem;">Портфель · графики (quotes 1d)</a>
+    </p>
+</div>
+</section>
+
+<section aria-label="Сделки по всем стратегиям">
+<div class="card">
+    <h2>Сделки (все стратегии)</h2>
+    <p class="muted" style="margin-bottom: 0.75rem; font-size: 0.9rem;">
+        В отчётах ниже смешаны <strong>GAME_5M</strong>, портфель (Portfolio / trading_cycle), ручные сделки и др. — фильтр по игре на странице отчёта, если доступен.
+    </p>
+    <ul style="margin: 0; padding-left: 1.25rem; line-height: 1.8;">
+        <li><a href="/reports/pending">Открытые позиции</a></li>
+        <li><a href="/reports/closed">Закрытые позиции</a> · <a href="/reports/closed#excel-export">Excel</a></li>
+    </ul>
 </div>
 </section>
 {% endblock %}
-
-
-

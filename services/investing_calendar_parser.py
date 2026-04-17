@@ -45,6 +45,8 @@ DEBUG_SAVE_HTML = os.environ.get('INVESTING_CALENDAR_DEBUG_HTML', '').strip().lo
 INVESTING_CALENDAR_429_BACKOFF = [45, 90]
 INVESTING_CALENDAR_429_MAX_RETRIES = 2
 _CALENDAR_RATE_LIMIT_HIT = False
+# После 403 на HTML-календаре остальные регионы не опрашиваем (тот же IP → тот же ответ).
+_CALENDAR_HTML_403_ABORT = False
 
 # Регионы для экономического календаря
 REGIONS = {
@@ -145,7 +147,7 @@ def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
         'Upgrade-Insecure-Requests': '1'
     }
     
-    global _CALENDAR_RATE_LIMIT_HIT
+    global _CALENDAR_RATE_LIMIT_HIT, _CALENDAR_HTML_403_ABORT
     try:
         # Параметры для фильтрации
         params = {
@@ -284,6 +286,18 @@ def fetch_investing_calendar(region: str, days_ahead: int = 7) -> List[Dict]:
                 region,
             )
             return []
+        if status == 403:
+            _CALENDAR_HTML_403_ABORT = True
+            # WARNING: cron_watchdog ищет строки с «ERROR» — 403 от Investing для HTML не считаем аварией.
+            logger.warning(
+                "Investing.com calendar (HTML): 403 Forbidden для %s — страница не отдаётся этому клиенту/IP. "
+                "Рекомендация: снять INVESTING_CALENDAR_USE_HTML (по умолчанию календарь — JSON API "
+                "endpoints.investing.com) или задать прокси: INVESTING_CALENDAR_USE_SYSTEM_PROXY=true "
+                "и HTTP(S)_PROXY/ALL_PROXY. Исходная ошибка: %s",
+                region,
+                e,
+            )
+            return []
         logger.error(f"❌ Ошибка запроса к Investing.com: {e}")
         return []
     except Exception as e:
@@ -298,8 +312,9 @@ def fetch_all_regions_calendar() -> List[Dict]:
     По умолчанию — только JSON API (как nyse), без fallback на HTML.
     INVESTING_CALENDAR_USE_HTML=true — только legacy-обход HTML по регионам.
     """
-    global _CALENDAR_RATE_LIMIT_HIT
+    global _CALENDAR_RATE_LIMIT_HIT, _CALENDAR_HTML_403_ABORT
     _CALENDAR_RATE_LIMIT_HIT = False
+    _CALENDAR_HTML_403_ABORT = False
 
     use_html_only = (
         str(get_config_value("INVESTING_CALENDAR_USE_HTML") or "")
@@ -335,10 +350,14 @@ def fetch_all_regions_calendar() -> List[Dict]:
                 "Investing.com calendar: дальнейший опрос регионов пропущен (получен 429 в этом запуске)."
             )
             break
+        if _CALENDAR_HTML_403_ABORT:
+            break
         logger.info(f"📅 Получение календаря для {region}...")
         events = fetch_investing_calendar(region)
         all_events.extend(events)
-        
+
+        if _CALENDAR_HTML_403_ABORT:
+            break
         # Увеличенная задержка между запросами (чтобы избежать 429 Too Many Requests)
         if region != list(REGIONS.keys())[-1]:  # Не ждем после последнего региона
             time.sleep(5)  # Увеличено с 2 до 5 секунд

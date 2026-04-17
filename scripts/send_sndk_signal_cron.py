@@ -520,9 +520,16 @@ def process_ticker(
 
 
 def main():
+    # yfinance пишет «possibly delisted; no price data» на ERROR при пустом ответе Yahoo.
+    # Важно: setLevel(WARNING) НЕ отсекает ERROR (ERROR ≥ WARNING). Нужен CRITICAL, чтобы не засорять watchdog.
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
     token = get_config_value("TELEGRAM_BOT_TOKEN")
     if not token:
-        logger.error("TELEGRAM_BOT_TOKEN не задан в config.env")
+        logger.warning(
+            "TELEGRAM_BOT_TOKEN не задан в config.env — рассылка в Telegram невозможна, выход (код 1). "
+            "Для игры 5m без уведомлений задайте токен в secrets или отключите этот cron."
+        )
         sys.exit(1)
 
     chat_ids = get_signal_chat_ids()

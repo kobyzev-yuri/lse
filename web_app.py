@@ -5,6 +5,7 @@ FastAPI: портфель, отчёты 5m, база знаний, график�
 
 import asyncio
 import io
+import logging
 import math
 import os
 import json
@@ -55,6 +56,7 @@ from report_generator import (
 )
 
 app = FastAPI(title="LSE Trading System", version="1.0.0")
+logger = logging.getLogger(__name__)
 
 
 @app.exception_handler(Exception)
@@ -90,7 +92,10 @@ def _to_jsonable(obj: Any) -> Any:
         return None
     if isinstance(obj, Decimal):
         try:
-            return float(obj)
+            v = float(obj)
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                return None
+            return v
         except (ValueError, TypeError, OverflowError):
             return None
     # numpy/pandas скаляры (bool_, int64, float64 и т.д.) имеют .item()
@@ -105,6 +110,8 @@ def _to_jsonable(obj: Any) -> Any:
     if isinstance(obj, (bool,)):
         return bool(obj)
     if isinstance(obj, (int, float)):
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
         return obj
     if isinstance(obj, np.ndarray):
         return [_to_jsonable(x) for x in obj.tolist()]
@@ -253,119 +260,14 @@ def _format_ts(ts) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """Главная страница с дашбордом"""
+    """Главная: кэш portfolio_state + ссылки на портфельную игру (карточки/графики) и отчёты по сделкам."""
     with engine.connect() as conn:
         cash_result = conn.execute(
             text("SELECT quantity FROM portfolio_state WHERE ticker = 'CASH'")
         ).fetchone()
         cash = float(cash_result[0]) if cash_result else 0.0
 
-        # Открытые позиции: из trade_history (как /pending), чтобы отображались позиции game_5m и др.
-        report_engine = get_engine()
-        all_trades = load_trade_history(report_engine)
-        open_positions_list = compute_open_positions(all_trades)
-        positions = []
-        for op in open_positions_list:
-            ticker = op.ticker
-            quantity = float(op.quantity)
-            entry_price = float(op.entry_price)
-            price_row = conn.execute(
-                text("SELECT close FROM quotes WHERE ticker = :ticker ORDER BY date DESC LIMIT 1"),
-                {"ticker": ticker}
-            ).fetchone()
-            current_price = float(price_row[0]) if price_row and price_row[0] is not None else entry_price
-            cost_basis = quantity * entry_price
-            current_value = quantity * current_price
-            pnl = current_value - cost_basis
-            pnl_pct = ((current_price / entry_price) - 1) * 100 if entry_price > 0 else 0.0
-            positions.append({
-                "ticker": ticker,
-                "quantity": quantity,
-                "avg_entry_price": entry_price,
-                "current_price": current_price,
-                "pnl": pnl,
-                "pnl_pct": pnl_pct,
-                "last_updated": _format_ts(op.entry_ts) if getattr(op, "entry_ts", None) else "—",
-            })
-
-        # Закрытые сделки — тот же источник, что и /closed: вся история, без фильтра по дате
-        trade_pnls = compute_closed_trade_pnls(all_trades)
-        def _safe_net_pnl(t):
-            v = getattr(t, "net_pnl", None)
-            if v is None or (isinstance(v, float) and math.isnan(v)):
-                return 0.0
-            return float(v)
-        total_pnl = sum(_safe_net_pnl(t) for t in trade_pnls) if trade_pnls else 0.0
-        win_rate = (sum(1 for t in trade_pnls if _safe_net_pnl(t) > 0) / len(trade_pnls) * 100) if trade_pnls else 0.0
-
-        # Таблица закрытых позиций — те же лимиты и колонки, что /closed в Telegram
-        closed_rep_def, closed_rep_max = get_closed_positions_report_limits()
-        _, closed_web_max = get_web_closed_positions_limits()
-        closed_positions = []
-        if trade_pnls:
-            def _sort_key(x):
-                try:
-                    ts = getattr(x, "ts", None)
-                    if ts is None or (hasattr(pd, "isna") and pd.isna(ts)):
-                        return pd.Timestamp.min
-                    return pd.Timestamp(ts)
-                except Exception:
-                    return pd.Timestamp.min
-            try:
-                sorted_pnls = sorted(trade_pnls, key=_sort_key, reverse=True)[:closed_rep_max]
-            except Exception:
-                sorted_pnls = list(trade_pnls)[:closed_rep_max]
-            for t in sorted_pnls[:closed_rep_def]:
-                try:
-                    pts = t.exit_price - t.entry_price
-                    pips = round(pts * 10000) if "=X" in t.ticker or "USD" in t.ticker or "EUR" in t.ticker else round(pts, 2)
-                    open_msk = _closed_ts_msk(getattr(t, "entry_ts", None))
-                    close_msk = _closed_ts_msk(getattr(t, "ts", None))
-                    direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
-                    raw = getattr(t, "signal_type", None)
-                    if raw is None or (hasattr(pd, "isna") and pd.isna(raw)) or str(raw).strip() == "":
-                        exit_reason = "—"
-                    else:
-                        exit_reason = str(raw).strip()
-                    profit_usd = _safe_net_pnl(t)
-                    ep = float(t.entry_price)
-                    xp = float(t.exit_price)
-                    pl_pct = ((xp / ep) - 1.0) * 100.0 if ep > 0 else 0.0
-                    closed_positions.append({
-                        "instrument": t.ticker,
-                        "direction": direction,
-                        "open": ep,
-                        "close": xp,
-                        "profit_pips": pips,
-                        "profit_usd": profit_usd,
-                        "pl_pct": pl_pct,
-                        "units": int(t.quantity),
-                        "entry_strategy": getattr(t, "entry_strategy", None) or "—",
-                        "exit_strategy": getattr(t, "exit_strategy", None) or "—",
-                        "open_msk": open_msk,
-                        "close_msk": close_msk,
-                        "exit_reason": exit_reason,
-                        "exit_reason_caption": _exit_reason_caption(exit_reason if exit_reason != "—" else None),
-                        "trade_human_note": human_trade_explanation_from_exit_context(
-                            getattr(t, "exit_context_json", None)
-                        ),
-                    })
-                except Exception as e:
-                    import logging
-                    logging.getLogger(__name__).warning("Пропуск строки закрытой позиции: %s", e)
-
-    return HTMLResponse(render_template("index.html", {
-        "request": request,
-        "closed_positions": closed_positions,
-        "closed_report_default": closed_rep_def,
-        "closed_report_max": closed_rep_max,
-        "closed_report_web_max": closed_web_max,
-        "cash": cash,
-        "positions": positions,
-        "total_pnl": total_pnl,
-        "win_rate": win_rate,
-        "total_trades": len(trade_pnls) if trade_pnls else 0
-    }))
+    return HTMLResponse(render_template("index.html", {"request": request, "cash": cash}))
 
 
 @app.get("/api/price/{ticker}", response_class=JSONResponse)
@@ -1378,6 +1280,14 @@ def _make_json_safe(obj: Any) -> Any:
     """Рекурсивно заменяет nan/inf и несериализуемые значения на None. Результат безопасен для json.dumps."""
     if obj is None:
         return None
+    if isinstance(obj, Decimal):
+        try:
+            v = float(obj)
+            if isinstance(v, float) and (v != v or v == float("inf") or v == float("-inf")):
+                return None
+            return v
+        except (ValueError, TypeError, OverflowError):
+            return None
     if isinstance(obj, dict):
         return {k: _make_json_safe(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -1407,6 +1317,11 @@ def _make_json_safe(obj: Any) -> Any:
     if isinstance(obj, (int, str)):
         return obj
     return str(obj)
+
+
+def _api_json_body(obj: Any) -> Any:
+    """Ответы API под JSONResponse: numpy/Decimal/nan + защита от остаточных типов (иначе 500)."""
+    return _make_json_safe(_to_jsonable(obj))
 
 
 @app.get("/api/trades", response_class=JSONResponse)
@@ -1792,8 +1707,14 @@ async def get_portfolio_cards(corr_days: int = 30):
     try:
         payload = await asyncio.to_thread(_compute_portfolio_cards_sync, corr_days)
     except Exception as e:
+        logger.exception("GET /api/portfolio/cards corr_days=%s: %s", corr_days, e)
         raise HTTPException(status_code=500, detail=f"Ошибка карточек портфеля: {e!s}")
-    return _to_jsonable(payload)
+    try:
+        body = _api_json_body(payload)
+        return JSONResponse(content=body)
+    except Exception as e:
+        logger.exception("GET /api/portfolio/cards JSON serialize: %s", e)
+        raise HTTPException(status_code=500, detail=f"Сериализация ответа: {e!s}")
 
 
 @app.get("/api/portfolio/card/{ticker}/llm", response_class=JSONResponse)
@@ -1806,7 +1727,7 @@ async def get_portfolio_card_llm(ticker: str, corr_days: int = 30):
         raise HTTPException(status_code=500, detail=f"Ошибка LLM портфеля: {e!s}")
     if result.get("_error"):
         raise HTTPException(status_code=int(result.get("_status", 404)), detail=result.get("_error", "Нет данных"))
-    return _to_jsonable(result)
+    return JSONResponse(content=_api_json_body(result))
 
 
 @app.get("/api/portfolio/chart/{ticker}", response_class=JSONResponse)
@@ -1819,7 +1740,7 @@ async def get_portfolio_chart(ticker: str, days: int = 180):
         raise HTTPException(status_code=500, detail=f"Ошибка графика: {e!s}")
     if not data.get("bars"):
         raise HTTPException(status_code=404, detail=f"Нет дневных котировок в quotes для {t}")
-    return _to_jsonable(data)
+    return JSONResponse(content=_api_json_body(data))
 
 
 @app.get("/portfolio/cards", response_class=HTMLResponse)
