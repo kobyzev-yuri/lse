@@ -1502,7 +1502,7 @@ async def get_game5m_cards(days: int = 5):
 
 
 def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
-    """Карточки портфельной игры: AnalystAgent без LLM, дневные quotes + стратегия (как trading_cycle)."""
+    """Карточки портфельной игры: дневные quotes + стратегия + LLM при USE_LLM (как ExecutionAgent / trading_cycle)."""
     from services.portfolio_card import (
         get_portfolio_cluster_context,
         portfolio_card_payload,
@@ -1511,7 +1511,7 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
 
     ctx, trade = get_portfolio_cluster_context(days=min(max(5, corr_days), 120))
     take_fb = load_fallback_portfolio_take_pct()
-    agent = AnalystAgent(use_llm=False)
+    agent = AnalystAgent(use_llm=get_use_llm_for_analyst(engine=engine))
     cards: List[Dict[str, Any]] = []
     for t in trade:
         try:

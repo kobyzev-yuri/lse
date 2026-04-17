@@ -241,14 +241,17 @@ def _build_prompt_entry_html(payload: Dict[str, Any]) -> str:
     llm_analysis = payload.get("llm_analysis")
     decision = payload.get("decision")
     technical_signal = payload.get("technical_signal")
+    base_decision = payload.get("base_decision")
 
     parts: List[str] = []
     if note:
         parts.append(f'<p class="note">{esc(note)}</p>')
-    if decision is not None or technical_signal is not None:
+    if decision is not None or technical_signal is not None or base_decision is not None:
         meta_parts = []
         if decision is not None:
             meta_parts.append(f"Решение: {esc(str(decision))}")
+        if base_decision is not None and str(base_decision) != str(decision):
+            meta_parts.append(f"Сигнал стратегии (до LLM): {esc(str(base_decision))}")
         if technical_signal is not None:
             meta_parts.append(f"Тех. сигнал: {esc(str(technical_signal))}")
         parts.append(f'<p class="meta">{"; ".join(meta_parts)}</p>')
@@ -4547,6 +4550,7 @@ class LSETelegramBot:
                     "llm_response": decision_result.get("llm_response_raw"),
                     "llm_analysis": decision_result.get("llm_analysis"),
                     "decision": decision_result.get("decision"),
+                    "base_decision": decision_result.get("base_decision"),
                     "technical_signal": decision_result.get("technical_signal"),
                     "kb_news_signal_plain": kb_sig,
                 }

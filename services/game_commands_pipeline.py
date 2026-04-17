@@ -61,17 +61,19 @@ def portfolio_cluster_tickers_and_corr() -> Tuple[List[str], List[str], Optional
 
 
 def portfolio_single_cluster_context(ticker: str) -> Optional[Dict[str, Any]]:
-    """Кластер для одного тикера портфеля (как в /recommend <ticker>)."""
-    from services.ticker_groups import get_tickers_for_portfolio_game
+    """Кластер для одного тикера портфеля (как get_portfolio_cluster_context: только торгуемые, если нет индикаторов)."""
+    from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_indicator_only
     from services.cluster_recommend import get_correlation_matrix
 
-    cluster_tickers = list(get_tickers_for_portfolio_game() or [])
-    if ticker not in cluster_tickers:
-        cluster_tickers = [ticker] + cluster_tickers
-    if len(cluster_tickers) >= 2:
-        corr = get_correlation_matrix(cluster_tickers, days=30)
+    full_list = list(get_tickers_for_portfolio_game() or [])
+    indicator_only = set(get_tickers_indicator_only())
+    list_for_corr = full_list if indicator_only else [t for t in full_list if t not in indicator_only]
+    if ticker not in list_for_corr:
+        list_for_corr = [ticker] + list_for_corr
+    if len(list_for_corr) >= 2:
+        corr = get_correlation_matrix(list_for_corr, days=30)
         if corr:
-            return {"tickers": cluster_tickers, "correlation": corr, "other_signals": {}}
+            return {"tickers": list_for_corr, "correlation": corr, "other_signals": {}}
     return None
 
 
