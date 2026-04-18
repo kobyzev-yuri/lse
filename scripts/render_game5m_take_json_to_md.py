@@ -6,6 +6,9 @@
   python scripts/render_game5m_take_json_to_md.py logs/game5m_sim30m_kb.json -o report_sim30m.md
 
 Без --out — печать в stdout.
+
+  Только «шеф-таблица» (20 сделок, русские заголовки):
+  python scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json --mode chef -o docs/GAME5M_20_TRADES_TABLE.md
 """
 
 from __future__ import annotations
@@ -35,6 +38,73 @@ def _replay_cells(prefix: str, r: Optional[dict[str, Any]]) -> list[str]:
         _cell(r.get("take_pct_effective")),
         _cell(r.get("log_ret")),
     ]
+
+
+def _take_price_diff_usd(r5: dict[str, Any], r3: dict[str, Any]) -> Optional[float]:
+    try:
+        a = float(r5.get("exit_fill_price"))
+        b = float(r3.get("exit_fill_price"))
+        return round(a - b, 4)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pairs_both_replays(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = [
+        row
+        for row in rows
+        if isinstance(row.get("replay_5m"), dict) and isinstance(row.get("replay_30m"), dict)
+    ]
+    def _bid(r: dict[str, Any]) -> int:
+        try:
+            return int(r.get("buy_id"))
+        except (TypeError, ValueError):
+            return 0
+
+    out.sort(key=lambda r: (str(r.get("ticker") or ""), _bid(r)))
+    return out
+
+
+def render_chef_pairs_table_md(
+    pairs: list[dict[str, Any]],
+    *,
+    heading: str,
+    intro: str,
+) -> str:
+    """
+    Одна строка = один BUY, по которому посчитаны оба реплея выхода.
+    Заголовки колонок на русском (для отчёта руководству).
+    """
+    lines: list[str] = []
+    lines.append(f"{heading}\n\n")
+    lines.append(intro + "\n\n")
+    hdr = (
+        "| Тикер | № BUY в БД | Дата и время входа | Цена входа (факт BUY) | "
+        "№ SELL в БД (если уже был) | "
+        "Дата и время тейка (реплей **5m**) | Цена тейка (реплей 5m) | "
+        "Дата и время тейка (реплей **30m**) | Цена тейка (реплей 30m) | "
+        "Разница цен тейка (5m−30m), USD | Разница log_ret (5m−30m) | "
+        "Тип выхода 5m | Тип выхода 30m |\n"
+    )
+    sep = "|" + "|".join(["---"] * 12) + "|\n"
+    lines.append(hdr + sep)
+    for row in pairs:
+        r5 = row["replay_5m"]
+        r3 = row["replay_30m"]
+        act = row.get("actual_sell")
+        act_d = act if isinstance(act, dict) else None
+        pdiff = _take_price_diff_usd(r5, r3)
+        lines.append(
+            f"| {_cell(row.get('ticker'))} | {_cell(row.get('buy_id'))} | {_cell(row.get('entry_ts'))} | "
+            f"{_cell(row.get('entry_price'))} | "
+            f"{_cell(act_d.get('id') if act_d else None)} | "
+            f"{_cell(r5.get('bar_end_et'))} | {_cell(r5.get('exit_fill_price'))} | "
+            f"{_cell(r3.get('bar_end_et'))} | {_cell(r3.get('exit_fill_price'))} | "
+            f"{_cell(pdiff)} | {_cell(row.get('log_ret_diff_5m_minus_30m'))} | "
+            f"{_cell(r5.get('signal_type'))} | {_cell(r3.get('signal_type'))} |\n"
+        )
+    lines.append("")
+    return "".join(lines)
 
 
 def _count_signals(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
@@ -110,11 +180,7 @@ def render_md(payload: dict[str, Any]) -> str:
 
         lines.append("\n*Диагностика загрузки баров:* в JSON у каждой строки есть `bars_5m_loaded` / `bars_30m_loaded`.\n")
 
-        pairs = [
-            row
-            for row in rows
-            if isinstance(row.get("replay_5m"), dict) and isinstance(row.get("replay_30m"), dict)
-        ]
+        pairs = _pairs_both_replays(rows)
         if pairs:
             lines.append("### 1b. Одна и та же позиция — разные стратегии выхода (реплей 5m, реплей 30m, факт из БД)\n")
             lines.append(
@@ -157,6 +223,19 @@ def render_md(payload: dict[str, Any]) -> str:
             lines.append(f"| Реплей **30m** | Офлайн по барам 30m | `{c3}` |\n")
             lines.append(f"| **Факт** `SELL` | Запись в БД после `BUY` | `{ca}` |\n")
             lines.append("")
+
+            lines.append(
+                render_chef_pairs_table_md(
+                    pairs,
+                    heading="### 1d. Полная таблица сделок с двумя реплеями тейка (для руководства)",
+                    intro=(
+                        "Здесь только строки, где **оба** реплея нашли выход (это **20** сделок при типичном недельном прогоне). "
+                        "**Цена входа** — из фактического `BUY` в БД (одна на оба реплея). **Цены тейка** — модельные цены выхода из реплея "
+                        "(для `TAKE_PROFIT` по правилам игры используется уровень по **high** бара). "
+                        "**№ SELL** — идентификатор следующей записи продажи в `trade_history`, если она уже есть; даты тейка в реплее с ней не обязаны совпадать."
+                    ),
+                )
+            )
 
     sim = payload.get("full_30m_strategy_sim")
     if sim and isinstance(sim, dict):
@@ -223,6 +302,29 @@ def render_md(payload: dict[str, Any]) -> str:
     return "".join(lines)
 
 
+def render_chef_only_md(payload: dict[str, Any]) -> str:
+    """Только русская таблица §1d + краткий заголовок (для вставки в отчёт шефу)."""
+    rows = payload.get("rows") or []
+    pairs = _pairs_both_replays(rows)
+    lines: list[str] = []
+    lines.append("# GAME_5M: таблица сделок — тейк по реплею 5m и 30m при одном входе\n\n")
+    lines.append(f"- **Источник JSON:** `generated_at` = `{payload.get('generated_at', '—')}`\n")
+    lines.append(f"- **Строк в таблице:** **{len(pairs)}** (только `BUY`, у которых есть и `replay_5m`, и `replay_30m`).\n\n")
+    if not pairs:
+        lines.append("*Нет ни одной строки с обоими реплеями.* Проверьте JSON или запускайте бэктест без `--sim-30m-only`.\n")
+        return "".join(lines)
+    lines.append(
+        render_chef_pairs_table_md(
+            pairs,
+            heading="## Полная таблица",
+            intro=(
+                "Одна строка = один фактический `BUY`. Колонки — то, что обычно просят в сводке по сделкам."
+            ),
+        )
+    )
+    return "".join(lines)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="JSON → Markdown для game5m_take_5m_vs_30m")
     p.add_argument(
@@ -232,6 +334,12 @@ def main() -> None:
         help="Путь к JSON (по умолчанию logs/game5m_take_5m_vs_30m.json)",
     )
     p.add_argument("--out", "-o", type=str, default="", help="Файл .md; иначе stdout")
+    p.add_argument(
+        "--mode",
+        choices=("full", "chef"),
+        default="full",
+        help="full — весь отчёт; chef — только русская таблица 20 сделок (5m/30m тейк при одном входе)",
+    )
     args = p.parse_args()
 
     path = Path(args.json_path)
@@ -240,7 +348,7 @@ def main() -> None:
         sys.exit(1)
 
     payload = json.loads(path.read_text(encoding="utf-8"))
-    md = render_md(payload)
+    md = render_chef_only_md(payload) if args.mode == "chef" else render_md(payload)
 
     if args.out.strip():
         out = Path(args.out.strip())

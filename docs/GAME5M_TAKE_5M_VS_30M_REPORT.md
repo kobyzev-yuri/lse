@@ -29,6 +29,8 @@ docker compose exec lse python scripts/backtest_game5m_take_5m_vs_30m.py \
 cd /path/to/lse
 python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json -o docs/local_game5m_take_report.md
 python3 scripts/render_game5m_take_json_to_md.py logs/game5m_sim30m_kb.json -o docs/local_game5m_sim30m_tables.md
+# только русская таблица «20 сделок» (тикер, buy_id, даты/цены тейка 5m и 30m, разница цен):
+python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json --mode chef -o docs/GAME5M_20_TRADES_5M_30M_TABLE.md
 # или только в терминал:
 python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json
 ```
@@ -38,7 +40,10 @@ python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json
 - **§1** — широкая таблица по каждому `BUY` (реплей 5m и 30m + факт);
 - **§1b** — одна строка на позицию: **три «стратегии выхода»** (реплей 5m, реплей 30m, факт `SELL`), с сигналом, временем, fill, log_ret и `diff`;
 - **§1c** — сводка **числа выходов по `signal_type`** для реплея 5m, реплея 30m и факта;
+- **§1d** — **полная** таблица на русском: только строки, где есть **оба** реплея (обычно **20** сделок): тикер, `buy_id`, дата/цена входа, `id` фактического SELL (если есть), даты/цены тейка 5m и 30m, **разница цен** тейка в USD, разница log_ret, типы выхода;
 - **§2** — сводная таблица всех сделок автономной 30m и разбивка по тикерам (в т.ч. колонка `kb_in_sim`).
+
+Тот же блок **§1d** без остального отчёта: флаг **`--mode chef`** у `render_game5m_take_json_to_md.py`.
 
 ---
 
