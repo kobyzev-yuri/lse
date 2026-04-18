@@ -5,6 +5,8 @@
 пустые/отсутствующие в LSE заполняются из nyse/config.env (например MARKETAUX_API_KEY).
 Опционально перекрывает значениями из config.secrets.env (или путь в LSE_CONFIG_SECRETS /
 CONFIG_SECRETS_FILE): удобно держать API-ключи и DATABASE_URL отдельно от основного конфига.
+Затем опционально config.security.env (LSE_CONFIG_SECURITY / CONFIG_SECURITY_FILE) — последний
+среди файлов приоритет (после secrets); кэш load_config учитывает его mtime.
 Порядок приоритета для get_config_value: переменные окружения процесса, затем объединённый dict файлов.
 Если файла нет (например Cloud Run) — возвращает пустой dict, значения берутся из переменных окружения.
 """
@@ -16,6 +18,68 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
+
+# Кэш полного merge load_config(): при тысячах вызовов get_config_value() в реплее
+# повторное чтение огромного config.env неприемлемо. Инвалидация по mtime файлов
+# (основной config, NYSE overlay, secrets, security) + clear_load_config_cache() после записи config.env.
+_LOAD_CONFIG_CACHE: Optional[tuple[tuple[Any, ...], Dict[str, str]]] = None
+
+
+def clear_load_config_cache() -> None:
+    """Сброс кэша load_config (после ручного редактирования файлов или в тестах)."""
+    global _LOAD_CONFIG_CACHE
+    _LOAD_CONFIG_CACHE = None
+
+
+def _stat_mtime_ns(path: Path) -> Optional[int]:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _load_config_fingerprint(
+    *,
+    primary: Optional[Path],
+    primary_kind: str,
+) -> tuple[Any, ...]:
+    """
+    primary_kind: none | missing | dir | file
+    primary: путь к основному config (если есть); для missing/dir — тот же путь для стабильного ключа.
+    """
+    parts: list[Any] = []
+    if primary_kind == "file" and primary is not None:
+        parts.append(("primary", str(primary.resolve()), _stat_mtime_ns(primary)))
+    elif primary_kind == "dir" and primary is not None:
+        parts.append(("primary_dir", str(primary.resolve()), _stat_mtime_ns(primary)))
+    elif primary_kind == "missing" and primary is not None:
+        parts.append(("primary_missing", str(primary.resolve())))
+    else:
+        parts.append(("primary_none",))
+
+    raw_nyse = (os.environ.get("NYSE_CONFIG_PATH") or "").strip()
+    parts.append(("NYSE_CONFIG_PATH", raw_nyse))
+    if raw_nyse:
+        np = Path(raw_nyse).expanduser()
+        if np.is_file():
+            parts.append(("nyse_file", str(np.resolve()), _stat_mtime_ns(np)))
+        else:
+            parts.append(("nyse_notfile", str(np)))
+
+    sec = _secrets_overlay_path()
+    if sec and sec.is_file():
+        parts.append(("secrets", str(sec.resolve()), _stat_mtime_ns(sec)))
+    else:
+        parts.append(("secrets_none",))
+
+    secu = _security_overlay_path()
+    if secu and secu.is_file():
+        parts.append(("security", str(secu.resolve()), _stat_mtime_ns(secu)))
+    else:
+        parts.append(("security_none",))
+
+    return tuple(parts)
+
 
 # Секреты и чувствительные значения: не показывать/не сохранять через веб /parameters.
 # Список редактируемых ключей берётся из config.env.example (все незакомментированные KEY=value), кроме этого набора.
@@ -189,6 +253,7 @@ def update_config_key(key: str, value: str) -> bool:
     try:
         with open(path, "w", encoding="utf-8") as f:
             f.writelines(lines)
+        clear_load_config_cache()
         return True
     except OSError as e:
         logger.warning("Не удалось записать config.env: %s", e)
@@ -244,6 +309,33 @@ def _merge_config_secrets_overlay(config: Dict[str, str]) -> Dict[str, str]:
     return config
 
 
+def _security_overlay_path() -> Optional[Path]:
+    """Опциональный второй overlay: путь из env или ./config.security.env рядом с config_loader."""
+    raw = (os.environ.get("LSE_CONFIG_SECURITY") or os.environ.get("CONFIG_SECURITY_FILE") or "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        return p if p.is_file() else None
+    default = Path(__file__).resolve().parent / "config.security.env"
+    return default if default.is_file() else None
+
+
+def _merge_config_security_overlay(config: Dict[str, str]) -> Dict[str, str]:
+    """
+    Непустые ключи из security-файла перекрывают всё, что уже в config (в т.ч. secrets).
+    Пустые значения игнорируются.
+    """
+    path = _security_overlay_path()
+    if not path:
+        return config
+    overlay = _parse_env_file(path)
+    if not overlay:
+        return config
+    for k, v in overlay.items():
+        if v:
+            config[k] = v
+    return config
+
+
 def _merge_nyse_config_overlay(config: Dict[str, str]) -> Dict[str, str]:
     """
     Подмешать nyse/config.env по NYSE_CONFIG_PATH: только ключи, которых нет в LSE или они пустые.
@@ -277,8 +369,16 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
 
     Returns:
         dict с параметрами конфигурации. Если файл не найден — пустой dict (для Cloud Run: только env).
+
+    Результат кэшируется по mtime основного файла, NYSE overlay, secrets и security; после записи через
+    update_config_key() кэш сбрасывается. os.getenv в get_config_value по-прежнему перекрывает файл.
     """
+    global _LOAD_CONFIG_CACHE
+
     config: Dict[str, str] = {}
+    primary_path: Optional[Path] = None
+    primary_kind = "none"
+
     if config_file is None:
         local_config = Path(__file__).parent / "config.env"
         if local_config.exists():
@@ -292,8 +392,10 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
 
     if config_file:
         config_path = Path(config_file)
+        primary_path = config_path
         if not config_path.exists():
             logger.debug("config.env не найден: %s", config_path)
+            primary_kind = "missing"
         elif config_path.is_dir():
             # Docker: если на хосте не было файла, bind-mount мог создать каталог «config.env» — open() падал бы с IsADirectoryError.
             logger.error(
@@ -301,19 +403,31 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
                 "создайте файл config.env (см. config.env.example). Иначе конфиг только из переменных окружения.",
                 config_path,
             )
+            primary_kind = "dir"
         else:
-            with open(config_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, value = line.split("=", 1)
-                        config[key.strip()] = value.strip()
+            primary_kind = "file"
+
+    fp = _load_config_fingerprint(primary=primary_path, primary_kind=primary_kind)
+    if _LOAD_CONFIG_CACHE is not None and _LOAD_CONFIG_CACHE[0] == fp:
+        return dict(_LOAD_CONFIG_CACHE[1])
+
+    if primary_kind == "file" and primary_path is not None:
+        with open(primary_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    config[key.strip()] = value.strip()
 
     if not config:
         logger.debug("Базовый config.env не загружен или пуст — возможен только env и NYSE_CONFIG_PATH")
 
     merged = _merge_nyse_config_overlay(config)
-    return _merge_config_secrets_overlay(merged)
+    with_secrets = _merge_config_secrets_overlay(merged)
+    final = _merge_config_security_overlay(with_secrets)
+    snapshot = dict(final)
+    _LOAD_CONFIG_CACHE = (fp, snapshot)
+    return dict(snapshot)
 
 
 def get_database_url(config: Optional[Dict[str, str]] = None) -> str:

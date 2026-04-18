@@ -131,7 +131,7 @@ def main() -> int:
         action="store_true",
         help="Для mode=json: требовать replay_5m и replay_30m оба null (узкий фильтр)",
     )
-    p.add_argument("--require-sag", action="store_true", help="Требовать провисание по close (диагност §7)")
+    p.add_argument("--require-sag", action="store_true", help="Требовать провисание по close (диагност, раздел 7)")
     p.add_argument("--skip-sag", action="store_true", help="Явно отключить фильтр провисания")
     p.add_argument("--hanger-days", type=int, default=6, help="Календарных дней окна для диагноста/свипа")
     p.add_argument("--sag-epsilon-log", type=float, default=0.0, help="Порог log(close/entry) для провисания")
@@ -235,6 +235,24 @@ def main() -> int:
             out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"JSON: {out.resolve()}")
         return 0
+    except KeyboardInterrupt as e:
+        tb = traceback.format_exc()
+        print(tb, file=sys.stderr)
+        if json_out_arg:
+            out = Path(json_out_arg)
+            if not out.is_absolute():
+                out = project_root / out
+            try:
+                _write_error_json(
+                    out,
+                    err_type="KeyboardInterrupt",
+                    message=str(e) or "Interrupted",
+                    tb=tb,
+                )
+                print(f"Прерывание записано в JSON: {out.resolve()}", file=sys.stderr)
+            except OSError as w:
+                print(f"Не удалось записать error JSON: {w}", file=sys.stderr)
+        raise
     except Exception as e:
         tb = traceback.format_exc()
         print(tb, file=sys.stderr)
