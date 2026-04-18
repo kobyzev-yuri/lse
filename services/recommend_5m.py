@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -160,6 +160,8 @@ MAX_DAYS_30M = 60
 RSI_PERIOD_5M = 14
 # Баров в «2 часа» для импульса
 BARS_2H = 24
+# То же окно ~2 ч на 30m-сетке (сверка / эмуляция GAME_5M на 30m)
+BARS_2H_30M = 4
 
 # Регулярная сессия US (NYSE/NASDAQ) в ET
 US_SESSION_START = (9, 30)  # 9:30
@@ -671,6 +673,335 @@ def compute_rsi_5m(closes: pd.Series, period: int = RSI_PERIOD_5M) -> Optional[f
     return compute_rsi_from_closes(vals, period=period)
 
 
+def compute_30m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Технические признаки по 30m OHLC (те же ключи, что у compute_5m_features, для общих правил GAME_5M).
+    Импульс «2ч» = 4×30m; окно RTH-сессии — до 4 баров 30m назад; ATR/волатильность по 30m ряду.
+    """
+    if df is None or df.empty or "Close" not in df.columns:
+        return None
+    df = df.sort_values("datetime").reset_index(drop=True)
+    closes = df["Close"].astype(float)
+    high_5d = float(df["High"].max())
+    low_5d = float(df["Low"].min())
+    price = float(closes.iloc[-1])
+    last_bar_high = float(df["High"].iloc[-1])
+    last_bar_low = float(df["Low"].iloc[-1])
+    n_tail = min(6, len(df))
+    recent_bars_high_max = float(df["High"].iloc[-n_tail:].max()) if n_tail else last_bar_high
+    recent_bars_low_min = float(df["Low"].iloc[-n_tail:].min()) if n_tail else last_bar_low
+
+    recent_bars_high_ts = None
+    recent_bars_low_ts = None
+    try:
+        tail = df.iloc[-n_tail:]
+        hi_idx = int(tail["High"].astype(float).idxmax())
+        lo_idx = int(tail["Low"].astype(float).idxmin())
+        dt_hi = df.loc[hi_idx, "datetime"]
+        dt_lo = df.loc[lo_idx, "datetime"]
+        dts_hi = pd.to_datetime(dt_hi)
+        dts_lo = pd.to_datetime(dt_lo)
+        if dts_hi.tzinfo is None:
+            dts_hi = dts_hi.tz_localize("America/New_York", ambiguous="infer")
+        else:
+            dts_hi = dts_hi.tz_convert("America/New_York")
+        if dts_lo.tzinfo is None:
+            dts_lo = dts_lo.tz_localize("America/New_York", ambiguous="infer")
+        else:
+            dts_lo = dts_lo.tz_convert("America/New_York")
+        recent_bars_high_ts = dts_hi.isoformat()
+        recent_bars_low_ts = dts_lo.isoformat()
+    except Exception:
+        pass
+
+    session_high = high_5d
+    session_high_ts = None
+    try:
+        dts = pd.to_datetime(df["datetime"])
+        last_date = dts.max().date()
+        session_mask = dts.dt.date == last_date
+        session_high_val = float(df.loc[session_mask, "High"].max())
+        try:
+            sh_idx = int(df.loc[session_mask, "High"].astype(float).idxmax())
+            dt_sh = df.loc[sh_idx, "datetime"]
+            dts_sh = pd.to_datetime(dt_sh)
+            if dts_sh.tzinfo is None:
+                dts_sh = dts_sh.tz_localize("America/New_York", ambiguous="infer")
+            else:
+                dts_sh = dts_sh.tz_convert("America/New_York")
+            session_high_ts = dts_sh.isoformat()
+        except Exception:
+            session_high_ts = None
+    except Exception:
+        session_high_val = high_5d
+    if session_high_val > 0 and price < session_high_val:
+        session_high = session_high_val
+
+    curvature_5m_pct = None
+    if len(closes) >= 3 and price > 0:
+        d1 = float(closes.iloc[-1] - closes.iloc[-2])
+        d0 = float(closes.iloc[-2] - closes.iloc[-3])
+        curvature_5m_pct = (d1 - d0) / price * 100.0
+
+    possible_bounce_to_high_pct = None
+    estimated_bounce_pct = None
+    if session_high > 0 and price > 0 and session_high >= price:
+        possible_bounce_to_high_pct = (session_high - price) / price * 100.0
+    if session_high > 0 and recent_bars_low_min > 0 and price > 0 and curvature_5m_pct is not None and curvature_5m_pct > 0:
+        estimated_bounce_pct = 0.5 * (session_high - recent_bars_low_min) / price * 100.0
+
+    log_ret = _log_returns(closes)
+    volatility_5m_pct = float(log_ret.std() * 100) if len(log_ret) > 1 else 0.0
+    rsi_5m = compute_rsi_5m(closes, period=RSI_PERIOD_5M)
+
+    bar_minutes = 30
+    n = min(BARS_2H_30M, len(closes) - 1)
+    momentum_2h_pct = 0.0
+    momentum_window_min = 0
+    if n >= 1 and len(closes) >= n + 1:
+        price_2h_ago = float(closes.iloc[-(n + 1)])
+        if price_2h_ago > 0:
+            momentum_2h_pct = ((price / price_2h_ago) - 1.0) * 100.0
+        momentum_window_min = n * bar_minutes
+
+    momentum_rth_today_pct: Optional[float] = None
+    momentum_rth_today_window_min = 0
+    momentum_rth_today_bars = 0
+    try:
+        from datetime import time as dt_time
+
+        dts_et = pd.to_datetime(df["datetime"])
+        if dts_et.dt.tz is None:
+            try:
+                dts_et = dts_et.dt.tz_localize("America/New_York", ambiguous=True)
+            except Exception:
+                dts_et = dts_et.dt.tz_localize("UTC", ambiguous=True).dt.tz_convert("America/New_York")
+        else:
+            dts_et = dts_et.dt.tz_convert("America/New_York")
+        last_cal = dts_et.max().date()
+        t_start = dt_time(*US_SESSION_START)
+        t_end = dt_time(*US_SESSION_END)
+        rth_mask = (dts_et.dt.date == last_cal) & (dts_et.dt.time >= t_start) & (dts_et.dt.time <= t_end)
+        df_td = df.loc[rth_mask].sort_values("datetime")
+        closes_td = df_td["Close"].astype(float).reset_index(drop=True)
+        nt = len(closes_td)
+        if nt >= 2:
+            momentum_rth_today_bars = nt
+            n_sess = min(BARS_2H_30M, nt - 1)
+            if n_sess >= 1 and nt >= n_sess + 1:
+                p_open_ref = float(closes_td.iloc[-(n_sess + 1)])
+                p_now = float(closes_td.iloc[-1])
+                if p_open_ref > 0:
+                    momentum_rth_today_pct = ((p_now / p_open_ref) - 1.0) * 100.0
+                    momentum_rth_today_window_min = n_sess * bar_minutes
+    except Exception as e:
+        logger.debug("momentum_rth_today 30m %s: %s", ticker, e)
+
+    dt_min, dt_max = df["datetime"].min(), df["datetime"].max()
+    period_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}" if hasattr(dt_min, "strftime") else f"{dt_min} – {dt_max}"
+
+    pullback_from_high_pct = (session_high - price) / session_high * 100.0 if session_high > 0 and price < session_high else 0.0
+
+    atr_5m = None
+    if len(df) >= 2 and all(c in df.columns for c in ("High", "Low", "Close")):
+        high = df["High"].astype(float)
+        low = df["Low"].astype(float)
+        close = df["Close"].astype(float)
+        prev_close = close.shift(1)
+        tr = np.maximum(high - low, np.maximum((high - prev_close).abs(), (low - prev_close).abs()))
+        tail = tr.iloc[-14:] if len(tr) >= 14 else tr
+        mean_tr = tail.replace([np.inf, -np.inf], np.nan).dropna().mean()
+        if pd.notna(mean_tr) and mean_tr > 0 and price > 0:
+            atr_5m = round(float(mean_tr) / price * 100.0, 4)
+
+    volume_5m_last = None
+    volume_vs_avg_pct = None
+    if "Volume" in df.columns:
+        vol = df["Volume"].replace(0, np.nan).dropna()
+        if len(vol) > 0:
+            volume_5m_last = int(vol.iloc[-1])
+            tail_v = min(20, len(vol))
+            avg_vol = float(vol.iloc[-tail_v:].mean())
+            if avg_vol > 0 and volume_5m_last is not None:
+                volume_vs_avg_pct = round(volume_5m_last / avg_vol * 100.0, 2)
+
+    return {
+        "price": price,
+        "high_5d": high_5d,
+        "low_5d": low_5d,
+        "rsi_5m": rsi_5m,
+        "volatility_5m_pct": volatility_5m_pct,
+        "momentum_2h_pct": momentum_2h_pct,
+        "momentum_window_min": momentum_window_min,
+        "momentum_rth_today_pct": momentum_rth_today_pct,
+        "momentum_rth_today_window_min": momentum_rth_today_window_min,
+        "momentum_rth_today_bars": momentum_rth_today_bars,
+        "session_high": session_high,
+        "session_high_ts": session_high_ts,
+        "pullback_from_high_pct": pullback_from_high_pct,
+        "last_bar_high": last_bar_high,
+        "last_bar_low": last_bar_low,
+        "recent_bars_high_max": recent_bars_high_max,
+        "recent_bars_high_ts": recent_bars_high_ts,
+        "recent_bars_low_min": recent_bars_low_min,
+        "recent_bars_low_ts": recent_bars_low_ts,
+        "curvature_5m_pct": curvature_5m_pct,
+        "possible_bounce_to_high_pct": possible_bounce_to_high_pct,
+        "estimated_bounce_pct": estimated_bounce_pct,
+        "period_str": period_str,
+        "bars_count": len(df),
+        "atr_5m_pct": atr_5m,
+        "volume_5m_last": volume_5m_last,
+        "volume_vs_avg_pct": volume_vs_avg_pct,
+        "timeframe": "30m",
+    }
+
+
+def decide_game5m_technical(
+    *,
+    ticker: str,
+    features: Dict[str, Any],
+    closes: pd.Series,
+    th: Dict[str, Any],
+    rsi_prev_values: List[float],
+    decision_rule_params: Dict[str, Any],
+    min_session_bars: int,
+    premarket_intraday_momentum_pct: Optional[float],
+    early_use_premarket_mom: bool,
+) -> Tuple[str, List[str], Optional[str], bool]:
+    """
+    Техническое ядро BUY/HOLD/SELL GAME_5M (без KB, VIX, премаркет-гейта сессии, price_forecast).
+    min_session_bars — число баров **текущего** таймфрейма (5m в кроне; для 30m передать сконвертированный порог).
+    """
+    from config_loader import get_config_value as _gcv
+
+    vol_wait_min = float(th["volatility_wait_min"])
+    sell_confirm_bars = int(th["sell_confirm_bars"])
+    pm_mom_buy_min = float(th["premarket_momentum_buy_min"])
+    pm_mom_block_below = float(th["premarket_momentum_block_below"])
+    rsi_strong_buy_max = float(th["rsi_strong_buy_max"])
+    momentum_for_strong_buy_min = float(th["momentum_for_strong_buy_min"])
+    rsi_buy_max = float(th["rsi_buy_max"])
+    price_to_low5d_multiplier_max = float(th["price_to_low5d_multiplier_max"])
+    rsi_sell_min = float(th["rsi_sell_min"])
+    rsi_hold_overbought_min = float(th["rsi_hold_overbought_min"])
+    rth_momentum_buy_min = float(th["momentum_buy_min"])
+    rsi_for_momentum_buy_max = float(th["rsi_for_momentum_buy_max"])
+    volatility_warn_buy_min = float(th["volatility_warn_buy_min"])
+
+    allow_cross_day_mom_buy = (_gcv("GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY", "") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+    price = features["price"]
+    low_5d = features["low_5d"]
+    rsi_5m = features["rsi_5m"]
+    volatility_5m_pct = features["volatility_5m_pct"]
+    momentum_2h_pct = features["momentum_2h_pct"]
+    mom_rth_pct = features.get("momentum_rth_today_pct")
+    mom_rth_bars = int(features.get("momentum_rth_today_bars") or 0)
+
+    decision = "HOLD"
+    reasons: List[str] = []
+    technical_entry_branch: Optional[str] = None
+    entry_strong_buy_downgraded = False
+
+    if rsi_5m is not None:
+        if rsi_5m <= rsi_strong_buy_max and momentum_2h_pct >= momentum_for_strong_buy_min:
+            decision = "STRONG_BUY"
+            technical_entry_branch = "strong_buy_rsi"
+            reasons.append(f"RSI(5m)={rsi_5m:.1f} — перепроданность, отскок")
+        elif rsi_5m <= rsi_buy_max and price <= low_5d * price_to_low5d_multiplier_max:
+            decision = "BUY"
+            technical_entry_branch = "buy_5d_low"
+            reasons.append(f"RSI(5m)={rsi_5m:.1f}, цена у 5д минимума")
+        elif rsi_5m >= rsi_sell_min:
+            sell_confirmed = (
+                len(rsi_prev_values) >= sell_confirm_bars
+                and all(v >= rsi_sell_min for v in rsi_prev_values[:sell_confirm_bars])
+            )
+            if sell_confirmed:
+                decision = "SELL"
+                reasons.append(f"RSI(5m)={rsi_5m:.1f} и подтверждение {sell_confirm_bars} баров — перекупленность")
+            else:
+                reasons.append(f"RSI(5m)={rsi_5m:.1f} — перекупленность без подтверждения {sell_confirm_bars} баров, ждём")
+        elif rsi_5m >= rsi_hold_overbought_min:
+            if decision == "HOLD":
+                reasons.append(f"RSI(5m)={rsi_5m:.1f} — ближе к перекупленности, ждать")
+        elif (
+            mom_rth_pct is not None
+            and mom_rth_bars >= min_session_bars
+            and float(mom_rth_pct) > rth_momentum_buy_min
+            and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
+        ):
+            if decision == "HOLD":
+                wmin = int(features.get("momentum_rth_today_window_min") or 0)
+                decision = "BUY"
+                technical_entry_branch = "buy_rth_momentum"
+                reasons.append(
+                    f"импульс +{float(mom_rth_pct):.2f}% за текущую сессию RTH (~{wmin} мин), RSI не перекуплен"
+                )
+        elif (
+            early_use_premarket_mom
+            and mom_rth_bars < min_session_bars
+            and premarket_intraday_momentum_pct is not None
+            and float(premarket_intraday_momentum_pct) >= pm_mom_block_below
+            and float(premarket_intraday_momentum_pct) > pm_mom_buy_min
+            and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
+        ):
+            if decision == "HOLD":
+                decision = "BUY"
+                technical_entry_branch = "buy_premarket_momentum"
+                reasons.append(
+                    f"импульс премаркет +{float(premarket_intraday_momentum_pct):.2f}% "
+                    f"(1m до 9:30 ET; ранний RTH, баров сессии {mom_rth_bars} < {min_session_bars}), RSI не перекуплен"
+                )
+        elif (
+            allow_cross_day_mom_buy
+            and momentum_2h_pct > rth_momentum_buy_min
+            and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
+        ):
+            if decision == "HOLD":
+                decision = "BUY"
+                technical_entry_branch = "buy_cross_day_2h"
+                reasons.append(
+                    f"импульс +{momentum_2h_pct:.2f}% за окно до 2ч (кросс-дневной; GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY), RSI не перекуплен"
+                )
+
+    if volatility_5m_pct > volatility_warn_buy_min and decision in ("BUY", "STRONG_BUY"):
+        reasons.append(f"волатильность 5m высокая ({volatility_5m_pct:.2f}%) — предпочтительны лимитные ордера")
+    elif volatility_5m_pct > vol_wait_min:
+        if decision == "HOLD":
+            reasons.append(f"волатильность 5m {volatility_5m_pct:.2f}% > порога {vol_wait_min:.2f}% — выжидать")
+
+    atr_5m_pct = features.get("atr_5m_pct")
+    volume_vs_avg_pct = features.get("volume_vs_avg_pct")
+    _min_vol = _gcv("GAME_5M_MIN_VOLUME_VS_AVG_PCT", "").strip()
+    _max_atr = _gcv("GAME_5M_MAX_ATR_5M_PCT", "").strip()
+    decision_rule_params["cfg_min_volume_vs_avg_pct"] = _min_vol or None
+    decision_rule_params["cfg_max_atr_5m_pct"] = _max_atr or None
+    if _min_vol and volume_vs_avg_pct is not None and decision in ("BUY", "STRONG_BUY"):
+        try:
+            min_vol = float(_min_vol)
+            if volume_vs_avg_pct < min_vol:
+                decision = "HOLD"
+                reasons.append(f"объём {volume_vs_avg_pct:.0f}% от среднего < порога {min_vol:.0f}% — вход отложен")
+        except (ValueError, TypeError):
+            pass
+    if _max_atr and atr_5m_pct is not None and decision in ("BUY", "STRONG_BUY"):
+        try:
+            max_atr = float(_max_atr)
+            if atr_5m_pct > max_atr:
+                decision = "HOLD"
+                reasons.append(f"ATR 5m {atr_5m_pct:.2f}% > порога {max_atr}% — высокая волатильность, вход отложен")
+        except (ValueError, TypeError):
+            pass
+
+    return decision, reasons, technical_entry_branch, entry_strong_buy_downgraded
+
+
 # Минимум баров 1m премаркета для расчёта признаков (RSI 14 + импульс ~30 мин)
 PREMARKET_MIN_BARS = 14
 # Баров для «импульса» в премаркете (≈30 мин при 1m)
@@ -1126,17 +1457,12 @@ def get_decision_5m(
     period_str = features["period_str"]
 
     # Правила решения (агрессивные под интрадей)
-    decision = "HOLD"
-    reasons = []
-    technical_entry_branch: Optional[str] = None
-    entry_strong_buy_downgraded = False
     from config_loader import get_config_value as _gcv
+
     th = get_decision_5m_rule_thresholds()
-    vol_wait_min = float(th["volatility_wait_min"])
     sell_confirm_bars = int(th["sell_confirm_bars"])
     min_sess_bars = int(th["momentum_min_session_bars"])
-    pm_mom_buy_min = float(th["premarket_momentum_buy_min"])
-    pm_mom_block_below = float(th["premarket_momentum_block_below"])
+    vol_wait_min = float(th["volatility_wait_min"])
     rsi_strong_buy_max = float(th["rsi_strong_buy_max"])
     momentum_for_strong_buy_min = float(th["momentum_for_strong_buy_min"])
     rsi_buy_max = float(th["rsi_buy_max"])
@@ -1146,6 +1472,8 @@ def get_decision_5m(
     rth_momentum_buy_min = float(th["momentum_buy_min"])
     rsi_for_momentum_buy_max = float(th["rsi_for_momentum_buy_max"])
     volatility_warn_buy_min = float(th["volatility_warn_buy_min"])
+    pm_mom_buy_min = float(th["premarket_momentum_buy_min"])
+    pm_mom_block_below = float(th["premarket_momentum_block_below"])
     allow_cross_day_mom_buy = (_gcv("GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY", "") or "").strip().lower() in (
         "1",
         "true",
@@ -1156,7 +1484,6 @@ def get_decision_5m(
         "true",
         "yes",
     )
-    mom_rth_pct = features.get("momentum_rth_today_pct")
     mom_rth_bars = int(features.get("momentum_rth_today_bars") or 0)
     premarket_intraday_momentum_pct: Optional[float] = None
     if early_use_premarket_mom and mom_rth_bars < min_sess_bars:
@@ -1166,7 +1493,6 @@ def get_decision_5m(
             premarket_intraday_momentum_pct = get_premarket_intraday_momentum_pct(ticker)
         except Exception as e:
             logger.debug("premarket intraday momentum для %s: %s", ticker, e)
-    # RSI на предыдущих барах для подтверждения SELL (2 бара по умолчанию)
     rsi_prev_values: List[float] = []
     for back in range(1, sell_confirm_bars + 1):
         if len(closes) > back + RSI_PERIOD_5M:
@@ -1197,97 +1523,17 @@ def get_decision_5m(
         "premarket_momentum_block_below": pm_mom_block_below,
     }
 
-    if rsi_5m is not None:
-        if rsi_5m <= rsi_strong_buy_max and momentum_2h_pct >= momentum_for_strong_buy_min:
-            decision = "STRONG_BUY"
-            technical_entry_branch = "strong_buy_rsi"
-            reasons.append(f"RSI(5m)={rsi_5m:.1f} — перепроданность, отскок")
-        elif rsi_5m <= rsi_buy_max and price <= low_5d * price_to_low5d_multiplier_max:
-            decision = "BUY"
-            technical_entry_branch = "buy_5d_low"
-            reasons.append(f"RSI(5m)={rsi_5m:.1f}, цена у 5д минимума")
-        elif rsi_5m >= rsi_sell_min:
-            sell_confirmed = (
-                len(rsi_prev_values) >= sell_confirm_bars
-                and all(v >= rsi_sell_min for v in rsi_prev_values[:sell_confirm_bars])
-            )
-            if sell_confirmed:
-                decision = "SELL"
-                reasons.append(f"RSI(5m)={rsi_5m:.1f} и подтверждение {sell_confirm_bars} баров — перекупленность")
-            else:
-                reasons.append(f"RSI(5m)={rsi_5m:.1f} — перекупленность без подтверждения {sell_confirm_bars} баров, ждём")
-        elif rsi_5m >= rsi_hold_overbought_min:
-            if decision == "HOLD":
-                reasons.append(f"RSI(5m)={rsi_5m:.1f} — ближе к перекупленности, ждать")
-        elif (
-            mom_rth_pct is not None
-            and mom_rth_bars >= min_sess_bars
-            and float(mom_rth_pct) > rth_momentum_buy_min
-            and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
-        ):
-            if decision == "HOLD":
-                wmin = int(features.get("momentum_rth_today_window_min") or 0)
-                decision = "BUY"
-                technical_entry_branch = "buy_rth_momentum"
-                reasons.append(
-                    f"импульс +{float(mom_rth_pct):.2f}% за текущую сессию RTH (~{wmin} мин), RSI не перекуплен"
-                )
-        elif (
-            early_use_premarket_mom
-            and mom_rth_bars < min_sess_bars
-            and premarket_intraday_momentum_pct is not None
-            and float(premarket_intraday_momentum_pct) >= pm_mom_block_below
-            and float(premarket_intraday_momentum_pct) > pm_mom_buy_min
-            and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
-        ):
-            if decision == "HOLD":
-                decision = "BUY"
-                technical_entry_branch = "buy_premarket_momentum"
-                reasons.append(
-                    f"импульс премаркет +{float(premarket_intraday_momentum_pct):.2f}% "
-                    f"(1m до 9:30 ET; ранний RTH, баров 5m сессии {mom_rth_bars} < {min_sess_bars}), RSI не перекуплен"
-                )
-        elif (
-            allow_cross_day_mom_buy
-            and momentum_2h_pct > rth_momentum_buy_min
-            and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
-        ):
-            if decision == "HOLD":
-                decision = "BUY"
-                technical_entry_branch = "buy_cross_day_2h"
-                reasons.append(
-                    f"импульс +{momentum_2h_pct:.2f}% за окно до 2ч (кросс-дневной; GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY), RSI не перекуплен"
-                )
-
-    if volatility_5m_pct > volatility_warn_buy_min and decision in ("BUY", "STRONG_BUY"):
-        reasons.append(f"волатильность 5m высокая ({volatility_5m_pct:.2f}%) — предпочтительны лимитные ордера")
-    elif volatility_5m_pct > vol_wait_min:
-        if decision == "HOLD":
-            reasons.append(f"волатильность 5m {volatility_5m_pct:.2f}% > порога {vol_wait_min:.2f}% — выжидать")
-
-    # Опциональные пороги ATR 5m и объёма (оценка: scripts/estimate_5m_thresholds.py)
-    atr_5m_pct = features.get("atr_5m_pct")
-    volume_vs_avg_pct = features.get("volume_vs_avg_pct")
-    _min_vol = _gcv("GAME_5M_MIN_VOLUME_VS_AVG_PCT", "").strip()
-    _max_atr = _gcv("GAME_5M_MAX_ATR_5M_PCT", "").strip()
-    decision_rule_params["cfg_min_volume_vs_avg_pct"] = _min_vol or None
-    decision_rule_params["cfg_max_atr_5m_pct"] = _max_atr or None
-    if _min_vol and volume_vs_avg_pct is not None and decision in ("BUY", "STRONG_BUY"):
-        try:
-            min_vol = float(_min_vol)
-            if volume_vs_avg_pct < min_vol:
-                decision = "HOLD"
-                reasons.append(f"объём {volume_vs_avg_pct:.0f}% от среднего < порога {min_vol:.0f}% — вход отложен")
-        except (ValueError, TypeError):
-            pass
-    if _max_atr and atr_5m_pct is not None and decision in ("BUY", "STRONG_BUY"):
-        try:
-            max_atr = float(_max_atr)
-            if atr_5m_pct > max_atr:
-                decision = "HOLD"
-                reasons.append(f"ATR 5m {atr_5m_pct:.2f}% > порога {max_atr}% — высокая волатильность, вход отложен")
-        except (ValueError, TypeError):
-            pass
+    decision, reasons, technical_entry_branch, entry_strong_buy_downgraded = decide_game5m_technical(
+        ticker=ticker,
+        features=features,
+        closes=closes,
+        th=th,
+        rsi_prev_values=rsi_prev_values,
+        decision_rule_params=decision_rule_params,
+        min_session_bars=min_sess_bars,
+        premarket_intraday_momentum_pct=premarket_intraday_momentum_pct,
+        early_use_premarket_mom=early_use_premarket_mom,
+    )
 
     # Влияние новостей из KB на короткую игру 5m: явный учёт в решении BUY/HOLD/SELL
     kb_news = fetch_kb_news_for_period(ticker, days)

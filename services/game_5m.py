@@ -748,12 +748,16 @@ def should_close_position(
     *,
     pullback_from_high_pct: Optional[float] = None,
     session_phase: Optional[str] = None,
+    simulation_time: Optional[datetime] = None,
 ) -> Tuple[bool, str, str]:
     """Закрывать ли позицию: по тейку/стопу (цена), по истечении срока/сессии (TIME_EXIT), early de-risk (TIME_EXIT_EARLY).
 
     Возвращает (should_close, signal_type, exit_detail). exit_detail — уточнение для TIME_EXIT:
     session_end | max_hold_minutes | max_hold_days; для TIME_EXIT_EARLY — early_derisk; иначе пустая строка.
     Для мягкого тейка у хая: exit_detail = soft_near_high_open.
+
+    simulation_time: если задан (например момент закрытия бара при бэктесте), возраст позиции и TIME_EXIT
+    считаются относительно него; выход «конец сессии» по живому get_market_session_context не вызывается.
     """
     if current_price is None or current_price <= 0:
         return False, "", ""
@@ -823,7 +827,7 @@ def should_close_position(
             min_profit = float(get_config_value("GAME_5M_SESSION_END_MIN_PROFIT_PCT", "0.3"))
         except (ValueError, TypeError):
             exit_min, min_profit = 30, 0.3
-        if exit_min > 0 and min_profit >= 0 and current_decision != "STRONG_BUY":
+        if simulation_time is None and exit_min > 0 and min_profit >= 0 and current_decision != "STRONG_BUY":
             try:
                 from services.market_session import get_market_session_context
                 ctx = get_market_session_context()
@@ -841,8 +845,23 @@ def should_close_position(
                 logger.debug("GAME_5M session-end exit check: %s", e)
 
     entry_ts = open_position.get("entry_ts")
-    if isinstance(entry_ts, datetime):
-        age = datetime.now() - entry_ts
+    if entry_ts is not None:
+        import pandas as pd
+
+        ref = simulation_time if simulation_time is not None else datetime.now()
+        et = pd.Timestamp(entry_ts)
+        rt = pd.Timestamp(ref)
+        if et.tzinfo is None:
+            et = et.tz_localize(TRADE_HISTORY_TZ, ambiguous=True).tz_convert(CHART_DISPLAY_TZ)
+        else:
+            et = et.tz_convert(CHART_DISPLAY_TZ)
+        if rt.tzinfo is None:
+            rt = rt.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+        else:
+            rt = rt.tz_convert(CHART_DISPLAY_TZ)
+        age = rt - et
+        if hasattr(age, "to_pytimedelta"):
+            age = age.to_pytimedelta()
     else:
         age = timedelta(0)
     max_min = _max_position_minutes(open_position.get("ticker"))
