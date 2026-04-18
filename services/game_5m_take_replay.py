@@ -325,7 +325,9 @@ def simulate_game5m_30m_strategy_on_window(
     """
     Эмуляция «реальной» 30m-стратегии GAME_5M на интервале: свои входы (decide_game5m_technical
     по compute_30m_features) и выходы (should_close_position по импульсу с 30m).
-    Премаркет-1m и KB не подмешиваются (исторический офлайн; early_use_premarket_mom=False).
+    Премаркет-1m не используется (early_use_premarket_mom=False). Учёт **KB/sentiment** как в
+    `get_decision_5m` здесь намеренно не подключён — только техническое ядро; KB в проекте есть
+    и может быть добавлен в следующей версии для сопоставимости с кроном.
     """
     df30 = _normalize_df_datetime_et(df30)
     if df30.empty:
