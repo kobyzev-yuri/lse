@@ -166,25 +166,72 @@ def _hanger_tune_for_buy_candidates(
         entry_price = float(c["entry_price"])
         entry_ts = c["entry_ts"]
         try:
-            qty = float(c.get("quantity")) if c.get("quantity") is not None else _fetch_buy_quantity(engine, buy_id)
-        except (TypeError, ValueError):
-            qty = _fetch_buy_quantity(engine, buy_id)
-        entry_et = pd.Timestamp(trade_ts_to_et(entry_ts))
-        start_utc = (entry_et.tz_convert("UTC") - pd.Timedelta(days=8)).floor("s")
-        end_utc = (
-            entry_et.tz_convert("UTC") + pd.Timedelta(days=max(int(bar_horizon_days_after_entry), hanger_calendar_days))
-        ).ceil("s")
-        df5 = load_bars_5m_for_replay(engine, ticker, exchange, start_utc, end_utc)
-        diag = diagnose_hanger(
-            df5,
-            entry_ts_et=entry_et,
-            entry_price=entry_price,
-            ticker=ticker,
-            hanger_calendar_days=hanger_calendar_days,
-            sag_epsilon_log=sag_epsilon_log,
-            skip_sag_check=skip_sag_check,
-        )
-        if diag is None:
+            try:
+                qty = float(c.get("quantity")) if c.get("quantity") is not None else _fetch_buy_quantity(engine, buy_id)
+            except (TypeError, ValueError):
+                qty = _fetch_buy_quantity(engine, buy_id)
+            entry_et = pd.Timestamp(trade_ts_to_et(entry_ts))
+            start_utc = (entry_et.tz_convert("UTC") - pd.Timedelta(days=8)).floor("s")
+            end_utc = (
+                entry_et.tz_convert("UTC")
+                + pd.Timedelta(days=max(int(bar_horizon_days_after_entry), hanger_calendar_days))
+            ).ceil("s")
+            df5 = load_bars_5m_for_replay(engine, ticker, exchange, start_utc, end_utc)
+            diag = diagnose_hanger(
+                df5,
+                entry_ts_et=entry_et,
+                entry_price=entry_price,
+                ticker=ticker,
+                hanger_calendar_days=hanger_calendar_days,
+                sag_epsilon_log=sag_epsilon_log,
+                skip_sag_check=skip_sag_check,
+            )
+            if diag is None:
+                hanger_cases.append(
+                    {
+                        "buy_id": buy_id,
+                        "ticker": ticker,
+                        "entry_ts": str(entry_ts),
+                        "entry_price": entry_price,
+                        "skipped": True,
+                        "reason": "not_hanger_by_rules_or_insufficient_bars",
+                    }
+                )
+                continue
+            notional = _notional_usd(entry_price, qty)
+            ag = _hanger_aggression(notional, float(hanger_calendar_days))
+            sweep = sweep_hanger_take_cap(
+                df5,
+                entry_ts_et=entry_et,
+                entry_price=entry_price,
+                ticker=ticker,
+                hanger_calendar_days=hanger_calendar_days,
+                aggression=ag,
+            )
+            row = {
+                "buy_id": buy_id,
+                "ticker": ticker,
+                "entry_ts": str(entry_ts),
+                "entry_price": entry_price,
+                "notional_usd_approx": round(notional, 2),
+                "hanger_aggression": round(ag, 4),
+                "diagnosis": diag,
+                "remediation_take_cap": sweep,
+                "skipped": False,
+            }
+            hanger_cases.append(row)
+            if sweep:
+                merge_hints.append(
+                    {
+                        "theme": "hanger_take_cap",
+                        "env_key": sweep["env_key"],
+                        "direction": "decrease_cap",
+                        "evidence_buy_ids": [buy_id],
+                        "proposed_value": sweep["proposed_cap_pct"],
+                        "note": merge_note,
+                    }
+                )
+        except Exception as ex:
             hanger_cases.append(
                 {
                     "buy_id": buy_id,
@@ -192,44 +239,13 @@ def _hanger_tune_for_buy_candidates(
                     "entry_ts": str(entry_ts),
                     "entry_price": entry_price,
                     "skipped": True,
-                    "reason": "not_hanger_by_rules_or_insufficient_bars",
-                }
-            )
-            continue
-        notional = _notional_usd(entry_price, qty)
-        ag = _hanger_aggression(notional, float(hanger_calendar_days))
-        sweep = sweep_hanger_take_cap(
-            df5,
-            entry_ts_et=entry_et,
-            entry_price=entry_price,
-            ticker=ticker,
-            hanger_calendar_days=hanger_calendar_days,
-            aggression=ag,
-        )
-        row = {
-            "buy_id": buy_id,
-            "ticker": ticker,
-            "entry_ts": str(entry_ts),
-            "entry_price": entry_price,
-            "notional_usd_approx": round(notional, 2),
-            "hanger_aggression": round(ag, 4),
-            "diagnosis": diag,
-            "remediation_take_cap": sweep,
-            "skipped": False,
-        }
-        hanger_cases.append(row)
-        if sweep:
-            merge_hints.append(
-                {
-                    "theme": "hanger_take_cap",
-                    "env_key": sweep["env_key"],
-                    "direction": "decrease_cap",
-                    "evidence_buy_ids": [buy_id],
-                    "proposed_value": sweep["proposed_cap_pct"],
-                    "note": merge_note,
+                    "error": True,
+                    "error_type": type(ex).__name__,
+                    "reason": str(ex)[:500],
                 }
             )
     meta_out = {**meta, "hanger_calendar_days": int(hanger_calendar_days), "exchange": exchange}
+    meta_out["row_error_count"] = sum(1 for h in hanger_cases if isinstance(h, dict) and h.get("error"))
     return {
         "meta": meta_out,
         "hanger_hypotheses": hanger_cases,
