@@ -23,6 +23,11 @@ def main() -> None:
         help="В JSON добавить trade_effects — все сделки с метриками (для локального LLM/jq)",
     )
     parser.add_argument("--json-out", type=str, default="", help="Путь для сохранения JSON отчёта")
+    parser.add_argument(
+        "--game5m-param-backtest",
+        action="store_true",
+        help="Добавить в JSON блок game5m_param_hypothesis_backtest (висяки + недобор, офлайн-реплей)",
+    )
     args = parser.parse_args()
 
     days = max(1, min(30, int(args.days)))
@@ -31,6 +36,7 @@ def main() -> None:
         strategy=args.strategy,
         use_llm=bool(args.llm),
         include_trade_details=bool(args.include_trade_details),
+        include_game5m_param_hypothesis_backtest=bool(args.game5m_param_backtest),
     )
     print(format_trade_effectiveness_text(payload))
 

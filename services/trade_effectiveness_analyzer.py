@@ -110,6 +110,11 @@ ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
             "role": "Нормализация context_json при записи/чтении сделки.",
         },
         {
+            "path": "services/game5m_param_hypothesis_backtest.py",
+            "role": "Офлайн-реплей: висяки (тейк + провисание / кандидаты из JSON), недобор (missed upside) → mergeable_recommendations; "
+            "CLI: scripts/backtest_game5m_param_hypotheses.py.",
+        },
+        {
             "path": "report_generator.py",
             "role": "load_trade_history, compute_closed_trade_pnls — источник списка закрытых сделок.",
         },
@@ -1870,17 +1875,39 @@ def _build_catboost_entry_backtest(strategy: str, closed: List[Any], effects: Li
     return out
 
 
+def _attach_game5m_param_hypothesis_backtest_optional(
+    payload: Dict[str, Any],
+    *,
+    strategy: str,
+    effects: Optional[List[TradeEffect]],
+    include_game5m_param_hypothesis_backtest: bool,
+) -> None:
+    """Офлайн-реплей: висяки (старое окно BUY) и недобор (missed upside) → mergeable_recommendations."""
+    if not include_game5m_param_hypothesis_backtest or strategy.upper() != "GAME_5M":
+        return
+    try:
+        from services.game5m_param_hypothesis_backtest import run_game5m_hypothesis_bundle
+
+        payload["game5m_param_hypothesis_backtest"] = run_game5m_hypothesis_bundle(
+            engine=get_engine(),
+            effects=effects,
+        )
+    except Exception as exc:
+        payload["game5m_param_hypothesis_backtest"] = {"status": "error", "reason": str(exc)}
+
+
 def analyze_trade_effectiveness(
     days: int = 7,
     strategy: str = "GAME_5M",
     use_llm: bool = False,
     *,
     include_trade_details: bool = False,
+    include_game5m_param_hypothesis_backtest: bool = False,
 ) -> Dict[str, Any]:
     days = max(1, min(30, int(days)))
     closed = _load_closed_trades(days=days, strategy_name=strategy)
     if not closed:
-        return {
+        empty_payload: Dict[str, Any] = {
             "meta": {
                 "days": days,
                 "strategy": strategy,
@@ -1890,6 +1917,13 @@ def analyze_trade_effectiveness(
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
         }
+        _attach_game5m_param_hypothesis_backtest_optional(
+            empty_payload,
+            strategy=strategy,
+            effects=[],
+            include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
+        )
+        return empty_payload
 
     tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
     cache = _prepare_ohlc_cache(tickers=tickers, days=days)
@@ -1939,6 +1973,12 @@ def analyze_trade_effectiveness(
     if use_llm:
         payload["llm"] = _build_llm_recommendations(payload)
     payload["auto_config_override"] = _build_auto_config_override(payload)
+    _attach_game5m_param_hypothesis_backtest_optional(
+        payload,
+        strategy=strategy,
+        effects=effects,
+        include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
+    )
     _save_analyzer_state(
         {
             "last_run": {
@@ -1960,6 +2000,7 @@ def analyze_trade_effectiveness_focused(
     trade_ids: Optional[List[int]] = None,
     use_llm: bool = False,
     include_trade_details: bool = False,
+    include_game5m_param_hypothesis_backtest: bool = False,
 ) -> Dict[str, Any]:
     """
     Узкий анализ: последние ``days`` дней, опционально только выбранные тикеры и/или trade_id выхода.
@@ -1969,7 +2010,7 @@ def analyze_trade_effectiveness_focused(
     closed = _load_closed_trades(days=days, strategy_name=strategy)
     filtered = _filter_closed_trades_for_focus(closed, tickers=tickers, trade_ids=trade_ids)
     if not filtered:
-        return {
+        empty_focus: Dict[str, Any] = {
             "meta": {
                 "days": days,
                 "strategy": strategy,
@@ -1987,6 +2028,13 @@ def analyze_trade_effectiveness_focused(
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
         }
+        _attach_game5m_param_hypothesis_backtest_optional(
+            empty_focus,
+            strategy=strategy,
+            effects=[],
+            include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
+        )
+        return empty_focus
 
     tickers_list = [str(t.ticker) for t in filtered if getattr(t, "ticker", None)]
     cache = _prepare_ohlc_cache(tickers=tickers_list, days=days)
@@ -2030,6 +2078,12 @@ def analyze_trade_effectiveness_focused(
     if use_llm:
         payload["llm"] = _build_llm_recommendations(payload, game_5m_config_focus=True)
     payload["auto_config_override"] = _build_auto_config_override(payload)
+    _attach_game5m_param_hypothesis_backtest_optional(
+        payload,
+        strategy=strategy,
+        effects=effects,
+        include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
+    )
     return payload
 
 
@@ -2159,6 +2213,17 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             lines.append(
                 f"• {c.get('ticker')} #{c.get('trade_id')}: {c.get('diagnosis')} | action: {c.get('action')}"
             )
+    hyp = report.get("game5m_param_hypothesis_backtest")
+    if isinstance(hyp, dict) and hyp.get("hanger_hypotheses") is not None:
+        lines.append("")
+        lines.append("GAME_5M param backtest (висяки / недобор, офлайн):")
+        if hyp.get("status") == "error":
+            lines.append(f"• ошибка: {hyp.get('reason')}")
+        else:
+            hc = hyp.get("hanger_hypotheses") or []
+            uc = hyp.get("underprofit_hypotheses") or []
+            mr = hyp.get("mergeable_recommendations") or []
+            lines.append(f"• висяки (строк): {len(hc)} | недобор: {len(uc)} | mergeable_hints: {len(mr)}")
     hints = report.get("game_5m_config_hints") or []
     if hints:
         lines.append("")
