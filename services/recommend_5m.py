@@ -1402,6 +1402,97 @@ def _game5m_vix_context_snapshot() -> Dict[str, Any]:
     return out
 
 
+def apply_kb_news_to_game5m_decision(
+    *,
+    kb_news: List[Dict[str, Any]],
+    decision: str,
+    reasons: List[str],
+    technical_entry_branch: Optional[str],
+    entry_strong_buy_downgraded: bool,
+    rsi_5m: Optional[float],
+    momentum_2h_pct: Any,
+    decision_rule_params: Dict[str, Any],
+) -> Tuple[str, List[str], Optional[str], bool, str]:
+    """
+    Учёт новостей KB (sentiment) и блока VIX — тот же смысл, что сразу после decide_game5m_technical
+    в get_decision_5m. Используется и в офлайн-симуляции 30m для сопоставимости с кроном (без LLM).
+    """
+    from config_loader import get_config_value as _gcv
+
+    news_with_sentiment = [(n, float(n["sentiment_score"])) for n in kb_news[:10] if n.get("sentiment_score") is not None]
+    recent_negative = [n for n, s in news_with_sentiment if s < 0.4]
+    very_negative = [n for n, s in news_with_sentiment if s < 0.35]
+    recent_positive = [n for n, s in news_with_sentiment if s > 0.65]
+    kb_news_impact = "нейтрально"
+
+    vix_snap = _game5m_vix_context_snapshot()
+    vv = vix_snap.get("vix")
+    try:
+        vix_c18 = float((_gcv("GAME_5M_VIX_STRONG_COMFORT_MAX", "18") or "18").strip())
+    except (ValueError, TypeError):
+        vix_c18 = 18.0
+    try:
+        vix_c20 = float((_gcv("GAME_5M_VIX_COMFORT_MAX", "20") or "20").strip())
+    except (ValueError, TypeError):
+        vix_c20 = 20.0
+    relax_news_on_vix = (_gcv("GAME_5M_VIX_RELAX_VERY_NEGATIVE_NEWS", "true") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    relax_very_neg = bool(
+        very_negative and relax_news_on_vix and vv is not None and float(vv) < vix_c18
+    )
+    decision_rule_params["vix_comfort_max"] = vix_c20
+    decision_rule_params["vix_strong_comfort_max"] = vix_c18
+    decision_rule_params["vix_relax_very_negative_news"] = relax_news_on_vix
+
+    branch = technical_entry_branch
+    down = entry_strong_buy_downgraded
+    dec = decision
+
+    if very_negative:
+        if relax_very_neg:
+            reasons.append(
+                "сильный негатив в новостях; VIX ниже порога «сильного спокойствия» — "
+                "вход не откладываем только из-за гео-шума (рынок слабее дисконтирует панику)"
+            )
+            kb_news_impact = "негатив (VIX — вход не отложен)"
+        elif dec in ("BUY", "STRONG_BUY"):
+            dec = "HOLD"
+            reasons.append("сильный негатив в новостях — вход отложен")
+            kb_news_impact = "негатив (вход отложен)"
+    elif recent_negative:
+        if dec == "STRONG_BUY":
+            dec = "BUY"
+            down = True
+            reasons.append("негативные новости в базе — вход без STRONG_BUY")
+            kb_news_impact = "негатив (вход ослаблен)"
+        elif dec == "BUY":
+            reasons.append("негативные новости в базе — осторожность")
+            kb_news_impact = "негатив (осторожность)"
+    elif recent_positive and dec == "HOLD" and rsi_5m is not None and 38 <= rsi_5m <= 52 and momentum_2h_pct >= -0.5:
+        dec = "BUY"
+        branch = "buy_news_support"
+        reasons.append("позитив в новостях поддерживает вход при нейтральном RSI")
+        kb_news_impact = "позитив (поддержка входа)"
+    elif recent_positive and dec in ("BUY", "STRONG_BUY"):
+        kb_news_impact = "позитив"
+
+    if vix_snap.get("enabled") and vv is not None:
+        vp = [f"VIX={float(vv):.2f}"]
+        chg = vix_snap.get("vix_change_multiday_pct")
+        if chg is not None:
+            vp.append(f"Δ≈5сессий {float(chg):+.1f}%")
+        if float(vv) < vix_c18:
+            vp.append("<18 — сжатая премия за риск")
+        elif float(vv) < vix_c20:
+            vp.append("<20 — ослабление паники по индексу")
+        reasons.append(" · ".join(vp))
+
+    return dec, reasons, branch, down, kb_news_impact
+
+
 def get_decision_5m(
     ticker: str,
     days: int = None,
@@ -1537,74 +1628,16 @@ def get_decision_5m(
 
     # Влияние новостей из KB на короткую игру 5m: явный учёт в решении BUY/HOLD/SELL
     kb_news = fetch_kb_news_for_period(ticker, days)
-    news_with_sentiment = [(n, float(n["sentiment_score"])) for n in kb_news[:10] if n.get("sentiment_score") is not None]
-    recent_negative = [n for n, s in news_with_sentiment if s < 0.4]
-    very_negative = [n for n, s in news_with_sentiment if s < 0.35]
-    recent_positive = [n for n, s in news_with_sentiment if s > 0.65]
-    kb_news_impact = "нейтрально"  # для вывода в алерт
-
-    vix_snap = _game5m_vix_context_snapshot()
-    vv = vix_snap.get("vix")
-    try:
-        vix_c18 = float((_gcv("GAME_5M_VIX_STRONG_COMFORT_MAX", "18") or "18").strip())
-    except (ValueError, TypeError):
-        vix_c18 = 18.0
-    try:
-        vix_c20 = float((_gcv("GAME_5M_VIX_COMFORT_MAX", "20") or "20").strip())
-    except (ValueError, TypeError):
-        vix_c20 = 20.0
-    relax_news_on_vix = (_gcv("GAME_5M_VIX_RELAX_VERY_NEGATIVE_NEWS", "true") or "true").strip().lower() in (
-        "1",
-        "true",
-        "yes",
+    decision, reasons, technical_entry_branch, entry_strong_buy_downgraded, kb_news_impact = apply_kb_news_to_game5m_decision(
+        kb_news=kb_news,
+        decision=decision,
+        reasons=reasons,
+        technical_entry_branch=technical_entry_branch,
+        entry_strong_buy_downgraded=entry_strong_buy_downgraded,
+        rsi_5m=rsi_5m,
+        momentum_2h_pct=momentum_2h_pct,
+        decision_rule_params=decision_rule_params,
     )
-    relax_very_neg = bool(
-        very_negative and relax_news_on_vix and vv is not None and float(vv) < vix_c18
-    )
-    decision_rule_params["vix_comfort_max"] = vix_c20
-    decision_rule_params["vix_strong_comfort_max"] = vix_c18
-    decision_rule_params["vix_relax_very_negative_news"] = relax_news_on_vix
-
-    if very_negative:
-        if relax_very_neg:
-            reasons.append(
-                "сильный негатив в новостях; VIX ниже порога «сильного спокойствия» — "
-                "вход не откладываем только из-за гео-шума (рынок слабее дисконтирует панику)"
-            )
-            kb_news_impact = "негатив (VIX — вход не отложен)"
-        elif decision in ("BUY", "STRONG_BUY"):
-            decision = "HOLD"
-            reasons.append("сильный негатив в новостях — вход отложен")
-            kb_news_impact = "негатив (вход отложен)"
-    elif recent_negative:
-        # Негатив — смягчаем вход
-        if decision == "STRONG_BUY":
-            decision = "BUY"
-            entry_strong_buy_downgraded = True
-            reasons.append("негативные новости в базе — вход без STRONG_BUY")
-            kb_news_impact = "негатив (вход ослаблен)"
-        elif decision == "BUY":
-            reasons.append("негативные новости в базе — осторожность")
-            kb_news_impact = "негатив (осторожность)"
-    elif recent_positive and decision == "HOLD" and rsi_5m is not None and 38 <= rsi_5m <= 52 and momentum_2h_pct >= -0.5:
-        # Позитив в новостях при пограничном RSI — разрешаем осторожный BUY
-        decision = "BUY"
-        technical_entry_branch = "buy_news_support"
-        reasons.append("позитив в новостях поддерживает вход при нейтральном RSI")
-        kb_news_impact = "позитив (поддержка входа)"
-    elif recent_positive and decision in ("BUY", "STRONG_BUY"):
-        kb_news_impact = "позитив"
-
-    if vix_snap.get("enabled") and vv is not None:
-        vp = [f"VIX={float(vv):.2f}"]
-        chg = vix_snap.get("vix_change_multiday_pct")
-        if chg is not None:
-            vp.append(f"Δ≈5сессий {float(chg):+.1f}%")
-        if float(vv) < vix_c18:
-            vp.append("<18 — сжатая премия за риск")
-        elif float(vv) < vix_c20:
-            vp.append("<20 — ослабление паники по индексу")
-        reasons.append(" · ".join(vp))
 
     if not reasons:
         rsi_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "— (мало баров)"

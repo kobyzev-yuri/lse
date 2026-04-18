@@ -38,6 +38,8 @@ python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json
 | `rows` | Массив строк: **один фактический вход** → два реплея выхода (5m и 30m) + фактический `SELL`, если есть. |
 | `full_30m_strategy_sim` | Есть только при запуске с **`--full-30m-sim`**: объект `{ "SNDK": [ {...}, ... ], ... }` — сделки **полной** 30m-стратегии на том же календарном окне. |
 | `full_30m_window_et` | Границы окна эмуляции 30m (ET, ISO), если был `--full-30m-sim`. |
+| `full_30m_sim_use_kb` | `true`/`false`: применялся ли блок KB+VIX в симуляции (по умолчанию `true`; отключение: `--no-kb-on-30m-sim`). |
+| `full_30m_sim_kb_days_arg` | Аргумент `--sim-30m-kb-days` (фактическая глубость KB ≥ max этого числа и длины окна). |
 
 ---
 
@@ -67,8 +69,9 @@ python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json
 | `entry_branch` / `entry_decision` | Ветка правила и тип сигнала. |
 | `exit_ts`, `exit_signal`, `exit_detail` | Первый выход по правилам `game_5m.should_close_position`. |
 | `log_ret` | Log-return сделки. |
+| `kb_in_sim` | Учитывался ли KB в этом прогоне (совпадает с `full_30m_sim_use_kb` в корне JSON). |
 
-**Премаркет 1m** в этой эмуляции не подмешивается (нужны живые intraday-данные). **KB с sentiment** в системе есть и в проде участвует в `get_decision_5m` **без LLM**; в текущей офлайн-30m-симуляции KB **пока не вызывается** — только техническое ядро (`decide_game5m_technical`), чтобы отделить эффект таймфрейма от новостного фильтра. Следующий шаг разработки — повторить после технического решения тот же блок учёта новостей, что в `get_decision_5m`.
+**Премаркет 1m** в этой эмуляции не подмешивается (нужны живые intraday-данные). **KB с sentiment** и блок VIX после технического сигнала совпадают по смыслу с `get_decision_5m` (**без LLM**): новости один раз загружаются за окно (`fetch_kb_news_for_period`), затем на каждом баре вызывается `apply_kb_news_to_game5m_decision`. Чисто технический прогон: флаг `--no-kb-on-30m-sim`. Глубина KB: `--sim-30m-kb-days` (по умолчанию 14; внутри берётся max с запасом по длине окна).
 
 ---
 

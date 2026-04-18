@@ -22,10 +22,12 @@ from services.game_5m import _effective_take_profit_pct, should_close_position, 
 from services.recommend_5m import (
     GAME_5M_RULE_VERSION,
     RSI_PERIOD_5M,
+    apply_kb_news_to_game5m_decision,
     compute_30m_features,
     compute_5m_features,
     compute_rsi_5m,
     decide_game5m_technical,
+    fetch_kb_news_for_period,
     fetch_30m_ohlc,
     fetch_5m_ohlc,
     get_decision_5m_rule_thresholds,
@@ -321,13 +323,13 @@ def simulate_game5m_30m_strategy_on_window(
     window_start_et: pd.Timestamp,
     window_end_et: pd.Timestamp,
     bar_minutes: int = 30,
+    use_kb: bool = True,
+    kb_days: int = 14,
 ) -> List[Dict[str, Any]]:
     """
-    Эмуляция «реальной» 30m-стратегии GAME_5M на интервале: свои входы (decide_game5m_technical
-    по compute_30m_features) и выходы (should_close_position по импульсу с 30m).
-    Премаркет-1m не используется (early_use_premarket_mom=False). Учёт **KB/sentiment** как в
-    `get_decision_5m` здесь намеренно не подключён — только техническое ядро; KB в проекте есть
-    и может быть добавлен в следующей версии для сопоставимости с кроном.
+    Эмуляция 30m-стратегии GAME_5M на интервале: свои входы (decide_game5m_technical +
+    при use_kb тот же блок KB/sentiment и VIX, что в get_decision_5m) и выходы should_close_position.
+    Премаркет-1m не используется. KB один раз загружается за kb_days (как в кроне за окно), без LLM.
     """
     df30 = _normalize_df_datetime_et(df30)
     if df30.empty:
@@ -347,6 +349,11 @@ def simulate_game5m_30m_strategy_on_window(
     th = get_decision_5m_rule_thresholds()
     min_sess_30m = min_session_bars_equivalent_30m(int(th["momentum_min_session_bars"]))
     sell_confirm_bars = int(th["sell_confirm_bars"])
+
+    kb_cache: Optional[List[Dict[str, Any]]] = None
+    if use_kb:
+        span_days = max(7, int((w1 - w0).total_seconds() / 86400.0) + 5)
+        kb_cache = fetch_kb_news_for_period(ticker, max(kb_days, span_days))
 
     trades: List[Dict[str, Any]] = []
     pos: Optional[Dict[str, Any]] = None
@@ -381,7 +388,7 @@ def simulate_game5m_30m_strategy_on_window(
         )
         drp["momentum_allow_cross_day_buy"] = allow_cross
 
-        decision, _reasons, branch, _down = decide_game5m_technical(
+        decision, reasons_list, branch, down = decide_game5m_technical(
             ticker=ticker,
             features=feats,
             closes=closes,
@@ -392,6 +399,19 @@ def simulate_game5m_30m_strategy_on_window(
             premarket_intraday_momentum_pct=None,
             early_use_premarket_mom=False,
         )
+        reasons_list = list(reasons_list)
+
+        if use_kb and kb_cache is not None:
+            decision, reasons_list, branch, down, _kb_impact = apply_kb_news_to_game5m_decision(
+                kb_news=kb_cache,
+                decision=decision,
+                reasons=reasons_list,
+                technical_entry_branch=branch,
+                entry_strong_buy_downgraded=down,
+                rsi_5m=feats.get("rsi_5m"),
+                momentum_2h_pct=feats.get("momentum_2h_pct"),
+                decision_rule_params=drp,
+            )
 
         close = float(row["Close"])
         high = float(row["High"])
@@ -429,6 +449,7 @@ def simulate_game5m_30m_strategy_on_window(
                         "log_ret": log_return_pnl(float(pos["entry_price"]), fill),
                         "timeframe": "30m_sim",
                         "min_session_bars_30m_effective": min_sess_30m,
+                        "kb_in_sim": bool(use_kb),
                     }
                 )
                 pos = None

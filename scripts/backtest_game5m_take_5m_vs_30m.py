@@ -4,8 +4,8 @@
 
 1) Те же BUY из trade_history — реплей выхода по 5m и по 30m (импульс 2ч с соответствующей сетки).
 2) Опционально --full-30m-sim: на том же недельном окне (ET) полная эмуляция стратегии на 30m —
-   свои входы (те же технические правила, compute_30m_features, порог сессии в барах 30m)
-   и свои выходы (should_close_position), без привязки к датам входов из БД.
+   свои входы (техника + по умолчанию KB/sentiment и VIX как в get_decision_5m) и свои выходы
+   (should_close_position), без привязки к датам входов из БД.
 
 Пример:
   python scripts/backtest_game5m_take_5m_vs_30m.py --days 7 --exchange US
@@ -83,6 +83,18 @@ def main() -> None:
         "--full-30m-sim",
         action="store_true",
         help="Добавить эмуляцию полной 30m-стратегии на том же календарном окне (ET), по тикерам из BUY",
+    )
+    p.add_argument(
+        "--no-kb-on-30m-sim",
+        action="store_true",
+        help="В --full-30m-sim не применять KB/VIX после технического сигнала (чисто техническая эмуляция)",
+    )
+    p.add_argument(
+        "--sim-30m-kb-days",
+        type=int,
+        default=14,
+        metavar="N",
+        help="Глубность загрузки KB (дней) для 30m-эмуляции; фактически max(N, длина окна+запас)",
     )
     args = p.parse_args()
 
@@ -197,10 +209,13 @@ def main() -> None:
         print(f"  ... ещё {n - 20} строк (полный список в JSON при --json-out)")
 
     sim_30m_by_ticker: dict[str, list[dict[str, Any]]] = {}
+    window_et_meta: Optional[dict[str, str]] = None
+    use_kb_30m = not bool(args.no_kb_on_30m_sim)
     if args.full_30m_sim and buys:
         now_et = pd.Timestamp.now(tz="America/New_York")
         w0 = now_et - pd.Timedelta(days=max(1, args.days))
         w1 = now_et
+        window_et_meta = {"start": w0.isoformat(), "end": w1.isoformat()}
         start_utc = (w0.tz_convert("UTC") - pd.Timedelta(days=8)).floor("s")
         end_utc = (w1.tz_convert("UTC") + pd.Timedelta(days=1)).ceil("s")
         tickers = sorted({str(b["ticker"]).strip().upper() for b in buys})
@@ -211,6 +226,8 @@ def main() -> None:
                 sym,
                 window_start_et=w0,
                 window_end_et=w1,
+                use_kb=use_kb_30m,
+                kb_days=max(1, int(args.sim_30m_kb_days)),
             )
         total_sim = sum(len(v) for v in sim_30m_by_ticker.values())
         print(f"Полная 30m-эмуляция на [{w0.date()} .. {w1.date()}] ET: сделок всего {total_sim} по тикерам {', '.join(tickers)}")
@@ -235,10 +252,9 @@ def main() -> None:
         }
         if args.full_30m_sim:
             payload["full_30m_strategy_sim"] = sim_30m_by_ticker
-            payload["full_30m_window_et"] = {
-                "start": (pd.Timestamp.now(tz="America/New_York") - pd.Timedelta(days=max(1, args.days))).isoformat(),
-                "end": pd.Timestamp.now(tz="America/New_York").isoformat(),
-            }
+            payload["full_30m_window_et"] = window_et_meta or {}
+            payload["full_30m_sim_use_kb"] = use_kb_30m
+            payload["full_30m_sim_kb_days_arg"] = max(1, int(args.sim_30m_kb_days))
         out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"JSON: {out_path.resolve()}")
 
