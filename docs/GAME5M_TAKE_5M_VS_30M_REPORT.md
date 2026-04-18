@@ -117,4 +117,4 @@ python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json
 
 Сводка по типам сигнала (`TAKE_PROFIT`, стоп и т.д.) по первым трём столбцам — в **§1c** после генерации из полного JSON со строками `rows`.
 
-Отчёт для шефа с числами и примерами сделок: `docs/GAME5M_TAKE_5M_VS_30M_EXECUTIVE_REPORT.md`.
+Отчёт для шефа (в т.ч. **встроенная** таблица 20 сделок и блоки по автономной 30m — снимок, обновляется вручную после нового JSON): `docs/GAME5M_TAKE_5M_VS_30M_EXECUTIVE_REPORT.md`.

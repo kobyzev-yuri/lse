@@ -125,18 +125,23 @@ def _count_signals(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
 def render_md(payload: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# GAME_5M: сверка тейка 5m vs 30m (из JSON)\n")
-    lines.append(f"- **Сгенерировано (UTC):** `{payload.get('generated_at', '—')}`")
-    lines.append(f"- **Параметр days:** **{payload.get('days', '—')}** (глубина BUY при обычном запуске; ширина окна ET для `--full-30m-sim`)")
-    lines.append(f"- **Биржа в market_bars_*:** `{payload.get('exchange', '—')}`")
+    lines.append(f"- **Сгенерировано (UTC):** `{payload.get('generated_at', '—')}`\n")
+    lines.append(
+        f"- **Параметр days:** **{payload.get('days', '—')}** "
+        "(глубина BUY при обычном запуске; ширина окна ET для `--full-30m-sim`)\n"
+    )
+    lines.append(f"- **Биржа в market_bars_*:** `{payload.get('exchange', '—')}`\n")
     if payload.get("sim_30m_only"):
-        lines.append("- **Режим:** `--sim-30m-only` — реплей по `trade_history` **не** выполнялся (`rows` пустой).")
+        lines.append(
+            "- **Режим:** `--sim-30m-only` — реплей по `trade_history` **не** выполнялся (`rows` пустой).\n"
+        )
     if "full_30m_sim_use_kb" in payload:
-        lines.append(f"- **KB+VIX в 30m-симе:** `{payload.get('full_30m_sim_use_kb')}`")
+        lines.append(f"- **KB+VIX в 30m-симе:** `{payload.get('full_30m_sim_use_kb')}`\n")
     if payload.get("full_30m_sim_kb_days_arg") is not None:
-        lines.append(f"- **Аргумент глубины KB:** `{payload.get('full_30m_sim_kb_days_arg')}`")
+        lines.append(f"- **Аргумент глубины KB:** `{payload.get('full_30m_sim_kb_days_arg')}`\n")
     win = payload.get("full_30m_window_et")
     if isinstance(win, dict) and (win.get("start") or win.get("end")):
-        lines.append(f"- **Окно 30m-сим (ET):** `{win.get('start', '—')}` … `{win.get('end', '—')}`")
+        lines.append(f"- **Окно 30m-сим (ET):** `{win.get('start', '—')}` … `{win.get('end', '—')}`\n")
     lines.append("")
 
     rows = payload.get("rows") or []
