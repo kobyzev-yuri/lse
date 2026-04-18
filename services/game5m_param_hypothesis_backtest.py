@@ -1,16 +1,12 @@
 """
-Бэктест гипотез по GAME_5M_* на исторических BUY / закрытых сделках.
+Офлайн-подбор GAME_5M_* (в первую очередь по **не закрытым** BUY в trade_history).
 
-Два направления (v1):
-  1) Висяки — нет TAKE_PROFIT в первые ``hanger_calendar_days`` календарных дней после входа
-     и «провисание» (log(close/entry) на последнем баре окна ≤ ``sag_epsilon_log``).
-  2) Недобор прибыли — закрытые сделки с missed_upside_pct ≥ порога; перебор env, даёт ли реплей
-     более высокий log_ret к моменту фактического выхода (см. ``_replay_until_ts``).
+  1) Открытые позиции: BUY без последующего SELL по тому же тикеру → реплей 5m + сетка
+     ``GAME_5M_TAKE_PROFIT_PCT_<TICKER>`` (см. ``run_hanger_tune_for_open_trades``).
+  2) Опционально — кандидаты из сохранённого JSON сверки (legacy, ``run_hanger_tune_from_take_json``).
+  3) В составе анализатора — недобор по missed_upside + «старое» окно BUY (``run_game5m_hypothesis_bundle``).
 
-Результат — JSON-совместимый dict для ``analyze_trade_effectiveness(..., include_game5m_param_hypothesis_backtest=True)``
-или отдельного CLI ``scripts/backtest_game5m_param_hypotheses.py``.
-
-Пороги и окна — параметры функции; имплементация в прод не выполняется, только рекомендации.
+Имплементация в прод не выполняется автоматически — только рекомендации в JSON.
 """
 
 from __future__ import annotations
@@ -54,6 +50,31 @@ def _env_overrides(updates: Dict[str, str]) -> Iterator[None]:
                 os.environ[k] = old
 
 
+def fetch_open_game5m_buys(engine: Engine) -> List[Dict[str, Any]]:
+    """
+    Все ``GAME_5M`` BUY, после которых в истории **нет** SELL по этому тикеру (позиция ещё открыта).
+    """
+    q = text(
+        """
+        SELECT b.id, b.ts, b.ticker, b.price, b.quantity
+        FROM trade_history b
+        WHERE b.strategy_name = 'GAME_5M' AND b.side = 'BUY'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM trade_history s
+            WHERE s.strategy_name = 'GAME_5M'
+              AND s.side = 'SELL'
+              AND s.ticker = b.ticker
+              AND (s.ts > b.ts OR (s.ts = b.ts AND s.id > b.id))
+          )
+        ORDER BY b.ts ASC, b.id ASC
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(q).mappings().all()
+    return [dict(r) for r in rows]
+
+
 def _fetch_game5m_buys_between(engine: Engine, ts_start: datetime, ts_end: datetime) -> List[Dict[str, Any]]:
     q = text(
         """
@@ -84,13 +105,12 @@ def _fetch_buy_quantity(engine: Engine, buy_id: int) -> float:
 def candidates_from_game5m_take_json(
     path: str | Path,
     *,
-    require_both_replays_null: bool = True,
+    require_both_replays_null: bool = False,
 ) -> List[Dict[str, Any]]:
     """
-    Кандидаты «без выхода реплея» из ``scripts/backtest_game5m_take_5m_vs_30m.py --json-out``.
+    Legacy: строки JSON, где реплей **5m** не нашёл выход (``replay_5m is None``).
 
-    По умолчанию: ``replay_5m`` и ``replay_30m`` оба ``null`` (как ~24 строки в недельном отчёте).
-    При ``require_both_replays_null=False`` — только ``replay_5m is None``.
+    При ``require_both_replays_null=True`` — дополнительно требуется ``replay_30m is None`` (старое поле в файле).
     """
     raw = Path(path).expanduser().read_text(encoding="utf-8")
     data = json.loads(raw)
@@ -126,23 +146,18 @@ def candidates_from_game5m_take_json(
     return out
 
 
-def run_hanger_tune_from_take_json(
+def _hanger_tune_for_buy_candidates(
     *,
     engine: Engine,
-    json_path: str | Path,
-    exchange: str = "US",
-    hanger_calendar_days: int = 6,
-    sag_epsilon_log: float = 0.0,
-    skip_sag_check: bool = False,
-    require_both_replays_null: bool = True,
-    bar_horizon_days_after_entry: int = 10,
+    candidates: List[Dict[str, Any]],
+    meta: Dict[str, Any],
+    exchange: str,
+    hanger_calendar_days: int,
+    sag_epsilon_log: float,
+    skip_sag_check: bool,
+    bar_horizon_days_after_entry: int,
+    merge_note: str,
 ) -> Dict[str, Any]:
-    """
-    Прогон подбора потолка тейка по кандидатам из JSON (удобно в выходные без торгов).
-    """
-    candidates = candidates_from_game5m_take_json(
-        json_path, require_both_replays_null=require_both_replays_null
-    )
     hanger_cases: List[Dict[str, Any]] = []
     merge_hints: List[Dict[str, Any]] = []
     for c in candidates:
@@ -150,7 +165,10 @@ def run_hanger_tune_from_take_json(
         ticker = str(c["ticker"]).strip().upper()
         entry_price = float(c["entry_price"])
         entry_ts = c["entry_ts"]
-        qty = _fetch_buy_quantity(engine, buy_id)
+        try:
+            qty = float(c.get("quantity")) if c.get("quantity") is not None else _fetch_buy_quantity(engine, buy_id)
+        except (TypeError, ValueError):
+            qty = _fetch_buy_quantity(engine, buy_id)
         entry_et = pd.Timestamp(trade_ts_to_et(entry_ts))
         start_utc = (entry_et.tz_convert("UTC") - pd.Timedelta(days=8)).floor("s")
         end_utc = (
@@ -208,25 +226,100 @@ def run_hanger_tune_from_take_json(
                     "direction": "decrease_cap",
                     "evidence_buy_ids": [buy_id],
                     "proposed_value": sweep["proposed_cap_pct"],
-                    "note": "Из JSON кандидатов replay null; подтвердить walk-forward.",
+                    "note": merge_note,
                 }
             )
+    meta_out = {**meta, "hanger_calendar_days": int(hanger_calendar_days), "exchange": exchange}
     return {
-        "meta": {
-            "source_json": str(Path(json_path).expanduser().resolve()),
-            "candidates_in_json": len(candidates),
-            "hanger_calendar_days": int(hanger_calendar_days),
-            "sag_epsilon_log": float(sag_epsilon_log),
-            "skip_sag_check": bool(skip_sag_check),
-            "require_both_replays_null": bool(require_both_replays_null),
-            "bar_horizon_days_after_entry": int(bar_horizon_days_after_entry),
-            "exchange": exchange,
-            "module": "services.game5m_param_hypothesis_backtest.run_hanger_tune_from_take_json",
-        },
+        "meta": meta_out,
         "hanger_hypotheses": hanger_cases,
         "underprofit_hypotheses": [],
         "mergeable_recommendations": merge_hints,
     }
+
+
+def run_hanger_tune_for_open_trades(
+    *,
+    engine: Engine,
+    exchange: str = "US",
+    hanger_calendar_days: int = 6,
+    sag_epsilon_log: float = 0.0,
+    skip_sag_check: bool = True,
+    bar_horizon_days_after_entry: int = 10,
+) -> Dict[str, Any]:
+    """Подбор потолка тейка по **открытым** GAME_5M BUY (нет SELL в trade_history)."""
+    rows = fetch_open_game5m_buys(engine)
+    candidates: List[Dict[str, Any]] = []
+    for r in rows:
+        try:
+            candidates.append(
+                {
+                    "buy_id": int(r["id"]),
+                    "ticker": str(r["ticker"]).strip().upper(),
+                    "entry_ts": r["ts"],
+                    "entry_price": float(r["price"]),
+                    "quantity": r.get("quantity"),
+                }
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    meta = {
+        "source": "trade_history_open_buys",
+        "open_buys_count": len(candidates),
+        "sag_epsilon_log": float(sag_epsilon_log),
+        "skip_sag_check": bool(skip_sag_check),
+        "bar_horizon_days_after_entry": int(bar_horizon_days_after_entry),
+        "module": "services.game5m_param_hypothesis_backtest.run_hanger_tune_for_open_trades",
+    }
+    return _hanger_tune_for_buy_candidates(
+        engine=engine,
+        candidates=candidates,
+        meta=meta,
+        exchange=exchange,
+        hanger_calendar_days=hanger_calendar_days,
+        sag_epsilon_log=sag_epsilon_log,
+        skip_sag_check=skip_sag_check,
+        bar_horizon_days_after_entry=bar_horizon_days_after_entry,
+        merge_note="Открытый BUY в trade_history; подтвердить walk-forward.",
+    )
+
+
+def run_hanger_tune_from_take_json(
+    *,
+    engine: Engine,
+    json_path: str | Path,
+    exchange: str = "US",
+    hanger_calendar_days: int = 6,
+    sag_epsilon_log: float = 0.0,
+    skip_sag_check: bool = False,
+    require_both_replays_null: bool = False,
+    bar_horizon_days_after_entry: int = 10,
+) -> Dict[str, Any]:
+    """Legacy: кандидаты из JSON файла сверки (строки без реплея 5m)."""
+    candidates = candidates_from_game5m_take_json(
+        json_path, require_both_replays_null=require_both_replays_null
+    )
+    meta = {
+        "source": "take_json_file",
+        "source_json": str(Path(json_path).expanduser().resolve()),
+        "candidates_in_json": len(candidates),
+        "sag_epsilon_log": float(sag_epsilon_log),
+        "skip_sag_check": bool(skip_sag_check),
+        "require_both_replays_null": bool(require_both_replays_null),
+        "bar_horizon_days_after_entry": int(bar_horizon_days_after_entry),
+        "module": "services.game5m_param_hypothesis_backtest.run_hanger_tune_from_take_json",
+    }
+    return _hanger_tune_for_buy_candidates(
+        engine=engine,
+        candidates=candidates,
+        meta=meta,
+        exchange=exchange,
+        hanger_calendar_days=hanger_calendar_days,
+        sag_epsilon_log=sag_epsilon_log,
+        skip_sag_check=skip_sag_check,
+        bar_horizon_days_after_entry=bar_horizon_days_after_entry,
+        merge_note="Кандидат из JSON (без реплея 5m); подтвердить walk-forward.",
+    )
 
 
 def _slice_df_through_calendar_days(
@@ -627,6 +720,8 @@ def run_game5m_hypothesis_bundle(
 
 __all__ = [
     "run_game5m_hypothesis_bundle",
+    "fetch_open_game5m_buys",
+    "run_hanger_tune_for_open_trades",
     "run_hanger_tune_from_take_json",
     "candidates_from_game5m_take_json",
     "diagnose_hanger",

@@ -111,8 +111,8 @@ ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
         },
         {
             "path": "services/game5m_param_hypothesis_backtest.py",
-            "role": "Офлайн-реплей: висяки (тейк + провисание / кандидаты из JSON), недобор (missed upside) → mergeable_recommendations; "
-            "CLI: scripts/backtest_game5m_param_hypotheses.py.",
+            "role": "Офлайн 5m-реплей: открытые BUY в trade_history (или legacy JSON), недобор (missed upside) в bundle анализатора → mergeable_recommendations; "
+            "CLI: scripts/backtest_game5m_param_hypotheses.py --mode open|json|bundle.",
         },
         {
             "path": "report_generator.py",
