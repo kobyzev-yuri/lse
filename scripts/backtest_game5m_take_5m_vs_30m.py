@@ -10,6 +10,9 @@
 Пример:
   python scripts/backtest_game5m_take_5m_vs_30m.py --days 7 --exchange US
   python scripts/backtest_game5m_take_5m_vs_30m.py --days 7 --full-30m-sim --json-out local/game5m_take_5m_vs_30m.json
+  # только автономная 30m-симуляция с KB (без реплея по BUY): тикеры из конфига или --tickers
+  python scripts/backtest_game5m_take_5m_vs_30m.py --days 7 --full-30m-sim --sim-30m-only --exchange US --json-out logs/sim30m.json
+  python scripts/backtest_game5m_take_5m_vs_30m.py --days 7 --full-30m-sim --sim-30m-only --tickers SNDK,MU --json-out logs/sim30m.json
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ sys.path.insert(0, str(project_root))
 
 from config_loader import get_database_url
 
+from services.ticker_groups import get_tickers_game_5m
 from services.game_5m_take_replay import (
     load_bars_30m_for_replay,
     load_bars_5m_for_replay,
@@ -82,7 +86,19 @@ def main() -> None:
     p.add_argument(
         "--full-30m-sim",
         action="store_true",
-        help="Добавить эмуляцию полной 30m-стратегии на том же календарном окне (ET), по тикерам из BUY",
+        help="Эмуляция полной 30m-стратегии на окне --days ET (см. --sim-30m-only без реплея по BUY)",
+    )
+    p.add_argument(
+        "--sim-30m-only",
+        action="store_true",
+        help="Только полная 30m-эмуляция: не делать реплей выходов 5m/30m по входам из trade_history. "
+        "Тикеры: --tickers или GAME_5M_TICKERS / TICKERS_FAST (get_tickers_game_5m). Требует --full-30m-sim.",
+    )
+    p.add_argument(
+        "--tickers",
+        type=str,
+        default="",
+        help="Список тикеров через запятую (для --sim-30m-only; иначе игнорируется)",
     )
     p.add_argument(
         "--no-kb-on-30m-sim",
@@ -98,13 +114,19 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    if args.sim_30m_only and not args.full_30m_sim:
+        print("Ошибка: --sim-30m-only требует --full-30m-sim.")
+        sys.exit(2)
+
     engine = create_engine(get_database_url())
     bar_engine = None if args.no_db_bars else engine
 
-    buys = _fetch_buys(engine, max(1, args.days))
-    if not buys:
-        print(f"Нет BUY GAME_5M за последние {args.days} дн.")
-        return
+    buys: list[dict[str, Any]] = []
+    if not args.sim_30m_only:
+        buys = _fetch_buys(engine, max(1, args.days))
+        if not buys:
+            print(f"Нет BUY GAME_5M за последние {args.days} дн.")
+            return
 
     results: list[dict[str, Any]] = []
     for b in buys:
@@ -187,38 +209,52 @@ def main() -> None:
         results.append(row)
 
     n = len(results)
-    both = sum(1 for r in results if r["replay_5m"] and r["replay_30m"])
-    print(f"BUY за период: {n}; оба реплея нашли выход: {both}")
-    for r in results[:20]:
-        tag = f"{r['ticker']} buy_id={r['buy_id']}"
-        a = r["replay_5m"]
-        b = r["replay_30m"]
-        if a and b:
-            d = r.get("log_ret_diff_5m_minus_30m")
-            print(
-                f"  {tag}: 5m {a['signal_type']} @ {a['bar_end_et']} log_ret={a['log_ret']:.5f} | "
-                f"30m {b['signal_type']} @ {b['bar_end_et']} log_ret={b['log_ret']:.5f} | diff={d}"
-            )
-        elif a:
-            print(f"  {tag}: только 5m → {a['signal_type']} @ {a['bar_end_et']}")
-        elif b:
-            print(f"  {tag}: только 30m → {b['signal_type']} @ {b['bar_end_et']}")
-        else:
-            print(f"  {tag}: нет выхода в окне (мало баров или позиция не закрылась по правилам)")
-    if n > 20:
-        print(f"  ... ещё {n - 20} строк (полный список в JSON при --json-out)")
+    if not args.sim_30m_only:
+        both = sum(1 for r in results if r["replay_5m"] and r["replay_30m"])
+        print(f"BUY за период: {n}; оба реплея нашли выход: {both}")
+        for r in results[:20]:
+            tag = f"{r['ticker']} buy_id={r['buy_id']}"
+            a = r["replay_5m"]
+            b = r["replay_30m"]
+            if a and b:
+                d = r.get("log_ret_diff_5m_minus_30m")
+                print(
+                    f"  {tag}: 5m {a['signal_type']} @ {a['bar_end_et']} log_ret={a['log_ret']:.5f} | "
+                    f"30m {b['signal_type']} @ {b['bar_end_et']} log_ret={b['log_ret']:.5f} | diff={d}"
+                )
+            elif a:
+                print(f"  {tag}: только 5m → {a['signal_type']} @ {a['bar_end_et']}")
+            elif b:
+                print(f"  {tag}: только 30m → {b['signal_type']} @ {b['bar_end_et']}")
+            else:
+                print(f"  {tag}: нет выхода в окне (мало баров или позиция не закрылась по правилам)")
+        if n > 20:
+            print(f"  ... ещё {n - 20} строк (полный список в JSON при --json-out)")
+    else:
+        print("Режим --sim-30m-only: реплей по BUY из trade_history пропущен.")
 
     sim_30m_by_ticker: dict[str, list[dict[str, Any]]] = {}
     window_et_meta: Optional[dict[str, str]] = None
     use_kb_30m = not bool(args.no_kb_on_30m_sim)
-    if args.full_30m_sim and buys:
+    tickers_for_sim: list[str] = []
+    if args.full_30m_sim and args.sim_30m_only:
+        raw = (args.tickers or "").strip()
+        if raw:
+            tickers_for_sim = sorted({t.strip().upper() for t in raw.split(",") if t.strip()})
+        else:
+            tickers_for_sim = sorted({t.upper() for t in get_tickers_game_5m()})
+        if not tickers_for_sim:
+            print("Нет тикеров: задайте --tickers A,B или GAME_5M_TICKERS / TICKERS_FAST в config.")
+            return
+
+    if args.full_30m_sim and (buys or args.sim_30m_only):
         now_et = pd.Timestamp.now(tz="America/New_York")
         w0 = now_et - pd.Timedelta(days=max(1, args.days))
         w1 = now_et
         window_et_meta = {"start": w0.isoformat(), "end": w1.isoformat()}
         start_utc = (w0.tz_convert("UTC") - pd.Timedelta(days=8)).floor("s")
         end_utc = (w1.tz_convert("UTC") + pd.Timedelta(days=1)).ceil("s")
-        tickers = sorted({str(b["ticker"]).strip().upper() for b in buys})
+        tickers = tickers_for_sim if args.sim_30m_only else sorted({str(b["ticker"]).strip().upper() for b in buys})
         for sym in tickers:
             df30w = load_bars_30m_for_replay(bar_engine, sym, args.exchange, start_utc, end_utc)
             sim_30m_by_ticker[sym] = simulate_game5m_30m_strategy_on_window(
@@ -249,6 +285,7 @@ def main() -> None:
             "days": args.days,
             "exchange": args.exchange,
             "rows": results,
+            "sim_30m_only": bool(args.sim_30m_only),
         }
         if args.full_30m_sim:
             payload["full_30m_strategy_sim"] = sim_30m_by_ticker
