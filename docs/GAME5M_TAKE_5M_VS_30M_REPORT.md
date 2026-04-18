@@ -15,16 +15,30 @@ docker compose exec lse python scripts/backtest_game5m_take_5m_vs_30m.py \
   --json-out /app/logs/game5m_take_5m_vs_30m.json
 ```
 
+Только **автономная** 30m-эмуляция с KB (без реплея по фактическим BUY из `trade_history`):
+
+```bash
+docker compose exec lse python scripts/backtest_game5m_take_5m_vs_30m.py \
+  --days 7 --exchange US --full-30m-sim --sim-30m-only \
+  --json-out /app/logs/game5m_sim30m_kb.json
+```
+
 На локальной машине после `scp`:
 
 ```bash
 cd /path/to/lse
 python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json -o docs/local_game5m_take_report.md
+python3 scripts/render_game5m_take_json_to_md.py logs/game5m_sim30m_kb.json -o docs/local_game5m_sim30m_tables.md
 # или только в терминал:
 python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json
 ```
 
-Скрипт рендера: `scripts/render_game5m_take_json_to_md.py`.
+Скрипт рендера: `scripts/render_game5m_take_json_to_md.py`. Он строит:
+
+- **§1** — широкая таблица по каждому `BUY` (реплей 5m и 30m + факт);
+- **§1b** — одна строка на позицию: **три «стратегии выхода»** (реплей 5m, реплей 30m, факт `SELL`), с сигналом, временем, fill, log_ret и `diff`;
+- **§1c** — сводка **числа выходов по `signal_type`** для реплея 5m, реплея 30m и факта;
+- **§2** — сводная таблица всех сделок автономной 30m и разбивка по тикерам (в т.ч. колонка `kb_in_sim`).
 
 ---
 
@@ -40,6 +54,7 @@ python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json
 | `full_30m_window_et` | Границы окна эмуляции 30m (ET, ISO), если был `--full-30m-sim`. |
 | `full_30m_sim_use_kb` | `true`/`false`: применялся ли блок KB+VIX в симуляции (по умолчанию `true`; отключение: `--no-kb-on-30m-sim`). |
 | `full_30m_sim_kb_days_arg` | Аргумент `--sim-30m-kb-days` (фактическая глубость KB ≥ max этого числа и длины окна). |
+| `sim_30m_only` | `true`, если запуск с **`--sim-30m-only`**: блок `rows` пустой, в §2 рендера только автономная 30m-симуляция. |
 
 ---
 
@@ -81,3 +96,20 @@ python3 scripts/render_game5m_take_json_to_md.py logs/game5m_take_5m_vs_30m.json
 - **Раздел `full_30m_strategy_sim`:** отвечает: «Сколько раз и как стратегия **сама** вошла бы и вышла на 30m за неделю?» — сравнение с частотой/качеством фактических BUY из `rows` — отдельный срез.
 
 При расхождении 5m vs 30m в `rows` смотрите `momentum_2h_pct` / `take_pct_effective` в обеих колонках: на 30m импульс и порог тейка обновляются реже, поэтому момент выхода и цена часто отличаются.
+
+---
+
+## 6. Какие «стратегии» попадают в одну таблицу
+
+Для руководства удобно держать в голове **четыре разных режима** (в Markdown их выводит рендер):
+
+| Режим | Тот же вход, что фактический BUY? | Где смотреть в JSON / в рендере |
+|--------|-------------------------------------|----------------------------------|
+| Реплей выхода по **5m** | Да | `rows[].replay_5m`; §1 и **§1b** рендера |
+| Реплей выхода по **30m** | Да | `rows[].replay_30m`; §1 и **§1b** |
+| **Факт** продажи | Да | `rows[].actual_sell`; **§1b** |
+| **Автономная 30m** (+KB по умолчанию) | Нет (свои входы по барам 30m) | `full_30m_strategy_sim`; **§2** рендера |
+
+Сводка по типам сигнала (`TAKE_PROFIT`, стоп и т.д.) по первым трём столбцам — в **§1c** после генерации из полного JSON со строками `rows`.
+
+Отчёт для шефа с числами и примерами сделок: `docs/GAME5M_TAKE_5M_VS_30M_EXECUTIVE_REPORT.md`.
