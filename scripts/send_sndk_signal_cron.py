@@ -11,6 +11,7 @@
 
 Настройка config.env:
   TELEGRAM_BOT_TOKEN=..., TELEGRAM_SIGNAL_CHAT_IDS, TICKERS_FAST, GAME_5M_COOLDOWN_MINUTES (и др. GAME_5M_*).
+  Висяки (JSON + dual): см. config.env.lse; в логе маркер «HANGER_TACTIC» — grep по logs/cron_sndk_signal.log.
   Опционально: PLATFORM_GAME_API_ENABLED, PLATFORM_GAME_API_URL — внешний POST /game (kerimsrv), см. kerimsrv/platform doc.md.
 
 Аргументы: [тикеры] — если заданы, используются вместо GAME_5M_TICKERS/TICKERS_FAST (через запятую).
@@ -117,6 +118,7 @@ def process_ticker(
         get_latest_buy_context_json,
         _effective_take_profit_pct,
         _effective_stop_loss_pct,
+        _take_profit_cap_pct,
         _game_5m_stop_loss_enabled,
     )
 
@@ -165,6 +167,7 @@ def process_ticker(
         if has_pos and price_ok:
             engine = None
             apply_hanger_json = None
+            hdiag = None  # результат live_aggregate_hanger_diagnosis (если dual)
             try:
                 from report_generator import get_engine, get_latest_prices
                 engine = get_engine()
@@ -219,6 +222,30 @@ def process_ticker(
             )
             entry = open_pos.get("entry_price")
             entry_f = float(entry) if entry is not None and entry > 0 else None
+
+            if (open_pos.get("strategy_name") or "GAME_5M").strip().upper() == "GAME_5M" and entry_f and entry_f > 0:
+                cap_e = _take_profit_cap_pct(ticker, apply_hanger_json=apply_hanger_json)
+                take_e = _effective_take_profit_pct(
+                    momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json
+                )
+                thr = float(take_e) - 0.05
+                px_hi = bar_high if (bar_high is not None and float(bar_high) > 0) else price_for_check
+                px_take = max(float(price_for_check), float(px_hi))
+                pnl_take_line = (px_take - entry_f) / entry_f * 100.0
+                hk = hdiag.get("kind") if isinstance(hdiag, dict) else None
+                logger.info(
+                    "[5m] HANGER_TACTIC %s: apply_hanger_json=%s live_hanger_kind=%s cap_pct=%.4f eff_take_pct=%.4f "
+                    "thr_take_pct=%.4f pnl_pct_for_take=%.4f should_close=%s exit_type=%s",
+                    ticker,
+                    apply_hanger_json,
+                    hk,
+                    cap_e,
+                    take_e,
+                    thr,
+                    pnl_take_line,
+                    bool(should_close),
+                    exit_type or "",
+                )
 
             if should_close and exit_type:
                 base_exit = close_ctx.get("exit_bar_close") if isinstance(close_ctx.get("exit_bar_close"), (int, float)) and close_ctx.get("exit_bar_close") > 0 else price_for_check
@@ -590,6 +617,7 @@ def main():
             get_latest_buy_context_json,
             _effective_take_profit_pct,
             _effective_stop_loss_pct,
+            _take_profit_cap_pct,
             _game_5m_stop_loss_enabled,
         )
         from services.recommend_5m import get_decision_5m, has_5m_data, build_5m_close_context, merge_close_context_with_trade_narrative
@@ -613,6 +641,7 @@ def main():
                     price = d5.get("price")
                     engine_ah = None
                     apply_hanger_json_ah = None
+                    hdiag_ah = None
                     try:
                         from report_generator import get_engine, get_latest_prices
                         engine_ah = get_engine()
@@ -666,6 +695,33 @@ def main():
                         session_phase=ms_ah.get("session_phase"),
                         apply_hanger_json=apply_hanger_json_ah,
                     )
+                    try:
+                        entry_ah0 = open_pos.get("entry_price")
+                        entry_f0 = float(entry_ah0) if entry_ah0 is not None and float(entry_ah0) > 0 else None
+                    except (TypeError, ValueError):
+                        entry_f0 = None
+                    if (open_pos.get("strategy_name") or "GAME_5M").strip().upper() == "GAME_5M" and entry_f0:
+                        mom0 = close_ctx_ah.get("momentum_2h_pct")
+                        cap0 = _take_profit_cap_pct(ticker, apply_hanger_json=apply_hanger_json_ah)
+                        take0 = _effective_take_profit_pct(mom0, ticker=ticker, apply_hanger_json=apply_hanger_json_ah)
+                        thr0 = float(take0) - 0.05
+                        px_hi0 = bar_high if (bar_high is not None and float(bar_high) > 0) else price_for_check
+                        px_take0 = max(float(price_for_check), float(px_hi0))
+                        pnl_line0 = (px_take0 - entry_f0) / entry_f0 * 100.0
+                        hk0 = hdiag_ah.get("kind") if isinstance(hdiag_ah, dict) else None
+                        logger.info(
+                            "AFTER_HOURS HANGER_TACTIC %s: apply_hanger_json=%s live_hanger_kind=%s cap_pct=%.4f "
+                            "eff_take_pct=%.4f thr_take_pct=%.4f pnl_pct_for_take=%.4f should_close=%s exit_type=%s",
+                            ticker,
+                            apply_hanger_json_ah,
+                            hk0,
+                            cap0,
+                            take0,
+                            thr0,
+                            pnl_line0,
+                            bool(should_close),
+                            exit_type or "",
+                        )
                     if should_close and exit_type:
                         base_exit = close_ctx_ah.get("exit_bar_close") if isinstance(close_ctx_ah.get("exit_bar_close"), (int, float)) and close_ctx_ah.get("exit_bar_close") > 0 else price_for_check
                         exit_price = base_exit

@@ -1,6 +1,6 @@
 # Конфигурационные файлы с секретами
 config.env
-config.env.lse
+# config.env.lse — шаблон фрагмента для сервера (без секретов), хранится в репозитории
 config.secrets.env
 config.security.env
 # Дампы БД (переносить на сервер через scp, не через git)
