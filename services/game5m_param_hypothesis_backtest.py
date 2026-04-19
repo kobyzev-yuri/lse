@@ -158,9 +158,19 @@ def _hanger_tune_for_buy_candidates(
     bar_horizon_days_after_entry: int,
     merge_note: str,
 ) -> Dict[str, Any]:
+    n_cand = len(candidates)
+    src = str((meta or {}).get("source", "?"))
+    print(
+        f"hanger tune [{src}]: кандидатов={n_cand}, "
+        f"горизонт баров после входа {int(bar_horizon_days_after_entry)} дн. — считаем…",
+        flush=True,
+    )
     hanger_cases: List[Dict[str, Any]] = []
     merge_hints: List[Dict[str, Any]] = []
-    for c in candidates:
+    step = max(1, n_cand // 5) if n_cand > 10 else 0
+    for i, c in enumerate(candidates, start=1):
+        if step and (i % step == 0 or i == n_cand):
+            print(f"hanger tune: {i}/{n_cand}", flush=True)
         buy_id = int(c["buy_id"])
         ticker = str(c["ticker"]).strip().upper()
         entry_price = float(c["entry_price"])
@@ -264,7 +274,9 @@ def run_hanger_tune_for_open_trades(
     bar_horizon_days_after_entry: int = 10,
 ) -> Dict[str, Any]:
     """Подбор потолка тейка по **открытым** GAME_5M BUY (нет SELL в trade_history)."""
+    print("Загрузка открытых GAME_5M BUY из trade_history…", flush=True)
     rows = fetch_open_game5m_buys(engine)
+    print(f"Открытых BUY (строк из БД): {len(rows)}", flush=True)
     candidates: List[Dict[str, Any]] = []
     for r in rows:
         try:
@@ -312,6 +324,7 @@ def run_hanger_tune_from_take_json(
     bar_horizon_days_after_entry: int = 10,
 ) -> Dict[str, Any]:
     """Legacy: кандидаты из JSON файла сверки (строки без реплея 5m)."""
+    print(f"Чтение кандидатов из JSON: {json_path!s}…", flush=True)
     candidates = candidates_from_game5m_take_json(
         json_path, require_both_replays_null=require_both_replays_null
     )

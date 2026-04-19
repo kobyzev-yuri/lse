@@ -161,6 +161,11 @@ def main() -> int:
         engine = create_engine(get_database_url())
         skip_sag = _resolve_skip_sag(mode=args.mode, require_sag=args.require_sag, skip_sag=args.skip_sag)
         hd = max(4, min(10, int(args.hanger_days)))
+        print(
+            f"Старт расчёта: mode={args.mode} exchange={args.exchange} "
+            f"hanger_days={hd} bar_horizon={max(6, int(args.bar_horizon_days))}",
+            flush=True,
+        )
 
         if args.mode == "open":
             payload = run_hanger_tune_for_open_trades(
@@ -175,7 +180,10 @@ def main() -> int:
             hc = payload.get("hanger_hypotheses") or []
             tuned = sum(1 for h in hc if isinstance(h, dict) and h.get("remediation_take_cap"))
             errs = sum(1 for h in hc if isinstance(h, dict) and h.get("error"))
-            print(f"Открытых BUY: {n} | строк отчёта: {len(hc)} | cap: {tuned} | ошибок по строкам: {errs}")
+            print(
+                f"Открытых BUY: {n} | строк отчёта: {len(hc)} | cap: {tuned} | ошибок по строкам: {errs}",
+                flush=True,
+            )
         elif args.mode == "json":
             jp = (args.from_json or "").strip()
             if not jp:
@@ -199,7 +207,10 @@ def main() -> int:
             hc = payload.get("hanger_hypotheses") or []
             tuned = sum(1 for h in hc if isinstance(h, dict) and h.get("remediation_take_cap"))
             errs = sum(1 for h in hc if isinstance(h, dict) and h.get("error"))
-            print(f"Кандидатов в JSON: {n} | строк отчёта: {len(hc)} | cap: {tuned} | ошибок по строкам: {errs}")
+            print(
+                f"Кандидатов в JSON: {n} | строк отчёта: {len(hc)} | cap: {tuned} | ошибок по строкам: {errs}",
+                flush=True,
+            )
         else:
             rep = analyze_trade_effectiveness(
                 days=max(1, min(30, int(args.days))),
@@ -223,7 +234,8 @@ def main() -> int:
             print(
                 f"Bundle: trades={(rep.get('meta') or {}).get('trades_analyzed')} | "
                 f"hangers={len(hyp.get('hanger_hypotheses') or [])} | "
-                f"underprofit={len(hyp.get('underprofit_hypotheses') or [])}"
+                f"underprofit={len(hyp.get('underprofit_hypotheses') or [])}",
+                flush=True,
             )
 
         payload["run_status"] = "ok"
@@ -233,7 +245,7 @@ def main() -> int:
                 out = project_root / out
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"JSON: {out.resolve()}")
+            print(f"JSON: {out.resolve()}", flush=True)
         return 0
     except KeyboardInterrupt as e:
         tb = traceback.format_exc()
@@ -252,7 +264,8 @@ def main() -> int:
                 print(f"Прерывание записано в JSON: {out.resolve()}", file=sys.stderr)
             except OSError as w:
                 print(f"Не удалось записать error JSON: {w}", file=sys.stderr)
-        raise
+        # Не re-raise: иначе KeyboardInterrupt вылетает в raise SystemExit(main()) и дублирует traceback.
+        return 130
     except Exception as e:
         tb = traceback.format_exc()
         print(tb, file=sys.stderr)

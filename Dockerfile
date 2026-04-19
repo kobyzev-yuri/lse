@@ -7,6 +7,7 @@ WORKDIR /app
 # Системные зависимости (для сборки пакетов и matplotlib)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Сначала CPU-only PyTorch (без nvidia/cuda), иначе sentence-transformers подтянет CUDA-сборку
