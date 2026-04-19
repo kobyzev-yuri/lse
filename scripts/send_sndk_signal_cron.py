@@ -110,8 +110,7 @@ def process_ticker(
         merge_close_context_with_trade_narrative,
     )
     from services.game_5m import (
-        get_open_position,
-        get_open_position_any,
+        resolve_open_position_for_game5m_close,
         close_position,
         should_close_position,
         record_entry,
@@ -150,8 +149,8 @@ def process_ticker(
     close_narrative_ctx = None  # merge_close_context_with_trade_narrative — для текста в Telegram
 
     try:
-        # Сначала «любая» позиция по тикеру (как в /pending), иначе только GAME_5M — чтобы видеть MU и др. при другой стратегии
-        open_pos = get_open_position_any(ticker) or get_open_position(ticker)
+        # Нетто GAME_5M (VWAP по всем лотам) — согласовано с hanger_tune; иначе any / последний BUY.
+        open_pos = resolve_open_position_for_game5m_close(ticker)
         has_pos = open_pos is not None
         price_ok = price is not None and price > 0
         strategy_label = (" [%s]" % open_pos.get("strategy_name")) if (has_pos and open_pos.get("strategy_name")) else ""
@@ -350,7 +349,7 @@ def process_ticker(
         "yes",
     )
     if not closed_this_run and decision_entry in ("BUY", "STRONG_BUY") and not allow_pyramid:
-        if get_open_position_any(ticker) or get_open_position(ticker):
+        if resolve_open_position_for_game5m_close(ticker):
             logger.info(
                 "[5m] %s: пропуск входа — уже есть открытая позиция (докуп выключен: GAME_5M_ALLOW_PYRAMID_BUY=false)",
                 ticker,
@@ -545,8 +544,7 @@ def main():
     try:
         from services.market_session import get_market_session_context
         from services.game_5m import (
-            get_open_position,
-            get_open_position_any,
+            resolve_open_position_for_game5m_close,
             close_position,
             should_close_position,
             get_latest_buy_context_json,
@@ -566,7 +564,7 @@ def main():
             tickers_ah = [t for t in tickers_ah if has_5m_data(t)]
             for ticker in tickers_ah:
                 try:
-                    open_pos = get_open_position_any(ticker) or get_open_position(ticker)
+                    open_pos = resolve_open_position_for_game5m_close(ticker)
                     if not open_pos:
                         continue
                     d5 = get_decision_5m(ticker, use_llm_news=False)

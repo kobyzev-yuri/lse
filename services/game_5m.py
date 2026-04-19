@@ -287,6 +287,94 @@ def get_open_position_any(ticker: str) -> Optional[dict[str, Any]]:
     }
 
 
+def get_open_position_game5m_vwap(ticker: str) -> Optional[dict[str, Any]]:
+    """
+    Нетто-позиция только GAME_5M по тикеру: средневзвешенная цена и суммарный quantity
+    по хронологии BUY/SELL этой стратегии (как агрегат на графике).
+
+    Нужна для закрытия в кроне при нескольких открытых BUY: ``get_open_position`` даёт только последний лот,
+    а hanger_tune и реальный PnL позиции считаются от **склейки** лотов.
+    """
+    ticker_upper = (ticker or "").strip().upper()
+    if not ticker_upper:
+        return None
+    engine = _engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT ts, id, side, quantity, price, signal_type
+                FROM public.trade_history
+                WHERE UPPER(TRIM(ticker)) = :ticker_upper AND strategy_name = :strategy
+                ORDER BY ts ASC, id ASC
+                """
+            ),
+            {"ticker_upper": ticker_upper, "strategy": GAME_5M_STRATEGY},
+        ).fetchall()
+    if not rows:
+        return None
+    position_qty = 0.0
+    position_cost = 0.0
+    position_open_ts = None
+    position_last_signal = None
+    last_buy_id: Optional[int] = None
+    for row in rows:
+        ts, _id, side, qty, price, signal_type = row
+        qty = float(qty or 0)
+        price = float(price or 0)
+        if side and side.upper() == "BUY":
+            if position_qty == 0:
+                position_open_ts = ts
+            position_qty += qty
+            position_cost += qty * price
+            position_last_signal = signal_type
+            try:
+                last_buy_id = int(_id)
+            except (TypeError, ValueError):
+                pass
+        elif side and side.upper() == "SELL":
+            if position_qty <= 0:
+                continue
+            avg_entry = position_cost / position_qty
+            cost_sold = avg_entry * min(qty, position_qty)
+            position_qty -= qty
+            position_cost -= cost_sold
+            if position_qty <= 0:
+                position_open_ts = None
+                position_cost = 0.0
+    if position_qty <= 0 or position_cost <= 0:
+        return None
+    return {
+        "id": last_buy_id,
+        "ticker": ticker,
+        "entry_ts": position_open_ts,
+        "entry_price": position_cost / position_qty,
+        "quantity": position_qty,
+        "entry_signal_type": position_last_signal,
+        "strategy_name": GAME_5M_STRATEGY,
+        "aggregate_game5m_vwap": True,
+    }
+
+
+def resolve_open_position_for_game5m_close(ticker: str) -> Optional[dict[str, Any]]:
+    """
+    Позиция для тейка/стопа в кроне 5m: приоритет — нетто GAME_5M (VWAP по стратегии),
+    иначе ``get_open_position_any`` / ``get_open_position`` (другая стратегия на тикере).
+
+    Отключить VWAP GAME_5M: ``GAME_5M_CLOSE_USE_GAME5M_VWAP=false``.
+    """
+    use = (get_config_value("GAME_5M_CLOSE_USE_GAME5M_VWAP", "true") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if use:
+        p = get_open_position_game5m_vwap(ticker)
+        if p is not None:
+            return p
+    return get_open_position_any(ticker) or get_open_position(ticker)
+
+
 def record_entry(
     ticker: str,
     price: float,
@@ -648,15 +736,78 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
     return result[:limit]
 
 
+_HANGER_TUNE_CACHE: dict[str, Any] = {"path": "", "mtime": 0.0, "per_ticker": {}}
+
+
+def _hanger_tune_min_cap_pct(ticker_upper: str) -> Optional[float]:
+    """
+    Минимальный proposed_cap_pct по тикеру из ``hanger_hypotheses`` (где есть remediation_take_cap).
+    Консервативно для выхода: самый низкий кап = раньше/легче срабатывание тейка на агрегате.
+    """
+    global _HANGER_TUNE_CACHE
+    apply_raw = (get_config_value("GAME_5M_HANGER_TUNE_APPLY_TAKE", "false") or "false").strip().lower()
+    if apply_raw not in ("1", "true", "yes"):
+        return None
+    raw_path = (get_config_value("GAME_5M_HANGER_TUNE_JSON", "") or "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if not path.is_file():
+        return None
+    try:
+        mtime = float(path.stat().st_mtime)
+    except OSError:
+        return None
+    key_path = str(path.resolve())
+    global _HANGER_TUNE_CACHE
+    if _HANGER_TUNE_CACHE.get("path") != key_path or float(_HANGER_TUNE_CACHE.get("mtime") or 0) != mtime:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            return None
+        per: dict[str, float] = {}
+        for h in data.get("hanger_hypotheses") or []:
+            if not isinstance(h, dict):
+                continue
+            cap_obj = h.get("remediation_take_cap")
+            if not isinstance(cap_obj, dict):
+                continue
+            try:
+                prop = float(cap_obj.get("proposed_cap_pct"))
+            except (TypeError, ValueError):
+                continue
+            t = str(h.get("ticker") or "").strip().upper()
+            if not t:
+                continue
+            prev = per.get(t)
+            if prev is None or prop < prev:
+                per[t] = prop
+        _HANGER_TUNE_CACHE = {"path": key_path, "mtime": mtime, "per_ticker": per}
+    caps = _HANGER_TUNE_CACHE.get("per_ticker") or {}
+    if not isinstance(caps, dict):
+        return None
+    v = caps.get(ticker_upper.strip().upper())
+    return float(v) if v is not None else None
+
+
+def _apply_hanger_take_cap_to_base(ticker: Optional[str], base: float) -> float:
+    if not ticker:
+        return base
+    hang = _hanger_tune_min_cap_pct(str(ticker).strip().upper())
+    if hang is None:
+        return base
+    return min(float(base), float(hang))
+
+
 def _take_profit_cap_pct(ticker: Optional[str] = None) -> float:
-    """Потолок тейка (%): сначала подсказка из suggested_5m_params (если включено), затем GAME_5M_TAKE_PROFIT_PCT_<TICKER>, иначе общий."""
+    """Потолок тейка (%): suggested → GAME_5M_TAKE_PROFIT_PCT_<T> → общий; опционально сужение из hanger JSON."""
     suggested = _get_suggested_5m_params()
     if ticker and suggested:
         take_map = suggested.get("take_pct") or {}
         v = take_map.get(ticker.upper()) or take_map.get(ticker)
         if v is not None:
             try:
-                return max(2.0, min(10.0, float(v)))
+                return _apply_hanger_take_cap_to_base(ticker, max(2.0, min(10.0, float(v))))
             except (ValueError, TypeError):
                 pass
     if ticker:
@@ -664,11 +815,11 @@ def _take_profit_cap_pct(ticker: Optional[str] = None) -> float:
         raw = get_config_value(key, "").strip()
         if raw:
             try:
-                return float(raw)
+                return _apply_hanger_take_cap_to_base(ticker, float(raw))
             except (ValueError, TypeError):
                 pass
     params = get_strategy_params()
-    return params["take_profit_pct"]
+    return _apply_hanger_take_cap_to_base(ticker, float(params["take_profit_pct"]))
 
 
 def _effective_take_profit_pct(
