@@ -7,6 +7,9 @@
   3) В составе анализатора — недобор по missed_upside + «старое» окно BUY (``run_game5m_hypothesis_bundle``).
 
 Имплементация в прод не выполняется автоматически — только рекомендации в JSON.
+
+Для классифицированных висяков в JSON добавляется ``liquidation_preview``: оценка PnL при продаже остатка
+по последнему Close в загруженном окне и с дисконтом (bps), плюс худший Low за период; список кейсов сортируется по нотионалу.
 """
 
 from __future__ import annotations
@@ -28,6 +31,8 @@ from sqlalchemy.engine import Engine
 from config_loader import get_config_value, get_database_url
 from services.game_5m import _take_profit_cap_pct, trade_ts_to_et
 from services.game_5m_take_replay import (
+    _bar_end_et,
+    _normalize_df_datetime_et,
     load_bars_5m_for_replay,
     log_return_pnl,
     momentum_from_5m_slice,
@@ -289,6 +294,9 @@ def _hanger_tune_for_buy_candidates(
             agg_ids = c.get("aggregate_buy_ids")
             if isinstance(agg_ids, list) and agg_ids:
                 row["aggregate_buy_ids"] = [int(x) for x in agg_ids if x is not None]
+            liq = _liquidation_preview(df5, entry_ts_et=entry_et, entry_price=entry_price)
+            if liq:
+                row["liquidation_preview"] = liq
             hanger_cases.append(row)
             if sweep:
                 ev_ids = row.get("aggregate_buy_ids") or [buy_id]
@@ -315,11 +323,13 @@ def _hanger_tune_for_buy_candidates(
                     "reason": str(ex)[:500],
                 }
             )
+    ordered = _sort_hanger_hypotheses_largest_notional_first(hanger_cases)
     meta_out = {**meta, "hanger_calendar_days": int(hanger_calendar_days), "exchange": exchange}
-    meta_out["row_error_count"] = sum(1 for h in hanger_cases if isinstance(h, dict) and h.get("error"))
+    meta_out["row_error_count"] = sum(1 for h in ordered if isinstance(h, dict) and h.get("error"))
+    meta_out["hanger_hypotheses_order"] = "notional_desc_non_skipped_first"
     return {
         "meta": meta_out,
-        "hanger_hypotheses": hanger_cases,
+        "hanger_hypotheses": ordered,
         "underprofit_hypotheses": [],
         "mergeable_recommendations": merge_hints,
     }
@@ -536,6 +546,103 @@ def _notional_usd(entry_price: float, qty: Any) -> float:
 def _hanger_aggression(notional: float, calendar_days: float) -> float:
     ref_n = 25_000.0
     return min(2.0, (notional / ref_n) ** 0.5 * (0.6 + float(calendar_days) / 6.0))
+
+
+def _sort_hanger_hypotheses_largest_notional_first(cases: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Не-пропущенные строки — по убыванию notional_usd_approx; skipped/error — в конец."""
+
+    def _key(h: Dict[str, Any]) -> tuple:
+        if not isinstance(h, dict):
+            return (-2, 0.0, "")
+        if h.get("skipped") or h.get("error"):
+            return (-1, 0.0, str(h.get("ticker") or ""))
+        return (0, float(h.get("notional_usd_approx") or 0.0), str(h.get("ticker") or ""))
+
+    return sorted(cases, key=_key, reverse=True)
+
+
+def _liquidation_preview(
+    df5: pd.DataFrame,
+    *,
+    entry_ts_et: pd.Timestamp,
+    entry_price: float,
+    bar_minutes: int = 5,
+) -> Optional[Dict[str, Any]]:
+    """
+    Оценка «снять остаток по рынку» по последнему доступному 5m-бару в уже загруженном ``df5``:
+    log-ret от агрегатного входа без комиссий; сценарии с дисконтом к Close (имитация спреда/проскальзывания).
+    """
+    if df5 is None or df5.empty or entry_price <= 0:
+        return None
+    df = _normalize_df_datetime_et(df5)
+    if df is None or df.empty:
+        return None
+    et = pd.Timestamp(trade_ts_to_et(entry_ts_et))
+    if et.tzinfo is None:
+        et = et.tz_localize("America/New_York", ambiguous=True)
+    else:
+        et = et.tz_convert("America/New_York")
+
+    subs: List[Dict[str, Any]] = []
+    for i in range(len(df)):
+        row = df.iloc[i]
+        bar_open = pd.Timestamp(row["datetime"])
+        bar_end = _bar_end_et(bar_open, bar_minutes)
+        if bar_end <= et:
+            continue
+        try:
+            close = float(row["Close"])
+            low = float(row["Low"])
+        except (TypeError, ValueError):
+            continue
+        if close <= 0 or low <= 0:
+            continue
+        subs.append({"bar_end": bar_end, "close": close, "low": low})
+
+    if not subs:
+        return None
+
+    min_low = min(s["low"] for s in subs)
+    last = subs[-1]
+    last_close = float(last["close"])
+    last_end = last["bar_end"]
+
+    slip_bps_list = (0.0, 5.0, 10.0, 20.0, 35.0, 50.0, 75.0, 100.0)
+    scenarios_log_ret: Dict[str, float] = {}
+    best_lr: Optional[float] = None
+    best_name: Optional[str] = None
+    for bps in slip_bps_list:
+        px = last_close * (1.0 - bps / 10000.0)
+        if px <= 0:
+            continue
+        lr = log_return_pnl(entry_price, px)
+        if lr is None:
+            continue
+        name = "last_bar_close" if bps < 1e-9 else f"last_bar_close_minus_{int(bps)}bps"
+        scenarios_log_ret[name] = round(float(lr), 6)
+        if best_lr is None or lr > best_lr:
+            best_lr = lr
+            best_name = name
+
+    worst_lr = log_return_pnl(entry_price, min_low)
+    worst_pct = None if worst_lr is None else round((math.exp(float(worst_lr)) - 1.0) * 100.0, 3)
+    best_pct = None if best_lr is None else round((math.exp(float(best_lr)) - 1.0) * 100.0, 3)
+
+    return {
+        "last_bar_end_et": str(last_end),
+        "last_bar_close": round(last_close, 6),
+        "bars_after_entry": len(subs),
+        "exit_at_min_low_since_entry_log_ret": None
+        if worst_lr is None
+        else round(float(worst_lr), 6),
+        "exit_at_min_low_since_entry_pct_approx": worst_pct,
+        "scenarios_log_ret": scenarios_log_ret,
+        "best_listed_exit_log_ret": None if best_lr is None else round(float(best_lr), 6),
+        "best_listed_exit_pct_approx": best_pct,
+        "best_listed_exit_name": best_name,
+        "note_ru": "Доходность log(close/entry) без комиссий; дисконт к последнему Close — грубая имитация продажи остатка. "
+        "Окно = уже загруженные бары (--bar-horizon-days); для горизонта «ещё неделя» увеличьте горизонт.",
+    }
 
 
 def diagnose_hanger(

@@ -189,7 +189,8 @@ def main() -> int:
             tuned = sum(1 for h in hc if isinstance(h, dict) and h.get("remediation_take_cap"))
             errs = sum(1 for h in hc if isinstance(h, dict) and h.get("error"))
             print(
-                f"Открытых BUY: {n} | строк отчёта: {len(hc)} | cap: {tuned} | ошибок по строкам: {errs}",
+                f"Открытых BUY: {n} | строк отчёта: {len(hc)} | cap: {tuned} | ошибок по строкам: {errs} | "
+                f"liquidation_preview в JSON для висяков.",
                 flush=True,
             )
         elif args.mode == "open_agg":
@@ -209,7 +210,7 @@ def main() -> int:
             errs = sum(1 for h in hc if isinstance(h, dict) and h.get("error"))
             print(
                 f"Агрегат: тикеров={n_tick} (строк BUY в БД: {n_rows}) | строк отчёта: {len(hc)} | "
-                f"cap: {tuned} | ошибок: {errs}",
+                f"cap: {tuned} | ошибок: {errs} | см. liquidation_preview в JSON (снятие остатка по последнему Close ±bps).",
                 flush=True,
             )
         elif args.mode == "json":
