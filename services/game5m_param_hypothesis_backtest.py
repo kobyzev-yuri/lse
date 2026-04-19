@@ -75,6 +75,55 @@ def fetch_open_game5m_buys(engine: Engine) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def fetch_open_game5m_buys_aggregate_by_ticker(engine: Engine) -> List[Dict[str, Any]]:
+    """
+    Одна строка на **тикер**: все «висящие» BUY GAME_5M (как в ``fetch_open_game5m_buys``) склеены:
+    дата входа для окна — **первая** по времени, цена — **VWAP**, quantity — сумма лотов.
+    """
+    rows = fetch_open_game5m_buys(engine)
+    by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        try:
+            t = str(r.get("ticker") or "").strip().upper()
+            if not t:
+                continue
+            by_ticker.setdefault(t, []).append(dict(r))
+        except (TypeError, ValueError):
+            continue
+    out: List[Dict[str, Any]] = []
+    for t in sorted(by_ticker.keys()):
+        lst = sorted(by_ticker[t], key=lambda x: (x.get("ts"), int(x.get("id") or 0)))
+        first = lst[0]
+        tot_q = 0.0
+        tot_c = 0.0
+        buy_ids: List[int] = []
+        for r in lst:
+            try:
+                q = float(r.get("quantity") or 1.0)
+                p = float(r.get("price") or 0.0)
+            except (TypeError, ValueError):
+                q, p = 1.0, 0.0
+            tot_q += max(1e-9, q)
+            tot_c += q * p
+            try:
+                buy_ids.append(int(r["id"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if tot_q <= 0 or not buy_ids:
+            continue
+        out.append(
+            {
+                "buy_id": int(first["id"]),
+                "ticker": t,
+                "entry_ts": first["ts"],
+                "entry_price": tot_c / tot_q,
+                "quantity": tot_q,
+                "aggregate_buy_ids": buy_ids,
+            }
+        )
+    return out
+
+
 def _fetch_game5m_buys_between(engine: Engine, ts_start: datetime, ts_end: datetime) -> List[Dict[str, Any]]:
     q = text(
         """
@@ -229,14 +278,18 @@ def _hanger_tune_for_buy_candidates(
                 "remediation_take_cap": sweep,
                 "skipped": False,
             }
+            agg_ids = c.get("aggregate_buy_ids")
+            if isinstance(agg_ids, list) and agg_ids:
+                row["aggregate_buy_ids"] = [int(x) for x in agg_ids if x is not None]
             hanger_cases.append(row)
             if sweep:
+                ev_ids = row.get("aggregate_buy_ids") or [buy_id]
                 merge_hints.append(
                     {
                         "theme": "hanger_take_cap",
                         "env_key": sweep["env_key"],
                         "direction": "decrease_cap",
-                        "evidence_buy_ids": [buy_id],
+                        "evidence_buy_ids": ev_ids,
                         "proposed_value": sweep["proposed_cap_pct"],
                         "note": merge_note,
                     }
@@ -309,6 +362,42 @@ def run_hanger_tune_for_open_trades(
         skip_sag_check=skip_sag_check,
         bar_horizon_days_after_entry=bar_horizon_days_after_entry,
         merge_note="Открытый BUY в trade_history; подтвердить walk-forward.",
+    )
+
+
+def run_hanger_tune_for_open_trades_aggregate(
+    *,
+    engine: Engine,
+    exchange: str = "US",
+    hanger_calendar_days: int = 6,
+    sag_epsilon_log: float = 0.0,
+    skip_sag_check: bool = True,
+    bar_horizon_days_after_entry: int = 10,
+) -> Dict[str, Any]:
+    """Подбор тейка по **агрегированной** открытой позиции GAME_5M на тикер (первая дата входа + VWAP)."""
+    print("Загрузка открытых GAME_5M BUY и агрегация по тикерам…", flush=True)
+    candidates = fetch_open_game5m_buys_aggregate_by_ticker(engine)
+    print(f"Тикеров с открытой нетто-позицией: {len(candidates)}", flush=True)
+    meta = {
+        "source": "trade_history_open_buys_aggregate_by_ticker",
+        "open_buys_count": sum(len((c.get("aggregate_buy_ids") or [c.get("buy_id")])) for c in candidates),
+        "tickers_count": len(candidates),
+        "aggregate": True,
+        "sag_epsilon_log": float(sag_epsilon_log),
+        "skip_sag_check": bool(skip_sag_check),
+        "bar_horizon_days_after_entry": int(bar_horizon_days_after_entry),
+        "module": "services.game5m_param_hypothesis_backtest.run_hanger_tune_for_open_trades_aggregate",
+    }
+    return _hanger_tune_for_buy_candidates(
+        engine=engine,
+        candidates=candidates,
+        meta=meta,
+        exchange=exchange,
+        hanger_calendar_days=hanger_calendar_days,
+        sag_epsilon_log=sag_epsilon_log,
+        skip_sag_check=skip_sag_check,
+        bar_horizon_days_after_entry=bar_horizon_days_after_entry,
+        merge_note="Агрегат открытых BUY по тикеру (VWAP, первая дата); walk-forward обязателен.",
     )
 
 
@@ -488,6 +577,60 @@ def diagnose_hanger(
         if entry_price > 0
         else None,
     }
+
+
+def live_aggregate_hanger_diagnosis(
+    *,
+    engine: Engine,
+    ticker: str,
+    open_position: Dict[str, Any],
+    exchange: str = "US",
+    hanger_calendar_days: int = 6,
+    sag_epsilon_log: float = 0.0,
+    skip_sag_check: bool = False,
+    bar_horizon_days_after_entry: int = 10,
+) -> Optional[Dict[str, Any]]:
+    """
+    Live: одна нетто-позиция GAME_5M (``entry_price`` в ``open_position`` — обычно VWAP) и те же правила,
+    что ``diagnose_hanger``: окно **hanger_calendar_days** календарных дней от **самого раннего** открытого BUY.
+    """
+    ticker_u = (ticker or "").strip().upper()
+    if not ticker_u:
+        return None
+    rows = fetch_open_game5m_buys(engine)
+    first_ts = None
+    for r in rows:
+        if str(r.get("ticker") or "").strip().upper() != ticker_u:
+            continue
+        ts = r.get("ts")
+        if ts is None:
+            continue
+        if first_ts is None or ts < first_ts:
+            first_ts = ts
+    if first_ts is None:
+        return None
+    try:
+        entry_price = float(open_position.get("entry_price") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if entry_price <= 0:
+        return None
+    entry_et = pd.Timestamp(trade_ts_to_et(first_ts))
+    start_utc = (entry_et.tz_convert("UTC") - pd.Timedelta(days=8)).floor("s")
+    end_utc = (
+        entry_et.tz_convert("UTC")
+        + pd.Timedelta(days=max(int(bar_horizon_days_after_entry), int(hanger_calendar_days)))
+    ).ceil("s")
+    df5 = load_bars_5m_for_replay(engine, ticker_u, exchange, start_utc, end_utc)
+    return diagnose_hanger(
+        df5,
+        entry_ts_et=entry_et,
+        entry_price=entry_price,
+        ticker=ticker_u,
+        hanger_calendar_days=hanger_calendar_days,
+        sag_epsilon_log=sag_epsilon_log,
+        skip_sag_check=skip_sag_check,
+    )
 
 
 def sweep_hanger_take_cap(
@@ -750,10 +893,13 @@ def run_game5m_hypothesis_bundle(
 __all__ = [
     "run_game5m_hypothesis_bundle",
     "fetch_open_game5m_buys",
+    "fetch_open_game5m_buys_aggregate_by_ticker",
     "run_hanger_tune_for_open_trades",
+    "run_hanger_tune_for_open_trades_aggregate",
     "run_hanger_tune_from_take_json",
     "candidates_from_game5m_take_json",
     "diagnose_hanger",
+    "live_aggregate_hanger_diagnosis",
     "sweep_hanger_take_cap",
     "sweep_underprofit_momentum_factor",
     "_env_overrides",

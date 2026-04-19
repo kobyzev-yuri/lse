@@ -3,13 +3,18 @@
 Офлайн-подбор GAME_5M_* по **не закрытым** BUY (по умолчанию) — только trade_history + 5m-бары.
 
 Режимы:
-  open (по умолчанию) — все GAME_5M BUY без последующего SELL по тикеру;
+  open (по умолчанию) — каждая строка GAME_5M BUY без последующего SELL по тикеру;
+  open_agg — одна строка на тикер: те же открытые BUY склеены, цена входа VWAP, дата — первая сделка;
   json — legacy: список buy из сохранённого JSON сверки (строки без реплея 5m);
   bundle — полный отчёт анализатора закрытых сделок + блок гипотез (missed upside и т.д.).
 
 Пример на инстансе (Docker):
   docker compose exec lse python scripts/backtest_game5m_param_hypotheses.py \\
     --json-out /app/logs/hanger_tune_open.json
+
+  # одна строка на тикер (VWAP по всем открытым BUY на символ):
+  docker compose exec lse python scripts/backtest_game5m_param_hypotheses.py --mode open_agg \\
+    --json-out /app/logs/hanger_tune_open_agg.json
 
   # строже: учитывать «провисание» по close
   docker compose exec lse python scripts/backtest_game5m_param_hypotheses.py --require-sag \\
@@ -41,6 +46,7 @@ from sqlalchemy import create_engine
 from config_loader import get_database_url
 from services.game5m_param_hypothesis_backtest import (
     run_hanger_tune_for_open_trades,
+    run_hanger_tune_for_open_trades_aggregate,
     run_hanger_tune_from_take_json,
 )
 from services.trade_effectiveness_analyzer import analyze_trade_effectiveness
@@ -90,7 +96,7 @@ def _resolve_skip_sag(*, mode: str, require_sag: bool, skip_sag: bool) -> bool:
         return False
     if skip_sag:
         return True
-    return mode == "open"
+    return mode in ("open", "open_agg")
 
 
 def _write_error_json(out_path: Path, *, err_type: str, message: str, tb: str) -> None:
@@ -116,9 +122,9 @@ def main() -> int:
     )
     p.add_argument(
         "--mode",
-        choices=("open", "json", "bundle"),
+        choices=("open", "open_agg", "json", "bundle"),
         default="open",
-        help="open — не закрытые BUY в БД; json — файл сверки; bundle — анализатор + гипотезы",
+        help="open — каждый открытый BUY; open_agg — агрегат по тикеру (VWAP); json — файл сверки; bundle — анализатор + гипотезы",
     )
     p.add_argument(
         "--from-json",
@@ -182,6 +188,26 @@ def main() -> int:
             errs = sum(1 for h in hc if isinstance(h, dict) and h.get("error"))
             print(
                 f"Открытых BUY: {n} | строк отчёта: {len(hc)} | cap: {tuned} | ошибок по строкам: {errs}",
+                flush=True,
+            )
+        elif args.mode == "open_agg":
+            payload = run_hanger_tune_for_open_trades_aggregate(
+                engine=engine,
+                exchange=str(args.exchange),
+                hanger_calendar_days=hd,
+                sag_epsilon_log=float(args.sag_epsilon_log),
+                skip_sag_check=skip_sag,
+                bar_horizon_days_after_entry=max(6, int(args.bar_horizon_days)),
+            )
+            meta = payload.get("meta") or {}
+            n_rows = int(meta.get("open_buys_count", 0))
+            n_tick = int(meta.get("tickers_count", len(payload.get("hanger_hypotheses") or [])))
+            hc = payload.get("hanger_hypotheses") or []
+            tuned = sum(1 for h in hc if isinstance(h, dict) and h.get("remediation_take_cap"))
+            errs = sum(1 for h in hc if isinstance(h, dict) and h.get("error"))
+            print(
+                f"Агрегат: тикеров={n_tick} (строк BUY в БД: {n_rows}) | строк отчёта: {len(hc)} | "
+                f"cap: {tuned} | ошибок: {errs}",
                 flush=True,
             )
         elif args.mode == "json":
