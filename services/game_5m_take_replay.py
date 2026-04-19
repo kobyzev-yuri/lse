@@ -125,7 +125,7 @@ def _exit_fill_price(
     high: float,
     low: float,
 ) -> float:
-    if signal_type == "TAKE_PROFIT":
+    if signal_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND"):
         return max(close, high)
     if signal_type == "STOP_LOSS":
         return min(close, low)

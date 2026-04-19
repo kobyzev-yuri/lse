@@ -1843,6 +1843,7 @@ def _exit_reason_caption(code: Optional[str]) -> str:
     c = str(code).strip().upper()
     return {
         "TAKE_PROFIT": "достигнут тейк",
+        "TAKE_PROFIT_SUSPEND": "тейк по алгоритму висяка (сужение)",
         "TIME_EXIT": "конец сессии или макс. дней",
         "TIME_EXIT_EARLY": "ранний de-risk выход",
         "SELL": "сигнал SELL (правила 5m)",

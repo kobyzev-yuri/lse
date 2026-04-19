@@ -22,7 +22,7 @@ def main():
         sys.exit(1)
     ticker = sys.argv[1].strip().upper()
     signal_type = (sys.argv[2].strip().upper() if len(sys.argv) > 2 else "TAKE_PROFIT") or "TAKE_PROFIT"
-    if signal_type not in ("TAKE_PROFIT", "STOP_LOSS", "MANUAL", "SELL", "TIME_EXIT"):
+    if signal_type not in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND", "STOP_LOSS", "MANUAL", "SELL", "TIME_EXIT"):
         signal_type = "TAKE_PROFIT"
 
     from sqlalchemy import create_engine, text

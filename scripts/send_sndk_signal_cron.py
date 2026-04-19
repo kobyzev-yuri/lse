@@ -163,6 +163,8 @@ def process_ticker(
         )
 
         if has_pos and price_ok:
+            engine = None
+            apply_hanger_json = None
             try:
                 from report_generator import get_engine, get_latest_prices
                 engine = get_engine()
@@ -172,6 +174,37 @@ def process_ticker(
                 price_quotes = None
             price_for_check = max(price, price_quotes) if (price_quotes is not None and price_quotes > 0) else price
             ms = d5.get("market_session") if isinstance(d5.get("market_session"), dict) else {}
+            if engine is not None:
+                dual = (get_config_value("GAME_5M_HANGER_DUAL_MODE", "false") or "false").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                )
+                if dual and (open_pos.get("strategy_name") or "GAME_5M").strip().upper() == "GAME_5M":
+                    try:
+                        from services.game5m_param_hypothesis_backtest import live_aggregate_hanger_diagnosis
+
+                        live_days = int((get_config_value("GAME_5M_HANGER_LIVE_CALENDAR_DAYS", "6") or "6").strip())
+                        sag_eps = float((get_config_value("GAME_5M_HANGER_LIVE_SAG_EPSILON_LOG", "0") or "0").strip())
+                        skip_sag = (get_config_value("GAME_5M_HANGER_LIVE_SKIP_SAG", "false") or "false").strip().lower() in (
+                            "1",
+                            "true",
+                            "yes",
+                        )
+                        bar_hz = int((get_config_value("GAME_5M_BAR_HORIZON_DAYS", "10") or "10").strip())
+                        hdiag = live_aggregate_hanger_diagnosis(
+                            engine=engine,
+                            ticker=ticker,
+                            open_position=open_pos,
+                            exchange="US",
+                            hanger_calendar_days=live_days,
+                            sag_epsilon_log=sag_eps,
+                            skip_sag_check=skip_sag,
+                            bar_horizon_days_after_entry=bar_hz,
+                        )
+                        apply_hanger_json = hdiag is not None
+                    except Exception as e:
+                        logger.warning("%s: GAME_5M_HANGER_DUAL_MODE live hanger: %s", ticker, e)
             should_close, exit_type, exit_detail = should_close_position(
                 open_pos,
                 decision_exit,
@@ -182,13 +215,14 @@ def process_ticker(
                 rsi_5m=rsi_5m,
                 pullback_from_high_pct=d5.get("pullback_from_high_pct"),
                 session_phase=ms.get("session_phase"),
+                apply_hanger_json=apply_hanger_json,
             )
             entry = open_pos.get("entry_price")
             entry_f = float(entry) if entry is not None and entry > 0 else None
 
             if should_close and exit_type:
                 base_exit = close_ctx.get("exit_bar_close") if isinstance(close_ctx.get("exit_bar_close"), (int, float)) and close_ctx.get("exit_bar_close") > 0 else price_for_check
-                if exit_type == "TAKE_PROFIT":
+                if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND"):
                     # В БД пишем цену закрытия бара (exit_bar_close), чтобы на графике маркер «Тейк» был на линии Close, а не выше (bar_high).
                     # Решение о тейке принято по bar_high; для отображения и PnL используем close бара.
                     if base_exit and base_exit > 0:
@@ -203,9 +237,11 @@ def process_ticker(
                     exit_price = base_exit
                 strat_nm = (open_pos.get("strategy_name") or "GAME_5M").strip() or "GAME_5M"
                 entry_ctx_db = get_latest_buy_context_json(ticker, strat_nm)
-                take_pct_e = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
+                take_pct_e = _effective_take_profit_pct(
+                    momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json
+                )
                 stop_pct_e = (
-                    _effective_stop_loss_pct(momentum_2h_pct, ticker=ticker)
+                    _effective_stop_loss_pct(momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json)
                     if _game_5m_stop_loss_enabled()
                     else 0.0
                 )
@@ -216,7 +252,7 @@ def process_ticker(
                 )
                 pnl_to_take_pct = (
                     ((bar_high / entry_f) - 1.0) * 100.0
-                    if (exit_type == "TAKE_PROFIT" and entry_f and entry_f > 0 and bar_high and bar_high > 0)
+                    if (exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") and entry_f and entry_f > 0 and bar_high and bar_high > 0)
                     else None
                 )
                 logger.info(
@@ -258,7 +294,7 @@ def process_ticker(
                 close_narrative_ctx = close_ctx_enriched
                 close_position(
                     ticker, exit_price, exit_type, position=open_pos,
-                    bar_high=bar_high if exit_type == "TAKE_PROFIT" else None,
+                    bar_high=bar_high if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") else None,
                     bar_low=bar_low if exit_type == "STOP_LOSS" else None,
                     context_json=close_ctx_enriched,
                 )
@@ -282,9 +318,13 @@ def process_ticker(
             else:
                 if entry_f:
                     pnl_pct = (price_for_check - entry_f) / entry_f * 100.0
-                    take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
+                    take_pct = _effective_take_profit_pct(
+                        momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json
+                    )
                     if _game_5m_stop_loss_enabled():
-                        stop_pct = _effective_stop_loss_pct(momentum_2h_pct, ticker=ticker)
+                        stop_pct = _effective_stop_loss_pct(
+                            momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json
+                        )
                         outcome_lines.append(
                             "позиция открыта: вход=%.2f, текущая=%.2f, pnl=%.2f%%, тейк=%.1f%%, стоп=%.1f%% — тейк/стоп не сработали"
                             % (entry_f, price_for_check, pnl_pct, take_pct, stop_pct)
@@ -571,13 +611,45 @@ def main():
                     if not d5 or d5.get("price") is None:
                         continue
                     price = d5.get("price")
+                    engine_ah = None
+                    apply_hanger_json_ah = None
                     try:
                         from report_generator import get_engine, get_latest_prices
-                        quotes_prices = get_latest_prices(get_engine(), [ticker])
+                        engine_ah = get_engine()
+                        quotes_prices = get_latest_prices(engine_ah, [ticker])
                         pq = quotes_prices.get(ticker)
                         price_for_check = max(price, pq) if (pq is not None and pq > 0) else price
                     except Exception:
                         price_for_check = price
+                    if engine_ah is not None:
+                        dual_ah = (get_config_value("GAME_5M_HANGER_DUAL_MODE", "false") or "false").strip().lower() in (
+                            "1",
+                            "true",
+                            "yes",
+                        )
+                        if dual_ah and (open_pos.get("strategy_name") or "GAME_5M").strip().upper() == "GAME_5M":
+                            try:
+                                from services.game5m_param_hypothesis_backtest import live_aggregate_hanger_diagnosis
+
+                                live_days = int((get_config_value("GAME_5M_HANGER_LIVE_CALENDAR_DAYS", "6") or "6").strip())
+                                sag_eps = float((get_config_value("GAME_5M_HANGER_LIVE_SAG_EPSILON_LOG", "0") or "0").strip())
+                                skip_sag = (
+                                    get_config_value("GAME_5M_HANGER_LIVE_SKIP_SAG", "false") or "false"
+                                ).strip().lower() in ("1", "true", "yes")
+                                bar_hz = int((get_config_value("GAME_5M_BAR_HORIZON_DAYS", "10") or "10").strip())
+                                hdiag_ah = live_aggregate_hanger_diagnosis(
+                                    engine=engine_ah,
+                                    ticker=ticker,
+                                    open_position=open_pos,
+                                    exchange="US",
+                                    hanger_calendar_days=live_days,
+                                    sag_epsilon_log=sag_eps,
+                                    skip_sag_check=skip_sag,
+                                    bar_horizon_days_after_entry=bar_hz,
+                                )
+                                apply_hanger_json_ah = hdiag_ah is not None
+                            except Exception as e:
+                                logger.warning("%s: AFTER_HOURS HANGER_DUAL_MODE: %s", ticker, e)
                     close_ctx_ah = build_5m_close_context(d5)
                     bar_high = close_ctx_ah.get("bar_high")
                     bar_low = close_ctx_ah.get("bar_low")
@@ -592,20 +664,23 @@ def main():
                         rsi_5m=close_ctx_ah.get("rsi_5m"),
                         pullback_from_high_pct=d5.get("pullback_from_high_pct"),
                         session_phase=ms_ah.get("session_phase"),
+                        apply_hanger_json=apply_hanger_json_ah,
                     )
                     if should_close and exit_type:
                         base_exit = close_ctx_ah.get("exit_bar_close") if isinstance(close_ctx_ah.get("exit_bar_close"), (int, float)) and close_ctx_ah.get("exit_bar_close") > 0 else price_for_check
                         exit_price = base_exit
-                        if exit_type == "TAKE_PROFIT" and bar_high is not None and bar_high > 0:
+                        if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") and bar_high is not None and bar_high > 0:
                             exit_price = min(exit_price, bar_high)
                         elif exit_type == "STOP_LOSS" and bar_low is not None and bar_low > 0:
                             exit_price = max(exit_price, bar_low)
                         strat_ah = (open_pos.get("strategy_name") or "GAME_5M").strip() or "GAME_5M"
                         entry_ctx_ah = get_latest_buy_context_json(ticker, strat_ah)
                         mom_ah = close_ctx_ah.get("momentum_2h_pct")
-                        take_ah = _effective_take_profit_pct(mom_ah, ticker=ticker)
+                        take_ah = _effective_take_profit_pct(
+                            mom_ah, ticker=ticker, apply_hanger_json=apply_hanger_json_ah
+                        )
                         stop_ah = (
-                            _effective_stop_loss_pct(mom_ah, ticker=ticker)
+                            _effective_stop_loss_pct(mom_ah, ticker=ticker, apply_hanger_json=apply_hanger_json_ah)
                             if _game_5m_stop_loss_enabled()
                             else 0.0
                         )
@@ -622,7 +697,7 @@ def main():
                         )
                         close_position(
                             ticker, exit_price, exit_type, position=open_pos,
-                            bar_high=bar_high if exit_type == "TAKE_PROFIT" else None,
+                            bar_high=bar_high if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") else None,
                             bar_low=bar_low if exit_type == "STOP_LOSS" else None,
                             context_json=close_ctx_ah_merged,
                         )
@@ -638,7 +713,12 @@ def main():
                         )
                         pnl_take_ah = (
                             ((bar_high / entry_f_ah) - 1.0) * 100.0
-                            if (exit_type == "TAKE_PROFIT" and entry_f_ah and bar_high and bar_high > 0)
+                            if (
+                                exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND")
+                                and entry_f_ah
+                                and bar_high
+                                and bar_high > 0
+                            )
                             else None
                         )
                         logger.info(

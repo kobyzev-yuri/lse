@@ -1235,15 +1235,24 @@ def build_5m_trade_close_narrative(
     exit_condition: str
     exit_intuition: str
 
-    if exit_type == "TAKE_PROFIT":
-        exit_condition = (
-            f"Условие выхода (тейк): цель ~{take_pct:.2f}% от входа (импульс 2ч / потолок конфига; в кроне допуск 0.05 п.п.). "
-            f"Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
-        )
-        exit_intuition = (
-            "Интуиция: зафиксировать запланированный апсайд. Учёт High последних баров уменьшает шанс «пропустить» "
-            "кратковременный всплеск между запусками крона по 5m Close."
-        )
+    if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND"):
+        if exit_type == "TAKE_PROFIT_SUSPEND":
+            exit_condition = (
+                f"Условие выхода (тейк висяка): цель ~{take_pct:.2f}% после сужения по hanger / live-диагностике; допуск 0.05 п.п. "
+                f"Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+            )
+            exit_intuition = (
+                "Интуиция: выход по облегчённому потолку тейка для подвисшей позиции (отдельно от обычного TAKE_PROFIT в отчётах)."
+            )
+        else:
+            exit_condition = (
+                f"Условие выхода (тейк): цель ~{take_pct:.2f}% от входа (импульс 2ч / потолок конфига; в кроне допуск 0.05 п.п.). "
+                f"Факт: вход {ep:.4f}, выход {xp:.4f}, PnL ~{pnl_simple:+.2f}%."
+            )
+            exit_intuition = (
+                "Интуиция: зафиксировать запланированный апсайд. Учёт High последних баров уменьшает шанс «пропустить» "
+                "кратковременный всплеск между запусками крона по 5m Close."
+            )
     elif exit_type == "STOP_LOSS":
         exit_condition = (
             f"Условие выхода (стоп): просадка от входа достигла ~{stop_pct:.2f}% (по логике Low бара). "

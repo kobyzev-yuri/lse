@@ -465,7 +465,7 @@ def close_position(
     """Закрывает открытую позицию: INSERT SELL. Возвращает PnL в %.
     position — если передан (например от get_open_position_any), SELL пишется с strategy_name из позиции;
     иначе берётся позиция только GAME_5M.
-    bar_high/bar_low — опционально: при TAKE_PROFIT цена не выше bar_high, при STOP_LOSS не ниже bar_low.
+    bar_high/bar_low — опционально: при TAKE_PROFIT / TAKE_PROFIT_SUSPEND цена не выше bar_high, при STOP_LOSS не ниже bar_low.
     Если не заданы — применяется ограничение по entry (макс. +15% тейк / −15% стоп), чтобы в БД не попали нереальные цифры из глючных котировок."""
     if position is None:
         position = get_open_position(ticker)
@@ -483,15 +483,15 @@ def close_position(
 
     # Защита от нереальной цены в БД (глюк 5m/quotes или ручное закрытие с опечаткой)
     original_exit = exit_price
-    if exit_signal_type == "TAKE_PROFIT":
+    if exit_signal_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND"):
         if bar_high is not None and bar_high > 0:
             exit_price = min(exit_price, bar_high)
         else:
             cap = entry_price * 1.15
             if exit_price > cap:
                 logger.warning(
-                    "game_5m: %s TAKE_PROFIT exit_price=%.2f выше разумного (entry=%.2f, cap +15%%=%.2f) — записываем %.2f",
-                    ticker, original_exit, entry_price, cap, cap,
+                    "game_5m: %s %s exit_price=%.2f выше разумного (entry=%.2f, cap +15%%=%.2f) — записываем %.2f",
+                    ticker, exit_signal_type, original_exit, entry_price, cap, cap,
                 )
                 exit_price = cap
     elif exit_signal_type == "STOP_LOSS":
@@ -739,15 +739,22 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
 _HANGER_TUNE_CACHE: dict[str, Any] = {"path": "", "mtime": 0.0, "per_ticker": {}}
 
 
-def _hanger_tune_min_cap_pct(ticker_upper: str) -> Optional[float]:
+def _hanger_tune_min_cap_pct(ticker_upper: str, *, apply_hanger_json: Optional[bool] = None) -> Optional[float]:
     """
     Минимальный proposed_cap_pct по тикеру из ``hanger_hypotheses`` (где есть remediation_take_cap).
     Консервативно для выхода: самый низкий кап = раньше/легче срабатывание тейка на агрегате.
+
+    ``apply_hanger_json=False`` — не читать JSON (основной алгоритм).
+    ``None`` — уважать ``GAME_5M_HANGER_TUNE_APPLY_TAKE`` в config.
+    ``True`` — применять JSON, если файл задан (режим «только висок»).
     """
     global _HANGER_TUNE_CACHE
-    apply_raw = (get_config_value("GAME_5M_HANGER_TUNE_APPLY_TAKE", "false") or "false").strip().lower()
-    if apply_raw not in ("1", "true", "yes"):
+    if apply_hanger_json is False:
         return None
+    if apply_hanger_json is None:
+        apply_raw = (get_config_value("GAME_5M_HANGER_TUNE_APPLY_TAKE", "false") or "false").strip().lower()
+        if apply_raw not in ("1", "true", "yes"):
+            return None
     raw_path = (get_config_value("GAME_5M_HANGER_TUNE_JSON", "") or "").strip()
     if not raw_path:
         return None
@@ -759,7 +766,6 @@ def _hanger_tune_min_cap_pct(ticker_upper: str) -> Optional[float]:
     except OSError:
         return None
     key_path = str(path.resolve())
-    global _HANGER_TUNE_CACHE
     if _HANGER_TUNE_CACHE.get("path") != key_path or float(_HANGER_TUNE_CACHE.get("mtime") or 0) != mtime:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -790,16 +796,18 @@ def _hanger_tune_min_cap_pct(ticker_upper: str) -> Optional[float]:
     return float(v) if v is not None else None
 
 
-def _apply_hanger_take_cap_to_base(ticker: Optional[str], base: float) -> float:
+def _apply_hanger_take_cap_to_base(
+    ticker: Optional[str], base: float, *, apply_hanger_json: Optional[bool] = None
+) -> float:
     if not ticker:
         return base
-    hang = _hanger_tune_min_cap_pct(str(ticker).strip().upper())
+    hang = _hanger_tune_min_cap_pct(str(ticker).strip().upper(), apply_hanger_json=apply_hanger_json)
     if hang is None:
         return base
     return min(float(base), float(hang))
 
 
-def _take_profit_cap_pct(ticker: Optional[str] = None) -> float:
+def _take_profit_cap_pct(ticker: Optional[str] = None, *, apply_hanger_json: Optional[bool] = None) -> float:
     """Потолок тейка (%): suggested → GAME_5M_TAKE_PROFIT_PCT_<T> → общий; опционально сужение из hanger JSON."""
     suggested = _get_suggested_5m_params()
     if ticker and suggested:
@@ -807,7 +815,9 @@ def _take_profit_cap_pct(ticker: Optional[str] = None) -> float:
         v = take_map.get(ticker.upper()) or take_map.get(ticker)
         if v is not None:
             try:
-                return _apply_hanger_take_cap_to_base(ticker, max(2.0, min(10.0, float(v))))
+                return _apply_hanger_take_cap_to_base(
+                    ticker, max(2.0, min(10.0, float(v))), apply_hanger_json=apply_hanger_json
+                )
             except (ValueError, TypeError):
                 pass
     if ticker:
@@ -815,16 +825,18 @@ def _take_profit_cap_pct(ticker: Optional[str] = None) -> float:
         raw = get_config_value(key, "").strip()
         if raw:
             try:
-                return _apply_hanger_take_cap_to_base(ticker, float(raw))
+                return _apply_hanger_take_cap_to_base(ticker, float(raw), apply_hanger_json=apply_hanger_json)
             except (ValueError, TypeError):
                 pass
     params = get_strategy_params()
-    return _apply_hanger_take_cap_to_base(ticker, float(params["take_profit_pct"]))
+    return _apply_hanger_take_cap_to_base(ticker, float(params["take_profit_pct"]), apply_hanger_json=apply_hanger_json)
 
 
 def _effective_take_profit_pct(
     momentum_2h_pct: Optional[float],
     ticker: Optional[str] = None,
+    *,
+    apply_hanger_json: Optional[bool] = None,
 ) -> float:
     """Тейк-профит по импульсу 2ч или из конфига.
 
@@ -834,7 +846,7 @@ def _effective_take_profit_pct(
     Потолок не даёт тейку превысить заданный %; при импульсе 6% и factor=1 тейк = 6% (поэтому сработало на 6%, а не 7%).
     Фактор может быть >1.0 (например 1.05): цель от импульса выше сырого %% до упора в потолок; в коде ограничен сверху константой ниже.
     """
-    cap = _take_profit_cap_pct(ticker)
+    cap = _take_profit_cap_pct(ticker, apply_hanger_json=apply_hanger_json)
     try:
         min_take = float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "2.0"))
     except (ValueError, TypeError):
@@ -854,11 +866,13 @@ def _effective_take_profit_pct(
 def _effective_stop_loss_pct(
     momentum_2h_pct: Optional[float],
     ticker: Optional[str] = None,
+    *,
+    apply_hanger_json: Optional[bool] = None,
 ) -> float:
     """Стоп-лосс: меньше тейка, прогнозируется как доля от эффективного тейка (тейк от импульса 2ч)."""
     params = get_strategy_params()
     config_stop = params["stop_loss_pct"]
-    take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
+    take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json)
     try:
         ratio = float(get_config_value("GAME_5M_STOP_TO_TAKE_RATIO", "0.5"))
     except (ValueError, TypeError):
@@ -900,6 +914,7 @@ def should_close_position(
     pullback_from_high_pct: Optional[float] = None,
     session_phase: Optional[str] = None,
     simulation_time: Optional[datetime] = None,
+    apply_hanger_json: Optional[bool] = None,
 ) -> Tuple[bool, str, str]:
     """Закрывать ли позицию: по тейку/стопу (цена), по истечении срока/сессии (TIME_EXIT), early de-risk (TIME_EXIT_EARLY).
 
@@ -909,6 +924,10 @@ def should_close_position(
 
     simulation_time: если задан (например момент закрытия бара при бэктесте), возраст позиции и TIME_EXIT
     считаются относительно него; выход «конец сессии» по живому get_market_session_context не вызывается.
+
+    apply_hanger_json: None — как в config (``GAME_5M_HANGER_TUNE_APPLY_TAKE``); False — не сужать тейк JSON;
+    True — сужать (режим «только висок», см. ``GAME_5M_HANGER_DUAL_MODE`` в кроне).
+    При ``apply_hanger_json=True`` и срабатывании порога по цене в БД уходит ``TAKE_PROFIT_SUSPEND`` (тейк по алгоритму висяка), иначе ``TAKE_PROFIT``.
     """
     if current_price is None or current_price <= 0:
         return False, "", ""
@@ -916,8 +935,8 @@ def should_close_position(
     entry_price = open_position.get("entry_price")
     if isinstance(entry_price, (int, float)) and entry_price > 0:
         tkr = open_position.get("ticker")
-        take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=tkr)
-        stop_pct = _effective_stop_loss_pct(momentum_2h_pct, ticker=tkr)
+        take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=tkr, apply_hanger_json=apply_hanger_json)
+        stop_pct = _effective_stop_loss_pct(momentum_2h_pct, ticker=tkr, apply_hanger_json=apply_hanger_json)
         # Для тейка учитываем High последней свечи (отскок вверх при открытии сессии)
         price_for_take = max(current_price, bar_high) if bar_high is not None and bar_high > 0 else current_price
         # Для стопа учитываем Low последней свечи
@@ -928,7 +947,8 @@ def should_close_position(
         # Допуск 0.05%: в pending может показываться 2.7%, а в кроне (5m/quotes) получается 2.67% — чтобы тейк сработал
         take_threshold = take_pct - 0.05
         if pnl_take_pct >= take_threshold:
-            return True, "TAKE_PROFIT", ""
+            exit_sig = "TAKE_PROFIT_SUSPEND" if apply_hanger_json is True else "TAKE_PROFIT"
+            return True, exit_sig, ""
         exit_only_take = _game_5m_exit_only_take()
         # DEBUG: всегда пишем pnl vs порог; INFO — только когда до тейка осталось ≤0.5%
         logger.debug(
