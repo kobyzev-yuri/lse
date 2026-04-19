@@ -77,8 +77,11 @@ def fetch_open_game5m_buys(engine: Engine) -> List[Dict[str, Any]]:
 
 def fetch_open_game5m_buys_aggregate_by_ticker(engine: Engine) -> List[Dict[str, Any]]:
     """
-    Одна строка на **тикер**: все «висящие» BUY GAME_5M (как в ``fetch_open_game5m_buys``) склеены:
-    дата входа для окна — **первая** по времени, цена — **VWAP**, quantity — сумма лотов.
+    Одна строка на **тикер**: все «висящие» BUY GAME_5M (как в ``fetch_open_game5m_buys``) склеены;
+    цена — **VWAP**, quantity — сумма лотов.
+
+    ``entry_ts`` — **последний** открывающий BUY: реплей и подбор тейка только после него (нетто = VWAP).
+    ``aggregate_first_entry_ts`` — первый BUY по тикеру (справочно).
     """
     rows = fetch_open_game5m_buys(engine)
     by_ticker: Dict[str, List[Dict[str, Any]]] = {}
@@ -94,6 +97,7 @@ def fetch_open_game5m_buys_aggregate_by_ticker(engine: Engine) -> List[Dict[str,
     for t in sorted(by_ticker.keys()):
         lst = sorted(by_ticker[t], key=lambda x: (x.get("ts"), int(x.get("id") or 0)))
         first = lst[0]
+        last = lst[-1]
         tot_q = 0.0
         tot_c = 0.0
         buy_ids: List[int] = []
@@ -115,7 +119,8 @@ def fetch_open_game5m_buys_aggregate_by_ticker(engine: Engine) -> List[Dict[str,
             {
                 "buy_id": int(first["id"]),
                 "ticker": t,
-                "entry_ts": first["ts"],
+                "entry_ts": last["ts"],
+                "aggregate_first_entry_ts": first["ts"],
                 "entry_price": tot_c / tot_q,
                 "quantity": tot_q,
                 "aggregate_buy_ids": buy_ids,
@@ -278,6 +283,9 @@ def _hanger_tune_for_buy_candidates(
                 "remediation_take_cap": sweep,
                 "skipped": False,
             }
+            afe = c.get("aggregate_first_entry_ts")
+            if afe is not None:
+                row["aggregate_first_entry_ts"] = str(afe)
             agg_ids = c.get("aggregate_buy_ids")
             if isinstance(agg_ids, list) and agg_ids:
                 row["aggregate_buy_ids"] = [int(x) for x in agg_ids if x is not None]
@@ -374,7 +382,7 @@ def run_hanger_tune_for_open_trades_aggregate(
     skip_sag_check: bool = True,
     bar_horizon_days_after_entry: int = 10,
 ) -> Dict[str, Any]:
-    """Подбор тейка по **агрегированной** открытой позиции GAME_5M на тикер (первая дата входа + VWAP)."""
+    """Подбор тейка по **агрегированной** открытой позиции GAME_5M на тикер (VWAP; реплей от последнего BUY)."""
     print("Загрузка открытых GAME_5M BUY и агрегация по тикерам…", flush=True)
     candidates = fetch_open_game5m_buys_aggregate_by_ticker(engine)
     print(f"Тикеров с открытой нетто-позицией: {len(candidates)}", flush=True)
@@ -397,7 +405,7 @@ def run_hanger_tune_for_open_trades_aggregate(
         sag_epsilon_log=sag_epsilon_log,
         skip_sag_check=skip_sag_check,
         bar_horizon_days_after_entry=bar_horizon_days_after_entry,
-        merge_note="Агрегат открытых BUY по тикеру (VWAP, первая дата); walk-forward обязателен.",
+        merge_note="Агрегат открытых BUY по тикеру (VWAP; реплей/тейк от последнего BUY); walk-forward обязателен.",
     )
 
 
@@ -591,32 +599,34 @@ def live_aggregate_hanger_diagnosis(
     bar_horizon_days_after_entry: int = 10,
 ) -> Optional[Dict[str, Any]]:
     """
-    Live: одна нетто-позиция GAME_5M (``entry_price`` в ``open_position`` — обычно VWAP) и те же правила,
-    что ``diagnose_hanger``: окно **hanger_calendar_days** календарных дней от **самого раннего** открытого BUY.
+    Live: нетто GAME_5M (``entry_price`` в ``open_position`` — обычно VWAP), те же правила, что ``diagnose_hanger``.
+
+    Реплей и окно висяка считаются от **последнего** открывающего BUY по тикеру (после него нетто = VWAP);
+    загрузка 5m-баров — с запасом от **первого** BUY, чтобы не обрезать историю до докупок.
     """
     ticker_u = (ticker or "").strip().upper()
     if not ticker_u:
         return None
     rows = fetch_open_game5m_buys(engine)
-    first_ts = None
-    for r in rows:
-        if str(r.get("ticker") or "").strip().upper() != ticker_u:
-            continue
-        ts = r.get("ts")
-        if ts is None:
-            continue
-        if first_ts is None or ts < first_ts:
-            first_ts = ts
-    if first_ts is None:
+    t_rows = [
+        dict(r)
+        for r in rows
+        if str(r.get("ticker") or "").strip().upper() == ticker_u and r.get("ts") is not None
+    ]
+    if not t_rows:
         return None
+    t_rows.sort(key=lambda x: (x.get("ts"), int(x.get("id") or 0)))
+    first_ts = t_rows[0]["ts"]
+    last_ts = t_rows[-1]["ts"]
     try:
         entry_price = float(open_position.get("entry_price") or 0.0)
     except (TypeError, ValueError):
         return None
     if entry_price <= 0:
         return None
-    entry_et = pd.Timestamp(trade_ts_to_et(first_ts))
-    start_utc = (entry_et.tz_convert("UTC") - pd.Timedelta(days=8)).floor("s")
+    first_et = pd.Timestamp(trade_ts_to_et(first_ts))
+    entry_et = pd.Timestamp(trade_ts_to_et(last_ts))
+    start_utc = (first_et.tz_convert("UTC") - pd.Timedelta(days=8)).floor("s")
     end_utc = (
         entry_et.tz_convert("UTC")
         + pd.Timedelta(days=max(int(bar_horizon_days_after_entry), int(hanger_calendar_days)))
