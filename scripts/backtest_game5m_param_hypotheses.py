@@ -20,8 +20,10 @@
   docker compose exec lse python scripts/backtest_game5m_param_hypotheses.py --require-sag \\
     --json-out /app/logs/hanger_tune_open.json
 
-  Фон (терминал можно закрыть) — detached exec + лог в томе ``logs/``:
-  ./scripts/run_game5m_param_hypotheses_docker_bg.sh --json-out /app/logs/hanger_tune_open.json
+  Фон (терминал можно закрыть) — ``run_game5m_param_hypotheses_docker_bg.sh``:
+  если ``--mode`` не указан, скрипт подставляет ``--mode open_agg``; для построчного BUY укажите ``--mode open``.
+  ./scripts/run_game5m_param_hypotheses_docker_bg.sh \\
+    --log-file /app/logs/game5m_param_hypothesis_agg.log --json-out /app/logs/hanger_tune_open_agg.json
 
   Или вручную:
   docker compose exec -d lse env PYTHONUNBUFFERED=1 python -u scripts/backtest_game5m_param_hypotheses.py \\

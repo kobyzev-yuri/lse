@@ -3,21 +3,30 @@
 # Остановка: ./scripts/stop_game5m_param_hypotheses_docker.sh  (или … -9 для SIGKILL).
 # Логи: docker compose logs -f lse  ИЛИ  --log-file внутри Python (том ./logs → /app/logs).
 #
+# Если в аргументах нет --mode, подставляется --mode open_agg (один кандидат на тикер, VWAP).
+# Явно по каждой строке BUY в БД: добавьте --mode open
+#
 # Пример:
 #   cd ~/lse && ./scripts/run_game5m_param_hypotheses_docker_bg.sh \
-#     --log-file /app/logs/game5m_param_hypothesis_bg.log \
-#     --json-out /app/logs/hanger_tune_open.json
+#     --log-file /app/logs/game5m_param_hypothesis_agg.log \
+#     --json-out /app/logs/hanger_tune_open_agg.json
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 SERVICE="${LSE_COMPOSE_SERVICE:-lse}"
 
+ARGS=()
+if [[ "$*" != *--mode* ]]; then
+  ARGS+=(--mode open_agg)
+fi
+ARGS+=("$@")
+
 # exec -d = только «Docker принял запуск»; python может сразу упасть — проверка ниже.
 # Образ lse (python:3.11-slim) без procps — `ps` нет; проверяем /proc через python.
 if ! docker compose exec -d -w /app "$SERVICE" \
   env PYTHONUNBUFFERED=1 \
-  python -u scripts/backtest_game5m_param_hypotheses.py "$@"; then
+  python -u scripts/backtest_game5m_param_hypotheses.py "${ARGS[@]}"; then
   echo "Ошибка: docker compose exec -d не удалась (сервис $SERVICE не поднят или compose из другой директории?)." >&2
   exit 1
 fi
@@ -56,5 +65,5 @@ else
   echo "Внимание: процесс backtest_game5m_param_hypotheses в контейнере не найден — возможно сразу завершился." >&2
   echo "Диагностика без фона (увидите traceback в терминале):" >&2
   # shellcheck disable=SC2046
-  echo "  docker compose exec -w /app $SERVICE env PYTHONUNBUFFERED=1 python -u scripts/backtest_game5m_param_hypotheses.py $(printf ' %q' "$@")" >&2
+  echo "  docker compose exec -w /app $SERVICE env PYTHONUNBUFFERED=1 python -u scripts/backtest_game5m_param_hypotheses.py $(printf ' %q' "${ARGS[@]}")" >&2
 fi
