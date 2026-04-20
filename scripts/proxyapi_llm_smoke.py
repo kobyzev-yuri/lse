@@ -19,23 +19,23 @@ sys.path.insert(0, str(project_root))
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Smoke: один LLM-запрос по OPENAI_* из config.env")
-    p.add_argument("--timeout", type=int, default=None, help="Переопределить OPENAI_TIMEOUT (сек)")
+    p = argparse.ArgumentParser(description="Smoke: один LLM-запрос как LLMService (OPENAI_* и/или ANTHROPIC_*)")
+    p.add_argument("--timeout", type=int, default=None, help="Переопределить таймаут клиента (сек)")
     args = p.parse_args()
 
-    from config_loader import load_config
+    from services.llm_service import LLMService
 
-    cfg = load_config()
-    key = (cfg.get("OPENAI_GPT_KEY") or cfg.get("OPENAI_API_KEY") or "").strip()
-    base = (cfg.get("OPENAI_BASE_URL") or "https://api.proxyapi.ru/openai/v1").strip().rstrip("/")
-    model = (cfg.get("OPENAI_MODEL") or "gpt-4o").strip()
-    timeout = int(args.timeout if args.timeout is not None else (cfg.get("OPENAI_TIMEOUT") or "60"))
+    llm = LLMService()
+    key = llm.api_key
+    base = llm.base_url
+    model = llm.model
+    timeout = int(args.timeout if args.timeout is not None else llm.timeout)
 
     if not key:
-        print("Нет OPENAI_API_KEY / OPENAI_GPT_KEY в config.env", file=sys.stderr)
+        print("Нет ключа (OPENAI_API_KEY или ANTHROPIC_API_KEY) в config.env", file=sys.stderr)
         return 1
 
-    print(f"base_url={base}\nmodel={model}\ntimeout={timeout}s")
+    print(f"provider={getattr(llm, 'llm_provider', '?')}\nbase_url={base}\nmodel={model}\ntimeout={timeout}s")
     try:
         from openai import OpenAI
     except ImportError:
@@ -61,7 +61,7 @@ def main() -> int:
         es = str(e).lower()
         if "timeout" in es or "timed out" in es:
             print(
-                "Похоже на клиентский таймаут — увеличьте OPENAI_TIMEOUT (для claude-opus 180–600).",
+                "Похоже на клиентский таймаут — увеличьте OPENAI_TIMEOUT / ANTHROPIC_TIMEOUT (для Opus 180–600).",
                 file=sys.stderr,
             )
         return 1

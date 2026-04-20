@@ -40,10 +40,10 @@
 | Провайдер | Базовый URL (ProxyAPI) | Модель в конфиге | Пример |
 |-----------|------------------------|-------------------|--------|
 | OpenAI | `https://api.proxyapi.ru/openai/v1` | имя модели OpenAI | `gpt-4o`, `gpt-4-turbo` |
-| Anthropic | `https://api.proxyapi.ru/anthropic/v1` | имя из [списка моделей](https://proxyapi.ru/docs/anthropic-models) | `claude-opus-4-7`, `claude-sonnet-4-6` |
+| Anthropic (через OpenAI SDK) | `https://openai.api.proxyapi.ru/v1` | `anthropic/<имя>` или bare `claude-…` (префикс добавит код) | `anthropic/claude-opus-4-7` |
 | Google | `https://api.proxyapi.ru/google/v1` | имя из документации Google | Gemini (см. [документацию](https://proxyapi.ru/docs)) |
 
-В нашем проекте используется **один** OpenAI-совместимый клиент (`chat.completions`) и пары `OPENAI_BASE_URL` + `OPENAI_MODEL`. Для **OpenAI** достаточно сегмента `…/openai/v1`. Для **Claude** — база **Anthropic** у ProxyAPI (`…/anthropic/v1`, см. ниже); для **Gemini** — `…/google/v1` (см. [документацию ProxyAPI](https://proxyapi.ru/docs)). Нативный SDK Anthropic ([Claude Code](https://proxyapi.ru/docs/anthropic-claude-code) с `ANTHROPIC_BASE_URL=https://api.proxyapi.ru/anthropic`) в `llm_service` не используется — только Chat Completions.
+В нашем проекте используется **один** OpenAI-совместимый клиент (`chat.completions`). Для **OpenAI** — `OPENAI_BASE_URL` + `OPENAI_MODEL`. Для **Claude** — переменные **`ANTHROPIC_*`** (или нормализация legacy `OPENAI_*` с `…/anthropic/v1` + `claude-…` → unified). Для **Gemini** в сравнении — `…/google/v1` (см. [документацию ProxyAPI](https://proxyapi.ru/docs)). Нативный SDK Anthropic ([Claude Code](https://proxyapi.ru/docs/anthropic-claude-code) с `ANTHROPIC_BASE_URL=https://api.proxyapi.ru/anthropic`) в `llm_service` не используется — только Chat Completions.
 
 ### Остальные модели — через OpenRouter в ProxyAPI
 
@@ -92,20 +92,29 @@ OPENAI_API_KEY=<тот же ключ ProxyAPI>
 
 ### Вариант C: Claude (Anthropic) через ProxyAPI
 
-Список имён моделей: [Модели Anthropic — ProxyAPI](https://proxyapi.ru/docs/anthropic-models). Тот же ключ, что для OpenAI-сегмента.
+Список имён моделей: [Модели Anthropic — ProxyAPI](https://proxyapi.ru/docs/anthropic-models). Чат идёт через [OpenAI-совместимый unified](https://proxyapi.ru/docs/openai-compatible-api): база **`https://openai.api.proxyapi.ru/v1`**, в теле запроса **`model`: `anthropic/claude-…`** (префикс подставляется автоматически, если указано только `claude-opus-4-7`).
+
+**Рекомендуемый способ в проекте** — отдельные переменные (основной чат на Claude, embeddings и прочее могут остаться на `OPENAI_*`):
 
 ```env
-OPENAI_BASE_URL=https://api.proxyapi.ru/anthropic/v1
-OPENAI_MODEL=claude-opus-4-7
 OPENAI_API_KEY=<ключ ProxyAPI>
-OPENAI_TIMEOUT=300
+OPENAI_BASE_URL=https://api.proxyapi.ru/openai/v1
+OPENAI_MODEL=gpt-5.4-mini
+
+ANTHROPIC_MODEL=claude-opus-4-7
+ANTHROPIC_BASE_URL=https://openai.api.proxyapi.ru/v1
+ANTHROPIC_TIMEOUT=300
 ```
+
+Ключ для Claude можно не задавать: будет использован `OPENAI_API_KEY`. Опционально: `ANTHROPIC_API_KEY=...`.
+
+Альтернатива без `ANTHROPIC_*`: только `OPENAI_BASE_URL` + `OPENAI_MODEL`, тогда код нормализует `…/anthropic/v1` + bare `claude-*` → unified + `anthropic/…`.
 
 **Таймаут:** для Opus и длинных промптов (карточка 5m, кластер, новости) лимит **60 с** часто даёт обрыв на стороне клиента; начните с **180–300 с**, при необходимости **600**. Проверка одним коротким запросом: `python scripts/proxyapi_llm_smoke.py` (из корня репо; опция `--timeout 300`).
 
 Для **`/prompt_entry game5m`** (несколько тикеров подряд с большим блоком корреляции) можно задать отдельно **`OPENAI_TIMEOUT_PROMPT_ENTRY=300`** (или 600): этот HTTP-таймаут используется только в этих «тяжёлых» вызовах `analyze_trading_situation`, не меняя `OPENAI_TIMEOUT` для остального приложения.
 
-**Не смешивать:** `OPENAI_MODEL=claude-…` при `OPENAI_BASE_URL=…/openai/v1` — неверная пара; в логе при старте будет предупреждение из `services/llm_service.py`.
+**Не смешивать:** `OPENAI_MODEL=claude-…` при `OPENAI_BASE_URL=…/openai/v1` — неверная пара (лучше `ANTHROPIC_MODEL`); в логе будет предупреждение из `services/llm_service.py`.
 
 ---
 
@@ -119,9 +128,9 @@ OPENAI_TIMEOUT=300
 LLM_COMPARE_MODELS=gpt-4o,openai|gpt-5.2,anthropic|claude-opus-4-6,google|gemini-3.1-pro-preview
 ```
 
-При включённом `USE_LLM_NEWS` и при вызове LLM для новостей по тикеру (в т.ч. в `get_decision_5m`) один и тот же запрос отправляется во все перечисленные модели. Результат основной модели (из `OPENAI_MODEL`) по‑прежнему попадает в `llm_news_content`, `llm_sentiment`, `llm_insight`; ответы всех моделей дополнительно возвращаются в **`llm_comparison`**: список `{ "model", "content", "sentiment_score", "insight" }` (или `"error"` при сбое). Так можно сравнивать gpt-4o, gpt-5.2, claude-opus-4-6, gemini-3.1-pro-preview в одном запросе.
+При включённом `USE_LLM_NEWS` и при вызове LLM для новостей по тикеру (в т.ч. в `get_decision_5m`) один и тот же запрос отправляется во все перечисленные модели. Результат **основной** модели (если задан `ANTHROPIC_MODEL` — она, иначе `OPENAI_MODEL`) попадает в `llm_news_content`, `llm_sentiment`, `llm_insight`; ответы всех моделей дополнительно возвращаются в **`llm_comparison`**: список `{ "model", "content", "sentiment_score", "insight" }` (или `"error"` при сбое). Так можно сравнивать gpt-4o, gpt-5.2, claude-opus-4-6, gemini-3.1-pro-preview в одном запросе.
 
-Базовые URL по провайдерам (в коде): `openai` → `https://api.proxyapi.ru/openai/v1`, `anthropic` → `https://api.proxyapi.ru/anthropic/v1`, `google` → `https://api.proxyapi.ru/google/v1`. При необходимости уточните пути в [документации ProxyAPI](https://proxyapi.ru/docs) для Anthropic и Google.
+Базовые URL по провайдерам в `LLM_COMPARE_MODELS` (в коде): `openai` → `https://api.proxyapi.ru/openai/v1`, `anthropic` → unified `https://openai.api.proxyapi.ru/v1` (модель `anthropic/claude-…`), `google` → `https://api.proxyapi.ru/google/v1`.
 
 - Ручное A/B: менять только `OPENAI_MODEL` и перезапускать сервисы.
 - Фиксация в БД: при сохранении решения можно дописать в источник имя модели; при наличии `llm_comparison` — сохранять его в отдельное поле или таблицу для последующего разбора.
@@ -132,7 +141,7 @@ LLM_COMPARE_MODELS=gpt-4o,openai|gpt-5.2,anthropic|claude-opus-4-6,google|gemini
 
 - [ ] Иметь один ключ ProxyAPI ([Ключи API](https://console.proxyapi.ru/keys)); для OpenRouter используется тот же ключ.
 - [ ] Для OpenAI: `OPENAI_BASE_URL=https://api.proxyapi.ru/openai/v1`, менять только `OPENAI_MODEL` (gpt-4o, gpt-4-turbo и т.д.).
-- [ ] Для Claude: `OPENAI_BASE_URL=https://api.proxyapi.ru/anthropic/v1`, `OPENAI_MODEL` из [списка Anthropic](https://proxyapi.ru/docs/anthropic-models), `OPENAI_TIMEOUT` ≥ 180 (Opus — 300+).
+- [ ] Для Claude: `ANTHROPIC_MODEL` из [списка Anthropic](https://proxyapi.ru/docs/anthropic-models), `ANTHROPIC_BASE_URL=https://openai.api.proxyapi.ru/v1`, таймаут `ANTHROPIC_TIMEOUT` ≥ 180 (Opus — 300+); ключ чаще тот же `OPENAI_API_KEY`.
 - [ ] Для сравнения с другими провайдерами: `OPENAI_BASE_URL=https://api.proxyapi.ru/openrouter/v1`, `OPENAI_MODEL` = id из [OpenRouter](https://openrouter.ai/models) (например `mistralai/mistral-medium-3.1`, `minimax/minimax-m2.5`).
 - [ ] Запускать игру 5m / сбор новостей с разными моделями, сохранять вывод с указанием модели.
 - [ ] Оценить: стабильность сигналов, качество рассуждений, латентность, стоимость; зафиксировать модель для продакшена.

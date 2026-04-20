@@ -1,5 +1,6 @@
 """
-LLM сервис для работы с GPT-4o и другими моделями через proxyapi.ru.
+LLM сервис: OpenAI SDK (chat.completions) к OpenAI и/или Anthropic (ProxyAPI).
+Конфиг: OPENAI_* для GPT и embeddings; опционально ANTHROPIC_* для Claude (см. normalize_openai_sdk_proxyapi_base_model).
 Поддержка сравнения нескольких моделей (LLM_COMPARE_MODELS).
 """
 
@@ -559,7 +560,10 @@ def format_price_forecast_llm_block(technical_data: Dict[str, Any]) -> str:
 
 # Базовые URL ProxyAPI по провайдерам (см. proxyapi.ru/docs)
 PROXYAPI_OPENAI_BASE = "https://api.proxyapi.ru/openai/v1"
-PROXYAPI_ANTHROPIC_BASE = "https://api.proxyapi.ru/anthropic/v1"
+# Нативный Anthropic (`…/anthropic/v1/messages`) ≠ OpenAI SDK. Для chat.completions с Claude — универсальный OpenAI-совместимый хост:
+# https://proxyapi.ru/docs/openai-compatible-api — model вида anthropic/claude-…
+PROXYAPI_OPENAI_COMPAT_UNIFIED = "https://openai.api.proxyapi.ru/v1"
+PROXYAPI_ANTHROPIC_BASE = PROXYAPI_OPENAI_COMPAT_UNIFIED
 PROXYAPI_GOOGLE_BASE = "https://api.proxyapi.ru/google/v1"
 
 
@@ -567,6 +571,40 @@ def load_config():
     """Загружает конфигурацию из локального config.env или ../brats/config.env"""
     from config_loader import load_config as load_config_base
     return load_config_base()
+
+
+def normalize_openai_sdk_proxyapi_base_model(base_url: str, model: str) -> tuple[str, str]:
+    """
+    ProxyAPI: OpenAI Python SDK (chat.completions) с Claude должен идти на универсальный хост
+    ``https://openai.api.proxyapi.ru/v1`` и model ``anthropic/<имя>`` (см. /docs/openai-compatible-api).
+    Сегмент ``https://api.proxyapi.ru/anthropic/v1`` в доке — под нативный Anthropic Messages API, не под этот SDK.
+    """
+    bu = (base_url or "").strip().rstrip("/")
+    mo = (model or "").strip()
+    if not bu or not mo:
+        return bu, mo
+    low_b = bu.lower()
+    low_m = mo.lower()
+    unified = PROXYAPI_OPENAI_COMPAT_UNIFIED.rstrip("/")
+
+    def _is_bare_claude_id(m: str) -> bool:
+        lm = m.lower()
+        return lm.startswith("claude-") and "/" not in m
+
+    # Частая ошибка конфига: anthropic/v1 + claude-* → 400 Model not supported у OpenAI SDK
+    if "proxyapi.ru" in low_b and "/anthropic/v1" in low_b and "openai.api.proxyapi.ru" not in low_b:
+        new_m = f"anthropic/{mo}" if _is_bare_claude_id(mo) else mo
+        return unified, new_m
+
+    if "openai.api.proxyapi.ru" in low_b and _is_bare_claude_id(mo):
+        return bu, f"anthropic/{mo}"
+
+    # На unified для OpenAI-моделей документация задаёт префикс openai/…
+    if "openai.api.proxyapi.ru" in low_b and "/" not in mo:
+        if low_m.startswith("gpt-") or low_m.startswith("o1") or low_m.startswith("o3") or low_m.startswith("o4") or low_m.startswith("chatgpt-"):
+            return bu, f"openai/{mo}"
+
+    return bu, mo
 
 
 def get_openai_http_timeout_prompt_entry() -> Optional[float]:
@@ -611,6 +649,10 @@ def parse_compare_models(config: Dict[str, str]) -> List[Tuple[str, str]]:
             left, model = part.split("|", 1)
             left, model = left.strip(), model.strip()
             base = provider_bases.get(left.lower()) or left  # если не provider, считаем полным URL
+            if left.lower() == "anthropic":
+                base, model = normalize_openai_sdk_proxyapi_base_model(base, model)
+            elif left.lower() == "openai" and "openai.api.proxyapi.ru" in (base or "").lower():
+                base, model = normalize_openai_sdk_proxyapi_base_model(base, model)
             result.append((base, model))
         else:
             result.append((base_default, part))
@@ -619,49 +661,88 @@ def parse_compare_models(config: Dict[str, str]) -> List[Tuple[str, str]]:
 
 class LLMService:
     """
-    Сервис для работы с LLM (GPT-4o через proxyapi.ru)
+    Сервис для работы с LLM через OpenAI Python SDK (chat.completions): OpenAI и/или Anthropic (ProxyAPI).
     """
-    
+
     def __init__(self):
         """
-        Инициализация LLM сервиса
+        Инициализация LLM сервиса.
+
+        Два режима:
+        - Только OpenAI: ``OPENAI_*`` (как раньше).
+        - Anthropic для чата: задайте ``ANTHROPIC_MODEL``; ключ — ``ANTHROPIC_API_KEY`` или тот же ``OPENAI_API_KEY``;
+          base — ``ANTHROPIC_BASE_URL`` или unified ``openai.api.proxyapi.ru/v1`` (см. normalize_openai_sdk_proxyapi_base_model).
         """
         config = load_config()
-        # OPENAI_GPT_KEY — ключ для прямого доступа к OpenAI (gpt-4o); OPENAI_API_KEY — proxy или прямой
-        self.api_key = (
-            config.get("OPENAI_GPT_KEY") or os.getenv("OPENAI_GPT_KEY") or
-            config.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-        )
-        self.base_url = (config.get("OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.proxyapi.ru/openai/v1").strip().rstrip("/")
-        self.model = config.get("OPENAI_MODEL", "gpt-4o")
         self.temperature = float(config.get("OPENAI_TEMPERATURE", "0.2"))
-        self.timeout = int(config.get("OPENAI_TIMEOUT", "60"))
+
+        def _timeout_from(key: str, fallback_key: str) -> int:
+            raw = (config.get(key) or os.getenv(key) or config.get(fallback_key) or os.getenv(fallback_key) or "60")
+            try:
+                return max(1, int(float(str(raw).strip() or "60")))
+            except (ValueError, TypeError):
+                return 60
+
+        openai_key = (
+            (config.get("OPENAI_GPT_KEY") or os.getenv("OPENAI_GPT_KEY") or
+             config.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+        )
+        anthropic_model = (config.get("ANTHROPIC_MODEL") or os.getenv("ANTHROPIC_MODEL") or "").strip()
+
+        if anthropic_model:
+            self.llm_provider = "anthropic"
+            self.api_key = (
+                (config.get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or "").strip() or openai_key
+            )
+            raw_base = (
+                (config.get("ANTHROPIC_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL") or "").strip().rstrip("/")
+                or PROXYAPI_OPENAI_COMPAT_UNIFIED.rstrip("/")
+            )
+            self.base_url, self.model = normalize_openai_sdk_proxyapi_base_model(raw_base, anthropic_model)
+            self.timeout = _timeout_from("ANTHROPIC_TIMEOUT", "OPENAI_TIMEOUT")
+        else:
+            self.llm_provider = "openai"
+            self.api_key = openai_key
+            raw_base = (
+                (config.get("OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.proxyapi.ru/openai/v1")
+                .strip()
+                .rstrip("/")
+            )
+            om = (config.get("OPENAI_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o").strip()
+            self.base_url, self.model = normalize_openai_sdk_proxyapi_base_model(raw_base, om)
+            self.timeout = _timeout_from("OPENAI_TIMEOUT", "OPENAI_TIMEOUT")
 
         bu = self.base_url.lower()
         mo = (self.model or "").strip().lower()
-        if mo.startswith("claude-") and bu.endswith("/openai/v1"):
+        if self.llm_provider == "openai" and mo.startswith("claude-") and bu.endswith("/openai/v1"):
             logger.warning(
-                "OPENAI_MODEL похож на Anthropic Claude (%s), а base — сегмент …/openai/v1. "
-                "У ProxyAPI Claude идут через …/anthropic/v1 (см. docs/LLM_MODEL_SELECTION.md, раздел «Claude»).",
+                "OPENAI_MODEL похож на Claude (%s) при …/openai/v1 — неверная пара. "
+                "Задайте ANTHROPIC_MODEL и при необходимости ANTHROPIC_BASE_URL=%s (см. docs/LLM_MODEL_SELECTION.md).",
                 self.model,
+                PROXYAPI_OPENAI_COMPAT_UNIFIED,
             )
-        if ("opus" in mo or "sonnet" in mo or mo.startswith("claude-")) and self.timeout < 120:
+        if ("opus" in mo or "sonnet" in mo or mo.startswith("claude-") or "/claude" in mo) and self.timeout < 120:
             logger.warning(
-                "OPENAI_TIMEOUT=%s с коротким лимитом для Claude/Opus: при длинных промптах (игра 5m, KB) часто нужно 180–600 с.",
+                "HTTP-таймаут=%s с коротким лимитом для Claude/Opus: при длинных промптах часто нужно 180–600 с "
+                "(OPENAI_TIMEOUT или ANTHROPIC_TIMEOUT, плюс OPENAI_TIMEOUT_PROMPT_ENTRY для /prompt_entry game5m).",
                 self.timeout,
             )
 
         if not self.api_key:
-            logger.warning("⚠️ OPENAI_API_KEY не настроен, LLM функции будут недоступны")
+            logger.warning("⚠️ Нет ключа LLM (OPENAI_API_KEY / ANTHROPIC_API_KEY) — LLM недоступен")
             self.client = None
         else:
-            # Инициализируем OpenAI клиент
             self.client = OpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
-                timeout=self.timeout
+                timeout=self.timeout,
             )
-            logger.info(f"✅ LLMService инициализирован (model={self.model}, base_url={self.base_url})")
+            logger.info(
+                "✅ LLMService: provider=%s model=%s base_url=%s",
+                self.llm_provider,
+                self.model,
+                self.base_url,
+            )
     
     def generate_response(
         self,
@@ -681,7 +762,7 @@ class LLMService:
             Ответ от LLM с метаданными
         """
         if not self.client:
-            raise ValueError("LLMService не инициализирован (отсутствует OPENAI_API_KEY)")
+            raise ValueError("LLMService не инициализирован (нет OPENAI_API_KEY / ANTHROPIC_API_KEY)")
         
         try:
             # Формируем список сообщений
@@ -1208,7 +1289,10 @@ Sentiment анализ:
             logger.error(f"Ошибка анализа через LLM: {e}")
             err_str = str(e).lower()
             if "401" in err_str or "invalid api key" in err_str or "invalid_api_key" in err_str or "authentication" in err_str:
-                reasoning = "Ошибка анализа: неверный или отсутствующий API-ключ. Проверьте OPENAI_API_KEY (или прокси) в Параметрах → config.env."
+                reasoning = (
+                    "Ошибка анализа: неверный или отсутствующий API-ключ. "
+                    "Проверьте OPENAI_API_KEY / ANTHROPIC_API_KEY в Параметрах → config.env."
+                )
             else:
                 reasoning = f"Ошибка анализа: {str(e)}"
             return {
