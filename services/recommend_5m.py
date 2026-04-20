@@ -1421,7 +1421,7 @@ def apply_kb_news_to_game5m_decision(
     rsi_5m: Optional[float],
     momentum_2h_pct: Any,
     decision_rule_params: Dict[str, Any],
-) -> Tuple[str, List[str], Optional[str], bool, str]:
+) -> Tuple[str, List[str], Optional[str], bool, str, Dict[str, Any]]:
     """
     Учёт новостей KB (sentiment) и блока VIX — тот же смысл, что сразу после decide_game5m_technical
     в get_decision_5m. Используется и в офлайн-симуляции 30m для сопоставимости с кроном (без LLM).
@@ -1499,7 +1499,7 @@ def apply_kb_news_to_game5m_decision(
             vp.append("<20 — ослабление паники по индексу")
         reasons.append(" · ".join(vp))
 
-    return dec, reasons, branch, down, kb_news_impact
+    return dec, reasons, branch, down, kb_news_impact, vix_snap
 
 
 def get_decision_5m(
@@ -1637,7 +1637,7 @@ def get_decision_5m(
 
     # Влияние новостей из KB на короткую игру 5m: явный учёт в решении BUY/HOLD/SELL
     kb_news = fetch_kb_news_for_period(ticker, days)
-    decision, reasons, technical_entry_branch, entry_strong_buy_downgraded, kb_news_impact = apply_kb_news_to_game5m_decision(
+    decision, reasons, technical_entry_branch, entry_strong_buy_downgraded, kb_news_impact, vix_snap = apply_kb_news_to_game5m_decision(
         kb_news=kb_news,
         decision=decision,
         reasons=reasons,

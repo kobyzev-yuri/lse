@@ -402,7 +402,7 @@ def simulate_game5m_30m_strategy_on_window(
         reasons_list = list(reasons_list)
 
         if use_kb and kb_cache is not None:
-            decision, reasons_list, branch, down, _kb_impact = apply_kb_news_to_game5m_decision(
+            decision, reasons_list, branch, down, _kb_impact, _vix_snap = apply_kb_news_to_game5m_decision(
                 kb_news=kb_cache,
                 decision=decision,
                 reasons=reasons_list,
