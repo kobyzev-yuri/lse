@@ -596,6 +596,16 @@ def normalize_openai_sdk_proxyapi_base_model(base_url: str, model: str) -> tuple
         new_m = f"anthropic/{mo}" if _is_bare_claude_id(mo) else mo
         return unified, new_m
 
+    # Сегмент …/openai/v1 — только модели OpenAI; claude-* даёт 400 Model not supported
+    if "proxyapi.ru" in low_b and low_b.endswith("/openai/v1") and _is_bare_claude_id(mo):
+        logger.warning(
+            "ProxyAPI: модель Claude (%s) при …/openai/v1 не поддерживается. Переключение на %s с anthropic/%s.",
+            mo,
+            unified,
+            mo,
+        )
+        return unified, f"anthropic/{mo}"
+
     if "openai.api.proxyapi.ru" in low_b and _is_bare_claude_id(mo):
         return bu, f"anthropic/{mo}"
 
@@ -655,7 +665,8 @@ def parse_compare_models(config: Dict[str, str]) -> List[Tuple[str, str]]:
                 base, model = normalize_openai_sdk_proxyapi_base_model(base, model)
             result.append((base, model))
         else:
-            result.append((base_default, part))
+            b0, m0 = normalize_openai_sdk_proxyapi_base_model((base_default or "").strip().rstrip("/"), part.strip())
+            result.append((b0, m0))
     return result
 
 
@@ -714,12 +725,10 @@ class LLMService:
 
         bu = self.base_url.lower()
         mo = (self.model or "").strip().lower()
-        if self.llm_provider == "openai" and mo.startswith("claude-") and bu.endswith("/openai/v1"):
+        if self.llm_provider == "openai" and "claude" in mo and "api.openai.com" in bu:
             logger.warning(
-                "OPENAI_MODEL похож на Claude (%s) при …/openai/v1 — неверная пара. "
-                "Задайте ANTHROPIC_MODEL и при необходимости ANTHROPIC_BASE_URL=%s (см. docs/LLM_MODEL_SELECTION.md).",
+                "OPENAI_MODEL похож на Claude (%s) при прямом api.openai.com — используйте ProxyAPI или ANTHROPIC_MODEL.",
                 self.model,
-                PROXYAPI_OPENAI_COMPAT_UNIFIED,
             )
         if ("opus" in mo or "sonnet" in mo or mo.startswith("claude-") or "/claude" in mo) and self.timeout < 120:
             logger.warning(
