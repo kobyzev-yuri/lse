@@ -8,6 +8,7 @@
 Список тикеров: GAME_5M_TICKERS или TICKERS_FAST (config.env). По каждому тикеру:
 - при BUY/STRONG_BUY — отправка в Telegram (с cooldown по тикеру) и запись входа в игру (trade_history, GAME_5M);
 - при открытой позиции и (SELL или >2 дней) — закрытие позиции в игре.
+- в фазе AFTER_HOURS (после 16:00 ET) закрытия тейка/стопа идут отдельным циклом — уведомление в Telegram то же, что при дневном кроне (send_game5m_close_notification).
 
 Настройка config.env:
   TELEGRAM_BOT_TOKEN=..., TELEGRAM_SIGNAL_CHAT_IDS, TICKERS_FAST, GAME_5M_COOLDOWN_MINUTES (и др. GAME_5M_*).
@@ -91,6 +92,50 @@ def get_signal_mentions() -> str:
             seen.add(u)
             parts.append(u)
     return " ".join(parts) if parts else ""
+
+
+def send_game5m_close_notification(
+    token: str,
+    chat_ids: list[str],
+    ticker: str,
+    close_exit_type: str,
+    close_price: float | None,
+    close_entry_price: float | None,
+    close_narrative_ctx: dict | None,
+) -> int:
+    """Уведомление в Telegram о закрытии GAME_5M (тейк/стоп/SELL). Возвращает число успешных отправок."""
+    if not chat_ids:
+        logger.debug("[5m] %s: закрытие — нет TELEGRAM_SIGNAL_CHAT_IDS, уведомление пропущено", ticker)
+        return 0
+    pnl_str = ""
+    if close_entry_price is not None and close_price is not None and close_entry_price > 0:
+        pnl_pct = (close_price - close_entry_price) / close_entry_price * 100.0
+        pnl_str = ", PnL %+.2f%%" % pnl_pct
+    close_msg = "🔒 **5m:** %s закрыта по %s @ %.2f%s. Открытые позиции: /pending" % (
+        ticker, close_exit_type, close_price or 0, pnl_str,
+    )
+    if close_narrative_ctx:
+        er = (close_narrative_ctx.get("entry_recap_for_human") or "").strip()
+        ex_c = (close_narrative_ctx.get("exit_condition") or "").strip()
+        ex_i = (close_narrative_ctx.get("exit_intuition") or "").strip()
+        if er:
+            close_msg += "\n\n📥 " + er[:380] + ("…" if len(er) > 380 else "")
+        if ex_c:
+            close_msg += "\n📌 Выход: " + ex_c[:420] + ("…" if len(ex_c) > 420 else "")
+        if ex_i:
+            close_msg += "\n💡 " + ex_i[:380] + ("…" if len(ex_i) > 380 else "")
+    ok = 0
+    for cid in chat_ids:
+        if send_telegram_message(token, cid, close_msg, parse_mode=None):
+            ok += 1
+        else:
+            logger.error("[5m] не удалось отправить уведомление о закрытии %s в chat_id=%s", ticker, cid)
+    if ok > 0:
+        logger.info(
+            "[5m] %s: отправлено уведомление о закрытии по %s @ %.2f (в этом запуске новый вход не слать)",
+            ticker, close_exit_type, close_price or 0,
+        )
+    return ok
 
 
 def process_ticker(
@@ -382,31 +427,9 @@ def process_ticker(
     if closed_this_run and close_exit_type:
         mark_signal_sent(ticker)
         logger.info("%s: после закрытия установлен cooldown → следующий вход не раньше чем через %d мин", ticker, get_cooldown_minutes())
-        if chat_ids:
-            pnl_str = ""
-            if close_entry_price is not None and close_price is not None and close_entry_price > 0:
-                pnl_pct = (close_price - close_entry_price) / close_entry_price * 100.0
-                pnl_str = ", PnL %+.2f%%" % pnl_pct
-            close_msg = "🔒 **5m:** %s закрыта по %s @ %.2f%s. Открытые позиции: /pending" % (
-                ticker, close_exit_type, close_price or 0, pnl_str,
-            )
-            if close_narrative_ctx:
-                er = (close_narrative_ctx.get("entry_recap_for_human") or "").strip()
-                ex_c = (close_narrative_ctx.get("exit_condition") or "").strip()
-                ex_i = (close_narrative_ctx.get("exit_intuition") or "").strip()
-                if er:
-                    close_msg += "\n\n📥 " + er[:380] + ("…" if len(er) > 380 else "")
-                if ex_c:
-                    close_msg += "\n📌 Выход: " + ex_c[:420] + ("…" if len(ex_c) > 420 else "")
-                if ex_i:
-                    close_msg += "\n💡 " + ex_i[:380] + ("…" if len(ex_i) > 380 else "")
-            ok = 0
-            for cid in chat_ids:
-                if send_telegram_message(token, cid, close_msg, parse_mode=None):
-                    ok += 1
-            if ok > 0:
-                logger.info("[5m] %s: отправлено уведомление о закрытии по %s @ %.2f (в этом запуске новый вход не слать)", ticker, close_exit_type, close_price or 0)
-                return True
+        send_game5m_close_notification(
+            token, chat_ids, ticker, close_exit_type, close_price, close_entry_price, close_narrative_ctx
+        )
         return True  # закрыли в этом запуске — не слать новый вход в том же запуске
 
     # Докуп вторым BUY запрещён по умолчанию: иначе при открытой прибыльной позиции крон снова пишет BUY в БД.
@@ -798,6 +821,27 @@ def main():
                             take_ah if take_ah is not None else -1.0,
                             ("%.4f" % take_lvl_ah) if take_lvl_ah is not None else "n/a",
                             ("%.4f" % pnl_take_ah) if pnl_take_ah is not None else "n/a",
+                        )
+                        mark_signal_sent(ticker)
+                        close_price_for_tg = exit_price
+                        close_entry_for_tg = entry_f_ah
+                        try:
+                            from report_generator import get_engine, get_last_closed_for_ticker
+
+                            last_ah_closed = get_last_closed_for_ticker(get_engine(), ticker, "GAME_5M")
+                            if last_ah_closed:
+                                close_entry_for_tg = last_ah_closed.entry_price
+                                close_price_for_tg = last_ah_closed.exit_price
+                        except Exception as ex_ah:
+                            logger.debug("AFTER_HOURS get_last_closed_for_ticker %s: %s", ticker, ex_ah)
+                        send_game5m_close_notification(
+                            token,
+                            chat_ids,
+                            ticker,
+                            exit_type,
+                            close_price_for_tg,
+                            close_entry_for_tg,
+                            close_ctx_ah_merged,
                         )
                 except Exception as e:
                     logger.warning("AFTER_HOURS проверка %s: %s", ticker, e)
