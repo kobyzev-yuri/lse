@@ -1648,6 +1648,23 @@ def get_decision_5m(
         decision_rule_params=decision_rule_params,
     )
 
+    # Ниже (entry_advice, премаркет-ветки) используются флаги негативных новостей и relax_very_neg.
+    # Они считаются внутри apply_kb_news_to_game5m_decision, но здесь нужны в области видимости.
+    news_with_sentiment = [(n, float(n["sentiment_score"])) for n in kb_news[:10] if n.get("sentiment_score") is not None]
+    recent_negative = [n for n, s in news_with_sentiment if s < 0.4]
+    very_negative = [n for n, s in news_with_sentiment if s < 0.35]
+    vv = (vix_snap or {}).get("vix")
+    try:
+        vix_c18_local = float((_gcv("GAME_5M_VIX_STRONG_COMFORT_MAX", "18") or "18").strip())
+    except (ValueError, TypeError):
+        vix_c18_local = 18.0
+    relax_news_on_vix_local = (_gcv("GAME_5M_VIX_RELAX_VERY_NEGATIVE_NEWS", "true") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    relax_very_neg = bool(very_negative and relax_news_on_vix_local and vv is not None and float(vv) < vix_c18_local)
+
     if not reasons:
         rsi_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "— (мало баров)"
         reasons.append(
