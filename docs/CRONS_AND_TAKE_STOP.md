@@ -220,5 +220,3 @@
 **Таблицы один раз:** `scripts/migrate_market_bars_intraday.py` (или `ingest_...py --ensure-tables`).
 
 **Cron:** в **`setup_cron.sh`** и **`setup_cron_docker.sh`** добавлена строка **ежедневно в 23:25** (системный TZ сервера; на проде обычно MSK), с **`flock`** на хосте, лог `logs/cron_market_bars_intraday.log`. Достаточно для «хвоста» 7 дней по 5m и актуального 30m; реже — поменять расписание на раз в неделю (например `25 23 * * 0`).
-
-**Установка с инстанса из файла в репо (удобно при SSH без вставки в vim):** в корне репозитория **`ct.txt`** (плейсхолдеры `@LSE_HOME@`, `@CONTAINER@`), скрипт **`scripts/install_crontab.sh`** — подставляет пути и выполняет `crontab`. Пример: `cd ~/lse && bash scripts/install_crontab.sh /home/ai8049520 lse-bot`. Другой файл: `CRONTAB_TEMPLATE=/path/to/file bash scripts/install_crontab.sh ...`. **Внимание:** это **заменяет весь** crontab пользователя; при необходимости сначала `crontab -l > backup.cron`.
