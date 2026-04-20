@@ -4260,10 +4260,11 @@ class LSETelegramBot:
                         if not cluster_note:
                             continue
                         try:
-                            from services.llm_service import get_llm_service
+                            from services.llm_service import get_llm_service, get_openai_http_timeout_prompt_entry
                             llm = get_llm_service()
                             if not getattr(llm, "client", None):
                                 continue
+                            _pe_http_timeout = get_openai_http_timeout_prompt_entry()
                             technical_data = {
                                 "close": r.get("price"),
                                 "rsi": r.get("rsi_5m"),
@@ -4314,6 +4315,7 @@ class LSETelegramBot:
                             result = llm.analyze_trading_situation(
                                 r["ticker"], technical_data, news_list, sentiment,
                                 strategy_name="GAME_5M", strategy_signal=r.get("decision"),
+                                http_timeout_sec=_pe_http_timeout,
                             )
                             if result and result.get("llm_analysis"):
                                 ana = result["llm_analysis"]

@@ -194,9 +194,10 @@ def run_game5m_recommend_card_rows(
             if not cluster_note:
                 continue
             try:
-                from services.llm_service import get_llm_service
+                from services.llm_service import get_llm_service, get_openai_http_timeout_prompt_entry
 
                 llm = get_llm_service()
+                _pe_http_timeout = get_openai_http_timeout_prompt_entry()
                 if not getattr(llm, "client", None):
                     continue
                 technical_data = {
@@ -234,6 +235,7 @@ def run_game5m_recommend_card_rows(
                     sentiment,
                     strategy_name="GAME_5M",
                     strategy_signal=r.get("decision"),
+                    http_timeout_sec=_pe_http_timeout,
                 )
                 if result and result.get("llm_analysis"):
                     ana = result["llm_analysis"]

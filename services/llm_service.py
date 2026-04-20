@@ -569,6 +569,23 @@ def load_config():
     return load_config_base()
 
 
+def get_openai_http_timeout_prompt_entry() -> Optional[float]:
+    """
+    Опционально: HTTP-таймаут (сек) для тяжёлых вызовов entry-LLM (напр. /prompt_entry game5m по кластеру).
+    Пусто — используется таймаут клиента LLMService (OPENAI_TIMEOUT).
+    """
+    from config_loader import get_config_value
+
+    raw = (get_config_value("OPENAI_TIMEOUT_PROMPT_ENTRY", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        v = float(raw)
+        return v if v > 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_compare_models(config: Dict[str, str]) -> List[Tuple[str, str]]:
     """
     Парсит LLM_COMPARE_MODELS в список (base_url, model).
@@ -687,18 +704,31 @@ class LLMService:
                 max_completion_tokens=kwargs.get("max_completion_tokens"),
                 default_limit=2000,
             )
+            http_timeout = kwargs.pop("http_timeout_sec", None)
+            if http_timeout is not None:
+                try:
+                    http_timeout = float(http_timeout)
+                except (TypeError, ValueError):
+                    http_timeout = None
+            if http_timeout is None or http_timeout <= 0:
+                http_timeout = float(self.timeout)
+
             request_params = {
                 "model": self.model,
                 "messages": formatted_messages,
                 "temperature": kwargs.get("temperature", self.temperature),
                 **token_kw,
-                "timeout": self.timeout
             }
             
             # Выполняем запрос
-            logger.info(f"Отправка запроса к LLM (model={self.model}, messages={len(formatted_messages)})")
+            logger.info(
+                "Отправка запроса к LLM (model=%s, messages=%s, http_timeout=%ss)",
+                self.model,
+                len(formatted_messages),
+                http_timeout,
+            )
             
-            response = self.client.chat.completions.create(**request_params)
+            response = self.client.chat.completions.create(**request_params, timeout=http_timeout)
             
             # Извлекаем ответ
             assistant_message = response.choices[0].message.content
@@ -964,6 +994,7 @@ Sentiment анализ:
         strategy_signal: Optional[str] = None,
         strategy_outcome_stats: Optional[str] = None,
         entry_prompt_profile: str = "legacy_full",
+        http_timeout_sec: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Анализ торговой ситуации с помощью LLM
@@ -978,6 +1009,7 @@ Sentiment анализ:
             strategy_outcome_stats: Текст со статистикой исходов по стратегиям (закрытые сделки), если есть
             entry_prompt_profile: ``legacy_full`` — длинный system-промпт входа; ``portfolio_fusion`` —
                 короткий system и структурированный user (техника, KB, слияние, стратегия), как логика recommend5m.
+            http_timeout_sec: переопределение HTTP-таймаута для этого вызова (иначе OPENAI_TIMEOUT на клиенте).
 
         Returns:
             Анализ от LLM с рекомендацией
@@ -1111,7 +1143,9 @@ Sentiment анализ:
         messages = [{"role": "user", "content": user_message}]
         
         try:
-            result = self.generate_response(messages, system_prompt=system_prompt)
+            result = self.generate_response(
+                messages, system_prompt=system_prompt, http_timeout_sec=http_timeout_sec
+            )
             response_text = result["response"]
             
             # Пытаемся распарсить JSON из ответа
