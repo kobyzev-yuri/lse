@@ -619,7 +619,21 @@ class LLMService:
         self.model = config.get("OPENAI_MODEL", "gpt-4o")
         self.temperature = float(config.get("OPENAI_TEMPERATURE", "0.2"))
         self.timeout = int(config.get("OPENAI_TIMEOUT", "60"))
-        
+
+        bu = self.base_url.lower()
+        mo = (self.model or "").strip().lower()
+        if mo.startswith("claude-") and bu.endswith("/openai/v1"):
+            logger.warning(
+                "OPENAI_MODEL похож на Anthropic Claude (%s), а base — сегмент …/openai/v1. "
+                "У ProxyAPI Claude идут через …/anthropic/v1 (см. docs/LLM_MODEL_SELECTION.md, раздел «Claude»).",
+                self.model,
+            )
+        if ("opus" in mo or "sonnet" in mo or mo.startswith("claude-")) and self.timeout < 120:
+            logger.warning(
+                "OPENAI_TIMEOUT=%s с коротким лимитом для Claude/Opus: при длинных промптах (игра 5m, KB) часто нужно 180–600 с.",
+                self.timeout,
+            )
+
         if not self.api_key:
             logger.warning("⚠️ OPENAI_API_KEY не настроен, LLM функции будут недоступны")
             self.client = None
