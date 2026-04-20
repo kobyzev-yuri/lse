@@ -221,6 +221,21 @@ def _restart_result_from_completed(result: Any, cmd: str) -> Dict[str, Any]:
     }
 
 
+def _schedule_self_restart(*, delay_sec: float = 1.0) -> None:
+    """
+    Fallback рестарта, когда веб крутится внутри контейнера без Docker CLI.
+    Контейнер в docker-compose.yml имеет restart: unless-stopped, поэтому выход процесса
+    приведёт к автоматическому перезапуску контейнера и перечитыванию config.env.
+    """
+    import threading
+    import os
+
+    def _exit() -> None:
+        os._exit(0)
+
+    threading.Timer(max(0.0, float(delay_sec)), _exit).start()
+
+
 # Настройка шаблонов
 templates_dir = Path(__file__).parent / "templates"
 templates_dir.mkdir(exist_ok=True)
@@ -2301,6 +2316,17 @@ async def restart_service_api():
     try:
         result, used_cmd = _run_restart_resolved(config)
         if result.returncode != 0:
+            # Если docker/docker-compose недоступны (127), а мы внутри контейнера — делаем self-restart.
+            if result.returncode == 127:
+                _schedule_self_restart(delay_sec=1.0)
+                return _to_jsonable(
+                    {
+                        "ok": True,
+                        "message": "Docker CLI недоступен — выполняю self-restart контейнера (перечитает config.env).",
+                        "command": used_cmd[:200],
+                        "mode": "self_restart",
+                    }
+                )
             return _to_jsonable(_restart_result_from_completed(result, used_cmd))
         return _to_jsonable(
             {"ok": True, "message": "Перезапуск выполнен", "command": used_cmd[:200]}
