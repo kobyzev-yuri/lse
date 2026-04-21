@@ -63,7 +63,7 @@
 **Логика:** `execution_agent.py` — для каждой открытой позиции из portfolio_state (с ценой входа из trade_history):
 
 1. Стоп: лог-доходность ≤ порога (~ −5%) → закрытие по стопу.
-2. Если стратегия позиции = GAME_5M → **пропуск** (тейк/стоп по ней проверяет send_sndk_signal_cron).
+2. Позиции **GAME_5M** в этом проходе **не обходятся** (`exclude_strategy_names` в `run_for_tickers`) — тейк/стоп по ним только **send_sndk_signal_cron**.
 3. Тейк: берётся `take_profit` из последней BUY по тикеру или **PORTFOLIO_TAKE_PROFIT_PCT**; если pnl% ≥ тейка → закрытие по тейку.
 
 **Что видно в логах (trading_cycle_cron):**
@@ -78,10 +78,8 @@
     - или `Тейк‑профит для MSFT не задан (задайте PORTFOLIO_TAKE_PROFIT_PCT в config.env, напр. 3.0)`
     - или закрытие: `Take-profit triggered: pnl=...% >= ...%`
   - и `Стоп‑лосс для MSFT не сработал (log_ret=... > ...)`
-- Для позиций GAME_5M в этом же запуске:
-  - `MSFT — GAME_5M, тейк/стоп проверяет send_sndk_signal_cron` (если MSFT вдруг был открыт как GAME_5M)
 
-Тейк/стоп по портфелю — **только в логах trading_cycle_cron**, в блоке после анализа тикеров.
+Тейк/стоп по портфелю — **только в логах trading_cycle_cron**, в блоке после анализа тикеров (строк по GAME_5M там нет).
 
 ---
 

@@ -982,13 +982,15 @@ class ExecutionAgent:
             if cluster_context is not None:
                 other_signals[ticker] = decision
 
-        # После обработки всех тикеров проверяем стоп‑лоссы
-        self.check_stop_losses()
+        # Стоп/тейк портфеля — только не-GAME_5M; 5m закрывает send_sndk_signal_cron (не засоряем лог крона).
+        self.check_stop_losses(exclude_strategy_names=frozenset({"GAME_5M"}))
 
-    def check_stop_losses(self) -> None:
+    def check_stop_losses(self, *, exclude_strategy_names: frozenset[str] | None = None) -> None:
         """
         Проходит по открытым позициям и закрывает их по стопу (если включён) или по тейку.
         Список позиций берём из trade_history (как в /pending).
+
+        exclude_strategy_names: не трогать эти strategy_name (например GAME_5M при вызове из run_for_tickers).
         """
         if not self.stop_loss_enabled and not self._stop_loss_disabled_warned:
             self._stop_loss_disabled_warned = True
@@ -1025,11 +1027,16 @@ class ExecutionAgent:
 
         stop_log_threshold = float(np.log(self.stop_loss_level)) if self.stop_loss_enabled else 0.0  # при отключённом стопе не срабатывает
 
+        excluded = exclude_strategy_names or frozenset()
+
         for ticker, p_open in open_from_history.items():
             entry_price = float(p_open.entry_price)
             entry_ts = p_open.entry_ts
             quantity = float(p_open.quantity)
             strategy_name = (getattr(p_open, "strategy_name", None) or "").strip() or "Portfolio"
+
+            if strategy_name in excluded:
+                continue
 
             current_price = self._get_current_price(ticker)
             if current_price is None:
