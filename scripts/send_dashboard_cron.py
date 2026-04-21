@@ -27,6 +27,7 @@ import urllib.request
 
 from config_loader import get_config_value
 from services.dashboard_builder import build_dashboard_text
+from services.telegram_signal import get_telegram_urllib_opener
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ def send_telegram_message(token: str, chat_id: str, text: str, parse_mode: str =
         req = urllib.request.Request(url, data=data, method="POST")
         req.add_header("Content-Type", "application/x-www-form-urlencoded")
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with get_telegram_urllib_opener().open(req, timeout=30) as resp:
                 if resp.status != 200:
                     logger.error("Telegram API error: %s %s", resp.status, resp.read())
                     return False

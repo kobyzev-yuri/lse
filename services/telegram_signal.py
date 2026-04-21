@@ -14,6 +14,25 @@ logger = logging.getLogger(__name__)
 TELEGRAM_SEND_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
 
+def get_telegram_urllib_opener() -> urllib.request.OpenerDirector:
+    """
+    Opener для HTTPS к api.telegram.org. Учитывает TELEGRAM_PROXY_URL (http/https),
+    как и run_telegram_bot.py для polling. SOCKS в urllib без PySocks не поддерживается —
+    для кронов используйте HTTP-прокси (например локальный 8081 рядом с SOCKS).
+    """
+    raw = (get_config_value("TELEGRAM_PROXY_URL") or "").strip()
+    if raw and "socks" not in raw.lower():
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler({"https": raw, "http": raw})
+        )
+    if raw:
+        logger.debug(
+            "TELEGRAM_PROXY_URL=socks:// — кроны отправляют через urllib; "
+            "задайте TELEGRAM_PROXY_URL=http://... (HTTP-прокси к Telegram), см. run_telegram_bot.py."
+        )
+    return urllib.request.build_opener()
+
+
 def get_signal_chat_ids() -> list[str]:
     """Список chat_id для рассылки сигналов. Без дубликатов."""
     ids_raw = get_config_value("TELEGRAM_SIGNAL_CHAT_IDS", "").strip()
@@ -51,14 +70,14 @@ def send_telegram_message(
     )
     req.add_header("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with get_telegram_urllib_opener().open(req, timeout=30) as resp:
             if resp.status != 200:
                 logger.error("Telegram API error: %s %s", resp.status, resp.read())
                 return False
             return True
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        logger.error("Telegram HTTP %s: %s", e.code, body[:500])
+        logger.error("Telegram HTTP %s (chat_id=%s): %s", e.code, chat_id, body[:500])
         return False
     except Exception as e:
         logger.exception("Send failed: %s", e)

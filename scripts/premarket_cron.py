@@ -104,6 +104,10 @@ def main() -> None:
     # Подготовка Telegram (для обычного алерта и для стресс-алерта)
     import urllib.parse
     import urllib.request
+
+    from services.telegram_signal import get_telegram_urllib_opener
+
+    _tg_opener = get_telegram_urllib_opener()
     token = get_config_value("TELEGRAM_BOT_TOKEN", "").strip()
     chat_ids_raw = get_config_value("TELEGRAM_SIGNAL_CHAT_IDS", "") or get_config_value("TELEGRAM_SIGNAL_CHAT_ID", "")
     chat_ids = [x.strip() for x in chat_ids_raw.split(",") if x.strip()]
@@ -152,7 +156,7 @@ def main() -> None:
         req = urllib.request.Request(telegram_url, data=data, method="POST")
         req.add_header("Content-Type", "application/x-www-form-urlencoded")
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with _tg_opener.open(req, timeout=15) as resp:
                 if resp.status == 200:
                     logger.info("Премаркет-алерт отправлен в Telegram")
                 else:
@@ -207,7 +211,7 @@ def main() -> None:
                 req_stress = urllib.request.Request(telegram_url, data=data_stress, method="POST")
                 req_stress.add_header("Content-Type", "application/x-www-form-urlencoded")
                 try:
-                    with urllib.request.urlopen(req_stress, timeout=15) as resp2:
+                    with _tg_opener.open(req_stress, timeout=15) as resp2:
                         if resp2.status == 200:
                             logger.info("Алерт премаркет-стресс (закрыть позиции) отправлен в Telegram")
                         else:

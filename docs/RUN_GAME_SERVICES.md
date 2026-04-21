@@ -87,6 +87,18 @@ python scripts/send_sndk_signal_cron.py
 
 Логи: `logs/cron_sndk_signal.log`
 
+### Docker (VM): проверка Telegram из контейнера
+
+Если стек поднят через `docker-compose.yml` (сервис **`lse`**, образ читает тот же `./config.env` и `./config.secrets.env`, что на хосте), после `git pull` проверка рассылки и API без прокси:
+
+```bash
+cd /path/to/lse && docker compose exec lse python scripts/telegram_signal_diagnose.py
+```
+
+Только слой конфигов, без запросов к `api.telegram.org`: добавьте `--skip-api`. Скрипт: `scripts/telegram_signal_diagnose.py`.
+
+Если на хосте используется `config.security.env`, добавьте в `docker-compose.yml` такой же `volumes`, как у `config.secrets.env`, иначе внутри контейнера overlay не подхватится.
+
 ## 6. Веб-интерфейс (опционально)
 
 API рекомендации 5m и мониторинг:
