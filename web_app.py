@@ -1583,10 +1583,47 @@ def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int) -> Dict[str, A
     return portfolio_llm_public_payload(merged)
 
 
+def _load_portfolio_daily_chart_trades(ticker: str, cutoff: datetime, dt_hi: datetime) -> List[Dict[str, Any]]:
+    """Сделки для маркеров на дневном графике портфеля: всё, кроме GAME_5M (портфельный цикл, Manual и т.д.)."""
+    t = (ticker or "").strip().upper()
+    if not t:
+        return []
+    rows: List[Any] = []
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT id, ts, side, price, quantity, signal_type, strategy_name
+                FROM public.trade_history
+                WHERE ticker = :ticker
+                  AND ts >= :dt_min AND ts <= :dt_max
+                  AND UPPER(COALESCE(TRIM(strategy_name), '')) <> 'GAME_5M'
+                ORDER BY ts ASC, id ASC
+            """),
+            {"ticker": t, "dt_min": cutoff, "dt_max": dt_hi},
+        ).fetchall()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        ts_raw = r[1]
+        ts_s = ts_raw.isoformat() if hasattr(ts_raw, "isoformat") else str(ts_raw)
+        out.append(
+            {
+                "id": int(r[0]),
+                "ts": ts_s,
+                "side": (r[2] or "").strip().upper(),
+                "price": float(r[3]) if r[3] is not None else 0.0,
+                "quantity": float(r[4] or 0) if r[4] is not None else 0.0,
+                "signal_type": (r[5] or "") if r[5] is not None else "",
+                "strategy_name": (r[6] or "") if len(r) > 6 and r[6] is not None else "",
+            }
+        )
+    return out
+
+
 def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
-    """Дневной график из БД quotes (open/high/low/close), не intraday 5m."""
+    """Дневной график из БД quotes (open/high/low/close), не intraday 5m; сделки портфеля (не GAME_5M) для маркеров."""
     days = min(max(10, int(days)), 730)
     cutoff = datetime.now() - timedelta(days=days)
+    dt_hi = datetime.now() + timedelta(days=2)
     with engine.connect() as conn:
         df = pd.read_sql(
             text("""
@@ -1614,7 +1651,8 @@ def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
             "rsi": _to_jsonable(row.get("rsi")),
             "volatility_5": _to_jsonable(row.get("volatility_5")),
         })
-    return {"ticker": ticker, "interval": "1d", "source": "quotes", "bars": records}
+    trades = _load_portfolio_daily_chart_trades(ticker, cutoff, dt_hi)
+    return {"ticker": ticker, "interval": "1d", "source": "quotes", "bars": records, "trades": trades}
 
 
 def _build_portfolio_daily_charts_bulk(days: int) -> Dict[str, Any]:
@@ -1626,7 +1664,8 @@ def _build_portfolio_daily_charts_bulk(days: int) -> Dict[str, Any]:
     for t in tickers:
         one = _build_portfolio_daily_chart_data(t, days)
         bars = one.get("bars") or []
-        entry: Dict[str, Any] = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
+        trades = one.get("trades") or []
+        entry: Dict[str, Any] = {"ticker": t, "bars": bars, "trades": trades, "interval": "1d", "source": "quotes"}
         if not bars:
             entry["error"] = "no_data"
         charts.append(entry)

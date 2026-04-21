@@ -20,7 +20,7 @@
 <body>
 {% include "partials/site_nav_standalone.html" %}
     <h1>Daily — quotes</h1>
-    <p class="muted">Интервал <strong>1d</strong> из таблицы <code>quotes</code>. <strong>Все</strong> — график по каждому тикеру портфельной игры; иначе выберите тикер в списке. Ссылка с карточки <code>?ticker=…</code> выставляет список.</p>
+    <p class="muted">Интервал <strong>1d</strong> из таблицы <code>quotes</code>. <strong>Все</strong> — график по каждому тикеру портфельной игры; иначе выберите тикер в списке. Ссылка с карточки <code>?ticker=…</code> выставляет список. Маркеры сделок (не GAME_5M): <strong>*</strong> вход (BUY), <strong>▲</strong> выход в плюс к средней, <strong>▼</strong> в минус, серый ▲ без базы для P/L.</p>
     <div>
         <label>Тикер</label>
         <select id="tickerPortfolioFilter">
@@ -81,10 +81,137 @@
             return v.toUpperCase();
         }
 
-        function buildLineChart(canvas, title, bars) {
+        function findClosestLabelIndex(lbls, ts) {
+            var t = new Date(ts).getTime();
+            var best = 0, bestDiff = Infinity;
+            lbls.forEach(function(l, i) {
+                var d = Math.abs(new Date(l).getTime() - t);
+                if (d < bestDiff) { bestDiff = d; best = i; }
+            });
+            return best;
+        }
+
+        function buildTradeMarkerItems(labels, trades) {
+            var list = (trades || []).slice().sort(function(a, b) { return new Date(a.ts) - new Date(b.ts); });
+            var buyTrades = [], sellWinTrades = [], sellLossTrades = [], sellNeutralTrades = [];
+            var posQty = 0, posCost = 0;
+            list.forEach(function(tr) {
+                var price = parseFloat(tr.price);
+                if (!Number.isFinite(price) || price <= 0) return;
+                var q = parseFloat(tr.quantity);
+                if (!Number.isFinite(q) || q <= 0) q = 1;
+                var side = (tr.side || '').toUpperCase();
+                if (side === 'BUY') {
+                    posQty += q;
+                    posCost += q * price;
+                    buyTrades.push(tr);
+                } else if (side === 'SELL') {
+                    var pnlPct = null;
+                    if (posQty > 0 && posCost > 0) {
+                        var avg = posCost / posQty;
+                        pnlPct = ((price - avg) / avg) * 100;
+                        var sq = Math.min(q, posQty);
+                        posCost -= avg * sq;
+                        posQty -= sq;
+                    }
+                    if (pnlPct == null || !Number.isFinite(pnlPct)) sellNeutralTrades.push(tr);
+                    else if (pnlPct >= 0) sellWinTrades.push(tr);
+                    else sellLossTrades.push(tr);
+                }
+            });
+            var tradeMarkerItems = [];
+            function pushMarkers(arr, kind) {
+                arr.forEach(function(tr) {
+                    var i = findClosestLabelIndex(labels, tr.ts);
+                    var p = parseFloat(tr.price);
+                    if (Number.isFinite(p)) tradeMarkerItems.push({ index: i, price: p, kind: kind });
+                });
+            }
+            pushMarkers(buyTrades, 'buy');
+            pushMarkers(sellWinTrades, 'sellWin');
+            pushMarkers(sellLossTrades, 'sellLoss');
+            pushMarkers(sellNeutralTrades, 'sellNeutral');
+            return tradeMarkerItems;
+        }
+
+        var portfolioTradeMarkersPlugin = {
+            id: 'portfolioTradeMarkers',
+            afterDraw: function(chart) {
+                var cfg = chart.options.plugins && chart.options.plugins.tradeTriangleMarkers;
+                if (!cfg || !cfg.items || !cfg.items.length) return;
+                var xScale = chart.scales.x, yScale = chart.scales.y;
+                if (!xScale || !yScale) return;
+                var lbls = chart.data.labels || [];
+                var area = chart.chartArea;
+                var ctx = chart.ctx;
+                var stroke = 'rgba(15, 23, 42, 0.88)';
+                var h = 8, w = 7;
+                function triUp(cx, cyTip, fill) {
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cyTip);
+                    ctx.lineTo(cx - w, cyTip + h);
+                    ctx.lineTo(cx + w, cyTip + h);
+                    ctx.closePath();
+                    ctx.fillStyle = fill;
+                    ctx.strokeStyle = stroke;
+                    ctx.lineWidth = 1.2;
+                    ctx.fill();
+                    ctx.stroke();
+                }
+                function triDown(cx, cyTip, fill) {
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cyTip);
+                    ctx.lineTo(cx - w, cyTip - h);
+                    ctx.lineTo(cx + w, cyTip - h);
+                    ctx.closePath();
+                    ctx.fillStyle = fill;
+                    ctx.strokeStyle = stroke;
+                    ctx.lineWidth = 1.2;
+                    ctx.fill();
+                    ctx.stroke();
+                }
+                ctx.save();
+                try {
+                    if (typeof ctx.resetClip === 'function') ctx.resetClip();
+                } catch (_) {}
+                cfg.items.forEach(function(item) {
+                    var xi = item.index;
+                    if (xi < 0 || xi >= lbls.length) return;
+                    var px = xScale.getPixelForValue(lbls[xi]);
+                    var py = yScale.getPixelForValue(item.price);
+                    if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+                    if (px < area.left - 8 || px > area.right + 8 || py < area.top - 10 || py > area.bottom + 10) return;
+                    var k = item.kind;
+                    if (k === 'sellLoss') {
+                        triDown(px, py + 2, '#ef4444');
+                    } else if (k === 'sellWin') {
+                        triUp(px, py - 10, '#22c55e');
+                    } else if (k === 'buy') {
+                        ctx.save();
+                        ctx.font = 'bold 15px system-ui, -apple-system, "Segoe UI", sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        var starY = py - 2;
+                        ctx.lineWidth = 2.5;
+                        ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
+                        ctx.strokeText('*', px, starY);
+                        ctx.lineWidth = 1;
+                        ctx.fillStyle = '#0284c7';
+                        ctx.fillText('*', px, starY);
+                        ctx.restore();
+                    } else {
+                        triUp(px, py - 10, '#94a3b8');
+                    }
+                });
+                ctx.restore();
+            }
+        };
+
+        function buildLineChart(canvas, title, bars, trades) {
             var labels = bars.map(function(b) { return b.date.slice(0, 10); });
             var closes = bars.map(function(b) { return b.close != null ? Number(b.close) : null; });
             var sma = bars.map(function(b) { return b.sma_5 != null ? Number(b.sma_5) : null; });
+            var tradeMarkerItems = buildTradeMarkerItems(labels, trades || []);
             return new Chart(canvas, {
                 type: 'line',
                 data: {
@@ -99,13 +226,15 @@
                     maintainAspectRatio: false,
                     plugins: {
                         title: { display: !!title, text: title || '', color: '#94a3b8', font: { size: 11 } },
-                        legend: { labels: { color: '#cbd5e1' } }
+                        legend: { labels: { color: '#cbd5e1' } },
+                        tradeTriangleMarkers: { items: tradeMarkerItems }
                     },
                     scales: {
                         x: { ticks: { color: '#94a3b8', maxTicksLimit: 12 } },
                         y: { ticks: { color: '#94a3b8' } }
                     }
-                }
+                },
+                plugins: [portfolioTradeMarkersPlugin]
             });
         }
 
@@ -148,7 +277,7 @@
                             return;
                         }
                         ok++;
-                        chartInstances.push(buildLineChart(cv, '', bars));
+                        chartInstances.push(buildLineChart(cv, '', bars, item.trades || []));
                     });
                     statusEl.textContent = charts.length ? ('Тикеров: ' + charts.length + ' · с данными: ' + ok + (empty ? ' · без рядов: ' + empty : '')) : 'Список тикеров портфеля пуст.';
                     return;
@@ -162,6 +291,7 @@
                 }
                 var data = await r1.json();
                 var bars = data.bars || [];
+                var tr = data.trades || [];
                 if (!bars.length) {
                     statusEl.textContent = 'Нет дневных котировок для ' + t;
                     return;
@@ -174,8 +304,8 @@
                 sec.appendChild(h);
                 sec.appendChild(cv);
                 root.appendChild(sec);
-                chartInstances.push(buildLineChart(cv, '', bars));
-                statusEl.textContent = 'Тикер: ' + t + ' · точек: ' + bars.length;
+                chartInstances.push(buildLineChart(cv, '', bars, tr));
+                statusEl.textContent = 'Тикер: ' + t + ' · точек: ' + bars.length + (tr.length ? ' · сделок (не 5m): ' + tr.length : '');
             } catch (e) {
                 statusEl.textContent = 'Ошибка: ' + (e.message || String(e));
             }
