@@ -129,10 +129,17 @@ class ExecutionAgent:
             )
 
     def _has_open_position(self, ticker: str) -> bool:
-        """Проверяет наличие открытой позиции по тикеру."""
+        """Проверяет наличие открытой позиции по тикеру (только quantity > 0).
+
+        Раньше считалась любая строка в portfolio_state — при «нулевой» строке после частичных
+        правок cron логировал BUY от аналитика, но _execute_buy выходил сразу, без trade_history.
+        """
         with self.engine.connect() as conn:
             cnt = conn.execute(
-                text("SELECT COUNT(*) FROM portfolio_state WHERE ticker = :ticker AND ticker != 'CASH'"),
+                text(
+                    "SELECT COUNT(*) FROM portfolio_state WHERE ticker = :ticker "
+                    "AND ticker != 'CASH' AND quantity > 0"
+                ),
                 {"ticker": ticker},
             ).scalar()
         return cnt > 0
@@ -182,9 +189,12 @@ class ExecutionAgent:
             ).fetchone()
         
         if result:
+            qty = float(result[1])
+            if qty <= 0:
+                return None
             return Position(
                 ticker=result[0],
-                quantity=float(result[1]),
+                quantity=qty,
                 entry_price=float(result[2]),
                 entry_ts=result[3],
             )
@@ -259,23 +269,23 @@ class ExecutionAgent:
     # ---------- Торговые операции ----------
 
     def _execute_buy(self, ticker: str, decision: str, strategy_name: str = None,
-                     stop_loss: float = None, take_profit: float = None, context_json: dict = None) -> None:
-        """Имитация покупки по сигналу BUY/STRONG_BUY."""
+                     stop_loss: float = None, take_profit: float = None, context_json: dict = None) -> bool:
+        """Имитация покупки по сигналу BUY/STRONG_BUY. True — сделка записана в БД."""
         if self._has_open_position(ticker):
             logger.info(
                 "ℹ️ Позиция по %s уже открыта, покупка пропущена", ticker
             )
-            return
+            return False
 
         current_price = self._get_current_price(ticker)
         if current_price is None:
             logger.warning("⚠️ Нет котировок для %s, покупка невозможна", ticker)
-            return
+            return False
 
         # Проверка торговых часов NYSE (если настроено)
         if not self.risk_manager.is_trading_hours():
             logger.warning("⚠️ Вне торговых часов NYSE, покупка %s пропущена", ticker)
-            return
+            return False
 
         cash = self._get_cash()
         
@@ -288,7 +298,7 @@ class ExecutionAgent:
         
         if allocation <= 0:
             logger.warning("⚠️ Нет свободного кэша для покупки %s", ticker)
-            return
+            return False
 
         quantity = floor(allocation / current_price)
         if quantity <= 0:
@@ -298,7 +308,7 @@ class ExecutionAgent:
                 ticker,
                 current_price,
             )
-            return
+            return False
 
         notional = quantity * current_price
         commission = notional * self.commission_rate
@@ -308,7 +318,7 @@ class ExecutionAgent:
         is_valid, error_msg = self.risk_manager.check_position_size(notional, ticker)
         if not is_valid:
             logger.warning(f"⚠️ Risk limit нарушен для {ticker}: {error_msg}")
-            return
+            return False
         
         # Проверка экспозиции портфеля
         current_exposure = self._get_current_portfolio_exposure()
@@ -317,7 +327,7 @@ class ExecutionAgent:
         )
         if not is_valid_exposure:
             logger.warning(f"⚠️ Экспозиция портфеля превышена: {exposure_error}")
-            return
+            return False
 
         if total_cost > cash:
             logger.warning(
@@ -326,7 +336,7 @@ class ExecutionAgent:
                 ticker,
                 total_cost,
             )
-            return
+            return False
 
         # Получаем sentiment для записи в историю
         sentiment = self._get_weighted_sentiment(ticker)
@@ -406,6 +416,7 @@ class ExecutionAgent:
             "signal_type": decision,
             "strategy_name": (strategy_name or "").strip() or "Portfolio",
         })
+        return True
 
     def _execute_sell(self, ticker: str, position: Position, reason: str, strategy_name: str = None) -> None:
         """Закрытие позиции по текущей цене (например, по стоп‑лоссу). При SANDBOX_SLIPPAGE_SELL_PCT > 0 цена исполнения занижается (консервативная оценка)."""
@@ -602,10 +613,16 @@ class ExecutionAgent:
                 conn.execute(text("DELETE FROM portfolio_state WHERE ticker = :ticker"), {"ticker": ticker})
             else:
                 new_qty = float(position.quantity) - qty
-                conn.execute(
-                    text("UPDATE portfolio_state SET quantity = :qty, last_updated = CURRENT_TIMESTAMP WHERE ticker = :ticker"),
-                    {"qty": new_qty, "ticker": ticker},
-                )
+                if new_qty <= 0:
+                    conn.execute(text("DELETE FROM portfolio_state WHERE ticker = :ticker"), {"ticker": ticker})
+                else:
+                    conn.execute(
+                        text(
+                            "UPDATE portfolio_state SET quantity = :qty, last_updated = CURRENT_TIMESTAMP "
+                            "WHERE ticker = :ticker"
+                        ),
+                        {"qty": new_qty, "ticker": ticker},
+                    )
             conn.execute(
                 text("""
                     INSERT INTO trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone)
@@ -873,7 +890,16 @@ class ExecutionAgent:
                     logger.info("   Стратегия: %s", strategy_name)
 
             if decision in ("BUY", "STRONG_BUY"):
-                self._execute_buy(ticker, decision, strategy_name, stop_loss, take_profit, context_json)
+                executed = self._execute_buy(
+                    ticker, decision, strategy_name, stop_loss, take_profit, context_json
+                )
+                if not executed:
+                    logger.warning(
+                        "⚠️ %s: аналитик дал %s, но сделка BUY в БД не записана "
+                        "(см. предупреждения выше: кэш, котировки, лимиты риска, экспозиция).",
+                        ticker,
+                        decision,
+                    )
             else:
                 logger.info("ℹ️ Сигнал %s для %s, покупка не выполняется", decision, ticker)
 
