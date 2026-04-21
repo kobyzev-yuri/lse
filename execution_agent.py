@@ -140,12 +140,74 @@ class ExecutionAgent:
                 {"cash": new_cash},
             )
 
-    def _has_open_position(self, ticker: str) -> bool:
-        """Проверяет наличие открытой позиции по тикеру (только quantity > 0).
+    def _open_long_qty_from_trade_history(self, ticker: str) -> float | None:
+        """Нетто-лонг по trade_history (как /pending). None — ошибка загрузки, вызывающий код делает fallback."""
+        try:
+            from report_generator import (
+                _canonical_ticker_for_positions,
+                compute_open_positions,
+                load_trade_history,
+            )
 
-        Раньше считалась любая строка в portfolio_state — при «нулевой» строке после частичных
-        правок cron логировал BUY от аналитика, но _execute_buy выходил сразу, без trade_history.
+            want = _canonical_ticker_for_positions(ticker)
+            trades = load_trade_history(self.engine)
+            for p in compute_open_positions(trades):
+                if _canonical_ticker_for_positions(p.ticker) == want:
+                    return float(p.quantity)
+            return 0.0
+        except Exception as e:
+            logger.warning(
+                "Не удалось определить открытую позицию по trade_history для %s: %s",
+                ticker,
+                e,
+            )
+            return None
+
+    def _repair_stale_portfolio_state_row(self, ticker: str, *, history_flat: bool = False) -> None:
+        """Если по trade_history позиции нет, а в portfolio_state осталась строка — удалить (рассинхрон)."""
+        try:
+            if not history_flat:
+                qh = self._open_long_qty_from_trade_history(ticker)
+                if qh is None or qh > 0:
+                    return
+            with self.engine.begin() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT quantity FROM portfolio_state WHERE ticker = :ticker "
+                        "AND ticker != 'CASH'"
+                    ),
+                    {"ticker": ticker},
+                ).fetchone()
+                if not row:
+                    return
+                ps_qty = float(row[0])
+                if ps_qty <= 0:
+                    return
+                logger.warning(
+                    "Расхождение БД: %s в portfolio_state quantity=%.4f, по trade_history позиция закрыта — "
+                    "удаляю строку portfolio_state.",
+                    ticker,
+                    ps_qty,
+                )
+                conn.execute(
+                    text("DELETE FROM portfolio_state WHERE ticker = :ticker"),
+                    {"ticker": ticker},
+                )
+        except Exception as e:
+            logger.debug("repair portfolio_state %s: %s", ticker, e)
+
+    def _has_open_position(self, ticker: str) -> bool:
+        """Открытая позиция = нетто по trade_history (как /pending), не «сырой» portfolio_state.
+
+        Иначе после правок/сбоев portfolio_state мог показывать «есть MSFT», хотя BUY/SELL в истории уже нет.
         """
+        qh = self._open_long_qty_from_trade_history(ticker)
+        if qh is not None:
+            if qh > 0:
+                return True
+            self._repair_stale_portfolio_state_row(ticker, history_flat=True)
+            return False
+
         with self.engine.connect() as conn:
             cnt = conn.execute(
                 text(
