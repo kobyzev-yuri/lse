@@ -1,6 +1,10 @@
 """
-Модуль для управления risk limits и capacity компании
-Все данные хранятся локально и НЕ попадают в git
+Модуль для управления risk limits и capacity компании.
+
+Порядок загрузки конфигурации (если путь не передан явно):
+1. local/risk_limits.json — локальные переопределения (не в git)
+2. config/risk_limits.defaults.json — значения из репозитория для деплоя
+3. Встроенный _get_default_config(), если оба файла отсутствуют
 """
 
 import json
@@ -14,10 +18,11 @@ logger = logging.getLogger(__name__)
 
 class RiskManager:
     """
-    Менеджер рисков для управления лимитами компании
-    
-    Загружает конфигурацию из local/risk_limits.json,
-    с fallback'ом на БД (RLM), если передан engine.
+    Менеджер рисков для управления лимитами компании.
+
+    Загружает конфигурацию из local/risk_limits.json, иначе из
+    config/risk_limits.defaults.json, иначе встроенные значения.
+    Динамические переопределения — из БД (strategy_parameters), если передан engine.
     """
     
     def __init__(self, risk_config_path: Optional[Path] = None, engine=None):
@@ -29,10 +34,16 @@ class RiskManager:
             engine: SQLAlchemy engine для загрузки динамических параметров
         """
         if risk_config_path is None:
-            # Ищем в local/risk_limits.json
             project_root = Path(__file__).parent.parent
-            risk_config_path = project_root / "local" / "risk_limits.json"
-        
+            local_path = project_root / "local" / "risk_limits.json"
+            defaults_path = project_root / "config" / "risk_limits.defaults.json"
+            if local_path.is_file():
+                risk_config_path = local_path
+            elif defaults_path.is_file():
+                risk_config_path = defaults_path
+            else:
+                risk_config_path = local_path
+
         self.config_path = Path(risk_config_path)
         self.config: Dict = {}
         self.engine = engine
@@ -42,8 +53,9 @@ class RiskManager:
         """Загружает конфигурацию risk limits"""
         if not self.config_path.exists():
             logger.warning(
-                f"⚠️ Файл risk_limits.json не найден: {self.config_path}\n"
-                f"   Создайте его на основе local/risk_limits.example.json"
+                f"⚠️ Файл risk limits не найден: {self.config_path}\n"
+                f"   Ожидались local/risk_limits.json или config/risk_limits.defaults.json; "
+                f"см. local/risk_limits.example.json"
             )
             # Используем дефолтные значения
             self.config = self._get_default_config()
@@ -91,7 +103,7 @@ class RiskManager:
             "risk_capacity": {
                 "total_capital_usd": 100000.0,
                 "max_position_size_usd": 10000.0,
-                "max_portfolio_exposure_percent": 80.0,
+                "max_portfolio_exposure_percent": 95.0,
                 "max_single_ticker_exposure_percent": 20.0,
                 "max_daily_loss_usd": 5000.0,
                 "max_daily_loss_percent": 5.0,

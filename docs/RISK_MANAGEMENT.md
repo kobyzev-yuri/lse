@@ -9,18 +9,23 @@
 
 ## Структура хранения
 
-### Локальные файлы (НЕ в git)
+### Порядок загрузки (см. `utils/risk_manager.py`)
 
-Все данные о risk limits хранятся локально и **не попадают в git**:
+1. **`local/risk_limits.json`** — если есть, используется он (файл **не в git**, секреты/капитал).
+2. Иначе **`config/risk_limits.defaults.json`** — дефолты из репозитория (в т.ч. `max_portfolio_exposure_percent` для лимита экспозиции портфеля перед BUY).
+3. Иначе встроенный минимальный конфиг в коде.
 
 ```
 local/
-├── risk_limits.json          # Реальная конфигурация (НЕ в git)
-├── risk_limits.example.json  # Пример конфигурации (в git)
+├── risk_limits.json          # Переопределения (НЕ в git)
+├── risk_limits.example.json  # Шаблон (в git)
 └── README.md                 # Инструкции
+
+config/
+└── risk_limits.defaults.json # Деплой без local-файла (в git)
 ```
 
-Файлы в `local/` игнорируются через `.gitignore`.
+Только `local/risk_limits.json` игнорируется в `.gitignore` (не весь `local/`).
 
 ## Настройка Risk Limits
 
@@ -41,7 +46,7 @@ nano local/risk_limits.json
   "risk_capacity": {
     "total_capital_usd": 1000000.0,
     "max_position_size_usd": 100000.0,
-    "max_portfolio_exposure_percent": 80.0,
+    "max_portfolio_exposure_percent": 95.0,
     "max_single_ticker_exposure_percent": 20.0,
     "max_daily_loss_usd": 50000.0,
     "max_daily_loss_percent": 5.0
