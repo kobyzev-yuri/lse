@@ -3,11 +3,13 @@
 
 Порядок загрузки конфигурации (если путь не передан явно):
 1. local/risk_limits.json — локальные переопределения (не в git)
-2. config/risk_limits.defaults.json — значения из репозитория для деплоя
-3. Встроенный _get_default_config(), если оба файла отсутствуют
+2. Иначе при RISK_LIMITS_PROFILE=sandbox или LSE_SANDBOX=1 — config/risk_limits.sandbox.json
+3. Иначе config/risk_limits.defaults.json
+4. Встроенный _get_default_config(), если выбранный файл отсутствует
 """
 
 import json
+import os
 import logging
 from pathlib import Path
 from typing import Dict, Optional, List, Any
@@ -20,8 +22,9 @@ class RiskManager:
     """
     Менеджер рисков для управления лимитами компании.
 
-    Загружает конфигурацию из local/risk_limits.json, иначе из
-    config/risk_limits.defaults.json, иначе встроенные значения.
+    Загружает конфигурацию из local/risk_limits.json; без него —
+    sandbox-профиль (env) или config/risk_limits.defaults.json;
+    иначе встроенные значения.
     Динамические переопределения — из БД (strategy_parameters), если передан engine.
     """
     
@@ -37,12 +40,23 @@ class RiskManager:
             project_root = Path(__file__).parent.parent
             local_path = project_root / "local" / "risk_limits.json"
             defaults_path = project_root / "config" / "risk_limits.defaults.json"
+            sandbox_path = project_root / "config" / "risk_limits.sandbox.json"
             if local_path.is_file():
                 risk_config_path = local_path
-            elif defaults_path.is_file():
-                risk_config_path = defaults_path
             else:
-                risk_config_path = local_path
+                prof = (os.environ.get("RISK_LIMITS_PROFILE") or "").strip().lower()
+                sandbox_env = os.environ.get("LSE_SANDBOX", "").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                )
+                use_sandbox = prof == "sandbox" or sandbox_env
+                if use_sandbox and sandbox_path.is_file():
+                    risk_config_path = sandbox_path
+                elif defaults_path.is_file():
+                    risk_config_path = defaults_path
+                else:
+                    risk_config_path = local_path
 
         self.config_path = Path(risk_config_path)
         self.config: Dict = {}
@@ -54,8 +68,8 @@ class RiskManager:
         if not self.config_path.exists():
             logger.warning(
                 f"⚠️ Файл risk limits не найден: {self.config_path}\n"
-                f"   Ожидались local/risk_limits.json или config/risk_limits.defaults.json; "
-                f"см. local/risk_limits.example.json"
+                f"   Ожидались local/risk_limits.json, config/risk_limits.(defaults|sandbox).json; "
+                f"см. local/risk_limits.example.json, RISK_LIMITS_PROFILE=sandbox"
             )
             # Используем дефолтные значения
             self.config = self._get_default_config()

@@ -12,8 +12,9 @@
 ### Порядок загрузки (см. `utils/risk_manager.py`)
 
 1. **`local/risk_limits.json`** — если есть, используется он (файл **не в git**, секреты/капитал).
-2. Иначе **`config/risk_limits.defaults.json`** — дефолты из репозитория (в т.ч. `max_portfolio_exposure_percent` для лимита экспозиции портфеля перед BUY).
-3. Иначе встроенный минимальный конфиг в коде.
+2. Иначе, если задано **`RISK_LIMITS_PROFILE=sandbox`** или **`LSE_SANDBOX=1`** (`true`/`yes`) — **`config/risk_limits.sandbox.json`** (широкие лимиты для песочницы).
+3. Иначе **`config/risk_limits.defaults.json`** — дефолты из репозитория (в т.ч. `max_portfolio_exposure_percent` перед BUY).
+4. Иначе встроенный минимальный конфиг в коде.
 
 ```
 local/
@@ -22,7 +23,8 @@ local/
 └── README.md                 # Инструкции
 
 config/
-└── risk_limits.defaults.json # Деплой без local-файла (в git)
+├── risk_limits.defaults.json # Деплой без local-файла (в git)
+└── risk_limits.sandbox.json   # Песочница: RISK_LIMITS_PROFILE=sandbox или LSE_SANDBOX=1
 ```
 
 Только `local/risk_limits.json` игнорируется в `.gitignore` (не весь `local/`).

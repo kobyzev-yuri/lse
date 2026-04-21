@@ -1,0 +1,57 @@
+{
+  "_comment": "Профиль песочницы / paper: широкие портфельные лимиты. Включается без local/risk_limits.json: RISK_LIMITS_PROFILE=sandbox или LSE_SANDBOX=1.",
+  "company_info": {
+    "name": "LSE sandbox",
+    "broker": "paper",
+    "exchange": "NYSE",
+    "account_type": "sandbox",
+    "last_updated": "2026-04-21"
+  },
+  "risk_capacity": {
+    "total_capital_usd": 5000000.0,
+    "max_position_size_usd": 2000000.0,
+    "max_portfolio_exposure_percent": 99.5,
+    "max_single_ticker_exposure_percent": 80.0,
+    "max_daily_loss_usd": 2000000.0,
+    "max_daily_loss_percent": 25.0,
+    "max_drawdown_percent": 50.0
+  },
+  "position_limits": {
+    "max_positions_open": 40,
+    "min_position_size_usd": 100.0,
+    "max_position_concentration_percent": 80.0,
+    "max_sector_exposure_percent": 90.0
+  },
+  "risk_parameters": {
+    "stop_loss_percent": 5.0,
+    "take_profit_percent": 10.0,
+    "max_leverage": 1.0,
+    "max_correlation_exposure": 0.95,
+    "volatility_limit_percent": 80.0
+  },
+  "broker_limits": {},
+  "exchange_requirements": {
+    "NYSE": {
+      "trading_hours_utc": {
+        "open": "13:30",
+        "close": "20:00"
+      },
+      "pre_market_open": "09:00",
+      "after_hours_close": "22:00",
+      "timezone": "America/New_York"
+    }
+  },
+  "compliance_rules": {
+    "restricted_tickers": [],
+    "restricted_sectors": [],
+    "max_daily_trades": 500,
+    "wash_sale_window_days": 30,
+    "pattern_day_trader_limit": false
+  },
+  "risk_monitoring": {
+    "check_risk_before_trade": true,
+    "alert_on_limit_breach": true,
+    "auto_reduce_on_limit": false,
+    "risk_check_frequency_minutes": 15
+  }
+}
