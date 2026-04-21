@@ -253,12 +253,13 @@ class BacktestEngine:
                     
                     # Исполняем решение
                     if decision in ("BUY", "STRONG_BUY"):
-                        executor._execute_buy(
-                            ticker, 
+                        ok, _ = executor._execute_buy(
+                            ticker,
                             decision,
                             result.get('selected_strategy') if use_llm and isinstance(result, dict) else None
                         )
-                        trades_count += 1
+                        if ok:
+                            trades_count += 1
                     
                     # Проверяем стоп-лоссы
                     executor.check_stop_losses()
