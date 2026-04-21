@@ -11,17 +11,21 @@
 После исполнения сделок в Telegram отправляются уведомления по сделкам портфельной игры
 (не GAME_5M — те идут через send_sndk_signal_cron). TELEGRAM_BOT_TOKEN и TELEGRAM_SIGNAL_CHAT_IDS.
 
+По умолчанию LLM (ШАГ 3 portfolio_fusion в AnalystAgent) в этом кроне не вызывается — только техника + стратегия.
+Включить: TRADING_CYCLE_USE_LLM=true в config.env.
+
 Cron: 0 9,13,17 * * 1-5  cd /path/to/lse && python scripts/trading_cycle_cron.py
   или с тикерами: ... trading_cycle_cron.py "MSFT,ORCL,AMD"
 """
 
+import os
 import sys
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from config_loader import get_config_value
+from config_loader import get_config_value, load_config
 from execution_agent import ExecutionAgent
 from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_indicator_only
 from services.telegram_signal import get_signal_chat_ids, send_telegram_message
@@ -72,10 +76,27 @@ def _is_trading_cycle_enabled() -> bool:
     return v in ("1", "true", "yes")
 
 
+def _use_llm_in_trading_cycle() -> bool:
+    """HTTP к LLM в кроне только при TRADING_CYCLE_USE_LLM=true (или 1/yes). Иначе — get_decision без шага 3."""
+    v = get_config_value("TRADING_CYCLE_USE_LLM", "").strip().lower()
+    return v in ("1", "true", "yes")
+
+
 if __name__ == "__main__":
     try:
         if not _is_trading_cycle_enabled():
-            logger.info("Портфельная игра приостановлена (TRADING_CYCLE_ENABLED не включён в config.env). Крон завершён без исполнения.")
+            cfg = load_config()
+            env_v = os.getenv("TRADING_CYCLE_ENABLED")
+            file_v = cfg.get("TRADING_CYCLE_ENABLED")
+            eff = get_config_value("TRADING_CYCLE_ENABLED", "")
+            logger.info(
+                "Портфельная игра приостановлена: TRADING_CYCLE_ENABLED не true/1/yes. "
+                "Эффективное значение=%r (os.environ=%r, из merge config.env=%r). "
+                "Переменная окружения процесса перекрывает файл — см. docker-compose environment / Dockerfile ENV.",
+                eff,
+                env_v,
+                file_v,
+            )
             sys.exit(0)
         if len(sys.argv) > 1 and sys.argv[1].strip():
             tickers = [t.strip() for t in sys.argv[1].strip().split(",") if t.strip()]
@@ -91,8 +112,14 @@ if __name__ == "__main__":
             logging.warning("Тикеры не заданы (TRADING_CYCLE_TICKERS или TICKERS_MEDIUM/TICKERS_LONG в config.env, либо аргумент)")
             sys.exit(0)
 
+        use_llm = _use_llm_in_trading_cycle()
+        logger.info(
+            "Портфельный cron: LLM (portfolio_fusion / шаг 3) %s",
+            "включён (TRADING_CYCLE_USE_LLM)" if use_llm else "отключён — только техника+стратегия",
+        )
+
         agent = ExecutionAgent()
-        agent.run_for_tickers(tickers, cluster_tickers=cluster_tickers)
+        agent.run_for_tickers(tickers, use_llm=use_llm, cluster_tickers=cluster_tickers)
         _notify_portfolio_trades(agent)
     except Exception as e:
         logger.error("Ошибка торгового цикла: %s", e)
