@@ -12,7 +12,14 @@
 доп. алерт: рекомендуется закрыть позиции GAME_5m и рассмотреть закрытие прочих до открытия.
 
 Запуск вручную: python scripts/premarket_cron.py
-Cron (пример: 8:30 ET = 13:30 UTC зимой): 30 13 * * 1-5  cd /path/to/lse && python scripts/premarket_cron.py
+
+Cron (сервер в MSK, типичный EDT): ``session_phase == PRE_MARKET`` только когда в NY < 09:30 ET,
+т.е. примерно 04:00–09:29 ET → в MSK это примерно 11:00–16:29 (сдвиг ~+7 ч к ET).
+Пример двух запусков в окне премаркета: ``30 12,15 * * 1-5`` (12:30 и 15:30 MSK ≈ 5:30 и 8:30 ET).
+Неверно: ``15 17`` MSK в апреле–октябре ≈ 10:15 ET — уже ``NEAR_OPEN``, Telegram не уйдёт.
+
+Telegram: в config нужны ``PREMARKET_ALERT_TELEGRAM=true``, ``TELEGRAM_BOT_TOKEN``, ``TELEGRAM_SIGNAL_CHAT_IDS``;
+сообщение уходит только если фаза PRE_MARKET и по тикерам есть хотя бы одна строка в results.
 """
 
 import sys
@@ -50,7 +57,11 @@ def main() -> None:
     ctx = get_market_session_context()
     phase = (ctx.get("session_phase") or "").strip()
     if phase != "PRE_MARKET":
-        logger.info("Сейчас не премаркет (phase=%s), выход", phase)
+        logger.info(
+            "Сейчас не премаркет (phase=%s, NY=%s), выход — крон нужен только когда в NY < 09:30 ET (см. session_phase PRE_MARKET в services/market_session.py).",
+            phase,
+            ctx.get("et_now") or "?",
+        )
         sys.exit(0)
 
     # Тикеры: FAST + опционально портфельные (без дубликатов)

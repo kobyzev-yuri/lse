@@ -35,7 +35,8 @@ cat >> "$CRON_FILE" << EOF
 0 19 * * 1-5 docker exec $CONTAINER_NAME python update_finviz_data.py >> /dev/null 2>&1
 0 9,13,17 * * 1-5 docker exec $CONTAINER_NAME python scripts/trading_cycle_cron.py >> "$PROJECT_DIR/logs/cron_trading_cycle.log" 2>&1
 */5 * * * 1-5 docker exec $CONTAINER_NAME python scripts/send_sndk_signal_cron.py >> "$PROJECT_DIR/logs/cron_sndk_signal.log" 2>&1
-15 17 * * 1-5 docker exec $CONTAINER_NAME python scripts/premarket_cron.py >> "$PROJECT_DIR/logs/premarket_cron.log" 2>&1
+# Премаркет: только пока в NY < 09:30 ET (phase PRE_MARKET). Хост в MSK: 12:30 и 15:30 ≈ 5:30 и 8:30 ET (EDT); зимой (EST) то же окно до открытия.
+30 12,15 * * 1-5 docker exec $CONTAINER_NAME python scripts/premarket_cron.py >> "$PROJECT_DIR/logs/premarket_cron.log" 2>&1
 # Новости core-fast: каждые 15 мин (RSS + Alpha Vantage), без параллельных запусков
 */15 * * * * flock -n /tmp/lse_news_core_fast.lock docker exec $CONTAINER_NAME python scripts/fetch_news_cron.py --mode core-fast >> "$PROJECT_DIR/logs/news_fetch.log" 2>&1
 # Новости NewsAPI: раз в 2 часа (отдельно, чтобы backoff не тормозил другие источники), без параллельных запусков

@@ -269,6 +269,23 @@
                         root.appendChild(sec);
                         var bars = item.bars || [];
                         if (!bars.length) {
+                            var trBulk = item.trades || [];
+                            if (trBulk.length) {
+                                empty++;
+                                var p0 = document.createElement('p');
+                                p0.className = 'muted';
+                                p0.textContent = 'Нет ряда в quotes; сделки портфеля (не GAME_5M): ' + trBulk.length;
+                                sec.appendChild(p0);
+                                var ul0 = document.createElement('ul');
+                                ul0.style.cssText = 'font-size:0.82rem;margin:0.25rem 0 0 1rem;color:#cbd5e1;';
+                                trBulk.forEach(function(x) {
+                                    var li = document.createElement('li');
+                                    li.textContent = (x.ts || '') + ' · ' + (x.side || '') + ' @ ' + x.price + (x.strategy_name ? ' · ' + x.strategy_name : '');
+                                    ul0.appendChild(li);
+                                });
+                                sec.appendChild(ul0);
+                                return;
+                            }
                             empty++;
                             var p = document.createElement('p');
                             p.className = 'muted';
@@ -292,16 +309,33 @@
                 var data = await r1.json();
                 var bars = data.bars || [];
                 var tr = data.trades || [];
-                if (!bars.length) {
-                    statusEl.textContent = 'Нет дневных котировок для ' + t;
+                if (!bars.length && !tr.length) {
+                    statusEl.textContent = 'Нет дневных котировок и сделок портфеля для ' + t;
                     return;
                 }
                 var sec = document.createElement('div');
                 sec.className = 'chart-section';
                 var h = document.createElement('h2');
                 h.textContent = t;
-                var cv = document.createElement('canvas');
                 sec.appendChild(h);
+                if (!bars.length && tr.length) {
+                    var pNQ = document.createElement('p');
+                    pNQ.className = 'muted';
+                    pNQ.textContent = 'В quotes нет дневных баров за период — линию цены не построить. Сделки (не GAME_5M), по которым маркеры появятся после появления котировок:';
+                    sec.appendChild(pNQ);
+                    var ulNQ = document.createElement('ul');
+                    ulNQ.style.cssText = 'font-size:0.85rem;margin:0.35rem 0;color:#cbd5e1;';
+                    tr.forEach(function(x) {
+                        var li = document.createElement('li');
+                        li.textContent = (x.ts || '') + ' · ' + (x.side || '') + ' @ ' + x.price + (x.signal_type ? ' · ' + x.signal_type : '') + (x.strategy_name ? ' · ' + x.strategy_name : '');
+                        ulNQ.appendChild(li);
+                    });
+                    sec.appendChild(ulNQ);
+                    root.appendChild(sec);
+                    statusEl.textContent = 'Тикер: ' + t + ' · нет quotes · сделок: ' + tr.length;
+                    return;
+                }
+                var cv = document.createElement('canvas');
                 sec.appendChild(cv);
                 root.appendChild(sec);
                 chartInstances.push(buildLineChart(cv, '', bars, tr));

@@ -1583,6 +1583,16 @@ def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int) -> Dict[str, A
     return portfolio_llm_public_payload(merged)
 
 
+def _msk_naive_datetime() -> datetime:
+    """«Сейчас» в Europe/Moscow без tzinfo — как типичное хранение ts в trade_history."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
+    except Exception:
+        return datetime.now()
+
+
 def _load_portfolio_daily_chart_trades(ticker: str, cutoff: datetime, dt_hi: datetime) -> List[Dict[str, Any]]:
     """Сделки для маркеров на дневном графике портфеля: всё, кроме GAME_5M (портфельный цикл, Manual и т.д.)."""
     t = (ticker or "").strip().upper()
@@ -1623,7 +1633,11 @@ def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
     """Дневной график из БД quotes (open/high/low/close), не intraday 5m; сделки портфеля (не GAME_5M) для маркеров."""
     days = min(max(10, int(days)), 730)
     cutoff = datetime.now() - timedelta(days=days)
-    dt_hi = datetime.now() + timedelta(days=2)
+    # Окно сделок — по MSK (как в trade_history), чуть шире по нижней границе из-за часовых поясов сервера
+    now_msk = _msk_naive_datetime()
+    trade_lo = now_msk - timedelta(days=days + 2)
+    trade_hi = now_msk + timedelta(days=2)
+    trades = _load_portfolio_daily_chart_trades(ticker, trade_lo, trade_hi)
     with engine.connect() as conn:
         df = pd.read_sql(
             text("""
@@ -1636,6 +1650,15 @@ def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
             params={"ticker": ticker, "cutoff": cutoff},
         )
     if df.empty:
+        if trades:
+            return {
+                "ticker": ticker,
+                "interval": "1d",
+                "source": "quotes",
+                "bars": [],
+                "trades": trades,
+                "no_quotes": True,
+            }
         return {}
     records = []
     for _, row in df.iterrows():
@@ -1651,7 +1674,6 @@ def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
             "rsi": _to_jsonable(row.get("rsi")),
             "volatility_5": _to_jsonable(row.get("volatility_5")),
         })
-    trades = _load_portfolio_daily_chart_trades(ticker, cutoff, dt_hi)
     return {"ticker": ticker, "interval": "1d", "source": "quotes", "bars": records, "trades": trades}
 
 
@@ -1823,8 +1845,11 @@ async def get_portfolio_chart(ticker: str, days: int = 180):
         data = await asyncio.to_thread(_build_portfolio_daily_chart_data, t, days)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка графика: {e!s}")
-    if not data.get("bars"):
-        raise HTTPException(status_code=404, detail=f"Нет дневных котировок в quotes для {t}")
+    if not data.get("bars") and not (data.get("trades") or []):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Нет дневных котировок в quotes и сделок портфеля (не GAME_5M) для {t}",
+        )
     return JSONResponse(content=_api_json_body(data))
 
 

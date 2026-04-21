@@ -65,8 +65,8 @@ cat >> "$CRON_FILE" << EOF
 # Игра 5m: тикеры из config.env TICKERS_FAST. Аргумент переопределяет: ... send_sndk_signal_cron.py "SNDK,NDK"
 */5 * * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/send_sndk_signal_cron.py >> logs/cron_sndk_signal.log 2>&1
 
-# Премаркет: за 15 мин до открытия US (9:15 ET = 17:15 MSK зимой). При PREMARKET_ALERT_TELEGRAM=true — алерт в Telegram. Летом (EDT): 9:15 ET = 16:15 MSK — при необходимости сменить на 15 16
-15 17 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/premarket_cron.py >> logs/premarket_cron.log 2>&1
+# Премаркет: скрипт выходит, если в NY уже >= 09:30 ET (иначе нет phase PRE_MARKET и нет алерта). Хост в MSK: 12:30 и 15:30 — до открытия и в EDT и в EST. НЕ 17:15 MSK (летом это ~10:15 ET, уже RTH).
+30 12,15 * * 1-5 cd $PROJECT_DIR && $PYTHON_PATH scripts/premarket_cron.py >> logs/premarket_cron.log 2>&1
 
 # Новости core-fast (RSS + Alpha Vantage): каждые 15 мин, без параллельных запусков
 */15 * * * * cd $PROJECT_DIR && flock -n /tmp/lse_news_core_fast.lock $PYTHON_PATH scripts/fetch_news_cron.py --mode core-fast >> logs/news_fetch.log 2>&1
