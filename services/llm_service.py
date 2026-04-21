@@ -619,8 +619,11 @@ def normalize_openai_sdk_proxyapi_base_model(base_url: str, model: str) -> tuple
 
 def get_openai_http_timeout_prompt_entry() -> Optional[float]:
     """
-    Опционально: HTTP-таймаут (сек) для тяжёлых вызовов entry-LLM (напр. /prompt_entry game5m по кластеру).
-    Пусто — используется таймаут клиента LLMService (OPENAI_TIMEOUT).
+    Опционально: HTTP-таймаут (сек) для тяжёлых JSON-промптов к chat.completions.
+
+    Используется там же, где длинный user-текст: /prompt_entry game5m (кластер),
+    LLM по корреляции в pipeline, GET /api/analyzer с use_llm=1 (trade effectiveness).
+    Переменная одна — ``OPENAI_TIMEOUT_PROMPT_ENTRY``; пусто — таймаут клиента (OPENAI_TIMEOUT / ANTHROPIC_TIMEOUT).
     """
     from config_loader import get_config_value
 
@@ -733,7 +736,7 @@ class LLMService:
         if ("opus" in mo or "sonnet" in mo or mo.startswith("claude-") or "/claude" in mo) and self.timeout < 120:
             logger.warning(
                 "HTTP-таймаут=%s с коротким лимитом для Claude/Opus: при длинных промптах часто нужно 180–600 с "
-                "(OPENAI_TIMEOUT или ANTHROPIC_TIMEOUT, плюс OPENAI_TIMEOUT_PROMPT_ENTRY для /prompt_entry game5m).",
+                "(OPENAI_TIMEOUT или ANTHROPIC_TIMEOUT; для тяжёлых промптов — OPENAI_TIMEOUT_PROMPT_ENTRY: game5m prompt_entry, анализатор).",
                 self.timeout,
             )
 

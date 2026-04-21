@@ -112,7 +112,7 @@ ANTHROPIC_TIMEOUT=300
 
 **Таймаут:** для Opus и длинных промптов (карточка 5m, кластер, новости) лимит **60 с** часто даёт обрыв на стороне клиента; начните с **180–300 с**, при необходимости **600**. Проверка одним коротким запросом: `python scripts/proxyapi_llm_smoke.py` (из корня репо; опция `--timeout 300`).
 
-Для **`/prompt_entry game5m`** (несколько тикеров подряд с большим блоком корреляции) можно задать отдельно **`OPENAI_TIMEOUT_PROMPT_ENTRY=300`** (или 600): этот HTTP-таймаут используется только в этих «тяжёлых» вызовах `analyze_trading_situation`, не меняя `OPENAI_TIMEOUT` для остального приложения.
+**`OPENAI_TIMEOUT_PROMPT_ENTRY=300`** (или 600): один HTTP-таймаут для всех «тяжёлых» chat.completions с большим JSON/текстом — **`/prompt_entry game5m`**, LLM по корреляции в `game_commands_pipeline`, Telegram-ветка с тем же вызовом, **GET `/api/analyzer?use_llm=1`**. Не меняет `OPENAI_TIMEOUT` для коротких вызовов; если переменная пуста, везде используется таймаут клиента.
 
 **Не смешивать:** `OPENAI_MODEL=claude-…` при `OPENAI_BASE_URL=…/openai/v1` — неверная пара (лучше `ANTHROPIC_MODEL`); в логе будет предупреждение из `services/llm_service.py`.
 

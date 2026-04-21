@@ -789,9 +789,10 @@ def _build_llm_recommendations(
     game_5m_config_focus: bool = False,
 ) -> Optional[Dict[str, Any]]:
     try:
-        from services.llm_service import get_llm_service
+        from services.llm_service import get_llm_service, get_openai_http_timeout_prompt_entry
 
         llm = get_llm_service()
+        _heavy_llm_http_timeout = get_openai_http_timeout_prompt_entry()
         if not getattr(llm, "client", None):
             return {"status": "disabled", "reason": "LLM client unavailable"}
 
@@ -935,6 +936,7 @@ def _build_llm_recommendations(
             system_prompt=system_prompt,
             temperature=0.1,
             max_tokens=max_tok,
+            http_timeout_sec=_heavy_llm_http_timeout,
         )
         text = out.get("response") or ""
         finish_reason = out.get("finish_reason")
