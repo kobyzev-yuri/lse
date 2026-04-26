@@ -180,6 +180,38 @@ total_cost = notional + commission
 - `take_profit` и `stop_loss` из стратегии, если стратегия их вернула;
 - `context_json` с техническими данными, sentiment, base decision и кластером.
 
+### Откуда берётся `take_profit` при входе
+
+`take_profit` — это процент доходности от цены входа, а не цена. Его считает выбранная стратегия в `calculate_signal()`:
+
+```text
+StrategyManager.select_strategy(...)
+→ selected_strategy.calculate_signal(...)
+→ strategy_result["take_profit"]
+→ ExecutionAgent._execute_buy(..., take_profit=...)
+→ trade_history.take_profit
+```
+
+Внутри стратегии значение берётся через `BaseStrategy.get_parameters(default_params, target_identifier=f"TICKER:{ticker}")`:
+
+1. сначала читаются параметры из `strategy_parameters` для конкретной стратегии и тикера (`TICKER:<ticker>`);
+2. они накладываются поверх дефолтов стратегии;
+3. если параметров в БД нет, остаётся дефолт стратегии.
+
+Дефолты сейчас такие:
+
+| Стратегия | default `stop_loss` | default `take_profit` |
+|-----------|--------------------:|----------------------:|
+| `Momentum` | 3% | 8% |
+| `Mean Reversion` | 5% | 4% |
+| `Volatile Gap` | 7% | 12% |
+| `Geopolitical Bounce` | 5% | 4% |
+| `Neutral` | нет | нет |
+
+Важно: в текущей реализации `take_profit` попадает в BUY только когда `ExecutionAgent` получил полный `strategy_result`, то есть в пути `get_decision_with_llm()` (`TRADING_CYCLE_USE_LLM=true`) или если аналитический метод вернул dict с `strategy_result`. В дефолтном cron-режиме без LLM (`TRADING_CYCLE_USE_LLM` пустой/false) `get_decision()` возвращает только строку `BUY` / `HOLD`, поэтому `trade_history.take_profit` для нового BUY может быть `NULL`.
+
+Если в BUY `take_profit` оказался `NULL`, закрытие использует fallback `PORTFOLIO_TAKE_PROFIT_PCT` из config. Если и он равен `0` или пустой, тейк по портфельной позиции не проверяется.
+
 ---
 
 ## 10. Как закрываются позиции
@@ -223,9 +255,9 @@ stop_threshold = ln(STOP_LOSS_LEVEL)
 
 ## 12. Тейк-профит
 
-Порог тейка берётся так:
+При закрытии порог тейка берётся так:
 
-1. `take_profit` из последнего BUY по тикеру, если стратегия его записала;
+1. `take_profit` из последнего BUY по тикеру (`trade_history.take_profit`), если он был сохранён при входе;
 2. иначе `PORTFOLIO_TAKE_PROFIT_PCT` из config;
 3. если порог отсутствует или `0`, тейк не проверяется, в лог пишется подсказка задать `PORTFOLIO_TAKE_PROFIT_PCT`.
 
@@ -236,17 +268,7 @@ pnl_pct = (current_price - entry_price) / entry_price × 100
 закрыть, если pnl_pct >= take_profit
 ```
 
-Дефолтные тейки стратегий в коде:
-
-| Стратегия | stop_loss | take_profit |
-|-----------|----------:|------------:|
-| `Momentum` | 3% | 8% |
-| `Mean Reversion` | 5% | 4% |
-| `Volatile Gap` | 7% | 12% |
-| `Geopolitical Bounce` | 5% | 4% |
-| `Neutral` | нет | нет |
-
-Стратегические параметры могут переопределяться через `strategy_parameters` для `TICKER:<тикер>` или `GLOBAL`.
+Пример: если `Momentum` открыл BUY по 100 и в сделку записан `take_profit=8.0`, то автозакрытие сработает при `quotes.close >= 108` (до учёта slippage/комиссии). Если при входе `take_profit=NULL`, но в config задан `PORTFOLIO_TAKE_PROFIT_PCT=3`, то закрытие сработает при `pnl_pct >= 3%`.
 
 ---
 
