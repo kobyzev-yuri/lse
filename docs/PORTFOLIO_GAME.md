@@ -242,7 +242,7 @@ check_stop_losses(exclude_strategy_names=frozenset({"GAME_5M"}))
 
 Порядок проверки:
 
-1. **Стоп-лосс**, если `PORTFOLIO_STOP_LOSS_ENABLED=true` и `PORTFOLIO_EXIT_ONLY_TAKE=false`.
+1. **Стоп-лосс**, только если `PORTFOLIO_STOP_LOSS_ENABLED=true` и `PORTFOLIO_EXIT_ONLY_TAKE=false`. В текущей политике портфеля stop-loss выключен (`PORTFOLIO_STOP_LOSS_ENABLED=false`), как и в GAME_5M.
 2. **Тейк-профит**, если задан в последнем BUY или через `PORTFOLIO_TAKE_PROFIT_PCT`.
 3. Если ни стоп, ни тейк не сработали — позиция остаётся открытой.
 
