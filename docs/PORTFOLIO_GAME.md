@@ -192,21 +192,23 @@ StrategyManager.select_strategy(...)
 → trade_history.take_profit
 ```
 
-Внутри стратегии значение берётся через `BaseStrategy.get_parameters(default_params, target_identifier=f"TICKER:{ticker}")`:
+Эти числа теперь вынесены в `config.env` и видны в веб-разделе `/parameters`. Внутри стратегии значение берётся через `BaseStrategy.get_parameters(default_params, target_identifier=f"TICKER:{ticker}")`:
 
-1. сначала читаются параметры из `strategy_parameters` для конкретной стратегии и тикера (`TICKER:<ticker>`);
-2. они накладываются поверх дефолтов стратегии;
-3. если параметров в БД нет, остаётся дефолт стратегии.
+1. стартуют кодовые дефолты стратегии;
+2. поверх них накладываются ключи `PORTFOLIO_<STRATEGY>_STOP_LOSS_PCT` / `PORTFOLIO_<STRATEGY>_TAKE_PROFIT_PCT` из `config.env`;
+3. поверх config накладываются параметры из `strategy_parameters` для конкретной стратегии и тикера (`TICKER:<ticker>`), если они есть.
 
-Дефолты сейчас такие:
+Ключи config сейчас такие:
 
-| Стратегия | default `stop_loss` | default `take_profit` |
-|-----------|--------------------:|----------------------:|
-| `Momentum` | 3% | 8% |
-| `Mean Reversion` | 5% | 4% |
-| `Volatile Gap` | 7% | 12% |
-| `Geopolitical Bounce` | 5% | 4% |
-| `Neutral` | нет | нет |
+| Стратегия | config key stop | config key take |
+|-----------|-----------------|-----------------|
+| `Momentum` | `PORTFOLIO_MOMENTUM_STOP_LOSS_PCT=3` | `PORTFOLIO_MOMENTUM_TAKE_PROFIT_PCT=8` |
+| `Mean Reversion` | `PORTFOLIO_MEAN_REVERSION_STOP_LOSS_PCT=5` | `PORTFOLIO_MEAN_REVERSION_TAKE_PROFIT_PCT=4` |
+| `Volatile Gap` | `PORTFOLIO_VOLATILE_GAP_STOP_LOSS_PCT=7` | `PORTFOLIO_VOLATILE_GAP_TAKE_PROFIT_PCT=12` |
+| `Geopolitical Bounce` | `PORTFOLIO_GEOPOLITICAL_BOUNCE_STOP_LOSS_PCT=5` | `PORTFOLIO_GEOPOLITICAL_BOUNCE_TAKE_PROFIT_PCT=4` |
+| `Neutral` | `PORTFOLIO_NEUTRAL_STOP_LOSS_PCT=` | `PORTFOLIO_NEUTRAL_TAKE_PROFIT_PCT=` |
+
+Кодовые дефолты с теми же числами остаются только как fallback, если ключа нет в config. `PORTFOLIO_TAKE_PROFIT_PCT` — другой fallback: он используется уже при закрытии, если в BUY не был сохранён стратегический `take_profit`.
 
 Важно: в текущей реализации `take_profit` попадает в BUY только когда `ExecutionAgent` получил полный `strategy_result`, то есть в пути `get_decision_with_llm()` (`TRADING_CYCLE_USE_LLM=true`) или если аналитический метод вернул dict с `strategy_result`. В дефолтном cron-режиме без LLM (`TRADING_CYCLE_USE_LLM` пустой/false) `get_decision()` возвращает только строку `BUY` / `HOLD`, поэтому `trade_history.take_profit` для нового BUY может быть `NULL`.
 

@@ -90,6 +90,7 @@
 | `TRADING_CYCLE_USE_LLM` | Включает LLM-шаг `portfolio_fusion` внутри portfolio cron. По умолчанию cron работает без HTTP LLM. |
 | `TRADING_CYCLE_TICKERS` | Явный список торгуемых тикеров портфельной игры. Пусто = `TICKERS_MEDIUM + TICKERS_LONG`. |
 | `PORTFOLIO_TAKE_PROFIT_PCT` | Фолбэк тейка, если стратегия не записала `take_profit`; `0` = не закрывать только по этому правилу. |
+| `PORTFOLIO_<STRATEGY>_STOP_LOSS_PCT`, `PORTFOLIO_<STRATEGY>_TAKE_PROFIT_PCT` | Дефолтные stop/take, которые стратегия записывает в BUY (`MOMENTUM`, `MEAN_REVERSION`, `VOLATILE_GAP`, `GEOPOLITICAL_BOUNCE`, `NEUTRAL`). Видны в `/parameters`; БД `strategy_parameters` может перекрыть их точечно. |
 | `PORTFOLIO_STOP_LOSS_ENABLED` | Включает stop по `STOP_LOSS_LEVEL`. Может перекрываться через `strategy_parameters`. |
 | `PORTFOLIO_EXIT_ONLY_TAKE` | Если true — портфель закрывается только по тейку. |
 | `STOP_LOSS_LEVEL` | Порог stop как отношение цены к входу; `0.95` примерно -5%. |
