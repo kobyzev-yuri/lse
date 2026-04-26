@@ -59,7 +59,7 @@
 
 **Почему при TAKE_PROFIT в отчёте Close может быть заметно ниже локального пика?** В игре `GAME_5M` решение о тейке принимается с учётом **high/окна high** (см. `services/game_5m.py::should_close_position` и `services/recommend_5m.py::build_5m_close_context`), но **в `trade_history.price` при `TAKE_PROFIT` крон записывает `exit_bar_close` последнего доступного 5m-бара** (см. `scripts/send_sndk_signal_cron.py`, ветка `exit_type == "TAKE_PROFIT"`). Поэтому в отчёте `Close` — это **цена закрытия бара “решения”**, а не обязательно high бара, где был максимум окна.
 
-Подробный разбор динамического `take_pct`, окна `recent_bars_high_max`, `session_high` и влияния на `missed_upside` в анализаторе: `docs/GAME_5M_DYNAMIC_TAKE_EXIT_SEMANTICS.md`.
+Подробный разбор динамического `take_pct`, окна `recent_bars_high_max`, `session_high` и влияния на `missed_upside` в анализаторе: `docs/GAME_5M_CALCULATIONS_AND_REPORTING.md`.
 
 ---
 

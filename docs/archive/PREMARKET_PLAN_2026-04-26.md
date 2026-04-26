@@ -118,5 +118,5 @@
 
 - [market_session.py](../services/market_session.py) — фазы сессии.
 - [recommend_5m.py](../services/recommend_5m.py) — решение 5m.
-- [GAME_SNDK.md](GAME_SNDK.md) — игра 5m.
+- [GAME_5M_CALCULATIONS_AND_REPORTING.md](GAME_5M_CALCULATIONS_AND_REPORTING.md) — игра 5m.
 - Мысли Алекса (24–25.02.2026): вход по тек. курсу, курс входа по претрейдингу, лимит при движении вниз, апсайд на день, запрет входа; учёт премаркета.

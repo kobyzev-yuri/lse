@@ -133,7 +133,7 @@ python report_generator.py
 - [WEB_INTERFACE.md](WEB_INTERFACE.md) - Подробная документация веб-интерфейса
 - [BUSINESS_PROCESSES.md](BUSINESS_PROCESSES.md) - Описание бизнес-процессов
 - [ROADMAP.md](ROADMAP.md) - План развития системы
-- [docs/VECTOR_KB_IMPLEMENTATION.md](docs/VECTOR_KB_IMPLEMENTATION.md) - Векторная база знаний
+- [docs/VECTOR_KB_USAGE.md](docs/VECTOR_KB_USAGE.md) - Векторная база знаний
 
 
 

@@ -260,6 +260,19 @@ def update_config_key(key: str, value: str) -> bool:
         return False
 
 
+def _strip_env_value_inline_comment(value: str) -> str:
+    """Убрать хвост `` # коммент`` в значении (как в bash). ``#`` внутри ``"..."`` / ``'...'`` не трогаем."""
+    s = value.strip()
+    if not s:
+        return s
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        return s[1:-1]
+    for i, ch in enumerate(s):
+        if ch == "#" and (i == 0 or s[i - 1] in " \t"):
+            return s[:i].rstrip()
+    return s
+
+
 def _parse_env_file(path: Path) -> Dict[str, str]:
     """Парсит KEY=value; кавычки у значения снимаем (совместимость с nyse/config.env)."""
     out: Dict[str, str] = {}
@@ -276,7 +289,7 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
             continue
         key, value = s.split("=", 1)
         k = key.strip()
-        v = value.strip().strip('"').strip("'")
+        v = _strip_env_value_inline_comment(value).strip('"').strip("'")
         if k:
             out[k] = v
     return out
@@ -417,7 +430,7 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, str]:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     key, value = line.split("=", 1)
-                    config[key.strip()] = value.strip()
+                    config[key.strip()] = _strip_env_value_inline_comment(value)
 
     if not config:
         logger.debug("Базовый config.env не загружен или пуст — возможен только env и NYSE_CONFIG_PATH")

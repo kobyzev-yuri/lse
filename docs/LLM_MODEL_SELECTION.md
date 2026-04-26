@@ -154,4 +154,4 @@ LLM_COMPARE_MODELS=gpt-4o,openai|gpt-5.2,anthropic|claude-opus-4-6,google|gemini
 - `services/llm_service.py` — инициализация клиента по `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`.
 - `config.env.example` — шаблон конфига.
 - [OpenRouter Models](https://openrouter.ai/models) — список моделей для эндпоинта OpenRouter.
-- [GAME_SNDK.md](GAME_SNDK.md) — использование LLM в решении 5m (новости, KB, сессия биржи).
+- [GAME_5M_CALCULATIONS_AND_REPORTING.md](GAME_5M_CALCULATIONS_AND_REPORTING.md) — использование LLM в решении 5m (новости, KB, сессия биржи).

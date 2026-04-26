@@ -125,4 +125,4 @@ python web_app.py
 
 - **Остановить бота:** Ctrl+C в терминале с `run_telegram_bot.py`.
 - **Отключить авто-сигналы и игру по расписанию:** `crontab -e` → закомментировать строку с `send_sndk_signal_cron.py`.
-- **Посмотреть результаты:** см. раздел «Завершение игры и анализ результатов» в [GAME_SNDK.md](GAME_SNDK.md) — SQL-сводки по win rate и среднему PnL, пример на Python через `get_recent_results`, и что менять в коде для улучшения стратегии.
+- **Посмотреть результаты:** см. [GAME_5M_CALCULATIONS_AND_REPORTING.md](GAME_5M_CALCULATIONS_AND_REPORTING.md) для текущей логики игры и [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md) для анализа закрытых сделок и настройки параметров.

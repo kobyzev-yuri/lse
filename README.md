@@ -66,9 +66,10 @@ python web_app.py                  # http://localhost:8080 (порт в compose 
 ### Игра 5m и кроны
 | Документ | Содержание |
 |----------|------------|
+| [docs/PORTFOLIO_GAME.md](docs/PORTFOLIO_GAME.md) | Портфельная игра: алгоритм, стратегии, LLM, аллокация, тейк/стоп |
 | [docs/RUN_GAME_SERVICES.md](docs/RUN_GAME_SERVICES.md) | Запуск бота, крона 5m, SNDK |
 | [docs/CRONS_AND_TAKE_STOP.md](docs/CRONS_AND_TAKE_STOP.md) | Расписание, тейк/стоп, соответствие боту |
-| [docs/GAME_SNDK.md](docs/GAME_SNDK.md) | Сценарий GAME_5M по быстрым тикерам |
+| [docs/GAME_5M_CALCULATIONS_AND_REPORTING.md](docs/GAME_5M_CALCULATIONS_AND_REPORTING.md) | GAME_5M: алгоритм, тейк/стоп, висяки, отчётность |
 | [docs/GAME_5M_DEAL_PARAMS_JSON.md](docs/GAME_5M_DEAL_PARAMS_JSON.md) | `context_json` сделок, примеры, эволюция полей |
 | [docs/TIMEZONES.md](docs/TIMEZONES.md) | `trade_history.ts` и отображение в ET |
 

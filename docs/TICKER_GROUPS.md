@@ -147,6 +147,6 @@ all_ = get_all_ticker_groups()  # быстрые → средние → долг
 
 ## См. также
 
-- [GAME_SNDK.md](GAME_SNDK.md) — игра по 5m, быстрые тикеры
+- [GAME_5M_CALCULATIONS_AND_REPORTING.md](GAME_5M_CALCULATIONS_AND_REPORTING.md) — игра по 5m, быстрые тикеры
 - [TELEGRAM_BOT_SETUP.md](TELEGRAM_BOT_SETUP.md) — дашборд, рассылка сигналов
 - [RISK_MANAGEMENT.md](RISK_MANAGEMENT.md) — бюджет и лимиты компании для игры
