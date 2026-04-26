@@ -96,6 +96,8 @@
 | `STOP_LOSS_LEVEL` | Порог stop как отношение цены к входу; `0.95` примерно -5%. |
 | `SANDBOX_SLIPPAGE_SELL_PCT` | Консервативное проскальзывание при продаже в sandbox. |
 
+Новые `PORTFOLIO_<STRATEGY>_*_PCT` ключи читаются при расчёте сигнала стратегии. После правки через `/parameters` cron подхватит их на следующем запуске; для ручных вызовов из web/API перезапустите сервис через кнопку restart или `docker compose restart lse`.
+
 Risk capacity берётся не из `config.env`, а из `local/risk_limits.json`, `config/risk_limits.sandbox.json` или `config/risk_limits.defaults.json` через `utils/risk_manager.py`.
 
 ---

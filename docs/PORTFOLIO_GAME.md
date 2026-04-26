@@ -210,6 +210,18 @@ StrategyManager.select_strategy(...)
 
 Кодовые дефолты с теми же числами остаются только как fallback, если ключа нет в config. `PORTFOLIO_TAKE_PROFIT_PCT` — другой fallback: он используется уже при закрытии, если в BUY не был сохранён стратегический `take_profit`.
 
+### Как менять через веб
+
+После деплоя эти ключи появляются в `/parameters`, потому что веб-редактор строит список из незакомментированных строк `config.env.example`. Сохранение в вебе пишет значение в реальный `config.env`.
+
+Применение:
+
+1. После изменения кода (`strategies/base_strategy.py`) нужен обычный деплой с пересборкой Docker-образа.
+2. После изменения только значений в `/parameters`:
+   - `trading_cycle_cron.py` подхватит новые значения на следующем запуске, потому что стартует новым процессом;
+   - для долгоживущего web/API процесса нажмите restart в `/parameters` или выполните `docker compose restart lse`, если хотите сразу применять новые значения в ручных API-запусках.
+3. Если для той же стратегии и `TICKER:<ticker>` есть запись в `strategy_parameters`, она перекроет значение из `config.env`.
+
 Важно: в текущей реализации `take_profit` попадает в BUY только когда `ExecutionAgent` получил полный `strategy_result`, то есть в пути `get_decision_with_llm()` (`TRADING_CYCLE_USE_LLM=true`) или если аналитический метод вернул dict с `strategy_result`. В дефолтном cron-режиме без LLM (`TRADING_CYCLE_USE_LLM` пустой/false) `get_decision()` возвращает только строку `BUY` / `HOLD`, поэтому `trade_history.take_profit` для нового BUY может быть `NULL`.
 
 Если в BUY `take_profit` оказался `NULL`, закрытие использует fallback `PORTFOLIO_TAKE_PROFIT_PCT` из config. Если и он равен `0` или пустой, тейк по портфельной позиции не проверяется.
