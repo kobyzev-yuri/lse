@@ -207,19 +207,32 @@
             }
         };
 
-        function buildLineChart(canvas, title, bars, trades) {
+        function buildLineChart(canvas, title, bars, trades, position) {
             var labels = bars.map(function(b) { return b.date.slice(0, 10); });
             var closes = bars.map(function(b) { return b.close != null ? Number(b.close) : null; });
             var sma = bars.map(function(b) { return b.sma_5 != null ? Number(b.sma_5) : null; });
             var tradeMarkerItems = buildTradeMarkerItems(labels, trades || []);
+            var datasets = [
+                { label: 'Close', data: closes, borderColor: '#38bdf8', tension: 0.1, spanGaps: true, pointRadius: 0 },
+                { label: 'SMA5', data: sma, borderColor: '#a78bfa', tension: 0.1, spanGaps: true, pointRadius: 0 }
+            ];
+            var pos = position || {};
+            var entry = Number(pos.entry_price);
+            if (Number.isFinite(entry) && entry > 0 && labels.length) {
+                datasets.push({ label: 'Вход * @ ' + entry.toFixed(2), data: labels.map(function() { return entry; }), borderColor: '#0284c7', borderDash: [6, 4], borderWidth: 1.2, fill: false, pointRadius: 0 });
+            }
+            var take = Number(pos.take_level);
+            if (Number.isFinite(take) && take > 0 && labels.length) {
+                var takeLabel = 'Тейк @ ' + take.toFixed(2);
+                var takePct = Number(pos.take_pct);
+                if (Number.isFinite(takePct)) takeLabel += ' (+' + takePct.toFixed(1) + '%)';
+                datasets.push({ label: takeLabel, data: labels.map(function() { return take; }), borderColor: '#22c55e', borderDash: [3, 2], borderWidth: 1.2, fill: false, pointRadius: 0 });
+            }
             return new Chart(canvas, {
                 type: 'line',
                 data: {
                     labels: labels,
-                    datasets: [
-                        { label: 'Close', data: closes, borderColor: '#38bdf8', tension: 0.1, spanGaps: true, pointRadius: 0 },
-                        { label: 'SMA5', data: sma, borderColor: '#a78bfa', tension: 0.1, spanGaps: true, pointRadius: 0 }
-                    ]
+                    datasets: datasets
                 },
                 options: {
                     responsive: true,
@@ -294,7 +307,7 @@
                             return;
                         }
                         ok++;
-                        chartInstances.push(buildLineChart(cv, '', bars, item.trades || []));
+                        chartInstances.push(buildLineChart(cv, '', bars, item.trades || [], item.position || null));
                     });
                     statusEl.textContent = charts.length ? ('Тикеров: ' + charts.length + ' · с данными: ' + ok + (empty ? ' · без рядов: ' + empty : '')) : 'Список тикеров портфеля пуст.';
                     return;
@@ -338,7 +351,7 @@
                 var cv = document.createElement('canvas');
                 sec.appendChild(cv);
                 root.appendChild(sec);
-                chartInstances.push(buildLineChart(cv, '', bars, tr));
+                chartInstances.push(buildLineChart(cv, '', bars, tr, data.position || null));
                 statusEl.textContent = 'Тикер: ' + t + ' · точек: ' + bars.length + (tr.length ? ' · сделок (не 5m): ' + tr.length : '');
             } catch (e) {
                 statusEl.textContent = 'Ошибка: ' + (e.message || String(e));

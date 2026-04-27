@@ -7,24 +7,30 @@
 <form id="excel-export" method="get" action="/reports/closed" style="margin-bottom: 0.65rem; display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;">
     <label for="limit-input" class="muted" style="margin:0;">Строк (таблица и Excel):</label>
     <input id="limit-input" type="number" name="limit" min="1" max="{{ closed_report_web_max }}" value="{{ limit }}" inputmode="numeric" style="width: 5.2rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #0f3460; background: #0f172a; color: #eaeaea;">
+    <label for="game-type-input" class="muted" style="margin:0;">Тип игры:</label>
+    <select id="game-type-input" name="game_type" style="padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #0f3460; background: #0f172a; color: #eaeaea;">
+        {% for opt in closed_game_type_options %}
+        <option value="{{ opt.value }}" {% if opt.value == game_type %}selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+    </select>
     <button type="submit" class="btn btn-sm">Применить</button>
     {% if closed_limit_presets %}
     <span class="muted" style="margin:0;">Быстро:</span>
     {% for n in closed_limit_presets %}
-    <a class="btn btn-sm btn-outline-primary" href="/reports/closed?limit={{ n }}">{{ n }}</a>
+    <a class="btn btn-sm btn-outline-primary" href="/reports/closed?limit={{ n }}&game_type={{ game_type }}">{{ n }}</a>
     {% endfor %}
     {% endif %}
 </form>
 <p style="margin-bottom: 0.6rem; display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;">
     <span style="color:#cbd5e1; font-size:0.9rem;">Выгрузка:</span>
-    <a class="btn btn-sm" href="/reports/closed/export?limit={{ limit }}">Excel (.xlsx), лимит {{ limit }}</a>
-    <a class="btn btn-sm btn-outline-primary" href="/reports/closed/export?limit={{ closed_report_web_max }}">Excel, до {{ closed_report_web_max }} строк</a>
+    <a class="btn btn-sm" href="/reports/closed/export?limit={{ limit }}&game_type={{ game_type }}">Excel (.xlsx), лимит {{ limit }}</a>
+    <a class="btn btn-sm btn-outline-primary" href="/reports/closed/export?limit={{ closed_report_web_max }}&game_type={{ game_type }}">Excel, до {{ closed_report_web_max }} строк</a>
 </p>
 <p class="muted" style="margin-bottom: 0.35rem;">
-    Аналог /closed в Telegram. Показано {{ rows|length }} (запрошено {{ limit }}, по умолчанию {{ closed_report_default }}, веб-макс. {{ closed_report_web_max }}{% if closed_report_telegram_max < closed_report_web_max %}; в Telegram — до {{ closed_report_telegram_max }}{% endif %}). Даты в MSK.
+    Аналог /closed в Telegram. Фильтр: {{ game_type }}. Показано {{ rows|length }} (запрошено {{ limit }}, по умолчанию {{ closed_report_default }}, веб-макс. {{ closed_report_web_max }}{% if closed_report_telegram_max < closed_report_web_max %}; в Telegram — до {{ closed_report_telegram_max }}{% endif %}). Даты в MSK.
 </p>
 <p class="muted" style="margin-bottom: 0.75rem; font-size: 0.88rem; line-height: 1.45;">
-    <strong>Entry / Exit</strong> в таблице — колонки стратегии (обычно GAME_5M).<br>
+    <strong>Game</strong> — торговый контур; <strong>Entry / Exit Strategy</strong> — конкретная стратегия внутри контура. <code>Portfolio fallback</code> означает старую/ручную portfolio-позицию без сохранённой стратегии StrategyManager.<br>
     <strong>Причина выхода</strong> — код из сделки SELL: <code>TAKE_PROFIT</code> (достигнут тейк),
     <code>TIME_EXIT</code> (конец сессии или превышен макс. срок дней/минут),
     <code>TIME_EXIT_EARLY</code> (ранний de-risk выход),
@@ -73,6 +79,7 @@
         <thead>
             <tr>
                 <th>Instrument</th>
+                <th>Game</th>
                 <th>Dir</th>
                 <th>Open</th>
                 <th>Close</th>
@@ -80,8 +87,8 @@
                 <th>Qty</th>
                 <th>Profit</th>
                 <th>P/L %</th>
-                <th>Entry</th>
-                <th>Exit</th>
+                <th>Entry Strategy</th>
+                <th>Exit Strategy</th>
                 <th>Причина выхода</th>
                 <th>Open (MSK)</th>
                 <th>Close (MSK)</th>
@@ -91,6 +98,7 @@
             {% for row in rows %}
             <tr>
                 <td>{{ row.instrument }}</td>
+                <td>{{ row.game }}</td>
                 <td>{{ row.direction }}</td>
                 <td>${{ "%.2f"|format(row.open) }}</td>
                 <td>${{ "%.2f"|format(row.close) }}</td>

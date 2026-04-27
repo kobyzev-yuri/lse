@@ -5,6 +5,7 @@
 {% block content %}
 <h1>Открытые позиции</h1>
 <p class="muted" style="margin-bottom: 0.5rem;">Аналог команды /pending в Telegram. Показано {{ rows|length }} (лимит {{ limit }}). Now и P/L — по последней close из quotes. «5m вне» — тикер убран из игры 5m. Даты в MSK.</p>
+<p class="muted" style="margin-bottom: 0.75rem;">Колонка <strong>Game</strong> — торговый контур; <strong>Strategy</strong> — конкретная стратегия внутри portfolio game. <code>Portfolio fallback</code> означает старую/ручную portfolio-позицию без сохранённой стратегии StrategyManager.</p>
 <p class="muted" style="margin-bottom: 0.75rem;">Одна строка на тикер: <strong>средневзвешенный</strong> вход по всем неснятым BUY; колонка «Open (MSK)» — время <strong>первого</strong> BUY текущей позиции. На графике 5m (страница «Визуализация») каждая покупка — символ <strong>*</strong>; зелёный ▲ — прибыльное закрытие; серый ▲ — выход без расчёта P/L к позиции.</p>
 <div class="card">
     {% if rows %}
@@ -18,6 +19,7 @@
                 <th>Now</th>
                 <th>Units</th>
                 <th>P/L</th>
+                <th>Game</th>
                 <th>Strategy</th>
                 <th>BUYs</th>
                 <th>Open (MSK)</th>
@@ -32,6 +34,7 @@
                 <td>{{ row.now }}</td>
                 <td>{{ row.units }}</td>
                 <td class="{% if row.pl != '—' and '+' in row.pl %}positive{% elif row.pl != '—' and '-' in row.pl %}negative{% endif %}">{{ row.pl }}</td>
+                <td>{{ row.game }}</td>
                 <td>{{ row.strategy }}</td>
                 <td>{{ row.buy_legs }}</td>
                 <td>{{ row.open_msk }}</td>

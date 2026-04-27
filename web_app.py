@@ -1629,6 +1629,56 @@ def _load_portfolio_daily_chart_trades(ticker: str, cutoff: datetime, dt_hi: dat
     return out
 
 
+def _load_portfolio_open_position_for_chart(ticker: str) -> Dict[str, Any]:
+    """Open non-GAME_5M position details for portfolio daily chart reference lines."""
+    t = (ticker or "").strip().upper()
+    if not t:
+        return {}
+    report_engine = get_engine()
+    with report_engine.connect() as conn:
+        df = pd.read_sql(
+            text("""
+                SELECT id, ts, ticker, side, quantity, price,
+                       commission, signal_type, total_value, sentiment_at_trade, strategy_name,
+                       take_profit, stop_loss, mfe, mae, context_json
+                FROM public.trade_history
+                WHERE UPPER(TRIM(ticker)) = :ticker
+                  AND UPPER(COALESCE(TRIM(strategy_name), '')) <> 'GAME_5M'
+                ORDER BY ts ASC, id ASC
+            """),
+            conn,
+            params={"ticker": t},
+        )
+    if df.empty:
+        return {}
+    open_positions = compute_open_positions(df)
+    pos = next((p for p in open_positions if (p.ticker or "").strip().upper() == t), None)
+    if not pos or pos.entry_price is None:
+        return {}
+    try:
+        entry_price = float(pos.entry_price)
+    except (TypeError, ValueError):
+        return {}
+    take_pct = None
+    take_level = None
+    try:
+        if pos.take_profit is not None:
+            take_pct = float(pos.take_profit)
+            if take_pct > 0 and entry_price > 0:
+                take_level = entry_price * (1.0 + take_pct / 100.0)
+    except (TypeError, ValueError):
+        take_pct = None
+        take_level = None
+    return {
+        "entry_price": entry_price,
+        "entry_ts": pos.entry_ts,
+        "strategy_name": pos.strategy_name,
+        "take_pct": take_pct,
+        "take_level": take_level,
+        "quantity": float(pos.quantity or 0),
+    }
+
+
 def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
     """Дневной график из БД quotes (open/high/low/close), не intraday 5m; сделки портфеля (не GAME_5M) для маркеров."""
     days = min(max(10, int(days)), 730)
@@ -1638,6 +1688,7 @@ def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
     trade_lo = now_msk - timedelta(days=days + 2)
     trade_hi = now_msk + timedelta(days=2)
     trades = _load_portfolio_daily_chart_trades(ticker, trade_lo, trade_hi)
+    position = _load_portfolio_open_position_for_chart(ticker)
     with engine.connect() as conn:
         df = pd.read_sql(
             text("""
@@ -1657,6 +1708,7 @@ def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
                 "source": "quotes",
                 "bars": [],
                 "trades": trades,
+                "position": position,
                 "no_quotes": True,
             }
         return {}
@@ -1674,7 +1726,7 @@ def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
             "rsi": _to_jsonable(row.get("rsi")),
             "volatility_5": _to_jsonable(row.get("volatility_5")),
         })
-    return {"ticker": ticker, "interval": "1d", "source": "quotes", "bars": records, "trades": trades}
+    return {"ticker": ticker, "interval": "1d", "source": "quotes", "bars": records, "trades": trades, "position": position}
 
 
 def _build_portfolio_daily_charts_bulk(days: int) -> Dict[str, Any]:
@@ -1943,17 +1995,62 @@ def _closed_ts_msk(ts) -> str:
         return str(ts)[:16] if ts else "—"
 
 
-def _closed_report_rows(limit: Optional[int] = None):
+def _normalize_closed_game_type(game_type: Optional[str]) -> str:
+    raw = (game_type or "all").strip().lower().replace("-", "_")
+    aliases = {
+        "": "all",
+        "all": "all",
+        "any": "all",
+        "game_5m": "game5m",
+        "game5m": "game5m",
+        "5m": "game5m",
+        "portfolio": "portfolio",
+        "trading_cycle": "portfolio",
+        "manual": "manual",
+    }
+    return aliases.get(raw, "all")
+
+
+def _closed_trade_game_type(t: Any) -> str:
+    strategy = str(getattr(t, "entry_strategy", None) or "").strip().upper()
+    if strategy == "GAME_5M":
+        return "game5m"
+    if strategy == "MANUAL":
+        return "manual"
+    return "portfolio"
+
+
+def _game_type_label(game_type: str) -> str:
+    return {
+        "game5m": "GAME_5M",
+        "portfolio": "Portfolio game",
+        "manual": "Manual",
+    }.get(game_type, "Other")
+
+
+def _strategy_display_name(strategy: Optional[str]) -> str:
+    s = (strategy or "").strip()
+    if not s or s == "—":
+        return "—"
+    if s == "Portfolio":
+        return "Portfolio fallback"
+    return s
+
+
+def _closed_report_rows(limit: Optional[int] = None, game_type: Optional[str] = None):
     """Данные для отчёта закрытых позиций (как /closed): сортировка по дате закрытия, новые сверху."""
     default_lim, web_max = get_web_closed_positions_limits()
     if limit is None:
         limit = default_lim
     limit = max(1, min(web_max, int(limit)))
+    game_type_norm = _normalize_closed_game_type(game_type)
     report_engine = get_engine()
     all_trades = load_trade_history(report_engine)
     trade_pnls = compute_closed_trade_pnls(all_trades)
     if not trade_pnls:
         return []
+    if game_type_norm != "all":
+        trade_pnls = [t for t in trade_pnls if _closed_trade_game_type(t) == game_type_norm]
     sorted_pnls = sorted(trade_pnls, key=lambda t: pd.Timestamp(t.ts) if t.ts else pd.Timestamp.min, reverse=True)[:limit]
 
     rows = []
@@ -1966,8 +2063,10 @@ def _closed_report_rows(limit: Optional[int] = None):
         exit_reason = (t.signal_type or "—") if t.signal_type and str(t.signal_type).strip() else "—"
         entry_px = float(t.entry_price)
         pl_pct = ((float(t.exit_price) / entry_px) - 1.0) * 100.0 if entry_px > 0 else 0.0
+        row_game_type = _closed_trade_game_type(t)
         rows.append({
             "instrument": t.ticker,
+            "game": _game_type_label(row_game_type),
             "direction": direction,
             "open": entry_px,
             "close": float(t.exit_price),
@@ -1975,8 +2074,8 @@ def _closed_report_rows(limit: Optional[int] = None):
             "profit_usd": float(t.net_pnl),
             "pl_pct": pl_pct,
             "units": int(t.quantity),
-            "entry_strategy": getattr(t, "entry_strategy", None) or "—",
-            "exit_strategy": getattr(t, "exit_strategy", None) or "—",
+            "entry_strategy": _strategy_display_name(getattr(t, "entry_strategy", None)),
+            "exit_strategy": _strategy_display_name(getattr(t, "exit_strategy", None)),
             "open_msk": open_msk,
             "close_msk": close_msk,
             "exit_reason": exit_reason,
@@ -2023,6 +2122,7 @@ def _build_closed_positions_xlsx(rows: List[Dict[str, Any]]) -> bytes:
     ws.title = "closed"
     headers = [
         "instrument",
+        "game",
         "direction",
         "open",
         "close",
@@ -2046,6 +2146,7 @@ def _build_closed_positions_xlsx(rows: List[Dict[str, Any]]) -> bytes:
         ws.append(
             [
                 r.get("instrument"),
+                r.get("game"),
                 r.get("direction"),
                 r.get("open"),
                 r.get("close"),
@@ -2094,9 +2195,16 @@ def _pending_report_rows(limit: int = 50):
 
     rows = []
     for p in pending:
-        strat = (p.strategy_name or "—").strip() or "—"
-        if strat == "GAME_5M" and p.ticker not in tickers_in_game_5m:
-            strat = "5m вне"
+        raw_strat = (p.strategy_name or "—").strip() or "—"
+        if raw_strat == "GAME_5M":
+            game = "GAME_5M" if p.ticker in tickers_in_game_5m else "5m вне"
+            strat = "—"
+        elif raw_strat == "Manual":
+            game = "Manual"
+            strat = "—"
+        else:
+            game = "Portfolio game"
+            strat = _strategy_display_name(raw_strat)
         now_price = latest_prices.get(p.ticker)
         if now_price is not None and p.entry_price and p.entry_price > 0:
             pct = (now_price - p.entry_price) / p.entry_price * 100.0
@@ -2113,6 +2221,7 @@ def _pending_report_rows(limit: int = 50):
             "now": f"{now_price:.2f}" if now_price is not None else "—",
             "units": int(p.quantity),
             "pl": pl_str,
+            "game": game,
             "strategy": strat,
             "open_msk": open_msk,
             "buy_legs": int(getattr(p, "buy_leg_count", 1) or 1),
@@ -2121,15 +2230,16 @@ def _pending_report_rows(limit: int = 50):
 
 
 @app.get("/reports/closed", response_class=HTMLResponse)
-async def report_closed(request: Request, limit: Optional[int] = None):
+async def report_closed(request: Request, limit: Optional[int] = None, game_type: str = "all"):
     """HTML-отчёт: закрытые позиции. Веб-потолок — get_web_closed_positions_limits() (опц. WEB_CLOSED_REPORT_MAX)."""
     _def_l, _tg_max = get_closed_positions_report_limits()
     _, web_max = get_web_closed_positions_limits()
+    game_type_norm = _normalize_closed_game_type(game_type)
     if limit is None:
         limit = _def_l
     else:
         limit = max(1, min(web_max, int(limit)))
-    rows = _closed_report_rows(limit=limit)
+    rows = _closed_report_rows(limit=limit, game_type=game_type_norm)
     total_pnl = sum(float(r["profit_usd"]) for r in rows) if rows else 0.0
     diagnostics = _closed_exit_diagnostics(rows)
     preset_candidates = (25, 50, 100, 200, 500, 1000, web_max)
@@ -2145,6 +2255,13 @@ async def report_closed(request: Request, limit: Optional[int] = None):
                 "closed_report_web_max": web_max,
                 "closed_report_telegram_max": _tg_max,
                 "closed_limit_presets": closed_limit_presets,
+                "game_type": game_type_norm,
+                "closed_game_type_options": [
+                    {"value": "all", "label": "Все игры"},
+                    {"value": "game5m", "label": "GAME_5M"},
+                    {"value": "portfolio", "label": "Portfolio game"},
+                    {"value": "manual", "label": "Manual"},
+                ],
                 "total_pnl": total_pnl,
                 "total_count": len(rows),
                 "diagnostics": diagnostics,
@@ -2154,14 +2271,15 @@ async def report_closed(request: Request, limit: Optional[int] = None):
 
 
 @app.get("/reports/closed/export")
-async def report_closed_export(limit: Optional[int] = None):
+async def report_closed_export(limit: Optional[int] = None, game_type: str = "all"):
     """Выгрузка закрытых позиций в Excel (.xlsx). Потолок строк — как у /reports/closed (WEB_CLOSED_REPORT_MAX / Telegram)."""
     _def_l, web_max = get_web_closed_positions_limits()
+    game_type_norm = _normalize_closed_game_type(game_type)
     if limit is None:
         limit = _def_l
     else:
         limit = max(1, min(web_max, int(limit)))
-    rows = _closed_report_rows(limit=limit)
+    rows = _closed_report_rows(limit=limit, game_type=game_type_norm)
     try:
         payload = _build_closed_positions_xlsx(rows)
     except ImportError:

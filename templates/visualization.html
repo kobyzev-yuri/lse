@@ -112,17 +112,24 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
     }
 
     function findClosestLabelIndex(lbls, ts) {
+        if (!lbls || !lbls.length) return -1;
         const t = new Date(ts).getTime();
+        if (!Number.isFinite(t)) return -1;
         let best = 0, bestDiff = Infinity;
         lbls.forEach((l, i) => {
             const d = Math.abs(new Date(l).getTime() - t);
             if (d < bestDiff) { bestDiff = d; best = i; }
         });
+        const maxMarkerSnapMs = 10 * 60 * 1000;
+        if (!Number.isFinite(bestDiff) || bestDiff > maxMarkerSnapMs) return -1;
         return best;
     }
     function makeTradeDataset(trades, label) {
         const arr = labels.map(() => null);
-        trades.forEach(tr => { const i = findClosestLabelIndex(labels, tr.ts); arr[i] = tr.price; });
+        trades.forEach(tr => {
+            const i = findClosestLabelIndex(labels, tr.ts);
+            if (i >= 0) arr[i] = tr.price;
+        });
         if (arr.every(v => v == null)) return null;
         return {
             label,
@@ -170,6 +177,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
     function pushMarkers(arr, kind) {
         arr.forEach(tr => {
             const i = findClosestLabelIndex(labels, tr.ts);
+            if (i < 0) return;
             const p = parseFloat(tr.price);
             if (Number.isFinite(p)) tradeMarkerItems.push({ index: i, price: p, kind: kind });
         });

@@ -573,14 +573,15 @@ def get_trades_for_chart(
     Возвращает список dict: ts, price, quantity, side ('BUY'|'SELL'), signal_type, ts_timezone (если есть в таблице)."""
     dt_lo, dt_hi = _chart_range_et_to_msk(dt_min, dt_max, margin_days=1)
     engine = _engine()
-    params = {"ticker": ticker, "strategy": GAME_5M_STRATEGY, "dt_min": dt_lo, "dt_max": dt_hi}
+    ticker_upper = (ticker or "").strip().upper()
+    params = {"ticker_upper": ticker_upper, "strategy": GAME_5M_STRATEGY, "dt_min": dt_lo, "dt_max": dt_hi}
     with engine.connect() as conn:
         try:
             rows = conn.execute(
                 text("""
                     SELECT id, ts, side, price, quantity, signal_type, ts_timezone
                     FROM public.trade_history
-                    WHERE ticker = :ticker AND strategy_name = :strategy
+                    WHERE UPPER(TRIM(ticker)) = :ticker_upper AND strategy_name = :strategy
                       AND ts >= :dt_min AND ts <= :dt_max
                     ORDER BY ts ASC, id ASC
                 """),
@@ -603,7 +604,7 @@ def get_trades_for_chart(
                 text("""
                     SELECT id, ts, side, price, quantity, signal_type
                     FROM public.trade_history
-                    WHERE ticker = :ticker AND strategy_name = :strategy
+                    WHERE UPPER(TRIM(ticker)) = :ticker_upper AND strategy_name = :strategy
                       AND ts >= :dt_min AND ts <= :dt_max
                     ORDER BY ts ASC, id ASC
                 """),
@@ -621,8 +622,40 @@ def get_trades_for_chart(
                 }
                 for r in rows
             ]
-    # Не фильтруем по ET здесь: диапазон уже переведён в MSK с запасом, отрисовка по сессиям сама отсечёт лишнее
-    return raw
+
+    # SQL-запрос берёт небольшой запас из-за разных форматов хранения ts.
+    # Для графика возвращаем только сделки, реально попавшие в видимое окно ET,
+    # иначе frontend может приклеить вчерашний SELL к ближайшей сегодняшней свече.
+    try:
+        import pandas as pd
+
+        t_lo = pd.Timestamp(dt_min)
+        t_hi = pd.Timestamp(dt_max)
+        if t_lo.tzinfo is None:
+            t_lo = t_lo.tz_localize(CHART_DISPLAY_TZ)
+        else:
+            t_lo = t_lo.tz_convert(CHART_DISPLAY_TZ)
+        if t_hi.tzinfo is None:
+            t_hi = t_hi.tz_localize(CHART_DISPLAY_TZ)
+        else:
+            t_hi = t_hi.tz_convert(CHART_DISPLAY_TZ)
+
+        filtered = []
+        for item in raw:
+            ts_et = trade_ts_to_et(item.get("ts"), source_tz=item.get("ts_timezone"))
+            if ts_et is None:
+                continue
+            ts_et = pd.Timestamp(ts_et)
+            if ts_et.tzinfo is None:
+                ts_et = ts_et.tz_localize(CHART_DISPLAY_TZ)
+            else:
+                ts_et = ts_et.tz_convert(CHART_DISPLAY_TZ)
+            if t_lo <= ts_et <= t_hi:
+                filtered.append(item)
+        return filtered
+    except Exception:
+        logger.debug("get_trades_for_chart: не удалось отфильтровать сделки по ET-окну", exc_info=True)
+        return raw
 
 
 def partition_trades_for_chart_pnl(trades: list[dict[str, Any]]) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
