@@ -11,20 +11,22 @@
 | Стратегия   | Описание |
 |------------|----------|
 | **GAME_5M** | Игра 5m: крон по тикерам из `GAME_5M_TICKERS`, интрадей (вход/выход по 5m, тейк/стоп). В `/pending` для тикеров, убранных из списка, показывается «5m вне» — крон по ним не управляет. |
-| **Portfolio** | Портфельный цикл (`trading_cycle_cron`, ExecutionAgent). Сделки по сигналу AnalystAgent по списку MEDIUM/LONG. Если StrategyManager не вернул имя стратегии, в БД пишется «Portfolio». Выходы: `ExecutionAgent.check_stop_losses()` — тейк/стоп по настройкам (`PORTFOLIO_TAKE_PROFIT_PCT`, `PORTFOLIO_EXIT_ONLY_TAKE`, см. `docs/CRONS_AND_TAKE_STOP.md`). |
+| **Portfolio** | Портфельный цикл (`trading_cycle_cron`, ExecutionAgent). Сделки по сигналу AnalystAgent по списку MEDIUM/LONG. Если StrategyManager не вернул имя стратегии, в БД пишется «Portfolio». Выходы: `ExecutionAgent.check_stop_losses()` — сейчас рабочий автоматический выход по тейку; stop-loss портфеля выключен флагом `PORTFOLIO_STOP_LOSS_ENABLED=false`. Подробный алгоритм: [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md). |
 | **Manual** | Ручные команды `/buy` и `/sell` в боте. |
 
-Подробнее: команда бота `/strategies`, см. также `docs/STRATEGY_FACTORY.md`.
+Подробнее: команда бота `/strategies`, портфельный алгоритм в [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md), исторический пример фабрики стратегий в `docs/STRATEGY_FACTORY.md`.
 
 ### 1.2 Стратегии StrategyManager (портфельный цикл)
 
-Выбираются по режиму рынка (волатильность, sentiment, гэп) на **дневных** данных (`get_last_5_days_quotes`, SMA/вола 5 и 20 дней) и **новостях из KB** (`get_recent_news`, взвешенный sentiment, insight в стратегиях). В `technical_data` передаются **^VIX** (`vix_value`, `vix_regime`): при **VIX ниже 20** чуть выше порог для ветки Volatile Gap (меньше ложных «панических» режимов на фоне гео-шума); при **LOW_FEAR** или **VIX ниже 18** чуть шире окно для Momentum по отношению волатильности.
+Выбираются по режиму рынка (волатильность, sentiment, гэп) на **дневных** данных (`get_last_5_days_quotes`, SMA/вола 5 и 20 дней) и **новостях из KB** (`get_recent_news`, взвешенный sentiment, insight в стратегиях). В `technical_data` передаются **^VIX** (`vix_value`, `vix_regime`): при **VIX ниже 20** чуть выше порог для ветки Volatile Gap (меньше ложных «панических» режимов на фоне гео-шума); при **LOW_FEAR** или **VIX ниже 18** чуть шире окно для Momentum по отношению волатильности. Точная очередность выбора и примеры `Volatile Gap` / `Geopolitical Bounce` описаны в [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md).
 
 - **Momentum** — низкая волатильность + положительный sentiment.
 - **Mean Reversion** — высокая волатильность + нейтральный sentiment.
 - **Volatile Gap** — очень высокая волатильность + гэп или экстремальный sentiment.
 - **Geopolitical Bounce** — резкое падение предыдущей сессии (≥2%), отскок long.
 - **Neutral** — fallback, когда ни одна стратегия не подошла; консервативный HOLD.
+
+Strategy-level параметры `PORTFOLIO_<STRATEGY>_TAKE_PROFIT_PCT` не зависят от тикера в `config.env`: выбранная стратегия фиксирует свой процент тейка в BUY, а закрытие ждёт достижения этого процента. Тикерные переопределения возможны через `strategy_parameters`, если они заведены для `TICKER:<ticker>`.
 
 **Portfolio** vs **Neutral**: Portfolio — метка по умолчанию при пустом имени стратегии; Neutral — явно выбранная стратегия (режим не определён, удержание).
 
@@ -170,11 +172,11 @@
 |-----|-----------|----------------|
 | **config.env** | Все переменные | При каждом вызове `get_config_value()` заново читается файл (кэша нет). |
 | **game_5m** | GAME_5M_STOP_LOSS_PCT, GAME_5M_TAKE_PROFIT_PCT, GAME_5M_MAX_POSITION_DAYS, GAME_5M_TAKE_PROFIT_MIN_PCT, GAME_5M_STOP_TO_TAKE_RATIO, GAME_5M_STOP_LOSS_MIN_PCT | При каждом вызове `get_strategy_params()`, `_effective_take_profit_pct()`, `should_close_position()` — т.е. при каждом запуске крона. Изменение config.env на диске подхватится следующим запуском крона (но не бота, если крон — отдельный процесс). |
-| **execution_agent** | STOP_LOSS_LEVEL (5%) | Константа в коде (0.95), не из config. Перезапуск не поможет — только правка кода или вынос в config. SANDBOX_SLIPPAGE_SELL_PCT читается при вызове `_get_slippage_sell_pct()` каждый раз. |
+| **execution_agent** | `PORTFOLIO_STOP_LOSS_ENABLED`, `PORTFOLIO_EXIT_ONLY_TAKE`, `STOP_LOSS_LEVEL`, `SANDBOX_SLIPPAGE_SELL_PCT` | `PORTFOLIO_STOP_LOSS_ENABLED=false` отключает портфельный stop-loss; при этом strategy-level `*_STOP_LOSS_PCT` могут сохраняться в BUY, но не закрывают позицию. `SANDBOX_SLIPPAGE_SELL_PCT` читается при вызове `_get_slippage_sell_pct()`. |
 | **StrategyManager** | Пороги выбора стратегии (волатильность 1.5x, sentiment ±0.6, гэп 3%) | Зашиты в `__init__` менеджера, не из config. Создаётся один раз при старте AnalystAgent. |
 | **ticker_groups** | GAME_5M_TICKERS, TICKERS_FAST, TICKERS_MEDIUM, TICKERS_LONG | При каждом вызове `get_tickers_game_5m()` и др. — снова читается config. |
 
-Итог: часть параметров (GAME_5M_*, тикеры) по факту читается при каждом обращении к ним, но источник один — config.env на диске. Долгоживущий процесс (бот, воркер) не перечитывает файл, если его править снаружи, пока не вызван код, который снова вызывает `get_config_value`. Пороги StrategyManager и стоп портфеля (STOP_LOSS_LEVEL) в коде — без перезапуска не меняются.
+Итог: часть параметров (GAME_5M_*, тикеры, portfolio strategy take/stop keys) по факту читается при обращении к ним, но источник один — config.env на диске. Портфельный cron стартует отдельным процессом и подхватывает новые значения на следующем запуске; долгоживущий web/API процесс лучше перезапускать после сохранения параметров. Пороги выбора `StrategyManager` пока зашиты в коде.
 
 ### 4.2 Имеет ли смысл вариации параметров
 

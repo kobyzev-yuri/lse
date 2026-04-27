@@ -59,7 +59,9 @@ python scripts/trading_cycle_cron.py "MSFT,ORCL,AMD"
 
 ## 4. Как выбирается стратегия
 
-Выбор делает `StrategyManager.select_strategy()` на дневных данных. Порядок важен:
+Выбор делает `StrategyManager.select_strategy()` на дневных данных. Это **не тикерная таблица**: один и тот же тикер сегодня может попасть в `Momentum`, завтра в `Volatile Gap`, а после резкого падения — в `Geopolitical Bounce`. Стратегия определяется текущим режимом рынка по дневным `quotes`, новостям KB, sentiment и VIX. Краткий обзор всех стратегий также есть в [STRATEGIES_LLM_AND_REPORTS.md](STRATEGIES_LLM_AND_REPORTS.md), но точная логика исполнения портфеля описана здесь.
+
+Порядок важен:
 
 | Приоритет | Стратегия | Условие выбора |
 |----------:|-----------|----------------|
@@ -71,6 +73,102 @@ python scripts/trading_cycle_cron.py "MSFT,ORCL,AMD"
 | 6 | `Neutral` | Ничего не подошло; консервативный `HOLD`. |
 
 Сигнал стратегии (`BUY`, `STRONG_BUY`, `HOLD`, иногда `SELL`) затем может быть передан в LLM как базовая рекомендация.
+
+### Как стратегия превращается в процент тейка
+
+При входе стратегия возвращает не цену закрытия, а **процентный порог**:
+
+```text
+selected_strategy.calculate_signal(...)
+→ {"signal": "BUY", "strategy": "Volatile Gap", "take_profit": 12.0, "stop_loss": 7.0}
+→ ExecutionAgent._execute_buy(...)
+→ trade_history.strategy_name = "Volatile Gap"
+→ trade_history.take_profit = 12.0
+→ trade_history.stop_loss = 7.0
+```
+
+Дальше стратегия уже не пересчитывается для этой открытой позиции. При закрытии `ExecutionAgent.check_stop_losses()` берёт `take_profit` из последнего BUY и ждёт:
+
+```text
+pnl_pct = (current_price - entry_price) / entry_price × 100
+закрыть SELL, если pnl_pct >= trade_history.take_profit
+```
+
+То есть если позиция вошла как `Volatile Gap`, она ждёт `PORTFOLIO_VOLATILE_GAP_TAKE_PROFIT_PCT`; если вошла как `Geopolitical Bounce`, ждёт `PORTFOLIO_GEOPOLITICAL_BOUNCE_TAKE_PROFIT_PCT`. Зависимости от тикера в `config.env` нет. Тикерное переопределение возможно только через БД `strategy_parameters` для конкретного `target_identifier`, например `TICKER:MU`.
+
+### Что происходит со stop-loss параметрами
+
+Ключи вида `PORTFOLIO_MOMENTUM_STOP_LOSS_PCT` тоже читаются стратегиями и могут быть сохранены в `trade_history.stop_loss` при BUY. Но текущая политика портфеля — **stop-loss выключен**:
+
+```env
+PORTFOLIO_STOP_LOSS_ENABLED=false
+```
+
+При таком флаге портфельный крон не закрывает позиции по стопу. Рабочая часть этих strategy-level параметров сейчас — `*_TAKE_PROFIT_PCT`. `*_STOP_LOSS_PCT` остаются сохранённым параметром входа и потенциальной настройкой на будущее, но не являются активным правилом выхода, пока stop-loss отключён.
+
+### Пример `Volatile Gap`
+
+Допустим, по `NVDA` дневные данные такие:
+
+```text
+open = 100
+close = 104
+volatility_5 = 3.2
+avg_volatility_20 = 2.0
+volatility_ratio = 1.6x
+sentiment = 0.65
+VIX не в LOW_FEAR
+```
+
+`StrategyManager` видит, что волатильность выше `1.5x`, дневной гэп/движение больше `3%`, а sentiment экстремально положительный. Выбирается `Volatile Gap`. Затем `VolatileGapStrategy.calculate_signal()` при `sentiment > 0.6` и `volatility_ratio > 1.5` возвращает `STRONG_BUY`.
+
+Параметры берутся из config:
+
+```env
+PORTFOLIO_VOLATILE_GAP_STOP_LOSS_PCT=7
+PORTFOLIO_VOLATILE_GAP_TAKE_PROFIT_PCT=12
+```
+
+Если BUY исполнился по `104`, в сделку записывается:
+
+```text
+strategy_name = "Volatile Gap"
+take_profit = 12.0
+stop_loss = 7.0
+```
+
+При текущем `PORTFOLIO_STOP_LOSS_ENABLED=false` стоп `7%` не закрывает позицию. Тейк сработает при:
+
+```text
+104 × (1 + 12 / 100) = 116.48
+```
+
+### Пример `Geopolitical Bounce`
+
+Допустим, вчера `MU` упал на `-2.8%`, а 5-дневная волатильность не ниже обычной:
+
+```text
+prev_day_return_pct = -2.8
+volatility_5 >= avg_volatility_20 × 1.05
+```
+
+Эта ветка проверяется первой, поэтому `StrategyManager` выбирает `Geopolitical Bounce` до `Momentum` / `Mean Reversion` / `Volatile Gap`. Стратегия трактует ситуацию как попытку long-отскока после панического движения и возвращает `BUY`.
+
+Параметры:
+
+```env
+PORTFOLIO_GEOPOLITICAL_BOUNCE_STOP_LOSS_PCT=5
+PORTFOLIO_GEOPOLITICAL_BOUNCE_TAKE_PROFIT_PCT=4
+```
+
+Если вход был по `100`, активный выход сейчас только по тейку:
+
+```text
+take_profit = 4.0
+SELL при цене примерно 104+
+```
+
+Stop `5%` сохранится в BUY, но не исполнится, пока `PORTFOLIO_STOP_LOSS_ENABLED=false`.
 
 ---
 
