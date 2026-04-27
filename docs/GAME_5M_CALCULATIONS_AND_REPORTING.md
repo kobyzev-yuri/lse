@@ -324,7 +324,42 @@ docker compose exec lse python scripts/backtest_game5m_param_hypotheses.py --mod
 4. Если это висяк, подобрать более низкий cap тейка через `sweep_hanger_take_cap()`.
 5. Записать результат в JSON в поле `hanger_hypotheses[].remediation_take_cap.proposed_cap_pct`.
 
-Сетка cap строится как множители к текущему потолку:
+### Что именно уменьшается
+
+Hanger-алгоритм уменьшает **только потолок тейка** (`cap`) для тикера. Он не меняет:
+
+- `GAME_5M_TAKE_MOMENTUM_FACTOR`;
+- `GAME_5M_TAKE_PROFIT_MIN_PCT`;
+- stop-loss;
+- max hold days/minutes;
+- правила входа.
+
+Обычный расчёт тейка:
+
+```text
+base_cap = GAME_5M_TAKE_PROFIT_PCT_<TICKER> или GAME_5M_TAKE_PROFIT_PCT
+take_pct = min(momentum_2h_pct × GAME_5M_TAKE_MOMENTUM_FACTOR, base_cap)
+```
+
+Для висяка добавляется ещё один cap:
+
+```text
+hanger_cap = remediation_take_cap.proposed_cap_pct из GAME_5M_HANGER_TUNE_JSON
+cap_for_hanger = min(base_cap, hanger_cap)
+take_pct = min(momentum_2h_pct × GAME_5M_TAKE_MOMENTUM_FACTOR, cap_for_hanger)
+```
+
+Если импульс ниже `GAME_5M_TAKE_PROFIT_MIN_PCT`, тейк всё равно равен cap, поэтому для висяка:
+
+```text
+take_pct = cap_for_hanger
+```
+
+То есть “лекарство” — снизить максимальную цель прибыли до уровня, на котором по историческим 5m-барам позиция успела бы закрыться тейком.
+
+### На сколько уменьшается cap
+
+Подбор не выбирает произвольное число. Он строит сетку множителей к текущему cap:
 
 ```python
 # services/game5m_param_hypothesis_backtest.py
@@ -332,7 +367,70 @@ floor_m = max(0.55, 1.0 - 0.45 * min(1.0, aggression))
 np.linspace(1.0, floor_m, n)
 ```
 
-Для каждого кандидата реплей проверяет: появился ли `TAKE_PROFIT` внутри окна. В JSON попадает cap, который даёт выход, но остаётся максимально близким к исходному cap среди успешных кандидатов.
+Где:
+
+```text
+aggression = min(2.0, sqrt(notional_usd / 25000) × (0.6 + calendar_days / 6))
+```
+
+Практически:
+
+- при маленькой позиции / мягком режиме сетка почти не уходит вниз;
+- при большой позиции и стандартном окне 6 календарных дней aggression быстро доходит до 1+;
+- нижняя граница множителя не ниже `0.55`, то есть cap может быть снижен максимум примерно до **55% от исходного cap**;
+- дополнительно `sweep_hanger_take_cap()` не даёт proposed cap ниже **1.5%**: `new_cap = max(1.5, round(base_cap × multiplier, 3))`.
+
+Примеры:
+
+| `base_cap` | Минимальный возможный cap по сетке | Что это означает |
+|-----------:|-----------------------------------:|------------------|
+| 5.0% | около 2.75% | если только такой cap даёт тейк в окне, JSON предложит cap около 2.75–5.0% |
+| 4.5% | около 2.475% | для MU/LITE с cap 4.5% нижняя зона около 2.5% |
+| 7.0% | около 3.85% | общий cap 7% может быть снижен до района 3.85% |
+| 2.0% | 1.5% | ниже 1.5% алгоритм не предлагает |
+
+Для каждого кандидата реплей проверяет: появился ли `TAKE_PROFIT` внутри окна. В JSON попадает **самый высокий** cap из успешных кандидатов:
+
+```python
+if best is None or cand["proposed_cap_pct"] > best["proposed_cap_pct"]:
+    best = cand
+```
+
+Это важно: алгоритм не режет тейк “как можно сильнее”. Он выбирает минимально достаточное снижение: первый уровень, при котором висяк уже закрывался бы, но цель остаётся максимально близкой к старой.
+
+### Что пишется в JSON
+
+Для каждого подтверждённого висяка в `hanger_hypotheses[]` появляется блок:
+
+```json
+{
+  "ticker": "MU",
+  "hanger_aggression": 1.23,
+  "diagnosis": {
+    "kind": "hanger",
+    "calendar_days_window": 6,
+    "bars_in_window": 123,
+    "sag_ok": true,
+    "log_close_over_entry_end": -0.012345
+  },
+  "remediation_take_cap": {
+    "env_key": "GAME_5M_TAKE_PROFIT_PCT_MU",
+    "baseline_cap_pct": 4.5,
+    "proposed_cap_pct": 2.925,
+    "cap_multiplier": 0.65,
+    "exit_bar_end_et": "2026-04-...",
+    "replay_log_ret": 0.0288
+  }
+}
+```
+
+Ключевые поля:
+
+- `baseline_cap_pct` — cap, с которым позиция не закрылась в окне;
+- `proposed_cap_pct` — новый потолок тейка, с которым реплей дал `TAKE_PROFIT`;
+- `cap_multiplier` — во сколько раз новый cap меньше старого;
+- `env_key` — какой per-ticker ключ это имитирует (`GAME_5M_TAKE_PROFIT_PCT_<TICKER>`);
+- `hanger_aggression` — насколько глубоко алгоритм разрешил искать снижение.
 
 ---
 
@@ -358,6 +456,15 @@ GAME_5M_HANGER_LIVE_SKIP_SAG=false
 5. Эффективный cap становится `min(base_cap, proposed_cap_pct)`.
 6. Формула `take_pct` остаётся той же, но с уменьшенным cap.
 7. Если цена достигает нового порога, SELL пишется с `signal_type='TAKE_PROFIT_SUSPEND'`.
+
+Если в JSON несколько гипотез по одному тикеру, live берёт **минимальный** `proposed_cap_pct`:
+
+```python
+if prev is None or prop < prev:
+    per[ticker] = prop
+```
+
+Это сделано консервативно для открытого остатка: если по одному тикеру есть несколько подвисших входов/агрегатов, live выбирает самый лёгкий cap, чтобы закрыть риск раньше. Но dual mode ограничивает это только теми позициями, которые прямо сейчас снова проходят live-диагностику как hanger.
 
 Кодовое ядро:
 
@@ -427,7 +534,8 @@ take_level ≈ 103.85
 
 - `entry = 100.00`;
 - обычный cap тикера `5.0%`;
-- в `/app/logs/hanger_tune_open_agg.json` для тикера есть `proposed_cap_pct = 2.8`;
+- offline sweep построил сетку `5.0 → ... → 2.75`;
+- в `/app/logs/hanger_tune_open_agg.json` для тикера есть `baseline_cap_pct=5.0`, `proposed_cap_pct=2.8`, `cap_multiplier=0.56`;
 - live-диагностика вернула `kind='hanger'`;
 - `momentum_2h_pct = 3.5%`, `factor = 1.1`.
 
@@ -448,6 +556,17 @@ signal_type = TAKE_PROFIT_SUSPEND
 ```
 
 Это не обычный тейк стратегии, а выход по облегчённому порогу для подвисшей позиции.
+
+Если бы live-диагностика **не** вернула `hanger`, тот же JSON не применился бы:
+
+```text
+apply_hanger_json = False
+cap_for_this_position = base_cap = 5.0%
+take_pct = min(3.5 × 1.1, 5.0) = 3.85%
+signal_type при достижении = TAKE_PROFIT
+```
+
+Поэтому JSON сам по себе не “портит” обычные сделки: он становится активным только после live-классификации позиции как висяка.
 
 ---
 
