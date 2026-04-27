@@ -86,7 +86,8 @@ print(f"API Key: {api_key[:10]}...")
 
 ## См. также
 
-- [SENTIMENT_ANALYSIS.md](docs/SENTIMENT_ANALYSIS.md) - Настройка sentiment analysis
+- [SENTIMENT_NEWS.md](docs/SENTIMENT_NEWS.md) - Оценка sentiment новостей
+- [NEWS.md](docs/NEWS.md) - Источники новостей и `knowledge_base`
 - [config.env.example](config.env.example) - Шаблон конфигурации
 
 

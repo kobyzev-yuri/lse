@@ -205,7 +205,7 @@ python scripts/run_telegram_bot.py
 
 **Проактивная рассылка по расписанию:** см. раздел ниже.
 
-**Цепочка изменений в БД:** пошаговый пример (покупка → продажа → частичная продажа → стоп-лосс) и вид таблиц `portfolio_state` и `trade_history` описан в [docs/SANDBOX_TRADE_EXAMPLE.md](SANDBOX_TRADE_EXAMPLE.md).
+**Цепочка изменений в БД:** актуальная схема `portfolio_state` / `trade_history` описана в [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md), а портфельная логика BUY/SELL — в [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md).
 
 ---
 
@@ -243,7 +243,7 @@ python scripts/run_telegram_bot.py
 
 - **cloudflared (в проекте):** `./scripts/run_tunnel.sh` → в выводе будет `https://XXX.trycloudflare.com`, подставить `.../webhook`
 - **ngrok:** `ngrok http 8080` → в настройку webhook подставить `https://XXXX.ngrok.io/webhook`
-- **Cloud Run / VM:** развернуть `api/bot_app.py` (см. `docs/DEPLOY_INSTRUCTIONS.md`)
+- **Cloud Run / VM:** развернуть `api/bot_app.py` (см. [DEPLOY_GCP.md](DEPLOY_GCP.md) и [DEPLOY.md](DEPLOY.md))
 
 После того как есть публичный URL:
 
@@ -271,7 +271,7 @@ python scripts/setup_webhook.py --url https://YOUR_PUBLIC_URL/webhook
 
 **Настройка на сервере:**
 
-1. Развернуть `api/bot_app.py` на Cloud Run или на VM (см. `docs/DEPLOY_INSTRUCTIONS.md`)
+1. Развернуть `api/bot_app.py` на Cloud Run или на VM (см. [DEPLOY_GCP.md](DEPLOY_GCP.md) и [DEPLOY.md](DEPLOY.md))
 
 2. Настроить webhook:
 ```bash
@@ -511,7 +511,7 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 
 ## Развёртывание
 
-Инструкции по развёртыванию (одна VM или Cloud Run + VM): **docs/DEPLOY_INSTRUCTIONS.md**. После деплоя на Cloud Run — настроить webhook: `python scripts/setup_webhook.py --url <SERVICE_URL>/webhook`.
+Регулярный Docker-деплой описан в [DEPLOY.md](DEPLOY.md), Cloud Run webhook — в [DEPLOY_GCP.md](DEPLOY_GCP.md). После деплоя на Cloud Run настройте webhook: `python scripts/setup_webhook.py --url <SERVICE_URL>/webhook`.
 
 ---
 
@@ -542,5 +542,7 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321
 - `services/dashboard_builder.py` - Сборка текста дашборда (общий код для /dashboard и cron)
 - `scripts/update_rsi_local.py` - Обновление RSI для всех тикеров
 - `scripts/setup_webhook.py` - Настройка webhook
-- `docs/SANDBOX_TRADE_EXAMPLE.md` - Пример цепочки сделок и изменений в БД (portfolio_state, trade_history)
-- `docs/DEPLOY_INSTRUCTIONS.md` - Инструкции по развертыванию
+- `docs/DATABASE_SCHEMA.md` - Схема БД
+- `docs/PORTFOLIO_GAME.md` - Логика портфельных сделок
+- `docs/DEPLOY.md` - регулярный Docker-деплой
+- `docs/DEPLOY_GCP.md` - Cloud Run webhook

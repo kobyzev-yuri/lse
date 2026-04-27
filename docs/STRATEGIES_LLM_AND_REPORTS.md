@@ -14,7 +14,7 @@
 | **Portfolio** | Портфельный цикл (`trading_cycle_cron`, ExecutionAgent). Сделки по сигналу AnalystAgent по списку MEDIUM/LONG. Если StrategyManager не вернул имя стратегии, в БД пишется «Portfolio». Выходы: `ExecutionAgent.check_stop_losses()` — сейчас рабочий автоматический выход по тейку; stop-loss портфеля выключен флагом `PORTFOLIO_STOP_LOSS_ENABLED=false`. Подробный алгоритм: [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md). |
 | **Manual** | Ручные команды `/buy` и `/sell` в боте. |
 
-Подробнее: команда бота `/strategies`, портфельный алгоритм в [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md), исторический пример фабрики стратегий в `docs/STRATEGY_FACTORY.md`.
+Подробнее: команда бота `/strategies`, портфельный алгоритм в [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md).
 
 ### 1.2 Стратегии StrategyManager (портфельный цикл)
 

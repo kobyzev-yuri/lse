@@ -808,7 +808,7 @@ flowchart TD
 
 **Где хранятся сделки:**
 - `portfolio_state` - текущий кэш (CASH) и открытые позиции (ticker, quantity, avg_entry_price).
-- `trade_history` - каждая сделка: ts, ticker, side (BUY/SELL), quantity, price, commission (0.1%), signal_type (MANUAL / STOP_LOSS / BUY / SELL), total_value, sentiment_at_trade, strategy_name. Пример цепочки изменений в БД: см. `docs/SANDBOX_TRADE_EXAMPLE.md`.
+- `trade_history` - каждая сделка: ts, ticker, side (BUY/SELL), quantity, price, commission, signal_type (MANUAL / STOP_LOSS / BUY / SELL), total_value, sentiment_at_trade, strategy_name. Актуальная схема таблиц: `docs/DATABASE_SCHEMA.md`; логика портфельной игры: `docs/PORTFOLIO_GAME.md`.
 
 **Особенности:**
 - Автоматическая нормализация тикеров (GC-F → GC=F)
@@ -904,13 +904,13 @@ flowchart TB
     style KB fill:#c8e6c9
 ```
 
-**Комментарий**: При варианте «Cloud Run + VM» Telegram и API работают на Cloud Run, Postgres и knowledge_base — на VM; подключение по `DATABASE_URL`. Альтернатива — всё на одной VM (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`).
+**Комментарий**: При варианте «Cloud Run + VM» Telegram и API работают на Cloud Run, Postgres и knowledge_base — на VM; подключение по `DATABASE_URL`. Альтернатива — всё на одной VM (см. раздел 11, `docs/DEPLOY.md` и `docs/DEPLOY_GCP.md`).
 
 ---
 
 ## 11. Развёртывание
 
-Два варианта: **одна VM** (Postgres + cron + бот) или **Cloud Run** (бот/API) + **VM** (БД + cron). Команды, переменные окружения и сравнение стоимости — в **docs/DEPLOY_INSTRUCTIONS.md**.
+Два варианта: **одна VM** (Postgres + cron + бот) или **Cloud Run** (бот/API) + **VM** (БД + cron). Команды, переменные окружения и сравнение стоимости — в **docs/DEPLOY.md** и **docs/DEPLOY_GCP.md**.
 
 ```mermaid
 flowchart LR
@@ -949,8 +949,8 @@ flowchart LR
 - `report_generator.py` — генерация отчетов
 - `vector_kb` / sync cron — векторный поиск по `knowledge_base.embedding` (см. [docs/VECTOR_KB_USAGE.md](docs/VECTOR_KB_USAGE.md))
 - Telegram бот: webhook, handlers, команды `/signal`, `/news`, `/price`, `/chart`, `/ask`, `/tickers`, песочница: `/portfolio`, `/buy`, `/sell`, `/history`, `/recommend` (см. раздел 10)
-- Документация по сделкам: `docs/SANDBOX_TRADE_EXAMPLE.md` — пример цепочки изменений в `portfolio_state` и `trade_history`
-- Деплой: варианты «одна VM» или «Cloud Run + VM» (см. раздел 11 и `docs/DEPLOY_INSTRUCTIONS.md`)
+- Документация по сделкам: `docs/DATABASE_SCHEMA.md` и `docs/PORTFOLIO_GAME.md`
+- Деплой: варианты «одна VM» или «Cloud Run + VM» (см. раздел 11, `docs/DEPLOY.md` и `docs/DEPLOY_GCP.md`)
 - Премаркет и игры: `setup_cron.sh` — расписание (5m каждые 5 мин, портфельная 9/13/17, премаркет 16:30 MSK). Премаркет: `scripts/premarket_cron.py`, `services/premarket.py`; актуальное описание — [docs/GAME_5M_PREMARKET_AND_IMPULSE.md](docs/GAME_5M_PREMARKET_AND_IMPULSE.md); старое резюме — [docs/archive/RESUME_PREMARKET_AND_RECENT.md](docs/archive/RESUME_PREMARKET_AND_RECENT.md)
 - Уведомления в Telegram: `services/telegram_signal.py` — общая рассылка (get_signal_chat_ids, send_telegram_message). Сигналы 5m — `send_sndk_signal_cron.py`; сделки портфельной игры — `trading_cycle_cron.py` после run_for_tickers (те же TELEGRAM_SIGNAL_CHAT_IDS). В боте `/history [тикер] [N]` — фильтр по тикеру, в ответе стратегия (GAME_5M / Portfolio / Manual).
 
@@ -968,7 +968,7 @@ flowchart LR
 - ✅ Уведомления о сделках портфельной игры в те же чаты (trading_cycle_cron → telegram_signal); общий модуль `services/telegram_signal.py`
 - ✅ `/recommend <ticker>` — рекомендация по входу и параметрам управления (стоп-лосс, размер позиции)
 - ✅ В `/ask` — ответы на вопросы «когда открыть позицию», «какие параметры советуешь» с учётом сигнала и risk_limits
-- ✅ Документация: `docs/SANDBOX_TRADE_EXAMPLE.md` — пример цепочки изменений в БД при сделках
+- ✅ Документация: `docs/DATABASE_SCHEMA.md` и `docs/PORTFOLIO_GAME.md` — схема БД и актуальная логика сделок
 - ✅ Обновлены диаграммы раздела 10 (поток запросов и маршрутизация)
 
 ### Изменения в версии 1.3.0:
@@ -985,7 +985,7 @@ flowchart LR
 ### Изменения в версии 1.2.0:
 - ✅ Добавлен раздел 10: Telegram бот-агент с webhook и маршрутизацией команд
 - ✅ Добавлен раздел 11: развёртывание на Cloud Run и отдельном сервере (Postgres + КБ), по образцу sc
-- ✅ Ссылка на `docs/DEPLOY_INSTRUCTIONS.md` для пошагового деплоя
+- ✅ Ссылки на `docs/DEPLOY.md` и `docs/DEPLOY_GCP.md` для деплоя
 
 ### Изменения в версии 1.1.0:
 - ✅ Добавлен Strategy Manager для автоматического выбора стратегий

@@ -76,7 +76,8 @@ python web_app.py                  # http://localhost:8080 (порт в compose 
 ### Деплой и внешние сервисы
 | Документ | Содержание |
 |----------|------------|
-| [docs/DEPLOY_INSTRUCTIONS.md](docs/DEPLOY_INSTRUCTIONS.md) | VM, Docker, Cloud Run |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Регулярный Docker-деплой и обновление сервера |
+| [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md) | Cloud Run webhook для Telegram-бота |
 | [docs/MIGRATE_SERVER.md](docs/MIGRATE_SERVER.md) | Перенос БД, дамп/restore |
 | [docs/PLATFORM_GAME_DOCKER.md](docs/PLATFORM_GAME_DOCKER.md) | Platform API (Kerim), сеть Docker |
 

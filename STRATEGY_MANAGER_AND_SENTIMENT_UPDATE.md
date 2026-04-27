@@ -199,9 +199,9 @@ python -c "from strategy_manager import get_strategy_manager; sm = get_strategy_
 
 ## См. также
 
-- [Strategy Factory Documentation](docs/STRATEGY_FACTORY.md)
+- [Portfolio Game](docs/PORTFOLIO_GAME.md)
 - [Trading Glossary](docs/TRADING_GLOSSARY.md)
-- [LLM Integration Guide](docs/LLM_GUIDANCE.md)
+- [Strategies, LLM and Reports](docs/STRATEGIES_LLM_AND_REPORTS.md)
 
 
 

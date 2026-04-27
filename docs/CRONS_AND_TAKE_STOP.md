@@ -109,7 +109,7 @@
 - **5m:** тикеры — **GAME_5M_TICKERS** или TICKERS_FAST; тейк/стоп — **GAME_5M_TAKE_PROFIT_PCT** (потолок), **GAME_5M_TAKE_PROFIT_MIN_PCT** (с какого импульса считать тейк от импульса), **GAME_5M_TAKE_MOMENTUM_FACTOR** (ниже 1 — консервативнее, выше 1 — агрессивнее до потолка; в коде clamp примерно 0.3–2.0), **GAME_5M_TAKE_PROFIT_PCT_SNDK** и т.д. (потолок по тикеру); **GAME_5M_STOP_LOSS_PCT**, **GAME_5M_STOP_LOSS_ENABLED** и др.
 - **Портфель:** тикеры — **TRADING_CYCLE_TICKERS** или TICKERS_MEDIUM + TICKERS_LONG; тейк по умолчанию — **PORTFOLIO_TAKE_PROFIT_PCT** (если 0 или не задан — в логах «Тейк‑профит не задан»). Стоп-лосс: **PORTFOLIO_STOP_LOSS_ENABLED** (true/false); при false в логах предупреждение «стоп отключён», закрытие только по тейку. Порог стопа — **STOP_LOSS_LEVEL** (0.95 ≈ −5%). Оба параметра (PORTFOLIO_STOP_LOSS_ENABLED, STOP_LOSS_LEVEL) можно переопределить в БД (strategy_parameters, GLOBAL) — тогда trading_cycle_cron и /gameparams используют значение из БД.
 
-См. также: [TICKER_GROUPS.md](TICKER_GROUPS.md), [CRON_TICKERS_EXPLANATION.md](CRON_TICKERS_EXPLANATION.md).
+См. также: [TICKER_GROUPS.md](TICKER_GROUPS.md), [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md).
 
 ---
 

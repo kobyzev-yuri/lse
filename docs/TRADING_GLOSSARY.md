@@ -396,7 +396,7 @@ weighted_sentiment = Σ(sentiment_i * weight_i) / Σ(weight_i)
 
 ## См. также
 
-- [Strategy Factory Documentation](STRATEGY_FACTORY.md)
-- [LLM Integration Guide](LLM_GUIDANCE.md)
-- [Vector KB Implementation](VECTOR_KB_USAGE.md)
+- [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md)
+- [STRATEGIES_LLM_AND_REPORTS.md](STRATEGIES_LLM_AND_REPORTS.md)
+- [VECTOR_KB_USAGE.md](VECTOR_KB_USAGE.md)
 
