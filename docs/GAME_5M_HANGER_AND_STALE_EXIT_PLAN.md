@@ -1,51 +1,51 @@
-# GAME_5M: rework hanger and stale exits
+# GAME_5M: доработка hanger и stale exits
 
-## Problem
+## Проблема
 
-Current GAME_5M has two separate issues that are mixed together in reports:
+В текущей GAME_5M смешаны две разные проблемы, которые в отчётах выглядят похожими:
 
-1. **Hanger**: a position waits for a take-profit for too long, tying up capital.
-2. **Stale reversal**: a position no longer has a positive setup, receives weak or opposite signals, and keeps falling instead of recovering.
+1. **Hanger / висяк**: позиция слишком долго ждёт take-profit и блокирует капитал.
+2. **Stale reversal**: у позиции уже нет позитивного сетапа, текущие сигналы слабые или обратные, а цена продолжает падать вместо восстановления.
 
-The current `hanger` mechanism is not a predictive model. It is a late classifier:
+Текущий механизм `hanger` не является прогнозной моделью. Это поздний классификатор:
 
-- replay current rules over a calendar window;
-- if the position did not close by replay;
-- and the market is not above entry at the end of the window;
-- then classify it as `hanger`.
+- реплеим текущие правила на календарном окне;
+- если позиция не закрылась по реплею;
+- и рынок в конце окна не выше цены входа;
+- классифицируем позицию как `hanger`.
 
-The current remediation only lowers the take-profit cap for classified hangers. That can help positions that are close to breakeven or mildly positive, but it does not solve deep negative reversals like NBIS or ASML.
+Текущее “лечение” только снижает потолок take-profit для классифицированных висяков. Это может помочь позициям около безубытка или в небольшом плюсе, но не решает глубокие отрицательные развороты вроде NBIS или ASML.
 
-## Current Weak Spots
+## Текущие слабые места
 
-- `GAME_5M_EXIT_ONLY_TAKE=true` disables `TIME_EXIT`, `TIME_EXIT_EARLY`, `STOP_LOSS`, and SELL-based exits after the take-profit check. Per-ticker max hold minutes therefore do not protect capital while this flag is enabled.
-- `hanger` is detected too late: default live window is 6 calendar days.
-- `hanger` only changes take-profit cap. It does not close bad positions.
-- Current SELL decision is explicitly not used as a close trigger for an already open long.
-- There is no first-30/60-minute stuck-risk score to predict a future hanger early.
+- `GAME_5M_EXIT_ONLY_TAKE=true` после проверки take-profit отключает `TIME_EXIT`, `TIME_EXIT_EARLY`, `STOP_LOSS` и выходы по SELL-сигналу. Поэтому per-ticker лимиты удержания в минутах не защищают капитал, пока включён этот режим.
+- `hanger` определяется слишком поздно: live-окно по умолчанию равно 6 календарным дням.
+- `hanger` меняет только take-profit cap. Он не закрывает плохие позиции.
+- Текущий SELL-сигнал явно не используется как триггер закрытия уже открытого long.
+- Нет скоринга риска зависания за первые 30/60 минут после входа.
 
-## Target Behavior
+## Целевое поведение
 
-Split exit logic into three independent layers:
+Логику выхода нужно разделить на три независимых слоя:
 
-1. **Normal profit capture**
-   - Use existing dynamic take-profit.
-   - Keep soft take near intraday high.
+1. **Обычная фиксация прибыли**
+   - Использовать существующий динамический take-profit.
+   - Сохранить soft take около intraday high.
 
-2. **Hanger rescue**
-   - Keep current `TAKE_PROFIT_SUSPEND` idea.
-   - Use it only for positions that are not deeply broken and can plausibly recover to a smaller positive take.
+2. **Спасение recoverable hanger**
+   - Сохранить идею `TAKE_PROFIT_SUSPEND`.
+   - Использовать её только для позиций, которые не сломаны глубоко и ещё могут реалистично выйти в уменьшенный положительный take.
 
 3. **Stale/reversal exit**
-   - Close positions that exceed their expected holding time and no longer have supportive signals.
-   - This is not a stop-loss. It is a time-and-signal invalidation rule.
-   - Exit as `TIME_EXIT_EARLY` initially to reuse existing reporting, then optionally introduce `STALE_REVERSAL_EXIT`.
+   - Закрывать позиции, которые превысили ожидаемый срок удержания и больше не поддерживаются текущими сигналами.
+   - Это не stop-loss, а правило инвалидации по времени и сигналу.
+   - На первом этапе закрывать как `TIME_EXIT_EARLY`, чтобы переиспользовать существующую отчётность. Позже можно ввести отдельный `STALE_REVERSAL_EXIT`.
 
-## Phase 1: Immediate Risk Control
+## Фаза 1: немедленный контроль риска
 
-Implement a stale/reversal rule in `services/game_5m.py::should_close_position`.
+Добавить stale/reversal rule в `services/game_5m.py::should_close_position`.
 
-Suggested condition:
+Условие:
 
 ```text
 enabled = GAME_5M_STALE_REVERSAL_EXIT_ENABLED
@@ -55,7 +55,7 @@ current_decision in HOLD/SELL
 momentum_2h_pct <= GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW
 ```
 
-Initial defaults for production tuning:
+Начальные значения для production tuning:
 
 ```env
 GAME_5M_STALE_REVERSAL_EXIT_ENABLED=true
@@ -64,18 +64,18 @@ GAME_5M_STALE_REVERSAL_MAX_PNL_PCT=-1.5
 GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW=0.0
 ```
 
-For high-risk tickers, use stricter per-ticker max hold:
+Для тикеров повышенного риска использовать более строгие per-ticker сроки удержания:
 
 ```env
 GAME_5M_MAX_POSITION_MINUTES_ASML=390
 GAME_5M_MAX_POSITION_MINUTES_NBIS=780
 ```
 
-Implementation note: the stale/reversal rule should be checked before the broad `GAME_5M_EXIT_ONLY_TAKE` guard, so enabling the rule can still protect stale risk even if legacy take-only mode remains enabled. Operationally, `GAME_5M_EXIT_ONLY_TAKE=false` is still cleaner because it restores normal `TIME_EXIT` behavior too.
+Замечание по реализации: stale/reversal rule нужно проверять до широкого guard `GAME_5M_EXIT_ONLY_TAKE`. Тогда включённое правило сможет защищать от stale risk даже при legacy take-only режиме. Операционно `GAME_5M_EXIT_ONLY_TAKE=false` всё равно чище, потому что возвращает и обычный `TIME_EXIT`.
 
-## Phase 2: Hanger Definition v2
+## Фаза 2: Hanger Definition v2
 
-Replace the current binary hanger definition with a scored diagnosis:
+Заменить бинарное определение hanger на скоринговую диагностику:
 
 ```text
 hanger_score = age_score
@@ -85,53 +85,53 @@ hanger_score = age_score
              + missed_opportunity_score
 ```
 
-Classify:
+Классы:
 
-- `recoverable_hanger`: mild drawdown or small positive PnL, weak but not broken trend;
-- `stale_reversal`: negative PnL, HOLD/SELL, weak momentum, age beyond expected hold;
-- `normal_hold`: still young or supported by STRONG_BUY/positive momentum.
+- `recoverable_hanger`: небольшая просадка или небольшой плюс, тренд слабый, но ещё не сломан;
+- `stale_reversal`: отрицательный PnL, HOLD/SELL, слабый momentum, возраст больше ожидаемого срока удержания;
+- `normal_hold`: позиция ещё молодая или поддерживается STRONG_BUY/положительным momentum.
 
-Only `recoverable_hanger` should receive lower take cap. `stale_reversal` should close.
+Сниженный take cap должен получать только `recoverable_hanger`. `stale_reversal` должен закрываться.
 
-## Phase 3: First-30/60-Minute Stuck-Risk Model
+## Фаза 3: модель stuck-risk на первых 30/60 минутах
 
-Train a simple supervised model before adding a neural net:
+Перед нейронной сетью стоит обучить простую supervised-модель.
 
-Target labels:
+Целевые метки:
 
-- `stuck`: no TAKE_PROFIT within N bars/days or exit negative after max hold;
-- `quick_win`: TAKE_PROFIT within same day or within configured max hold;
-- `bad_reversal`: drawdown exceeds threshold and no recovery.
+- `stuck`: нет `TAKE_PROFIT` за N баров/дней или выход в минус после max hold;
+- `quick_win`: `TAKE_PROFIT` в тот же день или в пределах настроенного max hold;
+- `bad_reversal`: просадка выше порога и нет восстановления.
 
-Candidate features:
+Кандидаты в признаки:
 
-- entry RSI, momentum_2h, volatility_5m, ATR, volume_vs_avg;
-- first 30/60 minute return after entry;
-- MFE/MAE in first 30/60 minutes;
-- current decision drift: BUY -> HOLD/SELL;
-- distance to dynamic take;
+- entry RSI, `momentum_2h`, `volatility_5m`, ATR, `volume_vs_avg`;
+- доходность за первые 30/60 минут после входа;
+- MFE/MAE за первые 30/60 минут;
+- drift текущего решения: BUY -> HOLD/SELL;
+- расстояние до динамического take;
 - market/session phase;
-- ticker-specific historical quick-win rate.
+- историческая ticker-specific доля быстрых успешных входов.
 
-Start with CatBoost/logistic regression and only then evaluate a neural net. The dataset is tabular and limited; CatBoost is likely a better first model.
+Начать лучше с CatBoost или logistic regression и только потом оценивать нейронную сеть. Данные табличные и ограниченные, поэтому CatBoost, вероятно, будет лучшей первой моделью.
 
-## Validation
+## Проверка
 
-Use replay before production:
+Перед production-раскаткой использовать replay:
 
-1. Replay open and recently closed GAME_5M trades with the new stale/reversal rule.
-2. Check avoided losses on NBIS/ASML-like cases.
-3. Check false exits where the position later recovered to take-profit.
-4. Compare:
+1. Реплейнуть открытые и недавно закрытые GAME_5M сделки с новым stale/reversal rule.
+2. Проверить предотвращённые убытки на кейсах типа NBIS/ASML.
+3. Проверить false exits, где позиция после раннего выхода всё же восстановилась бы до take-profit.
+4. Сравнить:
    - realized PnL;
    - capital-days locked;
    - missed upside after early exit;
-   - count of `TIME_EXIT_EARLY`.
+   - количество `TIME_EXIT_EARLY`.
 
-## Rollout
+## Раскатка
 
-1. Add code path behind config flags.
-2. Enable in paper/log-only mode if needed.
-3. Enable for high-risk tickers first.
-4. Review closed reports after one trading week.
-5. Promote to default if it reduces capital lock and large stale losses without cutting too many quick recoveries.
+1. Добавить code path за config flags.
+2. При необходимости включить сначала в paper/log-only режиме.
+3. Сначала включить для high-risk тикеров.
+4. Через одну торговую неделю проверить closed reports.
+5. Сделать режим дефолтным, если он снижает блокировку капитала и крупные stale losses без чрезмерного срезания быстрых восстановлений.
