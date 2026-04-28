@@ -194,6 +194,8 @@ def process_ticker(
     closed_this_run = False  # закрыли позицию в этом запуске — отправим уведомление и сбросим cooldown
     close_price = close_exit_type = close_entry_price = None
     close_narrative_ctx = None  # merge_close_context_with_trade_narrative — для текста в Telegram
+    entry_hanger_diag_checked = False
+    entry_live_hanger_kind = None
 
     try:
         # Нетто GAME_5M (VWAP по всем лотам) — согласовано с hanger_tune; иначе any / последний BUY.
@@ -250,6 +252,8 @@ def process_ticker(
                             skip_sag_check=skip_sag,
                             bar_horizon_days_after_entry=bar_hz,
                         )
+                        entry_hanger_diag_checked = True
+                        entry_live_hanger_kind = hdiag.get("kind") if isinstance(hdiag, dict) else None
                         apply_hanger_json = hdiag is not None
                     except Exception as e:
                         logger.warning("%s: GAME_5M_HANGER_DUAL_MODE live hanger: %s", ticker, e)
@@ -438,13 +442,41 @@ def process_ticker(
         "true",
         "yes",
     )
+    allow_pyramid_if_not_hanger = (
+        get_config_value("GAME_5M_ALLOW_PYRAMID_IF_NOT_HANGER", "false") or "false"
+    ).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     if not closed_this_run and decision_entry in ("BUY", "STRONG_BUY") and not allow_pyramid:
-        if resolve_open_position_for_game5m_close(ticker):
-            logger.info(
-                "[5m] %s: пропуск входа — уже есть открытая позиция (докуп выключен: GAME_5M_ALLOW_PYRAMID_BUY=false)",
-                ticker,
-            )
-            return False
+        pos_for_entry = resolve_open_position_for_game5m_close(ticker)
+        if pos_for_entry:
+            if (
+                allow_pyramid_if_not_hanger
+                and entry_hanger_diag_checked
+                and entry_live_hanger_kind is None
+                and (pos_for_entry.get("strategy_name") or "GAME_5M").strip().upper() == "GAME_5M"
+            ):
+                logger.info(
+                    "[5m] %s: докуп разрешён — позиция открыта, но live hanger-диагностика не классифицировала её как висяк "
+                    "(GAME_5M_ALLOW_PYRAMID_IF_NOT_HANGER=true)",
+                    ticker,
+                )
+            else:
+                reason = (
+                    "позиция classified as hanger=%s" % entry_live_hanger_kind
+                    if entry_hanger_diag_checked
+                    else "live hanger-диагностика не выполнена"
+                )
+                logger.info(
+                    "[5m] %s: пропуск входа — уже есть открытая позиция; докуп выключен "
+                    "(GAME_5M_ALLOW_PYRAMID_BUY=false, GAME_5M_ALLOW_PYRAMID_IF_NOT_HANGER=%s; %s)",
+                    ticker,
+                    allow_pyramid_if_not_hanger,
+                    reason,
+                )
+                return False
 
     if decision_entry not in ("BUY", "STRONG_BUY"):
         return False
