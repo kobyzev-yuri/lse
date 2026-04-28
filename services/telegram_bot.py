@@ -596,16 +596,9 @@ def _build_prompt_entry_game5m_html(
     )
 
 
-def _human_trade_explanation_from_exit_ctx(exit_ctx: Any) -> str:
-    from report_generator import human_trade_explanation_from_exit_context
-
-    return human_trade_explanation_from_exit_context(exit_ctx)
-
-
 def _build_closed_html(closed: List[Any], total_pnl: float = 0, impulse_pct: bool = False) -> str:
     """Собирает простой HTML для отчёта закрытых позиций (для сохранения в кэш). impulse_pct: добавить колонку Impulse %."""
     rows_html = []
-    ncol = 14 if impulse_pct else 13
     for t in closed:
         direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
         pts = t.exit_price - t.entry_price
@@ -642,20 +635,14 @@ def _build_closed_html(closed: List[Any], total_pnl: float = 0, impulse_pct: boo
             f"<td>{_ts_msk(t.entry_ts)}</td><td>{_ts_msk(t.ts)}</td></tr>"
         )
         rows_html.append(row_cells)
-        expl = _human_trade_explanation_from_exit_ctx(getattr(t, "exit_context_json", None))
-        if expl:
-            safe = html.escape(expl[:2000] + ("…" if len(expl) > 2000 else ""))
-            rows_html.append(
-                f'<tr class="human_note"><td colspan="{ncol}"><strong>Пояснение (вход→выход):</strong> {safe}</td></tr>'
-            )
     body = "\n".join(rows_html)
     summary = f'<p class="summary"><strong>Итого:</strong> {len(closed)} позиций, суммарный P/L: ${total_pnl:+,.2f}</p>'
     th_impulse = "<th>Импульс % (при входе)</th>" if impulse_pct else ""
     thead = f"<thead><tr><th>Instrument</th><th>Dir</th><th>Open</th><th>Close</th>{th_impulse}<th>Pips</th><th>Qty</th><th>Profit</th><th>P/L %</th><th>Entry</th><th>Exit</th><th>Причина выхода</th><th>Open (MSK)</th><th>Close (MSK)</th></tr></thead>"
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><title>Закрытые позиции</title>
-<style>table{{border-collapse:collapse;width:100%}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}} .summary{{margin-top:1em}} .human_note td{{font-size:0.9em;color:#333;background:#f9f9f9;vertical-align:top}}</style>
-</head><body><h1>Закрытые позиции</h1><p>Даты в MSK. Entry/Exit — стратегия. Причина выхода: TAKE_PROFIT (достигнут тейк), TIME_EXIT (конец сессии или макс. дней), SELL (сигнал), STOP_LOSS. Цель тейка при входе задаётся от импульса 2ч (напр. 6%%), но выход может быть по другой причине — тогда P/L %% меньше цели. Ниже по сделкам — пояснение вход→выход, если оно сохранено в БД при закрытии.</p>
+<style>table{{border-collapse:collapse;width:100%}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}} .summary{{margin-top:1em}}</style>
+</head><body><h1>Закрытые позиции</h1><p>Даты в MSK. Entry/Exit — стратегия. Причина выхода: TAKE_PROFIT (достигнут тейк), TIME_EXIT (конец сессии или макс. дней), SELL (сигнал), STOP_LOSS. Цель тейка при входе задаётся от импульса 2ч (напр. 6%%), но выход может быть по другой причине — тогда P/L %% меньше цели.</p>
 <table>{thead}<tbody>{body}</tbody></table>{summary}</body></html>"""
 
 
