@@ -935,6 +935,42 @@ def _game_5m_soft_take_near_high_params() -> tuple[bool, float, float]:
     return enabled, max(0.5, min_pnl), max(0.05, max_pull)
 
 
+def _game_5m_stale_reversal_exit_params(ticker: Optional[str] = None) -> dict[str, Any]:
+    """Time-and-signal invalidation for old GAME_5M longs that stopped behaving like quick trades."""
+    raw_enabled = (get_config_value("GAME_5M_STALE_REVERSAL_EXIT_ENABLED", "false") or "false").strip().lower()
+    enabled = raw_enabled in ("1", "true", "yes")
+
+    def _int_param(key: str, default: int, min_value: int) -> int:
+        raw = (get_config_value(key, str(default)) or str(default)).strip()
+        try:
+            return max(min_value, int(raw))
+        except (ValueError, TypeError):
+            return max(min_value, default)
+
+    def _float_param(key: str, default: float) -> float:
+        raw = (get_config_value(key, str(default)) or str(default)).strip().replace(",", ".")
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            return default
+
+    ticker_u = str(ticker or "").strip().upper()
+    min_age = _int_param("GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES", 390, 15)
+    if ticker_u:
+        raw_t = (get_config_value(f"GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES_{ticker_u}", "") or "").strip()
+        if raw_t:
+            try:
+                min_age = max(15, int(raw_t))
+            except (ValueError, TypeError):
+                pass
+    return {
+        "enabled": enabled,
+        "min_age_minutes": min_age,
+        "max_pnl_pct": _float_param("GAME_5M_STALE_REVERSAL_MAX_PNL_PCT", -1.5),
+        "momentum_below": _float_param("GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW", 0.0),
+    }
+
+
 def should_close_position(
     open_position: dict,
     current_decision: str,
@@ -1021,8 +1057,6 @@ def should_close_position(
                 return True, "TAKE_PROFIT", "soft_near_high_open"
         if not exit_only_take and _game_5m_stop_loss_enabled() and pnl_stop_pct <= -stop_pct:
             return True, "STOP_LOSS", ""
-        if exit_only_take:
-            return False, "", ""
 
         # В последние N минут сессии: закрыть с минимальным профитом, чтобы не уходить через день в минус.
         # Исключение: если текущий сигнал STRONG_BUY — остаёмся (рискуем перейти в следующую сессию).
@@ -1031,7 +1065,7 @@ def should_close_position(
             min_profit = float(get_config_value("GAME_5M_SESSION_END_MIN_PROFIT_PCT", "0.3"))
         except (ValueError, TypeError):
             exit_min, min_profit = 30, 0.3
-        if simulation_time is None and exit_min > 0 and min_profit >= 0 and current_decision != "STRONG_BUY":
+        if not exit_only_take and simulation_time is None and exit_min > 0 and min_profit >= 0 and current_decision != "STRONG_BUY":
             try:
                 from services.market_session import get_market_session_context
                 ctx = get_market_session_context()
@@ -1069,6 +1103,39 @@ def should_close_position(
     else:
         age = timedelta(0)
     max_min = _max_position_minutes(open_position.get("ticker"))
+
+    # Stale/reversal exit: explicit protection for old longs whose setup degraded.
+    # It is checked before EXIT_ONLY_TAKE so that enabling this flag can override the broad legacy mode.
+    stale_params = _game_5m_stale_reversal_exit_params(open_position.get("ticker"))
+    if stale_params.get("enabled") and isinstance(entry_price, (int, float)) and entry_price > 0:
+        pnl_current_pct = (current_price - entry_price) / entry_price * 100.0
+        try:
+            mom_current = None if momentum_2h_pct is None else float(momentum_2h_pct)
+        except (TypeError, ValueError):
+            mom_current = None
+        weak_mom = mom_current is None or mom_current <= float(stale_params["momentum_below"])
+        decision_norm = str(current_decision or "").strip().upper()
+        weak_decision = decision_norm in ("HOLD", "SELL")
+        min_age = timedelta(minutes=int(stale_params["min_age_minutes"]))
+        if (
+            age >= min_age
+            and pnl_current_pct <= float(stale_params["max_pnl_pct"])
+            and weak_mom
+            and weak_decision
+        ):
+            logger.info(
+                "GAME_5M %s: stale/reversal exit — age=%s мин, PnL=%.2f%% <= %.2f%%, "
+                "mom2h=%s <= %.2f%%, decision=%s",
+                open_position.get("ticker", "?"),
+                int(age.total_seconds() // 60),
+                pnl_current_pct,
+                float(stale_params["max_pnl_pct"]),
+                "—" if mom_current is None else f"{mom_current:+.2f}%",
+                float(stale_params["momentum_below"]),
+                decision_norm or "—",
+            )
+            return True, "TIME_EXIT_EARLY", "stale_reversal"
+
     if _game_5m_exit_only_take():
         return False, "", ""
     if max_min is not None and age > timedelta(minutes=max_min):
