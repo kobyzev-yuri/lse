@@ -86,6 +86,18 @@
 </div>
 
 <div class="card">
+    <h2>Hanger v2 / stale exits <code>game5m_hanger_v2_review</code></h2>
+    <p class="muted" style="font-size:0.9rem;">Разбор закрытых сделок по диагностике <code>position_state_v2</code>, сохранённой в SELL <code>context_json</code>. Live-наблюдение открытых позиций — отдельно по логам крона.</p>
+    <div id="hangerV2Block" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
+    <h2>Continuation gate <code>continuation_gate_review</code></h2>
+    <p class="muted" style="font-size:0.9rem;">Сравнение log-only решения <code>continuation_gate</code> с фактическим недобором после закрытия. Помогает понять, где тейк был слишком ранним.</p>
+    <div id="continuationGateBlock" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
     <h2>Худшие исходы (<code>top_cases.top_losses</code>)</h2>
     <p class="muted">Сначала сделки с <strong>наименьшим</strong> <code>realized_pct</code> (до 8 строк на странице). При высоком win rate это часто самые маленькие плюсы; смотрите также <code>missed_upside_pct</code> и <code>exit_signal</code>.</p>
     <div id="topLosses" class="dashboard-text">—</div>
@@ -258,6 +270,85 @@ function renderCatboostBlock(data) {
     el.innerHTML = html;
 }
 
+function renderHangerV2Block(data) {
+    const el = document.getElementById('hangerV2Block');
+    if (!el) {
+        return;
+    }
+    const r = data.game5m_hanger_v2_review || {};
+    if (!r.trades_with_position_state_v2) {
+        el.innerHTML = '<span class="muted">Пока нет закрытых сделок с <code>position_state_v2</code> в SELL context_json.</span>';
+        return;
+    }
+    let html = '';
+    html += 'Сделок с диагностикой: <strong>' + esc(r.trades_with_position_state_v2) + '</strong><br>';
+    html += 'State counts: <code>' + esc(JSON.stringify(r.state_counts || {})) + '</code><br>';
+    html += 'Stale exits: <strong>' + esc(r.stale_reversal_exit_count || 0) + '</strong>, ';
+    html += 'stale state без TIME_EXIT_EARLY: <strong>' + esc(r.stale_state_not_cut_count || 0) + '</strong><br>';
+    html += 'Recoverable hanger: <strong>' + esc(r.recoverable_hanger_count || 0) + '</strong>, near take: <strong>' + esc(r.recoverable_near_take_count || 0) + '</strong>';
+    const cases = Array.isArray(r.top_cases) ? r.top_cases.slice(0, 8) : [];
+    if (cases.length) {
+        html += '<p style="margin:0.7rem 0 0.25rem 0;"><strong>Top cases</strong></p>';
+        html += cases.map(function (c) {
+            return '• ' + esc(c.ticker) + ' #' + esc(c.trade_id) +
+                ': state=' + esc(c.state) +
+                ', score=' + esc(c.score != null ? c.score : '—') +
+                ', pnl=' + esc(c.realized_pct) + '%' +
+                ', exit=' + esc(c.exit_signal || '—') +
+                ', age=' + esc(c.age_minutes != null ? c.age_minutes : '—') + 'm' +
+                ', dist_to_take=' + esc(c.distance_to_take_pct != null ? c.distance_to_take_pct : '—');
+        }).join('<br>');
+    }
+    const cand = Array.isArray(r.parameter_candidates) ? r.parameter_candidates.slice(0, 4) : [];
+    if (cand.length) {
+        html += '<p style="margin:0.7rem 0 0.25rem 0;"><strong>Кандидаты настройки</strong></p>';
+        html += cand.map(function (c) {
+            return '• <code>' + esc((c.env_keys || []).join(', ')) + '</code>: ' + esc(c.direction || 'review') + ' — ' + esc(c.evidence || '');
+        }).join('<br>');
+    }
+    el.innerHTML = html;
+}
+
+function renderContinuationGateBlock(data) {
+    const el = document.getElementById('continuationGateBlock');
+    if (!el) {
+        return;
+    }
+    const r = data.continuation_gate_review || {};
+    if (!r.trades_with_continuation_gate) {
+        el.innerHTML = '<span class="muted">Пока нет закрытых сделок с <code>continuation_gate</code> в SELL context_json.</span>';
+        return;
+    }
+    let html = '';
+    html += 'Сделок с gate: <strong>' + esc(r.trades_with_continuation_gate) + '</strong><br>';
+    html += 'Decision counts: <code>' + esc(JSON.stringify(r.decision_counts || {})) + '</code><br>';
+    html += 'Extend candidates: <strong>' + esc(r.would_extend_take_count || 0) + '</strong>, ';
+    html += 'extend + missed ≥1%: <strong>' + esc(r.extend_candidates_with_missed_upside_ge_1pct || 0) + '</strong>, ';
+    html += 'close_now + missed ≥1%: <strong>' + esc(r.close_now_with_missed_upside_ge_1pct || 0) + '</strong><br>';
+    html += 'Avg missed extend: <strong>' + esc(r.avg_missed_upside_extend_candidates != null ? r.avg_missed_upside_extend_candidates : '—') + '%</strong>, ';
+    html += 'close_now: <strong>' + esc(r.avg_missed_upside_close_now != null ? r.avg_missed_upside_close_now : '—') + '%</strong>';
+    const cases = Array.isArray(r.top_cases) ? r.top_cases.slice(0, 8) : [];
+    if (cases.length) {
+        html += '<p style="margin:0.7rem 0 0.25rem 0;"><strong>Top missed cases</strong></p>';
+        html += cases.map(function (c) {
+            return '• ' + esc(c.ticker) + ' #' + esc(c.trade_id) +
+                ': decision=' + esc(c.decision || '—') +
+                ', extend=' + esc(c.would_extend_take) +
+                ', missed=' + esc(c.missed_upside_pct) + '%' +
+                ', pnl=' + esc(c.realized_pct) + '%' +
+                ', mom=' + esc(c.momentum_2h_pct != null ? c.momentum_2h_pct : '—');
+        }).join('<br>');
+    }
+    const cand = Array.isArray(r.parameter_candidates) ? r.parameter_candidates.slice(0, 4) : [];
+    if (cand.length) {
+        html += '<p style="margin:0.7rem 0 0.25rem 0;"><strong>Кандидаты настройки</strong></p>';
+        html += cand.map(function (c) {
+            return '• <code>' + esc((c.env_keys || []).join(', ')) + '</code>: ' + esc(c.direction || 'review') + ' — ' + esc(c.evidence || '');
+        }).join('<br>');
+    }
+    el.innerHTML = html;
+}
+
 async function runAnalyzer() {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
@@ -270,12 +361,16 @@ async function runAnalyzer() {
     const envBlock = document.getElementById('envBlock');
     const envManual = document.getElementById('envManual');
     const envSkip = document.getElementById('envSkip');
+    const hangerV2Block = document.getElementById('hangerV2Block');
+    const continuationGateBlock = document.getElementById('continuationGateBlock');
     const applyBtn = document.getElementById('applyEnvBtn');
     const applyStatus = document.getElementById('applyStatus');
     summary.innerHTML = 'Загрузка...';
     topLosses.innerHTML = '—';
     topMissed.innerHTML = '—';
     topWinMissed.innerHTML = '—';
+    hangerV2Block.innerHTML = '—';
+    continuationGateBlock.innerHTML = '—';
     llmBlock.textContent = '—';
     envBlock.textContent = '—';
     envManual.textContent = '—';
@@ -293,6 +388,8 @@ async function runAnalyzer() {
             return;
         }
         renderCatboostBlock(data);
+        renderHangerV2Block(data);
+        renderContinuationGateBlock(data);
         const s = data.summary || {};
         if (!s.total) {
             summary.innerHTML = 'За период нет закрытых сделок.';

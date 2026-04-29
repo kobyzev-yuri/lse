@@ -38,6 +38,26 @@
 - В JSON: сводная **калибровка** (средний P при win/loss, квантили P vs win rate), массив **`per_trade`** (статус CatBoost, P, `realized_pct`, при наличии — `estimated_upside_pct_day_at_entry`, `prob_up_at_entry`, укороченный `price_forecast_5m_summary_excerpt`), опционально **`price_context_at_entry`** — корреляция сохранённого upside на входе с фактическим результатом (справочно).
 - Для **`PORTFOLIO`** блок осознанно **пропускается** (модель не про дневной портфель); отдельная модель — по плану в `docs/ML_GAME5M_CATBOOST.md` §8.
 
+### Hanger v2 и continuation gate
+
+Новые SELL `context_json` могут содержать:
+
+- `position_state_v2` — диагностика Hanger v2 (`normal_hold`, `recoverable_hanger`, `stale_reversal`) на момент выхода;
+- `continuation_gate` — log-only решение, закрывать тейк сейчас или рассматривать extended take.
+
+Analyzer отдаёт два блока:
+
+- `game5m_hanger_v2_review`: state counts, stale/reversal exits, recoverable hanger cases, top cases и кандидаты параметров `GAME_5M_STALE_REVERSAL_*` / `GAME_5M_HANGER_V2_*`;
+- `continuation_gate_review`: сколько сделок gate хотел бы продлить, какой был `missed_upside`, и какие `GAME_5M_CONTINUATION_*` / take-параметры стоит проверять.
+
+Live-лог во время сессии:
+
+```bash
+python scripts/analyze_hanger_tactic_log.py logs/cron_sndk_signal.log --tail-lines 5000
+```
+
+Правило настройки: не менять много ручек сразу. Сначала смотрим live-log в сессии, после закрытий — `/analyzer?strategy=GAME_5M&days=1`, затем выбираем один небольшой набор параметров и сравниваем следующий snapshot.
+
 ## Узкий анализ (выбранные сделки / короткое окно)
 
 Функция `analyze_trade_effectiveness_focused(days, strategy, tickers=..., trade_ids=..., use_llm=...)`:
@@ -171,6 +191,7 @@ ANALYZER_AUTOTUNE_APPLY=1 python3 scripts/analyzer_autotune.py --days 5 --url ht
 - в `summary`: `sum_missed_upside_pct_on_wins`, `avg_missed_upside_pct_on_wins`, `wins_with_missed_upside_ge_1pct_count`;
 - `practical_parameter_suggestions` (грубые, практичные изменения порогов);
 - `critical_case_analysis` (разбор критичных сделок с action item);
+- `game5m_hanger_v2_review` и `continuation_gate_review` (новые блоки для Iteration 2);
 - опционально LLM-блок с приоритетами улучшений (`--llm` / `use_llm=1`).
 
 ## 5) Как интерпретировать

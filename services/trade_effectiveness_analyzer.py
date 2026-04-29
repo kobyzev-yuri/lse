@@ -294,6 +294,9 @@ class TradeEffect:
     entry_reasoning: Optional[str]
     decision_rule_version: Optional[str]
     decision_rule_params: Optional[Dict[str, Any]]
+    exit_detail: Optional[str]
+    position_state_v2: Optional[Dict[str, Any]]
+    continuation_gate: Optional[Dict[str, Any]]
 
 
 def _safe_float(v: Any) -> Optional[float]:
@@ -306,6 +309,18 @@ def _safe_float(v: Any) -> Optional[float]:
     except Exception:
         return None
     return None
+
+
+def _json_dict(v: Any) -> Dict[str, Any]:
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v.strip():
+        try:
+            data = json.loads(v)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 
 def _as_et(ts: pd.Timestamp) -> pd.Timestamp:
@@ -433,6 +448,11 @@ def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Opti
                 pass
 
         entry_ctx = normalize_entry_context(getattr(t, "context_json", None))
+        exit_ctx = _json_dict(getattr(t, "exit_context_json", None))
+        position_state_v2 = exit_ctx.get("position_state_v2") if isinstance(exit_ctx.get("position_state_v2"), dict) else None
+        continuation_gate = exit_ctx.get("continuation_gate") if isinstance(exit_ctx.get("continuation_gate"), dict) else None
+        exit_detail = exit_ctx.get("exit_detail") or exit_ctx.get("exit_condition")
+        exit_detail = str(exit_detail).strip() if exit_detail is not None and str(exit_detail).strip() else None
         raw_decision = entry_ctx.get("decision")
         entry_decision = str(raw_decision).strip() if raw_decision is not None and str(raw_decision).strip() else None
         raw_reason = entry_ctx.get("reasoning")
@@ -479,6 +499,9 @@ def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Opti
                 entry_reasoning=entry_reasoning,
                 decision_rule_version=(entry_ctx.get("decision_rule_version") or None),
                 decision_rule_params=(entry_ctx.get("decision_rule_params") if isinstance(entry_ctx.get("decision_rule_params"), dict) else None),
+                exit_detail=exit_detail,
+                position_state_v2=position_state_v2,
+                continuation_gate=continuation_gate,
             )
         )
     return effects
@@ -685,6 +708,9 @@ def _top_cases(effects: List[TradeEffect], limit: int = 8) -> Dict[str, List[Dic
             "entry_advice": e.entry_advice,
             "decision_rule_version": e.decision_rule_version,
             "decision_rule_params": e.decision_rule_params,
+            "exit_detail": e.exit_detail,
+            "position_state_v2": e.position_state_v2,
+            "continuation_gate": e.continuation_gate,
         }
 
     by_missed = sorted(effects, key=lambda x: x.missed_upside_pct or 0.0, reverse=True)[:limit]
@@ -714,6 +740,7 @@ def _trade_effect_detail_dict(e: TradeEffect) -> Dict[str, Any]:
         "realized_log_return": round(e.realized_log_return, 6) if e.realized_log_return > -900 else None,
         "exit_signal": e.exit_signal,
         "exit_strategy": e.exit_strategy,
+        "exit_detail": e.exit_detail,
         "potential_best_pct": None if e.potential_best_pct is None else round(e.potential_best_pct, 4),
         "preventable_worst_pct": None if e.preventable_worst_pct is None else round(e.preventable_worst_pct, 4),
         "missed_upside_pct": None if e.missed_upside_pct is None else round(e.missed_upside_pct, 4),
@@ -731,7 +758,198 @@ def _trade_effect_detail_dict(e: TradeEffect) -> Dict[str, Any]:
         "entry_advice": e.entry_advice,
         "decision_rule_version": e.decision_rule_version,
         "decision_rule_params": e.decision_rule_params,
+        "position_state_v2": e.position_state_v2,
+        "continuation_gate": e.continuation_gate,
         "suggested_config_env_review_for_entry": _suggested_entry_env_keys(e),
+    }
+
+
+def _count_by(rows: List[Dict[str, Any]], key: str) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for r in rows:
+        k = str(r.get(key) or "unknown")
+        out[k] = out.get(k, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _build_hanger_v2_review(effects: List[TradeEffect], *, limit: int = 12) -> Dict[str, Any]:
+    rows: List[Dict[str, Any]] = []
+    for e in effects:
+        ps = e.position_state_v2 if isinstance(e.position_state_v2, dict) else None
+        if not ps:
+            continue
+        state = str(ps.get("state") or "unknown")
+        row = {
+            "trade_id": e.trade_id,
+            "ticker": e.ticker,
+            "exit_signal": e.exit_signal,
+            "exit_detail": e.exit_detail,
+            "hold_minutes": round(e.hold_minutes, 1),
+            "hold_days": round(e.hold_minutes / (24 * 60), 2),
+            "realized_pct": round(e.realized_pct, 3),
+            "missed_upside_pct": round(e.missed_upside_pct or 0.0, 3),
+            "state": state,
+            "score": ps.get("score"),
+            "age_minutes": ps.get("age_minutes"),
+            "pnl_pct": ps.get("pnl_pct"),
+            "momentum_2h_pct": ps.get("momentum_2h_pct"),
+            "distance_to_take_pct": ps.get("distance_to_take_pct"),
+            "components": ps.get("components") if isinstance(ps.get("components"), dict) else {},
+        }
+        rows.append(row)
+
+    stale_closed = [
+        r for r in rows
+        if r["exit_signal"] == "TIME_EXIT_EARLY" and "stale_reversal" in str(r.get("exit_detail") or "").lower()
+    ]
+    stale_state_not_cut = [
+        r for r in rows
+        if r["state"] == "stale_reversal" and r not in stale_closed
+    ]
+    recoverable = [r for r in rows if r["state"] == "recoverable_hanger"]
+    recoverable_near_take = [
+        r for r in recoverable
+        if _safe_float(r.get("distance_to_take_pct")) is not None and (_safe_float(r.get("distance_to_take_pct")) or 999) <= 0.35
+    ]
+
+    cases = sorted(
+        rows,
+        key=lambda r: (
+            0 if r.get("state") == "stale_reversal" else 1,
+            float(r.get("realized_pct") or 0.0),
+            -float(r.get("hold_minutes") or 0.0),
+        ),
+    )[:limit]
+
+    parameter_candidates: List[Dict[str, Any]] = []
+    if stale_state_not_cut:
+        parameter_candidates.append(
+            {
+                "env_keys": [
+                    "GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES",
+                    "GAME_5M_STALE_REVERSAL_MAX_PNL_PCT",
+                    "GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW",
+                ],
+                "direction": "review_make_stale_exit_more_consistent",
+                "evidence": f"{len(stale_state_not_cut)} closed trades had position_state_v2=stale_reversal but were not closed as TIME_EXIT_EARLY/stale_reversal.",
+            }
+        )
+    if stale_closed:
+        avg_realized = float(np.mean([float(r["realized_pct"]) for r in stale_closed]))
+        parameter_candidates.append(
+            {
+                "env_keys": [
+                    "GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES",
+                    "GAME_5M_STALE_REVERSAL_MAX_PNL_PCT",
+                ],
+                "direction": "observe_before_changing" if len(stale_closed) < 3 else "review_age_and_loss_thresholds",
+                "evidence": f"{len(stale_closed)} stale/reversal exits, avg_realized_pct={avg_realized:.2f}%.",
+            }
+        )
+    if recoverable and not recoverable_near_take:
+        parameter_candidates.append(
+            {
+                "env_keys": [
+                    "GAME_5M_HANGER_V2_RECOVERABLE_MIN_AGE_MINUTES",
+                    "GAME_5M_HANGER_V2_RECOVERABLE_MIN_PNL_PCT",
+                    "GAME_5M_HANGER_V2_RECOVERABLE_MAX_PNL_PCT",
+                    "GAME_5M_HANGER_V2_WEAK_MOMENTUM_BELOW",
+                ],
+                "direction": "review_recoverable_definition_or_take_cap",
+                "evidence": f"{len(recoverable)} recoverable_hanger cases, but only {len(recoverable_near_take)} were within 0.35 p.p. of take.",
+            }
+        )
+
+    return {
+        "enabled": True,
+        "trades_with_position_state_v2": len(rows),
+        "state_counts": _count_by(rows, "state"),
+        "exit_signal_counts": _count_by(rows, "exit_signal"),
+        "stale_reversal_exit_count": len(stale_closed),
+        "stale_state_not_cut_count": len(stale_state_not_cut),
+        "recoverable_hanger_count": len(recoverable),
+        "recoverable_near_take_count": len(recoverable_near_take),
+        "top_cases": cases,
+        "watch_today": {
+            "stale_state_not_cut": stale_state_not_cut[:limit],
+            "recoverable_near_take": recoverable_near_take[:limit],
+            "stale_reversal_exits": stale_closed[:limit],
+        },
+        "parameter_candidates": parameter_candidates,
+        "note": "Closed-trade review from SELL context_json.position_state_v2; live open-position monitoring comes from cron log summary.",
+    }
+
+
+def _build_continuation_gate_review(effects: List[TradeEffect], *, limit: int = 12) -> Dict[str, Any]:
+    rows: List[Dict[str, Any]] = []
+    for e in effects:
+        cg = e.continuation_gate if isinstance(e.continuation_gate, dict) else None
+        if not cg:
+            continue
+        row = {
+            "trade_id": e.trade_id,
+            "ticker": e.ticker,
+            "exit_signal": e.exit_signal,
+            "exit_detail": e.exit_detail,
+            "realized_pct": round(e.realized_pct, 3),
+            "missed_upside_pct": round(e.missed_upside_pct or 0.0, 3),
+            "decision": cg.get("decision"),
+            "would_extend_take": bool(cg.get("would_extend_take")),
+            "log_only": bool(cg.get("log_only")),
+            "pnl_pct": cg.get("pnl_pct"),
+            "momentum_2h_pct": cg.get("momentum_2h_pct"),
+            "rsi_5m": cg.get("rsi_5m"),
+            "score": cg.get("score"),
+            "components": cg.get("components") if isinstance(cg.get("components"), dict) else {},
+        }
+        rows.append(row)
+
+    extend = [r for r in rows if r.get("would_extend_take")]
+    close_now = [r for r in rows if str(r.get("decision") or "") == "close_now"]
+    extend_missed = [r for r in extend if float(r.get("missed_upside_pct") or 0.0) >= 1.0]
+    close_now_missed = [r for r in close_now if float(r.get("missed_upside_pct") or 0.0) >= 1.0]
+
+    parameter_candidates: List[Dict[str, Any]] = []
+    if extend_missed:
+        parameter_candidates.append(
+            {
+                "env_keys": [
+                    "GAME_5M_CONTINUATION_GATE_LOG_ONLY",
+                    "GAME_5M_CONTINUATION_MIN_PNL_PCT",
+                    "GAME_5M_CONTINUATION_MIN_MOMENTUM_2H_PCT",
+                ],
+                "direction": "candidate_for_non_log_only_after_more_samples",
+                "evidence": f"{len(extend_missed)} extend_take_candidate cases still had missed_upside >= 1%.",
+            }
+        )
+    if close_now_missed:
+        parameter_candidates.append(
+            {
+                "env_keys": [
+                    "GAME_5M_CONTINUATION_MIN_MOMENTUM_2H_PCT",
+                    "GAME_5M_CONTINUATION_MAX_RSI_5M",
+                    "GAME_5M_TAKE_MOMENTUM_FACTOR",
+                ],
+                "direction": "review_strictness_or_take_factor",
+                "evidence": f"{len(close_now_missed)} close_now cases had missed_upside >= 1%, so continuation thresholds may be too strict.",
+            }
+        )
+
+    top_cases = sorted(rows, key=lambda r: float(r.get("missed_upside_pct") or 0.0), reverse=True)[:limit]
+    avg_missed_extend = float(np.mean([float(r.get("missed_upside_pct") or 0.0) for r in extend])) if extend else None
+    avg_missed_close = float(np.mean([float(r.get("missed_upside_pct") or 0.0) for r in close_now])) if close_now else None
+    return {
+        "enabled": True,
+        "trades_with_continuation_gate": len(rows),
+        "decision_counts": _count_by(rows, "decision"),
+        "would_extend_take_count": len(extend),
+        "extend_candidates_with_missed_upside_ge_1pct": len(extend_missed),
+        "close_now_with_missed_upside_ge_1pct": len(close_now_missed),
+        "avg_missed_upside_extend_candidates": None if avg_missed_extend is None else round(avg_missed_extend, 3),
+        "avg_missed_upside_close_now": None if avg_missed_close is None else round(avg_missed_close, 3),
+        "top_cases": top_cases,
+        "parameter_candidates": parameter_candidates,
+        "note": "Closed-trade review from SELL context_json.continuation_gate; current gate is expected to be log-only until enough samples are collected.",
     }
 
 
@@ -1205,6 +1423,36 @@ def _build_game5m_config_hints(
                 "direction": "review_vs_GAME_5M_TAKE_MOMENTUM_FACTOR",
                 "evidence": f"Мелкие TAKE_PROFIT (<2.5%): {len(tp_small)} из {len(tp_all)}",
                 "rationale": "Много ранних тейков — порог MIN_PCT для ветки «тейк от импульса» или factor тянут цель вниз относительно потолка.",
+            }
+        )
+
+    hanger_review = _build_hanger_v2_review(effects)
+    for cand in hanger_review.get("parameter_candidates", []) or []:
+        keys = cand.get("env_keys") if isinstance(cand, dict) else None
+        if not isinstance(keys, list) or not keys:
+            continue
+        hints.append(
+            {
+                "env_key": keys[0],
+                "related_env_keys": keys,
+                "direction": cand.get("direction") or "review",
+                "evidence": cand.get("evidence") or "Hanger v2 review candidate.",
+                "rationale": "game5m_hanger_v2_review сопоставляет state Hanger v2 с фактическим закрытием и PnL.",
+            }
+        )
+
+    cont_review = _build_continuation_gate_review(effects)
+    for cand in cont_review.get("parameter_candidates", []) or []:
+        keys = cand.get("env_keys") if isinstance(cand, dict) else None
+        if not isinstance(keys, list) or not keys:
+            continue
+        hints.append(
+            {
+                "env_key": keys[0],
+                "related_env_keys": keys,
+                "direction": cand.get("direction") or "review",
+                "evidence": cand.get("evidence") or "Continuation gate review candidate.",
+                "rationale": "continuation_gate_review сравнивает решение gate с missed upside после закрытия.",
             }
         )
     return hints
@@ -1944,6 +2192,8 @@ def analyze_trade_effectiveness(
     game_5m_config_hints = _build_game5m_config_hints(effects, summary)
     entry_review = _build_entry_underperformance_review(effects, limit=8)
     catboost_entry_backtest = _build_catboost_entry_backtest(strategy, closed, effects)
+    hanger_v2_review = _build_hanger_v2_review(effects)
+    continuation_gate_review = _build_continuation_gate_review(effects)
     payload: Dict[str, Any] = {
         "meta": {
             "days": days,
@@ -1969,6 +2219,8 @@ def analyze_trade_effectiveness(
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
+        "game5m_hanger_v2_review": hanger_v2_review,
+        "continuation_gate_review": continuation_gate_review,
     }
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
@@ -2049,6 +2301,8 @@ def analyze_trade_effectiveness_focused(
     game_5m_config_hints = _build_game5m_config_hints(effects, summary)
     entry_review = _build_entry_underperformance_review(effects, limit=8)
     catboost_entry_backtest = _build_catboost_entry_backtest(strategy, filtered, effects)
+    hanger_v2_review = _build_hanger_v2_review(effects)
+    continuation_gate_review = _build_continuation_gate_review(effects)
 
     payload: Dict[str, Any] = {
         "meta": {
@@ -2074,6 +2328,8 @@ def analyze_trade_effectiveness_focused(
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
+        "game5m_hanger_v2_review": hanger_v2_review,
+        "continuation_gate_review": continuation_gate_review,
     }
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]

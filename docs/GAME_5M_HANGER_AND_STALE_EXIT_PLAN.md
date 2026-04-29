@@ -32,6 +32,14 @@
 
 Для накопления такого контекста добавлен отдельный сборщик `scripts/ingest_premarket_daily_features.py`: он пишет агрегаты премаркета в `premarket_daily_features` по `symbol + trade_date + snapshot_label`. Эти признаки затем можно присоединять к `build_game5m_stuck_dataset.py` и `build_game5m_continuation_dataset.py`.
 
+Операционный мониторинг Iteration 2:
+
+```bash
+python scripts/analyze_hanger_tactic_log.py logs/cron_sndk_signal.log --tail-lines 5000
+```
+
+После закрытий смотреть `/analyzer?strategy=GAME_5M&days=1`: блоки `game5m_hanger_v2_review` и `continuation_gate_review` связывают live-диагностику с фактическим PnL, missed upside и кандидатами параметров. Настройка выполняется малыми шагами: один набор `GAME_5M_STALE_REVERSAL_*`, `GAME_5M_HANGER_V2_*` или `GAME_5M_CONTINUATION_*`, затем следующая сессия и новый snapshot.
+
 ## Проблема
 
 В текущей GAME_5M смешаны две разные проблемы, которые в отчётах выглядят похожими:
