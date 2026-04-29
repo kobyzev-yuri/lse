@@ -145,6 +145,17 @@
             html += '<div class="row"><span class="label">VIX режим</span><span class="value">' + escapeHtml(String(c.vix_regime || '—')) + '</span></div>';
             html += '<div class="row"><span class="label">Sentiment (норм.)</span><span class="value">' + fmt(c.sentiment_normalized, 2) + '</span></div>';
             html += '<div class="row"><span class="label">Новостей (окно агента)</span><span class="value">' + escapeHtml(String(c.news_count != null ? c.news_count : '—')) + '</span></div>';
+            if (c.portfolio_ml_status === 'ok') {
+                var mlSignClass = c.portfolio_ml_expected_return_pct >= 0 ? 'positive' : 'negative';
+                html += '<div class="goals-block">';
+                html += '<div class="goals-title">ML expected return (daily CatBoost)</div>';
+                html += '<div class="row"><span class="label">Горизонт / роль</span><span class="value">' + escapeHtml(String(c.portfolio_ml_horizon_days || '—')) + 'd · ' + escapeHtml(c.portfolio_ml_cluster_role || 'unassigned') + '</span></div>';
+                html += '<div class="row"><span class="label">Ожидаемый рост</span><span class="value ' + mlSignClass + '">' + fmt(c.portfolio_ml_expected_return_pct, 2) + '%</span></div>';
+                html += '<div class="row"><span class="label">Entry score</span><span class="value">' + fmt(c.portfolio_ml_entry_score, 1) + '/100 · порог +' + fmt(c.portfolio_ml_threshold_pct, 2) + '%</span></div>';
+                html += '</div>';
+            } else if (c.portfolio_ml_status && c.portfolio_ml_status !== 'disabled') {
+                html += '<div class="reasoning muted">ML portfolio: ' + escapeHtml(c.portfolio_ml_status) + (c.portfolio_ml_note ? ' · ' + escapeHtml(c.portfolio_ml_note) : '') + '</div>';
+            }
             html += '<div class="goals-block">';
             html += '<div class="goals-title">Цель портфельной игры — ожидаемый тейк и исполнение</div>';
             if (c.effective_take_profit_pct != null) {

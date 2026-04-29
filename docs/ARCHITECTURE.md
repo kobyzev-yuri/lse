@@ -25,6 +25,7 @@
 | `trade_history` | Все сделки; `strategy_name` отделяет **GAME_5M** от портфеля; `context_json` — снимок входа/выхода 5m |
 | `portfolio_state` | Текущий портфель (симуляция) |
 | `strategy_parameters` | Динамические параметры (см. `config_loader`, `utils/parameter_store.py`) |
+| `premarket_daily_features` | Компактные premarket-снимки для ML; не используется для исполнения сделок |
 
 Схема колонок: [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md).
 
@@ -41,6 +42,7 @@ flowchart TB
 
   subgraph Ingest[Загрузка]
     UP[update_prices · cron]
+    PM[premarket features · cron]
     FN[fetch_news_cron и др.]
   end
 
@@ -58,6 +60,7 @@ flowchart TB
   end
 
   YF --> UP --> DB
+  YF --> PM --> DB
   RSS --> FN --> DB
   DB --> G5
   DB --> EA
@@ -70,7 +73,9 @@ flowchart TB
 
 **Игра 5m (цепочка):** Yahoo 5m → `get_decision_5m` → крон → при BUY `record_entry` + `build_full_entry_context` → при выходе `close_position` + `build_5m_close_context`. JSON сделки: [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md).
 
-**Портфель:** `trading_cycle_cron` → `ExecutionAgent` → те же таблицы, другие `strategy_name`.
+**Портфель:** `trading_cycle_cron` → `ExecutionAgent` → те же таблицы, другие `strategy_name`. Новые `BUY` портфеля исполняются только в regular-сессию NYSE, если не включён аварийный `TRADING_CYCLE_ALLOW_OFFHOURS_BUY=true`.
+
+**Premarket-контекст:** отдельная торговля в премаркете не является целевым режимом. `scripts/ingest_premarket_daily_features.py` сохраняет агрегированные premarket-снимки в `premarket_daily_features`; они используются как общий ML-контекст для основного trading flow обеих игр: для фильтрации входов после открытия, оценки gap continuation / gap fade, stuck-risk в `GAME_5M` и advisory ML в портфеле.
 
 ---
 
@@ -81,12 +86,17 @@ flowchart TB
 | Бизнес-процессы и длинные диаграммы | [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md) |
 | Схема БД | [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) |
 | Портфельная игра: алгоритм, стратегии, аллокация, тейк/стоп | [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md) |
+| Portfolio ML | [ML_PORTFOLIO_CATBOOST.md](ML_PORTFOLIO_CATBOOST.md) |
 | Игра 5m: сделки, JSON, крон | [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md), [CRONS_AND_TAKE_STOP.md](CRONS_AND_TAKE_STOP.md), [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md) |
+| GAME_5M: развитие hanger/stale exits/continuation | [GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md](GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md) |
+| GAME_5M ML | [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md), [GAME_5M_CATBOOST_FUSION.md](GAME_5M_CATBOOST_FUSION.md) |
 | Новости и KB | [NEWS.md](NEWS.md), [KNOWLEDGE_BASE_FIELDS.md](KNOWLEDGE_BASE_FIELDS.md) |
 | Новостной сигнал (план: этапы A/B, горизонты, кэш бэтчей) | [NEWS_SIGNAL_ARCHITECTURE.md](NEWS_SIGNAL_ARCHITECTURE.md) |
 | Деплой VM / Docker / Cloud Run | [DEPLOY.md](DEPLOY.md), [DEPLOY_GCP.md](DEPLOY_GCP.md), [MIGRATE_SERVER.md](MIGRATE_SERVER.md), [PLATFORM_GAME_DOCKER.md](PLATFORM_GAME_DOCKER.md) |
 | Риски и лимиты | [RISK_MANAGEMENT.md](RISK_MANAGEMENT.md) |
 | Устаревшие материалы | [archive/README.md](archive/README.md) |
+
+Правило ведения документации: не заводить новый документ для каждой итерации игры. Стратегия и тактика развития фиксируются в профильном документе игры (`PORTFOLIO_GAME.md` или `GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md`), ML-детали — в существующем ML-документе, а `ARCHITECTURE.md` обновляется при изменении потоков исполнения, границ компонентов, хранилищ, cron-режимов или правил включения/блокировки сделок.
 
 ---
 

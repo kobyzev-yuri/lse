@@ -82,6 +82,21 @@ def _use_llm_in_trading_cycle() -> bool:
     return v in ("1", "true", "yes")
 
 
+def _is_regular_session_for_trading_cycle() -> tuple[bool, str]:
+    """Portfolio cron executes only during regular NYSE session unless explicitly overridden."""
+    allow = (get_config_value("TRADING_CYCLE_ALLOW_OFFHOURS_BUY", "false") or "false").strip().lower()
+    if allow in ("1", "true", "yes"):
+        return True, "override"
+    from services.market_session import get_market_session_context
+
+    ctx = get_market_session_context()
+    phase = (ctx.get("session_phase") or "").strip()
+    ny_time = ctx.get("et_now") or "n/a"
+    if phase in ("REGULAR", "NEAR_OPEN", "NEAR_CLOSE"):
+        return True, f"{phase} ny_time={ny_time}"
+    return False, f"{phase or 'UNKNOWN'} ny_time={ny_time}"
+
+
 if __name__ == "__main__":
     try:
         if not _is_trading_cycle_enabled():
@@ -96,6 +111,14 @@ if __name__ == "__main__":
                 eff,
                 env_v,
                 file_v,
+            )
+            sys.exit(0)
+        session_ok, session_reason = _is_regular_session_for_trading_cycle()
+        if not session_ok:
+            logger.info(
+                "Портфельный cron пропущен вне regular-сессии NYSE: %s. "
+                "Для аварийного ручного разрешения задайте TRADING_CYCLE_ALLOW_OFFHOURS_BUY=true.",
+                session_reason,
             )
             sys.exit(0)
         if len(sys.argv) > 1 and sys.argv[1].strip():

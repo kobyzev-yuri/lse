@@ -274,6 +274,24 @@ class ExecutionAgent:
             )
         return None
 
+    def _portfolio_buy_allowed_by_market_session(self) -> tuple[bool, str]:
+        """Portfolio BUY is allowed only during regular NYSE session unless explicitly overridden."""
+        raw = (get_config_value("TRADING_CYCLE_ALLOW_OFFHOURS_BUY", "false") or "false").strip().lower()
+        if raw in ("1", "true", "yes"):
+            return True, "override"
+        try:
+            from services.market_session import get_market_session_context
+
+            ctx = get_market_session_context()
+            phase = (ctx.get("session_phase") or "").strip()
+            if phase in ("REGULAR", "NEAR_OPEN", "NEAR_CLOSE"):
+                return True, phase
+            ny_time = ctx.get("et_now") or "n/a"
+            return False, f"{phase or 'UNKNOWN'} ny_time={ny_time}"
+        except Exception as e:
+            logger.warning("⚠️ Не удалось проверить торговую сессию NYSE для portfolio BUY: %s", e)
+            return False, "session_check_error"
+
     def _get_current_price(self, ticker: str) -> float | None:
         """Получает последнюю цену закрытия для тикера."""
         with self.engine.connect() as conn:
@@ -357,9 +375,9 @@ class ExecutionAgent:
             logger.warning("⚠️ Нет котировок для %s, покупка невозможна", ticker)
             return False, "no_quote"
 
-        # Проверка торговых часов NYSE (если настроено)
-        if not self.risk_manager.is_trading_hours():
-            logger.warning("⚠️ Вне торговых часов NYSE, покупка %s пропущена", ticker)
+        session_ok, session_reason = self._portfolio_buy_allowed_by_market_session()
+        if not session_ok:
+            logger.warning("⚠️ Вне regular-сессии NYSE (%s), portfolio BUY %s пропущен", session_reason, ticker)
             return False, "outside_hours"
 
         cash = self._get_cash()

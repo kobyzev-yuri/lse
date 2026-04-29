@@ -121,6 +121,30 @@
 
 ---
 
+## Таблица `premarket_daily_features`
+
+Компактный ML-снимок премаркета. Источник — Yahoo `1m` с `prepost=True`, агрегированный скриптом `scripts/ingest_premarket_daily_features.py`. Это **не** таблица сделок и не разрешение торговать до открытия.
+
+Уникальность: **`(exchange, symbol, trade_date, snapshot_label)`**. Это позволяет хранить несколько срезов одного утра, например `0800_ET`, `0900_ET`, `0925_ET`, и позже сравнить, какой срез лучше предсказывает gap follow-through / gap fade.
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
+| exchange, symbol, trade_date, snapshot_label | VARCHAR / DATE | Ключ снимка |
+| snapshot_ts_utc, snapshot_time_et | TIMESTAMPTZ / TIMESTAMP | Когда собран снимок |
+| minutes_until_open | INTEGER | Минут до 09:30 ET |
+| prev_close, daily_volatility_5 | NUMERIC | Предыдущий close и 5d volatility из `quotes` |
+| premarket_open/high/low/last/vwap | NUMERIC | Агрегаты премаркета |
+| premarket_volume, premarket_bar_count | BIGINT / INTEGER | Объём и число 1m-баров в окне 04:00–09:30 ET |
+| premarket_gap_pct | NUMERIC | Гэп `premarket_last` к `prev_close`, % |
+| premarket_return_pct | NUMERIC | Движение внутри премаркета `last/open`, % |
+| premarket_range_pct | NUMERIC | Диапазон премаркета `high/low`, % |
+| gap_vs_daily_volatility | NUMERIC | Гэп относительно дневной волатильности из `quotes` |
+| source, created_at, updated_at | VARCHAR / TIMESTAMPTZ | Источник и служебные метки |
+
+DDL: `db/knowledge_pg/sql/022_premarket_daily_features.sql`.
+
+---
+
 ## Экспорт и восстановление
 
 - Таблицы LSE для переноса: см. **`scripts/export_pg_dump.sh`** (список `-t public.*`).

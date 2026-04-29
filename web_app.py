@@ -1529,6 +1529,13 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
 
     ctx, trade = get_portfolio_cluster_context(days=min(max(5, corr_days), 120))
     take_fb = load_fallback_portfolio_take_pct()
+    try:
+        from services.portfolio_catboost_signal import predict_portfolio_expected_returns
+
+        ml_by_ticker = predict_portfolio_expected_returns(trade)
+    except Exception as e:
+        logger.debug("portfolio ML batch skipped: %s", e)
+        ml_by_ticker = {}
     agent = AnalystAgent(use_llm=False)
     cards: List[Dict[str, Any]] = []
     for t in trade:
@@ -1542,7 +1549,9 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
                     "reasoning": "Нет данных в quotes (или недостаточно истории).",
                 })
             else:
-                cards.append(portfolio_card_payload(t, r, fallback_take_pct=take_fb))
+                card = portfolio_card_payload(t, r, fallback_take_pct=take_fb)
+                card.update(ml_by_ticker.get(t, {}))
+                cards.append(card)
         except Exception as e:
             cards.append({"ticker": t, "decision": "ERROR", "horizon": "daily", "error": str(e)})
     return {
@@ -1572,6 +1581,12 @@ def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int) -> Dict[str, A
     if r.get("decision") == "NO_DATA":
         return {"_error": "Нет данных quotes", "_status": 404}
     base = portfolio_card_payload(ticker, r, fallback_take_pct=load_fallback_portfolio_take_pct())
+    try:
+        from services.portfolio_catboost_signal import predict_portfolio_expected_return
+
+        base.update(predict_portfolio_expected_return(ticker))
+    except Exception as e:
+        logger.debug("portfolio ML single skipped for %s: %s", ticker, e)
     merged = {
         **base,
         "llm_analysis": _make_json_safe(r.get("llm_analysis")),

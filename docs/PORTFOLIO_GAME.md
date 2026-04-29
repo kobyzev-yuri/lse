@@ -12,7 +12,7 @@
 - **Таблицы:** сделки пишутся в `trade_history`, текущие позиции и кэш — в `portfolio_state`.
 - **Отделение от GAME_5M:** владелец позиции определяется по `trade_history.strategy_name`. Позиции `GAME_5M` портфельный крон не закрывает; их ведёт `send_sndk_signal_cron.py`.
 
-Портфельный cron по умолчанию **ничего не делает**, если `TRADING_CYCLE_ENABLED` не равен `true`, `1` или `yes`.
+Портфельный cron по умолчанию **ничего не делает**, если `TRADING_CYCLE_ENABLED` не равен `true`, `1` или `yes`. Даже при включённом `TRADING_CYCLE_ENABLED` новые `BUY` блокируются вне regular-сессии NYSE (`REGULAR`, `NEAR_OPEN`, `NEAR_CLOSE`), если явно не задан аварийный override `TRADING_CYCLE_ALLOW_OFFHOURS_BUY=true`.
 
 ---
 
@@ -30,6 +30,10 @@ Cron-пример из кода:
 ```cron
 0 9,13,17 * * 1-5 cd /path/to/lse && python scripts/trading_cycle_cron.py
 ```
+
+Если расписание запускает скрипт до открытия NYSE, он завершится без анализа и сделок с логом `Портфельный cron пропущен вне regular-сессии NYSE`.
+
+Премаркет используется как ML-контекст, а не как отдельный режим торговли. Сборщик `scripts/ingest_premarket_daily_features.py` сохраняет агрегированные признаки в `premarket_daily_features`; портфельный `BUY` до открытия при этом остаётся заблокированным.
 
 Список тикеров:
 
@@ -60,6 +64,8 @@ python scripts/trading_cycle_cron.py "MSFT,ORCL,AMD"
 ## 4. Как выбирается стратегия
 
 Выбор делает `StrategyManager.select_strategy()` на дневных данных. Это **не тикерная таблица**: один и тот же тикер сегодня может попасть в `Momentum`, завтра в `Volatile Gap`, а после резкого падения — в `Geopolitical Bounce`. Стратегия определяется текущим режимом рынка по дневным `quotes`, новостям KB, sentiment и VIX. Краткий обзор всех стратегий также есть в [STRATEGIES_LLM_AND_REPORTS.md](STRATEGIES_LLM_AND_REPORTS.md), но точная логика исполнения портфеля описана здесь.
+
+Дополнительный ML-слой описан в [ML_PORTFOLIO_CATBOOST.md](ML_PORTFOLIO_CATBOOST.md): он прогнозирует ожидаемый forward log-return по дневным данным и корреляциям portfolio+5m, но является advisory-блоком и сам не исполняет сделки.
 
 Порядок важен:
 
