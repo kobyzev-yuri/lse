@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY requirements-catboost.txt .
+RUN pip install --no-cache-dir -r requirements-catboost.txt
+
 COPY . .
 
 ENV PYTHONPATH=/app

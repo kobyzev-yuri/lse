@@ -1171,20 +1171,12 @@ def build_5m_close_context(d5: Dict[str, Any]) -> Dict[str, Any]:
     """
     if not d5:
         return {}
-    # Для закрытия позиции нам важно не "close", а то, что цена могла кратко коснуться уровня тейка/стопа.
-    # Исторически использовали max/min последних ~30 минут (recent_bars_*), но если крон/данные
-    # были нестабильны, достижение тейка могло быть раньше и "выпасть" из этого окна.
-    # Поэтому для safety-net учитываем также session_high (пик текущей RTH-сессии), если он есть.
+    # Для закрытия позиции нам важно не только "close", а то, что цена могла коснуться
+    # уровня тейка/стопа внутри последних 5m баров. Не подмешиваем session_high:
+    # он может быть дальним/аномальным пиком сессии и давать ложный TAKE_PROFIT.
     bar_high_recent = d5.get("recent_bars_high_max") or d5.get("last_bar_high")
     bar_high = bar_high_recent
-    try:
-        sh = float(d5.get("session_high")) if d5.get("session_high") is not None else None
-    except (TypeError, ValueError):
-        sh = None
     bar_high_session_lifted = False
-    if sh is not None and sh > 0 and (bar_high is None or float(bar_high) <= 0 or sh > float(bar_high)):
-        bar_high = sh
-        bar_high_session_lifted = True
 
     bar_low = d5.get("recent_bars_low_min") or d5.get("last_bar_low")
     return {

@@ -14,9 +14,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
@@ -25,6 +27,56 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 GAME_5M = "GAME_5M"
+FALSE_TAKE_TOLERANCE_PCT = 0.05
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if out == out else None
+
+
+def _target_take_pct_from_exit_context(ctx: dict[str, Any]) -> float | None:
+    text = str(ctx.get("exit_condition") or "")
+    match = re.search(r"цель\s*~\s*([0-9]+(?:\.[0-9]+)?)%", text)
+    if match:
+        return _safe_float(match.group(1))
+    return None
+
+
+def _is_false_take_profit_by_session_high(trade_pnl: Any) -> bool:
+    """
+    Skip historical rows where TAKE_PROFIT was triggered by a session_high lift
+    rather than by recent executable 5m highs. We leave trade_history untouched,
+    but avoid teaching the model that these premature exits were clean outcomes.
+    """
+    ctx = _json_dict(getattr(trade_pnl, "exit_context_json", None))
+    if not ctx.get("bar_high_session_lifted"):
+        return False
+    exit_signal = str(ctx.get("exit_signal") or getattr(trade_pnl, "signal_type", "") or "").upper()
+    if exit_signal not in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND"):
+        return False
+    target_pct = _target_take_pct_from_exit_context(ctx)
+    entry_price = _safe_float(getattr(trade_pnl, "entry_price", None))
+    recent_high = _safe_float(ctx.get("bar_high_recent_max") or ctx.get("recent_bars_high_max"))
+    if target_pct is None or entry_price is None or entry_price <= 0 or recent_high is None or recent_high <= 0:
+        return False
+    recent_high_pct = (recent_high / entry_price - 1.0) * 100.0
+    return recent_high_pct < (target_pct - FALSE_TAKE_TOLERANCE_PCT)
 
 
 def main() -> int:
@@ -72,9 +124,18 @@ def main() -> int:
     rows: list[list] = []
     labels: list[int] = []
     meta_rows: list[tuple] = []  # (entry_ts, ticker) for sorting
+    skipped_false_take = 0
 
     for t in closed:
         if (t.entry_strategy or "").strip().upper() != GAME_5M:
+            continue
+        if _is_false_take_profit_by_session_high(t):
+            skipped_false_take += 1
+            logger.info(
+                "skip trade_id=%s %s: false_take_profit_by_session_high",
+                getattr(t, "trade_id", None),
+                getattr(t, "ticker", "?"),
+            )
             continue
         ctx_raw = t.context_json
         if not ctx_raw:
@@ -98,10 +159,12 @@ def main() -> int:
     n_total = len(rows)
     pos = sum(labels)
     logger.info(
-        "Закрытых сделок GAME_5M с context_json и валидной строкой признаков: %s (y=1: %s, y=0: %s)",
+        "Закрытых сделок GAME_5M с context_json и валидной строкой признаков: %s (y=1: %s, y=0: %s); "
+        "исключено false_take_profit_by_session_high=%s",
         n_total,
         pos,
         n_total - pos,
+        skipped_false_take,
     )
 
     if n_total < min_rows:
@@ -170,6 +233,7 @@ def main() -> int:
         "n_train": n_train,
         "n_valid": n_valid,
         "n_total": n_total,
+        "excluded_false_take_profit_by_session_high": skipped_false_take,
         "label": args.label,
         "min_train_rows_config": min_rows,
         "auc_valid": round(auc, 4) if auc == auc else None,

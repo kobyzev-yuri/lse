@@ -1,0 +1,11 @@
+---
+description: Use the live GCP LSE runtime for factual data checks
+alwaysApply: true
+---
+
+# Live Runtime Access
+
+- For factual database, trade history, cron, and container checks, use the live VM instead of local PostgreSQL: `ssh gcp-lse`.
+- The project runtime is in Docker containers on that host, especially `lse-bot` and `lse-postgres`.
+- Prefer commands like `ssh gcp-lse "docker exec lse-bot ..."` for Python/app checks and `ssh gcp-lse "docker exec lse-postgres ..."` for direct PostgreSQL checks.
+- Do not assume local `localhost:5432` has the production data.
