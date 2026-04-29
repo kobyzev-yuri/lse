@@ -12,7 +12,7 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import create_engine, text
 
@@ -969,6 +969,212 @@ def _game_5m_stale_reversal_exit_params(ticker: Optional[str] = None) -> dict[st
         "max_pnl_pct": _float_param("GAME_5M_STALE_REVERSAL_MAX_PNL_PCT", -1.5),
         "momentum_below": _float_param("GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW", 0.0),
     }
+
+
+def _game_5m_position_age_minutes(open_position: dict, *, ref: Optional[datetime] = None) -> Optional[float]:
+    entry_ts = open_position.get("entry_ts") if open_position else None
+    if entry_ts is None:
+        return None
+    try:
+        import pandas as pd
+
+        et = pd.Timestamp(entry_ts)
+        rt = pd.Timestamp(ref or datetime.now())
+        if et.tzinfo is None:
+            et = et.tz_localize(TRADE_HISTORY_TZ, ambiguous=True).tz_convert(CHART_DISPLAY_TZ)
+        else:
+            et = et.tz_convert(CHART_DISPLAY_TZ)
+        if rt.tzinfo is None:
+            rt = rt.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+        else:
+            rt = rt.tz_convert(CHART_DISPLAY_TZ)
+        return max(0.0, float((rt - et).total_seconds() / 60.0))
+    except Exception:
+        return None
+
+
+def classify_game5m_position_state_v2(
+    open_position: dict,
+    *,
+    current_price: Optional[float],
+    current_decision: str,
+    momentum_2h_pct: Optional[float],
+    take_pct: Optional[float],
+    ref_time: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    Rule-based Hanger Definition v2 diagnostics.
+
+    This is intentionally explainable and suitable for context_json logging. It does not execute trades by itself.
+    """
+    raw_enabled = (get_config_value("GAME_5M_HANGER_V2_ENABLED", "false") or "false").strip().lower()
+    enabled = raw_enabled in ("1", "true", "yes")
+
+    def _cfg_float(key: str, default: float) -> float:
+        raw = (get_config_value(key, str(default)) or str(default)).strip().replace(",", ".")
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            return default
+
+    def _cfg_int(key: str, default: int, min_value: int = 1) -> int:
+        raw = (get_config_value(key, str(default)) or str(default)).strip()
+        try:
+            return max(min_value, int(raw))
+        except (ValueError, TypeError):
+            return max(min_value, default)
+
+    params = {
+        "enabled": enabled,
+        "recoverable_min_age_minutes": _cfg_int("GAME_5M_HANGER_V2_RECOVERABLE_MIN_AGE_MINUTES", 390, 15),
+        "recoverable_min_pnl_pct": _cfg_float("GAME_5M_HANGER_V2_RECOVERABLE_MIN_PNL_PCT", -1.0),
+        "recoverable_max_pnl_pct": _cfg_float("GAME_5M_HANGER_V2_RECOVERABLE_MAX_PNL_PCT", 1.0),
+        "weak_momentum_below": _cfg_float("GAME_5M_HANGER_V2_WEAK_MOMENTUM_BELOW", 0.5),
+        "stale_max_pnl_pct": _cfg_float("GAME_5M_HANGER_V2_STALE_MAX_PNL_PCT", -1.5),
+        "stale_momentum_below": _cfg_float("GAME_5M_HANGER_V2_STALE_MOMENTUM_BELOW", 0.0),
+    }
+
+    out: Dict[str, Any] = {
+        "enabled": enabled,
+        "state": "unknown",
+        "score": 0,
+        "params": params,
+    }
+    if not enabled:
+        out["state"] = "disabled"
+        return out
+    try:
+        entry = float(open_position.get("entry_price") or 0)
+        price = float(current_price or 0)
+    except (TypeError, ValueError):
+        entry, price = 0.0, 0.0
+    if entry <= 0 or price <= 0:
+        out["reason"] = "missing_entry_or_price"
+        return out
+
+    age_min = _game_5m_position_age_minutes(open_position, ref=ref_time)
+    pnl_pct = (price / entry - 1.0) * 100.0
+    try:
+        mom = None if momentum_2h_pct is None else float(momentum_2h_pct)
+    except (TypeError, ValueError):
+        mom = None
+    try:
+        take_f = None if take_pct is None else float(take_pct)
+    except (TypeError, ValueError):
+        take_f = None
+    distance_to_take = (take_f - pnl_pct) if take_f is not None else None
+    decision_norm = str(current_decision or "").strip().upper()
+    weak_decision = decision_norm in ("HOLD", "SELL")
+    weak_momentum = mom is None or mom <= params["weak_momentum_below"]
+    stale_momentum = mom is None or mom <= params["stale_momentum_below"]
+    old_enough = age_min is not None and age_min >= params["recoverable_min_age_minutes"]
+
+    components = {
+        "age_old": int(bool(old_enough)),
+        "pnl_negative": int(pnl_pct < 0),
+        "weak_momentum": int(bool(weak_momentum)),
+        "weak_decision": int(bool(weak_decision)),
+        "far_from_take": int(distance_to_take is not None and distance_to_take > 1.0),
+    }
+    score = int(sum(components.values()))
+
+    if old_enough and pnl_pct <= params["stale_max_pnl_pct"] and stale_momentum and weak_decision:
+        state = "stale_reversal"
+    elif (
+        old_enough
+        and params["recoverable_min_pnl_pct"] <= pnl_pct <= params["recoverable_max_pnl_pct"]
+        and weak_momentum
+        and (distance_to_take is None or distance_to_take > 0)
+    ):
+        state = "recoverable_hanger"
+    else:
+        state = "normal_hold"
+
+    out.update(
+        {
+            "state": state,
+            "score": score,
+            "components": components,
+            "age_minutes": None if age_min is None else round(age_min, 2),
+            "pnl_pct": round(pnl_pct, 4),
+            "momentum_2h_pct": None if mom is None else round(mom, 4),
+            "decision": decision_norm or "—",
+            "take_pct": None if take_f is None else round(take_f, 4),
+            "distance_to_take_pct": None if distance_to_take is None else round(distance_to_take, 4),
+        }
+    )
+    return out
+
+
+def evaluate_game5m_continuation_gate(
+    *,
+    ticker: Optional[str],
+    pnl_pct: Optional[float],
+    momentum_2h_pct: Optional[float],
+    rsi_5m: Optional[float],
+    volume_vs_avg_pct: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Rule-based log-only continuation gate for TAKE_PROFIT underprofit analysis."""
+    raw_enabled = (get_config_value("GAME_5M_CONTINUATION_GATE_ENABLED", "false") or "false").strip().lower()
+    enabled = raw_enabled in ("1", "true", "yes")
+    raw_log_only = (get_config_value("GAME_5M_CONTINUATION_GATE_LOG_ONLY", "true") or "true").strip().lower()
+    log_only = raw_log_only in ("1", "true", "yes")
+
+    def _cfg_float(key: str, default: float) -> float:
+        raw = (get_config_value(key, str(default)) or str(default)).strip().replace(",", ".")
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            return default
+
+    params = {
+        "enabled": enabled,
+        "log_only": log_only,
+        "min_pnl_pct": _cfg_float("GAME_5M_CONTINUATION_MIN_PNL_PCT", 2.0),
+        "min_momentum_2h_pct": _cfg_float("GAME_5M_CONTINUATION_MIN_MOMENTUM_2H_PCT", 1.0),
+        "max_rsi_5m": _cfg_float("GAME_5M_CONTINUATION_MAX_RSI_5M", 72.0),
+        "min_volume_vs_avg_pct": _cfg_float("GAME_5M_CONTINUATION_MIN_VOLUME_VS_AVG_PCT", 0.0),
+        "extend_take_add_pct": _cfg_float("GAME_5M_CONTINUATION_EXTEND_TAKE_ADD_PCT", 1.0),
+        "max_extra_minutes": _cfg_float("GAME_5M_CONTINUATION_MAX_EXTRA_MINUTES", 120.0),
+        "trail_pullback_pct": _cfg_float("GAME_5M_CONTINUATION_TRAIL_PULLBACK_PCT", 0.7),
+    }
+    out: Dict[str, Any] = {
+        "enabled": enabled,
+        "log_only": log_only,
+        "decision": "disabled",
+        "would_extend_take": False,
+        "params": params,
+        "ticker": ticker,
+    }
+    if not enabled:
+        return out
+    try:
+        pnl = None if pnl_pct is None else float(pnl_pct)
+        mom = None if momentum_2h_pct is None else float(momentum_2h_pct)
+        rsi = None if rsi_5m is None else float(rsi_5m)
+        vol = None if volume_vs_avg_pct is None else float(volume_vs_avg_pct)
+    except (TypeError, ValueError):
+        pnl = mom = rsi = vol = None
+
+    checks = {
+        "pnl_ok": pnl is not None and pnl >= params["min_pnl_pct"],
+        "momentum_ok": mom is not None and mom >= params["min_momentum_2h_pct"],
+        "rsi_ok": rsi is None or rsi <= params["max_rsi_5m"],
+        "volume_ok": params["min_volume_vs_avg_pct"] <= 0 or (vol is not None and vol >= params["min_volume_vs_avg_pct"]),
+    }
+    would = all(bool(v) for v in checks.values())
+    out.update(
+        {
+            "decision": "extend_take_candidate" if would else "close_now",
+            "would_extend_take": bool(would),
+            "checks": checks,
+            "pnl_pct": None if pnl is None else round(pnl, 4),
+            "momentum_2h_pct": None if mom is None else round(mom, 4),
+            "rsi_5m": None if rsi is None else round(rsi, 4),
+            "volume_vs_avg_pct": None if vol is None else round(vol, 4),
+        }
+    )
+    return out
 
 
 def should_close_position(

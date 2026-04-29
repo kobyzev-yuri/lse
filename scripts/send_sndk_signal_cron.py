@@ -165,6 +165,8 @@ def process_ticker(
         _effective_stop_loss_pct,
         _take_profit_cap_pct,
         _game_5m_stop_loss_enabled,
+        classify_game5m_position_state_v2,
+        evaluate_game5m_continuation_gate,
     )
 
     d5 = d5_precomputed
@@ -196,6 +198,8 @@ def process_ticker(
     close_narrative_ctx = None  # merge_close_context_with_trade_narrative — для текста в Telegram
     entry_hanger_diag_checked = False
     entry_live_hanger_kind = None
+    position_state_v2 = None
+    continuation_gate = None
 
     try:
         # Нетто GAME_5M (VWAP по всем лотам) — согласовано с hanger_tune; иначе any / последний BUY.
@@ -277,6 +281,13 @@ def process_ticker(
                 take_e = _effective_take_profit_pct(
                     momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json
                 )
+                position_state_v2 = classify_game5m_position_state_v2(
+                    open_pos,
+                    current_price=price_for_check,
+                    current_decision=decision_exit,
+                    momentum_2h_pct=momentum_2h_pct,
+                    take_pct=take_e,
+                )
                 thr = float(take_e) - 0.05
                 px_hi = bar_high if (bar_high is not None and float(bar_high) > 0) else price_for_check
                 px_take = max(float(price_for_check), float(px_hi))
@@ -295,6 +306,17 @@ def process_ticker(
                     bool(should_close),
                     exit_type or "",
                 )
+                if position_state_v2 and position_state_v2.get("enabled"):
+                    logger.info(
+                        "[5m] HANGER_V2 %s: state=%s score=%s age_min=%s pnl=%.4f%% mom=%s distance_to_take=%s",
+                        ticker,
+                        position_state_v2.get("state"),
+                        position_state_v2.get("score"),
+                        position_state_v2.get("age_minutes"),
+                        float(position_state_v2.get("pnl_pct") or 0.0),
+                        position_state_v2.get("momentum_2h_pct"),
+                        position_state_v2.get("distance_to_take_pct"),
+                    )
 
             if should_close and exit_type:
                 base_exit = close_ctx.get("exit_bar_close") if isinstance(close_ctx.get("exit_bar_close"), (int, float)) and close_ctx.get("exit_bar_close") > 0 else price_for_check
@@ -331,6 +353,26 @@ def process_ticker(
                     if (exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") and entry_f and entry_f > 0 and bar_high and bar_high > 0)
                     else None
                 )
+                if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND"):
+                    current_pnl_pct = ((exit_price / entry_f) - 1.0) * 100.0 if entry_f and entry_f > 0 else None
+                    continuation_gate = evaluate_game5m_continuation_gate(
+                        ticker=ticker,
+                        pnl_pct=current_pnl_pct,
+                        momentum_2h_pct=momentum_2h_pct,
+                        rsi_5m=rsi_5m,
+                        volume_vs_avg_pct=d5.get("volume_vs_avg_pct"),
+                    )
+                    if continuation_gate.get("enabled"):
+                        logger.info(
+                            "[5m] CONTINUATION_GATE %s: decision=%s would_extend=%s log_only=%s pnl=%s mom=%s rsi=%s",
+                            ticker,
+                            continuation_gate.get("decision"),
+                            continuation_gate.get("would_extend_take"),
+                            continuation_gate.get("log_only"),
+                            continuation_gate.get("pnl_pct"),
+                            continuation_gate.get("momentum_2h_pct"),
+                            continuation_gate.get("rsi_5m"),
+                        )
                 logger.info(
                     "[5m] %s закрытие: тип=%s, exit_bar_close=%s exit_bar_close_ts=%s exit_bar_et=[%s..%s), "
                     "price_5m=%.2f, bar_high=%s bar_high_recent_max=%s bar_high_session_lifted=%s, "
@@ -367,6 +409,10 @@ def process_ticker(
                     take_pct=take_pct_e,
                     stop_pct=stop_pct_e,
                 )
+                if position_state_v2 is not None:
+                    close_ctx_enriched["position_state_v2"] = position_state_v2
+                if continuation_gate is not None:
+                    close_ctx_enriched["continuation_gate"] = continuation_gate
                 close_narrative_ctx = close_ctx_enriched
                 close_position(
                     ticker, exit_price, exit_type, position=open_pos,
@@ -674,6 +720,8 @@ def main():
             _effective_stop_loss_pct,
             _take_profit_cap_pct,
             _game_5m_stop_loss_enabled,
+            classify_game5m_position_state_v2,
+            evaluate_game5m_continuation_gate,
         )
         from services.recommend_5m import get_decision_5m, has_5m_data, build_5m_close_context, merge_close_context_with_trade_narrative
         ctx = get_market_session_context()
@@ -759,6 +807,13 @@ def main():
                         mom0 = close_ctx_ah.get("momentum_2h_pct")
                         cap0 = _take_profit_cap_pct(ticker, apply_hanger_json=apply_hanger_json_ah)
                         take0 = _effective_take_profit_pct(mom0, ticker=ticker, apply_hanger_json=apply_hanger_json_ah)
+                        position_state_ah = classify_game5m_position_state_v2(
+                            open_pos,
+                            current_price=price_for_check,
+                            current_decision=d5.get("technical_decision_core") or d5.get("decision", "HOLD"),
+                            momentum_2h_pct=mom0,
+                            take_pct=take0,
+                        )
                         thr0 = float(take0) - 0.05
                         px_hi0 = bar_high if (bar_high is not None and float(bar_high) > 0) else price_for_check
                         px_take0 = max(float(price_for_check), float(px_hi0))
@@ -777,6 +832,8 @@ def main():
                             bool(should_close),
                             exit_type or "",
                         )
+                    else:
+                        position_state_ah = None
                     if should_close and exit_type:
                         base_exit = close_ctx_ah.get("exit_bar_close") if isinstance(close_ctx_ah.get("exit_bar_close"), (int, float)) and close_ctx_ah.get("exit_bar_close") > 0 else price_for_check
                         exit_price = base_exit
@@ -795,6 +852,20 @@ def main():
                             if _game_5m_stop_loss_enabled()
                             else 0.0
                         )
+                        continuation_gate_ah = None
+                        if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND"):
+                            entry_price_ah = open_pos.get("entry_price")
+                            try:
+                                pnl_ah = (float(exit_price) / float(entry_price_ah) - 1.0) * 100.0 if entry_price_ah else None
+                            except (TypeError, ValueError):
+                                pnl_ah = None
+                            continuation_gate_ah = evaluate_game5m_continuation_gate(
+                                ticker=ticker,
+                                pnl_pct=pnl_ah,
+                                momentum_2h_pct=mom_ah,
+                                rsi_5m=close_ctx_ah.get("rsi_5m"),
+                                volume_vs_avg_pct=d5.get("volume_vs_avg_pct"),
+                            )
                         close_ctx_ah_merged = merge_close_context_with_trade_narrative(
                             close_ctx_ah,
                             d5=d5,
@@ -806,6 +877,10 @@ def main():
                             take_pct=take_ah,
                             stop_pct=stop_ah,
                         )
+                        if position_state_ah is not None:
+                            close_ctx_ah_merged["position_state_v2"] = position_state_ah
+                        if continuation_gate_ah is not None:
+                            close_ctx_ah_merged["continuation_gate"] = continuation_gate_ah
                         close_position(
                             ticker, exit_price, exit_type, position=open_pos,
                             bar_high=bar_high if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") else None,

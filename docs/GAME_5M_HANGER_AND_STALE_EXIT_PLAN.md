@@ -2,7 +2,7 @@
 
 ## Текущий статус
 
-На 2026-04-28 мы находимся на границе **Фазы 1 -> Фазы 2**.
+На 2026-04-29 мы находимся в **итерации 2**: rule-based диагностика + логирование для будущего ML.
 
 Уже сделано:
 
@@ -11,14 +11,18 @@
 3. Live-прогон уже закрыл старые stale/reversal позиции как `TIME_EXIT_EARLY` с detail `stale_reversal`.
 4. Подготовлен первый датасет-builder для будущей модели stuck-risk: `scripts/build_game5m_stuck_dataset.py`.
 5. Подготовлен второй датасет-builder для модели continuation/underprofit: `scripts/build_game5m_continuation_dataset.py`.
+6. Добавлены rule-based diagnostics:
+   - `position_state_v2` (`normal_hold / recoverable_hanger / stale_reversal`);
+   - `continuation_gate` (`close_now / extend_take_candidate`, log-only).
+   Эти поля пишутся в `context_json` SELL, чтобы накопить историю для ML.
 
-Следующий инженерный этап — **Фаза 2: Hanger Definition v2**. Нужно заменить бинарное “висяк / не висяк” на диагностику классов:
+Текущий инженерный этап — **Фаза 2: Hanger Definition v2**. Мы заменяем бинарное “висяк / не висяк” на диагностику классов:
 
 - `recoverable_hanger`: снижать take cap и пытаться выйти в уменьшенный плюс;
 - `stale_reversal`: закрывать, не ждать take;
 - `normal_hold`: держать, если позиция ещё молодая или текущий сигнал подтверждает long.
 
-Фаза 3 начнётся после накопления и проверки stuck-risk датасета: CatBoost/логистическая модель должна предсказывать риск зависания до входа или в первые 30/60 минут после входа.
+Следующий этап — накопить 1-2 недели истории с `position_state_v2` и `continuation_gate`, затем перестроить датасеты и перейти к Фазе 3: CatBoost/логистическая модель должна предсказывать риск зависания до входа или в первые 30/60 минут после входа.
 
 Параллельный следующий трек — **Фаза 4: Underprofit / continuation predictor**. Он отвечает на другой вопрос: не забрали ли мы слишком маленький take-profit на бумаге, которая могла продолжить движение.
 
@@ -145,6 +149,20 @@ hanger_score = age_score
 
 Сниженный take cap должен получать только `recoverable_hanger`. `stale_reversal` должен закрываться.
 
+Итерация 2 добавляет rule-based baseline и логирование:
+
+```env
+GAME_5M_HANGER_V2_ENABLED=true
+GAME_5M_HANGER_V2_RECOVERABLE_MIN_AGE_MINUTES=390
+GAME_5M_HANGER_V2_RECOVERABLE_MIN_PNL_PCT=-1.0
+GAME_5M_HANGER_V2_RECOVERABLE_MAX_PNL_PCT=1.0
+GAME_5M_HANGER_V2_WEAK_MOMENTUM_BELOW=0.5
+GAME_5M_HANGER_V2_STALE_MAX_PNL_PCT=-1.5
+GAME_5M_HANGER_V2_STALE_MOMENTUM_BELOW=0.0
+```
+
+Пока это диагностика и логирование в `context_json`, а не замена всех правил выхода. Цель — накопить объяснимую историю решений: где параметрический классификатор был прав, а где ошибался.
+
 ## Фаза 3: модель stuck-risk на первых 30/60 минутах
 
 Перед нейронной сетью стоит обучить простую supervised-модель.
@@ -225,6 +243,22 @@ python scripts/build_game5m_continuation_dataset.py \
 3. Если одновременно высокий `stuck_risk_score` и высокий `continuation_score`, вход считается опасным: потенциал есть, но риск зависания тоже высокий. Для такого случая нужен меньший размер или отказ от сделки.
 
 Главный принцип: `continuation_score` не должен превращать систему в “держим всё до бесконечности”. Он должен разрешать терпение только тогда, когда вероятность продолжения выше статистического порога.
+
+Итерация 2 добавляет log-only continuation gate:
+
+```env
+GAME_5M_CONTINUATION_GATE_ENABLED=true
+GAME_5M_CONTINUATION_GATE_LOG_ONLY=true
+GAME_5M_CONTINUATION_MIN_PNL_PCT=2.0
+GAME_5M_CONTINUATION_MIN_MOMENTUM_2H_PCT=1.0
+GAME_5M_CONTINUATION_MAX_RSI_5M=72
+GAME_5M_CONTINUATION_MIN_VOLUME_VS_AVG_PCT=0
+GAME_5M_CONTINUATION_EXTEND_TAKE_ADD_PCT=1.0
+GAME_5M_CONTINUATION_MAX_EXTRA_MINUTES=120
+GAME_5M_CONTINUATION_TRAIL_PULLBACK_PCT=0.7
+```
+
+Даже при `GAME_5M_CONTINUATION_GATE_ENABLED=true` исполнение пока не меняется: gate пишет в `context_json`, закрыли бы мы сейчас (`close_now`) или дали бы позиции шанс на extended/trailing take (`extend_take_candidate`). Это нужно, чтобы потом сравнить решение gate с фактическим post-exit движением.
 
 ## Фаза 5: условный докуп / pyramid gate
 
