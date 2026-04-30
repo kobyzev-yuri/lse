@@ -47,10 +47,34 @@ function scheduleChartAutoRefresh() {
     }, CHART_REFRESH_MS);
 }
 
-function formatChart5mTime(iso) {
+function _fmtTz(iso, tz, opts) {
     if (!iso) return '';
     const d = new Date(iso);
-    return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' });
+    if (!Number.isFinite(d.getTime())) return '';
+    return d.toLocaleString('ru-RU', Object.assign({ timeZone: tz }, opts || {}));
+}
+
+function formatChart5mTimeET(iso) {
+    // Only time, explicit ET.
+    const t = _fmtTz(iso, 'America/New_York', { hour: '2-digit', minute: '2-digit' });
+    return t ? (t + ' ET') : '';
+}
+
+function formatChart5mDateET(iso) {
+    return _fmtTz(iso, 'America/New_York', { day: '2-digit', month: '2-digit' });
+}
+
+function formatChart5mTickET(labels, idx) {
+    // Show date only on day change, otherwise show time.
+    const cur = labels && labels[idx] ? String(labels[idx]) : '';
+    const prev = idx > 0 && labels && labels[idx - 1] ? String(labels[idx - 1]) : '';
+    const dCur = formatChart5mDateET(cur);
+    const dPrev = formatChart5mDateET(prev);
+    if (idx === 0 || (dCur && dCur !== dPrev)) {
+        const t = _fmtTz(cur, 'America/New_York', { hour: '2-digit', minute: '2-digit' });
+        return dCur ? (dCur + (t ? (' ' + t) : '') + ' ET') : formatChart5mTimeET(cur);
+    }
+    return formatChart5mTimeET(cur);
 }
 
 /** Подпись горизонта прогноза: сразу видно 30 мин vs 1 ч vs 2 ч */
@@ -205,14 +229,31 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
             responsive: true,
             maintainAspectRatio: true,
             scales: {
-                x: { ticks: { maxTicksLimit: 12, callback: (v, i) => formatChart5mTime(labels[i]) } },
+                x: {
+                    title: { display: true, text: 'Время (ET, New York)' },
+                    ticks: { maxTicksLimit: 12, callback: (v, i) => formatChart5mTickET(labels, i) }
+                },
                 y: { title: { display: true, text: 'Цена' } }
             },
             plugins: {
                 legend: { position: 'top' },
                 dayBoundaries: dayBoundaries,
                 priceForecast5m: data.price_forecast_5m || null,
-                tradeTriangleMarkers: { items: tradeMarkerItems }
+                tradeTriangleMarkers: { items: tradeMarkerItems },
+                tooltip: {
+                    callbacks: {
+                        title: function(items) {
+                            if (!items || !items.length) return '';
+                            const iso = items[0].label;
+                            const et = _fmtTz(iso, 'America/New_York', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                            const msk = _fmtTz(iso, 'Europe/Moscow', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                            const parts = [];
+                            if (et) parts.push(et + ' ET');
+                            if (msk) parts.push(msk + ' MSK');
+                            return parts.join(' · ');
+                        }
+                    }
+                }
             }
         },
         plugins: [{
