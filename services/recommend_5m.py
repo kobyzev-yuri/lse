@@ -325,24 +325,52 @@ def fetch_5m_ohlc(ticker: str, days: int = None) -> Optional[pd.DataFrame]:
             logger.debug("Приведение 5m к US/Eastern: %s", e)
             return df_in
 
+    def _coverage_score(df_in: Optional[pd.DataFrame]) -> tuple:
+        """
+        Оцениваем «насколько длинный» ряд для сравнения вариантов загрузки.
+        Возвращаем кортеж (уникальных_дней, строк) — лексикографически сравниваем.
+        """
+        if df_in is None or df_in.empty or "datetime" not in df_in.columns:
+            return (0, 0)
+        try:
+            d = pd.to_datetime(df_in["datetime"], errors="coerce")
+            unique_days = int(d.dt.date.nunique()) if hasattr(d, "dt") else 0
+        except Exception:
+            unique_days = 0
+        return (unique_days, int(len(df_in)))
+
     try:
         df = t.history(start=start_str, end=end_str, interval="5m", auto_adjust=False)
     except (TypeError, KeyError, AttributeError) as e:
         logger.debug("yfinance history для %s (start/end): %s", ticker, e)
         df = None
     df = _normalize(df)
-    if df is not None:
-        return _to_us_eastern(df)
-    # Fallback: Yahoo иногда отдаёт 5m только через period (или при выходных/вне сессии пусто)
-    for period in ("7d", "5d", "2d", "1d"):
+    df_best = _to_us_eastern(df) if df is not None else None
+    best_score = _coverage_score(df_best)
+
+    # Fallback/alt: Yahoo иногда отдаёт 5m «обрезанно» через start/end (например, только 1 день),
+    # но нормально через period. Берём вариант с наибольшим покрытием.
+    periods = []
+    # Сначала — запрошенное окно, потом стандартные fallback.
+    if days:
+        periods.append(f"{int(days)}d")
+    periods.extend(["7d", "5d", "2d", "1d"])
+    seen = set()
+    periods = [p for p in periods if not (p in seen or seen.add(p))]
+    for period in periods:
         try:
             df = t.history(period=period, interval="5m", auto_adjust=False)
             df = _normalize(df)
             if df is not None and not df.empty:
-                logger.info("5m данные %s получены через period=%s (start/end вернули пусто)", ticker, period)
-                return _to_us_eastern(df)
+                df2 = _to_us_eastern(df)
+                sc = _coverage_score(df2)
+                if sc > best_score:
+                    df_best, best_score = df2, sc
+                    logger.info("5m данные %s выбраны через period=%s (coverage=%s)", ticker, period, sc)
         except Exception as e:
             logger.debug("yfinance period=%s для %s: %s", period, ticker, e)
+    if df_best is not None and not df_best.empty:
+        return df_best
     logger.warning("Нет 5m данных для %s за %d дн. (Yahoo пустой ответ или биржа закрыта)", ticker, days)
     return None
 

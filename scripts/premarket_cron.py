@@ -104,6 +104,8 @@ def main() -> None:
     # Подготовка Telegram (для обычного алерта и для стресс-алерта)
     import urllib.parse
     import urllib.request
+    import urllib.error
+    import html
 
     from services.telegram_signal import get_telegram_urllib_opener
 
@@ -113,11 +115,40 @@ def main() -> None:
     chat_ids = [x.strip() for x in chat_ids_raw.split(",") if x.strip()]
     telegram_url = f"https://api.telegram.org/bot{token}/sendMessage" if token else None
 
+    def _send_telegram_message(text: str, *, label: str) -> None:
+        if not (telegram_url and chat_ids):
+            return
+        data = urllib.parse.urlencode(
+            {
+                "chat_id": chat_ids[0],
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": "true",
+            }
+        ).encode()
+        req = urllib.request.Request(telegram_url, data=data, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        try:
+            with _tg_opener.open(req, timeout=15) as resp:
+                if resp.status == 200:
+                    logger.info("%s отправлен в Telegram", label)
+                else:
+                    logger.warning("Telegram (%s): %s %s", label, resp.status, resp.read())
+        except urllib.error.HTTPError as e:
+            body = b""
+            try:
+                body = e.read()
+            except Exception:
+                body = b""
+            logger.warning("Telegram (%s): HTTP %s %s", label, getattr(e, "code", "?"), body or str(e))
+        except Exception as e:
+            logger.warning("Telegram (%s): %s", label, e)
+
     # Опционально: алерт в Telegram (премаркет по тикерам)
     alert = get_config_value("PREMARKET_ALERT_TELEGRAM", "").strip().lower() in ("1", "true", "yes")
     entry_preview_5m = get_config_value("PREMARKET_ENTRY_PREVIEW_5M", "").strip().lower() in ("1", "true", "yes")
     if alert and results and token and chat_ids:
-        lines = ["📊 **Премаркет** (до открытия US). Цена — последняя минута Yahoo (prepost)."]
+        lines = ["📊 <b>Премаркет</b> (до открытия US). Цена — последняя минута Yahoo (prepost)."]
         for item in results:
             ticker, prev, last, gap, mins = item[0], item[1], item[2], item[3], item[4]
             last_time = item[5] if len(item) > 5 else None
@@ -125,7 +156,18 @@ def main() -> None:
             mins_str = f"{mins} мин" if mins is not None else "—"
             prev_str = f", вчера close {prev}" if prev is not None else ""
             time_str = f" ({last_time})" if last_time is not None else ""
-            lines.append(f"• {ticker}: премаркет {last}{time_str} гэп {gap_str}{prev_str} до открытия {mins_str}")
+            lines.append(
+                "• "
+                + html.escape(str(ticker))
+                + ": премаркет "
+                + html.escape(str(last))
+                + html.escape(str(time_str))
+                + " гэп "
+                + html.escape(str(gap_str))
+                + html.escape(str(prev_str))
+                + " до открытия "
+                + html.escape(str(mins_str))
+            )
         # Прогноз на вступление (5m): по тикерам игры 5m — решение до открытия (трейдеру информация по возможности раньше)
         if entry_preview_5m:
             try:
@@ -142,27 +184,25 @@ def main() -> None:
                                 pr = d5.get("price")
                                 rsi = d5.get("rsi_5m")
                                 rsi_str = f", RSI {rsi:.0f}" if rsi is not None else ""
-                                preview_parts.append(f"• {t}: {dec} (${pr:.2f}{rsi_str})")
+                                preview_parts.append(
+                                    "• "
+                                    + html.escape(str(t))
+                                    + ": "
+                                    + html.escape(str(dec))
+                                    + " ($"
+                                    + html.escape(f"{pr:.2f}{rsi_str}")
+                                    + ")"
+                                )
                         except Exception:
                             continue
                     if preview_parts:
                         lines.append("")
-                        lines.append("🎯 **Прогноз на вступление (5m)** — по последним данным до открытия:")
+                        lines.append("🎯 <b>Прогноз на вступление (5m)</b> — по последним данным до открытия:")
                         lines.extend(preview_parts)
             except Exception as e:
                 logger.debug("Прогноз на вступление 5m: %s", e)
         text = "\n".join(lines)
-        data = urllib.parse.urlencode({"chat_id": chat_ids[0], "text": text, "parse_mode": "Markdown"}).encode()
-        req = urllib.request.Request(telegram_url, data=data, method="POST")
-        req.add_header("Content-Type", "application/x-www-form-urlencoded")
-        try:
-            with _tg_opener.open(req, timeout=15) as resp:
-                if resp.status == 200:
-                    logger.info("Премаркет-алерт отправлен в Telegram")
-                else:
-                    logger.warning("Telegram: %s %s", resp.status, resp.read())
-        except Exception as e:
-            logger.warning("Отправка алерта: %s", e)
+        _send_telegram_message(text, label="Премаркет-алерт")
     elif alert and (not token or not chat_ids):
         logger.debug("PREMARKET_ALERT_TELEGRAM=true, но нет TELEGRAM_BOT_TOKEN или chat id")
 
@@ -199,25 +239,18 @@ def main() -> None:
             if stress_detected and (not friday_only or is_friday) and token and chat_ids:
                 day_note = " В пятницу — по возможности закрыть позиции до выходных." if is_friday else ""
                 lines_stress = [
-                    "⚠️ **Премаркет-стресс (геополитика/риск)**",
+                    "⚠️ <b>Премаркет-стресс (геополитика/риск)</b>",
                     "Сильный гэп вниз по индикаторам:",
                 ]
                 for t, g in stress_details:
-                    lines_stress.append(f"• {t}: гэп {g:+.2f}%")
+                    lines_stress.append(f"• {html.escape(str(t))}: гэп {g:+.2f}%")
                 lines_stress.append("")
-                lines_stress.append("Рекомендуется закрыть позиции **GAME_5m** и рассмотреть закрытие прочих до открытия сессии." + day_note)
+                lines_stress.append(
+                    "Рекомендуется закрыть позиции <b>GAME_5m</b> и рассмотреть закрытие прочих до открытия сессии."
+                    + html.escape(day_note)
+                )
                 text_stress = "\n".join(lines_stress)
-                data_stress = urllib.parse.urlencode({"chat_id": chat_ids[0], "text": text_stress, "parse_mode": "Markdown"}).encode()
-                req_stress = urllib.request.Request(telegram_url, data=data_stress, method="POST")
-                req_stress.add_header("Content-Type", "application/x-www-form-urlencoded")
-                try:
-                    with _tg_opener.open(req_stress, timeout=15) as resp2:
-                        if resp2.status == 200:
-                            logger.info("Алерт премаркет-стресс (закрыть позиции) отправлен в Telegram")
-                        else:
-                            logger.warning("Telegram стресс-алерт: %s %s", resp2.status, resp2.read())
-                except Exception as e:
-                    logger.warning("Отправка алерта стресс: %s", e)
+                _send_telegram_message(text_stress, label="Премаркет-стресс алерт")
         except Exception as e:
             logger.warning("Проверка премаркет-стресс: %s", e)
 

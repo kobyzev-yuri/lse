@@ -379,12 +379,73 @@ def _filter_closed_trades_for_focus(
     return out
 
 
+def _read_market_bars_5m_cached(
+    cache: Dict[str, Optional[pd.DataFrame]],
+    ticker: str,
+    *,
+    days_back: int,
+) -> Optional[pd.DataFrame]:
+    """
+    DB-first загрузка 5m из Postgres (market_bars_5m), чтобы отчёт был воспроизводим и не зависел
+    от нестабильности Yahoo/yfinance (обрезанные ответы, разные окна).
+
+    Кешируем по тикеру, потому что анализатор вызывает окно для множества сделок на один тикер.
+    """
+    t = (ticker or "").strip().upper()
+    if not t:
+        return None
+    if t in cache:
+        return cache[t]
+    days_back = int(days_back or 1)
+    days_back = min(max(1, days_back), 7)
+    engine = get_engine()
+    # Берём с запасом: анализатор может смотреть окна entry→exit, где entry может быть чуть раньше cutoff по дням.
+    cutoff_utc = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days_back + 2)
+    try:
+        from sqlalchemy import text
+
+        with engine.connect() as conn:
+            df = pd.read_sql(
+                text(
+                    """
+                    SELECT bar_start_utc AS datetime,
+                           open AS "Open",
+                           high AS "High",
+                           low  AS "Low",
+                           close AS "Close",
+                           volume AS "Volume"
+                    FROM public.market_bars_5m
+                    WHERE exchange = 'US'
+                      AND symbol = :sym
+                      AND bar_start_utc >= :cutoff
+                    ORDER BY bar_start_utc ASC
+                    """
+                ),
+                conn,
+                params={"sym": t, "cutoff": cutoff_utc},
+            )
+    except Exception:
+        cache[t] = None
+        return None
+    if df is None or df.empty:
+        cache[t] = None
+        return None
+    try:
+        d = pd.to_datetime(df["datetime"], utc=True).dt.tz_convert("America/New_York")
+        df = df.copy()
+        df["datetime"] = d
+    except Exception:
+        pass
+    cache[t] = df.reset_index(drop=True)
+    return cache[t]
+
+
 def _prepare_ohlc_cache(tickers: List[str], days: int) -> Dict[str, Optional[pd.DataFrame]]:
     cache: Dict[str, Optional[pd.DataFrame]] = {}
     fetch_days = min(7, max(3, days + 2))
     for t in sorted(set(tickers)):
         try:
-            df = fetch_5m_ohlc(t, days=fetch_days)
+            df = _read_market_bars_5m_cached(cache, t, days_back=fetch_days) or fetch_5m_ohlc(t, days=fetch_days)
             if df is None or df.empty:
                 cache[t] = None
                 continue

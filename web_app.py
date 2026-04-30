@@ -44,6 +44,7 @@ from config_loader import (
     is_editable_config_env_key,
 )
 from execution_agent import ExecutionAgent
+from services.game5m_tuning_policy import apply_game5m_update, current_config_value, validate_game5m_update
 from services.ticker_groups import get_tickers_fast
 from news_importer import add_news, get_news_sources_stats
 from report_generator import (
@@ -57,6 +58,22 @@ from report_generator import (
 
 app = FastAPI(title="LSE Trading System", version="1.0.0")
 logger = logging.getLogger(__name__)
+
+GAME5M_TUNING_REGLEMENT = {
+    "rules": [
+        "Один live-эксперимент за раз.",
+        "Proposal из replay - гипотеза, не команда применять весь top-list.",
+        "Минимальное окно наблюдения: 1 полный торговый день, лучше 2-3 дня или 8-20 новых закрытых сделок.",
+        "Пока эксперимент pending_effect, не меняем другие GAME_5M параметры входа/выхода.",
+        "Оставляем изменение только если log-return/качество выходов лучше baseline без роста риска.",
+        "Откатываем old_value из ledger, если появились ранние тейки, выросли stop/stale/no-exit или результат хуже baseline.",
+    ],
+    "default_live_test": {
+        "env_key": "GAME_5M_TAKE_PROFIT_MIN_PCT",
+        "value": "2.5",
+        "note": "Мягкий шаг между текущим 3.0 и replay direction 2.0.",
+    },
+}
 
 
 @app.exception_handler(Exception)
@@ -689,12 +706,13 @@ async def apply_analyzer_config(request: Request):
         proposed = str(row.get("proposed") if row.get("proposed") is not None else "").strip()
         if not key:
             continue
-        if not is_editable_config_env_key(key):
-            skipped.append({"env_key": key, "reason": "not_editable"})
+        validation = validate_game5m_update(key, proposed)
+        if not validation.ok:
+            skipped.append({"env_key": key, "reason": validation.reason})
             continue
-        ok = update_config_key(key, proposed)
+        ok, record = apply_game5m_update(key, proposed, source="web_api_analyzer_apply_config")
         if not ok:
-            skipped.append({"env_key": key, "reason": "write_failed"})
+            skipped.append({"env_key": key, "reason": record.get("status") or "write_failed"})
             continue
         applied.append({"env_key": key, "proposed": proposed})
 
@@ -728,6 +746,197 @@ async def apply_analyzer_config(request: Request):
             "restart": restart_result,
         }
     )
+
+
+def _game5m_tuning_ledger_path() -> Path:
+    raw = (os.environ.get("GAME5M_TUNING_LEDGER") or "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        return p if p.is_absolute() else Path(__file__).resolve().parent / p
+    return Path(__file__).resolve().parent / "local" / "game5m_tuning_ledger.json"
+
+
+def _load_game5m_tuning_ledger() -> Dict[str, Any]:
+    p = _game5m_tuning_ledger_path()
+    try:
+        if not p.is_file():
+            return {}
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        logger.warning("Не удалось прочитать GAME_5M tuning ledger", exc_info=True)
+        return {}
+
+
+def _save_game5m_tuning_ledger(ledger: Dict[str, Any]) -> None:
+    p = _game5m_tuning_ledger_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    ledger["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+    p.write_text(json.dumps(_to_jsonable(ledger), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _game5m_closed_summary(days: int) -> Dict[str, Any]:
+    closed = compute_closed_trade_pnls(load_trade_history(get_engine(), strategy_name="GAME_5M"))
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=max(1, int(days)))
+    rows = []
+    for t in closed:
+        ts = pd.Timestamp(getattr(t, "ts", None))
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("Europe/Moscow", ambiguous=True).tz_convert("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
+        if ts >= cutoff:
+            rows.append(t)
+    wins = sum(1 for t in rows if float(getattr(t, "log_return", 0.0) or 0.0) > 0)
+    total_lr = sum(float(getattr(t, "log_return", 0.0) or 0.0) for t in rows)
+    total_pnl = sum(float(getattr(t, "net_pnl", 0.0) or 0.0) for t in rows)
+    return {
+        "days": int(days),
+        "closed_trades": len(rows),
+        "wins": wins,
+        "losses": max(0, len(rows) - wins),
+        "win_rate_pct": round((wins / len(rows) * 100.0), 2) if rows else None,
+        "total_log_return": round(total_lr, 6),
+        "avg_log_return": round(total_lr / len(rows), 6) if rows else None,
+        "total_net_pnl": round(total_pnl, 2),
+        "avg_net_pnl": round(total_pnl / len(rows), 2) if rows else None,
+    }
+
+
+def _find_game5m_proposal(ledger: Dict[str, Any], proposal_id: str) -> Optional[Dict[str, Any]]:
+    latest = ledger.get("latest_proposals") if isinstance(ledger.get("latest_proposals"), dict) else {}
+    for p in latest.get("proposals") or []:
+        if isinstance(p, dict) and str(p.get("proposal_id")) == str(proposal_id):
+            return p
+    return None
+
+
+@app.get("/api/analyzer/tuning/status", response_class=JSONResponse)
+async def analyzer_tuning_status(top_n: int = 8):
+    """GAME_5M tuning ledger status for Analyzer UI."""
+    ledger = _load_game5m_tuning_ledger()
+    latest = ledger.get("latest_proposals") if isinstance(ledger.get("latest_proposals"), dict) else {}
+    return _to_jsonable(
+        {
+            "ok": True,
+            "ledger": str(_game5m_tuning_ledger_path()),
+            "reglement": GAME5M_TUNING_REGLEMENT,
+            "active_experiment": ledger.get("active_experiment"),
+            "latest_generated_at_utc": latest.get("generated_at_utc"),
+            "latest_selection": latest.get("selection"),
+            "latest_proposal_count": len(latest.get("proposals") or []),
+            "top_proposals": (latest.get("proposals") or [])[: max(1, min(int(top_n), 20))],
+            "current_values": {
+                "GAME_5M_TAKE_PROFIT_MIN_PCT": current_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT"),
+                "GAME_5M_TAKE_PROFIT_PCT": current_config_value("GAME_5M_TAKE_PROFIT_PCT"),
+                "GAME_5M_MAX_POSITION_DAYS": current_config_value("GAME_5M_MAX_POSITION_DAYS"),
+            },
+        }
+    )
+
+
+@app.post("/api/analyzer/tuning/apply", response_class=JSONResponse)
+async def analyzer_tuning_apply(request: Request):
+    """Apply one GAME_5M tuning proposal or explicit key/value through shared guardrails."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Ожидается JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Ожидается JSON object")
+
+    ledger = _load_game5m_tuning_ledger()
+    active = ledger.get("active_experiment") if isinstance(ledger.get("active_experiment"), dict) else None
+    if active and active.get("status") == "pending_effect" and not bool(body.get("force")):
+        raise HTTPException(status_code=409, detail="Уже есть active experiment pending_effect. Сначала observe/review или rollback.")
+
+    proposal = _find_game5m_proposal(ledger, str(body.get("proposal_id") or "")) if body.get("proposal_id") else None
+    key = str(body.get("key") or (proposal or {}).get("env_key") or "").strip()
+    value = str(body.get("value") if body.get("value") is not None else (proposal or {}).get("proposed") or "").strip()
+    observe_days = max(1, min(int(body.get("observe_days") or 2), 30))
+    dry_run = bool(body.get("dry_run"))
+
+    if not key or not value:
+        raise HTTPException(status_code=400, detail="Нужны key/value или proposal_id")
+    validation = validate_game5m_update(key, value)
+    if not validation.ok:
+        raise HTTPException(status_code=400, detail=f"Guardrails rejected: {validation.reason}")
+
+    baseline = _game5m_closed_summary(observe_days)
+    ok, record = apply_game5m_update(key, value, source="web_api_analyzer_tuning_apply", dry_run=dry_run)
+    experiment = {
+        "experiment_id": f"{record.get('env_key')}={record.get('new_value')}@{datetime.now(timezone.utc).isoformat()}",
+        "status": "dry_run" if dry_run else ("pending_effect" if ok else "failed"),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "proposal_id": (proposal or {}).get("proposal_id"),
+        "applied": record,
+        "proposal": proposal,
+        "baseline_summary": baseline,
+        "observe_days": observe_days,
+        "observations": [],
+    }
+    ledger["active_experiment"] = experiment
+    ledger.setdefault("history", []).append(experiment)
+    _save_game5m_tuning_ledger(ledger)
+    if not ok:
+        raise HTTPException(status_code=500, detail=record.get("status") or "write_failed")
+    return _to_jsonable({"ok": True, "ledger": str(_game5m_tuning_ledger_path()), "experiment": experiment})
+
+
+@app.post("/api/analyzer/tuning/observe", response_class=JSONResponse)
+async def analyzer_tuning_observe(request: Request):
+    """Attach current post-apply observation to active GAME_5M tuning experiment."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    ledger = _load_game5m_tuning_ledger()
+    active = ledger.get("active_experiment") if isinstance(ledger.get("active_experiment"), dict) else None
+    if not active:
+        raise HTTPException(status_code=404, detail="Нет active experiment")
+    days = max(1, min(int(body.get("days") or active.get("observe_days") or 2), 30))
+    min_new_trades = max(1, min(int(body.get("min_new_trades") or 8), 100))
+    summary = _game5m_closed_summary(days)
+    obs = {"at_utc": datetime.now(timezone.utc).isoformat(), "summary": summary}
+    active.setdefault("observations", []).append(obs)
+    baseline_total = int((active.get("baseline_summary") or {}).get("closed_trades") or 0)
+    if int(summary.get("closed_trades") or 0) >= baseline_total + min_new_trades:
+        active["status"] = "ready_for_review"
+        active["ready_at_utc"] = datetime.now(timezone.utc).isoformat()
+    ledger["active_experiment"] = active
+    ledger.setdefault("history", []).append({"type": "observation", "experiment_id": active.get("experiment_id"), **obs})
+    _save_game5m_tuning_ledger(ledger)
+    return _to_jsonable({"ok": True, "ledger": str(_game5m_tuning_ledger_path()), "active_experiment": active})
+
+
+@app.post("/api/analyzer/tuning/rollback", response_class=JSONResponse)
+async def analyzer_tuning_rollback():
+    """Rollback active GAME_5M experiment to old_value recorded in ledger."""
+    ledger = _load_game5m_tuning_ledger()
+    active = ledger.get("active_experiment") if isinstance(ledger.get("active_experiment"), dict) else None
+    if not active:
+        raise HTTPException(status_code=404, detail="Нет active experiment")
+    applied = active.get("applied") if isinstance(active.get("applied"), dict) else {}
+    key = str(applied.get("env_key") or "").strip()
+    old_value = applied.get("old_value")
+    if not key or old_value is None:
+        raise HTTPException(status_code=400, detail="В ledger нет old_value для rollback")
+    ok, record = apply_game5m_update(key, old_value, source="web_api_analyzer_tuning_rollback")
+    rollback_record = {
+        "type": "rollback",
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+        "experiment_id": active.get("experiment_id"),
+        "rollback": record,
+    }
+    active["status"] = "rolled_back" if ok else "rollback_failed"
+    active["rollback"] = rollback_record
+    ledger["active_experiment"] = active
+    ledger.setdefault("history", []).append(rollback_record)
+    _save_game5m_tuning_ledger(ledger)
+    if not ok:
+        raise HTTPException(status_code=500, detail=record.get("status") or "rollback_failed")
+    return _to_jsonable({"ok": True, "ledger": str(_game5m_tuning_ledger_path()), "active_experiment": active})
 
 
 @app.get("/trading")
@@ -1039,8 +1248,59 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
         from services.game_5m import get_open_position, get_open_position_any, get_trades_for_chart
     except ImportError:
         return None
+
+    def _fetch_5m_from_db(symbol: str, days_back: int) -> Optional[pd.DataFrame]:
+        """
+        Пытаемся взять 5m из Postgres (market_bars_5m), чтобы графики были стабильными и одинаковыми
+        по глубине при фильтре «Все». Fallback остаётся на Yahoo/yfinance.
+        """
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return None
+        try:
+            days_back = int(days_back or 1)
+        except (TypeError, ValueError):
+            days_back = 1
+        days_back = min(max(1, days_back), 7)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days_back + 1)
+        try:
+            with engine.connect() as conn:
+                df_db = pd.read_sql(
+                    text(
+                        """
+                        SELECT bar_start_utc AS datetime,
+                               open AS "Open",
+                               high AS "High",
+                               low  AS "Low",
+                               close AS "Close",
+                               volume AS "Volume"
+                        FROM public.market_bars_5m
+                        WHERE exchange = 'US'
+                          AND symbol = :sym
+                          AND bar_start_utc >= :cutoff
+                        ORDER BY bar_start_utc ASC
+                        """
+                    ),
+                    conn,
+                    params={"sym": sym, "cutoff": cutoff},
+                )
+        except Exception:
+            return None
+        if df_db is None or df_db.empty or "datetime" not in df_db.columns or "Close" not in df_db.columns:
+            return None
+        try:
+            d = pd.to_datetime(df_db["datetime"], errors="coerce")
+            # В БД хранится UTC → приводим к US/Eastern для единой оси времени в UI.
+            if hasattr(d, "dt") and d.dt.tz is not None:
+                d = d.dt.tz_convert("America/New_York")
+            df_db = df_db.copy()
+            df_db["datetime"] = d
+        except Exception:
+            pass
+        return df_db
+
     try:
-        df = fetch_5m_ohlc(ticker, days=days)
+        df = _fetch_5m_from_db(ticker, days) or fetch_5m_ohlc(ticker, days=days)
     except Exception:
         return None
     if df is None or df.empty or "Close" not in df.columns:
@@ -1048,7 +1308,7 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
             if fallback_days == days:
                 continue
             try:
-                df = fetch_5m_ohlc(ticker, days=fallback_days)
+                df = _fetch_5m_from_db(ticker, fallback_days) or fetch_5m_ohlc(ticker, days=fallback_days)
             except Exception:
                 continue
             if df is not None and not df.empty and "Close" in df.columns:
