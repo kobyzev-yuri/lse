@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from config_loader import is_editable_config_env_key, update_config_key  # noqa: E402
+from services.game5m_tuning_policy import apply_game5m_update, coerce_float, validate_game5m_update  # noqa: E402
 
 
 def _utc_now() -> str:
@@ -103,12 +103,7 @@ def _auto_updates(report: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _coerce_float(x: Any) -> Optional[float]:
-    if x is None:
-        return None
-    try:
-        return float(x)
-    except Exception:
-        return None
+    return coerce_float(x)
 
 
 def _guardrails_ok(row: Dict[str, Any]) -> Tuple[bool, str]:
@@ -119,36 +114,9 @@ def _guardrails_ok(row: Dict[str, Any]) -> Tuple[bool, str]:
       - ограничение “шагов” для самых чувствительных ключей
     """
     key = str(row.get("env_key") or "").strip()
-    proposed = str(row.get("proposed") if row.get("proposed") is not None else "").strip()
-    if not key or not proposed:
-        return False, "empty_key_or_value"
-    if not is_editable_config_env_key(key):
-        return False, "not_editable"
-    if not key.startswith("GAME_5M_"):
-        return False, "non_game5m_key"
-    # bool allowed
-    if proposed.lower() in ("true", "false", "1", "0", "yes", "no"):
-        return True, "ok"
-    # numeric required for other keys
-    pv = _coerce_float(proposed)
-    if pv is None:
-        return False, "non_numeric_value"
-    # Step limits (soft) — if current present
-    cur = row.get("current")
-    cv = _coerce_float(cur) if cur is not None else None
-    if cv is not None:
-        delta = pv - cv
-        if key == "GAME_5M_TAKE_MOMENTUM_FACTOR" and abs(delta) > 0.1:
-            return False, "delta_too_large_take_momentum_factor"
-        if key == "GAME_5M_TAKE_PROFIT_PCT" and abs(delta) > 1.0:
-            return False, "delta_too_large_take_profit_pct"
-        if key.startswith("GAME_5M_TAKE_PROFIT_PCT_") and abs(delta) > 2.0:
-            return False, "delta_too_large_take_profit_pct_ticker"
-        if key in ("GAME_5M_RSI_STRONG_BUY_MAX", "GAME_5M_RSI_FOR_MOMENTUM_BUY_MAX") and abs(delta) > 5:
-            return False, "delta_too_large_rsi"
-        if key in ("GAME_5M_VOLATILITY_WARN_BUY_MIN", "GAME_5M_VOLATILITY_WAIT_MIN") and abs(delta) > 0.3:
-            return False, "delta_too_large_volatility"
-    return True, "ok"
+    proposed = row.get("proposed") if row.get("proposed") is not None else ""
+    result = validate_game5m_update(key, proposed, current=row.get("current"))
+    return result.ok, result.reason
 
 
 def _pick_one_update(
@@ -184,8 +152,8 @@ def _pick_one_update(
 
 
 def _apply_update(key: str, value: str) -> Tuple[bool, str]:
-    ok = update_config_key(key, value)
-    return (ok, "applied" if ok else "write_failed")
+    ok, record = apply_game5m_update(key, value, source="analyzer_autotune")
+    return (ok, str(record.get("status") or ("applied" if ok else "write_failed")))
 
 
 def main() -> None:

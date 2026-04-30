@@ -15,7 +15,7 @@ import pandas as pd
 from report_generator import get_engine, load_trade_history, compute_closed_trade_pnls
 from services.recommend_5m import fetch_5m_ohlc
 from services.deal_params_5m import normalize_entry_context
-from config_loader import load_config, is_editable_config_env_key
+from config_loader import get_config_value, load_config, is_editable_config_env_key
 
 # Дольше — считаем позицию «подвисшей» для пристрастного разбора порогов входа vs выхода.
 LONG_HOLD_MINUTES = 7 * 24 * 60
@@ -1055,11 +1055,16 @@ def _llm_trade_analyzer_response_parsed_ok(parsed: Any) -> bool:
 
 
 def _analyzer_llm_max_output_tokens(*, game_5m_config_focus: bool) -> int:
-    """Лимит completion: большие промпты + длинный JSON; 2000 часто режет gpt-5.x на середине объекта."""
-    raw = (os.environ.get("ANALYZER_LLM_MAX_COMPLETION_TOKENS") or "").strip()
-    if raw.isdigit():
-        return max(1024, min(16384, int(raw)))
-    return 6144 if game_5m_config_focus else 4096
+    """Лимит completion: большие промпты + длинный JSON; 4096 режет verbose-модели (Claude) на середине объекта."""
+    # Важно: get_config_value (файл config.env + merge), не только os.environ — иначе правка в config.env не подхватывается вебом.
+    raw = (get_config_value("ANALYZER_LLM_MAX_COMPLETION_TOKENS") or "").strip()
+    if raw:
+        try:
+            return max(1024, min(16384, int(float(raw))))
+        except (ValueError, TypeError):
+            pass
+    # Дефолты выше прежних 4096/6144: полный отчёт + русскоязычные priorities/изменения часто >4k completion.
+    return 8192 if game_5m_config_focus else 10240
 
 
 def _build_llm_recommendations(
@@ -1162,7 +1167,11 @@ def _build_llm_recommendations(
             "Никогда не связывай GAME_5M_SIGNAL_CRON_MINUTES с late_polling_signals: это разные вещи (см. llm_critical_notes). "
             "Не пиши в priorities фразы про «late polling» как про инфраструктуру — говори «выход ниже MFE окна» или «недобор после тейка».\n"
             "Для тейка/стопа опирайся на algorithm_digest.game_5m_take_exit_runtime и "
-            "report.meta.current_decision_rule_params.exit_strategy (в т.ч. strategy_params_snapshot, TAKE_MOMENTUM_FACTOR).\n\n"
+            "report.meta.current_decision_rule_params.exit_strategy (в т.ч. strategy_params_snapshot, TAKE_MOMENTUM_FACTOR).\n"
+            "ОБЪЁМ ОТВЕТА (обязательно): priorities — не более 4 строк; in_algorithm_parameter_changes — не более 5 объектов; "
+            "algorithm_change_proposals — не более 2; monitoring_fixes — не более 2; validation_plan — не более 3 строк. "
+            "В каждом поле reason_from_metrics, expected_effect, change, why_current_algo_not_enough — не более 220 символов; "
+            "без повторного перечисления одних и тех же trade_id. Не используй markdown (никаких ```).\n\n"
             "Верни ТОЛЬКО валидный JSON без markdown и без пояснений вне JSON со следующими ключами:\n"
             "{\n"
             "  \"priorities\": [\"...\"],\n"

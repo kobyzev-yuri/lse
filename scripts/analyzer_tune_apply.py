@@ -28,7 +28,7 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(_scripts_dir))
 
 from analyzer_snapshot_staleness import snapshot_staleness_warnings
-from config_loader import is_editable_config_env_key, update_config_key
+from services.game5m_tuning_policy import apply_game5m_update, validate_game5m_update
 
 
 def _skip_set() -> set[str]:
@@ -140,15 +140,16 @@ def main() -> None:
         if ku in skip:
             skipped.append({"env_key": key, "reason": "skip_list_env_ANALYZER_TUNE_SKIP_KEYS"})
             continue
-        if not is_editable_config_env_key(key):
-            skipped.append({"env_key": key, "reason": "not_editable"})
+        validation = validate_game5m_update(key, proposed_str)
+        if not validation.ok:
+            skipped.append({"env_key": key, "reason": validation.reason})
             continue
         if args.dry_run:
             applied.append({"env_key": key, "proposed": proposed_str, "dry_run": True})
             continue
-        ok = update_config_key(key, proposed_str)
+        ok, record = apply_game5m_update(key, proposed_str, source="analyzer_tune_apply")
         if not ok:
-            skipped.append({"env_key": key, "reason": "write_failed"})
+            skipped.append({"env_key": key, "reason": record.get("status") or "write_failed"})
             continue
         applied.append(
             {

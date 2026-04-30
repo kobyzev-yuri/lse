@@ -73,6 +73,42 @@
     <p id="analyzerJsonDownloadStatus" class="muted" style="margin-top:0.5rem; min-height:1.2em;"></p>
 </div>
 
+<div class="card" style="border: 1px solid rgba(34,197,94,0.35);">
+    <h2>GAME_5M tuning: регламент и live-эксперимент</h2>
+    <p class="muted" style="font-size:0.9rem;">Один параметр за раз: apply → наблюдение → review/rollback. Данные берутся из <code>local/game5m_tuning_ledger.json</code>, изменения проходят через общие guardrails.</p>
+    <div id="tuningStatus" class="dashboard-text">Загрузка tuning status...</div>
+    <details style="margin-top:0.65rem;">
+        <summary style="cursor:pointer; color:#e2e8f0; font-weight:600;">Регламент</summary>
+        <div id="tuningReglement" class="dashboard-text muted" style="margin-top:0.45rem;">—</div>
+    </details>
+    <div style="margin-top:0.75rem; display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.55rem; align-items:end;">
+        <div>
+            <label for="tuningKey">Ключ</label>
+            <input id="tuningKey" type="text" value="GAME_5M_TAKE_PROFIT_MIN_PCT">
+        </div>
+        <div>
+            <label for="tuningValue">Значение</label>
+            <input id="tuningValue" type="text" value="2.5">
+        </div>
+        <div>
+            <label for="tuningObserveDays">Observe days</label>
+            <input id="tuningObserveDays" type="number" min="1" max="30" value="2">
+        </div>
+        <div>
+            <label for="tuningMinNewTrades">Min new trades</label>
+            <input id="tuningMinNewTrades" type="number" min="1" max="100" value="8">
+        </div>
+    </div>
+    <div style="margin-top:0.7rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <button id="tuningRefreshBtn" type="button">Обновить статус</button>
+        <button id="tuningObserveBtn" type="button">Observe</button>
+        <button id="tuningApplyBtn" type="button">Apply один параметр</button>
+        <button id="tuningRollbackBtn" type="button" style="background:#7f1d1d;">Rollback active</button>
+    </div>
+    <div id="tuningActionStatus" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
+    <div id="tuningTopProposals" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
+</div>
+
 <div class="card">
     <h2>Сводка периода (<code>summary</code>)</h2>
     <p class="muted">Сумма недоборов — <code>sum_missed_upside_pct</code>; сумма избежимых просадок по окну — <code>sum_avoidable_loss_pct</code>. Пояснения — в справке сверху.</p>
@@ -138,6 +174,7 @@
 {% block extra_js %}
 <script>
 let lastAutoUpdates = [];
+let lastTuningStatus = null;
 
 function updateAnalyzerJsonLinks() {
     const days = document.getElementById('days').value || 7;
@@ -210,6 +247,177 @@ function esc(s) {
     const d = document.createElement('div');
     d.textContent = s == null ? '' : String(s);
     return d.innerHTML;
+}
+
+function fmtSummary(s) {
+    if (!s) {
+        return '—';
+    }
+    return 'trades=' + esc(s.closed_trades) +
+        ', win_rate=' + esc(s.win_rate_pct != null ? s.win_rate_pct + '%' : '—') +
+        ', total_lr=' + esc(s.total_log_return) +
+        ', avg_lr=' + esc(s.avg_log_return) +
+        ', net_pnl=' + esc(s.total_net_pnl != null ? s.total_net_pnl : '—');
+}
+
+function renderTuningStatus(data) {
+    lastTuningStatus = data || {};
+    const statusEl = document.getElementById('tuningStatus');
+    const regEl = document.getElementById('tuningReglement');
+    const topEl = document.getElementById('tuningTopProposals');
+    const active = (data && data.active_experiment) || null;
+    const current = (data && data.current_values) || {};
+    let html = '';
+    html += 'Текущие значения: ';
+    html += '<code>MIN_TAKE=' + esc(current.GAME_5M_TAKE_PROFIT_MIN_PCT != null ? current.GAME_5M_TAKE_PROFIT_MIN_PCT : '—') + '</code>, ';
+    html += '<code>TAKE=' + esc(current.GAME_5M_TAKE_PROFIT_PCT != null ? current.GAME_5M_TAKE_PROFIT_PCT : '—') + '</code>, ';
+    html += '<code>MAX_DAYS=' + esc(current.GAME_5M_MAX_POSITION_DAYS != null ? current.GAME_5M_MAX_POSITION_DAYS : '—') + '</code><br>';
+    if (active) {
+        const applied = active.applied || {};
+        html += 'Active: <strong>' + esc(active.status || '—') + '</strong> · ';
+        html += '<code>' + esc(applied.env_key || '—') + '=' + esc(applied.new_value || '—') + '</code> ';
+        html += '(old <code>' + esc(applied.old_value != null ? applied.old_value : '—') + '</code>)<br>';
+        html += 'Start UTC: <code>' + esc(active.created_at_utc || '—') + '</code><br>';
+        html += 'Baseline: ' + fmtSummary(active.baseline_summary) + '<br>';
+        const obs = Array.isArray(active.observations) ? active.observations : [];
+        if (obs.length) {
+            const last = obs[obs.length - 1];
+            html += 'Last observe: <code>' + esc(last.at_utc || '—') + '</code> · ' + fmtSummary(last.summary);
+        } else {
+            html += '<span class="muted">Observations пока нет.</span>';
+        }
+    } else {
+        html += '<span class="muted">Active experiment отсутствует. Можно применить один параметр.</span>';
+    }
+    statusEl.innerHTML = html;
+
+    const rules = data && data.reglement && Array.isArray(data.reglement.rules) ? data.reglement.rules : [];
+    regEl.innerHTML = rules.length ? rules.map(function (r) { return '• ' + esc(r); }).join('<br>') : '—';
+
+    const proposals = data && Array.isArray(data.top_proposals) ? data.top_proposals : [];
+    if (proposals.length) {
+        let phtml = '<strong>Top replay proposals</strong><br>';
+        phtml += proposals.slice(0, 6).map(function (p, idx) {
+            const m = p.metrics || {};
+            return (idx + 1) + '. <code>' + esc(p.env_key) + '</code> ' + esc(p.current) + ' → <strong>' + esc(p.proposed) +
+                '</strong>, score=' + esc(p.score) +
+                ', improved=' + esc(m.improved_count) +
+                ', worsened=' + esc(m.worsened_count) +
+                ' <button type="button" data-proposal-id="' + esc(p.proposal_id) + '" class="tuningApplyProposalBtn" style="padding:0.15rem 0.4rem;margin-left:0.35rem;">Apply</button>';
+        }).join('<br>');
+        topEl.innerHTML = phtml;
+        document.querySelectorAll('.tuningApplyProposalBtn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                applyTuningProposal(btn.getAttribute('data-proposal-id'));
+            });
+        });
+    } else {
+        topEl.innerHTML = '<span class="muted">Replay proposals в основном ledger пока не сохранены. Можно применить явный key/value.</span>';
+    }
+}
+
+async function loadTuningStatus() {
+    const actionEl = document.getElementById('tuningActionStatus');
+    try {
+        const r = await fetch('/api/analyzer/tuning/status?top_n=8');
+        const data = await r.json();
+        if (!r.ok) {
+            throw new Error((data && data.detail) || r.statusText || 'ошибка API');
+        }
+        renderTuningStatus(data);
+        if (actionEl) {
+            actionEl.textContent = 'Статус обновлен.';
+        }
+    } catch (e) {
+        if (actionEl) {
+            actionEl.innerHTML = '<span class="text-danger">Ошибка tuning status: ' + esc(e.message || e) + '</span>';
+        }
+    }
+}
+
+async function postTuning(url, body) {
+    const r = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body || {}),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+        throw new Error((data && data.detail) || r.statusText || 'ошибка API');
+    }
+    return data;
+}
+
+async function applyTuningProposal(proposalId) {
+    const actionEl = document.getElementById('tuningActionStatus');
+    if (!proposalId) {
+        return;
+    }
+    if (!confirm('Применить proposal ' + proposalId + '? Один active experiment за раз.')) {
+        return;
+    }
+    actionEl.textContent = 'Применение proposal...';
+    try {
+        await postTuning('/api/analyzer/tuning/apply', {
+            proposal_id: proposalId,
+            observe_days: Number(document.getElementById('tuningObserveDays').value || 2),
+        });
+        actionEl.textContent = 'Proposal применен.';
+        await loadTuningStatus();
+    } catch (e) {
+        actionEl.innerHTML = '<span class="text-danger">Ошибка apply: ' + esc(e.message || e) + '</span>';
+    }
+}
+
+async function applyTuningKeyValue() {
+    const actionEl = document.getElementById('tuningActionStatus');
+    const key = document.getElementById('tuningKey').value || '';
+    const value = document.getElementById('tuningValue').value || '';
+    if (!confirm('Применить ' + key + '=' + value + '?')) {
+        return;
+    }
+    actionEl.textContent = 'Применение...';
+    try {
+        await postTuning('/api/analyzer/tuning/apply', {
+            key: key,
+            value: value,
+            observe_days: Number(document.getElementById('tuningObserveDays').value || 2),
+        });
+        actionEl.textContent = 'Изменение применено.';
+        await loadTuningStatus();
+    } catch (e) {
+        actionEl.innerHTML = '<span class="text-danger">Ошибка apply: ' + esc(e.message || e) + '</span>';
+    }
+}
+
+async function observeTuningExperiment() {
+    const actionEl = document.getElementById('tuningActionStatus');
+    actionEl.textContent = 'Observe...';
+    try {
+        await postTuning('/api/analyzer/tuning/observe', {
+            days: Number(document.getElementById('tuningObserveDays').value || 2),
+            min_new_trades: Number(document.getElementById('tuningMinNewTrades').value || 8),
+        });
+        actionEl.textContent = 'Observation записан.';
+        await loadTuningStatus();
+    } catch (e) {
+        actionEl.innerHTML = '<span class="text-danger">Ошибка observe: ' + esc(e.message || e) + '</span>';
+    }
+}
+
+async function rollbackTuningExperiment() {
+    const actionEl = document.getElementById('tuningActionStatus');
+    if (!confirm('Откатить active experiment к old_value из ledger?')) {
+        return;
+    }
+    actionEl.textContent = 'Rollback...';
+    try {
+        await postTuning('/api/analyzer/tuning/rollback', {});
+        actionEl.textContent = 'Rollback выполнен.';
+        await loadTuningStatus();
+    } catch (e) {
+        actionEl.innerHTML = '<span class="text-danger">Ошибка rollback: ' + esc(e.message || e) + '</span>';
+    }
 }
 
 function toLine(r) {
@@ -467,7 +675,12 @@ document.getElementById('strategy').addEventListener('change', updateAnalyzerJso
 document.getElementById('useLlm').addEventListener('change', updateAnalyzerJsonLinks);
 document.getElementById('analyzerDownloadJson').addEventListener('click', function() { downloadAnalyzerJson(false); });
 document.getElementById('analyzerDownloadJsonFull').addEventListener('click', function() { downloadAnalyzerJson(true); });
+document.getElementById('tuningRefreshBtn').addEventListener('click', loadTuningStatus);
+document.getElementById('tuningObserveBtn').addEventListener('click', observeTuningExperiment);
+document.getElementById('tuningApplyBtn').addEventListener('click', applyTuningKeyValue);
+document.getElementById('tuningRollbackBtn').addEventListener('click', rollbackTuningExperiment);
 updateAnalyzerJsonLinks();
+loadTuningStatus();
 
 async function applyEnvOverride() {
     const applyBtn = document.getElementById('applyEnvBtn');
