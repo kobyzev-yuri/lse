@@ -198,7 +198,7 @@ def cmd_observe(args: argparse.Namespace) -> None:
     min_new = max(1, int(args.min_new_trades))
     if summary["closed_trades"] >= baseline_total + min_new:
         active["status"] = "ready_for_review"
-        active["ready_at_utc"] = _utc_now()
+        active["ready_at_utc"] = _utc_now()()
     ledger["active_experiment"] = active
     ledger.setdefault("history", []).append({"type": "observation", "experiment_id": active.get("experiment_id"), **obs})
     ledger["updated_at_utc"] = _utc_now()
