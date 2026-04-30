@@ -40,6 +40,79 @@ python scripts/analyze_hanger_tactic_log.py logs/cron_sndk_signal.log --tail-lin
 
 После закрытий смотреть `/analyzer?strategy=GAME_5M&days=1`: блоки `game5m_hanger_v2_review` и `continuation_gate_review` связывают live-диагностику с фактическим PnL, missed upside и кандидатами параметров. Настройка выполняется малыми шагами: один набор `GAME_5M_STALE_REVERSAL_*`, `GAME_5M_HANGER_V2_*` или `GAME_5M_CONTINUATION_*`, затем следующая сессия и новый snapshot.
 
+## Пайплайн: висяки, упущенная выгода, данные и обратная связь
+
+Ниже — **одна схема**, как связаны live-торговля, логирование, датасеты, CatBoost, анализатор и настройка порогов. Детали входа в начале RTH — в `docs/GAME_5M_CALCULATIONS_AND_REPORTING.md` §2.1 и `docs/GAME_5M_PREMARKET_AND_IMPULSE.md`.
+
+```mermaid
+flowchart TB
+  subgraph live["Live сессия"]
+    CRON["send_sndk_signal_cron"]
+    D5["get_decision_5m"]
+    CLOSE["should_close_position"]
+    BUY["record_entry BUY"]
+    SELL["close_position SELL"]
+    CRON --> D5
+    D5 --> CLOSE
+    CLOSE -->|открыта позиция| SELL
+    D5 -->|нет позиции, BUY/STRONG_BUY| BUY
+  end
+
+  subgraph ctx["context_json"]
+    CJB["BUY: полный entry context"]
+    CJS["SELL: position_state_v2, continuation_gate, exit_*"]
+    BUY --> CJB
+    SELL --> CJS
+  end
+
+  subgraph data["После сессии / по cron"]
+    PM["ingest_premarket_daily_features"]
+    DS1["build_game5m_stuck_dataset.py"]
+    DS2["build_game5m_continuation_dataset.py"]
+    ML["run_daily_game5m_ml_pipeline.py"]
+    PM -.->|фичи по дате| DS1
+    PM -.->|фичи по дате| DS2
+    CJB --> DS1
+    CJB --> DS2
+    CJB --> ML
+    DS1 --> ML
+    DS2 --> ML
+    ML --> JSONL["game5m_daily_ml_report.jsonl"]
+    ML --> CBM["game5m_entry_catboost.cbm + .meta.json"]
+  end
+
+  subgraph review["Оценка перед / после правок"]
+    AN["/api/analyzer strategy=GAME_5M"]
+    HV["game5m_hanger_v2_review"]
+    CG["continuation_gate_review"]
+    CB["catboost_entry_backtest"]
+    LLM["llm при use_llm=1"]
+    AN --> HV
+    AN --> CG
+    AN --> CB
+    AN --> LLM
+  end
+
+  subgraph act["Действия"]
+    TUNE["GAME_5M tuning ledger / один ключ"]
+    HYP["game5m_param_hypothesis_backtest"]
+    TUNE --> CRON
+    HYP -.->|офлайн сценарии| TUNE
+  end
+
+  CJS --> AN
+  CBM --> CB
+  JSONL -->|тренд строк/AUC| review
+```
+
+**Поток по смыслу**
+
+1. **Висяки / stale:** `should_close_position` применяет тейк, стоп (если включён), time exits, **stale_reversal**, hanger v2; в SELL пишется **`position_state_v2`** и причины — чтобы постфактум сопоставить класс с PnL.
+2. **Упущенная выгода:** на выходе по тейку пишется **`continuation_gate`** (пока чаще `log_only`): «закрыли бы сейчас» vs «extend_take_candidate»; анализатор сравнивает с **post-exit** движением (`continuation_gate_review`).
+3. **Премаркет:** `ingest_premarket_daily_features` кладёт агрегаты в БД; они **подмешиваются** в stuck/continuation датасеты (см. заголовки `scripts/build_game5m_stuck_dataset.py` / `build_game5m_continuation_dataset.py`), не отдельная игра.
+4. **CatBoost entry:** обучается на BUY-`context_json` + исход сделки; **не** заменяет правила (`GAME_5M_CATBOOST_FUSION.md`). Бэктест в анализаторе = тот же инференс на сохранённом контексте.
+5. **Решение что крутить:** анализатор (`practical_parameter_suggestions`, `game_5m_config_hints`, LLM JSON) + регламент `docs/GAME_5M_TUNING_REGLEMENT.md` — **один параметр за раз**, observe, rollback при ухудшении.
+
 ## Проблема
 
 В текущей GAME_5M смешаны две разные проблемы, которые в отчётах выглядят похожими:

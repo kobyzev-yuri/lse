@@ -1,5 +1,7 @@
 # GAME_5M: алгоритм, динамический тейк и борьба с висяками
 
+Связанные документы: **пайплайн** hanger / continuation / nightly ML / анализатор — `docs/GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md` (раздел «Пайплайн»); **навигация** — `docs/README.md`.
+
 Документ фиксирует текущую реализацию **GAME_5M**: как устроена 5-минутная игра, как считается тейк, почему `TAKE_PROFIT` может не совпадать с пиком на графике, и как работает механизм борьбы с **висяками**. Старые раздельные документы перенесены в архив:
 
 - `docs/archive/GAME_5M_CALCULATIONS_AND_REPORTING_2026-04-26.md`
@@ -45,6 +47,19 @@ should_close, exit_type, exit_detail = should_close_position(...)
 6. Если позиции нет, а входной сигнал `BUY` / `STRONG_BUY`, пишет BUY через `record_entry()` и отправляет Telegram-сигнал.
 
 Важно: для выхода используется **чистое техническое решение** `technical_decision_core`, а для входа — `technical_decision_effective`, куда могут быть добавлены fusion/ML-фильтры. Это сделано, чтобы дополнительные входные фильтры не ломали закрытие уже открытой позиции.
+
+### 2.1. Вход в начале торгового дня (премаркет → RTH, первые минуты)
+
+Источник правды в коде: `services/recommend_5m.py::get_decision_5m` (версия правил фиксируется в ответе как `decision_rule_version` = `GAME_5M_RULE_VERSION`).
+
+| Фаза сессии | Поведение входа |
+|-------------|-----------------|
+| **PRE_MARKET** | Решение `BUY` / `STRONG_BUY` **принудительно снижается до `HOLD`**: торговля не началась, вход только после открытия RTH. В reasoning добавляется пояснение; считаются премаркет-фичи для карточки и **рекомендация** (лимит / ждать открытия) — см. `docs/GAME_5M_PREMARKET_AND_IMPULSE.md`. |
+| **NEAR_OPEN** (первые ~15 мин RTH, см. `GAME_5M_NEAR_OPEN_FIRST_WINDOW_MIN`) | **Open-guard** (`GAME_5M_NEAR_OPEN_BUY_GUARD`): если последний завершённый 5m-бар «широкий» (размах Open–Close ≥ `GAME_5M_NEAR_OPEN_WIDE_BAR_PCT`), цена для контекста может стать `min(Open, Close)` (`entry_price_basis=min_open_close_last_bar`), а **STRONG_BUY** при режиме `hold` — в **HOLD** или **BUY** (`GAME_5M_NEAR_OPEN_STRONG_BUY_ON_WIDE_BAR`), обычный **BUY** при необходимости в HOLD (`GAME_5M_NEAR_OPEN_BUY_ON_WIDE_BAR`). Цель — не гнаться за первым волатильным баром после аукциона. |
+| **Импульс при малом числе баров** | `momentum_2h_pct` не ждёт полных двух часов: используется `n = min(24, len−1)` баров 5m (см. `compute_5m_features`). В первые 15 минут это часто **~10 минут** окна. Отдельно для **текущего RTH-дня** считается `momentum_rth_today_pct` / `momentum_rth_today_window_min` по барам **только сегодняшней** regular-сессии (от опорной цены n баров назад до последнего Close) — удобно интерпретировать «движение от открытия сессии». |
+| **После закрытия RTH** | `AFTER_HOURS` / выходные: как и премаркет, агрессивный вход не разрешается (см. тот же блок принудительного HOLD для BUY/STRONG_BUY). |
+
+Связь с висяками: слабый импульс в первые минуты + последующий **stale_reversal** часто видны вместе в анализаторе; пороги **`GAME_5M_MOMENTUM_STRONG_BUY_MIN`**, **`GAME_5M_RSI_STRONG_BUY_MAX`**, лимиты **`GAME_5M_MAX_POSITION_DAYS`** / **minutes** и **early derisk** настраиваются по блокам `game5m_hanger_v2_review` и LLM-отчёту, не «на глаз».
 
 ---
 

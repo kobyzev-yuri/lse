@@ -36,7 +36,7 @@
 
 - Для стратегий **`GAME_5M`** и **`ALL`** (в режиме ALL только сделки с `entry_strategy=GAME_5M`) по каждой закрытой сделке вызывается `predict_entry_favorability_from_saved_context` — та же модель, что в проде на входе, но признаки **только из `context_json` на BUY** (корреляция не дозаполняется из «текущей» матрицы).
 - В JSON: сводная **калибровка** (средний P при win/loss, квантили P vs win rate), массив **`per_trade`** (статус CatBoost, P, `realized_pct`, при наличии — `estimated_upside_pct_day_at_entry`, `prob_up_at_entry`, укороченный `price_forecast_5m_summary_excerpt`), опционально **`price_context_at_entry`** — корреляция сохранённого upside на входе с фактическим результатом (справочно).
-- Для **`PORTFOLIO`** блок осознанно **пропускается** (модель не про дневной портфель); отдельная модель — по плану в `docs/ML_GAME5M_CATBOOST.md` §8.
+- Для **`PORTFOLIO`** блок осознанно **пропускается** (модель не про дневной портфель); отдельная модель — по плану в `docs/ML_GAME5M_CATBOOST.md` §9.
 
 ### Hanger v2 и continuation gate
 
@@ -193,6 +193,23 @@ ANALYZER_AUTOTUNE_APPLY=1 python3 scripts/analyzer_autotune.py --days 5 --url ht
 - `critical_case_analysis` (разбор критичных сделок с action item);
 - `game5m_hanger_v2_review` и `continuation_gate_review` (новые блоки для Iteration 2);
 - опционально LLM-блок с приоритетами улучшений (`--llm` / `use_llm=1`).
+
+### 4.1 Карта отчёта и варианты решений
+
+| Блок JSON | Что отвечает | Типовые шаги (не все сразу) |
+|-----------|----------------|----------------------------|
+| `summary` + `top_cases` | Общий PnL, win rate, хвосты убытков и недобора | Зафиксировать период `days`; при высоком win rate смотреть `top_losses` как «слабейшие плюсы», не только убытки. |
+| `practical_parameter_suggestions` | Грубые правки `GAME_5M_*` под наблюдаемые паттерны | Один ключ за итерацию → `analyzer_tune_apply` / tuning API → observe → `docs/GAME_5M_TUNING_REGLEMENT.md`. |
+| `game_5m_config_hints` | Эвристики по env без обязательной связи с ML | Ручной разбор; сверка с `meta.current_decision_rule_params`. |
+| `critical_case_analysis` | Несколько худших кейсов с текстовым action item | Приоритет устранения «грубых промахов» перед тонкой калибровкой. |
+| `entry_underperformance_review` | Входы с плохим исходом или долгим удержанием | Ужесточение веток STRONG_BUY/BUY, `ENTRY_QUALITY_*`, лимиты дней/минут. |
+| `catboost_entry_backtest` | Согласованность скора входа с фактом (`realized_pct`) | Убедиться: `GAME_5M_CATBOOST_ENABLED`, путь к `.cbm` на хосте веба, достаточно строк без `disabled`; после nightly ML сравнить калибровку P(win) vs loss. См. `docs/ML_GAME5M_CATBOOST.md`. |
+| `game5m_hanger_v2_review` | `position_state_v2` vs PnL (stale / recoverable / normal) | Подкрутка `GAME_5M_STALE_REVERSAL_*`, `GAME_5M_HANGER_V2_*`, `GAME_5M_MAX_POSITION_*`, `EARLY_DERISK_*`; план фаз — `docs/GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md`. |
+| `continuation_gate_review` | Log-only gate vs фактический `missed_upside` после тейка | Сначала накопить статистику при `GAME_5M_CONTINUATION_GATE_LOG_ONLY=true`; затем точечно ослаблять тейк только при `extend_take_candidate` (риск большей просадки). |
+| `auto_config_override` | Готовые пары ключ→значение из эвристик анализатора | Применять только разрешённые ключи; согласовать с `analyzer_tune_apply` / веб-кнопкой «Применить». |
+| `llm` (`use_llm=1`) | Структурированный JSON приоритетов и `in_algorithm_parameter_changes` | Валидация на данных отчёта; лимит ответа: `ANALYZER_LLM_MAX_COMPLETION_TOKENS` (читается из merged `config.env` через `get_config_value`). Не подменяет бэктест. |
+
+**Связь с nightly ML:** JSONL `local/logs/game5m_daily_ml_report.jsonl` (в Docker часто `/app/local/logs/...`) описывает **объём датасетов и AUC обучения**; анализатор на закрытых сделках проверяет **эксплуатацию** модели и правил. Оба слоя нужны перед агрессивной сменой прод-конфига.
 
 ## 5) Как интерпретировать
 
