@@ -1524,13 +1524,19 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
 
 
 @app.get("/api/chart5m/{ticker}")
-async def get_chart5m(ticker: str, days: int = 5, source: str = "live"):
+async def get_chart5m(ticker: str, days: int = 1, source: str = "live"):
     """API: Данные для графика 5m с зоной пролонгации (EMA, тренд при ≥5 свечах)."""
     err_404 = "Нет 5m данных: Yahoo не вернул свечи. Обычно 5m доступны в торговые часы США. Попробуйте 5 или 7 дней."
-    days = min(max(1, days), 7)
+    source_norm = (source or "live").strip().lower()
+    if source_norm == "live":
+        # В live режиме график нужен как “текущая сессия”, иначе по оси времени
+        # (в основном HH:MM) получается неочевидная каша при нескольких днях.
+        days = 1
+    else:
+        days = min(max(1, days), 7)
     try:
         loop = asyncio.get_running_loop()
-        fn = functools.partial(_build_chart5m_data, ticker, days, source=source)
+        fn = functools.partial(_build_chart5m_data, ticker, days, source=source_norm)
         data = await loop.run_in_executor(None, fn)
     except Exception as e:
         return JSONResponse(

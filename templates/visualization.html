@@ -8,6 +8,11 @@
 <div class="card">
     <h2>График 5m (интрадей + пролонгация)</h2>
     <p class="muted" style="margin-bottom:0.5rem;">Тикеры игры 5m (как в карточках). Список <strong>Все</strong> — график по каждому; выберите тикер или откройте ссылку <code>/visualization?ticker=SNDK</code> с карточки. Ось времени — US Eastern (NYSE/NASDAQ).</p>
+    <label>Режим:</label>
+    <select id="chart5mMode">
+        <option value="live" selected>Live (Yahoo, 1 день)</option>
+        <option value="history">History (DB/auto)</option>
+    </select>
     <label>Дней:</label>
     <select id="days5mSelect">
         <option value="1" selected>1</option>
@@ -36,6 +41,26 @@
 let chart5mInstances = {};
 const CHART_REFRESH_MS = 5 * 60 * 1000;
 let chartRefreshTimer = null;
+function getChart5mMode() {
+    const sel = document.getElementById('chart5mMode');
+    const v = sel && sel.value ? String(sel.value).trim().toLowerCase() : 'live';
+    return (v === 'history') ? 'history' : 'live';
+}
+
+function syncChart5mControls() {
+    const mode = getChart5mMode();
+    const daysSel = document.getElementById('days5mSelect');
+    if (!daysSel) return;
+    if (mode === 'live') {
+        daysSel.value = '1';
+        daysSel.disabled = true;
+        daysSel.title = 'Live режим всегда показывает 1 день (текущая сессия).';
+    } else {
+        daysSel.disabled = false;
+        daysSel.title = '';
+    }
+}
+
 function scheduleChartAutoRefresh() {
     if (chartRefreshTimer) clearTimeout(chartRefreshTimer);
     chartRefreshTimer = null;
@@ -484,7 +509,10 @@ function get5mTickersToPlot() {
 
 async function loadChart5mAll() {
     const tickers = get5mTickersToPlot();
-    const days = parseInt(document.getElementById('days5mSelect').value, 10) || 1;
+    const mode = getChart5mMode();
+    const source = (mode === 'live') ? 'live' : 'auto';
+    const daysSel = document.getElementById('days5mSelect');
+    const days = (mode === 'live') ? 1 : (parseInt(daysSel && daysSel.value ? daysSel.value : '1', 10) || 1);
     const container = document.getElementById('chart5mContainer');
     if (!container) return;
     if (!tickers.length) {
@@ -506,7 +534,7 @@ async function loadChart5mAll() {
         const legendEl = section.querySelector('.chart5m-legend');
 
         try {
-            const response = await fetch('/api/chart5m/' + encodeURIComponent(ticker) + '?days=' + days + '&source=live');
+            const response = await fetch('/api/chart5m/' + encodeURIComponent(ticker) + '?days=' + days + '&source=' + encodeURIComponent(source));
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
                 if (legendEl) legendEl.textContent = data.detail || 'Нет 5m данных';
@@ -529,6 +557,11 @@ document.getElementById('days5mSelect').addEventListener('change', async functio
     await loadChart5mAll();
     scheduleChartAutoRefresh();
 });
+document.getElementById('chart5mMode').addEventListener('change', async function() {
+    syncChart5mControls();
+    await loadChart5mAll();
+    scheduleChartAutoRefresh();
+});
 const ticker5mSel = document.getElementById('ticker5mFilter');
 if (ticker5mSel) {
     ticker5mSel.addEventListener('change', async function() {
@@ -538,6 +571,7 @@ if (ticker5mSel) {
 }
 document.getElementById('autoChartRefresh').addEventListener('change', scheduleChartAutoRefresh);
 init5mTickerFilterFromUrl();
+syncChart5mControls();
 loadChart5mAll().then(function() { scheduleChartAutoRefresh(); });
 
 </script>
