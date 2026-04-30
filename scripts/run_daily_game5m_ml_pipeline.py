@@ -10,9 +10,19 @@
 Проверка «тестирования» в анализаторе: GET /api/analyzer?strategy=GAME_5M — блок
 `catboost_entry_backtest` (модель `local/models/game5m_entry_catboost.cbm` + .meta.json на хосте веба).
 
-Пример cron (время подстроить под ET close + запас; ниже — ориентир 22:30 UTC будни):
+Запуск на сервере (как в docker-compose.yml: сервис lse, container_name lse-bot, WORKDIR /app).
 
-  cd /app && python3 scripts/run_daily_game5m_ml_pipeline.py >> /app/logs/game5m_daily_ml_pipeline.log 2>&1
+  Однократно из каталога с docker-compose.yml:
+    docker compose exec lse python3 scripts/run_daily_game5m_ml_pipeline.py
+
+  С логом в примонтированный ./logs (на хосте появится logs/game5m_daily_ml_pipeline.log):
+    docker compose exec lse bash -lc 'python3 scripts/run_daily_game5m_ml_pipeline.py >> /app/logs/game5m_daily_ml_pipeline.log 2>&1'
+
+  Без compose (если известен container_name):
+    docker exec lse-bot bash -lc 'cd /app && python3 scripts/run_daily_game5m_ml_pipeline.py'
+
+  Cron на хосте (из каталога репозитория; -T — без TTY для cron):
+    30 22 * * 1-5 cd /path/to/lse && docker compose exec -T lse python3 scripts/run_daily_game5m_ml_pipeline.py >> /path/to/lse/logs/game5m_daily_ml_pipeline.log 2>&1
 
 Переменные окружения:
   DAILY_ML_MIN_CATBOOST_ROWS  — порог строк для train_game5m_catboost (default: 35)
