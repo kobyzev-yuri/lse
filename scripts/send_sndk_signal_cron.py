@@ -12,7 +12,7 @@
 
 Настройка config.env:
   TELEGRAM_BOT_TOKEN=..., TELEGRAM_SIGNAL_CHAT_IDS, TICKERS_FAST, GAME_5M_COOLDOWN_MINUTES (и др. GAME_5M_*).
-  Висяки (JSON + dual): см. config.env.lse; в логе маркер «HANGER_TACTIC» — grep по logs/cron_sndk_signal.log.
+  Висяки (JSON + dual): см. GAME_5M_HANGER_* в config.env; в логе маркер «HANGER_TACTIC» — grep по logs/cron_sndk_signal.log.
   Опционально: PLATFORM_GAME_API_ENABLED, PLATFORM_GAME_API_URL — внешний POST /game (kerimsrv), см. kerimsrv/platform doc.md.
 
 Аргументы: [тикеры] — если заданы, используются вместо GAME_5M_TICKERS/TICKERS_FAST (через запятую).
