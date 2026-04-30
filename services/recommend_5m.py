@@ -348,13 +348,22 @@ def fetch_5m_ohlc(ticker: str, days: int = None) -> Optional[pd.DataFrame]:
     df_best = _to_us_eastern(df) if df is not None else None
     best_score = _coverage_score(df_best)
 
-    # Fallback/alt: Yahoo иногда отдаёт 5m «обрезанно» через start/end (например, только 1 день),
-    # но нормально через period. Берём вариант с наибольшим покрытием.
-    periods = []
-    # Сначала — запрошенное окно, потом стандартные fallback.
+    # Fallback/alt: Yahoo иногда отдаёт 5m «обрезанно» через start/end,
+    # но нормально через period. ВАЖНО: не расширяем окно сверх запрошенного days,
+    # иначе "days=1" превращается в 7d и графики/логика становятся неочевидными.
+    periods: List[str] = []
     if days:
-        periods.append(f"{int(days)}d")
-    periods.extend(["7d", "5d", "2d", "1d"])
+        d = int(days)
+        if d >= 7:
+            periods.extend(["7d", "5d", "2d", "1d"])
+        elif d >= 5:
+            periods.extend(["5d", "2d", "1d"])
+        elif d >= 2:
+            periods.extend([f"{d}d", "1d"])
+        else:
+            periods.extend(["1d"])
+    else:
+        periods.extend(["7d", "5d", "2d", "1d"])
     seen = set()
     periods = [p for p in periods if not (p in seen or seen.add(p))]
     for period in periods:
