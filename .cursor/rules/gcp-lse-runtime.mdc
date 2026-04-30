@@ -5,7 +5,18 @@ alwaysApply: true
 
 # Live Runtime Access
 
-- For factual database, trade history, cron, and container checks, use the live VM instead of local PostgreSQL: `ssh gcp-lse`.
+- For factual database, trade history, cron, and container checks, use the **live GCP VM** instead of local PostgreSQL.
+- **SSH (explicit):** `ssh ai8049520@104.154.205.58` — use this when no `Host` alias is configured.
+- **SSH (alias):** if `~/.ssh/config` defines e.g. `Host gcp-lse` with the same machine, `ssh gcp-lse` is equivalent.
 - The project runtime is in Docker containers on that host, especially `lse-bot` and `lse-postgres`.
-- Prefer commands like `ssh gcp-lse "docker exec lse-bot ..."` for Python/app checks and `ssh gcp-lse "docker exec lse-postgres ..."` for direct PostgreSQL checks.
+- Prefer: `ssh ai8049520@104.154.205.58 "docker exec lse-bot ..."` for Python/app checks and `ssh ai8049520@104.154.205.58 "docker exec lse-postgres ..."` for direct PostgreSQL checks.
 - Do not assume local `localhost:5432` has the production data.
+
+## Deploy / “why my new file isn’t in the container”
+
+- `lse-bot` runs from the Docker image filesystem (`/app/...`). **New repo files are not visible inside the container** until you **rebuild/redeploy the image** (typical: `git pull` on the VM + `docker compose build ... && docker compose up -d ...` in the VM’s compose directory).
+- For a **one-off script** (debug/ops), you can copy into the running container without rebuilding:
+  - copy to VM: `scp ./path/script.py ai8049520@104.154.205.58:/tmp/script.py`
+  - copy into container: `ssh ai8049520@104.154.205.58 "docker cp /tmp/script.py lse-bot:/app/scripts/script.py"`
+  - run: `ssh ai8049520@104.154.205.58 "docker exec lse-bot bash -lc 'cd /app && python3 scripts/script.py ...'"`
+- Avoid fragile remote quoting by **base64-wrapping** ad-hoc Python probes, or by running `docker exec -i ... python3 - <<'PY' ... PY` from a local heredoc you control end-to-end.
