@@ -1451,6 +1451,8 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
         prolongation_prices = [float(last_close), float(last_close)]
 
     trades = []
+    # Время первой покупки в ET (для честного "high so far" на момент входа).
+    first_buy_ts_et = None
     try:
         from services.game_5m import trade_ts_to_et
         # Диапазон графика (ET); внутри get_trades_for_chart конвертируется в MSK и фильтруется по ET
@@ -1471,6 +1473,30 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
                 "signal_type": t.get("signal_type"),
                 "id": int(t.get("id") or 0),
             })
+            try:
+                if first_buy_ts_et is None and (t.get("side") or "").upper() == "BUY":
+                    ts0 = trade_ts_to_et(t.get("ts"), source_tz=t.get("ts_timezone"))
+                    if ts0 is not None:
+                        first_buy_ts_et = pd.Timestamp(ts0).tz_convert("America/New_York") if pd.Timestamp(ts0).tzinfo else pd.Timestamp(ts0).tz_localize("America/New_York", ambiguous=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # High so far: максимум High по барам до первой BUY-сделки (если она есть в окне).
+    # Это делает визуализацию честнее: не сравниваем вход с "high дня", который мог случиться позже.
+    try:
+        if first_buy_ts_et is not None and "High" in df.columns and "datetime" in df.columns:
+            dtt = pd.to_datetime(df["datetime"])
+            if dtt.dt.tz is None:
+                dtt = dtt.dt.tz_localize("America/New_York", ambiguous=True)
+            else:
+                dtt = dtt.dt.tz_convert("America/New_York")
+            mask = dtt <= first_buy_ts_et
+            if mask.any():
+                hs = pd.to_numeric(df.loc[mask, "High"], errors="coerce").max()
+                if hs is not None and pd.notna(hs):
+                    session_high = float(hs)
     except Exception:
         pass
 

@@ -137,20 +137,23 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
         }
     }
     const closeData = (data.close || []).concat(Array(nProlong).fill(null));
-    const prolongData = Array(nMain).fill(null).concat(prolong.prices || []);
+    // Пролонгация/“вилка прогноза” в конце мешает обзору — не рисуем её на графике,
+    // выводим только текстом в комментарии ниже.
+    // const prolongData = Array(nMain).fill(null).concat(prolong.prices || []);
 
     const datasets = [];
     if (!noOhlc && nMain > 0) {
         datasets.push(
-            { label: 'Close', data: closeData, borderColor: '#1565c0', backgroundColor: 'rgba(21, 101, 192, 0.05)', fill: false, tension: 0.1, pointRadius: 0, borderWidth: 1.2 },
-            { label: prolong.label || (prolong.forecast_defined ? 'Прогноз' : '…'), data: prolongData, borderColor: '#c62828', borderDash: prolong.forecast_defined ? [] : [4, 4], borderWidth: prolong.forecast_defined ? 1.2 : 0.8, fill: false, tension: 0, pointRadius: 0 }
+            { label: 'Close', data: closeData, borderColor: '#1565c0', backgroundColor: 'rgba(21, 101, 192, 0.05)', fill: false, tension: 0.1, pointRadius: 0, borderWidth: 1.2 }
         );
     }
     if (data.entry_price != null && labels.length > 0) {
-        datasets.push({ label: 'Вход * @ ' + data.entry_price.toFixed(2), data: labels.map(() => data.entry_price), borderColor: '#0284c7', borderDash: [6, 4], borderWidth: 1.2, fill: false, pointRadius: 0 });
+        // Это не "BUY в момент времени", а горизонтальный уровень средней цены входа по позиции.
+        // Маркер "*" оставляем только для реальных BUY-сделок на графике.
+        datasets.push({ label: 'Уровень входа @ ' + data.entry_price.toFixed(2), data: labels.map(() => data.entry_price), borderColor: '#0284c7', borderDash: [6, 4], borderWidth: 1.2, fill: false, pointRadius: 0 });
     }
     if (!noOhlc && data.session_high != null) {
-        datasets.push({ label: 'Хай ' + data.session_high.toFixed(2), data: labels.map(() => data.session_high), borderColor: '#f57c00', borderDash: [2, 4], borderWidth: 1, fill: false, pointRadius: 0 });
+        datasets.push({ label: 'Хай (на момент входа) ' + data.session_high.toFixed(2), data: labels.map(() => data.session_high), borderColor: '#f57c00', borderDash: [2, 4], borderWidth: 1, fill: false, pointRadius: 0 });
     }
     if (!noOhlc && data.take_level != null) {
         var takeLbl = 'Тейк @ ' + data.take_level.toFixed(2);
@@ -169,7 +172,9 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
             const d = Math.abs(new Date(l).getTime() - t);
             if (d < bestDiff) { bestDiff = d; best = i; }
         });
-        const maxMarkerSnapMs = 10 * 60 * 1000;
+        // Маркеры сделок не должны "улетать" к 09:30 при неточности времени.
+        // Лучше пропустить маркер, чем приклеить его к началу сессии.
+        const maxMarkerSnapMs = 3 * 60 * 1000;
         if (!Number.isFinite(bestDiff) || bestDiff > maxMarkerSnapMs) return -1;
         return best;
     }
@@ -223,12 +228,16 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
         }
     });
     const tradeMarkerItems = [];
+    const tradeMetaByIndex = {};
     function pushMarkers(arr, kind) {
         arr.forEach(tr => {
             const i = findClosestLabelIndex(labels, tr.ts);
             if (i < 0) return;
             const p = parseFloat(tr.price);
-            if (Number.isFinite(p)) tradeMarkerItems.push({ index: i, price: p, kind: kind });
+            if (!Number.isFinite(p)) return;
+            tradeMarkerItems.push({ index: i, price: p, kind: kind, ts: tr.ts, side: tr.side, id: tr.id });
+            if (!tradeMetaByIndex[i]) tradeMetaByIndex[i] = [];
+            tradeMetaByIndex[i].push({ kind: kind, side: tr.side, ts: tr.ts, price: p, id: tr.id });
         });
     }
     pushMarkers(buyTrades, 'buy');
@@ -269,9 +278,32 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                     callbacks: {
                         title: function(items) {
                             if (!items || !items.length) return '';
-                            const iso = items[0].label;
+                            const it = items[0];
+                            const idx = (it && Number.isFinite(it.dataIndex)) ? it.dataIndex : null;
+                            let iso = it.label;
+                            // Если наведение по маркеру сделки — показываем реальное время сделки (ET), а не время свечи.
+                            if (idx != null && tradeMetaByIndex[idx] && tradeMetaByIndex[idx].length) {
+                                iso = tradeMetaByIndex[idx][0].ts || iso;
+                            }
                             const et = _fmtTz(iso, 'America/New_York', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
                             return et ? (et + ' ET') : '';
+                        },
+                        label: function(ctx) {
+                            // Для сделок: показываем BUY/SELL и цену, чтобы не выглядеть как "Вход в 09:30".
+                            try {
+                                const idx = ctx && Number.isFinite(ctx.dataIndex) ? ctx.dataIndex : null;
+                                const dsLabel = (ctx && ctx.dataset && ctx.dataset.label) ? String(ctx.dataset.label) : '';
+                                if (idx != null && tradeMetaByIndex[idx] && tradeMetaByIndex[idx].length && (dsLabel.startsWith('Вход') || dsLabel.startsWith('Закрытие'))) {
+                                    const tr = tradeMetaByIndex[idx][0];
+                                    const side = (tr.side || '').toUpperCase();
+                                    const px = Number.isFinite(tr.price) ? tr.price.toFixed(2) : '';
+                                    const kind = side === 'BUY' ? 'BUY' : (side === 'SELL' ? 'SELL' : 'TRADE');
+                                    return kind + (px ? (' @ ' + px) : '');
+                                }
+                            } catch (_) {}
+                            return ctx.formattedValue != null && ctx.dataset && ctx.dataset.label
+                                ? (String(ctx.dataset.label) + ': ' + String(ctx.formattedValue))
+                                : (ctx.formattedValue != null ? String(ctx.formattedValue) : '');
                         }
                     }
                 }
@@ -297,6 +329,10 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
         }, {
             id: 'forecastArrows',
             afterDraw(chart) {
+                // Оверлей прогноза перекрывает конец графика; по умолчанию выключен.
+                // Значения p50 выводим текстом под графиком.
+                const overlayEnabled = chart.options.plugins?.forecastOverlayEnabled === true;
+                if (!overlayEnabled) return;
                 const fc = chart.options.plugins?.priceForecast5m;
                 if (!fc || !fc.horizons || !fc.horizons.length) return;
                 const spot = parseFloat(fc.spot);
@@ -332,7 +368,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                     else if (p50 < spot) { col = 'rgba(248, 113, 113, 1)'; }
                     else { col = 'rgba(203, 213, 225, 1)'; }
                     const hLab = horizonLabelCanvas(h.minutes);
-                    const text = '* ' + hLab + ' ' + p50.toFixed(2);
+                    const text = 'p50 ' + hLab + ' ' + p50.toFixed(2);
                     ctx.font = font;
                     let tw = ctx.measureText(text).width;
                     if (tw < 8 && text.length > 1) {
@@ -454,14 +490,27 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
     if (legendEl) {
         let base = noOhlc
             ? (data.trades && data.trades.length ? 'Нет свечей; сделки GAME_5M.' : 'Нет данных.')
-            : (prolong.forecast_defined ? 'Пролонгация: ' + (prolong.label || '') : 'Тренд не определён (≥5 свечей).');
+            : (prolong.forecast_defined ? 'Прогноз: ' + (prolong.label || '') : 'Тренд не определён (≥5 свечей).');
+        if (prolong && Array.isArray(prolong.times) && prolong.times.length && Array.isArray(prolong.prices) && prolong.prices.length) {
+            const tLast = prolong.times[prolong.times.length - 1];
+            const pLast = parseFloat(prolong.prices[prolong.prices.length - 1]);
+            const tEt = tLast ? _fmtTz(tLast, 'America/New_York', { hour: '2-digit', minute: '2-digit' }) : '';
+            if (tEt && Number.isFinite(pLast)) {
+                base += ' · до ' + tEt + ' ET ~ ' + pLast.toFixed(2);
+            } else if (tEt) {
+                base += ' · до ' + tEt + ' ET';
+            }
+        }
         const pfc = data.price_forecast_5m;
         if (pfc && pfc.horizons && pfc.horizons.length && Number.isFinite(parseFloat(pfc.spot))) {
             const sp = parseFloat(pfc.spot);
             const bits = pfc.horizons.map(function(h) {
                 const p50 = parseFloat(h.p50_price);
                 const a = p50 > sp ? '↑' : (p50 < sp ? '↓' : '→');
-                return horizonShortLabel(h.minutes) + a;
+                if (!Number.isFinite(p50)) {
+                    return horizonShortLabel(h.minutes) + a;
+                }
+                return 'p50 ' + horizonShortLabel(h.minutes) + ' ' + p50.toFixed(2) + ' ' + a;
             });
             base += ' · Медианы: ' + bits.join(' · ');
         }
