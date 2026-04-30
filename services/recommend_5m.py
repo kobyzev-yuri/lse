@@ -1120,6 +1120,9 @@ TECHNICAL_SIGNAL_KEYS = (
     "estimated_downside_pct_day", "prob_up", "prob_down",
     "pullback_from_high_pct", "session_high",
     "kb_news_impact", "entry_advice", "entry_advice_reason", "market_session",
+    "session_phase", "entry_price_basis",
+    "open_guard_triggered", "open_guard_bar_range_pct", "open_guard_mins_since_open",
+    "open_guard_prev_decision", "open_guard_next_decision",
     "premarket_gap_pct", "premarket_last", "bars_count",
     "is_preliminary",
     # CatBoost (опционально); итог для входа/LLM — technical_decision_effective
@@ -1752,6 +1755,101 @@ def get_decision_5m(
         reasoning = reasoning + f" [Вход отложен: сессия {session_phase} — ждём открытия биржи 9:30 ET]"
         decision = "HOLD"
 
+    # Осторожность на старте RTH: первый 5m бар часто «широкий» (гэп/аукцион),
+    # а `price` по умолчанию = Close последнего бара может не совпадать с тем, что интуитивно видно как «цена открытия».
+    # Здесь мы НЕ пересчитываем RSI/импульс (они уже посчитаны), но можем:
+    # - сделать recorded entry price более консервативным (min(Open, Close) последнего бара)
+    # - и/или отложить агрессивный STRONG_BUY до стабилизации после широкого open-бара.
+    near_open_guard = (_gcv("GAME_5M_NEAR_OPEN_BUY_GUARD", "true") or "true").strip().lower() in ("1", "true", "yes")
+    try:
+        near_open_thr = float((_gcv("GAME_5M_NEAR_OPEN_WIDE_BAR_PCT", "1.0") or "1.0").strip())
+    except (ValueError, TypeError):
+        near_open_thr = 1.0
+    try:
+        near_open_first_min = int(
+            float((_gcv("GAME_5M_NEAR_OPEN_FIRST_WINDOW_MIN", "15") or "15").strip())
+        )
+    except (ValueError, TypeError):
+        near_open_first_min = 15
+    near_open_first_min = max(1, min(near_open_first_min, 120))
+    # strong: что делать с STRONG_BUY на «широком» баре в окне после открытия: hold | buy | none
+    near_open_strong_mode = (
+        (_gcv("GAME_5M_NEAR_OPEN_STRONG_BUY_ON_WIDE_BAR", "hold") or "hold").strip().lower()
+    )
+    if near_open_strong_mode in ("off", "skip", "no", "false", "0"):
+        near_open_strong_mode = "none"
+    # buy: что делать с обычным BUY (обычно оставляем, иначе слишком много пропусков)
+    near_open_buy_mode = ((_gcv("GAME_5M_NEAR_OPEN_BUY_ON_WIDE_BAR", "none") or "none").strip().lower())
+    if near_open_buy_mode in ("off", "skip", "no", "false", "0"):
+        near_open_buy_mode = "none"
+    decision_rule_params.update(
+        {
+            "near_open_buy_guard": near_open_guard,
+            "near_open_wide_bar_pct": near_open_thr,
+            "near_open_first_window_min": near_open_first_min,
+            "near_open_strong_buy_on_wide_bar": near_open_strong_mode,
+            "near_open_buy_on_wide_bar": near_open_buy_mode,
+        }
+    )
+    open_guard_triggered = False
+    open_guard_bar_range_pct: Optional[float] = None
+    open_guard_mins_since_open: Optional[float] = None
+    open_guard_prev_decision: Optional[str] = None
+    open_guard_next_decision: Optional[str] = None
+    entry_price_basis = "last_close"
+    if (
+        near_open_guard
+        and session_phase == "NEAR_OPEN"
+        and decision in ("BUY", "STRONG_BUY")
+        and df is not None
+        and not df.empty
+        and all(c in df.columns for c in ("Open", "Close"))
+    ):
+        try:
+            t_last = pd.to_datetime(df["datetime"].iloc[-1])
+            if t_last.tzinfo is None:
+                t_last = t_last.tz_localize("America/New_York", ambiguous="infer")
+            else:
+                t_last = t_last.tz_convert("America/New_York")
+            open_et = t_last.normalize() + pd.Timedelta(hours=9, minutes=30)
+            mins_since_open = float((t_last - open_et).total_seconds()) / 60.0
+            in_open_window = mins_since_open >= 0 and mins_since_open <= float(near_open_first_min)
+            open_guard_mins_since_open = mins_since_open
+            o_last = float(pd.to_numeric(df["Open"].iloc[-1], errors="coerce"))
+            c_last = float(pd.to_numeric(df["Close"].iloc[-1], errors="coerce"))
+            if in_open_window and o_last > 0 and c_last > 0:
+                bar_range_pct = abs(o_last - c_last) / max(o_last, c_last) * 100.0
+                # Консервативная цена записи входа: не «хуже» min(Open, Close) на широком баре
+                if bar_range_pct >= near_open_thr:
+                    open_guard_triggered = True
+                    open_guard_bar_range_pct = float(bar_range_pct)
+                    decision_before_wide_bar = decision
+                    new_px = float(min(o_last, c_last))
+                    if new_px > 0 and new_px != float(price):
+                        old_px = float(price)
+                        price = new_px
+                        features["price"] = new_px
+                        entry_price_basis = "min_open_close_last_bar"
+                        reasoning = (
+                            reasoning
+                            + f" [Open-guard: NEAR_OPEN first {near_open_first_min}m, wide 5m bar ~{bar_range_pct:.2f}% "
+                            f"≥ {near_open_thr:.2f}% → entry_price_basis={entry_price_basis} ({old_px:.4f}→{new_px:.4f})]"
+                        )
+                    if decision_before_wide_bar == "STRONG_BUY" and near_open_strong_mode in ("hold", "buy", "none"):
+                        if near_open_strong_mode == "hold":
+                            decision = "HOLD"
+                            reasoning = reasoning + " [Open-guard: STRONG_BUY отложен из‑за широкого бара у открытия]"
+                        elif near_open_strong_mode == "buy":
+                            decision = "BUY"
+                            reasoning = reasoning + " [Open-guard: STRONG_BUY→BUY из‑за широкого бара у открытия]"
+                    elif decision_before_wide_bar == "BUY" and near_open_buy_mode == "hold":
+                        decision = "HOLD"
+                        reasoning = reasoning + " [Open-guard: BUY отложен из‑за широкого бара у открытия]"
+                    open_guard_prev_decision = str(decision_before_wide_bar)
+                    open_guard_next_decision = str(decision)
+        except Exception as e:
+            logger.debug("near_open buy guard для %s: %s", ticker, e)
+
     # Рекомендация по входу в премаркете (2.2, 2.3): войти сейчас / ждать открытия / лимит ниже
     premarket_entry_recommendation = None
     premarket_suggested_limit_price = None
@@ -1836,6 +1934,13 @@ def get_decision_5m(
         "kb_news": kb_news,
         "kb_news_impact": kb_news_impact,
         "market_session": market_session,
+        "session_phase": session_phase,
+        "entry_price_basis": entry_price_basis,
+        "open_guard_triggered": open_guard_triggered,
+        "open_guard_bar_range_pct": open_guard_bar_range_pct,
+        "open_guard_mins_since_open": open_guard_mins_since_open,
+        "open_guard_prev_decision": open_guard_prev_decision,
+        "open_guard_next_decision": open_guard_next_decision,
     }
     if vix_snap.get("enabled"):
         out["vix_context"] = {
