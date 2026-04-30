@@ -31,3 +31,5 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 45 * * * * docker exec lse-bot python scripts/cron_watchdog.py --execute >> /home/ai8049520/lse/logs/cron_watchdog.log 2>&1
 30 23 * * 1-5 docker exec -e ANALYZER_AUTOTUNE_APPLY=0 lse-bot python scripts/analyzer_autotune.py --days 5 --url http://127.0.0.1:8080/api/analyzer >> /home/ai8049520/lse/logs/autotune.log 2>&1
 25 23 * * * flock -n /tmp/lse_market_bars_intraday.lock docker exec lse-bot python scripts/ingest_market_bars_intraday.py >> /home/ai8049520/lse/logs/cron_market_bars_intraday.log 2>&1
+# GAME_5M ML: stuck + continuation CSV, CatBoost entry, JSONL-отчёт (после ingest_market_bars и analyzer_autotune).
+40 23 * * 1-5 flock -n /tmp/lse_game5m_daily_ml.lock docker exec lse-bot python scripts/run_daily_game5m_ml_pipeline.py >> /home/ai8049520/lse/logs/game5m_daily_ml_pipeline.log 2>&1
