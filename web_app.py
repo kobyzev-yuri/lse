@@ -1300,7 +1300,9 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
         return df_db
 
     try:
-        df = _fetch_5m_from_db(ticker, days) or fetch_5m_ohlc(ticker, days=days)
+        df = _fetch_5m_from_db(ticker, days)
+        if df is None or df.empty:
+            df = fetch_5m_ohlc(ticker, days=days)
     except Exception:
         return None
     if df is None or df.empty or "Close" not in df.columns:
@@ -1308,7 +1310,9 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
             if fallback_days == days:
                 continue
             try:
-                df = _fetch_5m_from_db(ticker, fallback_days) or fetch_5m_ohlc(ticker, days=fallback_days)
+                df = _fetch_5m_from_db(ticker, fallback_days)
+                if df is None or df.empty:
+                    df = fetch_5m_ohlc(ticker, days=fallback_days)
             except Exception:
                 continue
             if df is not None and not df.empty and "Close" in df.columns:
