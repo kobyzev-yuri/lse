@@ -68,7 +68,9 @@ def _load_trades(engine, days: int, ticker: Optional[str]) -> pd.DataFrame:
         SELECT id, ts, ticker, side, price, signal_type, context_json
         FROM public.trade_history
         WHERE strategy_name = :strategy
-          AND ts >= (NOW() AT TIME ZONE 'UTC') - (:days::int * INTERVAL '1 day')
+          -- NOTE: don't mix SQLAlchemy named binds with Postgres "::casts" inside the same token
+          -- (e.g. ":days::int" breaks parsing). Cast via CAST(...) instead.
+          AND ts >= (NOW() AT TIME ZONE 'UTC') - (CAST(:days AS int) * INTERVAL '1 day')
     """
     params: Dict[str, Any] = {"strategy": GAME_5M, "days": int(days)}
     if ticker:
