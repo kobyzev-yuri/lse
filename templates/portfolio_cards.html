@@ -137,7 +137,8 @@
             var d = c.decision || '—';
             var html = '<div class="card-pf ' + decisionClass(d) + '" data-ticker="' + escapeHtml(c.ticker) + '">';
             html += '<div class="card-head"><span class="ticker">' + escapeHtml(c.ticker) + '</span><span class="decision ' + escapeHtml(d) + '">' + escapeHtml(d) + '</span></div>';
-            html += '<div class="row"><span class="label">Стратегия</span><span class="value">' + escapeHtml(c.selected_strategy || '—') + '</span></div>';
+            html += '<div class="row"><span class="label">Техника (базовый сигнал)</span><span class="value">' + escapeHtml(c.technical_signal || '—') + '</span></div>';
+            html += '<div class="row"><span class="label">Итог стратегии</span><span class="value">' + escapeHtml(c.selected_strategy || '—') + '</span></div>';
             html += '<div class="row"><span class="label">Close (daily)</span><span class="value">' + fmt(c.close, 2) + '</span></div>';
             html += '<div class="row"><span class="label">SMA5</span><span class="value">' + fmt(c.sma_5, 2) + '</span></div>';
             html += '<div class="row"><span class="label">RSI</span><span class="value">' + fmt(c.rsi, 1) + '</span></div>';
