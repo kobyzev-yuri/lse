@@ -506,7 +506,7 @@ async function loadChart5mAll() {
         const legendEl = section.querySelector('.chart5m-legend');
 
         try {
-            const response = await fetch('/api/chart5m/' + encodeURIComponent(ticker) + '?days=' + days);
+            const response = await fetch('/api/chart5m/' + encodeURIComponent(ticker) + '?days=' + days + '&source=live');
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
                 if (legendEl) legendEl.textContent = data.detail || 'Нет 5m данных';

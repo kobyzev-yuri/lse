@@ -1240,7 +1240,7 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
     }
 
 
-def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
+def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Optional[Dict[str, Any]]:
     """Строит данные для графика 5m с пролонгацией (те же функции, что в Telegram)."""
     try:
         from services.recommend_5m import fetch_5m_ohlc, get_decision_5m
@@ -1299,10 +1299,45 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
             pass
         return df_db
 
+    source = (source or "live").strip().lower()
+    if source not in ("live", "db", "auto"):
+        source = "live"
     try:
-        df = _fetch_5m_from_db(ticker, days)
-        if df is None or df.empty:
+        if source == "db":
+            df = _fetch_5m_from_db(ticker, days)
+            if df is None or df.empty:
+                df = fetch_5m_ohlc(ticker, days=days)
+        elif source == "auto":
+            df = _fetch_5m_from_db(ticker, days)
+            if df is None or df.empty:
+                df = fetch_5m_ohlc(ticker, days=days)
+            else:
+                # Если БД явно устарела — пробуем Yahoo для "живого" окна.
+                try:
+                    now_et = pd.Timestamp.now(tz="America/New_York")
+                    dt_max_db = pd.to_datetime(df["datetime"]).max()
+                    dt_max_db = pd.Timestamp(dt_max_db)
+                    if dt_max_db.tzinfo is None:
+                        dt_max_db = dt_max_db.tz_localize("America/New_York", ambiguous=True)
+                    else:
+                        dt_max_db = dt_max_db.tz_convert("America/New_York")
+                    if now_et - dt_max_db > pd.Timedelta(minutes=45):
+                        df_y = fetch_5m_ohlc(ticker, days=days)
+                        if df_y is not None and not df_y.empty and "datetime" in df_y.columns:
+                            dt_max_y = pd.Timestamp(pd.to_datetime(df_y["datetime"]).max())
+                            if dt_max_y.tzinfo is None:
+                                dt_max_y = dt_max_y.tz_localize("America/New_York", ambiguous=True)
+                            else:
+                                dt_max_y = dt_max_y.tz_convert("America/New_York")
+                            if dt_max_y > dt_max_db:
+                                df = df_y
+                except Exception:
+                    pass
+        else:
+            # live: сначала Yahoo (реальное время), затем БД как fallback.
             df = fetch_5m_ohlc(ticker, days=days)
+            if df is None or df.empty:
+                df = _fetch_5m_from_db(ticker, days)
     except Exception:
         return None
     if df is None or df.empty or "Close" not in df.columns:
@@ -1310,9 +1345,14 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
             if fallback_days == days:
                 continue
             try:
-                df = _fetch_5m_from_db(ticker, fallback_days)
-                if df is None or df.empty:
+                if source == "live":
                     df = fetch_5m_ohlc(ticker, days=fallback_days)
+                    if df is None or df.empty:
+                        df = _fetch_5m_from_db(ticker, fallback_days)
+                else:
+                    df = _fetch_5m_from_db(ticker, fallback_days)
+                    if df is None or df.empty:
+                        df = fetch_5m_ohlc(ticker, days=fallback_days)
             except Exception:
                 continue
             if df is not None and not df.empty and "Close" in df.columns:
@@ -1483,13 +1523,13 @@ def _build_chart5m_data(ticker: str, days: int) -> Optional[Dict[str, Any]]:
 
 
 @app.get("/api/chart5m/{ticker}")
-async def get_chart5m(ticker: str, days: int = 5):
+async def get_chart5m(ticker: str, days: int = 5, source: str = "live"):
     """API: Данные для графика 5m с зоной пролонгации (EMA, тренд при ≥5 свечах)."""
     err_404 = "Нет 5m данных: Yahoo не вернул свечи. Обычно 5m доступны в торговые часы США. Попробуйте 5 или 7 дней."
     days = min(max(1, days), 7)
     try:
         loop = asyncio.get_running_loop()
-        data = await loop.run_in_executor(None, _build_chart5m_data, ticker, days)
+        data = await loop.run_in_executor(None, _build_chart5m_data, ticker, days, source=source)
     except Exception as e:
         return JSONResponse(
             status_code=500,
