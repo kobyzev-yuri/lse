@@ -246,11 +246,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                             if (!items || !items.length) return '';
                             const iso = items[0].label;
                             const et = _fmtTz(iso, 'America/New_York', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-                            const msk = _fmtTz(iso, 'Europe/Moscow', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-                            const parts = [];
-                            if (et) parts.push(et + ' ET');
-                            if (msk) parts.push(msk + ' MSK');
-                            return parts.join(' · ');
+                            return et ? (et + ' ET') : '';
                         }
                     }
                 }
@@ -518,6 +514,11 @@ async function loadChart5mAll() {
             }
             const ch = buildChart5mFromData(ticker, data, canvasEl, legendEl);
             chart5mInstances[ticker] = ch;
+            if (legendEl) {
+                const lastIso = (data && data.dt_max) ? data.dt_max : ((data.times && data.times.length) ? data.times[data.times.length - 1] : null);
+                const lastEt = lastIso ? _fmtTz(lastIso, 'America/New_York', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+                if (lastEt) legendEl.textContent = 'Данные до: ' + lastEt + ' ET';
+            }
         } catch (err) {
             if (legendEl) legendEl.textContent = 'Ошибка: ' + (err.message || 'нет данных');
         }
