@@ -1230,6 +1230,13 @@ def build_5m_close_context(d5: Dict[str, Any]) -> Dict[str, Any]:
         "exit_bar_close_ts": d5.get("exit_bar_close_ts"),
         "exit_bar_start_et": d5.get("exit_bar_start_et"),
         "exit_bar_end_et": d5.get("exit_bar_end_et"),
+        "decision_5m_bar_open_et": d5.get("decision_5m_bar_open_et"),
+        "exit_5m_bar_open_et": d5.get("exit_5m_bar_open_et"),
+        "exit_5m_bar_end_et": d5.get("exit_5m_bar_end_et"),
+        "exit_5m_open": d5.get("exit_5m_open"),
+        "exit_5m_high": d5.get("exit_5m_high"),
+        "exit_5m_low": d5.get("exit_5m_low"),
+        "exit_5m_close": d5.get("exit_5m_close"),
         "recent_bars_high_max": d5.get("recent_bars_high_max"),
         "recent_bars_high_ts": d5.get("recent_bars_high_ts"),
         "recent_bars_low_min": d5.get("recent_bars_low_min"),
@@ -1881,17 +1888,46 @@ def get_decision_5m(
                     f"Рекомендация: войти после открытия 9:30 ET или лимит ниже {limit_str}."
                 )
 
+    # ---- Бар 5m решения о входе = последняя свеча ряда (постоянен между минутными запусками крона, пока не появится новый бар) ----
+    entry_5m_bar_open_et = None
+    entry_5m_bar_end_et = None
+    entry_5m_open = entry_5m_high = entry_5m_low = entry_5m_close = None
+    try:
+        if df is not None and not df.empty and "datetime" in df.columns:
+            row = df.iloc[-1]
+            if all(c in df.columns for c in ("Open", "High", "Low", "Close")):
+                entry_5m_open = float(row["Open"])
+                entry_5m_high = float(row["High"])
+                entry_5m_low = float(row["Low"])
+                entry_5m_close = float(row["Close"])
+            dt_last = pd.to_datetime(row["datetime"], errors="coerce")
+            if pd.notna(dt_last):
+                if getattr(dt_last, "tzinfo", None) is None:
+                    dt_et = dt_last.tz_localize("America/New_York", ambiguous="infer")
+                else:
+                    dt_et = dt_last.tz_convert("America/New_York")
+                entry_5m_bar_open_et = dt_et.isoformat()
+                entry_5m_bar_end_et = (dt_et + pd.Timedelta(minutes=5)).isoformat()
+    except Exception:
+        pass
+
     # Close бара, который только что завершился к текущему моменту (для записи цены выхода — без расхождений с корректором)
     exit_bar_close = None
     exit_bar_close_ts = None
     exit_bar_start_et = None
     exit_bar_end_et = None
+    exit_5m_bar_open_et = None
+    exit_5m_bar_end_et = None
+    exit_5m_open = exit_5m_high = exit_5m_low = exit_5m_close = None
+    # Открытие 5m-бара из df по тому же окну, что exit_bar_close — не меняется между минутными запусками крона, пока бар тот же.
+    decision_5m_bar_open_et = None
     try:
         now_et = pd.Timestamp.now(tz="America/New_York")
         bar_end = now_et.floor("5min")
         bar_start = bar_end - pd.Timedelta(minutes=5)
         exit_bar_start_et = bar_start.isoformat()
         exit_bar_end_et = bar_end.isoformat()
+        decision_5m_bar_open_et = exit_bar_start_et
         dts = pd.to_datetime(df["datetime"])
         if dts.dt.tz is None:
             dts = dts.dt.tz_localize("America/New_York", ambiguous="infer")
@@ -1901,6 +1937,15 @@ def get_decision_5m(
         if mask.any():
             exit_bar_close = float(df.loc[mask, "Close"].iloc[-1])
             try:
+                exr = df.loc[mask].iloc[-1]
+                if all(c in df.columns for c in ("Open", "High", "Low", "Close")):
+                    exit_5m_open = float(exr["Open"])
+                    exit_5m_high = float(exr["High"])
+                    exit_5m_low = float(exr["Low"])
+                    exit_5m_close = float(exr["Close"])
+            except Exception:
+                pass
+            try:
                 t_exit = pd.to_datetime(df.loc[mask, "datetime"].iloc[-1])
                 if t_exit.tzinfo is None:
                     t_exit = t_exit.tz_localize("America/New_York", ambiguous="infer")
@@ -1909,10 +1954,23 @@ def get_decision_5m(
                 exit_bar_close_ts = t_exit.isoformat()
             except Exception:
                 exit_bar_close_ts = None
+            try:
+                t_open_series = pd.to_datetime(df.loc[mask, "datetime"])
+                t_open_min = t_open_series.min()
+                if getattr(t_open_min, "tzinfo", None) is None:
+                    t_open_min = t_open_min.tz_localize("America/New_York", ambiguous="infer")
+                else:
+                    t_open_min = t_open_min.tz_convert("America/New_York")
+                decision_5m_bar_open_et = t_open_min.isoformat()
+            except Exception:
+                pass
         if exit_bar_close is None or exit_bar_close <= 0:
             exit_bar_close = price
     except Exception:
         exit_bar_close = price
+
+    exit_5m_bar_open_et = decision_5m_bar_open_et
+    exit_5m_bar_end_et = exit_bar_end_et
 
     # Базовый вывод: все признаки из compute_5m_features (один раз посчитаны) + решение и контекст
     out = {
@@ -1927,6 +1985,19 @@ def get_decision_5m(
         "exit_bar_close_ts": exit_bar_close_ts,
         "exit_bar_start_et": exit_bar_start_et,
         "exit_bar_end_et": exit_bar_end_et,
+        "decision_5m_bar_open_et": decision_5m_bar_open_et,
+        "entry_5m_bar_open_et": entry_5m_bar_open_et,
+        "entry_5m_bar_end_et": entry_5m_bar_end_et,
+        "entry_5m_open": entry_5m_open,
+        "entry_5m_high": entry_5m_high,
+        "entry_5m_low": entry_5m_low,
+        "entry_5m_close": entry_5m_close,
+        "exit_5m_bar_open_et": exit_5m_bar_open_et,
+        "exit_5m_bar_end_et": exit_5m_bar_end_et,
+        "exit_5m_open": exit_5m_open,
+        "exit_5m_high": exit_5m_high,
+        "exit_5m_low": exit_5m_low,
+        "exit_5m_close": exit_5m_close,
         "stop_loss_enabled": stop_loss_enabled,
         "stop_loss_pct": stop_loss_pct if stop_loss_enabled else None,
         "take_profit_pct": take_profit_pct,

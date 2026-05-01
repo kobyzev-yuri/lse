@@ -36,6 +36,20 @@ FULL_ENTRY_KEYS = (
     "exit_bar_close_ts",
     "exit_bar_start_et",
     "exit_bar_end_et",
+    "decision_5m_bar_open_et",
+    # 5m-бар входа (последняя свеча df) и выхода (окно exit_bar) — OHLC + open/end ET для крона раз в минуту
+    "entry_5m_bar_open_et",
+    "entry_5m_bar_end_et",
+    "entry_5m_open",
+    "entry_5m_high",
+    "entry_5m_low",
+    "entry_5m_close",
+    "exit_5m_bar_open_et",
+    "exit_5m_bar_end_et",
+    "exit_5m_open",
+    "exit_5m_high",
+    "exit_5m_low",
+    "exit_5m_close",
 ) + CORRELATION_CB_FEATURE_KEYS
 # session_phase берём из market_session
 SESSION_PHASE_KEY = "session_phase"

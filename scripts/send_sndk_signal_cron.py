@@ -419,7 +419,11 @@ def process_ticker(
                     bar_high=bar_high if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") else None,
                     bar_low=bar_low if exit_type == "STOP_LOSS" else None,
                     context_json=close_ctx_enriched,
-                    trade_ts=close_ctx.get("exit_bar_close_ts"),
+                    trade_ts=(
+                        close_ctx.get("exit_5m_bar_open_et")
+                        or close_ctx.get("decision_5m_bar_open_et")
+                        or close_ctx.get("exit_bar_close_ts")
+                    ),
                 )
                 outcome_lines.append("позиция закрыта по %s @ %.2f" % (exit_type, exit_price))
                 closed_this_run = True
@@ -655,7 +659,11 @@ def process_ticker(
             decision,
             reasoning,
             entry_context=entry_context,
-            trade_ts=d5.get("exit_bar_close_ts") if d5 else None,
+            trade_ts=(
+                (d5.get("entry_5m_bar_open_et") or d5.get("decision_5m_bar_open_et") or d5.get("exit_bar_close_ts"))
+                if d5
+                else None
+            ),
         )
         if entry_id is None:
             logger.error("game_5m: запись входа %s не создана (record_entry вернул None), рассылка отменена", ticker)
@@ -894,7 +902,11 @@ def main():
                             bar_high=bar_high if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") else None,
                             bar_low=bar_low if exit_type == "STOP_LOSS" else None,
                             context_json=close_ctx_ah_merged,
-                            trade_ts=close_ctx_ah.get("exit_bar_close_ts"),
+                            trade_ts=(
+                                close_ctx_ah.get("exit_5m_bar_open_et")
+                                or close_ctx_ah.get("decision_5m_bar_open_et")
+                                or close_ctx_ah.get("exit_bar_close_ts")
+                            ),
                         )
                         entry_ah = open_pos.get("entry_price")
                         try:

@@ -33,7 +33,7 @@
         Обновлять графики каждые 5 мин
     </label>
     <div id="chart5mSymbolsLegend" class="muted" style="margin-top:0.75rem; margin-bottom:0.5rem; font-size:0.8rem; line-height:1.4;">
-        <strong style="color:#cbd5e1;">Обозначения:</strong> <strong>*</strong> и <strong>▲/▼</strong> — цена = <code>price</code> в БД; по горизонтали — индекс бара <code>bar_index</code> с сервера (момент сделки в полуинтервале [open, open+5m) того же ряда, что свечи), иначе снап по времени. Свечи/линия Close — OHLC этого API. Горизонталь: <strong>синяя</strong> — вход по позиции, <strong>оранжевая</strong> — хай до первого BUY, <strong>зелёная</strong> — тейк. Справа — <strong>p50</strong> (30м / 1ч / 2ч).
+        <strong style="color:#cbd5e1;">Обозначения:</strong> <strong>*</strong> и <strong>▲/▼</strong> — цена = <code>price</code> в БД; по горизонтали — <code>bar_index</code> / <code>bar_ts</code> (открытие 5m-бара того же ряда, что OHLC), иначе снап по времени. В тултипе <code>trade_history.ts</code> — момент записи строки (крон), он может быть на минуты позже открытия бара. Свечи/линия Close — OHLC этого API. Горизонталь: <strong>синяя</strong> — вход по позиции, <strong>оранжевая</strong> — хай до первого BUY, <strong>зелёная</strong> — тейк. Справа — <strong>p50</strong> (30м / 1ч / 2ч).
     </div>
     <div id="chart5mContainer"></div>
 </div>
@@ -274,10 +274,10 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
             if (i < 0) return;
             const p = parseFloat(tr.price);
             if (!Number.isFinite(p)) return;
-            const dispTs = labels[i] || tradeTimeForSnap(tr);
-            tradeMarkerItems.push({ index: i, price: p, kind: kind, ts: dispTs, db_ts: tr.ts, side: tr.side, id: tr.id });
+            const dispTs = (tr.bar_ts && String(tr.bar_ts).trim()) || labels[i] || tradeTimeForSnap(tr);
+            tradeMarkerItems.push({ index: i, price: p, kind: kind, ts: dispTs, bar_ts: tr.bar_ts || null, db_ts: tr.ts, side: tr.side, id: tr.id });
             if (!tradeMetaByIndex[i]) tradeMetaByIndex[i] = [];
-            tradeMetaByIndex[i].push({ kind: kind, side: tr.side, ts: dispTs, db_ts: tr.ts, price: p, id: tr.id });
+            tradeMetaByIndex[i].push({ kind: kind, side: tr.side, ts: dispTs, bar_ts: tr.bar_ts || null, db_ts: tr.ts, price: p, id: tr.id });
         });
     }
     pushMarkers(buyTrades, 'buy');
@@ -372,7 +372,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
                                     const main = kind + (px ? (' @ ' + px) : '');
                                     if (tr.db_ts && String(tr.db_ts) !== String(tr.ts)) {
                                         const dbEt = _fmtTz(tr.db_ts, 'America/New_York', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-                                        return [main, dbEt ? ('ts в БД: ' + dbEt + ' ET') : main];
+                                        return [main, dbEt ? ('trade_history.ts: ' + dbEt + ' ET (запись крона, не open свечи)') : main];
                                     }
                                     return main;
                                 }

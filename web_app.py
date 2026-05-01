@@ -1514,6 +1514,12 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
                     bi = bi_ohlc
             if bi is not None:
                 row["bar_index"] = int(bi)
+                try:
+                    ib = int(bi)
+                    if 0 <= ib < len(times):
+                        row["bar_ts"] = times[ib]
+                except Exception:
+                    pass
             trades.append(row)
             try:
                 if first_buy_ts_et is None and (t.get("side") or "").upper() == "BUY":

@@ -297,7 +297,8 @@ def match_refine_trade_bar_index_prefer_ohlc(
 def chart_ts_iso_from_context(context_json: Any) -> Optional[str]:
     """
     Время 5m-бара для привязки маркера на графике (не момент INSERT в БД).
-    Берётся из context_json сделки: exit_bar_close_ts / exit_bar_start_et (как в get_decision_5m / merge_close_context).
+    Приоритет: ``entry_5m_bar_open_et`` (BUY), затем ``exit_5m_bar_open_et`` / ``decision_5m_bar_open_et``,
+    иначе ``exit_bar_close_ts`` / ``exit_bar_start_et`` (get_decision_5m / merge_close_context).
     Возвращает ISO в America/New_York для фронта.
     """
     import json as _json
@@ -313,7 +314,13 @@ def chart_ts_iso_from_context(context_json: Any) -> Optional[str]:
         ctx = context_json
     else:
         return None
-    raw = ctx.get("exit_bar_close_ts") or ctx.get("exit_bar_start_et")
+    raw = (
+        ctx.get("entry_5m_bar_open_et")
+        or ctx.get("exit_5m_bar_open_et")
+        or ctx.get("decision_5m_bar_open_et")
+        or ctx.get("exit_bar_close_ts")
+        or ctx.get("exit_bar_start_et")
+    )
     if not raw:
         return None
     try:
@@ -327,7 +334,7 @@ def chart_ts_iso_from_context(context_json: Any) -> Optional[str]:
 
 def parse_game5m_bar_ts_for_db(trade_ts: Optional[Any]) -> Optional[datetime]:
     """
-    Метка бара из get_decision_5m (exit_bar_close_ts и т.п., обычно ISO с America/New_York)
+    Метка открытия 5m-бара (entry_5m_bar_open_et / exit_5m_bar_open_et / exit_bar_close_ts и т.п., ISO ET)
     → naive datetime для колонки trade_history.ts (как при записи по Москве: ts_timezone=Europe/Moscow).
     """
     if trade_ts is None:
@@ -675,7 +682,7 @@ def record_entry(
 ) -> Optional[int]:
     """Фиксирует бумажный вход: INSERT BUY в trade_history (strategy_name=GAME_5M).
     entry_context: контекст на момент входа (momentum_2h_pct и др.) — сохраняется в context_json для /closed_impulse (импульс при решении об открытии).
-    trade_ts: время 5m-бара решения (как exit_bar_close_ts из get_decision_5m); иначе CURRENT_TIMESTAMP."""
+    trade_ts: открытие 5m-бара решения (entry_5m_bar_open_et из get_decision_5m); иначе CURRENT_TIMESTAMP."""
     if price <= 0:
         logger.warning("game_5m: record_entry %s с ценой <= 0, пропуск", ticker)
         return None
@@ -780,7 +787,7 @@ def close_position(
     иначе берётся позиция только GAME_5M.
     bar_high/bar_low — опционально: при TAKE_PROFIT / TAKE_PROFIT_SUSPEND цена не выше bar_high, при STOP_LOSS не ниже bar_low.
     Если не заданы — применяется ограничение по entry (макс. +15% тейк / −15% стоп), чтобы в БД не попали нереальные цифры из глючных котировок.
-    trade_ts: время 5m-бара выхода (exit_bar_close_ts из build_5m_close_context); иначе CURRENT_TIMESTAMP — для графика лучше передавать бар."""
+    trade_ts: открытие 5m-бара выхода (exit_5m_bar_open_et / decision_5m_bar_open_et из build_5m_close_context); иначе CURRENT_TIMESTAMP."""
     if position is None:
         position = get_open_position(ticker)
         strategy = GAME_5M_STRATEGY
