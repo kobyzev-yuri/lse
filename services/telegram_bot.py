@@ -2098,6 +2098,7 @@ class LSETelegramBot:
                     partition_trades_for_chart_pnl,
                     trade_plot_time_naive_et,
                     match_trade_to_chart_bar_index,
+                    refine_bar_index_for_trade_price,
                     trade_ts_to_et,
                     TRADE_HISTORY_TZ,
                 )
@@ -2108,6 +2109,8 @@ class LSETelegramBot:
                         bar_times_iso.append(pd.Timestamp(x).isoformat())
                     except Exception:
                         bar_times_iso.append(str(x))
+                _lows = df["Low"].astype(float).tolist() if "Low" in df.columns else None
+                _highs = df["High"].astype(float).tolist() if "High" in df.columns else None
 
                 def _time_iso_for_bar(trade_row):
                     if trade_row.get("chart_ts"):
@@ -2120,7 +2123,18 @@ class LSETelegramBot:
                     return str(ts)
 
                 def _append_trade_xy(ts_list, p_list, t):
-                    bi = match_trade_to_chart_bar_index(bar_times_iso, _time_iso_for_bar(t))
+                    time_iso = _time_iso_for_bar(t)
+                    bi = match_trade_to_chart_bar_index(bar_times_iso, time_iso)
+                    if (
+                        bi is not None
+                        and _lows is not None
+                        and _highs is not None
+                        and len(_lows) == len(bar_times_iso)
+                        and len(_highs) == len(bar_times_iso)
+                    ):
+                        bi = refine_bar_index_for_trade_price(
+                            bi, float(t["price"]), _lows, _highs, bar_times_iso, time_iso
+                        )
                     if bi is not None and 0 <= bi < len(df):
                         ts_list.append(df["_dt_plot"].iloc[bi])
                         p_list.append(float(t["price"]))
@@ -2457,6 +2471,7 @@ class LSETelegramBot:
                     partition_trades_for_chart_pnl,
                     trade_plot_time_naive_et,
                     match_trade_to_chart_bar_index,
+                    refine_bar_index_for_trade_price,
                     trade_ts_to_et,
                     TRADE_HISTORY_TZ,
                 )
@@ -2467,6 +2482,8 @@ class LSETelegramBot:
                         bar_times_iso.append(pd.Timestamp(x).isoformat())
                     except Exception:
                         bar_times_iso.append(str(x))
+                _lows2 = df["Low"].astype(float).tolist() if "Low" in df.columns else None
+                _highs2 = df["High"].astype(float).tolist() if "High" in df.columns else None
 
                 def _time_iso_for_bar2(trade_row):
                     if trade_row.get("chart_ts"):
@@ -2479,7 +2496,18 @@ class LSETelegramBot:
                     return str(ts)
 
                 def _append_trade_xy2(ts_list, p_list, t):
-                    bi = match_trade_to_chart_bar_index(bar_times_iso, _time_iso_for_bar2(t))
+                    time_iso = _time_iso_for_bar2(t)
+                    bi = match_trade_to_chart_bar_index(bar_times_iso, time_iso)
+                    if (
+                        bi is not None
+                        and _lows2 is not None
+                        and _highs2 is not None
+                        and len(_lows2) == len(bar_times_iso)
+                        and len(_highs2) == len(bar_times_iso)
+                    ):
+                        bi = refine_bar_index_for_trade_price(
+                            bi, float(t["price"]), _lows2, _highs2, bar_times_iso, time_iso
+                        )
                     if bi is not None and 0 <= bi < len(df):
                         ts_list.append(df["_dt_plot"].iloc[bi])
                         p_list.append(float(t["price"]))

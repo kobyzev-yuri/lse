@@ -78,6 +78,27 @@ def trade_plot_time_naive_et(trade_row: dict[str, Any]) -> Any:
         return None
 
 
+def _trade_time_in_5m_bar(
+    t_trade: Any,
+    t_open: Any,
+    *,
+    bar_minutes: int = 5,
+) -> bool:
+    """
+    True, если t_trade относится к 5m-бару [t_open, t_end): обычный случай,
+    либо t_trade == t_end (метка «закрытия» бара — иначе полуинтервал уводит на следующий бар +1).
+    """
+    import pandas as pd
+
+    t_end = t_open + pd.Timedelta(minutes=int(bar_minutes))
+    if t_open <= t_trade < t_end:
+        return True
+    try:
+        return bool(abs((t_trade - t_end).total_seconds()) < 1e-6)
+    except Exception:
+        return bool(t_trade == t_end)
+
+
 def match_trade_to_chart_bar_index(
     bar_times_iso: list[str],
     trade_time_iso: Optional[str],
@@ -86,7 +107,8 @@ def match_trade_to_chart_bar_index(
 ) -> Optional[int]:
     """
     Индекс 5m-бара в ряду ``times`` графика (тот же df, что OHLC), к которому относится момент сделки.
-    Правило: ``bar_open <= t_trade < bar_open + bar_minutes`` в America/New_York.
+    Правило (ET): ``bar_open <= t_trade < bar_open + bar_minutes``, плюс ``t_trade == bar_close``
+    (правая граница включена в этот бар, чтобы не сдвигать маркер на следующий бар).
     """
     if not bar_times_iso or not trade_time_iso:
         return None
@@ -107,12 +129,93 @@ def match_trade_to_chart_bar_index(
                     t_open = t_open.tz_convert(CHART_DISPLAY_TZ)
             except Exception:
                 continue
-            t_end = t_open + pd.Timedelta(minutes=int(bar_minutes))
-            if t_open <= t_trade < t_end:
+            if _trade_time_in_5m_bar(t_trade, t_open, bar_minutes=int(bar_minutes)):
                 return i
     except Exception:
         logger.debug("match_trade_to_chart_bar_index: iteration failed", exc_info=True)
     return None
+
+
+def refine_bar_index_for_trade_price(
+    bar_index_time: Optional[int],
+    price: float,
+    lows: list,
+    highs: list,
+    bar_times_iso: list[str],
+    trade_time_iso: Optional[str],
+    *,
+    max_scan: int = 120,
+    rel_tol: float = 0.002,
+) -> Optional[int]:
+    """
+    Если ``price`` не лежит в [Low, High] бара ``bar_index_time`` (другой ряд котировок vs время в context),
+    ищем среди соседних ±max_scan баров тот, чей диапазон (с допуском) содержит цену,
+    с минимальным |t_trade − t_open(bar)|.
+    """
+    if bar_index_time is None or price is None or price <= 0:
+        return bar_index_time
+    try:
+        n = min(len(lows), len(highs), len(bar_times_iso))
+        if n <= 0 or bar_index_time < 0 or bar_index_time >= n:
+            return bar_index_time
+        tol = max(rel_tol * float(price), 0.5)
+
+        def _contains(idx: int) -> bool:
+            if idx < 0 or idx >= n:
+                return False
+            lo = float(lows[idx])
+            hi = float(highs[idx])
+            return (lo - tol) <= float(price) <= (hi + tol)
+
+        if _contains(bar_index_time):
+            return bar_index_time
+
+        import pandas as pd
+
+        t_trade = None
+        if trade_time_iso:
+            try:
+                t_trade = pd.Timestamp(str(trade_time_iso).strip())
+                if t_trade.tzinfo is None:
+                    t_trade = t_trade.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+                else:
+                    t_trade = t_trade.tz_convert(CHART_DISPLAY_TZ)
+            except Exception:
+                t_trade = None
+
+        candidates: list[tuple[int, int, float, int]] = []
+        # (i, time_ok_sort, score_sec, abs_index_dist) — сначала бар, в чей 5m-интервал попадает t_trade, потом ближе к индексу по времени
+        lo_scan = max(0, int(bar_index_time) - int(max_scan))
+        hi_scan = min(n - 1, int(bar_index_time) + int(max_scan))
+        for i in range(lo_scan, hi_scan + 1):
+            if not _contains(i):
+                continue
+            time_ok = 0
+            score = float(abs(i - bar_index_time) * 300)
+            if t_trade is not None:
+                try:
+                    t_open = pd.Timestamp(str(bar_times_iso[i]).strip())
+                    if t_open.tzinfo is None:
+                        t_open = t_open.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+                    else:
+                        t_open = t_open.tz_convert(CHART_DISPLAY_TZ)
+                    if _trade_time_in_5m_bar(t_trade, t_open, bar_minutes=5):
+                        time_ok = 0
+                    else:
+                        time_ok = 1
+                    score = abs((t_trade - t_open).total_seconds())
+                except Exception:
+                    time_ok = 1
+                    score = float(abs(i - bar_index_time) * 300)
+            idx_dist = abs(i - int(bar_index_time))
+            candidates.append((i, time_ok, score, idx_dist))
+        if not candidates:
+            return bar_index_time
+        candidates.sort(key=lambda x: (x[1], x[3], x[2]))
+        return int(candidates[0][0])
+    except Exception:
+        logger.debug("refine_bar_index_for_trade_price: skip", exc_info=True)
+        return bar_index_time
 
 
 def chart_ts_iso_from_context(context_json: Any) -> Optional[str]:

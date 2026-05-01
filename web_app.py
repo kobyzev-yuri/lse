@@ -1471,7 +1471,7 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
     # Время первой покупки в ET (для честного "high so far" на момент входа).
     first_buy_ts_et = None
     try:
-        from services.game_5m import trade_ts_to_et, match_trade_to_chart_bar_index
+        from services.game_5m import trade_ts_to_et, match_trade_to_chart_bar_index, refine_bar_index_for_trade_price
         # Диапазон графика (ET); внутри get_trades_for_chart конвертируется в MSK и фильтруется по ET
         for t in get_trades_for_chart(ticker, dt_min, dt_max):
             ts = t.get("ts")
@@ -1495,6 +1495,22 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
                 row["chart_ts"] = ct
             time_for_bar = ct or ts
             bi = match_trade_to_chart_bar_index(times, time_for_bar)
+            if (
+                bi is not None
+                and ohlc_block is not None
+                and isinstance(ohlc_block.get("low"), list)
+                and isinstance(ohlc_block.get("high"), list)
+                and len(ohlc_block["low"]) == len(times)
+                and len(ohlc_block["high"]) == len(times)
+            ):
+                bi = refine_bar_index_for_trade_price(
+                    bi,
+                    float(row["price"]),
+                    ohlc_block["low"],
+                    ohlc_block["high"],
+                    times,
+                    time_for_bar,
+                )
             if bi is not None:
                 row["bar_index"] = int(bi)
             trades.append(row)
