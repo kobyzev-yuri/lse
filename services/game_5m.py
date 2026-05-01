@@ -148,9 +148,12 @@ def refine_bar_index_for_trade_price(
     rel_tol: float = 0.002,
 ) -> Optional[int]:
     """
-    Если ``price`` не лежит в [Low, High] бара ``bar_index_time`` (другой ряд котировок vs время в context),
-    ищем среди соседних ±max_scan баров тот, чей диапазон (с допуском) содержит цену,
-    с минимальным |t_trade − t_open(bar)|.
+    Если ``price`` не лежит в [Low, High] бара ``bar_index_time`` (например gap и ts из context),
+    ищем по **всему** ряду свечей графика бары, где цена попадает в [Low, High] (с допуском).
+
+    Приоритет: (1) тот же 5m-интервал, что и ``t_trade``; (2) минимум |t_trade − t_open(bar)| по времени.
+    Не сортируем сначала по |i − i0|: иначе выигрывает соседний бар ±1 вместо нужной сессии вчера.
+    ``max_scan`` оставлен в сигнатуре для совместимости; сканирование полное по ``n``.
     """
     if bar_index_time is None or price is None or price <= 0:
         return bar_index_time
@@ -183,11 +186,9 @@ def refine_bar_index_for_trade_price(
             except Exception:
                 t_trade = None
 
+        # (i, time_ok, score_sec, abs_index_dist) — sort: time_ok, then time distance, then index distance
         candidates: list[tuple[int, int, float, int]] = []
-        # (i, time_ok_sort, score_sec, abs_index_dist) — сначала бар, в чей 5m-интервал попадает t_trade, потом ближе к индексу по времени
-        lo_scan = max(0, int(bar_index_time) - int(max_scan))
-        hi_scan = min(n - 1, int(bar_index_time) + int(max_scan))
-        for i in range(lo_scan, hi_scan + 1):
+        for i in range(n):
             if not _contains(i):
                 continue
             time_ok = 0
@@ -211,11 +212,86 @@ def refine_bar_index_for_trade_price(
             candidates.append((i, time_ok, score, idx_dist))
         if not candidates:
             return bar_index_time
-        candidates.sort(key=lambda x: (x[1], x[3], x[2]))
+        candidates.sort(key=lambda x: (x[1], x[2], x[3]))
         return int(candidates[0][0])
     except Exception:
         logger.debug("refine_bar_index_for_trade_price: skip", exc_info=True)
         return bar_index_time
+
+
+def ohlc_bar_contains_trade_price(
+    idx: Optional[int],
+    price: float,
+    lows: list,
+    highs: list,
+    *,
+    rel_tol: float = 0.002,
+) -> bool:
+    """True, если ``price`` (с допуском) попадает в [Low, High] бара ``idx``."""
+    if idx is None:
+        return False
+    try:
+        i = int(idx)
+        if i < 0 or i >= len(lows) or i >= len(highs):
+            return False
+        tol = max(rel_tol * float(price), 0.5)
+        lo, hi = float(lows[i]), float(highs[i])
+        return (lo - tol) <= float(price) <= (hi + tol)
+    except Exception:
+        return False
+
+
+def match_refine_trade_bar_index_prefer_ohlc(
+    bar_times_iso: list[str],
+    lows: list,
+    highs: list,
+    price: float,
+    *,
+    chart_ts_iso: Optional[str],
+    exec_ts_iso: Optional[str],
+) -> Optional[int]:
+    """
+    match + refine по времени сделки; сначала ``chart_ts`` (контекст бара), затем ``exec_ts`` (факт ts в БД),
+    пока не найдётся бар, чей OHLC содержит ``price``. Если ни один бар ряда не содержит цену — возвращается
+    индекс по первому удачному времени (как раньше).
+    """
+    if not bar_times_iso or price is None or price <= 0:
+        return None
+    n = min(len(lows), len(highs), len(bar_times_iso))
+    if n <= 0:
+        return None
+
+    def _attempt(time_iso: Optional[str]) -> Optional[int]:
+        if not time_iso or not str(time_iso).strip():
+            return None
+        s = str(time_iso).strip()
+        bi = match_trade_to_chart_bar_index(bar_times_iso, s)
+        if bi is None:
+            return None
+        return refine_bar_index_for_trade_price(bi, float(price), lows, highs, bar_times_iso, s)
+
+    ordered: list[str] = []
+    for cand in (chart_ts_iso, exec_ts_iso):
+        if not cand:
+            continue
+        s = str(cand).strip()
+        if not s or s in ordered:
+            continue
+        ordered.append(s)
+
+    if not ordered:
+        return None
+
+    best: Optional[int] = None
+    for t_iso in ordered:
+        bi = _attempt(t_iso)
+        if bi is None:
+            continue
+        if best is None:
+            best = bi
+        if ohlc_bar_contains_trade_price(bi, float(price), lows, highs):
+            return bi
+    return best
 
 
 def chart_ts_iso_from_context(context_json: Any) -> Optional[str]:

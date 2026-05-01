@@ -2098,7 +2098,7 @@ class LSETelegramBot:
                     partition_trades_for_chart_pnl,
                     trade_plot_time_naive_et,
                     match_trade_to_chart_bar_index,
-                    refine_bar_index_for_trade_price,
+                    match_refine_trade_bar_index_prefer_ohlc,
                     trade_ts_to_et,
                     TRADE_HISTORY_TZ,
                 )
@@ -2122,19 +2122,34 @@ class LSETelegramBot:
                         return str(ts_et.isoformat())
                     return str(ts)
 
+                def _exec_time_iso_for_bar(trade_row):
+                    ts = trade_row["ts"]
+                    stored = trade_row.get("ts_timezone") or TRADE_HISTORY_TZ
+                    ts_et = trade_ts_to_et(ts, source_tz=stored)
+                    if ts_et is not None and hasattr(ts_et, "isoformat"):
+                        return str(ts_et.isoformat())
+                    return str(ts)
+
                 def _append_trade_xy(ts_list, p_list, t):
                     time_iso = _time_iso_for_bar(t)
                     bi = match_trade_to_chart_bar_index(bar_times_iso, time_iso)
                     if (
-                        bi is not None
-                        and _lows is not None
+                        _lows is not None
                         and _highs is not None
                         and len(_lows) == len(bar_times_iso)
                         and len(_highs) == len(bar_times_iso)
                     ):
-                        bi = refine_bar_index_for_trade_price(
-                            bi, float(t["price"]), _lows, _highs, bar_times_iso, time_iso
+                        ct = t.get("chart_ts")
+                        bi_ohlc = match_refine_trade_bar_index_prefer_ohlc(
+                            bar_times_iso,
+                            _lows,
+                            _highs,
+                            float(t["price"]),
+                            chart_ts_iso=str(ct).strip() if ct else None,
+                            exec_ts_iso=_exec_time_iso_for_bar(t).strip() or None,
                         )
+                        if bi_ohlc is not None:
+                            bi = bi_ohlc
                     if bi is not None and 0 <= bi < len(df):
                         ts_list.append(df["_dt_plot"].iloc[bi])
                         p_list.append(float(t["price"]))
@@ -2471,7 +2486,7 @@ class LSETelegramBot:
                     partition_trades_for_chart_pnl,
                     trade_plot_time_naive_et,
                     match_trade_to_chart_bar_index,
-                    refine_bar_index_for_trade_price,
+                    match_refine_trade_bar_index_prefer_ohlc,
                     trade_ts_to_et,
                     TRADE_HISTORY_TZ,
                 )
@@ -2495,19 +2510,34 @@ class LSETelegramBot:
                         return str(ts_et.isoformat())
                     return str(ts)
 
+                def _exec_time_iso_for_bar2(trade_row):
+                    ts = trade_row["ts"]
+                    stored = trade_row.get("ts_timezone") or TRADE_HISTORY_TZ
+                    ts_et = trade_ts_to_et(ts, source_tz=stored)
+                    if ts_et is not None and hasattr(ts_et, "isoformat"):
+                        return str(ts_et.isoformat())
+                    return str(ts)
+
                 def _append_trade_xy2(ts_list, p_list, t):
                     time_iso = _time_iso_for_bar2(t)
                     bi = match_trade_to_chart_bar_index(bar_times_iso, time_iso)
                     if (
-                        bi is not None
-                        and _lows2 is not None
+                        _lows2 is not None
                         and _highs2 is not None
                         and len(_lows2) == len(bar_times_iso)
                         and len(_highs2) == len(bar_times_iso)
                     ):
-                        bi = refine_bar_index_for_trade_price(
-                            bi, float(t["price"]), _lows2, _highs2, bar_times_iso, time_iso
+                        ct = t.get("chart_ts")
+                        bi_ohlc = match_refine_trade_bar_index_prefer_ohlc(
+                            bar_times_iso,
+                            _lows2,
+                            _highs2,
+                            float(t["price"]),
+                            chart_ts_iso=str(ct).strip() if ct else None,
+                            exec_ts_iso=_exec_time_iso_for_bar2(t).strip() or None,
                         )
+                        if bi_ohlc is not None:
+                            bi = bi_ohlc
                     if bi is not None and 0 <= bi < len(df):
                         ts_list.append(df["_dt_plot"].iloc[bi])
                         p_list.append(float(t["price"]))
