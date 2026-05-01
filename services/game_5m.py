@@ -56,6 +56,79 @@ GAME_NOTIONAL_USD = 10_000.0
 COMMISSION_RATE = 0.0  # 0% — оплаты брокеру нет
 
 
+def trade_plot_time_naive_et(trade_row: dict[str, Any]) -> Any:
+    """
+    Время сделки для оси X на графике (matplotlib): naive datetime в «стене» ET,
+    как колонка _dt_plot у 5m df. Приоритет chart_ts (бар из context_json), иначе ts записи.
+    """
+    raw = trade_row.get("chart_ts") or trade_row.get("ts")
+    if raw is None:
+        return None
+    try:
+        stored_tz = "America/New_York" if trade_row.get("chart_ts") else (trade_row.get("ts_timezone") or TRADE_HISTORY_TZ)
+        ts_et = trade_ts_to_et(raw, source_tz=stored_tz)
+        if ts_et is None:
+            return None
+        dt = ts_et.to_pydatetime() if hasattr(ts_et, "to_pydatetime") else ts_et
+        if getattr(dt, "tzinfo", None):
+            return dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        logger.debug("trade_plot_time_naive_et: skip %r", raw, exc_info=True)
+        return None
+
+
+def chart_ts_iso_from_context(context_json: Any) -> Optional[str]:
+    """
+    Время 5m-бара для привязки маркера на графике (не момент INSERT в БД).
+    Берётся из context_json сделки: exit_bar_close_ts / exit_bar_start_et (как в get_decision_5m / merge_close_context).
+    Возвращает ISO в America/New_York для фронта.
+    """
+    import json as _json
+
+    if context_json is None:
+        return None
+    if isinstance(context_json, str):
+        try:
+            ctx = _json.loads(context_json)
+        except Exception:
+            return None
+    elif isinstance(context_json, dict):
+        ctx = context_json
+    else:
+        return None
+    raw = ctx.get("exit_bar_close_ts") or ctx.get("exit_bar_start_et")
+    if not raw:
+        return None
+    try:
+        ts_et = trade_ts_to_et(raw, source_tz="America/New_York")
+        if ts_et is not None and hasattr(ts_et, "isoformat"):
+            return str(ts_et.isoformat())
+    except Exception:
+        logger.debug("chart_ts_iso_from_context: skip %r", raw, exc_info=True)
+    return None
+
+
+def parse_game5m_bar_ts_for_db(trade_ts: Optional[Any]) -> Optional[datetime]:
+    """
+    Метка бара из get_decision_5m (exit_bar_close_ts и т.п., обычно ISO с America/New_York)
+    → naive datetime для колонки trade_history.ts (как при записи по Москве: ts_timezone=Europe/Moscow).
+    """
+    if trade_ts is None:
+        return None
+    try:
+        import pandas as pd
+
+        t = pd.Timestamp(trade_ts)
+        if t.tzinfo is None:
+            t = t.tz_localize("America/New_York", ambiguous=True)
+        t_msk = t.tz_convert(TRADE_HISTORY_TZ)
+        return t_msk.to_pydatetime().replace(tzinfo=None)
+    except Exception:
+        logger.debug("parse_game5m_bar_ts_for_db: не разобрали %r", trade_ts, exc_info=True)
+        return None
+
+
 def _get_suggested_5m_params() -> Optional[dict]:
     """
     Подсказки из local/suggested_5m_params.json (legacy-режим).
@@ -382,9 +455,11 @@ def record_entry(
     reasoning: Optional[str] = None,
     *,
     entry_context: Optional[dict[str, Any]] = None,
+    trade_ts: Optional[Any] = None,
 ) -> Optional[int]:
     """Фиксирует бумажный вход: INSERT BUY в trade_history (strategy_name=GAME_5M).
-    entry_context: контекст на момент входа (momentum_2h_pct и др.) — сохраняется в context_json для /closed_impulse (импульс при решении об открытии)."""
+    entry_context: контекст на момент входа (momentum_2h_pct и др.) — сохраняется в context_json для /closed_impulse (импульс при решении об открытии).
+    trade_ts: время 5m-бара решения (как exit_bar_close_ts из get_decision_5m); иначе CURRENT_TIMESTAMP."""
     if price <= 0:
         logger.warning("game_5m: record_entry %s с ценой <= 0, пропуск", ticker)
         return None
@@ -394,25 +469,46 @@ def record_entry(
     commission = notional * COMMISSION_RATE
     import json as _json
     context_str = _json.dumps(entry_context) if entry_context else None
+    ts_db = parse_game5m_bar_ts_for_db(trade_ts)
     engine = _engine()
     with engine.begin() as conn:
-        conn.execute(
-            text("""
-                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone, context_json)
-                VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz, :context_json)
-            """),
-            {
-                "ticker": ticker,
-                "qty": quantity,
-                "price": price,
-                "commission": commission,
-                "signal_type": signal_type,
-                "total_value": notional,
-                "strategy": GAME_5M_STRATEGY,
-                "ts_tz": TRADE_HISTORY_TZ,
-                "context_json": context_str,
-            },
-        )
+        if ts_db is not None:
+            conn.execute(
+                text("""
+                    INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone, context_json)
+                    VALUES (:ts, :ticker, 'BUY', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz, :context_json)
+                """),
+                {
+                    "ts": ts_db,
+                    "ticker": ticker,
+                    "qty": quantity,
+                    "price": price,
+                    "commission": commission,
+                    "signal_type": signal_type,
+                    "total_value": notional,
+                    "strategy": GAME_5M_STRATEGY,
+                    "ts_tz": TRADE_HISTORY_TZ,
+                    "context_json": context_str,
+                },
+            )
+        else:
+            conn.execute(
+                text("""
+                    INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone, context_json)
+                    VALUES (CURRENT_TIMESTAMP, :ticker, 'BUY', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz, :context_json)
+                """),
+                {
+                    "ticker": ticker,
+                    "qty": quantity,
+                    "price": price,
+                    "commission": commission,
+                    "signal_type": signal_type,
+                    "total_value": notional,
+                    "strategy": GAME_5M_STRATEGY,
+                    "ts_tz": TRADE_HISTORY_TZ,
+                    "context_json": context_str,
+                },
+            )
         row = conn.execute(text("SELECT LASTVAL()")).fetchone()
         new_id = row[0] if row else None
     logger.info("game_5m: вход %s id=%s @ %.2f qty=%s %s", ticker, new_id, price, quantity, signal_type)
@@ -461,12 +557,14 @@ def close_position(
     bar_high: Optional[float] = None,
     bar_low: Optional[float] = None,
     context_json: Optional[dict[str, Any]] = None,
+    trade_ts: Optional[Any] = None,
 ) -> Optional[float]:
     """Закрывает открытую позицию: INSERT SELL. Возвращает PnL в %.
     position — если передан (например от get_open_position_any), SELL пишется с strategy_name из позиции;
     иначе берётся позиция только GAME_5M.
     bar_high/bar_low — опционально: при TAKE_PROFIT / TAKE_PROFIT_SUSPEND цена не выше bar_high, при STOP_LOSS не ниже bar_low.
-    Если не заданы — применяется ограничение по entry (макс. +15% тейк / −15% стоп), чтобы в БД не попали нереальные цифры из глючных котировок."""
+    Если не заданы — применяется ограничение по entry (макс. +15% тейк / −15% стоп), чтобы в БД не попали нереальные цифры из глючных котировок.
+    trade_ts: время 5m-бара выхода (exit_bar_close_ts из build_5m_close_context); иначе CURRENT_TIMESTAMP — для графика лучше передавать бар."""
     if position is None:
         position = get_open_position(ticker)
         strategy = GAME_5M_STRATEGY
@@ -517,25 +615,46 @@ def close_position(
     pnl_pct = float(log_return * 100.0 - 2 * COMMISSION_RATE * 100.0)
 
     import json
+    ts_db = parse_game5m_bar_ts_for_db(trade_ts)
     engine = _engine()
     with engine.begin() as conn:
-        conn.execute(
-            text("""
-                INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone, context_json)
-                VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz, :context_json)
-            """),
-            {
-                "ticker": ticker,
-                "qty": quantity,
-                "price": exit_price,
-                "commission": commission,
-                "signal_type": exit_signal_type,
-                "total_value": notional,
-                "strategy": strategy,
-                "ts_tz": TRADE_HISTORY_TZ,
-                "context_json": json.dumps(context_json) if context_json else None,
-            },
-        )
+        if ts_db is not None:
+            conn.execute(
+                text("""
+                    INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone, context_json)
+                    VALUES (:ts, :ticker, 'SELL', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz, :context_json)
+                """),
+                {
+                    "ts": ts_db,
+                    "ticker": ticker,
+                    "qty": quantity,
+                    "price": exit_price,
+                    "commission": commission,
+                    "signal_type": exit_signal_type,
+                    "total_value": notional,
+                    "strategy": strategy,
+                    "ts_tz": TRADE_HISTORY_TZ,
+                    "context_json": json.dumps(context_json) if context_json else None,
+                },
+            )
+        else:
+            conn.execute(
+                text("""
+                    INSERT INTO public.trade_history (ts, ticker, side, quantity, price, commission, signal_type, total_value, sentiment_at_trade, strategy_name, ts_timezone, context_json)
+                    VALUES (CURRENT_TIMESTAMP, :ticker, 'SELL', :qty, :price, :commission, :signal_type, :total_value, NULL, :strategy, :ts_tz, :context_json)
+                """),
+                {
+                    "ticker": ticker,
+                    "qty": quantity,
+                    "price": exit_price,
+                    "commission": commission,
+                    "signal_type": exit_signal_type,
+                    "total_value": notional,
+                    "strategy": strategy,
+                    "ts_tz": TRADE_HISTORY_TZ,
+                    "context_json": json.dumps(context_json) if context_json else None,
+                },
+            )
     logger.info("game_5m: %s закрыта @ %.2f %s (strategy=%s), PnL=%.2f%%", ticker, exit_price, exit_signal_type, strategy, pnl_pct)
     return pnl_pct
 
@@ -570,8 +689,10 @@ def get_trades_for_chart(
 ) -> list[dict[str, Any]]:
     """Сделки GAME_5M по тикеру в заданном диапазоне времени (для нанесения на график 5m).
     dt_min, dt_max — диапазон графика в ET. В БД ts хранятся в Moscow, поэтому диапазон переводится в MSK.
-    Возвращает список dict: ts, price, quantity, side ('BUY'|'SELL'), signal_type, ts_timezone (если есть в таблице)."""
-    dt_lo, dt_hi = _chart_range_et_to_msk(dt_min, dt_max, margin_days=1)
+    Возвращает список dict: ts, price, quantity, side ('BUY'|'SELL'), signal_type, ts_timezone (если есть),
+    опционально chart_ts — ISO ET времени бара из context_json (для маркера по оси X), без сырого context_json."""
+    # Широкий запас по ts в SQL: старые SELL могли иметь ts=момент INSERT, а не бар — иначе строка не попадёт в выборку.
+    dt_lo, dt_hi = _chart_range_et_to_msk(dt_min, dt_max, margin_days=3)
     engine = _engine()
     ticker_upper = (ticker or "").strip().upper()
     params = {"ticker_upper": ticker_upper, "strategy": GAME_5M_STRATEGY, "dt_min": dt_lo, "dt_max": dt_hi}
@@ -579,7 +700,7 @@ def get_trades_for_chart(
         try:
             rows = conn.execute(
                 text("""
-                    SELECT id, ts, side, price, quantity, signal_type, ts_timezone
+                    SELECT id, ts, side, price, quantity, signal_type, ts_timezone, context_json
                     FROM public.trade_history
                     WHERE UPPER(TRIM(ticker)) = :ticker_upper AND strategy_name = :strategy
                       AND ts >= :dt_min AND ts <= :dt_max
@@ -587,8 +708,11 @@ def get_trades_for_chart(
                 """),
                 params,
             ).fetchall()
-            raw = [
-                {
+            raw = []
+            for r in rows:
+                ctx = r[7]
+                chart_iso = chart_ts_iso_from_context(ctx)
+                row = {
                     "id": int(r[0]),
                     "ts": r[1],
                     "price": float(r[3]),
@@ -597,8 +721,9 @@ def get_trades_for_chart(
                     "signal_type": r[5] or "",
                     "ts_timezone": r[6],
                 }
-                for r in rows
-            ]
+                if chart_iso:
+                    row["chart_ts"] = chart_iso
+                raw.append(row)
         except Exception:
             rows = conn.execute(
                 text("""
@@ -626,6 +751,7 @@ def get_trades_for_chart(
     # SQL-запрос берёт небольшой запас из-за разных форматов хранения ts.
     # Для графика возвращаем только сделки, реально попавшие в видимое окно ET,
     # иначе frontend может приклеить вчерашний SELL к ближайшей сегодняшней свече.
+    # Учитываем и chart_ts (бар из context_json), если ts записи вне окна из-за старого CURRENT_TIMESTAMP.
     try:
         import pandas as pd
 
@@ -640,18 +766,26 @@ def get_trades_for_chart(
         else:
             t_hi = t_hi.tz_convert(CHART_DISPLAY_TZ)
 
+        def _in_et_window(ts_et: Any) -> bool:
+            if ts_et is None:
+                return False
+            t = pd.Timestamp(ts_et)
+            if t.tzinfo is None:
+                t = t.tz_localize(CHART_DISPLAY_TZ)
+            else:
+                t = t.tz_convert(CHART_DISPLAY_TZ)
+            return bool(t_lo <= t <= t_hi)
+
         filtered = []
         for item in raw:
-            ts_et = trade_ts_to_et(item.get("ts"), source_tz=item.get("ts_timezone"))
-            if ts_et is None:
+            ts_et_db = trade_ts_to_et(item.get("ts"), source_tz=item.get("ts_timezone"))
+            in_win = _in_et_window(ts_et_db)
+            chart_iso = item.get("chart_ts")
+            if not in_win and chart_iso:
+                in_win = _in_et_window(trade_ts_to_et(chart_iso, source_tz="America/New_York"))
+            if not in_win:
                 continue
-            ts_et = pd.Timestamp(ts_et)
-            if ts_et.tzinfo is None:
-                ts_et = ts_et.tz_localize(CHART_DISPLAY_TZ)
-            else:
-                ts_et = ts_et.tz_convert(CHART_DISPLAY_TZ)
-            if t_lo <= ts_et <= t_hi:
-                filtered.append(item)
+            filtered.append(item)
         return filtered
     except Exception:
         logger.debug("get_trades_for_chart: не удалось отфильтровать сделки по ET-окну", exc_info=True)

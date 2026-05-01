@@ -419,6 +419,7 @@ def process_ticker(
                     bar_high=bar_high if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") else None,
                     bar_low=bar_low if exit_type == "STOP_LOSS" else None,
                     context_json=close_ctx_enriched,
+                    trade_ts=close_ctx.get("exit_bar_close_ts"),
                 )
                 outcome_lines.append("позиция закрыта по %s @ %.2f" % (exit_type, exit_price))
                 closed_this_run = True
@@ -648,7 +649,14 @@ def process_ticker(
         )
         if entry_context is not None and not entry_context:
             entry_context = None
-        entry_id = record_entry(ticker, price, decision, reasoning, entry_context=entry_context)
+        entry_id = record_entry(
+            ticker,
+            price,
+            decision,
+            reasoning,
+            entry_context=entry_context,
+            trade_ts=d5.get("exit_bar_close_ts") if d5 else None,
+        )
         if entry_id is None:
             logger.error("game_5m: запись входа %s не создана (record_entry вернул None), рассылка отменена", ticker)
             return False
@@ -886,6 +894,7 @@ def main():
                             bar_high=bar_high if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") else None,
                             bar_low=bar_low if exit_type == "STOP_LOSS" else None,
                             context_json=close_ctx_ah_merged,
+                            trade_ts=close_ctx_ah.get("exit_bar_close_ts"),
                         )
                         entry_ah = open_pos.get("entry_price")
                         try:

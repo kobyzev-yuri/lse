@@ -32,6 +32,10 @@ FULL_ENTRY_KEYS = (
     "technical_entry_branch", "entry_strong_buy_downgraded", "entry_condition", "entry_intuition",
     # Прогноз цены 30/60/120 мин (лог-норм. по 5m) — для LLM и истории входа
     "price_forecast_5m", "price_forecast_5m_summary",
+    # Время бара решения (get_decision_5m) — для графика / бэктеста, не только ts INSERT в trade_history
+    "exit_bar_close_ts",
+    "exit_bar_start_et",
+    "exit_bar_end_et",
 ) + CORRELATION_CB_FEATURE_KEYS
 # session_phase берём из market_session
 SESSION_PHASE_KEY = "session_phase"

@@ -1195,14 +1195,18 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
                 ts = ts_et.isoformat()
             elif hasattr(ts, "isoformat"):
                 ts = ts.isoformat()
-            trades_out.append({
+            row = {
                 "ts": ts,
                 "price": float(t.get("price", 0)),
                 "quantity": float(t.get("quantity") or 0),
                 "side": t.get("side"),
                 "signal_type": t.get("signal_type"),
                 "id": int(t.get("id") or 0),
-            })
+            }
+            ct = t.get("chart_ts")
+            if ct:
+                row["chart_ts"] = ct
+            trades_out.append(row)
     except Exception:
         pass
     entry_price = None
@@ -1381,6 +1385,19 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
     times = [_ts_str(t) for t in df["datetime"].tolist()]
     close = [float(x) for x in df["Close"].astype(float).tolist()]
 
+    ohlc_block: Optional[Dict[str, list]] = None
+    try:
+        _ohlc_cols = ("Open", "High", "Low", "Close")
+        if all(c in df.columns for c in _ohlc_cols):
+            ohlc_block = {
+                "open": [float(x) for x in df["Open"].astype(float).tolist()],
+                "high": [float(x) for x in df["High"].astype(float).tolist()],
+                "low": [float(x) for x in df["Low"].astype(float).tolist()],
+                "close": [float(x) for x in df["Close"].astype(float).tolist()],
+            }
+    except Exception:
+        ohlc_block = None
+
     # Индексы начала нового торгового дня (для вертикальных границ на графике)
     day_boundaries = []
     for i in range(1, len(times)):
@@ -1465,17 +1482,22 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
                 ts = ts_et.isoformat()
             elif hasattr(ts, "isoformat"):
                 ts = ts.isoformat()
-            trades.append({
+            row = {
                 "ts": ts,
                 "price": float(t.get("price", 0)),
                 "quantity": float(t.get("quantity") or 0),
                 "side": t.get("side"),
                 "signal_type": t.get("signal_type"),
                 "id": int(t.get("id") or 0),
-            })
+            }
+            ct = t.get("chart_ts")
+            if ct:
+                row["chart_ts"] = ct
+            trades.append(row)
             try:
                 if first_buy_ts_et is None and (t.get("side") or "").upper() == "BUY":
-                    ts0 = trade_ts_to_et(t.get("ts"), source_tz=t.get("ts_timezone"))
+                    ts_src = ct or t.get("ts")
+                    ts0 = trade_ts_to_et(ts_src, source_tz="America/New_York" if ct else t.get("ts_timezone"))
                     if ts0 is not None:
                         first_buy_ts_et = pd.Timestamp(ts0).tz_convert("America/New_York") if pd.Timestamp(ts0).tzinfo else pd.Timestamp(ts0).tz_localize("America/New_York", ambiguous=True)
             except Exception:
@@ -1522,6 +1544,7 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
         "times": list(times),
         "day_boundaries": list(day_boundaries),
         "close": [float(c) for c in close],
+        "ohlc": ohlc_block,
         "dt_max": _ts_str(dt_max),
         "dt_max_ext": _ts_str(dt_max_ext),
         "prolongation": {

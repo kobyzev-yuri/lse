@@ -1997,20 +1997,18 @@ class LSETelegramBot:
             )
             try:
                 from datetime import datetime, timedelta
-                from services.game_5m import get_trades_for_chart, trade_ts_to_et, TRADE_HISTORY_TZ
+                from services.game_5m import get_trades_for_chart, TRADE_HISTORY_TZ, trade_plot_time_naive_et
                 now = datetime.utcnow()
                 dt_start = now - timedelta(days=min(days + 2, 14))
                 trades = get_trades_for_chart(ticker, dt_start, now)
                 if trades:
                     lines = ["📋 Сделки GAME_5M по %s (без свечей):" % ticker]
                     for t in trades[-10:]:
-                        ts = t.get("ts")
-                        tz = t.get("ts_timezone") or TRADE_HISTORY_TZ
                         try:
-                            ts_et = trade_ts_to_et(ts, source_tz=tz)
-                            ts_str = ts_et.strftime("%d.%m %H:%M") if hasattr(ts_et, "strftime") else str(ts)
+                            dt_naive = trade_plot_time_naive_et(t)
+                            ts_str = dt_naive.strftime("%d.%m %H:%M") + " ET" if dt_naive is not None else str(t.get("ts"))
                         except Exception:
-                            ts_str = str(ts)
+                            ts_str = str(t.get("ts"))
                         lines.append("  %s @ %.2f — %s" % (t.get("side", ""), float(t.get("price", 0)), ts_str))
                     msg = msg + "\n\n" + "\n".join(lines)
             except Exception:
@@ -2098,36 +2096,31 @@ class LSETelegramBot:
                 from services.game_5m import (
                     get_trades_for_chart,
                     partition_trades_for_chart_pnl,
-                    trade_ts_to_et,
-                    TRADE_HISTORY_TZ,
+                    trade_plot_time_naive_et,
                 )
-
-                def _trade_ts_et(t):
-                    ts = t["ts"]
-                    try:
-                        stored_tz = t.get("ts_timezone") or TRADE_HISTORY_TZ
-                        ts_et = trade_ts_to_et(ts, source_tz=stored_tz)
-                        if ts_et is not None:
-                            dt = ts_et.to_pydatetime() if hasattr(ts_et, "to_pydatetime") else ts_et
-                            ts = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
-                    except Exception:
-                        pass
-                    return ts
 
                 raw_trades = get_trades_for_chart(ticker, dt_min, dt_max)
                 buys, sell_win, sell_loss, sell_neutral = partition_trades_for_chart_pnl(raw_trades)
                 for t in buys:
-                    buy_ts.append(_trade_ts_et(t))
-                    buy_p.append(float(t["price"]))
+                    tp = trade_plot_time_naive_et(t)
+                    if tp is not None:
+                        buy_ts.append(tp)
+                        buy_p.append(float(t["price"]))
                 for t in sell_win:
-                    take_ts.append(_trade_ts_et(t))
-                    take_p.append(float(t["price"]))
+                    tp = trade_plot_time_naive_et(t)
+                    if tp is not None:
+                        take_ts.append(tp)
+                        take_p.append(float(t["price"]))
                 for t in sell_loss:
-                    stop_ts.append(_trade_ts_et(t))
-                    stop_p.append(float(t["price"]))
+                    tp = trade_plot_time_naive_et(t)
+                    if tp is not None:
+                        stop_ts.append(tp)
+                        stop_p.append(float(t["price"]))
                 for t in sell_neutral:
-                    other_ts.append(_trade_ts_et(t))
-                    other_p.append(float(t["price"]))
+                    tp = trade_plot_time_naive_et(t)
+                    if tp is not None:
+                        other_ts.append(tp)
+                        other_p.append(float(t["price"]))
             except Exception:
                 pass
             for idx, sd in enumerate(session_dates):
@@ -2276,7 +2269,10 @@ class LSETelegramBot:
                     parts.append("▼ закрытие −")
                 if other_ts:
                     parts.append("▲ выход без P/L (сер.)")
-                caption += f"\n📌 Сделки: {', '.join(parts)} — {n_markers} шт. Время ET. Зелёный ▲ — прибыльное закрытие; серый — SELL без расчёта P/L к позиции; * — покупка."
+                caption += (
+                    f"\n📌 Сделки: {', '.join(parts)} — {n_markers} шт. ET. Цена маркера = price в БД; по времени — "
+                    "бар из context_json (если есть), иначе ts записи."
+                )
             if entry_price is not None:
                 caption += f"\n📌 Позиция открыта @ ${entry_price:.2f}"
             buf.seek(0)
@@ -2332,7 +2328,7 @@ class LSETelegramBot:
 
         def fetch_one(ticker: str) -> dict:
             from services.recommend_5m import fetch_5m_ohlc, filter_to_last_n_us_sessions
-            from services.game_5m import get_trades_for_chart, get_open_position, trade_ts_to_et, TRADE_HISTORY_TZ
+            from services.game_5m import get_trades_for_chart, get_open_position
             from services.recommend_5m import get_decision_5m
             import pandas as pd
             empty = {"ticker": ticker, "df": None, "session_dates": [], "trades": [], "entry_price": None, "d5_chart": None, "dt_min": None, "dt_max": None}
@@ -2438,33 +2434,29 @@ class LSETelegramBot:
             stop_ts, stop_p = [], []
             other_ts, other_p = [], []
             if df is not None and not df.empty and trades:
-                from services.game_5m import partition_trades_for_chart_pnl, trade_ts_to_et, TRADE_HISTORY_TZ
-
-                def _trade_ts_et_row(t):
-                    ts = t["ts"]
-                    try:
-                        stored_tz = t.get("ts_timezone") or TRADE_HISTORY_TZ
-                        ts_et = trade_ts_to_et(ts, source_tz=stored_tz)
-                        if ts_et is not None:
-                            dt = ts_et.to_pydatetime() if hasattr(ts_et, "to_pydatetime") else ts_et
-                            ts = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
-                    except Exception:
-                        pass
-                    return ts
+                from services.game_5m import partition_trades_for_chart_pnl, trade_plot_time_naive_et
 
                 buys, sell_win, sell_loss, sell_neutral = partition_trades_for_chart_pnl(trades)
                 for t in buys:
-                    buy_ts.append(_trade_ts_et_row(t))
-                    buy_p.append(float(t["price"]))
+                    tp = trade_plot_time_naive_et(t)
+                    if tp is not None:
+                        buy_ts.append(tp)
+                        buy_p.append(float(t["price"]))
                 for t in sell_win:
-                    take_ts.append(_trade_ts_et_row(t))
-                    take_p.append(float(t["price"]))
+                    tp = trade_plot_time_naive_et(t)
+                    if tp is not None:
+                        take_ts.append(tp)
+                        take_p.append(float(t["price"]))
                 for t in sell_loss:
-                    stop_ts.append(_trade_ts_et_row(t))
-                    stop_p.append(float(t["price"]))
+                    tp = trade_plot_time_naive_et(t)
+                    if tp is not None:
+                        stop_ts.append(tp)
+                        stop_p.append(float(t["price"]))
                 for t in sell_neutral:
-                    other_ts.append(_trade_ts_et_row(t))
-                    other_p.append(float(t["price"]))
+                    tp = trade_plot_time_naive_et(t)
+                    if tp is not None:
+                        other_ts.append(tp)
+                        other_p.append(float(t["price"]))
 
             for j in range(max_cols):
                 ax = axes[i, j]
@@ -2567,7 +2559,10 @@ class LSETelegramBot:
         plt.savefig(buf, format="png", dpi=72, bbox_inches="tight", facecolor="white")
         buf.seek(0)
         plt.close()
-        caption = f"📈 Игра 5m: все тикеры, {days} сессий (9:30–16:00 ET). Каждый ряд — один тикер, как /chart5m."
+        caption = (
+            f"📈 Игра 5m: все тикеры, {days} сессий (9:30–16:00 ET). Каждый ряд — один тикер, как /chart5m.\n"
+            "Маркеры: цена = price в БД; время по оси X — бар из context_json при наличии."
+        )
         try:
             await update.message.reply_photo(photo=buf, caption=caption)
         except Exception as send_err:
