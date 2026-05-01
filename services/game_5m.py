@@ -78,6 +78,43 @@ def trade_plot_time_naive_et(trade_row: dict[str, Any]) -> Any:
         return None
 
 
+def match_trade_to_chart_bar_index(
+    bar_times_iso: list[str],
+    trade_time_iso: Optional[str],
+    *,
+    bar_minutes: int = 5,
+) -> Optional[int]:
+    """
+    Индекс 5m-бара в ряду ``times`` графика (тот же df, что OHLC), к которому относится момент сделки.
+    Правило: ``bar_open <= t_trade < bar_open + bar_minutes`` в America/New_York.
+    """
+    if not bar_times_iso or not trade_time_iso:
+        return None
+    try:
+        import pandas as pd
+
+        t_trade = pd.Timestamp(str(trade_time_iso).strip())
+        if t_trade.tzinfo is None:
+            t_trade = t_trade.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+        else:
+            t_trade = t_trade.tz_convert(CHART_DISPLAY_TZ)
+        for i, tstr in enumerate(bar_times_iso):
+            try:
+                t_open = pd.Timestamp(str(tstr).strip())
+                if t_open.tzinfo is None:
+                    t_open = t_open.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+                else:
+                    t_open = t_open.tz_convert(CHART_DISPLAY_TZ)
+            except Exception:
+                continue
+            t_end = t_open + pd.Timedelta(minutes=int(bar_minutes))
+            if t_open <= t_trade < t_end:
+                return i
+    except Exception:
+        logger.debug("match_trade_to_chart_bar_index: iteration failed", exc_info=True)
+    return None
+
+
 def chart_ts_iso_from_context(context_json: Any) -> Optional[str]:
     """
     Время 5m-бара для привязки маркера на графике (не момент INSERT в БД).

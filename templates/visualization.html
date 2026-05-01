@@ -33,7 +33,7 @@
         Обновлять графики каждые 5 мин
     </label>
     <div id="chart5mSymbolsLegend" class="muted" style="margin-top:0.75rem; margin-bottom:0.5rem; font-size:0.8rem; line-height:1.4;">
-        <strong style="color:#cbd5e1;">Обозначения:</strong> <strong>*</strong> и <strong>▲/▼</strong> — только из <strong>trade_history</strong>: цена = поле <code>price</code> сделки; по горизонтали привязка к <strong>5m-бару</strong> из <code>context_json</code> (время бара), если есть, иначе к <code>ts</code> записи. Свечи/линия Close — OHLC того же окна, что API. Горизонталь: <strong>синяя</strong> — уровень входа по открытой позиции, <strong>оранжевая</strong> — хай до первого BUY в окне, <strong>зелёная</strong> — тейк. Справа — <strong>p50</strong> (30м / 1ч / 2ч).
+        <strong style="color:#cbd5e1;">Обозначения:</strong> <strong>*</strong> и <strong>▲/▼</strong> — цена = <code>price</code> в БД; по горизонтали — индекс бара <code>bar_index</code> с сервера (момент сделки в полуинтервале [open, open+5m) того же ряда, что свечи), иначе снап по времени. Свечи/линия Close — OHLC этого API. Горизонталь: <strong>синяя</strong> — вход по позиции, <strong>оранжевая</strong> — хай до первого BUY, <strong>зелёная</strong> — тейк. Справа — <strong>p50</strong> (30м / 1ч / 2ч).
     </div>
     <div id="chart5mContainer"></div>
 </div>
@@ -190,6 +190,19 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
     function tradeTimeForSnap(tr) {
         return (tr && tr.chart_ts) ? tr.chart_ts : (tr && tr.ts);
     }
+    /** Индекс бара: сервер bar_index (тот же df, что OHLC), иначе снап по времени. */
+    function resolveTradeBarIndex(tr, lbls, nMainLen) {
+        const bi = tr.bar_index;
+        if (bi !== undefined && bi !== null && Number.isFinite(Number(bi))) {
+            const i = parseInt(String(bi), 10);
+            const cap = Number.isFinite(nMainLen) && nMainLen > 0 ? nMainLen : lbls.length;
+            if (i >= 0 && i < cap && i < lbls.length) return i;
+        }
+        const tSnap = tradeTimeForSnap(tr);
+        if (!tSnap) return -1;
+        const maxSnap = tr.chart_ts ? (6 * 60 * 1000) : (3 * 60 * 1000);
+        return findClosestLabelIndex(lbls, tSnap, maxSnap);
+    }
     /** Привязка маркера к индексу свечи: chart_ts (бар из БД-контекста) — до ±6 мин; иначе ts записи — ±3 мин. */
     function findClosestLabelIndex(lbls, ts, maxSnapMs) {
         if (!lbls || !lbls.length) return -1;
@@ -207,9 +220,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
     function makeTradeDataset(trades, label) {
         const arr = labels.map(() => null);
         trades.forEach(tr => {
-            const tSnap = tradeTimeForSnap(tr);
-            const maxSnap = tr.chart_ts ? (6 * 60 * 1000) : (3 * 60 * 1000);
-            const i = findClosestLabelIndex(labels, tSnap, maxSnap);
+            const i = resolveTradeBarIndex(tr, labels, nMain);
             if (i >= 0) arr[i] = tr.price;
         });
         if (arr.every(v => v == null)) return null;
@@ -259,13 +270,11 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
     const tradeMetaByIndex = {};
     function pushMarkers(arr, kind) {
         arr.forEach(tr => {
-            const tSnap = tradeTimeForSnap(tr);
-            const maxSnap = tr.chart_ts ? (6 * 60 * 1000) : (3 * 60 * 1000);
-            const i = findClosestLabelIndex(labels, tSnap, maxSnap);
+            const i = resolveTradeBarIndex(tr, labels, nMain);
             if (i < 0) return;
             const p = parseFloat(tr.price);
             if (!Number.isFinite(p)) return;
-            const dispTs = tSnap;
+            const dispTs = labels[i] || tradeTimeForSnap(tr);
             tradeMarkerItems.push({ index: i, price: p, kind: kind, ts: dispTs, db_ts: tr.ts, side: tr.side, id: tr.id });
             if (!tradeMetaByIndex[i]) tradeMetaByIndex[i] = [];
             tradeMetaByIndex[i].push({ kind: kind, side: tr.side, ts: dispTs, db_ts: tr.ts, price: p, id: tr.id });
