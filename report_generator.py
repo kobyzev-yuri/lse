@@ -45,6 +45,50 @@ def human_trade_explanation_from_exit_context(exit_ctx: Any) -> str:
     return " ".join(parts)
 
 
+def _exit_context_dict(raw: Any) -> Optional[Dict[str, Any]]:
+    """context_json строки SELL → dict или None."""
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, float) and pd.isna(raw):
+            return None
+    except Exception:
+        pass
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+    return None
+
+
+def exit_ts_for_closed_display(trade: "TradePnL") -> pd.Timestamp:
+    """
+    Время «закрытия» для человекочитаемых отчётов (/closed, шеф): в SELL.context_json есть
+    exit_bar_end_et — правый конец 5m-окна решения в ET (например 9:30 вместо open 9:25);
+    переводим в Europe/Moscow naive, как колонки MSK. Иначе trade.ts из БД.
+    """
+    base = pd.to_datetime(trade.ts)
+    ctx = _exit_context_dict(trade.exit_context_json)
+    if not ctx:
+        return base
+    et_iso = ctx.get("exit_bar_end_et") or ctx.get("exit_5m_bar_end_et")
+    if not et_iso:
+        return base
+    try:
+        t = pd.Timestamp(str(et_iso).strip())
+        if t.tzinfo is None:
+            t = t.tz_localize("America/New_York", ambiguous=True)
+        else:
+            t = t.tz_convert("America/New_York")
+        return t.tz_convert("Europe/Moscow").tz_localize(None)
+    except Exception:
+        logger.debug("exit_ts_for_closed_display: skip %r", et_iso, exc_info=True)
+        return base
+
+
 @dataclass
 class TradePnL:
     trade_id: int

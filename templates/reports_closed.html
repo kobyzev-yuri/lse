@@ -31,7 +31,7 @@
     <a class="btn btn-sm btn-outline-primary" href="/reports/closed/export?limit={{ closed_report_web_max }}&game_type={{ game_type }}">Excel, до {{ closed_report_web_max }} строк</a>
 </p>
 <p class="muted" style="margin-bottom: 0.35rem;">
-    Аналог /closed в Telegram. Фильтр: {{ game_type }}. Показано {{ rows|length }} (запрошено {{ limit }}, по умолчанию {{ closed_report_default }}, веб-макс. {{ closed_report_web_max }}{% if closed_report_telegram_max < closed_report_web_max %}; в Telegram — до {{ closed_report_telegram_max }}{% endif %}). Даты в MSK.
+    Аналог /closed в Telegram. Фильтр: {{ game_type }}. Показано {{ rows|length }} (запрошено {{ limit }}, по умолчанию {{ closed_report_default }}, веб-макс. {{ closed_report_web_max }}{% if closed_report_telegram_max < closed_report_web_max %}; в Telegram — до {{ closed_report_telegram_max }}{% endif %}). Даты в MSK. Колонка <strong>Close (MSK)</strong> для GAME_5M: если в контексте выхода есть конец 5m-окна (<code>exit_bar_end_et</code>), показывается он (например 16:30 вместо open бара 16:25); иначе — время из БД.
 </p>
 <p class="muted" style="margin-bottom: 0.75rem; font-size: 0.88rem; line-height: 1.45;">
     <strong>Game</strong> — торговый контур; <strong>Entry / Exit Strategy</strong> — конкретная стратегия внутри контура. <code>Portfolio fallback</code> означает старую/ручную portfolio-позицию без сохранённой стратегии StrategyManager.<br>

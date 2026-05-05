@@ -34,6 +34,7 @@ from telegram.ext import (
 from analyst_agent import AnalystAgent
 from services.vector_kb import VectorKB
 from config_loader import get_config_value, get_closed_positions_report_limits, get_use_llm_for_analyst
+from report_generator import exit_ts_for_closed_display
 
 logger = logging.getLogger(__name__)
 
@@ -632,7 +633,7 @@ def _build_closed_html(closed: List[Any], total_pnl: float = 0, impulse_pct: boo
             f'<td class="{profit_cls}">{t.net_pnl:+.2f}</td>'
             f'<td class="{profit_cls}">{pnl_pct_str}</td>'
             f"<td>{entry_s}</td><td>{exit_s}</td><td>{reason}</td>"
-            f"<td>{_ts_msk(t.entry_ts)}</td><td>{_ts_msk(t.ts)}</td></tr>"
+            f"<td>{_ts_msk(t.entry_ts)}</td><td>{_ts_msk(exit_ts_for_closed_display(t))}</td></tr>"
         )
         rows_html.append(row_cells)
     body = "\n".join(rows_html)
@@ -642,7 +643,7 @@ def _build_closed_html(closed: List[Any], total_pnl: float = 0, impulse_pct: boo
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><title>Закрытые позиции</title>
 <style>table{{border-collapse:collapse;width:100%}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}} .summary{{margin-top:1em}}</style>
-</head><body><h1>Закрытые позиции</h1><p>Даты в MSK. Entry/Exit — стратегия. Причина выхода: TAKE_PROFIT (достигнут тейк), TIME_EXIT (конец сессии или макс. дней), SELL (сигнал), STOP_LOSS. Цель тейка при входе задаётся от импульса 2ч (напр. 6%%), но выход может быть по другой причине — тогда P/L %% меньше цели.</p>
+</head><body><h1>Закрытые позиции</h1><p>Даты в MSK. Close (MSK) для GAME_5M: при наличии в контексте выхода — конец 5m-окна решения (exit_bar_end_et в ET), иначе время из БД. Entry/Exit — стратегия. Причина выхода: TAKE_PROFIT (достигнут тейк), TIME_EXIT (конец сессии или макс. дней), SELL (сигнал), STOP_LOSS. Цель тейка при входе задаётся от импульса 2ч (напр. 6%%), но выход может быть по другой причине — тогда P/L %% меньше цели.</p>
 <table>{thead}<tbody>{body}</tbody></table>{summary}</body></html>"""
 
 
@@ -3820,7 +3821,7 @@ class LSETelegramBot:
                     + _cell(str(pips_val), w_pips) + sep + _cell(qty_str, w_qty) + sep + _cell(f"{t.net_pnl:+.2f}", w_profit) + sep
                     + _cell(pct_str, w_pct) + sep
                     + _cell(entry_s, w_strat) + sep + _cell(exit_s, w_strat) + sep + _cell(reason_s, w_reason) + sep
-                    + _cell(_fmt_ts_msk(t.entry_ts), w_date) + sep + _fmt_ts_msk(t.ts)
+                    + _cell(_fmt_ts_msk(t.entry_ts), w_date) + sep + _fmt_ts_msk(exit_ts_for_closed_display(t))
                 )
                 rows.append(row)
             total_pnl = sum(t.net_pnl for t in closed)
@@ -3982,7 +3983,7 @@ class LSETelegramBot:
                     _cell(t.ticker, w_inst) + sep + _cell(f"{t.entry_price:.2f}", w_open) + sep + _cell(f"{t.exit_price:.2f}", w_close) + sep
                     + _cell(impulse_str, w_imp) + sep + _cell(qty_str, w_qty) + sep + _cell(f"{t.net_pnl:+.2f}", w_profit) + sep + _cell(pct_str, w_pct) + sep
                     + _cell(reason_s, w_reason) + sep
-                    + _cell(_fmt_ts_msk(t.entry_ts), w_date) + sep + _fmt_ts_msk(t.ts)
+                    + _cell(_fmt_ts_msk(t.entry_ts), w_date) + sep + _fmt_ts_msk(exit_ts_for_closed_display(t))
                 )
                 rows.append(row)
             total_pnl = sum(t.net_pnl for t in closed)

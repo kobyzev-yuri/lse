@@ -55,6 +55,7 @@ from report_generator import (
     get_engine,
     get_latest_prices,
     human_trade_explanation_from_exit_context,
+    exit_ts_for_closed_display,
 )
 
 app = FastAPI(title="LSE Trading System", version="1.0.0")
@@ -727,6 +728,18 @@ async def apply_analyzer_config(request: Request):
                     "ok": True,
                     "message": "Перезапуск выполнен",
                     "command": used_cmd[:200],
+                }
+            elif result.returncode == 127:
+                # Как /api/config/restart: в контейнере без Docker CLI — выход процесса → compose перезапустит контейнер.
+                _schedule_self_restart(delay_sec=1.0)
+                restart_result = {
+                    "ok": True,
+                    "message": (
+                        "Docker CLI недоступен (код 127) — запланирован self-restart процесса; "
+                        "контейнер с restart:unless-stopped перечитает config.env."
+                    ),
+                    "command": used_cmd[:200],
+                    "mode": "self_restart",
                 }
             else:
                 restart_result = _restart_result_from_completed(result, used_cmd)
@@ -2461,7 +2474,7 @@ def _closed_report_rows(limit: Optional[int] = None, game_type: Optional[str] = 
         pts = t.exit_price - t.entry_price
         pips = round(pts * 10000) if ("=X" in t.ticker or "USD" in t.ticker or "EUR" in t.ticker) else round(pts, 2)
         open_msk = _closed_ts_msk(t.entry_ts)
-        close_msk = _closed_ts_msk(t.ts)
+        close_msk = _closed_ts_msk(exit_ts_for_closed_display(t))
         direction = "Long" if getattr(t, "side", "") == "SELL" else "Short"
         exit_reason = (t.signal_type or "—") if t.signal_type and str(t.signal_type).strip() else "—"
         entry_px = float(t.entry_price)
