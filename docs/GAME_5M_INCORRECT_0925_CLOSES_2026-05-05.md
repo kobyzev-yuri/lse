@@ -40,6 +40,15 @@ We ran a bar-by-bar replay using `scripts/replay_incident_2026_05_05_open_closes
 
 Result (RTH-only replay) vs recorded incident (recorded window is always `[09:25..09:30)` in `context_json`):
 
+Table (similar to `/reports/closed`, but with corrected close timestamp + corrected close amount):
+
+| Ticker | Side | Qty | Entry (MSK) | Entry px | Close (DB, MSK) | Close px (DB) | Close amount (DB) | Signal (DB) | Close (correct, MSK) | Close px (correct) | Close amount (correct) | Signal (correct) | PnL (DB) | PnL (correct) | ΔPnL |
+|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---|---:|---:|---:|
+| MU | Long | 17 | 04.05.2026 18:30 | 581.27 | 05.05.2026 16:25 | 609.57 | 10362.69 | TAKE_PROFIT_SUSPEND | **05.05.2026 16:35** | **617.5199** | **10497.84** | TAKE_PROFIT | +481.18 | **+616.25** | **+135.07** |
+| NBIS | Long | 56 | 04.05.2026 22:55 | 176.31 | 05.05.2026 16:25 | 169.22 | 9476.32 | TIME_EXIT_EARLY stale_reversal | **05.05.2026 16:35** | **171.5188** | **9605.05** | TIME_EXIT_EARLY stale_reversal | -397.04 | **-268.31** | **+128.73** |
+| ASML | Long | 7 | 04.05.2026 20:45 | 1387.20 | 05.05.2026 16:25 | 1425.71 | 9979.97 | TAKE_PROFIT_SUSPEND | **05.05.2026 18:50** | **1447.0000** | **10129.00** | TAKE_PROFIT | +269.57 | **+418.60** | **+149.03** |
+| SNDK | Long | 7 | 04.05.2026 17:45 | 1250.90 | 05.05.2026 16:25 | 1289.00 | 9023.00 | TAKE_PROFIT | **05.05.2026 16:35** | **1316.0000** | **9212.00** | TAKE_PROFIT | +266.70 | **+455.70** | **+189.00** |
+
 - **MU**
   - recorded: `16:25 MSK`, `TAKE_PROFIT_SUSPEND`, window `[09:25..09:30)`
   - replay: **`TAKE_PROFIT`** on **09:30–09:35**, fill `617.5199`
