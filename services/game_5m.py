@@ -1565,6 +1565,33 @@ def should_close_position(
     True — сужать (режим «только висок», см. ``GAME_5M_HANGER_DUAL_MODE`` в кроне).
     При ``apply_hanger_json=True`` и срабатывании порога по цене в БД уходит ``TAKE_PROFIT_SUSPEND`` (тейк по алгоритму висяка), иначе ``TAKE_PROFIT``.
     """
+    # Guard against premature exits right at the market open.
+    # We run the cron frequently (often every minute), but 5m OHLC bars are anchored on 5-minute grid.
+    # On the first run after 09:30 ET, the last *completed* bar can still be 09:25–09:30 (premarket).
+    # Exiting based on that window produces misleading "09:25" close times and can use premarket highs/lows.
+    if simulation_time is None and (session_phase or "").strip() == "NEAR_OPEN":
+        try:
+            guard_min = int((get_config_value("GAME_5M_EXIT_GUARD_FIRST_MINUTES", "5") or "5").strip())
+        except (TypeError, ValueError):
+            guard_min = 5
+        guard_min = max(0, min(30, guard_min))
+        if guard_min > 0:
+            try:
+                import pandas as pd
+                now_et = pd.Timestamp.now(tz=CHART_DISPLAY_TZ)
+                open_et = now_et.normalize() + pd.Timedelta(hours=9, minutes=30)
+                mins_since_open = float((now_et - open_et).total_seconds()) / 60.0
+                if mins_since_open >= 0 and mins_since_open < float(guard_min):
+                    logger.info(
+                        "GAME_5M %s: exit-guard near open (%d min) — mins_since_open=%.2f, skip exit checks",
+                        open_position.get("ticker", "?"),
+                        guard_min,
+                        mins_since_open,
+                    )
+                    return False, "", ""
+            except Exception:
+                pass
+
     if current_price is None or current_price <= 0:
         return False, "", ""
 
