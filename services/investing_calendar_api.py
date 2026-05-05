@@ -99,6 +99,17 @@ def _get_json_with_retries(session: requests.Session, params: dict) -> dict:
             time.sleep(delay_sec)
         try:
             r = session.get(ENDPOINT, params=params, timeout=25)
+            # 403/401 from Investing endpoints are typically geo/bot/cookie blocks and are NOT transient.
+            # Retrying just spams logs; the only real fix is changing network path (proxy) or endpoint.
+            if r.status_code in (401, 403):
+                logger.warning(
+                    "Investing calendar API %s (Forbidden/Unauthorized). Not retrying. "
+                    "If you need this source, use a proxy: set INVESTING_CALENDAR_USE_SYSTEM_PROXY=true "
+                    "and configure HTTP(S)_PROXY/ALL_PROXY for the process/container. Params=%s",
+                    r.status_code,
+                    {k: params.get(k) for k in ("domain_id", "start_date", "end_date", "country_ids", "limit")},
+                )
+                r.raise_for_status()
             if r.status_code == 429 and attempt < len(INVESTING_CALENDAR_API_BACKOFF) - 1:
                 logger.warning(
                     "Investing calendar API 429, retry %s/%s",
@@ -110,6 +121,10 @@ def _get_json_with_retries(session: requests.Session, params: dict) -> dict:
             return r.json()
         except (requests.RequestException, ValueError) as e:
             if attempt < len(INVESTING_CALENDAR_API_BACKOFF) - 1:
+                # Do not retry non-transient HTTP errors (e.g., 403) if they bubbled as exceptions.
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status in (401, 403):
+                    raise
                 logger.warning("Investing calendar API request failed (%s), retrying", e)
                 continue
             raise
@@ -146,8 +161,10 @@ def fetch_investing_calendar_api_events(
     sess = outbound_session("INVESTING_CALENDAR_USE_SYSTEM_PROXY")
     sess.headers.update(
         {
-            "User-Agent": "Mozilla/5.0",
+            # Keep headers simple but browser-like; some CDNs block default python-requests signatures.
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
             "Referer": "https://www.investing.com/economic-calendar/",
             "Origin": "https://www.investing.com",
         }
