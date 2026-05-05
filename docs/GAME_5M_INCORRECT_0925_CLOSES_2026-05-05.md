@@ -12,8 +12,10 @@ the **09:25–09:30 premarket** 5-minute window for take/stale decisions.
   - `bar_end = now_et.floor("5min")`
   - `bar_start = bar_end - 5 minutes`
 - On the first run right after `09:30 ET`, `bar_end` becomes `09:30`, so the chosen window is **`[09:25; 09:30)`**.
-- That window is mostly **premarket**. It is *not* the first completed regular-session bar (`[09:30; 09:35)`),
-  because the first RTH 5-minute bar closes only at `09:35`.
+- That window is the 5-minute bucket that ends at the open. Even if Yahoo/yfinance treats it as part of
+  the first “regular session” aggregation (bar timestamp is the bar open), it still creates a misleading
+  close time label (`09:25`) in reports, and can mix boundary behavior around the open.
+  It is *not* the first completed regular-session bar (`[09:30; 09:35)`), because the first RTH 5-minute bar closes only at `09:35`.
 
 Result:
 
@@ -48,6 +50,7 @@ so any exit that relies on 5m OHLC should not fire at `09:30:xx`.
 
 Even with the guard, running the cron every minute is usually unnecessary because 5m OHLC changes every 5 minutes.
 If desired, reduce crontab to `*/5` (the repository helper `setup_cron_docker.sh` already uses `*/5`).
+Also update the repo template `crontab/lse-docker.crontab` to avoid reintroducing `*/1` later.
 
 ## Follow-ups (optional)
 
