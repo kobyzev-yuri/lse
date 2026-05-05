@@ -30,6 +30,48 @@ Result:
 - In `logs/cron_sndk_signal.log` around `16:30 MSK` (first run after open):
   - exits show `exit_bar_et=[2026-05-05T09:25:00-04:00..2026-05-05T09:30:00-04:00)`
 
+## Replay evidence (RTH-only, what would happen without the 09:25 bucket)
+
+We ran a bar-by-bar replay using `scripts/replay_incident_2026_05_05_open_closes.py`:
+
+- Source of truth for positions: `trade_history` (last BUY before the incident SELL + the incident SELL itself).
+- Price source for replay: **5m OHLC**, restricted to **RTH only** for `2026-05-05` (`[09:30..16:00] ET`).
+- Exit decisions: `services.game_5m.should_close_position(..., simulation_time=bar_end_et)` called per bar close.
+
+Result (RTH-only replay) vs recorded incident (recorded window is always `[09:25..09:30)` in `context_json`):
+
+- **MU**
+  - recorded: `16:25 MSK`, `TAKE_PROFIT_SUSPEND`, window `[09:25..09:30)`
+  - replay: **`TAKE_PROFIT`** on **09:30–09:35**, fill `617.5199`
+- **NBIS**
+  - recorded: `16:25 MSK`, `TIME_EXIT_EARLY stale_reversal`, window `[09:25..09:30)`
+  - replay: **`TIME_EXIT_EARLY stale_reversal`** on **09:30–09:35**, fill `171.5188`
+- **ASML**
+  - recorded: `16:25 MSK`, `TAKE_PROFIT_SUSPEND`, window `[09:25..09:30)`
+  - replay: **`TAKE_PROFIT`** on **11:45–11:50**, fill `1447.0000` (i.e. not at the open)
+- **SNDK**
+  - recorded: `16:25 MSK`, `TAKE_PROFIT`, window `[09:25..09:30)`
+  - replay: **`TAKE_PROFIT`** on **09:30–09:35**, fill `1316.0000`
+
+This demonstrates the intent of the fix: if we avoid making decisions on the ambiguous `[09:25..09:30)` bucket, the earliest valid bar-based decision time becomes the first completed RTH bar close at `09:35 ET` (i.e. bar `09:30–09:35`).
+
+### Export for reporting (JSON/CSV + PnL deltas)
+
+The script was extended to compute:
+
+- `log_return`: \( \ln(\text{exit}/\text{entry}) \)
+- `gross_pnl_usd`: `quantity * (exit - entry)`
+- deltas vs DB (`delta_log_return`, `delta_gross_pnl_usd`) between recorded DB exit fill and replay fill
+
+Example run (inside `lse-bot` container or any env with DB access and deps):
+
+```bash
+python3 scripts/replay_incident_2026_05_05_open_closes.py \
+  --tickers MU,NBIS,ASML,SNDK \
+  --json /tmp/game5m_incident_replay_2026-05-05.json \
+  --csv /tmp/game5m_incident_replay_2026-05-05.csv
+```
+
 ## Why it is considered incorrect
 
 - For reporting: it looks like trades were closed before the market open.
