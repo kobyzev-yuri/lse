@@ -989,6 +989,10 @@ def get_trades_for_chart(
         else:
             t_hi = t_hi.tz_convert(CHART_DISPLAY_TZ)
 
+        # dt_max на графике — время открытия последнего 5m-бара; сделка может быть внутри этого бара
+        # (или ts записи крона — на минуты позже open). Расширяем верхнюю границу на длительность бара.
+        t_hi_vis = t_hi + pd.Timedelta(minutes=5)
+
         def _in_et_window(ts_et: Any) -> bool:
             if ts_et is None:
                 return False
@@ -997,7 +1001,7 @@ def get_trades_for_chart(
                 t = t.tz_localize(CHART_DISPLAY_TZ)
             else:
                 t = t.tz_convert(CHART_DISPLAY_TZ)
-            return bool(t_lo <= t <= t_hi)
+            return bool(t_lo <= t <= t_hi_vis)
 
         filtered = []
         for item in raw:

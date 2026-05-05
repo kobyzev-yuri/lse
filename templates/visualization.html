@@ -200,10 +200,11 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
         }
         const tSnap = tradeTimeForSnap(tr);
         if (!tSnap) return -1;
-        const maxSnap = tr.chart_ts ? (6 * 60 * 1000) : (3 * 60 * 1000);
+        // Метки оси — open 5m-бара; ts записи может быть в любой точке бара (до ~5 мин от open).
+        const maxSnap = tr.chart_ts ? (6 * 60 * 1000) : (5 * 60 * 1000);
         return findClosestLabelIndex(lbls, tSnap, maxSnap);
     }
-    /** Привязка маркера к индексу свечи: chart_ts (бар из БД-контекста) — до ±6 мин; иначе ts записи — ±3 мин. */
+    /** Привязка маркера к индексу свечи: chart_ts — до ±6 мин; иначе ts записи — до ±5 мин (тот же 5m интервал). */
     function findClosestLabelIndex(lbls, ts, maxSnapMs) {
         if (!lbls || !lbls.length) return -1;
         const t = new Date(ts).getTime();
@@ -213,7 +214,7 @@ function buildChart5mFromData(ticker, data, canvasEl, legendEl) {
             const d = Math.abs(new Date(l).getTime() - t);
             if (d < bestDiff) { bestDiff = d; best = i; }
         });
-        const cap = Number.isFinite(maxSnapMs) && maxSnapMs > 0 ? maxSnapMs : (3 * 60 * 1000);
+        const cap = Number.isFinite(maxSnapMs) && maxSnapMs > 0 ? maxSnapMs : (5 * 60 * 1000);
         if (!Number.isFinite(bestDiff) || bestDiff > cap) return -1;
         return best;
     }
