@@ -206,6 +206,23 @@
                 html += '<p class="no-data">' + escapeHtml(c.reasoning || 'Нет данных') + '</p></div>';
                 return html;
             }
+            if (c.catboost_signal_status) {
+                html += '<div class="block-title">CatBoost (осторожный фильтр входа)</div>';
+                html += '<div class="row"><span class="label">Статус / режим</span><span class="value">' +
+                    escapeHtml(String(c.catboost_signal_status || '—')) + ' · ' + escapeHtml(String(c.catboost_fusion_mode || '—')) +
+                    '</span></div>';
+                if (c.catboost_entry_proba_good != null) {
+                    html += '<div class="row"><span class="label">P(хороший исход)</span><span class="value">' + fmt(c.catboost_entry_proba_good, 3) + '</span></div>';
+                }
+                if (c.technical_decision_core && c.technical_decision_effective && c.technical_decision_core !== c.technical_decision_effective) {
+                    html += '<div class="row"><span class="label">Сигнал (core→effective)</span><span class="value">' +
+                        escapeHtml(String(c.technical_decision_core)) + ' → <strong>' + escapeHtml(String(c.technical_decision_effective)) + '</strong>' +
+                        '</span></div>';
+                }
+                if (c.catboost_fusion_note) {
+                    html += '<div class="row"><span class="label">Заметка</span><span class="value muted" style="font-size:0.85em;">' + escapeHtml(String(c.catboost_fusion_note)) + '</span></div>';
+                }
+            }
             html += '<div class="row"><span class="label">Цена</span><span class="value">' + fmt(c.price, 2) + '</span></div>';
             html += '<div class="row"><span class="label">RSI(5m)</span><span class="value">' + fmt(c.rsi_5m, 1) + '</span></div>';
             var verdict = c.qwen_checklist_verdict || '';
