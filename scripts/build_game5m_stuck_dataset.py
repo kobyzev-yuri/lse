@@ -181,6 +181,17 @@ def _iter_dataset_rows(args: argparse.Namespace) -> Iterable[Dict[str, Any]]:
             continue
 
         ctx = normalize_entry_context(getattr(t, "context_json", None))
+        exit_ctx = normalize_entry_context(getattr(t, "exit_context_json", None))
+        # Exclude incident closes that used [09:25..09:30) at the open.
+        start = str(exit_ctx.get("exit_bar_start_et") or "").strip()
+        end = str(exit_ctx.get("exit_bar_end_et") or "").strip()
+        if start and end and "T09:25:00" in start and "T09:30:00" in end:
+            logger.info(
+                "skip trade_id=%s %s: incorrect_0925_open_boundary_exit",
+                getattr(t, "trade_id", None),
+                getattr(t, "ticker", "?"),
+            )
+            continue
         entry_price = _safe_float(getattr(t, "entry_price", None))
         exit_price = _safe_float(getattr(t, "exit_price", None))
         if entry_price is None or entry_price <= 0 or exit_price is None:
@@ -201,7 +212,6 @@ def _iter_dataset_rows(args: argparse.Namespace) -> Iterable[Dict[str, Any]]:
         signal = (getattr(t, "signal_type", "") or "").strip().upper()
         exit_detail = ""
         try:
-            exit_ctx = normalize_entry_context(getattr(t, "exit_context_json", None))
             exit_detail = str(exit_ctx.get("exit_detail") or exit_ctx.get("exit_condition") or "")[:160]
         except Exception:
             exit_detail = ""

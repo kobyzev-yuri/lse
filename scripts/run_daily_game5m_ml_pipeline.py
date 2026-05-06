@@ -70,6 +70,17 @@ def _load_json(path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _default_ml_out_dir(root: Path) -> Path:
+    """
+    Куда писать артефакты (CSV/CBM/meta):
+    - в контейнере: /app/logs/ml (persist bind-mount)
+    - локально: <repo>/local (как раньше)
+    """
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml")
+    return root / "local"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Daily GAME_5M ML: datasets + CatBoost + JSONL report")
     parser.add_argument("--root", type=Path, default=project_root, help="Repo root (default: parent of scripts/)")
@@ -86,11 +97,17 @@ def main() -> int:
         min_cb_rows = 35
     min_cb_rows = max(20, min_cb_rows)
 
-    report_path = Path(os.environ.get("DAILY_ML_REPORT_JSONL") or (root / "local" / "logs" / "game5m_daily_ml_report.jsonl"))
+    report_path = Path(
+        os.environ.get("DAILY_ML_REPORT_JSONL")
+        or (_default_ml_out_dir(root) / "logs" / "game5m_daily_ml_report.jsonl")
+    )
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
-    datasets_dir = root / "local" / "datasets"
-    models_dir = root / "local" / "models"
+    base_out = Path(os.environ.get("DAILY_ML_OUT_DIR") or _default_ml_out_dir(root))
+    datasets_dir = base_out / "datasets"
+    models_dir = base_out / "models"
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
     py = sys.executable
 
     stuck_out = datasets_dir / "game5m_stuck_dataset.csv"

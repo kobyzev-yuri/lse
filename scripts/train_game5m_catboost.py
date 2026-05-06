@@ -79,6 +79,27 @@ def _is_false_take_profit_by_session_high(trade_pnl: Any) -> bool:
     return recent_high_pct < (target_pct - FALSE_TAKE_TOLERANCE_PCT)
 
 
+def _is_incorrect_0925_open_boundary_exit(trade_pnl: Any) -> bool:
+    """
+    Exclude incident exits that used the ambiguous [09:25..09:30) bucket right after the NYSE open.
+
+    See docs/GAME_5M_INCORRECT_0925_CLOSES_2026-05-05.md
+    """
+    ctx = _json_dict(getattr(trade_pnl, "exit_context_json", None))
+    start = str(ctx.get("exit_bar_start_et") or "").strip()
+    end = str(ctx.get("exit_bar_end_et") or "").strip()
+    if not start or not end:
+        return False
+    # Exact 5m window that caused the incorrect close label and premarket mixing.
+    if "T09:25:00" not in start:
+        return False
+    if "T09:30:00" not in end:
+        return False
+    # Optional safety: require it to be an exit bar window (not some unrelated field)
+    if "exit_bar" not in " ".join(ctx.keys()):
+        return False
+    return True
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train CatBoost on GAME_5M closed trades")
     parser.add_argument("--min-rows", type=int, default=None, help="Override GAME_5M_CATBOOST_MIN_TRAIN_ROWS")
@@ -86,7 +107,7 @@ def main() -> int:
     parser.add_argument(
         "--out",
         type=str,
-        default=str(project_root / "local" / "models" / "game5m_entry_catboost.cbm"),
+        default="",
         help="Output .cbm path (meta written alongside as .meta.json)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Only print stats, no model file")
@@ -109,6 +130,20 @@ def main() -> int:
     from services.deal_params_5m import normalize_entry_context
     from services.catboost_5m_signal import get_catboost_feature_schema, row_from_entry_context_dict
 
+    out_arg = (args.out or "").strip()
+    cfg_out = (get_config_value("GAME_5M_CATBOOST_MODEL_PATH", "") or "").strip()
+    if out_arg:
+        out_final = out_arg
+    elif cfg_out:
+        out_final = cfg_out
+    else:
+        # По умолчанию в контейнере пишем в /app/logs (смонтирован на хост), иначе — в repo local/models.
+        out_final = (
+            "/app/logs/ml/models/game5m_entry_catboost.cbm"
+            if Path("/app/logs").exists()
+            else str(project_root / "local" / "models" / "game5m_entry_catboost.cbm")
+        )
+
     min_rows = args.min_rows
     if min_rows is None:
         try:
@@ -128,6 +163,13 @@ def main() -> int:
 
     for t in closed:
         if (t.entry_strategy or "").strip().upper() != GAME_5M:
+            continue
+        if _is_incorrect_0925_open_boundary_exit(t):
+            logger.info(
+                "skip trade_id=%s %s: incorrect_0925_open_boundary_exit",
+                getattr(t, "trade_id", None),
+                getattr(t, "ticker", "?"),
+            )
             continue
         if _is_false_take_profit_by_session_high(t):
             skipped_false_take += 1
@@ -216,7 +258,7 @@ def main() -> int:
         auc = float("nan")
     logger.info("Train=%s Valid=%s AUC(valid)≈%s", n_train, n_valid, auc if auc == auc else "n/a")
 
-    out_path = Path(args.out)
+    out_path = Path(out_final)
     meta_path = out_path.with_suffix(".meta.json")
 
     if args.dry_run:

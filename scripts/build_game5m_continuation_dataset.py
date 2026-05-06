@@ -185,6 +185,16 @@ def _iter_dataset_rows(args: argparse.Namespace) -> Iterable[Dict[str, Any]]:
 
         entry_ctx = normalize_entry_context(getattr(t, "context_json", None))
         exit_ctx = normalize_entry_context(getattr(t, "exit_context_json", None))
+        # Exclude incident closes that used [09:25..09:30) at the open.
+        start = str(exit_ctx.get("exit_bar_start_et") or "").strip()
+        end = str(exit_ctx.get("exit_bar_end_et") or "").strip()
+        if start and end and "T09:25:00" in start and "T09:30:00" in end:
+            logger.info(
+                "skip trade_id=%s %s: incorrect_0925_open_boundary_exit",
+                getattr(t, "trade_id", None),
+                getattr(t, "ticker", "?"),
+            )
+            continue
 
         post_stats = _window_stats(post_exit, exit_price, "post_exit")
         pre30_stats = _window_stats(pre_exit_30, entry_price, "pre_exit_30m")
