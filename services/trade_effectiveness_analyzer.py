@@ -61,10 +61,104 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "смесь TAKE_PROFIT vs TAKE_PROFIT_SUSPEND в окне; кандидаты на перегенерацию JSON (offline) и на "
         "GAME_5M_HANGER_TUNE_APPLY_TAKE. Решения по эффективности — здесь и в LLM/practical, а не разрозненные проверки."
     ),
+    "catboost_entry_backtest": (
+        "Проверка CatBoost entry (GAME_5M): берём сохранённый BUY context_json → считаем P(благоприятный исход) "
+        "и сопоставляем с фактом realized_pct. Нужен файл модели .cbm + meta.json и включение GAME_5M_CATBOOST_ENABLED."
+    ),
+    "catboost_signal_status": (
+        "Статус CatBoost-сигнала в payload сделки/проверки: ok|disabled|no_model_file|feature_mismatch|predict_error|… "
+        "При ошибке CatBoost не ломает решение правил — остаётся базовый сигнал."
+    ),
+    "catboost_entry_proba_good": (
+        "P(благоприятный исход) по CatBoost на входе. Используется как рекомендательный скор и (опционально) "
+        "как осторожный фильтр BUY→HOLD при GAME_5M_CATBOOST_FUSION=hold_if_buy_below_p."
+    ),
+    "technical_decision_core": (
+        "Решение чистых правил (RSI/импульс/качество входа/новости KB и т.д.). Выход из позиции (тейк/стоп/SELL) "
+        "в кроне должен опираться на core, а не на ML-effective."
+    ),
+    "technical_decision_effective": (
+        "Итоговый сигнал для входа/LLM после опционального слияния с CatBoost (GAME_5M_CATBOOST_FUSION). "
+        "По умолчанию совпадает с core; в режиме hold_if_buy_below_p может понизить BUY/STRONG_BUY до HOLD."
+    ),
+    "catboost_fusion_mode": "Режим слияния CatBoost с правилами (none|hold_if_buy_below_p).",
+    "catboost_fusion_note": "Короткое пояснение, если CatBoost изменил effective сигнал (например BUY→HOLD).",
+    "portfolio_catboost_status": (
+        "Статус портфельной CatBoost-модели (daily expected return): наличие файлов модели, включение PORTFOLIO_CATBOOST_ENABLED, "
+        "и последние метрики обучения (RMSE/MAE/top-decile) из meta.json/JSONL отчёта. Модель advisory: не открывает/не закрывает позиции."
+    ),
     "realized_pct": (
         "Результат сделки в % от cost basis из net_pnl (как в отчёте); для рядов также считается realized_log_return = log(1+p/100)."
     ),
 }
+
+
+def _load_last_jsonl_record(path: str, *, max_bytes: int = 256_000) -> Optional[Dict[str, Any]]:
+    p = Path(path)
+    if not p.is_file():
+        return None
+    try:
+        # читаем хвост файла: достаточно для последней строки
+        data = p.read_bytes()
+        if len(data) > max_bytes:
+            data = data[-max_bytes:]
+        text = data.decode("utf-8", errors="ignore")
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not lines:
+            return None
+        return json.loads(lines[-1])
+    except Exception:
+        return None
+
+
+def _build_portfolio_catboost_status() -> Dict[str, Any]:
+    """
+    Lightweight status block: exposes whether the portfolio ML is configured and what the last training run reported.
+    Does not train or query external services.
+    """
+    try:
+        from config_loader import get_config_value
+
+        enabled = (get_config_value("PORTFOLIO_CATBOOST_ENABLED", "false") or "false").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        model_path = (get_config_value("PORTFOLIO_CATBOOST_MODEL_PATH", "") or "").strip()
+        if not model_path:
+            model_path = str(Path(__file__).resolve().parents[1] / "local" / "models" / "portfolio_return_catboost.cbm")
+        meta_path = str(Path(model_path).with_suffix(".meta.json"))
+        report_path = (
+            (get_config_value("PORTFOLIO_ML_REPORT_JSONL", "") or "").strip()
+            or ("/app/logs/ml/logs/portfolio_daily_ml_report.jsonl" if Path("/app/logs").exists() else str(Path(__file__).resolve().parents[1] / "local" / "logs" / "portfolio_daily_ml_report.jsonl"))
+        )
+        meta = None
+        try:
+            if Path(meta_path).is_file():
+                meta = json.loads(Path(meta_path).read_text(encoding="utf-8"))
+        except Exception:
+            meta = None
+        last = _load_last_jsonl_record(report_path)
+        return {
+            "enabled": bool(enabled),
+            "model_path": model_path,
+            "meta_path": meta_path,
+            "model_file_exists": Path(model_path).is_file(),
+            "meta_file_exists": Path(meta_path).is_file(),
+            "last_training_jsonl_path": report_path,
+            "last_training": last,
+            "meta_summary": {
+                "trained_at": (meta or {}).get("trained_at"),
+                "horizon_days": (meta or {}).get("horizon_days"),
+                "n_train": (meta or {}).get("n_train"),
+                "n_valid": (meta or {}).get("n_valid"),
+                "metrics": (meta or {}).get("metrics"),
+            }
+            if isinstance(meta, dict)
+            else None,
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 # Краткий конспект для LLM: как устроен отчёт и где живёт торговая логика (без выдумывания путей).
 ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
@@ -2350,6 +2444,11 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
                 "GAME_5M_ENTRY_QUALITY_GUARD_ENABLED": _cfg_bool("GAME_5M_ENTRY_QUALITY_GUARD_ENABLED", "false"),
                 "GAME_5M_ENTRY_QUALITY_MIN_RR": _cfg_float("GAME_5M_ENTRY_QUALITY_MIN_RR", "1.2"),
                 "GAME_5M_ENTRY_QUALITY_MIN_EV_PCT": _cfg_float("GAME_5M_ENTRY_QUALITY_MIN_EV_PCT", "0.0"),
+                "GAME_5M_CATBOOST_ENABLED": _cfg_bool("GAME_5M_CATBOOST_ENABLED", "false"),
+                "GAME_5M_CATBOOST_MODEL_PATH": _cfg_str("GAME_5M_CATBOOST_MODEL_PATH", ""),
+                "GAME_5M_CATBOOST_APPEND_REASONING": _cfg_bool("GAME_5M_CATBOOST_APPEND_REASONING", "false"),
+                "GAME_5M_CATBOOST_FUSION": _cfg_str("GAME_5M_CATBOOST_FUSION", "none"),
+                "GAME_5M_CATBOOST_HOLD_BELOW_P": _cfg_float("GAME_5M_CATBOOST_HOLD_BELOW_P", "0.45"),
             },
             "exit_strategy": {
                 "max_position_minutes": _max_position_minutes(),
@@ -2638,6 +2737,7 @@ def analyze_trade_effectiveness(
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
+        "portfolio_catboost_status": _build_portfolio_catboost_status(),
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
@@ -2758,6 +2858,7 @@ def analyze_trade_effectiveness_focused(
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
+        "portfolio_catboost_status": _build_portfolio_catboost_status(),
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,

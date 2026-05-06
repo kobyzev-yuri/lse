@@ -2762,6 +2762,8 @@ CRON_LOG_FILES = [
     "sync_vector_kb.log",
     "add_sentiment_to_news.log",
     "analyze_event_outcomes.log",
+    "game5m_daily_ml_pipeline.log",
+    "portfolio_daily_ml_pipeline.log",
     "cron_watchdog.log",
 ]
 TAIL_LINES = 80

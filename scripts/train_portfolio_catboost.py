@@ -68,7 +68,7 @@ def main() -> int:
     parser.add_argument(
         "--out",
         type=str,
-        default=str(project_root / "local" / "models" / "portfolio_return_catboost.cbm"),
+        default="",
         help="Output .cbm path (meta written alongside as .meta.json)",
     )
     args = parser.parse_args()
@@ -87,6 +87,28 @@ def main() -> int:
         get_portfolio_ml_universe,
         portfolio_ml_threshold_log,
     )
+    from config_loader import get_config_value
+
+    out_arg = (args.out or "").strip()
+    cfg_out = (get_config_value("PORTFOLIO_CATBOOST_MODEL_PATH", "") or "").strip()
+    if out_arg:
+        out_final = out_arg
+    elif cfg_out:
+        out_final = cfg_out
+    else:
+        out_final = (
+            "/app/logs/ml/models/portfolio_return_catboost.cbm"
+            if Path("/app/logs").exists()
+            else str(project_root / "local" / "models" / "portfolio_return_catboost.cbm")
+        )
+
+    report_path_raw = (get_config_value("PORTFOLIO_ML_REPORT_JSONL", "") or "").strip()
+    report_path = (
+        Path(report_path_raw)
+        if report_path_raw
+        else (Path("/app/logs/ml/logs/portfolio_daily_ml_report.jsonl") if Path("/app/logs").exists() else (project_root / "local" / "logs" / "portfolio_daily_ml_report.jsonl"))
+    )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
 
     df = build_portfolio_ml_dataset(
         horizon_days=args.horizon_days,
@@ -165,9 +187,24 @@ def main() -> int:
 
     if args.dry_run:
         logger.info("Dry-run: модель не записываем.")
+        record = {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "dry_run": True,
+            "dataset_rows": int(n_total),
+            "tickers": int(df["ticker"].nunique()),
+            "horizon_days": int(args.horizon_days),
+            "corr_window_days": int(args.corr_window_days),
+            "min_rows": int(args.min_rows),
+            "metrics": {k: (round(v, 8) if isinstance(v, float) and math.isfinite(v) else v) for k, v in metrics.items()},
+            "out_model_path": out_final,
+            "note": "dry_run_no_model_written",
+        }
+        with report_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        logger.info("report appended: %s", report_path)
         return 0
 
-    out_path = Path(args.out)
+    out_path = Path(out_final)
     meta_path = out_path.with_suffix(".meta.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     model.save_model(str(out_path))
@@ -193,6 +230,24 @@ def main() -> int:
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     logger.info("Сохранено: %s и %s", out_path, meta_path)
+
+    record = {
+        "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "dry_run": False,
+        "dataset_rows": int(n_total),
+        "tickers": int(df["ticker"].nunique()),
+        "horizon_days": int(args.horizon_days),
+        "corr_window_days": int(args.corr_window_days),
+        "min_rows": int(args.min_rows),
+        "n_train": int(n_train),
+        "n_valid": int(n_valid),
+        "metrics": meta.get("metrics"),
+        "out_model_path": str(out_path),
+        "out_meta_path": str(meta_path),
+    }
+    with report_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    logger.info("report appended: %s", report_path)
     return 0
 
 

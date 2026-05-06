@@ -15,6 +15,10 @@ alwaysApply: true
 ## Deploy / “why my new file isn’t in the container”
 
 - `lse-bot` runs from the Docker image filesystem (`/app/...`). **New repo files are not visible inside the container** until you **rebuild/redeploy the image** (typical: `git pull` on the VM + `docker compose build ... && docker compose up -d ...` in the VM’s compose directory).
+- **Preferred workflow (GitHub → VM deploy script)**:
+  - **Local (developer machine)**: `git push origin main`
+  - **GCP VM**: `ssh ai8049520@104.154.205.58 "cd /home/ai8049520/lse && ./scripts/deploy_from_github.sh"`
+  - Reason: local has GitHub auth; VM pulls and rebuilds/restarts the runtime consistently.
 - For a **one-off script** (debug/ops), you can copy into the running container without rebuilding:
   - copy to VM: `scp ./path/script.py ai8049520@104.154.205.58:/tmp/script.py`
   - copy into container: `ssh ai8049520@104.154.205.58 "docker cp /tmp/script.py lse-bot:/app/scripts/script.py"`
