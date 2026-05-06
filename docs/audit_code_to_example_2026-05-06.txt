@@ -1,0 +1,62 @@
+[code_to_example] Repo root: /media/heep/home/cnn/lse
+Example: /media/heep/home/cnn/lse/config.env.example
+Keys read by code: 209
+Keys in config.env.example: 217
+Missing from example: 57
+ANALYZER_SNAPSHOT_DIR  # scripts/analyzer_autotune.py, scripts/analyzer_tune_apply.py, scripts/snapshot_analyzer_report.py
+ANALYZER_SNAPSHOT_URL  # scripts/snapshot_analyzer_report.py
+ANALYZER_STATE_PATH  # services/trade_effectiveness_analyzer.py
+ANALYZER_TUNE_SKIP_KEYS  # scripts/analyzer_hypothesis_candidates.py, scripts/analyzer_tune_apply.py
+CONFIG_SECRETS_FILE  # config_loader.py
+CONFIG_SECURITY_FILE  # config_loader.py
+CRON_WATCHDOG_MAX_AGE_HOURS  # scripts/cron_watchdog.py
+DAILY_ML_MIN_CATBOOST_ROWS  # scripts/run_daily_game5m_ml_pipeline.py
+DAILY_ML_OUT_DIR  # scripts/run_daily_game5m_ml_pipeline.py
+DAILY_ML_REPORT_JSONL  # scripts/run_daily_game5m_ml_pipeline.py, services/trade_effectiveness_analyzer.py
+DEEPSEEK_API_KEY  # tradenews/tradenews/predictors/deepseek_predictor.py
+DEEPSEEK_BASE_URL  # tradenews/tradenews/predictors/deepseek_predictor.py
+DEEPSEEK_TIMEOUT  # tradenews/tradenews/predictors/deepseek_predictor.py
+EVENT_OUTCOME_BATCH_SIZE  # scripts/analyze_event_outcomes_cron.py
+EVENT_OUTCOME_DAYS_AFTER  # scripts/analyze_event_outcomes_cron.py
+EVENT_OUTCOME_LIMIT  # scripts/analyze_event_outcomes_cron.py
+GAME5M_TUNING_LEDGER  # web_app.py
+GEMINI_API_KEY  # services/vector_kb.py, tradenews/tradenews/predictors/google_predictor.py
+GOOGLE_API_KEY  # tradenews/tradenews/predictors/google_predictor.py
+LSE_CONFIG_SECRETS  # config_loader.py
+LSE_CONFIG_SECURITY  # config_loader.py
+NYSE_PROJECT_ROOT  # tradenews/scripts/fetch_nyse_articles_fixture.py, tradenews/scripts/snapshot_live_dataset.py, tradenews/tradenews/predictors/nyse_reference.py
+OLLAMA_HOST  # tradenews/tradenews/predictors/ollama.py
+OLLAMA_KEEP_ALIVE  # tradenews/tradenews/ollama_client.py
+OLLAMA_NUM_PREDICT  # tradenews/tradenews/ollama_client.py
+OLLAMA_TEMPERATURE  # tradenews/tradenews/ollama_client.py
+OLLAMA_TIMEOUT_SEC  # tradenews/tradenews/predictors/ollama.py
+OPENAI_CHAT_USE_MAX_COMPLETION_TOKENS  # services/llm_service.py
+PORTFOLIO_ML_MIN_EDGE_BPS  # services/portfolio_ml_features.py
+PORTFOLIO_ML_TRANSACTION_COST_BPS  # services/portfolio_ml_features.py
+PROXYAPI_KEY  # tradenews/tradenews/proxyapi.py
+PROXYAPI_TIMEOUT  # tradenews/tradenews/predictors/deepseek_predictor.py, tradenews/tradenews/predictors/google_predictor.py
+SENTIMENT_BATCH_SIZE  # scripts/add_sentiment_to_news_cron.py
+SENTIMENT_DAYS_BACK  # scripts/add_sentiment_to_news_cron.py
+SENTIMENT_LIMIT  # scripts/add_sentiment_to_news_cron.py
+SENTIMENT_MIN_CONTENT_LENGTH  # scripts/add_sentiment_to_news_cron.py
+TELEGRAM_DASHBOARD_CHAT_ID  # scripts/send_dashboard_cron.py, services/telegram_signal.py
+TELEGRAM_SIGNAL_MENTIONS  # scripts/send_sndk_signal_cron.py
+TICKERS_INDICATOR_ONLY  # services/ticker_groups.py
+TRADENEWS_DEEPSEEK_JSON_OBJECT  # tradenews/tradenews/predictors/deepseek_predictor.py
+TRADENEWS_EVAL_MODEL_SPECS  # tradenews/tradenews/eval_defaults.py
+TRADENEWS_GEMINI_JSON  # tradenews/tradenews/predictors/google_predictor.py
+TRADENEWS_GEMINI_MAX_OUTPUT_TOKENS  # tradenews/tradenews/gemini_client.py
+TRADENEWS_GEMINI_MODEL  # tradenews/tradenews/predictors/google_predictor.py
+TRADENEWS_GEMINI_TIMEOUT  # tradenews/tradenews/predictors/google_predictor.py
+TRADENEWS_OPENAI_COMPAT_BASE_URL  # tradenews/tradenews/proxyapi.py
+TRADENEWS_OPENAI_JSON_OBJECT  # tradenews/tradenews/openai_chat_client.py, tradenews/tradenews/predictors/deepseek_predictor.py
+TRADENEWS_OPENAI_MAX_TOKENS  # tradenews/tradenews/openai_chat_client.py
+TRADENEWS_OPENAI_MAX_TOKENS_PARAM  # tradenews/tradenews/openai_chat_client.py
+TRADENEWS_OPENAI_MODEL  # tradenews/tradenews/predictors/openai_predictor.py
+TRADENEWS_PROXYAPI_DEEPSEEK_CHAT_MODEL  # tradenews/tradenews/proxyapi.py
+TRADENEWS_PROXYAPI_DEEPSEEK_REASONER_MODEL  # tradenews/tradenews/proxyapi.py
+TRADENEWS_PROXYAPI_KEY  # tradenews/tradenews/proxyapi.py
+TRADENEWS_USE_PROXYAPI  # tradenews/tradenews/proxyapi.py
+USE_GEMINI_EMBEDDINGS  # services/vector_kb.py
+VECTOR_KB_BATCH_SIZE  # scripts/sync_vector_kb_cron.py
+VECTOR_KB_SYNC_LIMIT  # scripts/sync_vector_kb_cron.py

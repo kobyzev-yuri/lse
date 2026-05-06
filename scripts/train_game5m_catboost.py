@@ -83,7 +83,7 @@ def _is_incorrect_0925_open_boundary_exit(trade_pnl: Any) -> bool:
     """
     Exclude incident exits that used the ambiguous [09:25..09:30) bucket right after the NYSE open.
 
-    See docs/GAME_5M_INCORRECT_0925_CLOSES_2026-05-05.md
+    See docs/archive/GAME_5M_INCORRECT_0925_CLOSES_2026-05-05.md
     """
     ctx = _json_dict(getattr(trade_pnl, "exit_context_json", None))
     start = str(ctx.get("exit_bar_start_et") or "").strip()

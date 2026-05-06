@@ -88,7 +88,7 @@ def main():
             print("   Cooldown после 429: не активен")
     except Exception as e:
         print(f"   (проверка cooldown: {e})")
-    av_key = get_config_value("ALPHAVANTAGE_KEY", "") or get_config_value("ALPHAVANTAGE_API_KEY", "")
+    av_key = get_config_value("ALPHAVANTAGE_KEY", "")
     print(f"📊 Alpha Vantage: ключ {'задан' if av_key else 'не задан'}")
     mx_key = get_config_value("MARKETAUX_API_KEY", "")
     print(f"🧩 Marketaux: ключ {'задан' if mx_key else 'не задан'} (TickerNews Yahoo+merge; см. TICKER_NEWS_* в config.env.example)")

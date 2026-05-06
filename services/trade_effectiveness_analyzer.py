@@ -91,6 +91,11 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Статус CatBoost entry (GAME_5M): trained_at/n_train/n_valid/AUC, исключения (например false_take_profit_by_session_high), "
         "и оценка trust_level. Используется для понимания, насколько аккуратно применять ML-слияние (BUY→HOLD) и как интерпретировать P."
     ),
+    "time_exit_early_review": (
+        "Контрфакт для TIME_EXIT_EARLY: что было бы с ценой после фактического выхода. "
+        "Считаем post-exit MFE/MAE по 5m OHLC на горизонте 1 часа (и опционально до конца дня) относительно цены выхода, "
+        "плюс время до break-even. Помогает отличить «вышли слишком рано» от «вышли правильно — дальше падало»."
+    ),
     "realized_pct": (
         "Результат сделки в % от cost basis из net_pnl (как в отчёте); для рядов также считается realized_log_return = log(1+p/100)."
     ),
@@ -583,7 +588,8 @@ def _read_market_bars_5m_cached(
     if t in cache:
         return cache[t]
     days_back = int(days_back or 1)
-    days_back = min(max(1, days_back), 7)
+    # Analyzer может смотреть окна entry→exit на 2–4 недели; берём шире, чем 7 дней.
+    days_back = min(max(1, days_back), 30)
     engine = get_engine()
     # Берём с запасом: анализатор может смотреть окна entry→exit, где entry может быть чуть раньше cutoff по дням.
     cutoff_utc = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days_back + 2)
@@ -628,10 +634,13 @@ def _read_market_bars_5m_cached(
 
 def _prepare_ohlc_cache(tickers: List[str], days: int) -> Dict[str, Optional[pd.DataFrame]]:
     cache: Dict[str, Optional[pd.DataFrame]] = {}
-    fetch_days = min(7, max(3, days + 2))
+    fetch_days = min(30, max(3, days + 2))
     for t in sorted(set(tickers)):
         try:
-            df = _read_market_bars_5m_cached(cache, t, days_back=fetch_days) or fetch_5m_ohlc(t, days=fetch_days)
+            df_db = _read_market_bars_5m_cached(cache, t, days_back=fetch_days)
+            df = df_db
+            if df is None or getattr(df, "empty", True):
+                df = fetch_5m_ohlc(t, days=fetch_days)
             if df is None or df.empty:
                 cache[t] = None
                 continue
@@ -656,6 +665,229 @@ def _slice_window(df: Optional[pd.DataFrame], start_et: pd.Timestamp, end_et: pd
     if w.empty:
         return None
     return w
+
+
+def _build_time_exit_early_review(
+    effects: List[TradeEffect],
+    ohlc_cache: Dict[str, Optional[pd.DataFrame]],
+    *,
+    limit: int = 12,
+) -> Dict[str, Any]:
+    exits = [e for e in effects if str(e.exit_signal or "").upper() == "TIME_EXIT_EARLY"]
+    if not exits:
+        return {"enabled": True, "count": 0}
+
+    rows: List[Dict[str, Any]] = []
+    for e in exits:
+        df = ohlc_cache.get(e.ticker)
+        if df is None or df.empty:
+            continue
+        exit_px = float(e.exit_price or 0.0)
+        if exit_px <= 0:
+            continue
+        t0_raw = pd.Timestamp(e.exit_ts)
+        t0 = t0_raw.tz_convert("America/New_York") if t0_raw.tzinfo else t0_raw.tz_localize("America/New_York")
+        # If the recorded exit_ts is outside our 5m OHLC coverage (often RTH-only),
+        # start from the next available 5m bar so the counterfactual is meaningful.
+        try:
+            nxt = df.loc[df["datetime"] >= t0]
+            if nxt is None or nxt.empty:
+                continue
+            t0_eff = pd.Timestamp(nxt["datetime"].iloc[0])
+        except Exception:
+            continue
+        start_shift_min = None
+        try:
+            start_shift_min = float((t0_eff - t0) / pd.Timedelta(minutes=1))
+        except Exception:
+            start_shift_min = None
+        t0 = t0_eff
+        t1 = t0 + pd.Timedelta(hours=1)
+        w1h = _slice_window(df, t0, t1)
+        post_mfe_1h = post_mae_1h = None
+        minutes_to_breakeven = None
+        if w1h is not None and not w1h.empty:
+            try:
+                high1 = float(w1h["High"].max())
+                low1 = float(w1h["Low"].min())
+                post_mfe_1h = (high1 / exit_px - 1.0) * 100.0
+                post_mae_1h = (low1 / exit_px - 1.0) * 100.0
+                # break-even: first bar where High >= exit_px
+                hits = w1h.loc[w1h["High"] >= exit_px]
+                if hits is not None and not hits.empty:
+                    ts_hit = hits["datetime"].iloc[0]
+                    try:
+                        minutes_to_breakeven = float((pd.Timestamp(ts_hit) - t0) / pd.Timedelta(minutes=1))
+                    except Exception:
+                        minutes_to_breakeven = None
+            except Exception:
+                post_mfe_1h = post_mae_1h = None
+
+        # Optional: to end of RTH day (16:00 ET of same date)
+        post_mfe_eod = post_mae_eod = None
+        try:
+            day = t0.normalize()
+            eod = day + pd.Timedelta(hours=16)
+            if eod > t0 and (eod - t0) <= pd.Timedelta(hours=14):
+                we = _slice_window(df, t0, eod)
+                if we is not None and not we.empty:
+                    hi = float(we["High"].max())
+                    lo = float(we["Low"].min())
+                    post_mfe_eod = (hi / exit_px - 1.0) * 100.0
+                    post_mae_eod = (lo / exit_px - 1.0) * 100.0
+        except Exception:
+            post_mfe_eod = post_mae_eod = None
+
+        rows.append(
+            {
+                "trade_id": e.trade_id,
+                "ticker": e.ticker,
+                "exit_ts": e.exit_ts.isoformat(),
+                "exit_detail": e.exit_detail,
+                "realized_pct": round(float(e.realized_pct), 3),
+                "exit_price": round(exit_px, 4),
+                "post_exit_start_bar_et": str(t0),
+                "post_exit_start_shift_min": None if start_shift_min is None else round(float(start_shift_min), 1),
+                "post_exit_mfe_pct_1h": None if post_mfe_1h is None else round(float(post_mfe_1h), 3),
+                "post_exit_mae_pct_1h": None if post_mae_1h is None else round(float(post_mae_1h), 3),
+                "minutes_to_break_even_1h": None if minutes_to_breakeven is None else round(float(minutes_to_breakeven), 1),
+                "post_exit_mfe_pct_eod": None if post_mfe_eod is None else round(float(post_mfe_eod), 3),
+                "post_exit_mae_pct_eod": None if post_mae_eod is None else round(float(post_mae_eod), 3),
+            }
+        )
+
+    if not rows:
+        return {"enabled": True, "count": len(exits), "rows_with_ohlc": 0}
+
+    def _avg(vals: List[Optional[float]]) -> Optional[float]:
+        xs = [float(v) for v in vals if v is not None and math.isfinite(float(v))]
+        return round(float(np.mean(xs)), 4) if xs else None
+
+    by_detail: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        k = str(r.get("exit_detail") or "unknown")
+        by_detail.setdefault(k, []).append(r)
+    by_detail_summary = {}
+    for k, lst in by_detail.items():
+        by_detail_summary[k] = {
+            "count": len(lst),
+            "avg_post_exit_mfe_pct_1h": _avg([x.get("post_exit_mfe_pct_1h") for x in lst]),
+            "avg_post_exit_mae_pct_1h": _avg([x.get("post_exit_mae_pct_1h") for x in lst]),
+            "avg_minutes_to_break_even_1h": _avg([x.get("minutes_to_break_even_1h") for x in lst]),
+        }
+
+    early_candidates = sorted(rows, key=lambda r: float(r.get("post_exit_mfe_pct_1h") or 0.0), reverse=True)[:limit]
+    protective_candidates = sorted(rows, key=lambda r: float(r.get("post_exit_mae_pct_1h") or 0.0))[:limit]
+
+    # Candidate tuning proposals (no new env keys): suggest adjustments only if counterfactual indicates early exits.
+    proposals: List[Dict[str, Any]] = []
+    try:
+        from config_loader import get_config_value
+
+        def _cfg_int(key: str, default: int) -> int:
+            try:
+                return int((get_config_value(key, str(default)) or str(default)).strip())
+            except Exception:
+                return int(default)
+
+        def _cfg_float(key: str, default: float) -> float:
+            try:
+                return float((get_config_value(key, str(default)) or str(default)).strip())
+            except Exception:
+                return float(default)
+
+        cur_min_age_default = _cfg_int("GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES", 390)
+        cur_max_pnl = float((get_config_value("GAME_5M_STALE_REVERSAL_MAX_PNL_PCT", "-1.5") or "-1.5").strip())
+        cur_mom_below = float((get_config_value("GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW", "0.0") or "0.0").strip())
+        cur_enabled = (get_config_value("GAME_5M_STALE_REVERSAL_EXIT_ENABLED", "false") or "false").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+    except Exception:
+        cur_min_age_default, cur_max_pnl, cur_mom_below, cur_enabled = 390, -1.5, 0.0, False
+
+    # Per-ticker current min_age overrides (if present in config.env)
+    tickers_in_exits = sorted({str(r.get("ticker") or "").strip().upper() for r in rows if str(r.get("ticker") or "").strip()})
+    cur_min_age_by_ticker: Dict[str, int] = {}
+    for t in tickers_in_exits:
+        # Only min_age supports _TICKER override in game_5m; keep the same here.
+        try:
+            key_t = f"GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES_{t}"
+            raw_t = ""
+            try:
+                from config_loader import get_config_value as _gcv
+                raw_t = (_gcv(key_t, "") or "").strip()
+            except Exception:
+                raw_t = ""
+            cur_min_age_by_ticker[t] = int(raw_t) if raw_t else int(cur_min_age_default)
+        except Exception:
+            cur_min_age_by_ticker[t] = int(cur_min_age_default)
+
+    agg = by_detail_summary.get("stale_reversal") if isinstance(by_detail_summary, dict) else None
+    avg_mfe = _safe_float((agg or {}).get("avg_post_exit_mfe_pct_1h")) if isinstance(agg, dict) else None
+    avg_mae = _safe_float((agg or {}).get("avg_post_exit_mae_pct_1h")) if isinstance(agg, dict) else None
+    n_stale = int((agg or {}).get("count") or 0) if isinstance(agg, dict) else 0
+
+    # Heuristic: large post-exit upside with not-too-bad post-exit drawdown => exits are likely premature.
+    if n_stale >= 5 and avg_mfe is not None and avg_mfe >= 3.0 and (avg_mae is None or avg_mae > -1.0):
+        # Proposal A: wait longer before stale cut (age gate).
+        # If ticker overrides exist, propose per-ticker adjustments and only propose global default
+        # when it meaningfully applies (tickers without overrides).
+        base_reason = f"post-exit MFE(1h) avg={avg_mfe:.2f}% при MAE avg={('—' if avg_mae is None else f'{avg_mae:.2f}%')}; похоже, что stale_cut срабатывает рано — увеличиваем min_age."
+        no_override = [t for t in tickers_in_exits if cur_min_age_by_ticker.get(t, cur_min_age_default) == cur_min_age_default]
+        if no_override:
+            p_min_age = int(min(24 * 60, max(cur_min_age_default, cur_min_age_default + 180)))
+            if p_min_age != cur_min_age_default:
+                proposals.append(
+                    {
+                        "env_key": "GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES",
+                        "current": cur_min_age_default,
+                        "proposed": p_min_age,
+                        "applies_to": {"tickers_without_override": no_override},
+                        "reason": base_reason,
+                    }
+                )
+        # Variant A: do NOT emit per-ticker proposal duplicates.
+        # We rely on the global default + existing per-ticker overrides (like NBIS) to keep config minimal.
+        # Proposal B: require more negative momentum (avoid cutting when momentum just ~0)
+        p_mom = float(min(cur_mom_below, -0.3)) if cur_mom_below >= -0.3 else float(cur_mom_below)
+        if p_mom != cur_mom_below:
+            proposals.append(
+                {
+                    "env_key": "GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW",
+                    "current": cur_mom_below,
+                    "proposed": p_mom,
+                    "reason": "Сейчас stale_reversal может сработать при momentum≈0. Требуем более отрицательный импульс, чтобы не резать на плоском рынке перед возможным отскоком.",
+                }
+            )
+        # Proposal C: tolerate deeper unrealized loss before cutting (reduce false positives)
+        p_pnl = float(min(cur_max_pnl, cur_max_pnl - 0.5))
+        if p_pnl != cur_max_pnl:
+            proposals.append(
+                {
+                    "env_key": "GAME_5M_STALE_REVERSAL_MAX_PNL_PCT",
+                    "current": cur_max_pnl,
+                    "proposed": p_pnl,
+                    "reason": "Делаем порог реза более строгим (нужно хуже PnL), чтобы не фиксировать небольшую просадку, которая часто отыгрывается.",
+                }
+            )
+
+    return {
+        "enabled": True,
+        "count": len(exits),
+        "rows_with_ohlc": len(rows),
+        "by_exit_detail": dict(sorted(by_detail_summary.items(), key=lambda kv: (-int(kv[1]["count"]), kv[0]))),
+        "top_early_exit_candidates_1h": early_candidates,
+        "top_protective_exits_1h": protective_candidates,
+        "config_candidates": {
+            "stale_reversal_enabled": bool(cur_enabled),
+            "current_min_age_default": int(cur_min_age_default),
+            "current_min_age_by_ticker": cur_min_age_by_ticker,
+            "proposals": proposals,
+        },
+        "note": "post-exit MFE/MAE are computed from 5m OHLC relative to exit_price; this is counterfactual and does not simulate fills/slippage.",
+    }
 
 
 def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Optional[pd.DataFrame]]) -> List[TradeEffect]:
@@ -2817,6 +3049,7 @@ def analyze_trade_effectiveness(
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_catboost_status": _build_game5m_catboost_status(),
         "portfolio_catboost_status": _build_portfolio_catboost_status(),
+        "time_exit_early_review": _build_time_exit_early_review(effects, cache),
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
@@ -2939,6 +3172,7 @@ def analyze_trade_effectiveness_focused(
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_catboost_status": _build_game5m_catboost_status(),
         "portfolio_catboost_status": _build_portfolio_catboost_status(),
+        "time_exit_early_review": _build_time_exit_early_review(effects, cache),
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,

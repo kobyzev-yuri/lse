@@ -59,7 +59,7 @@
 | Переменная | Назначение |
 |------------|------------|
 | `NEWSAPI_KEY` | NewsAPI.org (и в NYSE, и в LSE) |
-| `ALPHAVANTAGE_KEY` | Alpha Vantage (в коде LSE также читается `ALPHAVANTAGE_API_KEY`) |
+| `ALPHAVANTAGE_KEY` | Alpha Vantage |
 | `MARKETAUX_API_KEY` | Marketaux (слой TickerNews в LSE; в NYSE — в merged news) |
 | `NYSE_CONFIG_PATH` | Опционально: путь к `nyse/config.env` — в LSE подмешиваются **только пустые** ключи (не дублировать секреты в двух файлах) |
 
