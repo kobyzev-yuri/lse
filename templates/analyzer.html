@@ -128,6 +128,12 @@
 </div>
 
 <div class="card">
+    <h2>Hanger JSON / TAKE_PROFIT_SUSPEND <code>game5m_hanger_tune_json_review</code></h2>
+    <p class="muted" style="font-size:0.9rem;">Файл <code>GAME_5M_HANGER_TUNE_JSON</code>, возраст, капы по тикеру, смесь <code>TAKE_PROFIT</code> vs <code>TAKE_PROFIT_SUSPEND</code> в окне; кандидаты на offline-перегенерацию и на <code>GAME_5M_HANGER_TUNE_APPLY_TAKE</code> (см. также <code>practical_parameter_suggestions</code> / <code>auto_config_override</code>).</p>
+    <div id="hangerTuneJsonBlock" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
     <h2>Continuation gate <code>continuation_gate_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Сравнение log-only решения <code>continuation_gate</code> с фактическим недобором после закрытия. Помогает понять, где тейк был слишком ранним.</p>
     <div id="continuationGateBlock" class="dashboard-text">—</div>
@@ -517,6 +523,59 @@ function renderHangerV2Block(data) {
     el.innerHTML = html;
 }
 
+function renderHangerTuneJsonBlock(data) {
+    const el = document.getElementById('hangerTuneJsonBlock');
+    if (!el) {
+        return;
+    }
+    const r = data.game5m_hanger_tune_json_review || {};
+    if (!r.enabled) {
+        el.innerHTML = '<span class="muted">Блок только для стратегий <code>GAME_5M</code> и <code>ALL</code>.</span>';
+        return;
+    }
+    const cfg = r.config || {};
+    let html = '';
+    html += '<code>GAME_5M_HANGER_TUNE_APPLY_TAKE</code>: <strong>' + esc(cfg.GAME_5M_HANGER_TUNE_APPLY_TAKE) + '</strong><br>';
+    html += '<code>GAME_5M_HANGER_TUNE_JSON</code>: <code>' + esc(cfg.GAME_5M_HANGER_TUNE_JSON || '—') + '</code><br>';
+    html += 'Сделок в области (GAME_5M): <strong>' + esc(r.trades_in_scope != null ? r.trades_in_scope : '—') + '</strong><br>';
+    if (r.file_status) {
+        html += 'Файл: <strong>' + esc(r.file_status) + '</strong>';
+        if (r.file && r.file.age_days != null) {
+            html += ', возраст <strong>' + esc(r.file.age_days) + '</strong> дн.';
+        }
+        if (r.json_stale_vs_policy) {
+            html += ' <span class="text-warning">(старше политики ' + esc(r.staleness_policy_days) + ' дн.)</span>';
+        }
+        html += '<br>';
+    }
+    const mix = r.take_exit_mix || {};
+    ['TAKE_PROFIT', 'TAKE_PROFIT_SUSPEND'].forEach(function (sig) {
+        const m = mix[sig] || {};
+        if (m.count) {
+            html += esc(sig) + ': n=' + esc(m.count) + ', avg_realized=' + esc(m.avg_realized_pct) + '%, avg_missed=' + esc(m.avg_missed_upside_pct) + '%<br>';
+        }
+    });
+    const caps = r.caps_by_ticker_min_pct;
+    if (caps && typeof caps === 'object' && Object.keys(caps).length) {
+        html += 'Капы из JSON (min proposed_cap_pct): <code>' + esc(JSON.stringify(caps)) + '</code><br>';
+    }
+    const cand = Array.isArray(r.parameter_candidates) ? r.parameter_candidates.slice(0, 6) : [];
+    if (cand.length) {
+        html += '<p style="margin:0.7rem 0 0.25rem 0;"><strong>Кандидаты</strong></p>';
+        html += cand.map(function (c) {
+            return '• <code>' + esc((c.env_keys || []).join(', ')) + '</code>: ' + esc(c.direction || '') + ' — ' + esc(c.evidence || '');
+        }).join('<br>');
+    }
+    const add = Array.isArray(r.practical_parameter_additions) ? r.practical_parameter_additions : [];
+    if (add.length) {
+        html += '<p style="margin:0.7rem 0 0.25rem 0;"><strong>Добавлено в practical (автопач)</strong></p>';
+        html += add.map(function (a) {
+            return '• <code>' + esc(a.parameter || '') + '</code> → proposed <code>' + esc(a.proposed) + '</code>: ' + esc(a.why || '');
+        }).join('<br>');
+    }
+    el.innerHTML = html || '<span class="muted">Нет данных (нет сделок или JSON не задан).</span>';
+}
+
 function renderContinuationGateBlock(data) {
     const el = document.getElementById('continuationGateBlock');
     if (!el) {
@@ -570,6 +629,7 @@ async function runAnalyzer() {
     const envManual = document.getElementById('envManual');
     const envSkip = document.getElementById('envSkip');
     const hangerV2Block = document.getElementById('hangerV2Block');
+    const hangerTuneJsonBlock = document.getElementById('hangerTuneJsonBlock');
     const continuationGateBlock = document.getElementById('continuationGateBlock');
     const applyBtn = document.getElementById('applyEnvBtn');
     const applyStatus = document.getElementById('applyStatus');
@@ -578,6 +638,7 @@ async function runAnalyzer() {
     topMissed.innerHTML = '—';
     topWinMissed.innerHTML = '—';
     hangerV2Block.innerHTML = '—';
+    hangerTuneJsonBlock.innerHTML = '—';
     continuationGateBlock.innerHTML = '—';
     llmBlock.textContent = '—';
     envBlock.textContent = '—';
@@ -597,6 +658,7 @@ async function runAnalyzer() {
         }
         renderCatboostBlock(data);
         renderHangerV2Block(data);
+        renderHangerTuneJsonBlock(data);
         renderContinuationGateBlock(data);
         const s = data.summary || {};
         if (!s.total) {

@@ -255,6 +255,28 @@ def _schedule_self_restart(*, delay_sec: float = 1.0) -> None:
     threading.Timer(max(0.0, float(delay_sec)), _exit).start()
 
 
+def _running_inside_docker() -> bool:
+    """
+    Грубый, но практичный детектор контейнера.
+    Нужен, чтобы НЕ пытаться звать `docker compose` изнутри контейнера (часто отсутствует Docker CLI → 127).
+    """
+    try:
+        if os.path.exists("/.dockerenv"):
+            return True
+    except Exception:
+        pass
+    try:
+        cgroup = "/proc/1/cgroup"
+        if os.path.isfile(cgroup):
+            txt = Path(cgroup).read_text(encoding="utf-8", errors="ignore")
+            low = txt.lower()
+            if "docker" in low or "containerd" in low or "kubepods" in low:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 # Настройка шаблонов
 templates_dir = Path(__file__).parent / "templates"
 templates_dir.mkdir(exist_ok=True)
@@ -722,27 +744,37 @@ async def apply_analyzer_config(request: Request):
     if do_restart and applied:
         config = load_config()
         try:
-            result, used_cmd = _run_restart_resolved(config)
-            if result.returncode == 0:
-                restart_result = {
-                    "ok": True,
-                    "message": "Перезапуск выполнен",
-                    "command": used_cmd[:200],
-                }
-            elif result.returncode == 127:
-                # Как /api/config/restart: в контейнере без Docker CLI — выход процесса → compose перезапустит контейнер.
+            # Если мы внутри контейнера и RESTART_CMD не задан — не пытаемся звать docker compose (часто отсутствует).
+            if _running_inside_docker() and not (config.get("RESTART_CMD") or "").strip():
                 _schedule_self_restart(delay_sec=1.0)
                 restart_result = {
                     "ok": True,
                     "message": (
-                        "Docker CLI недоступен (код 127) — запланирован self-restart процесса; "
-                        "контейнер с restart:unless-stopped перечитает config.env."
+                        "Запланирован self-restart процесса; контейнер с restart:unless-stopped перечитает config.env."
                     ),
-                    "command": used_cmd[:200],
                     "mode": "self_restart",
                 }
             else:
-                restart_result = _restart_result_from_completed(result, used_cmd)
+                result, used_cmd = _run_restart_resolved(config)
+                if result.returncode == 0:
+                    restart_result = {
+                        "ok": True,
+                        "message": "Перезапуск выполнен",
+                        "command": used_cmd[:200],
+                    }
+                elif result.returncode == 127 and _running_inside_docker():
+                    # В контейнере без Docker CLI — выход процесса → compose перезапустит контейнер.
+                    _schedule_self_restart(delay_sec=1.0)
+                    restart_result = {
+                        "ok": True,
+                        "message": (
+                            "Запланирован self-restart процесса; контейнер с restart:unless-stopped перечитает config.env."
+                        ),
+                        "command": used_cmd[:200],
+                        "mode": "self_restart",
+                    }
+                else:
+                    restart_result = _restart_result_from_completed(result, used_cmd)
         except FileNotFoundError:
             restart_result = {"ok": False, "message": "Выполните на сервере: docker compose restart lse"}
         except subprocess.TimeoutExpired:
@@ -2912,23 +2944,31 @@ async def restart_service_api():
     import subprocess
     config = load_config()
     try:
+        # Если мы внутри контейнера и RESTART_CMD не задан — self-restart без попыток docker compose.
+        if _running_inside_docker() and not (config.get("RESTART_CMD") or "").strip():
+            _schedule_self_restart(delay_sec=1.0)
+            return _to_jsonable(
+                {
+                    "ok": True,
+                    "message": "Запланирован self-restart процесса (перечитает config.env).",
+                    "mode": "self_restart",
+                }
+            )
         result, used_cmd = _run_restart_resolved(config)
         if result.returncode != 0:
             # Если docker/docker-compose недоступны (127), а мы внутри контейнера — делаем self-restart.
-            if result.returncode == 127:
+            if result.returncode == 127 and _running_inside_docker():
                 _schedule_self_restart(delay_sec=1.0)
                 return _to_jsonable(
                     {
                         "ok": True,
-                        "message": "Docker CLI недоступен — выполняю self-restart контейнера (перечитает config.env).",
+                        "message": "Запланирован self-restart процесса (перечитает config.env).",
                         "command": used_cmd[:200],
                         "mode": "self_restart",
                     }
                 )
             return _to_jsonable(_restart_result_from_completed(result, used_cmd))
-        return _to_jsonable(
-            {"ok": True, "message": "Перезапуск выполнен", "command": used_cmd[:200]}
-        )
+        return _to_jsonable({"ok": True, "message": "Перезапуск выполнен", "command": used_cmd[:200]})
     except FileNotFoundError:
         return _to_jsonable({"ok": False, "message": "Выполните на сервере: docker compose restart lse"})
     except subprocess.TimeoutExpired:

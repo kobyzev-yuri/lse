@@ -101,6 +101,11 @@ def validate_game5m_update(
     if not is_editable_config_env_key(key):
         return ValidationResult(False, "not_editable", key, proposed_s, current_s)
 
+    if key == "GAME_5M_HANGER_TUNE_JSON":
+        if len(proposed_s) > 512:
+            return ValidationResult(False, "path_too_long", key, proposed_s, current_s)
+        return ValidationResult(True, "ok", key, proposed_s, current_s)
+
     if proposed_s.lower() in ("true", "false", "1", "0", "yes", "no"):
         return ValidationResult(True, "ok", key, proposed_s, current_s)
 

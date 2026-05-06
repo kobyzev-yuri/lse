@@ -56,6 +56,11 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Агрегаты по типу выхода (exit_signal): count, avg_realized_pct, avg_missed_pct. "
         "Показывает, какой сигнал закрытия доминирует и насколько он «дорогой» по missed upside."
     ),
+    "game5m_hanger_tune_json_review": (
+        "Пайплайн hanger JSON: путь GAME_5M_HANGER_TUNE_JSON, возраст файла, капы remediation_take_cap по тикеру, "
+        "смесь TAKE_PROFIT vs TAKE_PROFIT_SUSPEND в окне; кандидаты на перегенерацию JSON (offline) и на "
+        "GAME_5M_HANGER_TUNE_APPLY_TAKE. Решения по эффективности — здесь и в LLM/practical, а не разрозненные проверки."
+    ),
     "realized_pct": (
         "Результат сделки в % от cost basis из net_pnl (как в отчёте); для рядов также считается realized_log_return = log(1+p/100)."
     ),
@@ -95,7 +100,7 @@ ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
     "code_map": [
         {
             "path": "services/trade_effectiveness_analyzer.py",
-            "role": "Сбор отчёта, агрегаты summary, эвристики practical_parameter_suggestions, game_5m_config_hints, вызов LLM.",
+            "role": "Сбор отчёта, агрегаты summary, эвристики practical_parameter_suggestions, game_5m_config_hints, game5m_hanger_tune_json_review (JSON капы vs TAKE_PROFIT_SUSPEND), вызов LLM.",
         },
         {
             "path": "services/recommend_5m.py",
@@ -172,6 +177,15 @@ ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
             "Много TAKE_PROFIT и высокий sum_missed_upside_pct → чаще трогают TAKE_MOMENTUM_FACTOR или потолок тейка; "
             "много убытков при vol — VOLATILITY_*, SELL_CONFIRM_BARS; долгое удержание — MAX_POSITION_*."
         ),
+    },
+    "game_5m_hanger_tune_json": {
+        "code": (
+            "services/game_5m.py: _hanger_tune_min_cap_pct (JSON hanger_hypotheses[].remediation_take_cap.proposed_cap_pct), "
+            "_apply_hanger_take_cap_to_base; при live apply_hanger_json тейк может закрыться как TAKE_PROFIT_SUSPEND."
+        ),
+        "config": "GAME_5M_HANGER_TUNE_JSON (путь к JSON), GAME_5M_HANGER_TUNE_APPLY_TAKE=true — сужение потолка тейка по капу из файла.",
+        "offline_regen": "scripts/backtest_game5m_param_hypotheses.py --mode bundle (или open/json) — обновление JSON; сравнивайте mtime файла с политикой свежести (напр. 7 дней).",
+        "analyzer_block": "report.game5m_hanger_tune_json_review — метрики окна + кандидаты; см. metric_definitions.game5m_hanger_tune_json_review.",
     },
 }
 
@@ -1014,6 +1028,289 @@ def _build_continuation_gate_review(effects: List[TradeEffect], *, limit: int = 
     }
 
 
+def _effects_for_hanger_tune_json(strategy: str, effects: List[TradeEffect]) -> List[TradeEffect]:
+    su = (strategy or "").strip().upper()
+    if su == "ALL":
+        return [e for e in effects if str(getattr(e, "exit_strategy", None) or "").strip().upper() == "GAME_5M"]
+    if su == "GAME_5M":
+        return list(effects)
+    return []
+
+
+def _game_5m_take_cap_pct_for_ticker(ticker: str) -> float:
+    """Потолок тейка из config: per-ticker или общий GAME_5M_TAKE_PROFIT_PCT."""
+    cfg = load_config()
+    tu = str(ticker or "").strip().upper()
+    if tu:
+        raw = (cfg.get(f"GAME_5M_TAKE_PROFIT_PCT_{tu}") or "").strip()
+        if raw:
+            try:
+                return float(raw.replace(",", "."))
+            except (ValueError, TypeError):
+                pass
+    raw2 = (cfg.get("GAME_5M_TAKE_PROFIT_PCT") or "").strip()
+    if raw2:
+        try:
+            return float(raw2.replace(",", "."))
+        except (ValueError, TypeError):
+            pass
+    return 7.0
+
+
+def _parse_hanger_tune_json_caps(data: Dict[str, Any]) -> Dict[str, float]:
+    """Минимальный proposed_cap_pct на тикер (как в game_5m._hanger_tune_min_cap_pct)."""
+    per: Dict[str, float] = {}
+    for h in data.get("hanger_hypotheses") or []:
+        if not isinstance(h, dict):
+            continue
+        cap_obj = h.get("remediation_take_cap")
+        if not isinstance(cap_obj, dict):
+            continue
+        try:
+            prop = float(cap_obj.get("proposed_cap_pct"))
+        except (TypeError, ValueError):
+            continue
+        t = str(h.get("ticker") or "").strip().upper()
+        if not t:
+            continue
+        prev = per.get(t)
+        if prev is None or prop < prev:
+            per[t] = prop
+    return per
+
+
+def _build_game5m_hanger_tune_json_review(
+    effects: List[TradeEffect],
+    summary: Dict[str, Any],
+    *,
+    strategy: str,
+) -> Dict[str, Any]:
+    """
+    Эффективность ветки hanger JSON: файл, возраст, капы vs фактические TAKE_PROFIT / TAKE_PROFIT_SUSPEND.
+    Добавляет practical_parameter_additions и parameter_candidates для game_5m_config_hints / LLM.
+    """
+    from collections import defaultdict
+
+    out: Dict[str, Any] = {
+        "enabled": False,
+        "scope": "GAME_5M hanger JSON (remediation_take_cap) + exits TAKE_PROFIT vs TAKE_PROFIT_SUSPEND",
+        "note": "Перегенерация JSON — offline (bundle); отчёт только постфактум по закрытым сделкам.",
+        "practical_parameter_additions": [],
+        "parameter_candidates": [],
+    }
+    su = (strategy or "").strip().upper()
+    if su not in ("GAME_5M", "ALL"):
+        out["skip_reason"] = "hanger JSON относится к выходам GAME_5M"
+        return out
+    out["enabled"] = True
+
+    apply_raw = (get_config_value("GAME_5M_HANGER_TUNE_APPLY_TAKE", "false") or "false").strip().lower()
+    apply_take = apply_raw in ("1", "true", "yes")
+    raw_path = (get_config_value("GAME_5M_HANGER_TUNE_JSON", "") or "").strip()
+    out["config"] = {
+        "GAME_5M_HANGER_TUNE_APPLY_TAKE": apply_take,
+        "GAME_5M_HANGER_TUNE_JSON": raw_path or None,
+    }
+
+    ge = _effects_for_hanger_tune_json(strategy, effects)
+    out["trades_in_scope"] = len(ge)
+
+    practical: List[Dict[str, Any]] = []
+    candidates: List[Dict[str, Any]] = []
+
+    take_rows = [e for e in ge if e.exit_signal in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND")]
+    by_sig: Dict[str, List[TradeEffect]] = defaultdict(list)
+    for e in take_rows:
+        by_sig[str(e.exit_signal)].append(e)
+
+    def _slice_stats(rows: List[TradeEffect]) -> Dict[str, Any]:
+        if not rows:
+            return {"count": 0}
+        missed = [float(e.missed_upside_pct or 0.0) for e in rows]
+        realized = [float(e.realized_pct) for e in rows]
+        return {
+            "count": len(rows),
+            "avg_realized_pct": round(float(np.mean(realized)), 4),
+            "avg_missed_upside_pct": round(float(np.mean(missed)), 4),
+        }
+
+    out["take_exit_mix"] = {
+        "TAKE_PROFIT": _slice_stats(by_sig.get("TAKE_PROFIT", [])),
+        "TAKE_PROFIT_SUSPEND": _slice_stats(by_sig.get("TAKE_PROFIT_SUSPEND", [])),
+    }
+
+    if not raw_path:
+        out["file_status"] = "no_path"
+        if apply_take:
+            practical.append(
+                {
+                    "parameter": "hanger_tune_apply_take",
+                    "current": True,
+                    "proposed": False,
+                    "why": "GAME_5M_HANGER_TUNE_APPLY_TAKE=true, но путь GAME_5M_HANGER_TUNE_JSON пуст — JSON не применяется.",
+                    "expected_effect": "Согласованная конфигурация до появления файла с капами.",
+                }
+            )
+            candidates.append(
+                {
+                    "env_keys": ["GAME_5M_HANGER_TUNE_APPLY_TAKE", "GAME_5M_HANGER_TUNE_JSON"],
+                    "direction": "set_json_path_or_disable_apply",
+                    "evidence": "apply_take без пути к JSON.",
+                }
+            )
+        out["practical_parameter_additions"] = practical
+        out["parameter_candidates"] = candidates
+        return out
+
+    path = Path(raw_path).expanduser()
+    if not path.is_file():
+        out["file_status"] = "missing"
+        out["path"] = raw_path
+        if apply_take:
+            practical.append(
+                {
+                    "parameter": "hanger_tune_apply_take",
+                    "current": True,
+                    "proposed": False,
+                    "why": f"GAME_5M_HANGER_TUNE_APPLY_TAKE=true, файл не найден: {raw_path}",
+                    "expected_effect": "Не держать включённым apply без валидного JSON.",
+                }
+            )
+            candidates.append(
+                {
+                    "env_keys": ["GAME_5M_HANGER_TUNE_JSON", "GAME_5M_HANGER_TUNE_APPLY_TAKE"],
+                    "direction": "fix_path_or_disable_apply",
+                    "evidence": "JSON path задан, файл отсутствует.",
+                }
+            )
+        out["practical_parameter_additions"] = practical
+        out["parameter_candidates"] = candidates
+        return out
+
+    try:
+        mtime = float(path.stat().st_mtime)
+        text = path.read_text(encoding="utf-8")
+        meta = json.loads(text)
+    except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+        out["file_status"] = "parse_error"
+        out["path"] = str(path)
+        out["error"] = str(exc)
+        if apply_take:
+            practical.append(
+                {
+                    "parameter": "hanger_tune_apply_take",
+                    "current": True,
+                    "proposed": False,
+                    "why": "JSON hanger tune не читается или битый — отключить apply до исправления файла.",
+                    "expected_effect": "Исключить непредсказуемое поведение при ошибке парсинга.",
+                }
+            )
+        out["practical_parameter_additions"] = practical
+        out["parameter_candidates"] = candidates
+        return out
+
+    if not isinstance(meta, dict):
+        out["file_status"] = "invalid_root"
+        out["practical_parameter_additions"] = practical
+        out["parameter_candidates"] = candidates
+        return out
+
+    age_sec = max(0.0, datetime.now(timezone.utc).timestamp() - mtime)
+    age_days = age_sec / 86400.0
+    caps = _parse_hanger_tune_json_caps(meta)
+    out["file_status"] = "ok"
+    out["file"] = {
+        "path": str(path.resolve()),
+        "mtime_utc": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+        "age_days": round(age_days, 2),
+    }
+    out["json_meta"] = {
+        k: meta.get(k)
+        for k in ("generated_at", "generated_at_utc", "source", "mode", "bundle_mode")
+        if meta.get(k) is not None
+    }
+    out["caps_by_ticker_min_pct"] = caps
+
+    per_ticker: Dict[str, Dict[str, Any]] = {}
+    tickers_union = set(caps.keys())
+    for e in by_sig.get("TAKE_PROFIT_SUSPEND", []):
+        tickers_union.add(str(e.ticker or "").strip().upper())
+    for t in sorted(tickers_union):
+        if not t:
+            continue
+        cap = caps.get(t)
+        cfg_take = _game_5m_take_cap_pct_for_ticker(t)
+        eff = min(float(cfg_take), float(cap)) if cap is not None else float(cfg_take)
+        susp = [e for e in by_sig.get("TAKE_PROFIT_SUSPEND", []) if str(e.ticker or "").strip().upper() == t]
+        tpn = [e for e in by_sig.get("TAKE_PROFIT", []) if str(e.ticker or "").strip().upper() == t]
+        per_ticker[t] = {
+            "json_cap_pct": cap,
+            "config_take_cap_pct": round(cfg_take, 4),
+            "effective_cap_if_apply_pct": None if cap is None else round(eff, 4),
+            "TAKE_PROFIT_SUSPEND": _slice_stats(susp),
+            "TAKE_PROFIT": _slice_stats(tpn),
+        }
+    out["per_ticker"] = per_ticker
+
+    policy_stale_days = 7.0
+    out["staleness_policy_days"] = policy_stale_days
+    out["json_stale_vs_policy"] = bool(age_days > policy_stale_days and caps)
+    if out["json_stale_vs_policy"]:
+        candidates.append(
+            {
+                "env_keys": ["GAME_5M_HANGER_TUNE_JSON"],
+                "direction": "offline_regenerate_bundle",
+                "evidence": (
+                    f"Возраст JSON {age_days:.1f} дн. > политики {policy_stale_days:g} дн.; "
+                    f"капы заданы для {len(caps)} тикер(ов). CLI: scripts/backtest_game5m_param_hypotheses.py --mode bundle"
+                ),
+            }
+        )
+
+    suspend = by_sig.get("TAKE_PROFIT_SUSPEND", [])
+    tp_norm = by_sig.get("TAKE_PROFIT", [])
+    if apply_take and len(suspend) >= 2:
+        avg_r_s = float(np.mean([float(e.realized_pct) for e in suspend]))
+        avg_m_s = float(np.mean([float(e.missed_upside_pct or 0.0) for e in suspend]))
+        avg_m_t = (
+            float(np.mean([float(e.missed_upside_pct or 0.0) for e in tp_norm]))
+            if len(tp_norm) >= 2
+            else 0.0
+        )
+        if avg_r_s < -0.25:
+            practical.append(
+                {
+                    "parameter": "hanger_tune_apply_take",
+                    "current": True,
+                    "proposed": False,
+                    "why": (
+                        f"{len(suspend)}× TAKE_PROFIT_SUSPEND, средний realized {avg_r_s:.2f}% — "
+                        "сужение/висячный тейк в окне дал слабый или отрицательный результат."
+                    ),
+                    "expected_effect": "Временно обычный TAKE_PROFIT до пересмотра JSON и диагностики hanger.",
+                }
+            )
+        elif len(suspend) >= 3 and avg_m_s >= 1.2 and (len(tp_norm) < 2 or avg_m_s > avg_m_t + 0.8):
+            candidates.append(
+                {
+                    "env_keys": [
+                        "GAME_5M_HANGER_TUNE_JSON",
+                        "GAME_5M_TAKE_PROFIT_PCT_<TICKER>",
+                        "GAME_5M_HANGER_TUNE_APPLY_TAKE",
+                    ],
+                    "direction": "review_caps_or_regenerate_json",
+                    "evidence": (
+                        f"SUSPEND: avg missed {avg_m_s:.2f}% vs обычный TAKE_PROFIT avg missed {avg_m_t:.2f}% "
+                        f"(n_susp={len(suspend)}, n_tp={len(tp_norm)})."
+                    ),
+                }
+            )
+
+    out["practical_parameter_additions"] = practical
+    out["parameter_candidates"] = candidates
+    return out
+
+
 def _parse_llm_json_response(text: str) -> Any:
     """
     Парсит JSON из ответа модели: чистый JSON, ```json ... ```, или текст с JSON-объектом внутри.
@@ -1098,6 +1395,8 @@ def _build_llm_recommendations(
                 "Для недобора до MFE при TAKE_PROFIT предлагай TAKE_PROFIT_*, TAKE_MOMENTUM_FACTOR, trailing/лимиты — не cron.",
                 "sum_avoidable_loss_pct на прибыльных сделках может быть велик — см. metric_definitions.sum_avoidable_loss_pct.",
                 "Корреляции в отчёте (vol, prob_up, exit_signal) не доказывают причинность — указывай confidence и validation_plan.",
+                "Эффективность hanger JSON и TAKE_PROFIT_SUSPEND — report.game5m_hanger_tune_json_review и metric_definitions.game5m_hanger_tune_json_review; "
+                "обновление JSON — offline (algorithm_digest.game_5m_hanger_tune_json.offline_regen), не выдумывай путь к файлу.",
             ],
             "parameter_to_env_key_hint": {
                 "momentum_buy_min": "GAME_5M_RTH_MOMENTUM_BUY_MIN",
@@ -1143,6 +1442,8 @@ def _build_llm_recommendations(
                 "GAME_5M_MIN_VOLUME_VS_AVG_PCT",
                 "GAME_5M_SELL_CONFIRM_BARS",
                 "GAME_5M_VOLATILITY_WAIT_MIN",
+                "GAME_5M_HANGER_TUNE_JSON",
+                "GAME_5M_HANGER_TUNE_APPLY_TAKE",
             ]
             algorithm_context["focus_instruction"] = (
                 "Это УЗКИЙ отчёт по нескольким дням и/или выбранным тикерам/сделкам. "
@@ -1401,130 +1702,147 @@ def _build_critical_case_analysis(effects: List[TradeEffect], limit: int = 5) ->
 def _build_game5m_config_hints(
     effects: List[TradeEffect],
     summary: Dict[str, Any],
+    hanger_tune_review: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Эвристики по выборке: какие ключи config.env разумно пересмотреть (без автоподстановки чисел)."""
     hints: List[Dict[str, Any]] = []
-    if not effects:
+    if not effects and not (isinstance(hanger_tune_review, dict) and hanger_tune_review.get("enabled")):
         return hints
     from collections import defaultdict
 
-    stuck_poor = [
-        e for e in effects if e.hold_minutes >= LONG_HOLD_MINUTES and e.realized_pct <= 0.15
-    ]
-    if len(stuck_poor) >= 1:
-        hints.append(
-            {
-                "env_key": "GAME_5M_MAX_POSITION_DAYS",
-                "direction": "review_with_entry_thresholds",
-                "evidence": (
-                    f"{len(stuck_poor)}× удержание ≥7 суток при слабом/нулевом результате (≤0.15%) "
-                    f"из {len(effects)} сделок"
-                ),
-                "rationale": (
-                    "Долго «висит» без ощутимого плюса — чаще всего либо слишком мягкие пороги входа, "
-                    "либо слишком мягкие лимиты удержания; см. также entry_underperformance_review в JSON отчёта."
-                ),
-            }
-        )
-
-    take_by_ticker: Dict[str, List[TradeEffect]] = defaultdict(list)
-    for e in effects:
-        if e.exit_signal == "TAKE_PROFIT":
-            take_by_ticker[e.ticker].append(e)
-    for ticker, lst in take_by_ticker.items():
-        if len(lst) < 2:
-            continue
-        missed = [e.missed_upside_pct or 0.0 for e in lst]
-        if float(np.mean(missed)) >= 1.0:
-            tu = str(ticker).strip().upper()
+    if effects:
+        stuck_poor = [
+            e for e in effects if e.hold_minutes >= LONG_HOLD_MINUTES and e.realized_pct <= 0.15
+        ]
+        if len(stuck_poor) >= 1:
             hints.append(
                 {
-                    "env_key": f"GAME_5M_TAKE_PROFIT_PCT_{tu}",
-                    "direction": "review_raise_cap_or_min_pct",
-                    "evidence": f"{tu}: {len(lst)}× TAKE_PROFIT, средний missed_upside {float(np.mean(missed)):.2f}%",
-                    "rationale": "После тейка цена часто уходит существенно выше — потолок тейка или ранняя цель (импульсная ветка) могут быть узки.",
+                    "env_key": "GAME_5M_MAX_POSITION_DAYS",
+                    "direction": "review_with_entry_thresholds",
+                    "evidence": (
+                        f"{len(stuck_poor)}× удержание ≥7 суток при слабом/нулевом результате (≤0.15%) "
+                        f"из {len(effects)} сделок"
+                    ),
+                    "rationale": (
+                        "Долго «висит» без ощутимого плюса — чаще всего либо слишком мягкие пороги входа, "
+                        "либо слишком мягкие лимиты удержания; см. также entry_underperformance_review в JSON отчёта."
+                    ),
                 }
             )
 
-    time_exit_loss = [e for e in effects if e.exit_signal == "TIME_EXIT" and e.realized_pct <= 0]
-    if len(time_exit_loss) >= 2:
-        hints.append(
-            {
-                "env_key": "GAME_5M_SESSION_END_MIN_PROFIT_PCT",
-                "direction": "review_with_SESSION_END_EXIT_MINUTES",
-                "evidence": f"{len(time_exit_loss)}× TIME_EXIT без плюса",
-                "rationale": "Закрытие в хвосте сессии даёт слабый или отрицательный результат — порог минимального профита или окно минут.",
-            }
-        )
+        take_by_ticker: Dict[str, List[TradeEffect]] = defaultdict(list)
+        for e in effects:
+            if e.exit_signal == "TAKE_PROFIT":
+                take_by_ticker[e.ticker].append(e)
+        for ticker, lst in take_by_ticker.items():
+            if len(lst) < 2:
+                continue
+            missed = [e.missed_upside_pct or 0.0 for e in lst]
+            if float(np.mean(missed)) >= 1.0:
+                tu = str(ticker).strip().upper()
+                hints.append(
+                    {
+                        "env_key": f"GAME_5M_TAKE_PROFIT_PCT_{tu}",
+                        "direction": "review_raise_cap_or_min_pct",
+                        "evidence": f"{tu}: {len(lst)}× TAKE_PROFIT, средний missed_upside {float(np.mean(missed)):.2f}%",
+                        "rationale": "После тейка цена часто уходит существенно выше — потолок тейка или ранняя цель (импульсная ветка) могут быть узки.",
+                    }
+                )
 
-    late = int(summary.get("late_polling_signals", 0))
-    if late >= 2:
-        hints.append(
-            {
-                "env_key": "GAME_5M_TAKE_MOMENTUM_FACTOR",
-                "direction": "review_with_TAKE_PROFIT_PCT_and_missed_upside",
-                "evidence": (
-                    f"exit_below_window_mfe_count={late} (legacy late_polling_signals) на {len(effects)} сделках"
-                ),
-                "rationale": (
-                    "Счётчик — цена выхода заметно ниже max High 5m-окна при недоборе; это не доказательство «медленного cron». "
-                    "Сначала тейк/потолок (TAKE_PROFIT_PCT*, TAKE_MOMENTUM_FACTOR), не интервал опроса."
-                ),
-            }
-        )
+        time_exit_loss = [e for e in effects if e.exit_signal == "TIME_EXIT" and e.realized_pct <= 0]
+        if len(time_exit_loss) >= 2:
+            hints.append(
+                {
+                    "env_key": "GAME_5M_SESSION_END_MIN_PROFIT_PCT",
+                    "direction": "review_with_SESSION_END_EXIT_MINUTES",
+                    "evidence": f"{len(time_exit_loss)}× TIME_EXIT без плюса",
+                    "rationale": "Закрытие в хвосте сессии даёт слабый или отрицательный результат — порог минимального профита или окно минут.",
+                }
+            )
 
-    sell_loss = [e for e in effects if e.exit_signal == "SELL" and e.realized_pct < -1.0]
-    if len(sell_loss) >= 2:
-        hints.append(
-            {
-                "env_key": "GAME_5M_SELL_CONFIRM_BARS",
-                "direction": "review_raise",
-                "evidence": f"{len(sell_loss)}× SELL с результатом < -1%",
-                "rationale": "Усилить подтверждение перед выходом по перекупленности (RSI).",
-            }
-        )
+        late = int(summary.get("late_polling_signals", 0))
+        if late >= 2:
+            hints.append(
+                {
+                    "env_key": "GAME_5M_TAKE_MOMENTUM_FACTOR",
+                    "direction": "review_with_TAKE_PROFIT_PCT_and_missed_upside",
+                    "evidence": (
+                        f"exit_below_window_mfe_count={late} (legacy late_polling_signals) на {len(effects)} сделках"
+                    ),
+                    "rationale": (
+                        "Счётчик — цена выхода заметно ниже max High 5m-окна при недоборе; это не доказательство «медленного cron». "
+                        "Сначала тейк/потолок (TAKE_PROFIT_PCT*, TAKE_MOMENTUM_FACTOR), не интервал опроса."
+                    ),
+                }
+            )
 
-    tp_all = [e for e in effects if e.exit_signal == "TAKE_PROFIT"]
-    tp_small = [e for e in tp_all if 0 < e.realized_pct < 2.5]
-    if len(tp_all) >= 3 and len(tp_small) >= max(3, int(0.6 * len(tp_all))):
-        hints.append(
-            {
-                "env_key": "GAME_5M_TAKE_PROFIT_MIN_PCT",
-                "direction": "review_vs_GAME_5M_TAKE_MOMENTUM_FACTOR",
-                "evidence": f"Мелкие TAKE_PROFIT (<2.5%): {len(tp_small)} из {len(tp_all)}",
-                "rationale": "Много ранних тейков — порог MIN_PCT для ветки «тейк от импульса» или factor тянут цель вниз относительно потолка.",
-            }
-        )
+        sell_loss = [e for e in effects if e.exit_signal == "SELL" and e.realized_pct < -1.0]
+        if len(sell_loss) >= 2:
+            hints.append(
+                {
+                    "env_key": "GAME_5M_SELL_CONFIRM_BARS",
+                    "direction": "review_raise",
+                    "evidence": f"{len(sell_loss)}× SELL с результатом < -1%",
+                    "rationale": "Усилить подтверждение перед выходом по перекупленности (RSI).",
+                }
+            )
 
-    hanger_review = _build_hanger_v2_review(effects)
-    for cand in hanger_review.get("parameter_candidates", []) or []:
-        keys = cand.get("env_keys") if isinstance(cand, dict) else None
-        if not isinstance(keys, list) or not keys:
-            continue
-        hints.append(
-            {
-                "env_key": keys[0],
-                "related_env_keys": keys,
-                "direction": cand.get("direction") or "review",
-                "evidence": cand.get("evidence") or "Hanger v2 review candidate.",
-                "rationale": "game5m_hanger_v2_review сопоставляет state Hanger v2 с фактическим закрытием и PnL.",
-            }
-        )
+        tp_all = [e for e in effects if e.exit_signal == "TAKE_PROFIT"]
+        tp_small = [e for e in tp_all if 0 < e.realized_pct < 2.5]
+        if len(tp_all) >= 3 and len(tp_small) >= max(3, int(0.6 * len(tp_all))):
+            hints.append(
+                {
+                    "env_key": "GAME_5M_TAKE_PROFIT_MIN_PCT",
+                    "direction": "review_vs_GAME_5M_TAKE_MOMENTUM_FACTOR",
+                    "evidence": f"Мелкие TAKE_PROFIT (<2.5%): {len(tp_small)} из {len(tp_all)}",
+                    "rationale": "Много ранних тейков — порог MIN_PCT для ветки «тейк от импульса» или factor тянут цель вниз относительно потолка.",
+                }
+            )
 
-    cont_review = _build_continuation_gate_review(effects)
-    for cand in cont_review.get("parameter_candidates", []) or []:
-        keys = cand.get("env_keys") if isinstance(cand, dict) else None
-        if not isinstance(keys, list) or not keys:
-            continue
-        hints.append(
-            {
-                "env_key": keys[0],
-                "related_env_keys": keys,
-                "direction": cand.get("direction") or "review",
-                "evidence": cand.get("evidence") or "Continuation gate review candidate.",
-                "rationale": "continuation_gate_review сравнивает решение gate с missed upside после закрытия.",
-            }
-        )
+        hanger_review = _build_hanger_v2_review(effects)
+        for cand in hanger_review.get("parameter_candidates", []) or []:
+            keys = cand.get("env_keys") if isinstance(cand, dict) else None
+            if not isinstance(keys, list) or not keys:
+                continue
+            hints.append(
+                {
+                    "env_key": keys[0],
+                    "related_env_keys": keys,
+                    "direction": cand.get("direction") or "review",
+                    "evidence": cand.get("evidence") or "Hanger v2 review candidate.",
+                    "rationale": "game5m_hanger_v2_review сопоставляет state Hanger v2 с фактическим закрытием и PnL.",
+                }
+            )
+
+        cont_review = _build_continuation_gate_review(effects)
+        for cand in cont_review.get("parameter_candidates", []) or []:
+            keys = cand.get("env_keys") if isinstance(cand, dict) else None
+            if not isinstance(keys, list) or not keys:
+                continue
+            hints.append(
+                {
+                    "env_key": keys[0],
+                    "related_env_keys": keys,
+                    "direction": cand.get("direction") or "review",
+                    "evidence": cand.get("evidence") or "Continuation gate review candidate.",
+                    "rationale": "continuation_gate_review сравнивает решение gate с missed upside после закрытия.",
+                }
+            )
+
+    if isinstance(hanger_tune_review, dict) and hanger_tune_review.get("enabled"):
+        for cand in hanger_tune_review.get("parameter_candidates") or []:
+            keys = cand.get("env_keys") if isinstance(cand, dict) else None
+            if not isinstance(keys, list) or not keys:
+                continue
+            hints.append(
+                {
+                    "env_key": keys[0],
+                    "related_env_keys": keys,
+                    "direction": cand.get("direction") or "review",
+                    "evidence": cand.get("evidence") or "Hanger tune JSON review candidate.",
+                    "rationale": "game5m_hanger_tune_json_review: капы из JSON, TAKE_PROFIT_SUSPEND vs TAKE_PROFIT, свежесть файла.",
+                }
+            )
     return hints
 
 
@@ -1553,8 +1871,14 @@ PARAM_TO_ENV_KEY: Dict[str, str] = {
     "entry_quality_min_rr": "GAME_5M_ENTRY_QUALITY_MIN_RR",
     "entry_quality_min_ev_pct": "GAME_5M_ENTRY_QUALITY_MIN_EV_PCT",
     "max_position_minutes": "GAME_5M_MAX_POSITION_MINUTES",
+    "max_position_days": "GAME_5M_MAX_POSITION_DAYS",
+    "early_derisk_enabled": "GAME_5M_EARLY_DERISK_ENABLED",
+    "early_derisk_min_age_minutes": "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES",
+    "early_derisk_max_loss_pct": "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT",
+    "early_derisk_momentum_below": "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW",
     "stop_loss_pct_effective": "GAME_5M_STOP_LOSS_PCT",
     "take_profit_pct_effective": "GAME_5M_TAKE_PROFIT_PCT",
+    "soft_take_max_pullback_from_high_pct": "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT",
     "GAME_5M_VOLATILITY_WAIT_MIN": "GAME_5M_VOLATILITY_WAIT_MIN",
     "GAME_5M_SELL_CONFIRM_BARS": "GAME_5M_SELL_CONFIRM_BARS",
     "GAME_5M_MOMENTUM_MIN_SESSION_BARS": "GAME_5M_MOMENTUM_MIN_SESSION_BARS",
@@ -1567,6 +1891,11 @@ PARAM_TO_ENV_KEY: Dict[str, str] = {
     "GAME_5M_ENTRY_QUALITY_MIN_RR": "GAME_5M_ENTRY_QUALITY_MIN_RR",
     "GAME_5M_ENTRY_QUALITY_MIN_EV_PCT": "GAME_5M_ENTRY_QUALITY_MIN_EV_PCT",
     "GAME_5M_MAX_POSITION_MINUTES": "GAME_5M_MAX_POSITION_MINUTES",
+    "GAME_5M_MAX_POSITION_DAYS": "GAME_5M_MAX_POSITION_DAYS",
+    "GAME_5M_EARLY_DERISK_ENABLED": "GAME_5M_EARLY_DERISK_ENABLED",
+    "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES": "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES",
+    "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT": "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT",
+    "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW": "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW",
     "GAME_5M_STOP_LOSS_PCT": "GAME_5M_STOP_LOSS_PCT",
     "GAME_5M_TAKE_PROFIT_PCT": "GAME_5M_TAKE_PROFIT_PCT",
     "GAME_5M_RSI_STRONG_BUY_MAX": "GAME_5M_RSI_STRONG_BUY_MAX",
@@ -1580,6 +1909,10 @@ PARAM_TO_ENV_KEY: Dict[str, str] = {
     "GAME_5M_VOLATILITY_WARN_BUY_MIN": "GAME_5M_VOLATILITY_WARN_BUY_MIN",
     "GAME_5M_SIGNAL_CRON_MINUTES": "GAME_5M_SIGNAL_CRON_MINUTES",
     "GAME_5M_TAKE_MOMENTUM_FACTOR": "GAME_5M_TAKE_MOMENTUM_FACTOR",
+    "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT": "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT",
+    "hanger_tune_apply_take": "GAME_5M_HANGER_TUNE_APPLY_TAKE",
+    "GAME_5M_HANGER_TUNE_APPLY_TAKE": "GAME_5M_HANGER_TUNE_APPLY_TAKE",
+    "GAME_5M_HANGER_TUNE_JSON": "GAME_5M_HANGER_TUNE_JSON",
 }
 
 
@@ -1599,6 +1932,7 @@ def _game_5m_env_key_expects_bool(env_key: str) -> bool:
     return env_key in (
         "GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY",
         "GAME_5M_EARLY_USE_PREMARKET_MOMENTUM",
+        "GAME_5M_HANGER_TUNE_APPLY_TAKE",
     )
 
 
@@ -1717,9 +2051,12 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
         if not parameter and not env_key_hint:
             continue
         env_key = PARAM_TO_ENV_KEY.get(parameter) or PARAM_TO_ENV_KEY.get(parameter.upper())
-        if not env_key and parameter.startswith("GAME_5M_") and is_editable_config_env_key(parameter):
+        # Важно: не привязываем распознавание "похоже на env key" к is_editable_config_env_key(),
+        # потому что whitelist редактируемых ключей может быть закэширован до обновления config.env.example.
+        # Фильтрация "можно применять" всё равно ниже, отдельной проверкой is_editable_config_env_key(env_key).
+        if not env_key and parameter.startswith("GAME_5M_"):
             env_key = parameter
-        if not env_key and env_key_hint.startswith("GAME_5M_") and is_editable_config_env_key(env_key_hint):
+        if not env_key and env_key_hint.startswith("GAME_5M_"):
             env_key = env_key_hint
         if not env_key:
             skipped.append(
@@ -2041,6 +2378,8 @@ def _get_current_decision_rule_params() -> Dict[str, Any]:
                 "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT": _cfg_float(
                     "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT", "0.35"
                 ),
+                "GAME_5M_HANGER_TUNE_JSON": (get_config_value("GAME_5M_HANGER_TUNE_JSON", "") or "").strip(),
+                "GAME_5M_HANGER_TUNE_APPLY_TAKE": _cfg_bool("GAME_5M_HANGER_TUNE_APPLY_TAKE", "false"),
             },
         }
     except Exception:
@@ -2237,6 +2576,12 @@ def analyze_trade_effectiveness(
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
         }
+        if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
+            htr = _build_game5m_hanger_tune_json_review([], {"total": 0}, strategy=strategy)
+            empty_payload["game5m_hanger_tune_json_review"] = htr
+            empty_payload["game_5m_config_hints"] = _build_game5m_config_hints(
+                [], {"total": 0}, hanger_tune_review=htr
+            )
         _attach_game5m_param_hypothesis_backtest_optional(
             empty_payload,
             strategy=strategy,
@@ -2257,9 +2602,13 @@ def analyze_trade_effectiveness(
     if isinstance(prev_state.get("last_run"), dict):
         ps = prev_state["last_run"].get("game_5m_config_snapshot")
         prev_snap = ps if isinstance(ps, dict) else None
+    hanger_tune_review = _build_game5m_hanger_tune_json_review(effects, summary, strategy=strategy)
     practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
+    add_pr = hanger_tune_review.get("practical_parameter_additions") if isinstance(hanger_tune_review, dict) else None
+    if isinstance(add_pr, list):
+        practical.extend([x for x in add_pr if isinstance(x, dict)])
     critical_cases = _build_critical_case_analysis(effects, limit=5)
-    game_5m_config_hints = _build_game5m_config_hints(effects, summary)
+    game_5m_config_hints = _build_game5m_config_hints(effects, summary, hanger_tune_review=hanger_tune_review)
     entry_review = _build_entry_underperformance_review(effects, limit=8)
     catboost_entry_backtest = _build_catboost_entry_backtest(strategy, closed, effects)
     hanger_v2_review = _build_hanger_v2_review(effects)
@@ -2291,6 +2640,7 @@ def analyze_trade_effectiveness(
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
+        "game5m_hanger_tune_json_review": hanger_tune_review,
     }
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
@@ -2352,6 +2702,12 @@ def analyze_trade_effectiveness_focused(
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
         }
+        if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
+            htr_f = _build_game5m_hanger_tune_json_review([], {"total": 0}, strategy=strategy)
+            empty_focus["game5m_hanger_tune_json_review"] = htr_f
+            empty_focus["game_5m_config_hints"] = _build_game5m_config_hints(
+                [], {"total": 0}, hanger_tune_review=htr_f
+            )
         _attach_game5m_param_hypothesis_backtest_optional(
             empty_focus,
             strategy=strategy,
@@ -2366,9 +2722,13 @@ def analyze_trade_effectiveness_focused(
     summary = _aggregate(effects)
     tops = _top_cases(effects)
     current_rules = _get_current_decision_rule_params()
+    hanger_tune_review = _build_game5m_hanger_tune_json_review(effects, summary, strategy=strategy)
     practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
+    add_pr_f = hanger_tune_review.get("practical_parameter_additions") if isinstance(hanger_tune_review, dict) else None
+    if isinstance(add_pr_f, list):
+        practical.extend([x for x in add_pr_f if isinstance(x, dict)])
     critical_cases = _build_critical_case_analysis(effects, limit=5)
-    game_5m_config_hints = _build_game5m_config_hints(effects, summary)
+    game_5m_config_hints = _build_game5m_config_hints(effects, summary, hanger_tune_review=hanger_tune_review)
     entry_review = _build_entry_underperformance_review(effects, limit=8)
     catboost_entry_backtest = _build_catboost_entry_backtest(strategy, filtered, effects)
     hanger_v2_review = _build_hanger_v2_review(effects)
@@ -2400,6 +2760,7 @@ def analyze_trade_effectiveness_focused(
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
+        "game5m_hanger_tune_json_review": hanger_tune_review,
     }
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
