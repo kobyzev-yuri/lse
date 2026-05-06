@@ -87,6 +87,10 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Статус портфельной CatBoost-модели (daily expected return): наличие файлов модели, включение PORTFOLIO_CATBOOST_ENABLED, "
         "и последние метрики обучения (RMSE/MAE/top-decile) из meta.json/JSONL отчёта. Модель advisory: не открывает/не закрывает позиции."
     ),
+    "game5m_catboost_status": (
+        "Статус CatBoost entry (GAME_5M): trained_at/n_train/n_valid/AUC, исключения (например false_take_profit_by_session_high), "
+        "и оценка trust_level. Используется для понимания, насколько аккуратно применять ML-слияние (BUY→HOLD) и как интерпретировать P."
+    ),
     "realized_pct": (
         "Результат сделки в % от cost basis из net_pnl (как в отчёте); для рядов также считается realized_log_return = log(1+p/100)."
     ),
@@ -156,6 +160,80 @@ def _build_portfolio_catboost_status() -> Dict[str, Any]:
             }
             if isinstance(meta, dict)
             else None,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _trust_level_game5m_catboost(meta: Optional[Dict[str, Any]], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    try:
+        auc = None
+        n_valid = None
+        if isinstance(meta, dict):
+            auc = meta.get("auc_valid")
+            n_valid = meta.get("n_valid")
+        if auc is None and isinstance(last, dict):
+            cb = (last.get("catboost_entry") or {}) if isinstance(last.get("catboost_entry"), dict) else {}
+            auc = cb.get("auc_valid")
+            n_valid = cb.get("n_valid")
+        auc_f = float(auc) if auc is not None else None
+        nv = int(n_valid) if n_valid is not None else None
+    except Exception:
+        auc_f = None
+        nv = None
+
+    # Conservative: small holdout + modest AUC => keep as advisory/guard only.
+    if auc_f is None or nv is None:
+        return {"trust_level": "unknown", "trust_reason": "Нет метрик AUC/n_valid (meta/jsonl отсутствуют)."}
+    if nv < 80:
+        return {"trust_level": "low", "trust_reason": f"Мало validation строк (n_valid={nv}); использовать только как мягкий BUY→HOLD фильтр."}
+    if auc_f < 0.58:
+        return {"trust_level": "low", "trust_reason": f"AUC={auc_f:.3f} < 0.58; сигнал слабый, только рекомендательный."}
+    if auc_f < 0.65:
+        return {"trust_level": "medium", "trust_reason": f"AUC={auc_f:.3f} при n_valid={nv}; допустим осторожный guard, без агрессивных правил."}
+    return {"trust_level": "high", "trust_reason": f"AUC={auc_f:.3f} при n_valid={nv}; можно обсуждать расширение влияния после walk-forward."}
+
+
+def _build_game5m_catboost_status() -> Dict[str, Any]:
+    try:
+        enabled = (get_config_value("GAME_5M_CATBOOST_ENABLED", "false") or "false").strip().lower() in ("1", "true", "yes")
+        model_path = (get_config_value("GAME_5M_CATBOOST_MODEL_PATH", "") or "").strip()
+        if not model_path:
+            model_path = str(Path(__file__).resolve().parents[1] / "local" / "models" / "game5m_entry_catboost.cbm")
+        meta_path = str(Path(model_path).with_suffix(".meta.json"))
+        report_path = (
+            (get_config_value("DAILY_ML_REPORT_JSONL", "") or "").strip()
+            or ("/app/logs/ml/logs/game5m_daily_ml_report.jsonl" if Path("/app/logs").exists() else str(Path(__file__).resolve().parents[1] / "local" / "logs" / "game5m_daily_ml_report.jsonl"))
+        )
+        meta = None
+        try:
+            if Path(meta_path).is_file():
+                meta = json.loads(Path(meta_path).read_text(encoding="utf-8"))
+        except Exception:
+            meta = None
+        last = _load_last_jsonl_record(report_path)
+        trust = _trust_level_game5m_catboost(meta if isinstance(meta, dict) else None, last if isinstance(last, dict) else None)
+        return {
+            "enabled": bool(enabled),
+            "model_path": model_path,
+            "meta_path": meta_path,
+            "model_file_exists": Path(model_path).is_file(),
+            "meta_file_exists": Path(meta_path).is_file(),
+            "last_training_jsonl_path": report_path,
+            "last_training": last,
+            "meta_summary": {
+                "trained_at": (meta or {}).get("trained_at"),
+                "n_train": (meta or {}).get("n_train"),
+                "n_valid": (meta or {}).get("n_valid"),
+                "n_total": (meta or {}).get("n_total"),
+                "excluded_false_take_profit_by_session_high": (meta or {}).get("excluded_false_take_profit_by_session_high"),
+                "label": (meta or {}).get("label"),
+                "min_train_rows_config": (meta or {}).get("min_train_rows_config"),
+                "auc_valid": (meta or {}).get("auc_valid"),
+            }
+            if isinstance(meta, dict)
+            else None,
+            **trust,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -2737,6 +2815,7 @@ def analyze_trade_effectiveness(
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
+        "game5m_catboost_status": _build_game5m_catboost_status(),
         "portfolio_catboost_status": _build_portfolio_catboost_status(),
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
@@ -2858,6 +2937,7 @@ def analyze_trade_effectiveness_focused(
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
+        "game5m_catboost_status": _build_game5m_catboost_status(),
         "portfolio_catboost_status": _build_portfolio_catboost_status(),
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,

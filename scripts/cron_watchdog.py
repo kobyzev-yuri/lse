@@ -33,7 +33,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # Максимум хешей «уже отправлено» — чтобы файл не рос бесконечно; старые выкидываются
 SENT_HASHES_MAX = 2000
@@ -110,6 +110,29 @@ def line_matches_error(line: str, include_warnings: bool) -> bool:
     return False
 
 
+def _parse_log_line_ts_utc(line: str) -> datetime | None:
+    """
+    Best-effort parse of a log line timestamp.
+    Expected prefix like: '2026-04-30 15:14:20,615 - ERROR - ...'
+    Treats naive datetime as UTC.
+    """
+    # Fast path: avoid regex for every line
+    if len(line) < 19 or line[4] != "-" or line[7] != "-" or line[10] != " ":
+        return None
+    head = line[:23]  # 'YYYY-MM-DD HH:MM:SS,mmm'
+    try:
+        dt = datetime.strptime(head, "%Y-%m-%d %H:%M:%S,%f")
+        return dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        # Some logs may not have milliseconds
+        head2 = line[:19]
+        try:
+            dt = datetime.strptime(head2, "%Y-%m-%d %H:%M:%S")
+            return dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+
 def scan_log_dir(
     logs_dir: Path,
     tail: int,
@@ -122,6 +145,16 @@ def scan_log_dir(
     """
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     findings: list[tuple[str, str, str]] = []
+    max_age_hours = None
+    try:
+        max_age_hours = float((get_config_value("CRON_WATCHDOG_MAX_AGE_HOURS", "72") or "").strip())
+    except Exception:
+        max_age_hours = 72.0
+    if max_age_hours is not None and max_age_hours <= 0:
+        max_age_hours = None
+    cutoff = None
+    if max_age_hours is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
 
     for log_name in CRON_LOG_FILES:
         if log_name == WATCHDOG_LOG_NAME:
@@ -133,6 +166,10 @@ def scan_log_dir(
             line_stripped = line.rstrip("\n\r")
             if not line_stripped.strip():
                 continue
+            if cutoff is not None:
+                ts = _parse_log_line_ts_utc(line_stripped)
+                if ts is not None and ts < cutoff:
+                    continue
             if line_matches_error(line_stripped, include_warnings):
                 # храним: имя файла, номер строки (примерный), текст (обрезанный)
                 short = line_stripped[:500] + ("..." if len(line_stripped) > 500 else "")
