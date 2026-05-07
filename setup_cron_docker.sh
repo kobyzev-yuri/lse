@@ -18,7 +18,7 @@ mkdir -p "$PROJECT_DIR/logs"
 CRON_FILE=$(mktemp)
 
 # Удаляем старые LSE docker cron-задачи
-crontab -l 2>/dev/null | grep -v "docker.*lse-bot\|LSE.*Docker\|send_sndk_signal_cron\|trading_cycle_cron\|premarket_cron\|update_prices_cron\|fetch_news_cron\|sync_vector_kb_cron\|add_sentiment_to_news\|analyze_event_outcomes\|cleanup_calendar_noise\|cron_watchdog\|update_rsi_local\|update_finviz\|ingest_market_bars_intraday" | grep -v "$PROJECT_DIR" > "$CRON_FILE" || true
+crontab -l 2>/dev/null | grep -v "docker.*lse-bot\|LSE.*Docker\|send_sndk_signal_cron\|trading_cycle_cron\|premarket_cron\|update_prices_cron\|fetch_news_cron\|sync_vector_kb_cron\|add_sentiment_to_news\|analyze_event_outcomes\|cleanup_calendar_noise\|cron_watchdog\|update_rsi_local\|update_finviz\|ingest_market_bars_intraday\|run_daily_game5m_recovery_pipeline" | grep -v "$PROJECT_DIR" > "$CRON_FILE" || true
 if ! grep -q . "$CRON_FILE" 2>/dev/null; then
   : > "$CRON_FILE"
 fi
@@ -50,6 +50,8 @@ cat >> "$CRON_FILE" << EOF
 45 * * * * docker exec $CONTAINER_NAME python scripts/cron_watchdog.py --execute >> "$PROJECT_DIR/logs/cron_watchdog.log" 2>&1
 # 5m/30m в Postgres для бэктеста (Yahoo, UPSERT). Ежедневно 23:25 по системному TZ сервера (ожидается MSK).
 25 23 * * * flock -n /tmp/lse_market_bars_intraday.lock docker exec $CONTAINER_NAME python scripts/ingest_market_bars_intraday.py >> "$PROJECT_DIR/logs/cron_market_bars_intraday.log" 2>&1
+# Recovery ML (анализатор + train): будни после US сессии (ожидается MSK). Без параллельных запусков.
+40 23 * * 1-5 flock -n /tmp/lse_daily_recovery_pipeline.lock docker exec $CONTAINER_NAME python scripts/run_daily_game5m_recovery_pipeline.py >> "$PROJECT_DIR/logs/game5m_daily_recovery_pipeline.log" 2>&1
 EOF
 
 crontab "$CRON_FILE"

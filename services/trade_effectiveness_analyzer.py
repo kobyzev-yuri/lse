@@ -4201,12 +4201,14 @@ def _build_recovery_scenario_backtest(
         and str(e.exit_strategy or "").strip().upper() == "GAME_5M"
     ]
     per_trade: List[Dict[str, Any]] = []
-    n_would_delay = 0
+    would_delay_policy_count = 0  # P < tau
+    would_delay_with_delta_count = 0  # P < tau and delayed_pct exists
     improved = 0
     worse = 0
     equal = 0
     deltas: List[float] = []
     scored = 0
+    delta_missing_reasons: Dict[str, int] = {}
 
     for e in te_eff:
         df = ohlc_cache.get(e.ticker)
@@ -4267,8 +4269,14 @@ def _build_recovery_scenario_backtest(
             delayed_pct = (del_close / entry_px - 1.0) * 100.0
         would_delay = float(proba) < tau
         delta: Optional[float] = None
-        if would_delay and delayed_pct is not None:
-            n_would_delay += 1
+        if would_delay:
+            would_delay_policy_count += 1
+            if delayed_pct is None:
+                delta_missing_reasons["no_delayed_close_after_exit_k_bars"] = (
+                    delta_missing_reasons.get("no_delayed_close_after_exit_k_bars", 0) + 1
+                )
+            else:
+                would_delay_with_delta_count += 1
             delta = delayed_pct - actual_pct
             deltas.append(delta)
             if delta > 1e-6:
@@ -4293,8 +4301,13 @@ def _build_recovery_scenario_backtest(
 
     out["time_exit_early_trades"] = len(te_eff)
     out["scored"] = scored
-    out["would_delay_count"] = n_would_delay
-    if n_would_delay > 0:
+    # Важно: would_delay_exit может быть true даже если delta недоступна (нет Close через K баров после exit).
+    out["would_delay_policy_count"] = would_delay_policy_count
+    out["would_delay_with_delta_count"] = would_delay_with_delta_count
+    out["delta_missing_reasons"] = delta_missing_reasons
+    # Backward compatible field name: count where we could compute delta.
+    out["would_delay_count"] = would_delay_with_delta_count
+    if would_delay_with_delta_count > 0:
         out["among_would_delay"] = {
             "improved": improved,
             "worse": worse,
@@ -4307,7 +4320,7 @@ def _build_recovery_scenario_backtest(
             "worse": 0,
             "about_equal": 0,
             "mean_delta_pct": None,
-            "note": "Нет сделок с P < τ и доступной ценой через K баров после exit.",
+            "note": "Нет сделок с P < τ и доступной ценой через K баров после exit (delta недоступна).",
         }
     _max_rows = 120
     out["per_trade"] = per_trade[:_max_rows]
