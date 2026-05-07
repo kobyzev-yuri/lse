@@ -4750,6 +4750,44 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             lines.append("• Для будущего ML recovery: мало строк (insufficient_data_for_ml).")
         if teas.get("focused_trade_rows_matched"):
             lines.append(f"• Focused: совпало строк отчёта: {teas.get('focused_trade_rows_matched')}.")
+
+    # Recovery ML (офлайн): статус модели и сценарий задержки выхода для TIME_EXIT_EARLY.
+    rec_st = report.get("game5m_recovery_model_status") or {}
+    rec_sc = report.get("recovery_scenario_backtest") or {}
+    if isinstance(rec_st, dict) and (rec_st.get("model_file_exists") or rec_st.get("meta_file_exists")):
+        lines.append("")
+        lines.append("Recovery ML (офлайн, не влияет на live-выходы):")
+        ms = rec_st.get("meta_summary") if isinstance(rec_st.get("meta_summary"), dict) else {}
+        auc = ms.get("auc_valid")
+        nt = ms.get("n_total")
+        hv = ms.get("horizon_minutes")
+        tau = rec_sc.get("tau") if isinstance(rec_sc, dict) else None
+        scored = rec_sc.get("scored") if isinstance(rec_sc, dict) else None
+        te_n = rec_sc.get("time_exit_early_trades") if isinstance(rec_sc, dict) else None
+        pol = rec_sc.get("would_delay_policy_count") if isinstance(rec_sc, dict) else None
+        wdd = rec_sc.get("would_delay_with_delta_count") if isinstance(rec_sc, dict) else None
+        missing = rec_sc.get("delta_missing_reasons") if isinstance(rec_sc, dict) else None
+        mean_delta = None
+        if isinstance(rec_sc, dict) and isinstance(rec_sc.get("among_would_delay"), dict):
+            mean_delta = rec_sc["among_would_delay"].get("mean_delta_pct")
+        lines.append(
+            "• model: "
+            + ("ok" if rec_st.get("model_file_exists") and rec_st.get("meta_file_exists") else "partial")
+            + (f", AUC={auc}" if auc is not None else "")
+            + (f", n={nt}" if nt is not None else "")
+            + (f", H={hv}m" if hv is not None else "")
+        )
+        if tau is not None:
+            lines.append(
+                f"• scenario: τ={tau}, TIME_EXIT_EARLY={te_n}, scored={scored}, "
+                f"P<τ={pol}, delta_ok={wdd}"
+                + (f", meanΔ={mean_delta:+.3f}%" if isinstance(mean_delta, (int, float)) else "")
+            )
+        if isinstance(missing, dict) and missing:
+            # Покажем только 1–2 причины, чтобы не раздувать текст.
+            top_m = sorted(((k, int(v)) for k, v in missing.items() if isinstance(v, int)), key=lambda kv: -kv[1])[:2]
+            if top_m:
+                lines.append("• delta missing: " + ", ".join([f"{k}={v}" for k, v in top_m]))
     cb = report.get("catboost_entry_backtest") or {}
     if cb.get("mode") == "game5m_entry_context":
         cal = cb.get("calibration") or {}
