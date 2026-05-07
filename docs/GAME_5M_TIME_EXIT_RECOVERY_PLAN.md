@@ -66,7 +66,7 @@
 | [x] D1 | Скрипт **`scripts/train_game5m_recovery_catboost.py`**: читает JSONL из фазы C (`--jsonl` или `GAME_5M_RECOVERY_TRAIN_JSONL`), метка `h{H}_y_recovery` (по умолчанию H=120), пишет **`GAME_5M_RECOVERY_CATBOOST_MODEL_PATH`** (`.cbm` + `.meta.json`). Признаки: `services/game5m_recovery_catboost.py`. | Не в торговом hot path. |
 | [x] D2 | Блок отчёта **`game5m_recovery_model_status`**: файлы модели/meta, `trained_at`, AUC/n_valid, **`recovery_trust_level`**, флаг конфига **`GAME_5M_RECOVERY_ML_ENABLED`** (прод ещё не обязан быть включён). Калибровка «на сделках» — в **`recovery_scenario_backtest`**. | Прозрачность перед кроном/продом. |
 | [x] D3 | Блок **`recovery_scenario_backtest`**: сделки `TIME_EXIT_EARLY` + `exit_strategy=GAME_5M` — скор на **последнем** 5m баре удержания; если `P < GAME_5M_RECOVERY_SCENARIO_TAU`, контрфакт выхода через **`GAME_5M_RECOVERY_SCENARIO_DELAY_BARS`** баров после `exit_ts` (Close, **без комиссий**). | Подбор τ до live. |
-| [ ] D4 | **Прод в `game_5m`:** только после D3 и явного флага `GAME_5M_RECOVERY_ML_ENABLED` — тонкая вставка **после** rule-based early, не ломая `EXIT_ONLY_TAKE` / stale порядок. **В той же поставке** — телеметрия в `exit_context_json` (см. ниже), иначе ревью «улучшил ли именно ML» невозможно без смешения с рынком и правилами. Отдельный PR. | Стратегическое включение. |
+| [ ] D4 | **Прод в `game_5m`:** recovery-gate для `TIME_EXIT_EARLY` (отложить закрытие на K баров) — **только после D3** и под явным флагом. Делать в 2 шага: **log-only** → **apply**. **В той же поставке** — телеметрия в `exit_context_json`, иначе ревью «улучшил ли именно ML» невозможно. Отдельный PR. | Стратегическое включение. |
 
 CatBoost остаётся разумным дефолтом (табличка + ticker); смена на LightGBM — вопрос одного скрипта, контракт фич из фазы C не меняется.
 
@@ -93,6 +93,26 @@ CatBoost остаётся разумным дефолтом (табличка + 
    - экспорт выборки для таблицы (тот же контур, что JSONL в фазе C).
 
 **Критерий успеха процесса:** по закрытым сделкам можно ответить: «сколько раз сработал ML», «как изменились PnL и ранние выходы в этой подвыборке», «не ухудшили ли мы защиту (stale/риск)» — с опорой на сохранённые поля, а не на ощущение.
+
+### D4 — план PR (реализация recovery-gate в live)
+
+Цель D4: **не заменить** Hanger V2/правила, а добавить “тонкую пролонгацию” **только в момент `TIME_EXIT_EARLY`**, когда правила уже решили закрывать.
+
+1. **D4a (log-only, безопасно)**:
+   - Добавить параметры (пример):  
+     `GAME_5M_RECOVERY_ML_ENABLED` (общий), `GAME_5M_RECOVERY_ML_LOG_ONLY=true`,  
+     `GAME_5M_RECOVERY_LIVE_TAU_HOLD` (например 0.55–0.65), `GAME_5M_RECOVERY_LIVE_DEFER_BARS` (например 6),  
+     hard-guards: `GAME_5M_RECOVERY_HARD_STOP_LOSS_PCT`, `GAME_5M_RECOVERY_HARD_STOP_MOMENTUM_2H_PCT`, `GAME_5M_RECOVERY_DEFER_MAX_AGE_MINUTES`.
+   - В ветке `TIME_EXIT_EARLY` считать `recovery_proba` по текущим доступным фичам (аналогично D3) и логировать “что было бы”, **не меняя** закрытие.
+   - Записать телеметрию в `exit_context_json`: `recovery_ml_enabled`, `recovery_ml_log_only`, `recovery_ml_proba`, `recovery_ml_tau_hold`, `recovery_ml_defer_bars`, `recovery_ml_decision=defer|deny|skip`, `recovery_ml_deny_reason`.
+
+2. **D4b (apply, ограниченно)**:
+   - При `TIME_EXIT_EARLY`: если `recovery_proba >= TAU_HOLD` и hard-guards не сработали — **не закрывать**, а отложить `TIME_EXIT_EARLY` на K баров (defer budget).
+   - Стоп/конец сессии/прочие hard exits продолжают действовать.
+   - Защититься от бесконечного defer: бюджет + “один defer на сделку” или cooldown.
+
+3. **Пост-ревью**:
+   - После 1–2 недель: анализатором/SQL сравнить `recovery_ml_applied=true` vs нет по PnL и по метрикам `time_exit_early_review` (whipsaw/MFE/MAE), принять решение о TAU/K и оставлять ли apply.
 
 ---
 
