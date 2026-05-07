@@ -32,6 +32,17 @@ RECOVERY_CB_FEATURE_NAMES: List[str] = [
 RECOVERY_CB_CAT_FEATURE_INDICES: List[int] = [0, 11]
 
 
+def default_recovery_catboost_model_path() -> Path:
+    """
+    Если GAME_5M_RECOVERY_CATBOOST_MODEL_PATH не задан — тот же дефолт, что в train_game5m_recovery_catboost.py
+    (/app/logs/ml/models/… в контейнере, иначе repo local/models).
+    """
+    root = Path(__file__).resolve().parents[1]
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml/models/game5m_recovery_catboost.cbm")
+    return root / "local" / "models" / "game5m_recovery_catboost.cbm"
+
+
 def recovery_catboost_schema() -> Tuple[List[str], List[int]]:
     return list(RECOVERY_CB_FEATURE_NAMES), list(RECOVERY_CB_CAT_FEATURE_INDICES)
 

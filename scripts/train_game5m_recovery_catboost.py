@@ -73,6 +73,7 @@ def main() -> int:
 
     from config_loader import get_config_value
     from services.game5m_recovery_catboost import (
+        default_recovery_catboost_model_path,
         recovery_catboost_schema,
         row_vector_from_export_record,
     )
@@ -96,11 +97,7 @@ def main() -> int:
     elif cfg_out:
         out_final = cfg_out
     else:
-        out_final = (
-            "/app/logs/ml/models/game5m_recovery_catboost.cbm"
-            if Path("/app/logs").exists()
-            else str(project_root / "local" / "models" / "game5m_recovery_catboost.cbm")
-        )
+        out_final = str(default_recovery_catboost_model_path())
 
     min_rows = args.min_rows
     if min_rows is None:

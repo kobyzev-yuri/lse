@@ -307,7 +307,7 @@ def _trust_level_game5m_recovery(meta: Optional[Dict[str, Any]]) -> Dict[str, An
 
 def _build_game5m_recovery_model_status() -> Dict[str, Any]:
     try:
-        from services.game5m_recovery_catboost import load_recovery_model_meta
+        from services.game5m_recovery_catboost import default_recovery_catboost_model_path, load_recovery_model_meta
 
         prod_enabled = (get_config_value("GAME_5M_RECOVERY_ML_ENABLED", "false") or "false").strip().lower() in (
             "1",
@@ -316,9 +316,7 @@ def _build_game5m_recovery_model_status() -> Dict[str, Any]:
         )
         model_path = (get_config_value("GAME_5M_RECOVERY_CATBOOST_MODEL_PATH", "") or "").strip()
         if not model_path:
-            model_path = str(
-                Path(__file__).resolve().parents[1] / "local" / "models" / "game5m_recovery_catboost.cbm"
-            )
+            model_path = str(default_recovery_catboost_model_path())
         meta_path = str(Path(model_path).with_suffix(".meta.json"))
         meta = load_recovery_model_meta(model_path)
         trust = _trust_level_game5m_recovery(meta if isinstance(meta, dict) else None)
@@ -4129,6 +4127,7 @@ def _build_recovery_scenario_backtest(
     при P < τ контрфакт «выход на K баров позже» по Close (без комиссий).
     """
     from services.game5m_recovery_catboost import (
+        default_recovery_catboost_model_path,
         load_recovery_model_meta,
         predict_recovery_hold_proba,
         row_vector_from_hold_bar,
@@ -4148,9 +4147,7 @@ def _build_recovery_scenario_backtest(
 
     model_path = (get_config_value("GAME_5M_RECOVERY_CATBOOST_MODEL_PATH", "") or "").strip()
     if not model_path:
-        model_path = str(
-            Path(__file__).resolve().parents[1] / "local" / "models" / "game5m_recovery_catboost.cbm"
-        )
+        model_path = str(default_recovery_catboost_model_path())
     meta = load_recovery_model_meta(model_path)
     mp = Path(model_path)
 
