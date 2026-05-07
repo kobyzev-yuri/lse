@@ -4277,14 +4277,14 @@ def _build_recovery_scenario_backtest(
                 )
             else:
                 would_delay_with_delta_count += 1
-            delta = delayed_pct - actual_pct
-            deltas.append(delta)
-            if delta > 1e-6:
-                improved += 1
-            elif delta < -1e-6:
-                worse += 1
-            else:
-                equal += 1
+                delta = delayed_pct - actual_pct
+                deltas.append(delta)
+                if delta > 1e-6:
+                    improved += 1
+                elif delta < -1e-6:
+                    worse += 1
+                else:
+                    equal += 1
 
         per_trade.append(
             {
