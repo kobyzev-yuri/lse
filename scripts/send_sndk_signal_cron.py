@@ -167,7 +167,245 @@ def process_ticker(
         _game_5m_stop_loss_enabled,
         classify_game5m_position_state_v2,
         evaluate_game5m_continuation_gate,
+        CHART_DISPLAY_TZ,
+        TRADE_HISTORY_TZ,
     )
+    from services.game5m_recovery_catboost import (
+        default_recovery_catboost_model_path,
+        load_recovery_model_meta,
+        predict_recovery_hold_proba,
+        row_vector_from_hold_bar,
+    )
+
+    def _game5m_recovery_live_gate_time_exit_early(
+        *,
+        ticker: str,
+        open_position: dict,
+        entry_ctx: dict | None,
+        ref_close: float,
+        bar_time_et: str | None,
+        momentum_2h_pct: float | None,
+        exit_detail: str,
+        market_session_ctx: dict | None,
+    ) -> dict | None:
+        """
+        Phase D4a: compute Recovery ML gate for TIME_EXIT_EARLY and return a telemetry dict
+        to attach into SELL context_json. In D4a it is log-only by default.
+        """
+        try:
+            enabled = (get_config_value("GAME_5M_RECOVERY_ML_ENABLED", "false") or "false").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+        except Exception:
+            enabled = False
+        if not enabled:
+            return None
+
+        try:
+            log_only = (get_config_value("GAME_5M_RECOVERY_ML_LOG_ONLY", "true") or "true").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+        except Exception:
+            log_only = True
+
+        try:
+            tau_hold = float((get_config_value("GAME_5M_RECOVERY_LIVE_TAU_HOLD", "0.65") or "0.65").strip())
+        except (TypeError, ValueError):
+            tau_hold = 0.65
+        tau_hold = max(0.0, min(1.0, tau_hold))
+
+        try:
+            defer_bars = int((get_config_value("GAME_5M_RECOVERY_LIVE_DEFER_BARS", "6") or "6").strip())
+        except (TypeError, ValueError):
+            defer_bars = 6
+        defer_bars = max(1, min(48, defer_bars))
+
+        try:
+            hard_stop_loss_pct = float(
+                (get_config_value("GAME_5M_RECOVERY_HARD_STOP_LOSS_PCT", "-3.0") or "-3.0").strip()
+            )
+        except (TypeError, ValueError):
+            hard_stop_loss_pct = -3.0
+        try:
+            hard_stop_mom_2h_pct = float(
+                (get_config_value("GAME_5M_RECOVERY_HARD_STOP_MOMENTUM_2H_PCT", "-2.0") or "-2.0").strip()
+            )
+        except (TypeError, ValueError):
+            hard_stop_mom_2h_pct = -2.0
+
+        try:
+            max_age_min = int((get_config_value("GAME_5M_RECOVERY_DEFER_MAX_AGE_MINUTES", "780") or "780").strip())
+        except (TypeError, ValueError):
+            max_age_min = 780
+        max_age_min = max(60, min(60 * 24 * 14, max_age_min))
+
+        try:
+            near_close_min = int(
+                (get_config_value("GAME_5M_RECOVERY_DEFER_NEAR_CLOSE_MINUTES", "45") or "45").strip()
+            )
+        except (TypeError, ValueError):
+            near_close_min = 45
+        near_close_min = max(0, min(120, near_close_min))
+
+        only_detail = (get_config_value("GAME_5M_RECOVERY_ONLY_EXIT_DETAIL", "stale_reversal") or "stale_reversal").strip()
+        if only_detail and (exit_detail or "") != only_detail:
+            return {
+                "enabled": True,
+                "log_only": log_only,
+                "status": "skipped",
+                "skip_reason": f"exit_detail_not_allowed:{exit_detail or ''}",
+                "exit_detail": exit_detail or "",
+                "tau_hold": tau_hold,
+                "defer_bars": defer_bars,
+            }
+
+        if not isinstance(entry_ctx, dict):
+            return {
+                "enabled": True,
+                "log_only": log_only,
+                "status": "skipped",
+                "skip_reason": "missing_entry_ctx",
+                "exit_detail": exit_detail or "",
+                "tau_hold": tau_hold,
+                "defer_bars": defer_bars,
+            }
+
+        entry = open_position.get("entry_price")
+        entry_price = float(entry) if isinstance(entry, (int, float)) and entry > 0 else None
+        if not entry_price:
+            return {
+                "enabled": True,
+                "log_only": log_only,
+                "status": "skipped",
+                "skip_reason": "missing_entry_price",
+                "exit_detail": exit_detail or "",
+                "tau_hold": tau_hold,
+                "defer_bars": defer_bars,
+            }
+
+        try:
+            import pandas as pd
+
+            entry_ts = open_position.get("entry_ts")
+            et = pd.Timestamp(entry_ts)
+            if et.tzinfo is None:
+                et = et.tz_localize(TRADE_HISTORY_TZ, ambiguous=True).tz_convert(CHART_DISPLAY_TZ)
+            else:
+                et = et.tz_convert(CHART_DISPLAY_TZ)
+
+            bt = pd.Timestamp(bar_time_et) if bar_time_et else pd.Timestamp.now(tz=CHART_DISPLAY_TZ)
+            if bt.tzinfo is None:
+                bt = bt.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+            else:
+                bt = bt.tz_convert(CHART_DISPLAY_TZ)
+        except Exception:
+            return {
+                "enabled": True,
+                "log_only": log_only,
+                "status": "skipped",
+                "skip_reason": "timestamp_parse_error",
+                "exit_detail": exit_detail or "",
+                "tau_hold": tau_hold,
+                "defer_bars": defer_bars,
+            }
+
+        age_min = float((bt - et) / pd.Timedelta(minutes=1))
+        try:
+            pnl_pct = (float(ref_close) / float(entry_price) - 1.0) * 100.0
+        except Exception:
+            pnl_pct = None
+        try:
+            mom = None if momentum_2h_pct is None else float(momentum_2h_pct)
+        except Exception:
+            mom = None
+
+        mins_left = None
+        if isinstance(market_session_ctx, dict):
+            mins_left = market_session_ctx.get("minutes_until_close")
+
+        deny_reasons: list[str] = []
+        if pnl_pct is not None and pnl_pct <= hard_stop_loss_pct:
+            deny_reasons.append("hard_stop_loss")
+        if mom is not None and mom <= hard_stop_mom_2h_pct:
+            deny_reasons.append("hard_stop_momentum_2h")
+        if age_min >= float(max_age_min):
+            deny_reasons.append("too_old")
+        if mins_left is not None and near_close_min > 0:
+            try:
+                if float(mins_left) <= float(near_close_min):
+                    deny_reasons.append("near_close")
+            except Exception:
+                pass
+
+        model_path = (get_config_value("GAME_5M_RECOVERY_CATBOOST_MODEL_PATH", "") or "").strip()
+        if not model_path:
+            model_path = str(default_recovery_catboost_model_path())
+        meta = load_recovery_model_meta(model_path) or {}
+
+        row = row_vector_from_hold_bar(
+            ticker=ticker,
+            entry_price=float(entry_price),
+            entry_ts_et=et,
+            bar_time_et=bt,
+            ref_close=float(ref_close),
+            entry_rsi_5m=entry_ctx.get("rsi_5m"),
+            entry_vol_5m_pct=entry_ctx.get("volatility_5m_pct") or entry_ctx.get("entry_volatility_5m_pct"),
+            entry_momentum_2h_pct=entry_ctx.get("momentum_2h_pct"),
+            entry_decision=entry_ctx.get("decision") or entry_ctx.get("technical_decision_effective"),
+        )
+        if row is None:
+            return {
+                "enabled": True,
+                "log_only": log_only,
+                "status": "skipped",
+                "skip_reason": "row_build_failed",
+                "exit_detail": exit_detail or "",
+                "tau_hold": tau_hold,
+                "defer_bars": defer_bars,
+                "model_path": model_path,
+            }
+
+        pr = predict_recovery_hold_proba(model_path, row, meta=meta if meta else None)
+        proba = pr.get("recovery_proba") if isinstance(pr, dict) else None
+        would_defer_by_model = (proba is not None) and float(proba) >= float(tau_hold)
+        would_defer = bool(would_defer_by_model) and not deny_reasons
+
+        return {
+            "enabled": True,
+            "log_only": log_only,
+            "status": pr.get("status") if isinstance(pr, dict) else "error",
+            "exit_detail": exit_detail or "",
+            "recovery_proba": None if proba is None else round(float(proba), 4),
+            "tau_hold": tau_hold,
+            "defer_bars": defer_bars,
+            "would_defer_exit": bool(would_defer),
+            "would_defer_by_model": bool(would_defer_by_model),
+            "deny_reasons": deny_reasons,
+            "guards": {
+                "pnl_pct": None if pnl_pct is None else round(float(pnl_pct), 4),
+                "hard_stop_loss_pct": float(hard_stop_loss_pct),
+                "momentum_2h_pct": None if mom is None else round(float(mom), 4),
+                "hard_stop_momentum_2h_pct": float(hard_stop_mom_2h_pct),
+                "age_minutes": round(float(age_min), 2),
+                "max_age_minutes": int(max_age_min),
+                "minutes_until_close": mins_left,
+                "near_close_minutes": int(near_close_min),
+            },
+            "model_path": model_path,
+            "meta_summary": {
+                "trained_at": meta.get("trained_at"),
+                "auc_valid": meta.get("auc_valid"),
+                "n_total": meta.get("n_total"),
+                "label_column": meta.get("label_column"),
+                "horizon_minutes": meta.get("horizon_minutes"),
+            }
+            if isinstance(meta, dict) and meta
+            else None,
+        }
 
     d5 = d5_precomputed
     if d5 is None:
@@ -413,6 +651,30 @@ def process_ticker(
                     close_ctx_enriched["position_state_v2"] = position_state_v2
                 if continuation_gate is not None:
                     close_ctx_enriched["continuation_gate"] = continuation_gate
+                if exit_type == "TIME_EXIT_EARLY":
+                    rec_gate = _game5m_recovery_live_gate_time_exit_early(
+                        ticker=ticker,
+                        open_position=open_pos,
+                        entry_ctx=entry_ctx_db,
+                        ref_close=float(price_for_check),
+                        bar_time_et=close_ctx.get("exit_5m_bar_open_et") or close_ctx.get("decision_5m_bar_open_et"),
+                        momentum_2h_pct=momentum_2h_pct,
+                        exit_detail=exit_detail or "",
+                        market_session_ctx=ms,
+                    )
+                    if rec_gate is not None:
+                        close_ctx_enriched["recovery_ml_time_exit_early"] = rec_gate
+                        logger.info(
+                            "[5m] RECOVERY_ML_GATE %s: enabled=%s log_only=%s status=%s P=%s tau=%s would_defer=%s deny=%s",
+                            ticker,
+                            rec_gate.get("enabled"),
+                            rec_gate.get("log_only"),
+                            rec_gate.get("status"),
+                            rec_gate.get("recovery_proba"),
+                            rec_gate.get("tau_hold"),
+                            rec_gate.get("would_defer_exit"),
+                            ",".join(rec_gate.get("deny_reasons") or []),
+                        )
                 close_narrative_ctx = close_ctx_enriched
                 close_position(
                     ticker, exit_price, exit_type, position=open_pos,
