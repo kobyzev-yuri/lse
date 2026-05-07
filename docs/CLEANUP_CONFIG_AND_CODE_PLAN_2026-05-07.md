@@ -62,9 +62,25 @@ docker exec -i lse-bot python3 /app/scripts/audit_config_unused_keys.py \
 
 ### 5. Критерий «готово»
 
-- [ ] `config.env.example` покрывает все **намеренно поддерживаемые** ключи, которые читает код по `GAME_5M_*` (и выбранные другие префиксы по очереди).
+- [x] **Локально (2026-05-07):** `code_to_example` → **Missing from example: 0** (парсер `config.env.example` учитывает `KEY=` внутри поясняющих комментариев; добавлены недостающие закомментированные ключи). Артефакты: `docs/audit_code_to_example_2026-05-07.txt`, `docs/audit_config_to_code_example_2026-05-07.txt`.
+- [ ] После выравнивания с **боевым** `config.env` на VM — повторить аудит и убрать мусор из прода по списку `config_to_code`.
 - [ ] В прод‑`config.env` нет очевидного мусора из списка `config_to_code` (или он явно помечен как внешний/infra).
 - [ ] Удалённые ветки кода не оставляют «висячих» импортов; CI/локальный `py_compile` зелёный.
+
+### 6. Разбиение коммитов: подсистема «удержание / ранний TIME_EXIT» vs чистка конфига
+
+Две линии работ **не смешивать в одном коммите**, чтобы откат и ревью были простыми.
+
+| Коммит / PR | Содержимое | Риск | Когда |
+|-------------|------------|------|--------|
+| **A. Recovery / аналитика TIME_EXIT (офлайн)** | `services/game5m_recovery_catboost.py`, `scripts/train_game5m_recovery_catboost.py`, блоки в `services/trade_effectiveness_analyzer.py` (`game5m_hold_recovery_*`, `game5m_recovery_model_status`, `recovery_scenario_backtest`), `web_app.py` (`export_recovery_ml`), ключи recovery в `config.env.example`, `docs/GAME_5M_TIME_EXIT_RECOVERY_PLAN.md`, при необходимости краткая отсылка в `docs/ML_GAME5M_CATBOOST.md`. **Без D4** — без изменения live `should_close_position` в `game_5m.py`. | Низкий для торговли (только отчёт/API/обучение) | Можно влить до или параллельно чистке, отдельным merge |
+| **B. Аудит конфига и example** | Выводы `audit_config_unused_keys.py`, правки **только** `config.env.example` и документации к ключам; артефакты `docs/audit_*.txt` при необходимости. | Низкий | После прогона аудита против репо и (завтра) против прод‑`config.env` |
+| **C. Зачистка кода по приоритетам P0–P2** | Удаление/упрощение веток, не трогая `game_5m`/`recommend_5m` до P3. | Средний | Маленькими коммитами по одному префиксу/файлу |
+| **D. P3 торговый hot path** | `services/game_5m.py`, `recommend_5m.py` — только с реплеем и отдельным ревью. | Высокий | Отдельный PR после смоука |
+
+**Прод‑`config.env` на VM** править отдельно от коммитов A–C (бэкап, точечные удаления ключей по списку аудита), затем деплой по `scripts/deploy_from_github.sh`.
+
+**Пост‑ревью эффекта recovery в проде** (после будущего D4): телеметрия в `exit_context_json` и срезы через анализатор — см. раздел «Контроль эффекта после включения» в `docs/GAME_5M_TIME_EXIT_RECOVERY_PLAN.md`.
 
 ## Откат
 

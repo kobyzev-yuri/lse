@@ -640,6 +640,7 @@ async def get_analyzer(
     strategy: str = "GAME_5M",
     use_llm: bool = False,
     include_trade_details: bool = False,
+    export_recovery_ml: bool = False,
 ):
     """API: анализ эффективности закрытых сделок (единый код с /analyser в Telegram)."""
     try:
@@ -649,6 +650,7 @@ async def get_analyzer(
             strategy=(strategy or "GAME_5M").strip().upper(),
             use_llm=bool(use_llm),
             include_trade_details=bool(include_trade_details),
+            export_recovery_ml=bool(export_recovery_ml),
         )
         return _to_jsonable(payload)
     except Exception as e:
@@ -678,6 +680,7 @@ async def get_analyzer_focused(
     strategy: str = "GAME_5M",
     use_llm: bool = False,
     include_trade_details: bool = False,
+    export_recovery_ml: bool = False,
     tickers: str = "",
     trade_ids: str = "",
 ):
@@ -694,6 +697,7 @@ async def get_analyzer_focused(
             trade_ids=id_list if id_list else None,
             use_llm=bool(use_llm),
             include_trade_details=bool(include_trade_details),
+            export_recovery_ml=bool(export_recovery_ml),
         )
         return _to_jsonable(payload)
     except Exception as e:

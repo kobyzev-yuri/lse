@@ -1,0 +1,5 @@
+[config_to_code] Config: /media/heep/home/cnn/lse/config.env.example
+Scanned files: 393
+Keys total: 96
+Used (string-hit): 96
+No-hits candidates: 0

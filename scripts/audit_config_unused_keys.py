@@ -10,6 +10,8 @@ The goal is to help remove abandoned config keys AND eventually delete dead code
 Notes:
 - This is static and conservative. "No hits" is a strong signal; "hit" does not guarantee runtime use.
 - Some keys may be used externally (docker-compose, cron, infra); keep that in mind before deletion.
+- For `code_to_example`, commented lines in `config.env.example` are scanned for assignments `KEY=` anywhere in the
+  comment body (e.g. `# Dashboard: TELEGRAM_DASHBOARD_CHAT_ID=`), including empty values (`# NEWSAPI_KEY=`).
 """
 
 from __future__ import annotations
@@ -21,9 +23,18 @@ from typing import Dict, Iterable, List, Set, Tuple
 
 
 def _iter_config_keys(path: Path, *, include_commented: bool = False) -> list[str]:
+    """
+    Для config.env (include_commented=False): только незакомментированные строки KEY=value
+    (первый токен до '=' — ключ).
+
+    Для config.env.example (include_commented=True): плюс строки-комментарии, где ключ не в начале,
+    например «# Dashboard: TELEGRAM_DASHBOARD_CHAT_ID=» — ищем все присваивания вида KEY=значение.
+    """
     keys: list[str] = []
     if not path.is_file():
         return keys
+    # Допускаем пустое значение: "# NEWSAPI_KEY=" или "KEY=value"
+    assign_anywhere = re.compile(r"(?<![A-Z0-9_])([A-Z][A-Z0-9_]{2,})\s*=")
     for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         line = raw.strip()
         if not line:
@@ -31,10 +42,12 @@ def _iter_config_keys(path: Path, *, include_commented: bool = False) -> list[st
         if line.startswith("#"):
             if not include_commented:
                 continue
-            # Allow commented example lines like: "# FOO=bar" or "#FOO=bar"
-            line = line.lstrip("#").strip()
-            if not line:
+            body = line.lstrip("#").strip()
+            if not body:
                 continue
+            for m in assign_anywhere.finditer(body):
+                keys.append(m.group(1))
+            continue
         if "=" not in line:
             continue
         k = line.split("=", 1)[0].strip()

@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -20,6 +20,54 @@ from config_loader import get_config_value, load_config, is_editable_config_env_
 # Дольше — считаем позицию «подвисшей» для пристрастного разбора порогов входа vs выхода.
 LONG_HOLD_MINUTES = 7 * 24 * 60
 ENTRY_REASONING_ANALYZER_MAX = 420
+# Фаза B: пороги выборки для TIME_EXIT_EARLY (анализатор).
+TIME_EXIT_EARLY_MIN_ROWS_ML = 15
+TIME_EXIT_EARLY_MIN_ROWS_SOFT_CAP = 5
+TIME_EXIT_EARLY_MIN_ROWS_HARD_CAP = 2
+
+# Фаза C: псевдо-датасет recovery (удержание GAME_5M → метки по будущим 5m барам; фичи только до t).
+RECOVERY_ML_SCHEMA_VERSION = "1"
+RECOVERY_ML_DEFAULT_HORIZONS_MINUTES = (120, 390)
+RECOVERY_ML_DEFAULT_EPS_UP_PCT = 0.5
+RECOVERY_ML_DEFAULT_MAX_ADVERSE_PCT = -3.0
+RECOVERY_ML_MAX_ROWS_PER_TRADE = 48
+RECOVERY_ML_MAX_TOTAL_ROWS = 80_000
+RECOVERY_ML_ROW_STRIDE_DEFAULT = 1
+
+# Документация контракта строки (train_game5m_recovery_catboost.py и др.).
+RECOVERY_ML_SCHEMA: Dict[str, Any] = {
+    "version": RECOVERY_ML_SCHEMA_VERSION,
+    "description": (
+        "Одна строка = момент t внутри удержания long GAME_5M (5m бар, close эталонная цена). "
+        "Фичи известны на закрытии бара t; метки считаются по OHLC строго после t до t+H минут (wall-clock ET), "
+        "по полному ряду 5m (включая время после фактического exit сделки — контрфакт «если бы подождали H минут с рынка»)."
+    ),
+    "horizons_minutes": list(RECOVERY_ML_DEFAULT_HORIZONS_MINUTES),
+    "label_eps_up_pct": RECOVERY_ML_DEFAULT_EPS_UP_PCT,
+    "label_max_adverse_pct": RECOVERY_ML_DEFAULT_MAX_ADVERSE_PCT,
+    "feature_columns": [
+        "trade_id (int)",
+        "ticker (str)",
+        "bar_ts_et (ISO)",
+        "ref_close (float, цена на t)",
+        "entry_price (float)",
+        "pnl_pct (float, ref_close vs entry)",
+        "hold_minutes (float)",
+        "minutes_after_rth_open (float|None)",
+        "dow (int 0=Mon)",
+        "hour_et (int)",
+        "entry_rsi_5m (float|None)",
+        "entry_vol_5m_pct (float|None)",
+        "entry_momentum_2h_pct (float|None)",
+        "entry_decision (str, усечённый)",
+        "exit_signal (str, факт сделки — известен постфактум; можно выкинуть при обучении если утечка)",
+    ],
+    "label_columns_per_horizon": [
+        "h{H}_mfe_fwd_pct — max High в (t, t+H] vs ref_close, %",
+        "h{H}_mae_fwd_pct — min Low в том же окне vs ref_close, %",
+        "h{H}_y_recovery — 1 если mfe_fwd >= eps_up и mae_fwd >= max_adverse (отриц. порог просадки от ref)",
+    ],
+}
 
 # Пояснения для UI/LLM (исторически «late_polling» вводит в заблуждение — это не опрос Telegram/cron).
 ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
@@ -94,7 +142,29 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
     "time_exit_early_review": (
         "Контрфакт для TIME_EXIT_EARLY: что было бы с ценой после фактического выхода. "
         "Считаем post-exit MFE/MAE по 5m OHLC на горизонте 1 часа (и опционально до конца дня) относительно цены выхода, "
-        "плюс время до break-even. Помогает отличить «вышли слишком рано» от «вышли правильно — дальше падало»."
+        "плюс отскок относительно цены входа (recovery к безубытку), минуты после открытия RTH (ET) и время до break-even по exit. "
+        "config_candidates.proposals — числовые уровни GAME_5M_* (stale_reversal / early_derisk), когда отскоки после выхода систематичны; "
+        "дублируются в practical_parameter_suggestions для auto_config_override."
+    ),
+    "time_exit_early_action_summary": (
+        "Сводка для оператора: сколько TIME_EXIT_EARLY по exit_detail, доля whipsaw за 1h после выхода, "
+        "есть ли предложения с уверенностью high/medium, приоритет ветки stale_reversal vs early_derisk, "
+        "insufficient_data_for_ml при малых n. См. time_exit_early_review для деталей."
+    ),
+    "game5m_hold_recovery_dataset_stats": (
+        "Фаза C: псевдо-строки по окнам удержания GAME_5M из trade_effects + 5m OHLC. "
+        "Статистика объёма/баланса меток h{H}_y_recovery для горизонтов H (по умолчанию 120 и 390 мин). "
+        "Экспорт JSONL — при export_recovery_ml=true (вызов анализатора или ?export_recovery_ml=1 в API); "
+        "опционально фиксированный путь — ANALYZER_RECOVERY_ML_EXPORT_PATH, иначе LOG_DIR + timestamp. "
+        "Контракт колонок: см. RECOVERY_ML_SCHEMA в trade_effectiveness_analyzer."
+    ),
+    "game5m_recovery_model_status": (
+        "Фаза D2: CatBoost recovery (удержание): путь GAME_5M_RECOVERY_CATBOOST_MODEL_PATH, meta.json (AUC, n_train, горизонт метки), "
+        "флаг GAME_5M_RECOVERY_ML_ENABLED (прод-использование в game_5m — отдельно). Обучение: scripts/train_game5m_recovery_catboost.py."
+    ),
+    "recovery_scenario_backtest": (
+        "Фаза D3: для сделок TIME_EXIT_EARLY (GAME_5M) — скор recovery на последнем баре удержания; если P < τ, "
+        "считаем упрощённый контрфакт «выход на K 5m-баров позже» по Close (без комиссий). Пороги τ и K — GAME_5M_RECOVERY_SCENARIO_*."
     ),
     "realized_pct": (
         "Результат сделки в % от cost basis из net_pnl (как в отчёте); для рядов также считается realized_log_return = log(1+p/100)."
@@ -197,6 +267,84 @@ def _trust_level_game5m_catboost(meta: Optional[Dict[str, Any]], last: Optional[
     if auc_f < 0.65:
         return {"trust_level": "medium", "trust_reason": f"AUC={auc_f:.3f} при n_valid={nv}; допустим осторожный guard, без агрессивных правил."}
     return {"trust_level": "high", "trust_reason": f"AUC={auc_f:.3f} при n_valid={nv}; можно обсуждать расширение влияния после walk-forward."}
+
+
+def _trust_level_game5m_recovery(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(meta, dict):
+        return {"recovery_trust_level": "unknown", "recovery_trust_reason": "Нет meta.json recovery-модели."}
+    auc = meta.get("auc_valid")
+    nv = meta.get("n_valid")
+    try:
+        auc_f = float(auc) if auc is not None else None
+    except (TypeError, ValueError):
+        auc_f = None
+    try:
+        nv_i = int(nv) if nv is not None else None
+    except (TypeError, ValueError):
+        nv_i = None
+    if auc_f is None or nv_i is None:
+        return {"recovery_trust_level": "unknown", "recovery_trust_reason": "В meta нет auc_valid/n_valid."}
+    if nv_i < 200:
+        return {
+            "recovery_trust_level": "low",
+            "recovery_trust_reason": f"Мало валидационных строк (n_valid={nv_i}); сценарный бэктест только ориентир.",
+        }
+    if auc_f < 0.55:
+        return {
+            "recovery_trust_level": "low",
+            "recovery_trust_reason": f"AUC={auc_f:.3f} < 0.55; слабая модель для решений о задержке выхода.",
+        }
+    if auc_f < 0.62:
+        return {
+            "recovery_trust_level": "medium",
+            "recovery_trust_reason": f"AUC={auc_f:.3f}; осторожная калибровка порога τ.",
+        }
+    return {
+        "recovery_trust_level": "high",
+        "recovery_trust_reason": f"AUC={auc_f:.3f} при n_valid={nv_i}; можно подбирать τ по recovery_scenario_backtest.",
+    }
+
+
+def _build_game5m_recovery_model_status() -> Dict[str, Any]:
+    try:
+        from services.game5m_recovery_catboost import load_recovery_model_meta
+
+        prod_enabled = (get_config_value("GAME_5M_RECOVERY_ML_ENABLED", "false") or "false").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        model_path = (get_config_value("GAME_5M_RECOVERY_CATBOOST_MODEL_PATH", "") or "").strip()
+        if not model_path:
+            model_path = str(
+                Path(__file__).resolve().parents[1] / "local" / "models" / "game5m_recovery_catboost.cbm"
+            )
+        meta_path = str(Path(model_path).with_suffix(".meta.json"))
+        meta = load_recovery_model_meta(model_path)
+        trust = _trust_level_game5m_recovery(meta if isinstance(meta, dict) else None)
+        return {
+            "prod_enabled_config": bool(prod_enabled),
+            "model_path": model_path,
+            "meta_path": meta_path,
+            "model_file_exists": Path(model_path).is_file(),
+            "meta_file_exists": Path(meta_path).is_file(),
+            "meta_summary": {
+                "trained_at": (meta or {}).get("trained_at"),
+                "n_train": (meta or {}).get("n_train"),
+                "n_valid": (meta or {}).get("n_valid"),
+                "n_total": (meta or {}).get("n_total"),
+                "label_column": (meta or {}).get("label_column"),
+                "horizon_minutes": (meta or {}).get("horizon_minutes"),
+                "auc_valid": (meta or {}).get("auc_valid"),
+                "jsonl_source": (meta or {}).get("jsonl_source"),
+            }
+            if isinstance(meta, dict)
+            else None,
+            **trust,
+            "note": "Прод-логика в game_5m только с GAME_5M_RECOVERY_ML_ENABLED и отдельным ревью (фаза D4).",
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def _build_game5m_catboost_status() -> Dict[str, Any]:
@@ -667,15 +815,243 @@ def _slice_window(df: Optional[pd.DataFrame], start_et: pd.Timestamp, end_et: pd
     return w
 
 
+def _minutes_after_rth_open_et(ts_et: pd.Timestamp) -> Optional[float]:
+    """Минуты после 09:30 ET в тот же календарный день (для контекста открытия сессии)."""
+    try:
+        day = ts_et.normalize()
+        open_et = day + pd.Timedelta(hours=9, minutes=30)
+        return float((ts_et - open_et) / pd.Timedelta(minutes=1))
+    except Exception:
+        return None
+
+
+def _dedupe_time_exit_proposals(proposals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_k: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for p in proposals:
+        if not isinstance(p, dict):
+            continue
+        k = str(p.get("env_key") or "").strip()
+        if not k:
+            continue
+        if k not in by_k:
+            order.append(k)
+        by_k[k] = p
+    return [by_k[k] for k in order]
+
+
+TIME_EXIT_EARLY_ENV_TO_PRACTICAL_PARAMETER: Dict[str, str] = {
+    "GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES": "stale_reversal_min_age_minutes",
+    "GAME_5M_STALE_REVERSAL_MAX_PNL_PCT": "stale_reversal_max_pnl_pct",
+    "GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW": "stale_reversal_momentum_below",
+    "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES": "early_derisk_min_age_minutes",
+    "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT": "early_derisk_max_loss_pct",
+    "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW": "early_derisk_momentum_below",
+    "GAME_5M_EXIT_GUARD_FIRST_MINUTES": "exit_guard_first_minutes",
+}
+
+
+def _practical_suggestions_from_time_exit_early_review(review: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Переводит config_candidates.proposals в формат practical_parameter_suggestions (auto_config_override)."""
+    out: List[Dict[str, Any]] = []
+    cc = review.get("config_candidates") if isinstance(review, dict) else None
+    if not isinstance(cc, dict):
+        return out
+    for p in cc.get("proposals") or []:
+        if not isinstance(p, dict):
+            continue
+        env_key = str(p.get("env_key") or "").strip()
+        if not env_key:
+            continue
+        param = TIME_EXIT_EARLY_ENV_TO_PRACTICAL_PARAMETER.get(env_key)
+        if not param:
+            param = env_key if env_key.startswith("GAME_5M_") else env_key
+        conf = str(p.get("sample_confidence") or "")
+        reason = str(p.get("reason") or "")
+        if conf == "low":
+            reason = f"{reason} [уверенность: низкая — мало сделок]"
+        elif conf == "medium_low":
+            reason = f"{reason} [уверенность: ниже средней]"
+        out.append(
+            {
+                "parameter": param,
+                "current": p.get("current"),
+                "proposed": p.get("proposed"),
+                "why": reason,
+                "expected_effect": (
+                    "Смягчить преждевременный TIME_EXIT_EARLY при типичном отскоке после выхода (post-exit MFE / recovery к входу)."
+                ),
+            }
+        )
+    return out
+
+
+def _config_hints_from_time_exit_early_review(review: Dict[str, Any]) -> List[Dict[str, Any]]:
+    hints: List[Dict[str, Any]] = []
+    cc = review.get("config_candidates") if isinstance(review, dict) else None
+    if not isinstance(cc, dict):
+        return hints
+    for p in cc.get("proposals") or []:
+        if not isinstance(p, dict):
+            continue
+        env_key = str(p.get("env_key") or "").strip()
+        if not env_key:
+            continue
+        hints.append(
+            {
+                "env_key": env_key,
+                "direction": "time_exit_early_counterfactual",
+                "evidence": str(p.get("reason") or "")[:420],
+                "rationale": (
+                    "Порог предложен по time_exit_early_review (5m OHLC после exit). Проверьте sample_confidence и by_exit_detail."
+                ),
+            }
+        )
+    return hints
+
+
+def _time_exit_proposal_confidence_rank(sample_confidence: Optional[str]) -> int:
+    c = str(sample_confidence or "").strip().lower()
+    return {"high": 4, "medium": 3, "medium_low": 2, "low": 1}.get(c, 0)
+
+
+def _cap_time_exit_early_proposals_by_rank(
+    proposals: List[Dict[str, Any]],
+    *,
+    max_n: int,
+) -> List[Dict[str, Any]]:
+    valid = [p for p in proposals if isinstance(p, dict)]
+    if len(valid) <= max_n:
+        return valid
+    valid.sort(
+        key=lambda p: _time_exit_proposal_confidence_rank(str(p.get("sample_confidence"))),
+        reverse=True,
+    )
+    return valid[:max_n]
+
+
+def _build_time_exit_early_action_summary(te_review: Dict[str, Any]) -> Dict[str, Any]:
+    """Фаза B1/B3: одна сводка для оператора по TIME_EXIT_EARLY (без внешних таблиц)."""
+    if not isinstance(te_review, dict):
+        return {"enabled": False}
+    out: Dict[str, Any] = {"enabled": bool(te_review.get("enabled", True))}
+    count = int(te_review.get("count") or 0)
+    rows_ohlc = int(te_review.get("rows_with_ohlc") or 0)
+    whipsaw_total = int(te_review.get("premature_whipsaw_1h_count") or 0)
+    whipsaw_rate = round(float(whipsaw_total) / float(rows_ohlc), 4) if rows_ohlc > 0 else None
+
+    exit_detail_counts: Dict[str, int] = {}
+    by_d = te_review.get("by_exit_detail") or {}
+    if isinstance(by_d, dict):
+        for k, v in by_d.items():
+            if isinstance(v, dict):
+                exit_detail_counts[str(k)] = int(v.get("count") or 0)
+
+    top_candidates = te_review.get("top_early_exit_candidates_1h") or []
+    top_tickers: List[Dict[str, Any]] = []
+    seen_t = set()
+    for r in top_candidates[:10]:
+        if not isinstance(r, dict):
+            continue
+        t = str(r.get("ticker") or "").strip().upper()
+        if not t or t in seen_t:
+            continue
+        seen_t.add(t)
+        top_tickers.append(
+            {
+                "ticker": t,
+                "trade_id": r.get("trade_id"),
+                "post_exit_mfe_pct_1h": r.get("post_exit_mfe_pct_1h"),
+                "exit_detail": r.get("exit_detail"),
+            }
+        )
+
+    proposals = (te_review.get("config_candidates") or {}).get("proposals") or []
+    actionable = [
+        p
+        for p in proposals
+        if isinstance(p, dict) and str(p.get("sample_confidence") or "") in ("high", "medium")
+    ]
+    has_actionable = len(actionable) > 0
+
+    sr = int(exit_detail_counts.get("stale_reversal", 0))
+    ed = int(exit_detail_counts.get("early_derisk", 0))
+    known = sr + ed
+    total_detail = sum(exit_detail_counts.values())
+    unknown = max(0, total_detail - known)
+    dominant: Optional[str] = None
+    tune_hint: Optional[str] = None
+    if known > 0 and unknown <= max(1, int(0.35 * max(known, 1))):
+        if sr >= ed * 1.5 and sr > 0:
+            dominant = "stale_reversal"
+            tune_hint = (
+                "Приоритет правок: ветка stale_reversal (GAME_5M_STALE_REVERSAL_*) — доля среди известных exit_detail выше."
+            )
+        elif ed >= sr * 1.5 and ed > 0:
+            dominant = "early_derisk"
+            tune_hint = (
+                "Приоритет правок: ветка early_derisk (GAME_5M_EARLY_DERISK_*) — доля среди известных exit_detail выше."
+            )
+        elif sr > 0 and ed > 0:
+            dominant = "mixed"
+            tune_hint = "Обе ветки заметны — согласованно пересмотреть STALE_REVERSAL_* и EARLY_DERISK_*."
+        elif sr > 0:
+            dominant = "stale_reversal"
+            tune_hint = "Только stale_reversal в выборке — крутить `GAME_5M_STALE_REVERSAL_*`."
+        elif ed > 0:
+            dominant = "early_derisk"
+            tune_hint = "Только early_derisk в выборке — крутить `GAME_5M_EARLY_DERISK_*`."
+
+    focused_rows = te_review.get("focused_trade_rows")
+    focused_n = len(focused_rows) if isinstance(focused_rows, list) else 0
+
+    out.update(
+        {
+            "time_exit_early_trades_total": count,
+            "rows_with_ohlc": rows_ohlc,
+            "exit_detail_counts": exit_detail_counts,
+            "premature_whipsaw_1h_count": whipsaw_total,
+            "premature_whipsaw_rate_given_ohlc": whipsaw_rate,
+            "top_rebound_candidates": top_tickers[:5],
+            "has_actionable_proposals_high_or_medium": has_actionable,
+            "actionable_proposals_count": len(actionable),
+            "dominant_exit_detail": dominant,
+            "tune_priority_hint": tune_hint,
+            "insufficient_data_for_ml": bool(te_review.get("insufficient_data_for_ml")),
+            "proposals_capped_small_sample": bool(te_review.get("proposals_capped_small_sample")),
+            "ready_for_parameter_review": bool(
+                rows_ohlc >= 3 and (has_actionable or whipsaw_total >= 2)
+            ),
+            "focused_trade_rows_matched": focused_n,
+        }
+    )
+    return out
+
+
 def _build_time_exit_early_review(
     effects: List[TradeEffect],
     ohlc_cache: Dict[str, Optional[pd.DataFrame]],
     *,
     limit: int = 12,
+    focused_trade_ids: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     exits = [e for e in effects if str(e.exit_signal or "").upper() == "TIME_EXIT_EARLY"]
     if not exits:
-        return {"enabled": True, "count": 0}
+        return {
+            "enabled": True,
+            "count": 0,
+            "rows_with_ohlc": 0,
+            "premature_whipsaw_1h_count": 0,
+            "insufficient_data_for_ml": True,
+            "proposals_capped_small_sample": False,
+            "by_exit_detail": {},
+            "config_candidates": {
+                "stale_reversal_enabled": False,
+                "early_derisk_enabled": False,
+                "proposals": [],
+            },
+            "note": "Нет сделок TIME_EXIT_EARLY в выборке.",
+        }
 
     rows: List[Dict[str, Any]] = []
     for e in exits:
@@ -683,6 +1059,7 @@ def _build_time_exit_early_review(
         if df is None or df.empty:
             continue
         exit_px = float(e.exit_price or 0.0)
+        entry_px = float(e.entry_price or 0.0)
         if exit_px <= 0:
             continue
         t0_raw = pd.Timestamp(e.exit_ts)
@@ -705,6 +1082,7 @@ def _build_time_exit_early_review(
         t1 = t0 + pd.Timedelta(hours=1)
         w1h = _slice_window(df, t0, t1)
         post_mfe_1h = post_mae_1h = None
+        post_recovery_entry_pct_1h = None
         minutes_to_breakeven = None
         if w1h is not None and not w1h.empty:
             try:
@@ -712,6 +1090,8 @@ def _build_time_exit_early_review(
                 low1 = float(w1h["Low"].min())
                 post_mfe_1h = (high1 / exit_px - 1.0) * 100.0
                 post_mae_1h = (low1 / exit_px - 1.0) * 100.0
+                if entry_px > 0:
+                    post_recovery_entry_pct_1h = (high1 / entry_px - 1.0) * 100.0
                 # break-even: first bar where High >= exit_px
                 hits = w1h.loc[w1h["High"] >= exit_px]
                 if hits is not None and not hits.empty:
@@ -738,6 +1118,11 @@ def _build_time_exit_early_review(
         except Exception:
             post_mfe_eod = post_mae_eod = None
 
+        minutes_after_rth_open = _minutes_after_rth_open_et(t0)
+        likely_premature_1h = False
+        if post_mfe_1h is not None and post_mae_1h is not None:
+            likely_premature_1h = float(post_mfe_1h) >= 1.2 and float(post_mae_1h) > -2.0
+
         rows.append(
             {
                 "trade_id": e.trade_id,
@@ -745,11 +1130,19 @@ def _build_time_exit_early_review(
                 "exit_ts": e.exit_ts.isoformat(),
                 "exit_detail": e.exit_detail,
                 "realized_pct": round(float(e.realized_pct), 3),
+                "entry_price": round(entry_px, 4) if entry_px > 0 else None,
                 "exit_price": round(exit_px, 4),
+                "minutes_after_rth_open_et": None
+                if minutes_after_rth_open is None
+                else round(float(minutes_after_rth_open), 1),
                 "post_exit_start_bar_et": str(t0),
                 "post_exit_start_shift_min": None if start_shift_min is None else round(float(start_shift_min), 1),
                 "post_exit_mfe_pct_1h": None if post_mfe_1h is None else round(float(post_mfe_1h), 3),
                 "post_exit_mae_pct_1h": None if post_mae_1h is None else round(float(post_mae_1h), 3),
+                "post_exit_recovery_entry_pct_1h": None
+                if post_recovery_entry_pct_1h is None
+                else round(float(post_recovery_entry_pct_1h), 3),
+                "likely_premature_whipsaw_1h": bool(likely_premature_1h),
                 "minutes_to_break_even_1h": None if minutes_to_breakeven is None else round(float(minutes_to_breakeven), 1),
                 "post_exit_mfe_pct_eod": None if post_mfe_eod is None else round(float(post_mfe_eod), 3),
                 "post_exit_mae_pct_eod": None if post_mae_eod is None else round(float(post_mae_eod), 3),
@@ -757,7 +1150,17 @@ def _build_time_exit_early_review(
         )
 
     if not rows:
-        return {"enabled": True, "count": len(exits), "rows_with_ohlc": 0}
+        return {
+            "enabled": True,
+            "count": len(exits),
+            "rows_with_ohlc": 0,
+            "premature_whipsaw_1h_count": 0,
+            "insufficient_data_for_ml": True,
+            "proposals_capped_small_sample": False,
+            "by_exit_detail": {},
+            "config_candidates": {"proposals": []},
+            "note": "TIME_EXIT_EARLY есть, но нет строк с 5m OHLC в кэше (тикер/окно).",
+        }
 
     def _avg(vals: List[Optional[float]]) -> Optional[float]:
         xs = [float(v) for v in vals if v is not None and math.isfinite(float(v))]
@@ -769,17 +1172,21 @@ def _build_time_exit_early_review(
         by_detail.setdefault(k, []).append(r)
     by_detail_summary = {}
     for k, lst in by_detail.items():
+        premature_n = sum(1 for x in lst if x.get("likely_premature_whipsaw_1h"))
         by_detail_summary[k] = {
             "count": len(lst),
+            "premature_whipsaw_1h_count": premature_n,
             "avg_post_exit_mfe_pct_1h": _avg([x.get("post_exit_mfe_pct_1h") for x in lst]),
             "avg_post_exit_mae_pct_1h": _avg([x.get("post_exit_mae_pct_1h") for x in lst]),
+            "avg_post_exit_recovery_entry_pct_1h": _avg([x.get("post_exit_recovery_entry_pct_1h") for x in lst]),
             "avg_minutes_to_break_even_1h": _avg([x.get("minutes_to_break_even_1h") for x in lst]),
         }
 
     early_candidates = sorted(rows, key=lambda r: float(r.get("post_exit_mfe_pct_1h") or 0.0), reverse=True)[:limit]
     protective_candidates = sorted(rows, key=lambda r: float(r.get("post_exit_mae_pct_1h") or 0.0))[:limit]
+    whipsaw_rows = [r for r in rows if r.get("likely_premature_whipsaw_1h")]
 
-    # Candidate tuning proposals (no new env keys): suggest adjustments only if counterfactual indicates early exits.
+    # Candidate tuning proposals: числовые уровни GAME_5M_* при систематич. отскоке после TIME_EXIT_EARLY.
     proposals: List[Dict[str, Any]] = []
     try:
         from config_loader import get_config_value
@@ -792,31 +1199,43 @@ def _build_time_exit_early_review(
 
         def _cfg_float(key: str, default: float) -> float:
             try:
-                return float((get_config_value(key, str(default)) or str(default)).strip())
+                return float(
+                    ((get_config_value(key, str(default)) or str(default)).strip().replace(",", "."))
+                )
             except Exception:
                 return float(default)
 
         cur_min_age_default = _cfg_int("GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES", 390)
-        cur_max_pnl = float((get_config_value("GAME_5M_STALE_REVERSAL_MAX_PNL_PCT", "-1.5") or "-1.5").strip())
-        cur_mom_below = float((get_config_value("GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW", "0.0") or "0.0").strip())
+        cur_max_pnl = _cfg_float("GAME_5M_STALE_REVERSAL_MAX_PNL_PCT", -1.5)
+        cur_mom_below = _cfg_float("GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW", 0.0)
         cur_enabled = (get_config_value("GAME_5M_STALE_REVERSAL_EXIT_ENABLED", "false") or "false").strip().lower() in (
             "1",
             "true",
             "yes",
         )
+        cur_ed_min_age = _cfg_int("GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES", 180)
+        cur_ed_max_loss = _cfg_float("GAME_5M_EARLY_DERISK_MAX_LOSS_PCT", -2.0)
+        cur_ed_mom = _cfg_float("GAME_5M_EARLY_DERISK_MOMENTUM_BELOW", 0.0)
+        cur_ed_on = (get_config_value("GAME_5M_EARLY_DERISK_ENABLED", "false") or "false").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        cur_exit_guard = _cfg_int("GAME_5M_EXIT_GUARD_FIRST_MINUTES", 5)
     except Exception:
         cur_min_age_default, cur_max_pnl, cur_mom_below, cur_enabled = 390, -1.5, 0.0, False
+        cur_ed_min_age, cur_ed_max_loss, cur_ed_mom, cur_ed_on = 180, -2.0, 0.0, False
+        cur_exit_guard = 5
 
-    # Per-ticker current min_age overrides (if present in config.env)
     tickers_in_exits = sorted({str(r.get("ticker") or "").strip().upper() for r in rows if str(r.get("ticker") or "").strip()})
     cur_min_age_by_ticker: Dict[str, int] = {}
     for t in tickers_in_exits:
-        # Only min_age supports _TICKER override in game_5m; keep the same here.
         try:
             key_t = f"GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES_{t}"
             raw_t = ""
             try:
                 from config_loader import get_config_value as _gcv
+
                 raw_t = (_gcv(key_t, "") or "").strip()
             except Exception:
                 raw_t = ""
@@ -824,17 +1243,23 @@ def _build_time_exit_early_review(
         except Exception:
             cur_min_age_by_ticker[t] = int(cur_min_age_default)
 
-    agg = by_detail_summary.get("stale_reversal") if isinstance(by_detail_summary, dict) else None
-    avg_mfe = _safe_float((agg or {}).get("avg_post_exit_mfe_pct_1h")) if isinstance(agg, dict) else None
-    avg_mae = _safe_float((agg or {}).get("avg_post_exit_mae_pct_1h")) if isinstance(agg, dict) else None
-    n_stale = int((agg or {}).get("count") or 0) if isinstance(agg, dict) else 0
+    def _stale_premature_tier(n: int, mfe: Optional[float], mae: Optional[float]) -> Optional[str]:
+        if n <= 0 or mfe is None:
+            return None
+        if n >= 5 and mfe >= 3.0 and (mae is None or mae > -1.0):
+            return "high"
+        if n >= 3 and mfe >= 2.2 and (mae is None or mae > -1.2):
+            return "medium"
+        if n >= 2 and mfe >= 2.8 and (mae is None or mae > -1.5):
+            return "medium_low"
+        return None
 
-    # Heuristic: large post-exit upside with not-too-bad post-exit drawdown => exits are likely premature.
-    if n_stale >= 5 and avg_mfe is not None and avg_mfe >= 3.0 and (avg_mae is None or avg_mae > -1.0):
-        # Proposal A: wait longer before stale cut (age gate).
-        # If ticker overrides exist, propose per-ticker adjustments and only propose global default
-        # when it meaningfully applies (tickers without overrides).
-        base_reason = f"post-exit MFE(1h) avg={avg_mfe:.2f}% при MAE avg={('—' if avg_mae is None else f'{avg_mae:.2f}%')}; похоже, что stale_cut срабатывает рано — увеличиваем min_age."
+    def _append_stale_proposals(sample_confidence: str, n: int, avg_mfe: Optional[float], avg_mae: Optional[float]) -> None:
+        mae_disp = "—" if avg_mae is None else f"{avg_mae:.2f}%"
+        base_reason = (
+            f"stale_reversal (n={n}): средний post-exit MFE за 1h={avg_mfe:.2f}% от цены выхода при MAE={mae_disp} — "
+            f"частые отскоки после выхода; смягчаем условия реза."
+        )
         no_override = [t for t in tickers_in_exits if cur_min_age_by_ticker.get(t, cur_min_age_default) == cur_min_age_default]
         if no_override:
             p_min_age = int(min(24 * 60, max(cur_min_age_default, cur_min_age_default + 180)))
@@ -846,11 +1271,9 @@ def _build_time_exit_early_review(
                         "proposed": p_min_age,
                         "applies_to": {"tickers_without_override": no_override},
                         "reason": base_reason,
+                        "sample_confidence": sample_confidence,
                     }
                 )
-        # Variant A: do NOT emit per-ticker proposal duplicates.
-        # We rely on the global default + existing per-ticker overrides (like NBIS) to keep config minimal.
-        # Proposal B: require more negative momentum (avoid cutting when momentum just ~0)
         p_mom = float(min(cur_mom_below, -0.3)) if cur_mom_below >= -0.3 else float(cur_mom_below)
         if p_mom != cur_mom_below:
             proposals.append(
@@ -858,36 +1281,520 @@ def _build_time_exit_early_review(
                     "env_key": "GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW",
                     "current": cur_mom_below,
                     "proposed": p_mom,
-                    "reason": "Сейчас stale_reversal может сработать при momentum≈0. Требуем более отрицательный импульс, чтобы не резать на плоском рынке перед возможным отскоком.",
+                    "reason": (
+                        "stale_reversal: требовать более отрицательный momentum_2h, чтобы не резать при «плоском» импульсе перед отскоком."
+                    ),
+                    "sample_confidence": sample_confidence,
                 }
             )
-        # Proposal C: tolerate deeper unrealized loss before cutting (reduce false positives)
         p_pnl = float(min(cur_max_pnl, cur_max_pnl - 0.5))
-        if p_pnl != cur_max_pnl:
+        if abs(p_pnl - cur_max_pnl) > 1e-9:
             proposals.append(
                 {
                     "env_key": "GAME_5M_STALE_REVERSAL_MAX_PNL_PCT",
                     "current": cur_max_pnl,
                     "proposed": p_pnl,
-                    "reason": "Делаем порог реза более строгим (нужно хуже PnL), чтобы не фиксировать небольшую просадку, которая часто отыгрывается.",
+                    "reason": (
+                        "stale_reversal: порог MAX_PNL_PCT сделать глубже (ещё −0.5 п.п.): резать только при худшей просадке."
+                    ),
+                    "sample_confidence": sample_confidence,
                 }
             )
 
-    return {
+    stale_list = by_detail.get("stale_reversal", [])
+    n_stale = len(stale_list)
+    agg_st = by_detail_summary.get("stale_reversal", {}) if isinstance(by_detail_summary, dict) else {}
+    avg_mfe_s = _safe_float(agg_st.get("avg_post_exit_mfe_pct_1h")) if isinstance(agg_st, dict) else None
+    avg_mae_s = _safe_float(agg_st.get("avg_post_exit_mae_pct_1h")) if isinstance(agg_st, dict) else None
+    tier = _stale_premature_tier(n_stale, avg_mfe_s, avg_mae_s)
+    if tier and avg_mfe_s is not None:
+        _append_stale_proposals(tier, n_stale, avg_mfe_s, avg_mae_s)
+    elif n_stale == 1 and stale_list:
+        r0 = stale_list[0]
+        mfe0 = _safe_float(r0.get("post_exit_mfe_pct_1h"))
+        mae0 = _safe_float(r0.get("post_exit_mae_pct_1h"))
+        rec0 = _safe_float(r0.get("post_exit_recovery_entry_pct_1h"))
+        single_ok = (
+            mfe0 is not None
+            and mfe0 >= 2.0
+            and (mae0 is None or mae0 > -2.0)
+            and (rec0 is None or rec0 >= -0.3 or mfe0 >= 3.0)
+        )
+        if single_ok and mfe0 is not None:
+            _append_stale_proposals("low", 1, mfe0, mae0)
+
+    def _early_premature_tier(n: int, mfe: Optional[float], mae: Optional[float]) -> Optional[str]:
+        if n <= 0 or mfe is None:
+            return None
+        if n >= 4 and mfe >= 1.8 and (mae is None or mae > -1.8):
+            return "high"
+        if n >= 2 and mfe >= 1.5 and (mae is None or mae > -2.0):
+            return "medium"
+        return None
+
+    def _append_early_derisk_proposals(sample_confidence: str, n: int, avg_mfe: Optional[float], avg_mae: Optional[float]) -> None:
+        if not cur_ed_on:
+            return
+        mae_disp = "—" if avg_mae is None else f"{avg_mae:.2f}%"
+        base = (
+            f"early_derisk (n={n}): средний post-exit MFE 1h={avg_mfe:.2f}% при MAE={mae_disp} — выходы часто опережают отскок; "
+            f"смягчаем de-risk."
+        )
+        p_loss = float(max(-5.0, cur_ed_max_loss - 0.5))
+        if p_loss < cur_ed_max_loss - 1e-6:
+            proposals.append(
+                {
+                    "env_key": "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT",
+                    "current": cur_ed_max_loss,
+                    "proposed": round(p_loss, 2),
+                    "reason": base + " Углубление MAX_LOSS_PCT на 0.5 п.п. (реже срабатывание в мягкой просадке).",
+                    "sample_confidence": sample_confidence,
+                }
+            )
+        p_age = int(min(24 * 60, cur_ed_min_age + 60))
+        if p_age != cur_ed_min_age:
+            proposals.append(
+                {
+                    "env_key": "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES",
+                    "current": cur_ed_min_age,
+                    "proposed": p_age,
+                    "reason": base + " Позже разрешаем de-risk (+60 мин к min_age).",
+                    "sample_confidence": sample_confidence,
+                }
+            )
+        p_em = float(min(cur_ed_mom, -0.35)) if cur_ed_mom >= -0.25 else float(cur_ed_mom)
+        if p_em < cur_ed_mom - 1e-6:
+            proposals.append(
+                {
+                    "env_key": "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW",
+                    "current": cur_ed_mom,
+                    "proposed": round(p_em, 2),
+                    "reason": base + " Более отрицательный порог momentum_2h.",
+                    "sample_confidence": sample_confidence,
+                }
+            )
+
+    ed_list = by_detail.get("early_derisk", [])
+    n_ed = len(ed_list)
+    agg_ed = by_detail_summary.get("early_derisk", {}) if isinstance(by_detail_summary, dict) else {}
+    avg_mfe_e = _safe_float(agg_ed.get("avg_post_exit_mfe_pct_1h")) if isinstance(agg_ed, dict) else None
+    avg_mae_e = _safe_float(agg_ed.get("avg_post_exit_mae_pct_1h")) if isinstance(agg_ed, dict) else None
+    ed_tier = _early_premature_tier(n_ed, avg_mfe_e, avg_mae_e)
+    if ed_tier and avg_mfe_e is not None:
+        _append_early_derisk_proposals(ed_tier, n_ed, avg_mfe_e, avg_mae_e)
+    elif n_ed == 1 and ed_list:
+        r0 = ed_list[0]
+        mfe0 = _safe_float(r0.get("post_exit_mfe_pct_1h"))
+        mae0 = _safe_float(r0.get("post_exit_mae_pct_1h"))
+        rec0 = _safe_float(r0.get("post_exit_recovery_entry_pct_1h"))
+        if (
+            mfe0 is not None
+            and mfe0 >= 2.0
+            and (mae0 is None or mae0 > -2.2)
+            and (rec0 is None or rec0 >= -0.5)
+        ):
+            _append_early_derisk_proposals("low", 1, mfe0, mae0)
+
+    open_flush = [
+        r
+        for r in rows
+        if _safe_float(r.get("minutes_after_rth_open_et")) is not None
+        and 0 <= float(r["minutes_after_rth_open_et"]) <= 45
+        and r.get("likely_premature_whipsaw_1h")
+    ]
+    if len(open_flush) >= 2 or (len(open_flush) >= 1 and len(rows) <= 3):
+        p_g = int(min(30, max(cur_exit_guard + 10, 15)))
+        if p_g > cur_exit_guard:
+            proposals.append(
+                {
+                    "env_key": "GAME_5M_EXIT_GUARD_FIRST_MINUTES",
+                    "current": cur_exit_guard,
+                    "proposed": p_g,
+                    "reason": (
+                        f"TIME_EXIT_EARLY в первые ~45 мин RTH с отскоком после выхода: {len(open_flush)} кейс(ов) — "
+                        f"расширить EXIT_GUARD у открытия (меньше решений на «шумной» сетке сразу после 09:30 ET)."
+                    ),
+                    "sample_confidence": "medium_low" if len(open_flush) < 2 else "medium",
+                }
+            )
+
+    n_ohlc = len(rows)
+    insufficient_data_for_ml = n_ohlc < TIME_EXIT_EARLY_MIN_ROWS_ML
+    proposals_capped_small_sample = False
+    if n_ohlc > 0:
+        if n_ohlc < TIME_EXIT_EARLY_MIN_ROWS_HARD_CAP and len(proposals) > 1:
+            proposals = _cap_time_exit_early_proposals_by_rank(proposals, max_n=1)
+            proposals_capped_small_sample = True
+        elif n_ohlc < TIME_EXIT_EARLY_MIN_ROWS_SOFT_CAP and len(proposals) > 2:
+            proposals = _cap_time_exit_early_proposals_by_rank(proposals, max_n=2)
+            proposals_capped_small_sample = True
+
+    proposals = _dedupe_time_exit_proposals(proposals)
+
+    out: Dict[str, Any] = {
         "enabled": True,
         "count": len(exits),
-        "rows_with_ohlc": len(rows),
+        "rows_with_ohlc": n_ohlc,
+        "premature_whipsaw_1h_count": len(whipsaw_rows),
+        "insufficient_data_for_ml": insufficient_data_for_ml,
+        "proposals_capped_small_sample": proposals_capped_small_sample,
         "by_exit_detail": dict(sorted(by_detail_summary.items(), key=lambda kv: (-int(kv[1]["count"]), kv[0]))),
         "top_early_exit_candidates_1h": early_candidates,
         "top_protective_exits_1h": protective_candidates,
         "config_candidates": {
             "stale_reversal_enabled": bool(cur_enabled),
+            "early_derisk_enabled": bool(cur_ed_on),
+            "exit_guard_first_minutes_current": int(cur_exit_guard),
             "current_min_age_default": int(cur_min_age_default),
             "current_min_age_by_ticker": cur_min_age_by_ticker,
             "proposals": proposals,
         },
-        "note": "post-exit MFE/MAE are computed from 5m OHLC relative to exit_price; this is counterfactual and does not simulate fills/slippage.",
+        "note": (
+            "post-exit MFE/MAE — от цены выхода; post_exit_recovery_entry_pct_1h — насколько за 1h поднялся High относительно входа. "
+            "Контрфакт, без учёта проскальзывания/исполнения."
+        ),
     }
+    if focused_trade_ids:
+        fs = {int(x) for x in focused_trade_ids}
+        out["focused_trade_rows"] = [r for r in rows if int(r.get("trade_id") or -1) in fs]
+        out["focused_trade_ids_filter"] = [int(x) for x in focused_trade_ids]
+    return out
+
+
+def _effects_game5m_for_recovery(effects: List[TradeEffect], strategy: str) -> List[TradeEffect]:
+    su = (strategy or "").strip().upper()
+    if su not in ("GAME_5M", "ALL"):
+        return []
+    return [e for e in effects if str(e.exit_strategy or "").strip().upper() == "GAME_5M"]
+
+
+def _recovery_ml_horizons_from_config() -> Tuple[int, ...]:
+    raw = (get_config_value("GAME_5M_RECOVERY_ML_HORIZONS_MINUTES", "") or "").strip()
+    if not raw:
+        return RECOVERY_ML_DEFAULT_HORIZONS_MINUTES
+    out: List[int] = []
+    for p in raw.split(","):
+        p = p.strip()
+        if not p:
+            continue
+        try:
+            v = int(p)
+            if v >= 15:
+                out.append(v)
+        except ValueError:
+            continue
+    return tuple(out) if out else RECOVERY_ML_DEFAULT_HORIZONS_MINUTES
+
+
+def _recovery_ml_near_early_filter_from_config() -> Optional[float]:
+    raw = (get_config_value("GAME_5M_RECOVERY_DATASET_NEAR_EARLY_PCT", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw.replace(",", "."))
+    except (ValueError, TypeError):
+        return None
+
+
+def _default_recovery_ml_export_path() -> Path:
+    log_dir = (get_config_value("LOG_DIR", "logs") or "logs").strip()
+    p = Path(log_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    fn = f"game5m_recovery_ml_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+    return p / fn
+
+
+def _export_game5m_recovery_ml_jsonl(
+    rows: List[Dict[str, Any]],
+    *,
+    export_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not rows:
+        return {"status": "skipped", "reason": "no rows"}
+    path = Path(export_path).expanduser() if export_path else _default_recovery_ml_export_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+            n += 1
+    return {
+        "status": "ok",
+        "path": str(path.resolve()),
+        "lines_written": n,
+    }
+
+
+def _empty_game5m_hold_recovery_stats(reason: str) -> Dict[str, Any]:
+    return {
+        "enabled": False,
+        "skip_reason": reason,
+        "schema_version": RECOVERY_ML_SCHEMA_VERSION,
+        "schema_doc": RECOVERY_ML_SCHEMA,
+    }
+
+
+def _attach_game5m_hold_recovery_to_payload(
+    payload: Dict[str, Any],
+    effects: List[TradeEffect],
+    ohlc_cache: Dict[str, Optional[pd.DataFrame]],
+    *,
+    strategy: str,
+    export_recovery_ml: bool = False,
+    recovery_ml_export_path: Optional[str] = None,
+) -> None:
+    rec_stats, rec_rows = _build_game5m_hold_recovery_dataset_stats(
+        effects,
+        ohlc_cache,
+        strategy=strategy,
+        collect_rows_for_export=bool(export_recovery_ml),
+    )
+    payload["game5m_hold_recovery_dataset_stats"] = rec_stats
+    if export_recovery_ml and rec_rows:
+        path_override = (recovery_ml_export_path or "").strip() or None
+        if not path_override:
+            path_override = (get_config_value("ANALYZER_RECOVERY_ML_EXPORT_PATH", "") or "").strip() or None
+        payload["game5m_hold_recovery_export"] = _export_game5m_recovery_ml_jsonl(
+            rec_rows, export_path=path_override
+        )
+    elif export_recovery_ml:
+        payload["game5m_hold_recovery_export"] = {
+            "status": "skipped",
+            "reason": "no rows to export (OHLC/horizon coverage)",
+        }
+    else:
+        payload["game5m_hold_recovery_export"] = None
+
+
+def _build_game5m_hold_recovery_dataset_stats(
+    effects: List[TradeEffect],
+    ohlc_cache: Dict[str, Optional[pd.DataFrame]],
+    *,
+    strategy: str,
+    collect_rows_for_export: bool = False,
+    near_early_pnl_pct_max: Optional[float] = None,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """
+    Фаза C1/C2: статистика псевдо-датасета recovery; опционально накопление строк для JSONL.
+    """
+    ge = _effects_game5m_for_recovery(effects, strategy)
+    if not ge:
+        return (
+            {
+                "enabled": False,
+                "skip_reason": "no GAME_5M trades in analyzer scope",
+                "schema_version": RECOVERY_ML_SCHEMA_VERSION,
+                "schema_doc": RECOVERY_ML_SCHEMA,
+            },
+            [],
+        )
+
+    raw_eps = (
+        get_config_value("GAME_5M_RECOVERY_ML_EPS_UP_PCT", str(RECOVERY_ML_DEFAULT_EPS_UP_PCT))
+        or str(RECOVERY_ML_DEFAULT_EPS_UP_PCT)
+    ).strip().replace(",", ".")
+    try:
+        eps_up = float(raw_eps)
+    except (ValueError, TypeError):
+        eps_up = RECOVERY_ML_DEFAULT_EPS_UP_PCT
+    raw_adv = (
+        get_config_value("GAME_5M_RECOVERY_ML_MAX_ADVERSE_PCT", str(RECOVERY_ML_DEFAULT_MAX_ADVERSE_PCT))
+        or str(RECOVERY_ML_DEFAULT_MAX_ADVERSE_PCT)
+    ).strip().replace(",", ".")
+    try:
+        max_adv = float(raw_adv)
+    except (ValueError, TypeError):
+        max_adv = RECOVERY_ML_DEFAULT_MAX_ADVERSE_PCT
+
+    try:
+        max_per_trade = int(
+            (get_config_value("GAME_5M_RECOVERY_ML_MAX_ROWS_PER_TRADE", str(RECOVERY_ML_MAX_ROWS_PER_TRADE)) or "").strip()
+            or RECOVERY_ML_MAX_ROWS_PER_TRADE
+        )
+    except (ValueError, TypeError):
+        max_per_trade = RECOVERY_ML_MAX_ROWS_PER_TRADE
+    max_per_trade = max(4, min(200, max_per_trade))
+
+    try:
+        stride = int(
+            (get_config_value("GAME_5M_RECOVERY_ML_ROW_STRIDE", str(RECOVERY_ML_ROW_STRIDE_DEFAULT)) or "").strip()
+            or RECOVERY_ML_ROW_STRIDE_DEFAULT
+        )
+    except (ValueError, TypeError):
+        stride = RECOVERY_ML_ROW_STRIDE_DEFAULT
+    stride = max(1, min(12, stride))
+
+    try:
+        max_total = int(
+            (get_config_value("GAME_5M_RECOVERY_ML_MAX_TOTAL_ROWS", str(RECOVERY_ML_MAX_TOTAL_ROWS)) or "").strip()
+            or RECOVERY_ML_MAX_TOTAL_ROWS
+        )
+    except (ValueError, TypeError):
+        max_total = RECOVERY_ML_MAX_TOTAL_ROWS
+    max_total = max(1000, min(500_000, max_total))
+
+    horizons = _recovery_ml_horizons_from_config()
+    near_filter = near_early_pnl_pct_max
+    if near_filter is None:
+        near_filter = _recovery_ml_near_early_filter_from_config()
+
+    rows_out: List[Dict[str, Any]] = []
+    trades_used = 0
+    trades_skipped_no_ohlc = 0
+    trades_skipped_short = 0
+    label_sum: Dict[int, int] = {h: 0 for h in horizons}
+    label_n: Dict[int, int] = {h: 0 for h in horizons}
+    by_ticker: Dict[str, int] = {}
+
+    for e in ge:
+        if len(rows_out) >= max_total:
+            break
+        df = ohlc_cache.get(e.ticker)
+        if df is None or getattr(df, "empty", True):
+            trades_skipped_no_ohlc += 1
+            continue
+        entry_ts = _as_et(pd.Timestamp(e.entry_ts))
+        exit_ts = _as_et(pd.Timestamp(e.exit_ts))
+        if exit_ts <= entry_ts:
+            trades_skipped_short += 1
+            continue
+        try:
+            m = (df["datetime"] >= entry_ts) & (df["datetime"] < exit_ts)
+            sub = df.loc[m].reset_index(drop=True)
+        except Exception:
+            trades_skipped_no_ohlc += 1
+            continue
+        if len(sub) < 2:
+            trades_skipped_short += 1
+            continue
+        trades_used += 1
+        n_trade_rows = 0
+        entry = float(e.entry_price)
+        if entry <= 0:
+            continue
+
+        ed_dec = (e.entry_decision or "")[:64] if e.entry_decision else None
+
+        for i in range(0, len(sub), stride):
+            if len(rows_out) >= max_total or n_trade_rows >= max_per_trade:
+                break
+            try:
+                bar_time = pd.Timestamp(sub["datetime"].iloc[i])
+                if bar_time.tzinfo is None:
+                    bar_time = bar_time.tz_localize("America/New_York", ambiguous="infer")
+                else:
+                    bar_time = bar_time.tz_convert("America/New_York")
+            except Exception:
+                continue
+            try:
+                ref_close = float(sub["Close"].iloc[i])
+            except Exception:
+                continue
+            if ref_close <= 0:
+                continue
+            pnl_pct = (ref_close / entry - 1.0) * 100.0
+            if near_filter is not None and pnl_pct > near_filter:
+                continue
+            hold_min = float((bar_time - entry_ts) / pd.Timedelta(minutes=1))
+
+            row_base: Dict[str, Any] = {
+                "schema_version": RECOVERY_ML_SCHEMA_VERSION,
+                "trade_id": int(e.trade_id),
+                "ticker": str(e.ticker).strip().upper(),
+                "bar_ts_et": bar_time.isoformat(),
+                "ref_close": round(ref_close, 6),
+                "entry_price": round(entry, 6),
+                "pnl_pct": round(pnl_pct, 4),
+                "hold_minutes": round(hold_min, 2),
+                "minutes_after_rth_open": _minutes_after_rth_open_et(bar_time),
+                "dow": int(bar_time.dayofweek),
+                "hour_et": int(bar_time.hour),
+                "entry_rsi_5m": e.entry_rsi_5m,
+                "entry_vol_5m_pct": e.entry_vol_5m_pct,
+                "entry_momentum_2h_pct": e.entry_momentum_2h_pct,
+                "entry_decision": ed_dec,
+                "exit_signal": str(e.exit_signal or ""),
+                "horizons_minutes": list(horizons),
+                "label_eps_up_pct": eps_up,
+                "label_max_adverse_pct": max_adv,
+            }
+
+            labels_done: Dict[int, Tuple[float, float, int]] = {}
+            ok_all_h = True
+            for H in horizons:
+                end_t = bar_time + pd.Timedelta(minutes=int(H))
+                try:
+                    fwd = df.loc[(df["datetime"] > bar_time) & (df["datetime"] <= end_t)]
+                except Exception:
+                    ok_all_h = False
+                    break
+                if fwd is None or fwd.empty:
+                    ok_all_h = False
+                    break
+                try:
+                    hi = float(fwd["High"].max())
+                    lo = float(fwd["Low"].min())
+                except Exception:
+                    ok_all_h = False
+                    break
+                mfe_pct = (hi / ref_close - 1.0) * 100.0
+                mae_pct = (lo / ref_close - 1.0) * 100.0
+                y_rec = 1 if (mfe_pct >= eps_up and mae_pct >= max_adv) else 0
+                labels_done[int(H)] = (mfe_pct, mae_pct, y_rec)
+
+            if not ok_all_h or len(labels_done) != len(horizons):
+                continue
+
+            row = dict(row_base)
+            for H, (mfe_pct, mae_pct, y_rec) in sorted(labels_done.items()):
+                row[f"h{H}_mfe_fwd_pct"] = round(mfe_pct, 4)
+                row[f"h{H}_mae_fwd_pct"] = round(mae_pct, 4)
+                row[f"h{H}_y_recovery"] = y_rec
+                label_sum[int(H)] += y_rec
+                label_n[int(H)] += 1
+
+            rows_out.append(row)
+            n_trade_rows += 1
+            tk = row["ticker"]
+            by_ticker[tk] = by_ticker.get(tk, 0) + 1
+
+    if not collect_rows_for_export:
+        rows_for_file: List[Dict[str, Any]] = []
+    else:
+        rows_for_file = list(rows_out)
+
+    label_rate: Dict[str, Any] = {}
+    for h in horizons:
+        n = label_n.get(h, 0)
+        label_rate[str(h)] = None if n <= 0 else round(float(label_sum[h]) / float(n), 4)
+
+    top_tickers = sorted(by_ticker.items(), key=lambda kv: -kv[1])[:12]
+
+    stats: Dict[str, Any] = {
+        "enabled": True,
+        "schema_version": RECOVERY_ML_SCHEMA_VERSION,
+        "schema_doc": RECOVERY_ML_SCHEMA,
+        "horizons_minutes": list(horizons),
+        "label_eps_up_pct": eps_up,
+        "label_max_adverse_pct": max_adv,
+        "near_early_pnl_pct_max_filter": near_filter,
+        "row_stride": stride,
+        "max_rows_per_trade": max_per_trade,
+        "max_total_rows_cap": max_total,
+        "total_pseudo_rows": len(rows_out),
+        "trades_used": trades_used,
+        "trades_skipped_no_ohlc": trades_skipped_no_ohlc,
+        "trades_skipped_short_hold": trades_skipped_short,
+        "label_positive_rate_by_horizon": label_rate,
+        "label_counts_by_horizon": {str(h): {"positive": label_sum[h], "n": label_n[h]} for h in horizons},
+        "rows_top_tickers": [{"ticker": t, "rows": n} for t, n in top_tickers],
+        "sample_rows_preview": rows_out[:3] if rows_out else [],
+        "note": (
+            "Метки по полному 5m ряду после t (включая время после фактического exit). "
+            "Колонка exit_signal — постфактум; при обучении recovery можно исключить как утечку."
+        ),
+    }
+    return stats, rows_for_file
 
 
 def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Optional[pd.DataFrame]]) -> List[TradeEffect]:
@@ -1768,6 +2675,221 @@ def _analyzer_llm_max_output_tokens(*, game_5m_config_focus: bool) -> int:
     return 8192 if game_5m_config_focus else 10240
 
 
+def _analyzer_llm_temperature() -> float:
+    """Ниже OPENAI_TEMPERATURE по умолчанию: меньше разброс формулировок и «уверенных» цифр."""
+    raw = (get_config_value("ANALYZER_LLM_TEMPERATURE", "") or "").strip()
+    if not raw:
+        return 0.05
+    try:
+        t = float(raw.replace(",", "."))
+    except (ValueError, TypeError):
+        return 0.05
+    return max(0.0, min(0.5, t))
+
+
+def _normalize_llm_proposed_scalar(value: Any) -> str:
+    """Сопоставление proposed из LLM с proposed из отчёта (TIME_EXIT и др.)."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    s = str(value).strip().replace(",", ".")
+    sl = s.lower()
+    if sl in ("true", "1", "yes"):
+        return "true"
+    if sl in ("false", "0", "no"):
+        return "false"
+    try:
+        f = float(s)
+        if not math.isfinite(f):
+            return sl
+        rf = round(f, 8)
+        if abs(rf - round(rf)) < 1e-9:
+            return str(int(round(rf)))
+        txt = f"{rf:.8f}".rstrip("0").rstrip(".")
+        return txt if txt else str(rf)
+    except ValueError:
+        return sl
+
+
+def _time_exit_env_key_prefixes() -> Tuple[str, ...]:
+    return (
+        "GAME_5M_EARLY_DERISK_",
+        "GAME_5M_STALE_REVERSAL_",
+        "GAME_5M_EXIT_GUARD_",
+    )
+
+
+def _is_time_exit_early_env_key(env_key: str) -> bool:
+    ek = (env_key or "").strip().upper()
+    return any(ek.startswith(p) for p in _time_exit_env_key_prefixes())
+
+
+def _allow_map_time_exit_from_report(report: Dict[str, Any]) -> Tuple[Dict[str, Set[str]], bool, bool]:
+    """
+    Множество допустимых proposed (нормализованных строк) по env_key из time_exit_early_review.
+    Второе значение: insufficient_data_for_ml; третье: есть ли хотя бы одно предложение.
+    """
+    te = report.get("time_exit_early_review") if isinstance(report.get("time_exit_early_review"), dict) else {}
+    insufficient = bool(te.get("insufficient_data_for_ml"))
+    cc = te.get("config_candidates") if isinstance(te.get("config_candidates"), dict) else {}
+    props = cc.get("proposals") if isinstance(cc.get("proposals"), list) else []
+    allow: Dict[str, Set[str]] = {}
+    for p in props:
+        if not isinstance(p, dict):
+            continue
+        ek = str(p.get("env_key") or "").strip().upper()
+        if not ek or not _is_time_exit_early_env_key(ek):
+            continue
+        prop = p.get("proposed")
+        allow.setdefault(ek, set()).add(_normalize_llm_proposed_scalar(prop))
+    return allow, insufficient, bool(allow)
+
+
+def _sanitize_llm_analysis(
+    parsed: Any,
+    *,
+    report: Dict[str, Any],
+    config_env_allow_keys: Optional[Set[str]],
+) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    LLM может вернуть правдоподобный, но нестрогий JSON. Здесь:
+    - убираем expected_impact (галлюцинации процентов);
+    - TIME_EXIT_EARLY env: proposed только если совпадает с time_exit_early_review.config_candidates.proposals;
+    - выкидываем GAME_5M_SIGNAL_CRON_MINUTES;
+    - config_env_proposals: allowlist (focus) или любой GAME_5M_* + editable;
+    - ограничиваем размеры списков и строк.
+    """
+    warnings: List[str] = []
+    if not isinstance(parsed, dict):
+        return ({"raw_text": str(parsed)}, ["LLM analysis is not a JSON object; returned raw_text."])
+
+    out = dict(parsed)
+    te_allow, te_insufficient, te_has_rows = _allow_map_time_exit_from_report(report)
+
+    if "expected_impact" in out:
+        warnings.append("LLM: поле expected_impact удалено (цифры влияния без строгих данных часто являются догадками).")
+        out.pop("expected_impact", None)
+
+    def _cap_list(key: str, max_n: int) -> None:
+        v = out.get(key)
+        if isinstance(v, list) and len(v) > max_n:
+            out[key] = v[:max_n]
+            warnings.append(f"LLM: поле {key} обрезано до {max_n} элементов (было {len(v)}).")
+
+    _cap_list("priorities", 4)
+    _cap_list("algorithm_change_proposals", 3)
+    _cap_list("monitoring_fixes", 3)
+    _cap_list("validation_plan", 6)
+
+    mon0 = out.get("monitoring_fixes")
+    if isinstance(mon0, list):
+        mon_kept: List[Dict[str, Any]] = []
+        for row in mon0:
+            if not isinstance(row, dict):
+                continue
+            blob = f"{row.get('issue', '')} {row.get('proposed_fix', '')} {row.get('expected_effect', '')}"
+            if "GAME_5M_SIGNAL_CRON_MINUTES" in blob.upper():
+                warnings.append("LLM: удалён monitoring_fixes с упоминанием GAME_5M_SIGNAL_CRON_MINUTES.")
+                continue
+            mon_kept.append(row)
+        out["monitoring_fixes"] = mon_kept[:3]
+
+    # in_algorithm_parameter_changes: жёсткие фильтры
+    raw_changes = out.get("in_algorithm_parameter_changes")
+    kept_changes: List[Dict[str, Any]] = []
+    if isinstance(raw_changes, list):
+        for row in raw_changes:
+            if not isinstance(row, dict):
+                continue
+            ek = str(row.get("env_key") or "").strip().upper()
+            if ek == "GAME_5M_SIGNAL_CRON_MINUTES":
+                warnings.append("LLM: удалено in_algorithm_parameter_changes для GAME_5M_SIGNAL_CRON_MINUTES (жёсткий фильтр).")
+                continue
+            if _is_time_exit_early_env_key(ek):
+                if te_insufficient or not te_has_rows:
+                    warnings.append(
+                        f"LLM: удалено TE-предложение {ek}: time_exit_early_review.insufficient_data_for_ml или нет proposals."
+                    )
+                    continue
+                if ek not in te_allow:
+                    warnings.append(
+                        f"LLM: удалено TE-предложение {ek}: ключа нет в time_exit_early_review.config_candidates.proposals."
+                    )
+                    continue
+                pv = _normalize_llm_proposed_scalar(row.get("proposed"))
+                if pv not in te_allow[ek]:
+                    warnings.append(
+                        f"LLM: удалено TE-предложение {ek}: proposed={row.get('proposed')!r} "
+                        f"не из отчёта (допустимо: {sorted(te_allow[ek])})."
+                    )
+                    continue
+            row2 = dict(row)
+            for fld in ("reason_from_metrics", "expected_effect"):
+                if fld in row2 and row2[fld] is not None:
+                    row2[fld] = str(row2[fld])[:220]
+            kept_changes.append(row2)
+        out["in_algorithm_parameter_changes"] = kept_changes[:6]
+        if isinstance(raw_changes, list) and len(raw_changes) > 6:
+            warnings.append(f"LLM: in_algorithm_parameter_changes обрезано до 6 (было {len(raw_changes)}).")
+    else:
+        out["in_algorithm_parameter_changes"] = []
+
+    cep = out.get("config_env_proposals")
+    if isinstance(cep, list):
+        filtered: List[Dict[str, Any]] = []
+        dropped = 0
+        for row in cep:
+            if not isinstance(row, dict):
+                dropped += 1
+                continue
+            env_key = str(row.get("env_key") or "").strip().upper()
+            pv_raw = row.get("proposed_value")
+            pv = str(pv_raw).strip() if pv_raw is not None else ""
+            if not env_key or not pv:
+                dropped += 1
+                continue
+            if env_key == "GAME_5M_SIGNAL_CRON_MINUTES":
+                dropped += 1
+                continue
+            if config_env_allow_keys is not None:
+                if env_key not in config_env_allow_keys:
+                    dropped += 1
+                    continue
+            elif not env_key.startswith("GAME_5M_"):
+                dropped += 1
+                continue
+            if _is_time_exit_early_env_key(env_key):
+                if te_insufficient or not te_has_rows or env_key not in te_allow:
+                    dropped += 1
+                    continue
+                if _normalize_llm_proposed_scalar(pv_raw) not in te_allow[env_key]:
+                    dropped += 1
+                    warnings.append(
+                        f"LLM: удалено config_env_proposals {env_key}={pv!r}: proposed не из time_exit proposals "
+                        f"(допустимо: {sorted(te_allow[env_key])})."
+                    )
+                    continue
+            if not is_editable_config_env_key(env_key):
+                dropped += 1
+                continue
+            filtered.append(
+                {
+                    "env_key": env_key,
+                    "proposed_value": pv,
+                    "reason_from_metrics": str(row.get("reason_from_metrics") or "")[:220],
+                    "confidence": str(row.get("confidence") or "")[:16],
+                }
+            )
+        out["config_env_proposals"] = filtered[:8]
+        if dropped:
+            warnings.append(
+                f"LLM: из config_env_proposals удалено {dropped} строк (allowlist/TE-сверка/editable/GAME_5M_)."
+            )
+
+    return out, warnings
+
+
 def _build_llm_recommendations(
     payload: Dict[str, Any],
     *,
@@ -1817,6 +2939,9 @@ def _build_llm_recommendations(
             "hard_constraints": [
                 "read algorithm_digest before interpreting summary and top_cases",
                 "FORBIDDEN: GAME_5M_SIGNAL_CRON_MINUTES or signal_cron_minutes in in_algorithm_parameter_changes / config_env_proposals / monitoring_fixes when the cited evidence is late_polling_signals, exit_below_window_mfe_count, or wording like 'late polling' / 'polling delay' — those metrics are exit vs 5m window MFE, not cron latency",
+                "report.time_exit_early_review: числовые пороги для GAME_5M_EARLY_DERISK_* / GAME_5M_STALE_REVERSAL_* / GAME_5M_EXIT_GUARD_* бери ТОЛЬКО из report.time_exit_early_review.config_candidates.proposals (current/proposed/env_key). "
+                "Не выдумывай proposed, если в proposals нет строки для этого ключа; можно описать качественно при insufficient_data_for_ml.",
+                "report.time_exit_early_action_summary: используй dominant_exit_detail, tune_priority_hint, has_actionable_proposals_high_or_medium для приоритизации; не противоречь sample_confidence в proposals.",
                 "tie at least one priority or parameter_change to concrete trade_id or ticker from the report when evidence exists",
                 "for each in_algorithm_parameter_changes include env_key from parameter_to_env_key when the parameter maps",
                 "propose changes only with concrete fields from current_decision_rule_params when tuning thresholds",
@@ -1848,6 +2973,15 @@ def _build_llm_recommendations(
                 "GAME_5M_VOLATILITY_WAIT_MIN",
                 "GAME_5M_HANGER_TUNE_JSON",
                 "GAME_5M_HANGER_TUNE_APPLY_TAKE",
+                "GAME_5M_EARLY_DERISK_ENABLED",
+                "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES",
+                "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT",
+                "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW",
+                "GAME_5M_STALE_REVERSAL_EXIT_ENABLED",
+                "GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES",
+                "GAME_5M_STALE_REVERSAL_MAX_PNL_PCT",
+                "GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW",
+                "GAME_5M_EXIT_GUARD_FIRST_MINUTES",
             ]
             algorithm_context["focus_instruction"] = (
                 "Это УЗКИЙ отчёт по нескольким дням и/или выбранным тикерам/сделкам. "
@@ -1873,6 +3007,10 @@ def _build_llm_recommendations(
             "Не пиши в priorities фразы про «late polling» как про инфраструктуру — говори «выход ниже MFE окна» или «недобор после тейка».\n"
             "Для тейка/стопа опирайся на algorithm_digest.game_5m_take_exit_runtime и "
             "report.meta.current_decision_rule_params.exit_strategy (в т.ч. strategy_params_snapshot, TAKE_MOMENTUM_FACTOR).\n"
+            "Пост-обработка на сервере: любые GAME_5M_EARLY_DERISK_* / GAME_5M_STALE_REVERSAL_* / GAME_5M_EXIT_GUARD_* "
+            "в in_algorithm_parameter_changes или config_env_proposals будут удалены, если proposed не совпадает с "
+            "report.time_exit_early_review.config_candidates.proposals (или если insufficient_data_for_ml). "
+            "GAME_5M_SIGNAL_CRON_MINUTES в параметрах/config_env_proposals удаляется всегда.\n"
             "ОБЪЁМ ОТВЕТА (обязательно): priorities — не более 4 строк; in_algorithm_parameter_changes — не более 5 объектов; "
             "algorithm_change_proposals — не более 2; monitoring_fixes — не более 2; validation_plan — не более 3 строк. "
             "В каждом поле reason_from_metrics, expected_effect, change, why_current_algo_not_enough — не более 220 символов; "
@@ -1904,12 +3042,6 @@ def _build_llm_recommendations(
             "  \"monitoring_fixes\": [\n"
             "    {\"issue\": \"...\", \"proposed_fix\": \"...\", \"expected_effect\": \"...\"}\n"
             "  ],\n"
-            "  \"expected_impact\": {\n"
-            "    \"win_rate_increase_pct\": 0,\n"
-            "    \"reduction_in_avg_loss_pct\": 0,\n"
-            "    \"increase_in_avg_realized_pct\": 0,\n"
-            "    \"reduction_in_missed_upside_pct\": 0\n"
-            "  },\n"
             "  \"validation_plan\": [\"...\"]\n"
             "}\n"
         )
@@ -1923,11 +3055,18 @@ def _build_llm_recommendations(
                 "]\n"
                 "Ключи env_key только из algorithm_context.game_5m_exit_and_tuning_env_keys; для тикера — суффикс _TICKER.\n"
             )
+        cfg_allow: Optional[Set[str]] = None
+        if game_5m_config_focus:
+            cfg_allow = {
+                str(x).strip().upper()
+                for x in (algorithm_context.get("game_5m_exit_and_tuning_env_keys") or [])
+                if str(x).strip()
+            }
         max_tok = _analyzer_llm_max_output_tokens(game_5m_config_focus=game_5m_config_focus)
         out = llm.generate_response(
             messages=[{"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, indent=2)}],
             system_prompt=system_prompt,
-            temperature=0.1,
+            temperature=_analyzer_llm_temperature(),
             max_tokens=max_tok,
             http_timeout_sec=_heavy_llm_http_timeout,
         )
@@ -1952,6 +3091,13 @@ def _build_llm_recommendations(
                 parsed = {"raw_text": text or ""}
             if frag:
                 parsed["raw_fragment"] = frag
+        if parse_ok:
+            parsed, sanitize_warnings = _sanitize_llm_analysis(
+                parsed,
+                report=payload if isinstance(payload, dict) else {},
+                config_env_allow_keys=cfg_allow,
+            )
+            warnings.extend(sanitize_warnings)
         return {
             "status": status,
             "parse_ok": parse_ok,
@@ -2280,6 +3426,10 @@ PARAM_TO_ENV_KEY: Dict[str, str] = {
     "early_derisk_min_age_minutes": "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES",
     "early_derisk_max_loss_pct": "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT",
     "early_derisk_momentum_below": "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW",
+    "stale_reversal_min_age_minutes": "GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES",
+    "stale_reversal_max_pnl_pct": "GAME_5M_STALE_REVERSAL_MAX_PNL_PCT",
+    "stale_reversal_momentum_below": "GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW",
+    "exit_guard_first_minutes": "GAME_5M_EXIT_GUARD_FIRST_MINUTES",
     "stop_loss_pct_effective": "GAME_5M_STOP_LOSS_PCT",
     "take_profit_pct_effective": "GAME_5M_TAKE_PROFIT_PCT",
     "soft_take_max_pullback_from_high_pct": "GAME_5M_SOFT_TAKE_MAX_PULLBACK_FROM_HIGH_PCT",
@@ -2300,6 +3450,10 @@ PARAM_TO_ENV_KEY: Dict[str, str] = {
     "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES": "GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES",
     "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT": "GAME_5M_EARLY_DERISK_MAX_LOSS_PCT",
     "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW": "GAME_5M_EARLY_DERISK_MOMENTUM_BELOW",
+    "GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES": "GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES",
+    "GAME_5M_STALE_REVERSAL_MAX_PNL_PCT": "GAME_5M_STALE_REVERSAL_MAX_PNL_PCT",
+    "GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW": "GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW",
+    "GAME_5M_EXIT_GUARD_FIRST_MINUTES": "GAME_5M_EXIT_GUARD_FIRST_MINUTES",
     "GAME_5M_STOP_LOSS_PCT": "GAME_5M_STOP_LOSS_PCT",
     "GAME_5M_TAKE_PROFIT_PCT": "GAME_5M_TAKE_PROFIT_PCT",
     "GAME_5M_RSI_STRONG_BUY_MAX": "GAME_5M_RSI_STRONG_BUY_MAX",
@@ -2943,6 +4097,228 @@ def _build_catboost_entry_backtest(strategy: str, closed: List[Any], effects: Li
     return out
 
 
+def _recovery_delayed_close_after_exit(
+    df: Optional[pd.DataFrame],
+    exit_ts_et: pd.Timestamp,
+    delay_bars: int,
+) -> Optional[float]:
+    """Close цены на K-м 5m баре строго после exit_ts (упрощение для D3)."""
+    if df is None or getattr(df, "empty", True) or delay_bars <= 0:
+        return None
+    try:
+        m = df["datetime"] > exit_ts_et
+        fwd = df.loc[m]
+        if fwd is None or fwd.empty:
+            return None
+        ix = min(int(delay_bars), len(fwd)) - 1
+        if ix < 0:
+            return None
+        return float(fwd["Close"].iloc[ix])
+    except Exception:
+        return None
+
+
+def _build_recovery_scenario_backtest(
+    effects: List[TradeEffect],
+    ohlc_cache: Dict[str, Optional[pd.DataFrame]],
+    *,
+    strategy: str,
+) -> Dict[str, Any]:
+    """
+    Фаза D3: для TIME_EXIT_EARLY (GAME_5M) — скор recovery на последнем баре удержания;
+    при P < τ контрфакт «выход на K баров позже» по Close (без комиссий).
+    """
+    from services.game5m_recovery_catboost import (
+        load_recovery_model_meta,
+        predict_recovery_hold_proba,
+        row_vector_from_hold_bar,
+    )
+
+    su = (strategy or "").strip().upper()
+    if su == "PORTFOLIO":
+        return {
+            "mode": "skipped",
+            "note": "Recovery ML — контур GAME_5M; для портфеля не применяется.",
+        }
+    if su not in ("GAME_5M", "ALL"):
+        return {
+            "mode": "skipped",
+            "note": f"Стратегия {strategy!r}: сценарий только при GAME_5M или ALL.",
+        }
+
+    model_path = (get_config_value("GAME_5M_RECOVERY_CATBOOST_MODEL_PATH", "") or "").strip()
+    if not model_path:
+        model_path = str(
+            Path(__file__).resolve().parents[1] / "local" / "models" / "game5m_recovery_catboost.cbm"
+        )
+    meta = load_recovery_model_meta(model_path)
+    mp = Path(model_path)
+
+    try:
+        tau = float((get_config_value("GAME_5M_RECOVERY_SCENARIO_TAU", "0.45") or "0.45").replace(",", "."))
+    except (ValueError, TypeError):
+        tau = 0.45
+    try:
+        delay_bars = int((get_config_value("GAME_5M_RECOVERY_SCENARIO_DELAY_BARS", "6") or "6").strip())
+    except (ValueError, TypeError):
+        delay_bars = 6
+    delay_bars = max(1, min(delay_bars, 48))
+
+    out: Dict[str, Any] = {
+        "mode": "time_exit_early_delay",
+        "tau": tau,
+        "delay_bars": delay_bars,
+        "model_path": model_path,
+        "model_file_exists": mp.is_file(),
+        "meta_summary": {
+            "trained_at": (meta or {}).get("trained_at"),
+            "label_column": (meta or {}).get("label_column"),
+            "horizon_minutes": (meta or {}).get("horizon_minutes"),
+            "auc_valid": (meta or {}).get("auc_valid"),
+            "n_valid": (meta or {}).get("n_valid"),
+        }
+        if isinstance(meta, dict)
+        else None,
+        "description": (
+            "Последний 5m бар с entry_ts ≤ t < exit_ts → признаки как в экспорте recovery; P = P(y_recovery=1). "
+            "Если P < τ — считаем, что правило могло задержать выход на K баров после фактического exit_ts (Close, без комиссий)."
+        ),
+    }
+    out.update(_trust_level_game5m_recovery(meta if isinstance(meta, dict) else None))
+
+    if not mp.is_file():
+        out["note"] = "Нет .cbm — обучите: python scripts/train_game5m_recovery_catboost.py --jsonl …"
+        out["time_exit_early_trades"] = sum(
+            1
+            for e in effects
+            if str(e.exit_signal or "").upper() == "TIME_EXIT_EARLY"
+            and str(e.exit_strategy or "").strip().upper() == "GAME_5M"
+        )
+        out["scored"] = 0
+        return out
+
+    te_eff = [
+        e
+        for e in effects
+        if str(e.exit_signal or "").upper() == "TIME_EXIT_EARLY"
+        and str(e.exit_strategy or "").strip().upper() == "GAME_5M"
+    ]
+    per_trade: List[Dict[str, Any]] = []
+    n_would_delay = 0
+    improved = 0
+    worse = 0
+    equal = 0
+    deltas: List[float] = []
+    scored = 0
+
+    for e in te_eff:
+        df = ohlc_cache.get(e.ticker)
+        if df is None or getattr(df, "empty", True):
+            continue
+        entry_ts = _as_et(pd.Timestamp(e.entry_ts))
+        exit_ts = _as_et(pd.Timestamp(e.exit_ts))
+        if exit_ts <= entry_ts or float(e.entry_price) <= 0:
+            continue
+        try:
+            m = (df["datetime"] >= entry_ts) & (df["datetime"] < exit_ts)
+            sub = df.loc[m].reset_index(drop=True)
+        except Exception:
+            continue
+        if len(sub) < 1:
+            continue
+        try:
+            bar_time = pd.Timestamp(sub["datetime"].iloc[-1])
+            if bar_time.tzinfo is None:
+                bar_time = bar_time.tz_localize("America/New_York", ambiguous="infer")
+            else:
+                bar_time = bar_time.tz_convert("America/New_York")
+            ref_close = float(sub["Close"].iloc[-1])
+        except Exception:
+            continue
+        row = row_vector_from_hold_bar(
+            ticker=e.ticker,
+            entry_price=float(e.entry_price),
+            entry_ts_et=entry_ts,
+            bar_time_et=bar_time,
+            ref_close=ref_close,
+            entry_rsi_5m=e.entry_rsi_5m,
+            entry_vol_5m_pct=e.entry_vol_5m_pct,
+            entry_momentum_2h_pct=e.entry_momentum_2h_pct,
+            entry_decision=e.entry_decision,
+        )
+        if row is None:
+            continue
+        pred = predict_recovery_hold_proba(str(mp), row, meta=meta if isinstance(meta, dict) else None)
+        proba = pred.get("recovery_proba") if pred.get("status") == "ok" else None
+        if proba is None:
+            per_trade.append(
+                {
+                    "trade_id": e.trade_id,
+                    "ticker": e.ticker,
+                    "predict_status": pred.get("status"),
+                    "predict_reason": pred.get("reason"),
+                }
+            )
+            continue
+        scored += 1
+        entry_px = float(e.entry_price)
+        act_px = float(e.exit_price)
+        actual_pct = (act_px / entry_px - 1.0) * 100.0 if entry_px > 0 else 0.0
+        del_close = _recovery_delayed_close_after_exit(df, exit_ts, delay_bars)
+        delayed_pct: Optional[float] = None
+        if del_close is not None and entry_px > 0:
+            delayed_pct = (del_close / entry_px - 1.0) * 100.0
+        would_delay = float(proba) < tau
+        delta: Optional[float] = None
+        if would_delay and delayed_pct is not None:
+            n_would_delay += 1
+            delta = delayed_pct - actual_pct
+            deltas.append(delta)
+            if delta > 1e-6:
+                improved += 1
+            elif delta < -1e-6:
+                worse += 1
+            else:
+                equal += 1
+
+        per_trade.append(
+            {
+                "trade_id": e.trade_id,
+                "ticker": e.ticker,
+                "recovery_proba": round(float(proba), 4),
+                "would_delay_exit": bool(would_delay),
+                "exit_detail": e.exit_detail,
+                "actual_close_pct_approx": round(actual_pct, 4),
+                "delayed_close_pct_approx": round(delayed_pct, 4) if delayed_pct is not None else None,
+                "delta_delayed_minus_actual_pct": round(delta, 4) if delta is not None else None,
+            }
+        )
+
+    out["time_exit_early_trades"] = len(te_eff)
+    out["scored"] = scored
+    out["would_delay_count"] = n_would_delay
+    if n_would_delay > 0:
+        out["among_would_delay"] = {
+            "improved": improved,
+            "worse": worse,
+            "about_equal": equal,
+            "mean_delta_pct": round(float(np.mean(deltas)), 4) if deltas else None,
+        }
+    else:
+        out["among_would_delay"] = {
+            "improved": 0,
+            "worse": 0,
+            "about_equal": 0,
+            "mean_delta_pct": None,
+            "note": "Нет сделок с P < τ и доступной ценой через K баров после exit.",
+        }
+    _max_rows = 120
+    out["per_trade"] = per_trade[:_max_rows]
+    if len(per_trade) > _max_rows:
+        out["per_trade_omitted"] = len(per_trade) - _max_rows
+    return out
+
+
 def _attach_game5m_param_hypothesis_backtest_optional(
     payload: Dict[str, Any],
     *,
@@ -2971,6 +4347,8 @@ def analyze_trade_effectiveness(
     *,
     include_trade_details: bool = False,
     include_game5m_param_hypothesis_backtest: bool = False,
+    export_recovery_ml: bool = False,
+    recovery_ml_export_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     days = max(1, min(30, int(days)))
     closed = _load_closed_trades(days=days, strategy_name=strategy)
@@ -2980,6 +4358,7 @@ def analyze_trade_effectiveness(
                 "days": days,
                 "strategy": strategy,
                 "trades_analyzed": 0,
+                "export_recovery_ml": bool(export_recovery_ml),
                 "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
             },
             "summary": {"total": 0},
@@ -2991,12 +4370,30 @@ def analyze_trade_effectiveness(
             empty_payload["game_5m_config_hints"] = _build_game5m_config_hints(
                 [], {"total": 0}, hanger_tune_review=htr
             )
+        te0 = _build_time_exit_early_review([], {})
+        empty_payload["time_exit_early_review"] = te0
+        empty_payload["time_exit_early_action_summary"] = _build_time_exit_early_action_summary(te0)
         _attach_game5m_param_hypothesis_backtest_optional(
             empty_payload,
             strategy=strategy,
             effects=[],
             include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
         )
+        if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
+            empty_payload["game5m_hold_recovery_dataset_stats"] = _empty_game5m_hold_recovery_stats(
+                "no closed trades in window"
+            )
+        else:
+            empty_payload["game5m_hold_recovery_dataset_stats"] = _empty_game5m_hold_recovery_stats(
+                "recovery dataset only when strategy is GAME_5M or ALL"
+            )
+        if export_recovery_ml:
+            sr = (empty_payload.get("game5m_hold_recovery_dataset_stats") or {}).get("skip_reason", "skipped")
+            empty_payload["game5m_hold_recovery_export"] = {"status": "skipped", "reason": sr}
+        else:
+            empty_payload["game5m_hold_recovery_export"] = None
+        empty_payload["game5m_recovery_model_status"] = _build_game5m_recovery_model_status()
+        empty_payload["recovery_scenario_backtest"] = _build_recovery_scenario_backtest([], {}, strategy=strategy)
         return empty_payload
 
     tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
@@ -3012,12 +4409,15 @@ def analyze_trade_effectiveness(
         ps = prev_state["last_run"].get("game_5m_config_snapshot")
         prev_snap = ps if isinstance(ps, dict) else None
     hanger_tune_review = _build_game5m_hanger_tune_json_review(effects, summary, strategy=strategy)
+    te_review = _build_time_exit_early_review(effects, cache)
     practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
     add_pr = hanger_tune_review.get("practical_parameter_additions") if isinstance(hanger_tune_review, dict) else None
     if isinstance(add_pr, list):
         practical.extend([x for x in add_pr if isinstance(x, dict)])
+    practical.extend(_practical_suggestions_from_time_exit_early_review(te_review))
     critical_cases = _build_critical_case_analysis(effects, limit=5)
     game_5m_config_hints = _build_game5m_config_hints(effects, summary, hanger_tune_review=hanger_tune_review)
+    game_5m_config_hints.extend(_config_hints_from_time_exit_early_review(te_review))
     entry_review = _build_entry_underperformance_review(effects, limit=8)
     catboost_entry_backtest = _build_catboost_entry_backtest(strategy, closed, effects)
     hanger_v2_review = _build_hanger_v2_review(effects)
@@ -3028,6 +4428,7 @@ def analyze_trade_effectiveness(
             "strategy": strategy,
             "trades_analyzed": len(effects),
             "include_trade_details": bool(include_trade_details),
+            "export_recovery_ml": bool(export_recovery_ml),
             "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness",
             "decision_source_expected": "services.recommend_5m.get_decision_5m",
             "current_decision_rule_params": current_rules,
@@ -3048,8 +4449,11 @@ def analyze_trade_effectiveness(
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_catboost_status": _build_game5m_catboost_status(),
+        "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
+        "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
         "portfolio_catboost_status": _build_portfolio_catboost_status(),
-        "time_exit_early_review": _build_time_exit_early_review(effects, cache),
+        "time_exit_early_review": te_review,
+        "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review),
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
@@ -3064,6 +4468,14 @@ def analyze_trade_effectiveness(
         strategy=strategy,
         effects=effects,
         include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
+    )
+    _attach_game5m_hold_recovery_to_payload(
+        payload,
+        effects,
+        cache,
+        strategy=strategy,
+        export_recovery_ml=export_recovery_ml,
+        recovery_ml_export_path=recovery_ml_export_path,
     )
     _save_analyzer_state(
         {
@@ -3087,6 +4499,8 @@ def analyze_trade_effectiveness_focused(
     use_llm: bool = False,
     include_trade_details: bool = False,
     include_game5m_param_hypothesis_backtest: bool = False,
+    export_recovery_ml: bool = False,
+    recovery_ml_export_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Узкий анализ: последние ``days`` дней, опционально только выбранные тикеры и/или trade_id выхода.
@@ -3109,6 +4523,7 @@ def analyze_trade_effectiveness_focused(
                 "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness_focused",
                 "decision_source_expected": "services.recommend_5m.get_decision_5m",
                 "include_trade_details": bool(include_trade_details),
+                "export_recovery_ml": bool(export_recovery_ml),
                 "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
             },
             "summary": {"total": 0},
@@ -3120,12 +4535,30 @@ def analyze_trade_effectiveness_focused(
             empty_focus["game_5m_config_hints"] = _build_game5m_config_hints(
                 [], {"total": 0}, hanger_tune_review=htr_f
             )
+        te_f0 = _build_time_exit_early_review([], {}, focused_trade_ids=trade_ids if trade_ids else None)
+        empty_focus["time_exit_early_review"] = te_f0
+        empty_focus["time_exit_early_action_summary"] = _build_time_exit_early_action_summary(te_f0)
         _attach_game5m_param_hypothesis_backtest_optional(
             empty_focus,
             strategy=strategy,
             effects=[],
             include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
         )
+        if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
+            empty_focus["game5m_hold_recovery_dataset_stats"] = _empty_game5m_hold_recovery_stats(
+                "no closed trades matching focus filter"
+            )
+        else:
+            empty_focus["game5m_hold_recovery_dataset_stats"] = _empty_game5m_hold_recovery_stats(
+                "recovery dataset only when strategy is GAME_5M or ALL"
+            )
+        if export_recovery_ml:
+            sr = (empty_focus.get("game5m_hold_recovery_dataset_stats") or {}).get("skip_reason", "skipped")
+            empty_focus["game5m_hold_recovery_export"] = {"status": "skipped", "reason": sr}
+        else:
+            empty_focus["game5m_hold_recovery_export"] = None
+        empty_focus["game5m_recovery_model_status"] = _build_game5m_recovery_model_status()
+        empty_focus["recovery_scenario_backtest"] = _build_recovery_scenario_backtest([], {}, strategy=strategy)
         return empty_focus
 
     tickers_list = [str(t.ticker) for t in filtered if getattr(t, "ticker", None)]
@@ -3135,12 +4568,17 @@ def analyze_trade_effectiveness_focused(
     tops = _top_cases(effects)
     current_rules = _get_current_decision_rule_params()
     hanger_tune_review = _build_game5m_hanger_tune_json_review(effects, summary, strategy=strategy)
+    te_review_f = _build_time_exit_early_review(
+        effects, cache, focused_trade_ids=trade_ids if trade_ids else None
+    )
     practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
     add_pr_f = hanger_tune_review.get("practical_parameter_additions") if isinstance(hanger_tune_review, dict) else None
     if isinstance(add_pr_f, list):
         practical.extend([x for x in add_pr_f if isinstance(x, dict)])
+    practical.extend(_practical_suggestions_from_time_exit_early_review(te_review_f))
     critical_cases = _build_critical_case_analysis(effects, limit=5)
     game_5m_config_hints = _build_game5m_config_hints(effects, summary, hanger_tune_review=hanger_tune_review)
+    game_5m_config_hints.extend(_config_hints_from_time_exit_early_review(te_review_f))
     entry_review = _build_entry_underperformance_review(effects, limit=8)
     catboost_entry_backtest = _build_catboost_entry_backtest(strategy, filtered, effects)
     hanger_v2_review = _build_hanger_v2_review(effects)
@@ -3160,6 +4598,7 @@ def analyze_trade_effectiveness_focused(
             "decision_source_expected": "services.recommend_5m.get_decision_5m",
             "current_decision_rule_params": current_rules,
             "include_trade_details": bool(include_trade_details),
+            "export_recovery_ml": bool(export_recovery_ml),
             "long_hold_ge_7d_minutes": LONG_HOLD_MINUTES,
             "metric_definitions": ANALYZER_METRIC_DEFINITIONS,
         },
@@ -3171,8 +4610,11 @@ def analyze_trade_effectiveness_focused(
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_catboost_status": _build_game5m_catboost_status(),
+        "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
+        "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
         "portfolio_catboost_status": _build_portfolio_catboost_status(),
-        "time_exit_early_review": _build_time_exit_early_review(effects, cache),
+        "time_exit_early_review": te_review_f,
+        "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review_f),
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
@@ -3187,6 +4629,14 @@ def analyze_trade_effectiveness_focused(
         strategy=strategy,
         effects=effects,
         include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
+    )
+    _attach_game5m_hold_recovery_to_payload(
+        payload,
+        effects,
+        cache,
+        strategy=strategy,
+        export_recovery_ml=export_recovery_ml,
+        recovery_ml_export_path=recovery_ml_export_path,
     )
     return payload
 
@@ -3266,6 +4716,30 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             lines.append(
                 f"• {p.get('parameter')}: {p.get('current')} -> {p.get('proposed')} | {p.get('why')}"
             )
+    teas = report.get("time_exit_early_action_summary") or {}
+    if isinstance(teas, dict) and int(teas.get("time_exit_early_trades_total") or 0) > 0:
+        lines.append("")
+        lines.append("TIME_EXIT_EARLY (сводка):")
+        lines.append(
+            f"• Сделок: {teas.get('time_exit_early_trades_total', 0)}, с OHLC: {teas.get('rows_with_ohlc', 0)}, "
+            f"whipsaw 1h: {teas.get('premature_whipsaw_1h_count', 0)}"
+            + (
+                f" (доля {float(teas['premature_whipsaw_rate_given_ohlc']):.2%})"
+                if teas.get("premature_whipsaw_rate_given_ohlc") is not None
+                else ""
+            )
+        )
+        if teas.get("tune_priority_hint"):
+            lines.append(f"• {teas['tune_priority_hint']}")
+        lines.append(
+            f"• Предложения high/medium: {'да' if teas.get('has_actionable_proposals_high_or_medium') else 'нет'} "
+            f"({teas.get('actionable_proposals_count', 0)} шт.) | готово к правке порогов: "
+            f"{'да' if teas.get('ready_for_parameter_review') else 'нет'}"
+        )
+        if teas.get("insufficient_data_for_ml"):
+            lines.append("• Для будущего ML recovery: мало строк (insufficient_data_for_ml).")
+        if teas.get("focused_trade_rows_matched"):
+            lines.append(f"• Focused: совпало строк отчёта: {teas.get('focused_trade_rows_matched')}.")
     cb = report.get("catboost_entry_backtest") or {}
     if cb.get("mode") == "game5m_entry_context":
         cal = cb.get("calibration") or {}
