@@ -28,8 +28,8 @@ RECOVERY_CB_FEATURE_NAMES: List[str] = [
     "entry_decision",
 ]
 
-# Категориальные: ticker, entry_decision
-RECOVERY_CB_CAT_FEATURE_INDICES: List[int] = [0, 10]
+# Категориальные: ticker (0), entry_decision (11). Не [0,10] — индекс 10 это entry_momentum_2h_pct (float).
+RECOVERY_CB_CAT_FEATURE_INDICES: List[int] = [0, 11]
 
 
 def recovery_catboost_schema() -> Tuple[List[str], List[int]]:
