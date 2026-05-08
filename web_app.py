@@ -38,6 +38,7 @@ from config_loader import (
     get_use_llm_for_analyst,
     get_closed_positions_report_limits,
     get_web_closed_positions_limits,
+    get_config_value,
     load_config,
     get_config_file_path,
     update_config_key,
