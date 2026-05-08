@@ -1980,7 +1980,14 @@ async def get_game5m_cards(days: int = 5):
         raise HTTPException(status_code=501, detail="Модули recommend_5m / ticker_groups недоступны")
     tickers = list(get_tickers_game_5m() or [])
     if not tickers:
-        return _to_jsonable({"tickers": [], "cards": [], "updated_at": None})
+        return _to_jsonable(
+            {
+                "tickers": [],
+                "cards": [],
+                "updated_at": None,
+                "web_llm_enabled": web_llm_enabled(),
+            }
+        )
     days = min(max(1, days), 7)
     cards = []
     for tkr in tickers:
@@ -1994,11 +2001,14 @@ async def get_game5m_cards(days: int = 5):
         session = (d5 or {}).get("market_session") or {}
         card["session_phase"] = session.get("session_phase")
         cards.append(card)
-    return _to_jsonable({
-        "tickers": tickers,
-        "cards": cards,
-        "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
-    })
+    return _to_jsonable(
+        {
+            "tickers": tickers,
+            "cards": cards,
+            "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
+            "web_llm_enabled": web_llm_enabled(),
+        }
+    )
 
 
 def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
@@ -2044,6 +2054,7 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
         "correlation_tickers": (ctx or {}).get("tickers"),
         "cards": cards,
         "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
+        "web_llm_enabled": web_llm_enabled(),
     }
 
 
