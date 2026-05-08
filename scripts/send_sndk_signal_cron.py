@@ -464,7 +464,8 @@ def process_ticker(
                 price_quotes = quotes_prices.get(ticker)
             except Exception:
                 price_quotes = None
-            price_for_check = max(price, price_quotes) if (price_quotes is not None and price_quotes > 0) else price
+            # Тейк/стоп только по цене 5m-карточки + bar_high/bar_low в should_close_position (merge с quote из БД убран — ложные TAKE_PROFIT).
+            price_for_check = float(price)
             ms = d5.get("market_session") if isinstance(d5.get("market_session"), dict) else {}
             if engine is not None:
                 dual = (get_config_value("GAME_5M_HANGER_DUAL_MODE", "false") or "false").strip().lower() in (
@@ -531,9 +532,11 @@ def process_ticker(
                 px_take = max(float(price_for_check), float(px_hi))
                 pnl_take_line = (px_take - entry_f) / entry_f * 100.0
                 hk = hdiag.get("kind") if isinstance(hdiag, dict) else None
+                pq_log = "%.4f" % float(price_quotes) if price_quotes is not None else "n/a"
                 logger.info(
                     "[5m] HANGER_TACTIC %s: apply_hanger_json=%s live_hanger_kind=%s cap_pct=%.4f eff_take_pct=%.4f "
-                    "thr_take_pct=%.4f pnl_pct_for_take=%.4f should_close=%s exit_type=%s",
+                    "thr_take_pct=%.4f pnl_pct_for_take=%.4f should_close=%s exit_type=%s "
+                    "price_5m=%.4f quote=%s price_for_check=%.4f",
                     ticker,
                     apply_hanger_json,
                     hk,
@@ -543,6 +546,9 @@ def process_ticker(
                     pnl_take_line,
                     bool(should_close),
                     exit_type or "",
+                    float(price),
+                    pq_log,
+                    float(price_for_check),
                 )
                 if position_state_v2 and position_state_v2.get("enabled"):
                     logger.info(
@@ -1020,17 +1026,21 @@ def main():
                     if not d5 or d5.get("price") is None:
                         continue
                     price = d5.get("price")
+                    close_ctx_ah = build_5m_close_context(d5)
+                    bar_high_ah = close_ctx_ah.get("bar_high")
+                    bar_low_ah = close_ctx_ah.get("bar_low")
                     engine_ah = None
                     apply_hanger_json_ah = None
                     hdiag_ah = None
+                    pq_ah: float | None = None
                     try:
                         from report_generator import get_engine, get_latest_prices
                         engine_ah = get_engine()
                         quotes_prices = get_latest_prices(engine_ah, [ticker])
-                        pq = quotes_prices.get(ticker)
-                        price_for_check = max(price, pq) if (pq is not None and pq > 0) else price
+                        pq_ah = quotes_prices.get(ticker)
                     except Exception:
-                        price_for_check = price
+                        pass
+                    price_for_check = float(price)
                     if engine_ah is not None:
                         dual_ah = (get_config_value("GAME_5M_HANGER_DUAL_MODE", "false") or "false").strip().lower() in (
                             "1",
@@ -1060,9 +1070,8 @@ def main():
                                 apply_hanger_json_ah = hdiag_ah is not None
                             except Exception as e:
                                 logger.warning("%s: AFTER_HOURS HANGER_DUAL_MODE: %s", ticker, e)
-                    close_ctx_ah = build_5m_close_context(d5)
-                    bar_high = close_ctx_ah.get("bar_high")
-                    bar_low = close_ctx_ah.get("bar_low")
+                    bar_high = bar_high_ah
+                    bar_low = bar_low_ah
                     ms_ah = d5.get("market_session") if isinstance(d5.get("market_session"), dict) else {}
                     should_close, exit_type, exit_detail = should_close_position(
                         open_pos,
@@ -1097,9 +1106,11 @@ def main():
                         px_take0 = max(float(price_for_check), float(px_hi0))
                         pnl_line0 = (px_take0 - entry_f0) / entry_f0 * 100.0
                         hk0 = hdiag_ah.get("kind") if isinstance(hdiag_ah, dict) else None
+                        pq_log0 = "%.4f" % float(pq_ah) if pq_ah is not None else "n/a"
                         logger.info(
                             "AFTER_HOURS HANGER_TACTIC %s: apply_hanger_json=%s live_hanger_kind=%s cap_pct=%.4f "
-                            "eff_take_pct=%.4f thr_take_pct=%.4f pnl_pct_for_take=%.4f should_close=%s exit_type=%s",
+                            "eff_take_pct=%.4f thr_take_pct=%.4f pnl_pct_for_take=%.4f should_close=%s exit_type=%s "
+                            "price_5m=%.4f quote=%s price_for_check=%.4f",
                             ticker,
                             apply_hanger_json_ah,
                             hk0,
@@ -1109,6 +1120,9 @@ def main():
                             pnl_line0,
                             bool(should_close),
                             exit_type or "",
+                            float(price),
+                            pq_log0,
+                            float(price_for_check),
                         )
                     else:
                         position_state_ah = None
