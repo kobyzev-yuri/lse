@@ -22,7 +22,7 @@
         </table>
     </div>
     <div style="margin-top: 0.8rem;">
-        <button type="button" class="btn" id="restartServiceBtn">Перезапустить сервис с новыми параметрами</button>
+        <button type="button" class="btn" id="restartServiceBtn" {% if web_demo_mode %}disabled title="WEB_DEMO_MODE: отключено"{% endif %}>Перезапустить сервис с новыми параметрами</button>
         <span id="restartStatus" class="muted" style="margin-left: 0.5rem;"></span>
         <p class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;">Команда перезапуска — ключ <strong>RESTART_CMD</strong> в таблице выше. Пустое значение = <code>docker compose restart lse</code>.</p>
     </div>
@@ -42,9 +42,9 @@
             </div>
             <div class="mb-3">
                 <label class="form-label">Значение</label>
-                <input type="text" name="config_value" id="config_value" class="form-control" required>
+                <input type="text" name="config_value" id="config_value" class="form-control" required {% if web_demo_mode %}disabled{% endif %}>
             </div>
-            <button type="submit" class="btn" id="configEnvSaveBtn">Сохранить в config.env</button>
+            <button type="submit" class="btn" id="configEnvSaveBtn" {% if web_demo_mode %}disabled title="WEB_DEMO_MODE: редактирование отключено"{% endif %}>Сохранить в config.env</button>
         </form>
     </div>
 </div>

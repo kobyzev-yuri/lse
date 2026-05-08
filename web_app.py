@@ -61,6 +61,28 @@ from report_generator import (
 app = FastAPI(title="LSE Trading System", version="1.0.0")
 logger = logging.getLogger(__name__)
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def web_demo_mode() -> bool:
+    """
+    Демо-режим только для WEB UI (без аутентификации).
+    В этом режиме веб:
+    - запрещает любые записи в config.env и любые рестарты,
+    - запрещает любые apply/tuning операции анализатора,
+    - принудительно отключает LLM в веб-эндпоинтах (Telegram при этом не затрагивается).
+    """
+    return _env_flag("WEB_DEMO_MODE", False)
+
+
+def web_llm_enabled() -> bool:
+    # Можно отключить LLM в вебе отдельным флагом, не влияя на Telegram.
+    return not _env_flag("WEB_DISABLE_LLM", False) and not web_demo_mode()
+
 GAME5M_TUNING_REGLEMENT = {
     "rules": [
         "Один live-эксперимент за раз.",
@@ -284,6 +306,9 @@ jinja_env = Environment(loader=FileSystemLoader(str(templates_dir)))
 
 def render_template(template_name: str, context: dict):
     """Рендеринг шаблона"""
+    context = dict(context or {})
+    context.setdefault("web_demo_mode", web_demo_mode())
+    context.setdefault("web_llm_enabled", web_llm_enabled())
     template = jinja_env.get_template(template_name)
     return template.render(**context)
 
@@ -648,7 +673,7 @@ async def get_analyzer(
         payload = analyze_trade_effectiveness(
             days=min(max(1, int(days)), 30),
             strategy=(strategy or "GAME_5M").strip().upper(),
-            use_llm=bool(use_llm),
+            use_llm=bool(use_llm) and web_llm_enabled(),
             include_trade_details=bool(include_trade_details),
             export_recovery_ml=bool(export_recovery_ml),
         )
@@ -695,7 +720,7 @@ async def get_analyzer_focused(
             strategy=(strategy or "GAME_5M").strip().upper(),
             tickers=t_list if t_list else None,
             trade_ids=id_list if id_list else None,
-            use_llm=bool(use_llm),
+            use_llm=bool(use_llm) and web_llm_enabled(),
             include_trade_details=bool(include_trade_details),
             export_recovery_ml=bool(export_recovery_ml),
         )
@@ -715,6 +740,9 @@ async def apply_analyzer_config(request: Request):
       }
     """
     import subprocess
+
+    if web_demo_mode():
+        raise HTTPException(status_code=403, detail="WEB_DEMO_MODE: apply-config disabled")
 
     try:
         body = await request.json()
@@ -888,6 +916,8 @@ async def analyzer_tuning_status(top_n: int = 8):
 @app.post("/api/analyzer/tuning/apply", response_class=JSONResponse)
 async def analyzer_tuning_apply(request: Request):
     """Apply one GAME_5M tuning proposal or explicit key/value through shared guardrails."""
+    if web_demo_mode():
+        raise HTTPException(status_code=403, detail="WEB_DEMO_MODE: tuning disabled")
     try:
         body = await request.json()
     except Exception:
@@ -936,6 +966,8 @@ async def analyzer_tuning_apply(request: Request):
 @app.post("/api/analyzer/tuning/observe", response_class=JSONResponse)
 async def analyzer_tuning_observe(request: Request):
     """Attach current post-apply observation to active GAME_5M tuning experiment."""
+    if web_demo_mode():
+        raise HTTPException(status_code=403, detail="WEB_DEMO_MODE: tuning disabled")
     try:
         body = await request.json()
     except Exception:
@@ -963,6 +995,8 @@ async def analyzer_tuning_observe(request: Request):
 @app.post("/api/analyzer/tuning/rollback", response_class=JSONResponse)
 async def analyzer_tuning_rollback():
     """Rollback active GAME_5M experiment to old_value recorded in ledger."""
+    if web_demo_mode():
+        raise HTTPException(status_code=403, detail="WEB_DEMO_MODE: tuning disabled")
     ledger = _load_game5m_tuning_ledger()
     active = ledger.get("active_experiment") if isinstance(ledger.get("active_experiment"), dict) else None
     if not active:
@@ -999,6 +1033,7 @@ async def trading_page_removed():
 async def analyze_ticker(ticker: str = Form(...), use_llm: bool = Form(True)):
     """API: Анализ тикера (аналог /signal и /recommend в Telegram)"""
     try:
+        use_llm = bool(use_llm) and web_llm_enabled()
         agent = AnalystAgent(use_llm=use_llm)
         if use_llm:
             result = agent.get_decision_with_llm(ticker)
@@ -2925,6 +2960,8 @@ async def get_config_env_api():
 @app.post("/api/config/env", response_class=JSONResponse)
 async def update_config_env_api(key: str = Form(...), value: str = Form(...)):
     """API: обновить ключ в config.env (файл модифицируется на диске)."""
+    if web_demo_mode():
+        raise HTTPException(status_code=403, detail="WEB_DEMO_MODE: config editing disabled")
     key = (key or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="key is required")
@@ -2948,6 +2985,8 @@ async def restart_service_api():
     Если команда не задана или выполнение невозможно — возвращает подсказку для ручного перезапуска на сервере.
     """
     import subprocess
+    if web_demo_mode():
+        return _to_jsonable({"ok": False, "message": "WEB_DEMO_MODE: restart disabled"})
     config = load_config()
     try:
         # Если мы внутри контейнера и RESTART_CMD не задан — self-restart без попыток docker compose.

@@ -45,7 +45,7 @@
             </select>
         </div>
         <div>
-            <label><input id="useLlm" type="checkbox"> Запросить рекомендации модели (<code>use_llm=1</code>)</label>
+            <label><input id="useLlm" type="checkbox" {% if not web_llm_enabled %}disabled{% endif %}> Запросить рекомендации модели (<code>use_llm=1</code>)</label>
         </div>
         <div>
             <button id="runBtn" type="button">Запустить анализ</button>
@@ -171,7 +171,7 @@
     <div id="envSkip" class="dashboard-text muted">—</div>
     <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
         <label><input id="restartAfterApply" type="checkbox" checked> Перезагрузить сервис после применения</label>
-        <button id="applyEnvBtn" type="button" disabled>Применить в config.env</button>
+        <button id="applyEnvBtn" type="button" disabled {% if web_demo_mode %}title="WEB_DEMO_MODE: apply отключён"{% endif %}>Применить в config.env</button>
     </div>
     <div id="applyStatus" class="dashboard-text muted" style="margin-top:0.5rem;">—</div>
 </div>
