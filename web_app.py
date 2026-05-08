@@ -67,6 +67,19 @@ def _env_flag(name: str, default: bool = False) -> bool:
         return bool(default)
     return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
 
+def _config_flag(name: str, default: bool = False) -> bool:
+    """
+    Флаг, который можно задавать как через env процесса, так и через config.env.
+    Важно для прод/демо: config.env монтируется в контейнер, но не обязательно экспортируется в окружение.
+    """
+    try:
+        raw = get_config_value(name, None)  # env -> config.env
+    except Exception:
+        raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
+
 
 def web_demo_mode() -> bool:
     """
@@ -76,12 +89,12 @@ def web_demo_mode() -> bool:
     - запрещает любые apply/tuning операции анализатора,
     - принудительно отключает LLM в веб-эндпоинтах (Telegram при этом не затрагивается).
     """
-    return _env_flag("WEB_DEMO_MODE", False)
+    return _config_flag("WEB_DEMO_MODE", False)
 
 
 def web_llm_enabled() -> bool:
     # Можно отключить LLM в вебе отдельным флагом, не влияя на Telegram.
-    return not _env_flag("WEB_DISABLE_LLM", False) and not web_demo_mode()
+    return not _config_flag("WEB_DISABLE_LLM", False) and not web_demo_mode()
 
 GAME5M_TUNING_REGLEMENT = {
     "rules": [
@@ -2313,6 +2326,8 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
 @app.get("/api/game5m/card/{ticker}/llm", response_class=JSONResponse)
 async def get_game5m_card_llm(ticker: str):
     """API: Вывод LLM по одному тикеру 5m (по запросу, аналог prompt_entry). Для кнопки в карточке. Выполняется в потоке, чтобы не блокировать сервер."""
+    if not web_llm_enabled():
+        raise HTTPException(status_code=403, detail="WEB: LLM disabled")
     ticker = ticker.strip().upper()
     try:
         from services.ticker_groups import get_tickers_game_5m
@@ -2354,6 +2369,8 @@ async def get_portfolio_cards(corr_days: int = 30):
 @app.get("/api/portfolio/card/{ticker}/llm", response_class=JSONResponse)
 async def get_portfolio_card_llm(ticker: str, corr_days: int = 30):
     """API: LLM-разбор по тикеру портфеля (корреляции, новости, техника, риск)."""
+    if not web_llm_enabled():
+        raise HTTPException(status_code=403, detail="WEB: LLM disabled")
     t = ticker.strip().upper()
     try:
         result = await asyncio.to_thread(_compute_portfolio_card_llm_sync, t, corr_days)
