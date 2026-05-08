@@ -135,6 +135,7 @@
     <div id="cardsContainer"></div>
 
     <script>
+        var LSE_WEB_LLM_ENABLED = {% if web_llm_enabled %}true{% else %}false{% endif %};
         var REFRESH_INTERVAL_MS = 5 * 60 * 1000;
         var refreshTimer = null;
         function scheduleAutoRefresh() {
@@ -250,8 +251,10 @@
                 html += fcBlock;
             }
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
-            html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">Вывод LLM</button>';
-            html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';
+            if (LSE_WEB_LLM_ENABLED) {
+                html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">Вывод LLM</button>';
+                html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';
+            }
             html += '<div class="chart-link"><a href="/visualization?ticker=' + encodeURIComponent(c.ticker) + '" target="_blank">График 5m</a></div>';
             html += '</div>';
             return html;
@@ -276,7 +279,7 @@
         }
         async function onLlmClick(ticker) {
             const block = document.getElementById('llm-' + ticker);
-            if (!block) return;
+            if (!block || !LSE_WEB_LLM_ENABLED) return;
             if (block.classList.contains('open') && block.dataset.loaded === '1') return;
             block.classList.add('open');
             block.innerHTML = '<span class="loading-llm">Загрузка LLM… (может занять до 1–2 мин)</span>';

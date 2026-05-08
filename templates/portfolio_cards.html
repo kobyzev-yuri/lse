@@ -109,6 +109,7 @@
     <div id="cardsContainer"></div>
 
     <script>
+        var LSE_WEB_LLM_ENABLED = {% if web_llm_enabled %}true{% else %}false{% endif %};
         var REFRESH_MS = 30 * 60 * 1000;
         var refreshTimer = null;
         function escapeHtml(s) {
@@ -172,8 +173,10 @@
                 html += '<div class="row"><span class="label">Цена стоп-триггера (~)</span><span class="value negative">$' + fmt(c.execution_stop_trigger_price_at_close, 2) + '</span></div>';
             }
             html += '</div>';
-            html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">LLM (полный контекст)</button>';
-            html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';
+            if (LSE_WEB_LLM_ENABLED) {
+                html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">LLM (полный контекст)</button>';
+                html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';
+            }
             html += '<div class="chart-link"><a href="/portfolio/daily?ticker=' + encodeURIComponent(c.ticker) + '">График daily (quotes)</a></div>';
             html += '</div>';
             return html;
@@ -206,7 +209,7 @@
         }
         async function onLlm(ticker) {
             var block = document.getElementById('llm-' + ticker);
-            if (!block) return;
+            if (!block || !LSE_WEB_LLM_ENABLED) return;
             block.classList.add('open');
             block.innerHTML = '<span class="muted">Загрузка LLM…</span>';
             var controller = new AbortController();
