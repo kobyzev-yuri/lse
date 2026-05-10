@@ -7,7 +7,7 @@ LLM сервис: OpenAI SDK (chat.completions) к OpenAI и/или Anthropic (P
 import os
 import json
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Веса слияния тех+новости (как nyse trade_builder: tech vs news)
 ENTRY_FUSION_W_TECH = 0.55
@@ -17,6 +17,24 @@ import re
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
+
+
+def completion_message_text(message: Any) -> str:
+    """
+    Текст ответа ассистента: content или (для reasoning-моделей OpenRouter) reasoning, если content пуст.
+    """
+    t = getattr(message, "content", None)
+    if isinstance(t, str) and t.strip():
+        return t
+    r = getattr(message, "reasoning", None)
+    if isinstance(r, str) and r.strip():
+        return r
+    extra = getattr(message, "model_extra", None) or {}
+    if isinstance(extra, dict):
+        r2 = extra.get("reasoning")
+        if isinstance(r2, str) and r2.strip():
+            return r2
+    return ""
 
 
 def coerce_entry_decision_label(raw: Any, fallback: str = "HOLD") -> str:
@@ -644,10 +662,12 @@ def parse_compare_models(config: Dict[str, str]) -> List[Tuple[str, str]]:
     provider: openai, anthropic, google (базовые URL из ProxyAPI).
     Пример: gpt-4o,openai|gpt-5.2,anthropic|claude-opus-4-6,google|gemini-3.1-pro-preview
     """
-    raw = config.get("LLM_COMPARE_MODELS", "").strip()
+    from config_loader import get_config_value
+
+    raw = (get_config_value("LLM_COMPARE_MODELS") or config.get("LLM_COMPARE_MODELS") or "").strip()
     if not raw:
         return []
-    base_default = config.get("OPENAI_BASE_URL", PROXYAPI_OPENAI_BASE)
+    base_default = (get_config_value("OPENAI_BASE_URL") or config.get("OPENAI_BASE_URL") or PROXYAPI_OPENAI_BASE)
     provider_bases = {
         "openai": PROXYAPI_OPENAI_BASE,
         "anthropic": PROXYAPI_ANTHROPIC_BASE,
@@ -824,9 +844,7 @@ class LLMService:
             response = self.client.chat.completions.create(**request_params, timeout=http_timeout)
             
             # Извлекаем ответ
-            assistant_message = response.choices[0].message.content
-            if assistant_message is None:
-                assistant_message = ""
+            assistant_message = completion_message_text(response.choices[0].message)
 
             return {
                 "response": assistant_message,
@@ -1041,10 +1059,19 @@ Sentiment анализ:
         if not self.api_key:
             return None
         try:
+            http_timeout = kwargs.pop("http_timeout_sec", None)
+            if http_timeout is not None:
+                try:
+                    http_timeout = float(http_timeout)
+                except (TypeError, ValueError):
+                    http_timeout = None
+            if http_timeout is None or http_timeout <= 0:
+                http_timeout = float(kwargs.get("timeout", self.timeout) or self.timeout)
+
             client = OpenAI(
                 api_key=self.api_key,
                 base_url=base_url,
-                timeout=kwargs.get("timeout", self.timeout),
+                timeout=http_timeout,
             )
             formatted_messages = []
             if system_prompt:
@@ -1061,8 +1088,9 @@ Sentiment анализ:
                 messages=formatted_messages,
                 temperature=kwargs.get("temperature", self.temperature),
                 **_token_kw,
+                timeout=http_timeout,
             )
-            msg = response.choices[0].message.content
+            msg = completion_message_text(response.choices[0].message)
             return {
                 "response": msg,
                 "model": getattr(response, "model", model),
@@ -1290,13 +1318,87 @@ Sentiment анализ:
                     "LLM entry (ticker=%s): cluster_note was in prompt; reasoning/key_factors mention correlation: %s; reasoning: %.200s",
                     ticker, mentions_correlation, (analysis.get("reasoning") or "")[:200],
                 )
-            return {
+            out: Dict[str, Any] = {
                 "llm_analysis": analysis,
                 "usage": result.get("usage", {}),
                 "prompt_system": system_prompt,
                 "prompt_user": user_message,
                 "llm_response_raw": response_text,
             }
+            compare_list = parse_compare_models(load_config())
+            if compare_list:
+                cmp_max = int(os.getenv("ENTRY_LLM_COMPARE_MAX_TOKENS", "6144") or "6144")
+                try:
+                    cmp_temp = float(os.getenv("ENTRY_LLM_COMPARE_TEMPERATURE", str(self.temperature)))
+                except (ValueError, TypeError):
+                    cmp_temp = self.temperature
+                model_comparison: List[Dict[str, Any]] = []
+                for cbase, cmodel in compare_list:
+                    bu_n, mo_n = normalize_openai_sdk_proxyapi_base_model(cbase, cmodel)
+                    if bu_n.rstrip("/") == (self.base_url or "").rstrip("/") and mo_n == self.model:
+                        continue
+                    try:
+                        res_c = self.generate_response_with_model(
+                            bu_n,
+                            mo_n,
+                            messages,
+                            system_prompt=system_prompt,
+                            http_timeout_sec=http_timeout_sec,
+                            max_tokens=cmp_max,
+                            temperature=cmp_temp,
+                        )
+                    except Exception as ex:
+                        model_comparison.append(
+                            {"base_url": bu_n, "model": mo_n, "error": str(ex)}
+                        )
+                        continue
+                    if not res_c:
+                        model_comparison.append(
+                            {"base_url": bu_n, "model": mo_n, "error": "no response"}
+                        )
+                        continue
+                    raw_c = (res_c.get("response") or "").strip()
+                    analysis_c: Dict[str, Any]
+                    try:
+                        json_match_c = re.search(r"\{.*\}", raw_c, re.DOTALL)
+                        if json_match_c:
+                            analysis_c = json.loads(json_match_c.group())
+                        else:
+                            analysis_c = {
+                                "decision": "HOLD",
+                                "decision_fused": "HOLD",
+                                "ab_fusion_differs": False,
+                                "confidence": 0.5,
+                                "reasoning": raw_c,
+                                "reasoning_fused": "",
+                                "risks": [],
+                                "key_factors": [],
+                            }
+                    except json.JSONDecodeError:
+                        analysis_c = {
+                            "decision": "HOLD",
+                            "decision_fused": "HOLD",
+                            "ab_fusion_differs": False,
+                            "confidence": 0.5,
+                            "reasoning": raw_c,
+                            "reasoning_fused": "",
+                            "risks": [],
+                            "key_factors": [],
+                        }
+                    analysis_c = _finalize_dual_entry_llm_analysis(analysis_c)
+                    model_comparison.append(
+                        {
+                            "base_url": bu_n,
+                            "model": mo_n,
+                            "usage": res_c.get("usage") or {},
+                            "finish_reason": res_c.get("finish_reason"),
+                            "llm_analysis": analysis_c,
+                            "llm_response_raw": raw_c[:8000],
+                        }
+                    )
+                if model_comparison:
+                    out["llm_model_comparison"] = model_comparison
+            return out
         except Exception as e:
             logger.error(f"Ошибка анализа через LLM: {e}")
             err_str = str(e).lower()

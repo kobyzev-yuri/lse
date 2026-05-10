@@ -2894,7 +2894,12 @@ def _build_llm_recommendations(
     game_5m_config_focus: bool = False,
 ) -> Optional[Dict[str, Any]]:
     try:
-        from services.llm_service import get_llm_service, get_openai_http_timeout_prompt_entry
+        from services.llm_service import (
+            get_llm_service,
+            get_openai_http_timeout_prompt_entry,
+            normalize_openai_sdk_proxyapi_base_model,
+            parse_compare_models,
+        )
 
         llm = get_llm_service()
         _heavy_llm_http_timeout = get_openai_http_timeout_prompt_entry()
@@ -3096,7 +3101,7 @@ def _build_llm_recommendations(
                 config_env_allow_keys=cfg_allow,
             )
             warnings.extend(sanitize_warnings)
-        return {
+        ret: Dict[str, Any] = {
             "status": status,
             "parse_ok": parse_ok,
             "finish_reason": finish_reason,
@@ -3105,6 +3110,66 @@ def _build_llm_recommendations(
             "usage": out.get("usage"),
             "analysis": parsed,
         }
+        compare_list = parse_compare_models(load_config())
+        if compare_list:
+            comp: List[Dict[str, Any]] = []
+            msg_user = [{"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, indent=2)}]
+            for cbase, cmodel in compare_list:
+                bu_n, mo_n = normalize_openai_sdk_proxyapi_base_model(cbase, cmodel)
+                if bu_n.rstrip("/") == (llm.base_url or "").rstrip("/") and mo_n == llm.model:
+                    continue
+                try:
+                    res2 = llm.generate_response_with_model(
+                        bu_n,
+                        mo_n,
+                        msg_user,
+                        system_prompt=system_prompt,
+                        temperature=_analyzer_llm_temperature(),
+                        max_tokens=max_tok,
+                        http_timeout_sec=_heavy_llm_http_timeout,
+                    )
+                except Exception as ex:
+                    comp.append({"base_url": bu_n, "model": mo_n, "error": str(ex)})
+                    continue
+                if not res2:
+                    comp.append({"base_url": bu_n, "model": mo_n, "error": "no response"})
+                    continue
+                text2 = (res2.get("response") or "").strip()
+                fr2 = res2.get("finish_reason")
+                parsed2 = _parse_llm_json_response(text2)
+                ok2 = _llm_trade_analyzer_response_parsed_ok(parsed2)
+                w2: List[str] = []
+                if fr2 == "length":
+                    w2.append(
+                        "Ответ compare-модели обрезан (finish_reason=length); увеличьте ANALYZER_LLM_MAX_COMPLETION_TOKENS."
+                    )
+                if ok2 and isinstance(parsed2, dict):
+                    parsed2, sw2 = _sanitize_llm_analysis(
+                        parsed2,
+                        report=payload if isinstance(payload, dict) else {},
+                        config_env_allow_keys=cfg_allow,
+                    )
+                    w2.extend(sw2)
+                elif not ok2 and text2:
+                    frag2 = text2[:4000]
+                    if not isinstance(parsed2, dict):
+                        parsed2 = {"raw_text": text2 or ""}
+                    if frag2:
+                        parsed2["raw_fragment"] = frag2
+                comp.append(
+                    {
+                        "base_url": bu_n,
+                        "model": mo_n,
+                        "parse_ok": ok2,
+                        "finish_reason": fr2,
+                        "warnings": w2,
+                        "usage": res2.get("usage"),
+                        "analysis": parsed2,
+                    }
+                )
+            if comp:
+                ret["model_comparison"] = comp
+        return ret
     except Exception as e:
         return {"status": "error", "reason": str(e)}
 
