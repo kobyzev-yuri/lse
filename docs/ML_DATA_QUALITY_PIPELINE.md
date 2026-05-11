@@ -74,6 +74,7 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 | Создать таблицы | `python scripts/migrate_ml_event_analytics.py` |
 | SQL на просмотр | `scripts/sql/ml_event_analytics_schema.sql` |
 | Skeleton из KB (EARNINGS*) | `python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0` |
+| План джобов features/outcomes и cron | [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md) |
 
 Таблицы: `earnings_event_detail`, `peer_graph_edge`, `market_regime_daily`, `event_reaction_dataset`. Дамп: см. `scripts/export_pg_dump.sh` (список `LSE_TABLES` дополнен).
 
