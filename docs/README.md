@@ -1,6 +1,6 @@
 # Документация LSE — навигация
 
-Корневой обзор архитектуры: [ARCHITECTURE.md](ARCHITECTURE.md). Длинные бизнес-процессы: [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md).
+Корневой обзор архитектуры: [ARCHITECTURE.md](ARCHITECTURE.md). Длинные бизнес-процессы: [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md). **Разметка БД, ML, метрики и LLM-отчёт о качестве данных:** [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md).
 
 ## Игра GAME_5M (одна цепочка: вход → удержание → выход → разбор)
 
@@ -22,7 +22,8 @@
 | `scripts/run_daily_game5m_ml_pipeline.py` | После сессии: stuck CSV + continuation CSV + CatBoost + строка в `game5m_daily_ml_report.jsonl` |
 | `scripts/build_game5m_stuck_dataset.py` | Датасет риска зависания |
 | `scripts/build_game5m_continuation_dataset.py` | Датасет underprofit / continuation |
-| `scripts/train_game5m_catboost.py` | Обучение entry-модели |
+| `scripts/train_game5m_catboost.py` | Обучение entry-модели; **`--json-metrics-out`** для машинного снимка метрик |
+| `scripts/run_ml_data_quality_report.py` | **Единый отчёт** БД/датасетов/CatBoost + опц. dry-run train + **LLM** |
 | `scripts/snapshot_analyzer_report.py` | Снимок JSON анализатора для офлайна / cron |
 
 ## Earnings / event agent (дизайн)

@@ -63,7 +63,7 @@
    ```bash
    cd /path/to/lse && python scripts/train_game5m_catboost.py
    ```
-   Опции: `--min-rows 80`, `--valid-ratio 0.2`, `--out local/models/game5m_entry_catboost.cbm`, `--dry-run` (только статистика).
+   Опции: `--min-rows 80`, `--valid-ratio 0.2`, `--out local/models/game5m_entry_catboost.cbm`, `--dry-run` (только статистика), **`--json-metrics-out path.json`** — машинный снимок (`n_*`, `auc_valid`, `status`) для `scripts/run_ml_data_quality_report.py` (см. [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md)).
 4. Артефакты (не в git): `local/models/game5m_entry_catboost.cbm` + `game5m_entry_catboost.meta.json`.
 5. В `config.env`: `GAME_5M_CATBOOST_ENABLED=true`, при необходимости `GAME_5M_CATBOOST_MODEL_PATH=...`.
 

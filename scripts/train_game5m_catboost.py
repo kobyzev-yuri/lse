@@ -5,7 +5,7 @@
 Признаки совпадают с services.catboost_5m_signal (корреляция только из JSON, без текущей матрицы).
 
   pip install -r requirements-catboost.txt
-  python scripts/train_game5m_catboost.py [--dry-run] [--min-rows 80]
+  python scripts/train_game5m_catboost.py [--dry-run] [--min-rows 80] [--json-metrics-out metrics.json]
 
 См. docs/ML_GAME5M_CATBOOST.md
 """
@@ -112,12 +112,27 @@ def main() -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="Only print stats, no model file")
     parser.add_argument(
+        "--json-metrics-out",
+        type=str,
+        default="",
+        help="Путь JSON с метриками/статусом обучения (для run_ml_data_quality_report и дашбордов)",
+    )
+    parser.add_argument(
         "--label",
         choices=("net_pnl_pos", "log_return_pos"),
         default="net_pnl_pos",
         help="Binary label: net_pnl>0 or log_return>0",
     )
     args = parser.parse_args()
+
+    def _write_metrics_json(path_str: str, payload: dict[str, Any]) -> None:
+        ps = (path_str or "").strip()
+        if not ps:
+            return
+        outp = Path(ps).expanduser()
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        with open(outp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
     try:
         from catboost import CatBoostClassifier, Pool
@@ -214,6 +229,20 @@ def main() -> int:
             "Строк меньше порога %s — модель не пишем. Накопите историю или снизьте GAME_5M_CATBOOST_MIN_TRAIN_ROWS.",
             min_rows,
         )
+        _write_metrics_json(
+            args.json_metrics_out,
+            {
+                "script": "train_game5m_catboost",
+                "status": "insufficient_rows",
+                "trained_at": datetime.now(timezone.utc).isoformat(),
+                "n_total": n_total,
+                "y_pos": pos,
+                "y_neg": n_total - pos,
+                "min_train_rows_config": min_rows,
+                "excluded_false_take_profit_by_session_high": skipped_false_take,
+                "label": args.label,
+            },
+        )
         return 2
 
     # Time-ordered split by entry_ts (fallback exit ts)
@@ -261,6 +290,26 @@ def main() -> int:
     out_path = Path(out_final)
     meta_path = out_path.with_suffix(".meta.json")
 
+    meta = {
+        "script": "train_game5m_catboost",
+        "status": "ok",
+        "dry_run": bool(args.dry_run),
+        "feature_names": feature_names,
+        "cat_feature_indices": cat_features,
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "n_train": n_train,
+        "n_valid": n_valid,
+        "n_total": n_total,
+        "y_pos": pos,
+        "excluded_false_take_profit_by_session_high": skipped_false_take,
+        "label": args.label,
+        "min_train_rows_config": min_rows,
+        "auc_valid": round(auc, 4) if auc == auc else None,
+        "out_model_path": str(out_path),
+        "game_5m_rule_version_note": "Переобучите после смены признаков или GAME_5M_RULE_VERSION",
+    }
+    _write_metrics_json(args.json_metrics_out, meta)
+
     if args.dry_run:
         logger.info("Dry-run: не записываем %s", out_path)
         return 0
@@ -268,21 +317,10 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     model.save_model(str(out_path))
 
-    meta = {
-        "feature_names": feature_names,
-        "cat_feature_indices": cat_features,
-        "trained_at": datetime.now(timezone.utc).isoformat(),
-        "n_train": n_train,
-        "n_valid": n_valid,
-        "n_total": n_total,
-        "excluded_false_take_profit_by_session_high": skipped_false_take,
-        "label": args.label,
-        "min_train_rows_config": min_rows,
-        "auc_valid": round(auc, 4) if auc == auc else None,
-        "game_5m_rule_version_note": "Переобучите после смены признаков или GAME_5M_RULE_VERSION",
-    }
+    meta_save = {k: v for k, v in meta.items() if k not in ("script", "status", "dry_run", "out_model_path")}
+    meta_save["trained_at"] = meta["trained_at"]
     with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+        json.dump(meta_save, f, ensure_ascii=False, indent=2)
     logger.info("Сохранено: %s и %s", out_path, meta_path)
     return 0
 
