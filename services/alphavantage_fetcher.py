@@ -80,6 +80,19 @@ def get_api_key() -> Optional[str]:
     return get_config_value('ALPHAVANTAGE_KEY', None)
 
 
+def _safe_float_estimate(raw: Optional[str]) -> Optional[float]:
+    """AV иногда отдаёт нечисловой estimate (буква, «—», пусто) — не теряем всю строку календаря."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or s.upper() == "NONE":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def fetch_earnings_calendar(api_key: str, symbol: str = None) -> List[Dict]:
     """
     Получает календарь earnings через Alpha Vantage
@@ -105,34 +118,48 @@ def fetch_earnings_calendar(api_key: str, symbol: str = None) -> List[Dict]:
             return []
         response.raise_for_status()
         
-        # Alpha Vantage возвращает CSV
-        csv_data = response.text
-        
-        if not csv_data or 'Error' in csv_data:
-            logger.warning(f"⚠️ Alpha Vantage вернул ошибку: {csv_data[:200]}")
+        # Alpha Vantage обычно отдаёт CSV; при лимите ключа — JSON с "Note" / "Information Message"
+        csv_data = (response.text or "").strip()
+        if not csv_data:
+            logger.warning("⚠️ Alpha Vantage EARNINGS_CALENDAR: пустой ответ")
             return []
-        
+        if csv_data.startswith("{") or '"Note"' in csv_data or '"Information"' in csv_data:
+            logger.warning(
+                "⚠️ Alpha Vantage EARNINGS_CALENDAR: не CSV (лимит API или сообщение сервиса): %s",
+                csv_data[:500],
+            )
+            return []
+        if "Error" in csv_data[:120]:
+            logger.warning("⚠️ Alpha Vantage вернул ошибку: %s", csv_data[:400])
+            return []
+
         reader = csv.DictReader(StringIO(csv_data))
-        
+
         earnings = []
         for row in reader:
             try:
-                # Парсим дату
                 report_date = None
-                if row.get('reportDate'):
+                rd = (row.get("reportDate") or "").strip()
+                if rd:
                     try:
-                        report_date = datetime.strptime(row['reportDate'], '%Y-%m-%d')
-                    except:
+                        report_date = datetime.strptime(rd, "%Y-%m-%d")
+                    except ValueError:
                         pass
-                
-                earnings.append({
-                    'symbol': row.get('symbol', '').upper(),
-                    'reportDate': report_date,
-                    'estimate': float(row['estimate']) if row.get('estimate') and row['estimate'] != 'None' else None,
-                    'currency': row.get('currency', 'USD')
-                })
+                if report_date is None:
+                    continue
+                sym = (row.get("symbol") or "").strip().upper()
+                if not sym:
+                    continue
+                earnings.append(
+                    {
+                        "symbol": sym,
+                        "reportDate": report_date,
+                        "estimate": _safe_float_estimate(row.get("estimate")),
+                        "currency": (row.get("currency") or "USD").strip() or "USD",
+                    }
+                )
             except Exception as e:
-                logger.warning(f"⚠️ Ошибка парсинга строки earnings: {e}")
+                logger.warning("⚠️ Ошибка парсинга строки earnings: %s", e)
                 continue
         
         logger.info(f"✅ Получено {len(earnings)} записей earnings из Alpha Vantage")
