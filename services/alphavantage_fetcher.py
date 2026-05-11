@@ -132,6 +132,14 @@ def fetch_earnings_calendar(api_key: str, symbol: str = None) -> List[Dict]:
         if "Error" in csv_data[:120]:
             logger.warning("⚠️ Alpha Vantage вернул ошибку: %s", csv_data[:400])
             return []
+        # Free tier / лимит: вместо строк календаря приходит «CSV» со второй строкой I,n,f,o,r,m,a (буквы слова Information)
+        compact = csv_data.replace("\r", "").replace("\n", "")
+        if "n,f,o,r,m,a" in compact or ",n,f,o,r,m,a" in csv_data:
+            logger.warning(
+                "⚠️ Alpha Vantage EARNINGS_CALENDAR: ответ-заглушка (лимит ключа или premium-only). "
+                "Нужен платный план AV или другой источник дат отчётов (см. docs/NEWS.md)."
+            )
+            return []
 
         reader = csv.DictReader(StringIO(csv_data))
 
