@@ -1,0 +1,110 @@
+# Дизайн: earnings / event agent для LSE
+
+**Версия:** 1.0  
+**Дата:** 2026-05-11  
+**Контекст:** проект LSE (PostgreSQL + pgvector, `knowledge_base`, `quotes`, `premarket_daily_features`, `trade_history`, GAME_5M, `AnalystAgent`, LLM). Документ не про отдельный хакатон.
+
+## 1. Проблема
+
+Текущая ML-ветка, заточенная под **автоторговлю по одному тикеру**, плохо покрывает задачи инвестора:
+
+- не видит **полный контекст события** (earnings, guidance, commentary, утечки, кросс-влияние);
+- слабо формализует **сценарии реакции** (pullback vs переоценка, follow-through vs fade);
+- не использует системно **режим рынка** и **синхронность групп**;
+- цель «успеть прочитать отчёт и открыть позицию в моменте» для LSE **не первична** — нужен **прогноз типа реакции и зон**, а не только направление.
+
+Нужен отдельный контур **event intelligence**, который может кормить бота/веб аналитикой и опционально — флагами для GAME_5M, но **не заменяется** расширением одной торговой модели.
+
+## 2. Цели
+
+1. **Классификация сценария** после earnings (и аналогичных событий): pullback, смена коридора, follow-through, fade, кросс-заражение peers.
+2. **Кросс-отчёты:** влияние отчёта/новости тикера A на группу B (сектор, supply chain, тема).
+3. **Циклы и фазы:** вертикальный рост, провал и выкуп, групповой цикл (например AI-chips).
+4. **Синхронность / ротация:** кто лидер, кто laggard, куда уходит риск при продаже группы.
+5. **Режим индекса:** NDX / SPY / Dow + VIX + breadth — множители и veto для идей по отдельным именам.
+
+Все оценки доходности и обучение — на **log-returns**; симуляции входа/выхода — с **transaction costs** (правила проекта).
+
+## 3. Связь с существующей архитектурой
+
+| Компонент LSE | Роль для event agent |
+|---------------|----------------------|
+| `knowledge_base` (`event_type`, `outcome_json`, embedding) | Хранение событий, итогов реакции, RAG похожих кейсов |
+| [DATABASE_SCHEMA.md](../DATABASE_SCHEMA.md) | `quotes`, `premarket_daily_features`, `trade_history` |
+| [NEWS_SIGNAL_ARCHITECTURE.md](../NEWS_SIGNAL_ARCHITECTURE.md) | Этап A (интерпретация) / B (политика): event agent ближе к **расширению этапа A** под структурированные события earnings + отдельный **event_fusion** перед GAME_5M |
+| [GAME_5M_DEAL_PARAMS_JSON.md](../GAME_5M_DEAL_PARAMS_JSON.md) | Уже есть корреляции в `context_json`; event agent добавляет **дневной/событийный** контекст |
+| `AnalystAgent`, VIX | Режим волатильности как вход в market regime |
+| Trade effectiveness analyzer + LLM | Оффлайн-анализ сделок; **не** онлайн-решение по earnings |
+
+## 4. Данные и схема (предлагаемая)
+
+### 4.1 Расширение событий в KB или отдельная таблица
+
+Минимум полей для записи типа `EARNINGS` (имена — для обсуждения):
+
+- `symbol`, `event_time_et`, `fiscal_period`
+- `eps_actual`, `eps_estimate`, `revenue_actual`, `revenue_estimate` (или ссылка на внешний факт)
+- `guidance_summary` (структурированный JSON)
+- `affected_tickers[]` с весами (peers, supply chain)
+- `outcome_json`: реакция 1d/2d/5d/20d (log-returns), max drawdown, rebound, volume z-score, `final_label` (сценарий)
+
+Дедуп и источники — в духе существующих миграций `db/knowledge_pg/`.
+
+### 4.2 Датасет `event_reaction_dataset` (логическое имя)
+
+Строка = одно событие + окно признаков **до** события + исходы **после**:
+
+- дневные/внутридневные агрегаты из `quotes`, `premarket_daily_features`
+- корреляции / beta к NDX, к группе
+- признаки «фазы цикла» (дистанция до MA, drawdown from high, vol regime)
+- peer confirmation (синхронное движение группы)
+
+### 4.3 `peer_graph` / тематические кластеры
+
+Граф или таблица рёбер: `(source, target, relation_type, weight)` — усиление существующих `TICKER_GROUPS` / корреляционного контекста GAME_5M на **дневном** горизонте.
+
+### 4.4 `market_regime_daily`
+
+Снимок по дате: режим для SPY/NDX/VIX, breadth (если есть источник), флаги calendar/geo risk (как в [NEWS_SIGNAL_ARCHITECTURE.md](../NEWS_SIGNAL_ARCHITECTURE.md) §6).
+
+## 5. Слои системы
+
+1. **Ingest:** earnings facts + KB новости + (опц.) transcript snippets → нормализованное событие.
+2. **Feature builder:** числовой вектор до события + peer + regime.
+3. **ML head:** вероятности сценариев и/или квантили log-return (калибровка обязательна).
+4. **LLM (ограниченно):** извлечение фактов из текста, summary guidance, список конфликтующих фактов; **не** сырой торговый приказ без числового слоя.
+5. **RAG:** поиск top-k похожих событий по embedding + фильтр по сектору/режиму.
+6. **Вывод:** фиксированный JSON для UI/Telegram: сценарии, вероятности, уровни, invalidation, горизонт, связанные тикеры.
+
+## 6. Классы сценариев (MVP)
+
+- `beat_selloff_pullback` — хороший отчёт, просадка как откат в тренде
+- `beat_revaluation_down` — смена мультипликатора / доли в портфелях
+- `miss_or_guide_breakdown` — реальное ухудшение тезиса
+- `gap_up_follow_through` — продолжение после позитива
+- `gap_up_fade` — позитив уже в цене, слабая реакция
+- `cross_earnings_contagion` — движение группы от события одного эмитента
+
+Метрики качества — **отдельно по классу** (precision/reccalibration), не только accuracy.
+
+## 7. Интеграция с GAME_5M
+
+- Event agent выдаёт **флаги** (`earnings_risk`, `no_chase`, `peer_stress`) и **режим**, а не заменяет `recommend_5m`.
+- При конфликте: приоритет **риск-лимитов** и режима индекса ([RISK_MANAGEMENT.md](../RISK_MANAGEMENT.md)).
+
+## 8. Этапы внедрения
+
+1. Разметка 50–100 исторических событий (в т.ч. примеры из «Задачи для агента»).
+2. DDL для `earnings_event` / расширение KB + `outcome_json` пайплайн backfill.
+3. Скрипт сборки `event_reaction_dataset` из БД и внешних фактов.
+4. Baseline ML + отчёт по калибровке.
+5. LLM extractor по схеме JSON + кэш по `batch_hash` (как в новостном сигнале).
+6. Команда бота / раздел веб — **аналитический отчёт**, не обязательный автовход.
+
+## 9. Связанные документы
+
+- [ARCHITECTURE.md](../ARCHITECTURE.md)
+- [NEWS_SIGNAL_ARCHITECTURE.md](../NEWS_SIGNAL_ARCHITECTURE.md)
+- [DATABASE_SCHEMA.md](../DATABASE_SCHEMA.md)
+- [CORRELATION_DAILY.md](../CORRELATION_DAILY.md)
+- [TRADE_EFFECTIVENESS_ANALYZER.md](../TRADE_EFFECTIVENESS_ANALYZER.md)

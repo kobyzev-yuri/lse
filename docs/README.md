@@ -24,3 +24,9 @@
 | `scripts/build_game5m_continuation_dataset.py` | Датасет underprofit / continuation |
 | `scripts/train_game5m_catboost.py` | Обучение entry-модели |
 | `scripts/snapshot_analyzer_report.py` | Снимок JSON анализатора для офлайна / cron |
+
+## Earnings / event agent (дизайн)
+
+| Материал | Ссылка |
+|----------|--------|
+| Папка: дизайн-док, PDF «вопросы — ответы», HTML для пересборки PDF | [earnings-event-agent-lse/](earnings-event-agent-lse/README.md) |
