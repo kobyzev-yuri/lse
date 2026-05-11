@@ -18,7 +18,7 @@ mkdir -p "$PROJECT_DIR/logs"
 CRON_FILE=$(mktemp)
 
 # Удаляем старые LSE docker cron-задачи
-crontab -l 2>/dev/null | grep -v "docker.*lse-bot\|LSE.*Docker\|send_sndk_signal_cron\|trading_cycle_cron\|premarket_cron\|update_prices_cron\|fetch_news_cron\|sync_vector_kb_cron\|add_sentiment_to_news\|analyze_event_outcomes\|cleanup_calendar_noise\|cron_watchdog\|update_rsi_local\|update_finviz\|ingest_market_bars_intraday\|run_daily_game5m_recovery_pipeline" | grep -v "$PROJECT_DIR" > "$CRON_FILE" || true
+crontab -l 2>/dev/null | grep -v "docker.*lse-bot\|LSE.*Docker\|send_sndk_signal_cron\|trading_cycle_cron\|premarket_cron\|update_prices_cron\|fetch_news_cron\|sync_vector_kb_cron\|add_sentiment_to_news\|analyze_event_outcomes\|cleanup_calendar_noise\|cron_watchdog\|update_rsi_local\|update_finviz\|ingest_market_bars_intraday\|run_daily_game5m_recovery_pipeline\|run_ml_train_readiness_cron\|run_ml_data_quality_report" | grep -v "$PROJECT_DIR" > "$CRON_FILE" || true
 if ! grep -q . "$CRON_FILE" 2>/dev/null; then
   : > "$CRON_FILE"
 fi
@@ -52,6 +52,10 @@ cat >> "$CRON_FILE" << EOF
 25 23 * * * flock -n /tmp/lse_market_bars_intraday.lock docker exec $CONTAINER_NAME python scripts/ingest_market_bars_intraday.py >> "$PROJECT_DIR/logs/cron_market_bars_intraday.log" 2>&1
 # Recovery ML (анализатор + train): будни после US сессии (ожидается MSK). Без параллельных запусков.
 40 23 * * 1-5 flock -n /tmp/lse_daily_recovery_pipeline.lock docker exec $CONTAINER_NAME python scripts/run_daily_game5m_recovery_pipeline.py >> "$PROJECT_DIR/logs/game5m_daily_recovery_pipeline.log" 2>&1
+# ML train readiness (dry-run по умолчанию): гейты GAME_5M + portfolio → ml_train_readiness.jsonl. После recovery; env из compose (config.env).
+50 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec $CONTAINER_NAME python scripts/run_ml_train_readiness_cron.py >> "$PROJECT_DIR/logs/ml_train_readiness_cron.log" 2>&1
+# Единый отчёт качества данных (без LLM, без тяжёлых CSV): JSON в /app/logs/ml/ml_data_quality/ (на хосте — при монтировании logs).
+52 23 * * 1-5 flock -n /tmp/lse_ml_data_quality_report.lock docker exec $CONTAINER_NAME python scripts/run_ml_data_quality_report.py --no-default-datasets --json-out /app/logs/ml/ml_data_quality/report_daily.json >> "$PROJECT_DIR/logs/ml_data_quality_report_cron.log" 2>&1
 EOF
 
 crontab "$CRON_FILE"

@@ -11,7 +11,7 @@
   # Записать модели (осторожно на проде)
   ML_READINESS_TRAIN_MODE=full python scripts/run_ml_train_readiness_cron.py
 
-Переменные окружения:
+Переменные (как в окружении процесса, так и в config.env на /app/config.env в Docker):
   ML_READINESS_JSONL       — путь JSONL (default: /app/logs/ml/logs/ml_train_readiness.jsonl или local/...)
   ML_READINESS_TRAIN_MODE  — dry_run | full
   ML_READINESS_SKIP_GAME5M — 1 — не вызывать train_game5m_catboost
@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -35,6 +34,8 @@ from typing import Any, Dict, Optional
 
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
+
+from config_loader import get_config_value
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -56,8 +57,8 @@ def _load_json(path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _env_bool(key: str, default: bool = False) -> bool:
-    v = (os.environ.get(key) or "").strip().lower()
+def _readiness_bool(key: str, default: bool = False) -> bool:
+    v = (get_config_value(key) or "").strip().lower()
     if not v:
         return default
     return v in ("1", "true", "yes", "on")
@@ -71,14 +72,14 @@ def _gate_game5m(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if st != "ok":
         reasons.append(f"status={st}")
     try:
-        auc_min = float((os.environ.get("ML_READINESS_GAME5M_AUC_MIN") or "0.52").strip())
+        auc_min = float((get_config_value("ML_READINESS_GAME5M_AUC_MIN") or "0.52").strip())
     except (ValueError, TypeError):
         auc_min = 0.52
     auc = data.get("auc_valid")
     if auc is None or (isinstance(auc, (int, float)) and float(auc) < auc_min):
         reasons.append(f"auc_valid<{auc_min}")
     try:
-        nt_min = int((os.environ.get("ML_READINESS_GAME5M_MIN_TRAIN") or "40").strip())
+        nt_min = int((get_config_value("ML_READINESS_GAME5M_MIN_TRAIN") or "40").strip())
     except (ValueError, TypeError):
         nt_min = 40
     nt = int(data.get("n_train") or 0)
@@ -95,7 +96,7 @@ def _gate_portfolio(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if st != "ok":
         reasons.append(f"status={st}")
     try:
-        rmse_max = float((os.environ.get("ML_READINESS_PORTFOLIO_RMSE_MAX") or "0.08").strip())
+        rmse_max = float((get_config_value("ML_READINESS_PORTFOLIO_RMSE_MAX") or "0.08").strip())
     except (ValueError, TypeError):
         rmse_max = 0.08
     mets = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
@@ -103,7 +104,7 @@ def _gate_portfolio(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if rmse is None or (isinstance(rmse, (int, float)) and float(rmse) > rmse_max):
         reasons.append(f"rmse_valid>{rmse_max}")
     try:
-        nt_min = int((os.environ.get("ML_READINESS_PORTFOLIO_MIN_TRAIN") or "80").strip())
+        nt_min = int((get_config_value("ML_READINESS_PORTFOLIO_MIN_TRAIN") or "80").strip())
     except (ValueError, TypeError):
         nt_min = 80
     nt = int(data.get("n_train") or 0)
@@ -117,10 +118,11 @@ def main() -> int:
     py = sys.executable
     log_dir = _default_log_dir(root)
     log_dir.mkdir(parents=True, exist_ok=True)
-    jsonl = Path(os.environ.get("ML_READINESS_JSONL") or (log_dir / "ml_train_readiness.jsonl"))
+    jraw = (get_config_value("ML_READINESS_JSONL") or "").strip()
+    jsonl = Path(jraw) if jraw else (log_dir / "ml_train_readiness.jsonl")
     jsonl.parent.mkdir(parents=True, exist_ok=True)
 
-    mode = (os.environ.get("ML_READINESS_TRAIN_MODE") or "dry_run").strip().lower()
+    mode = (get_config_value("ML_READINESS_TRAIN_MODE") or "dry_run").strip().lower()
     full_train = mode in ("full", "train", "write", "prod")
 
     q_dir = log_dir.parent / "ml_data_quality"
@@ -130,8 +132,8 @@ def main() -> int:
     g5_path = q_dir / "last_game5m_train_metrics.json"
     pf_path = q_dir / "last_portfolio_train_metrics.json"
 
-    skip_g5 = _env_bool("ML_READINESS_SKIP_GAME5M", False)
-    skip_pf = _env_bool("ML_READINESS_SKIP_PORTFOLIO", False)
+    skip_g5 = _readiness_bool("ML_READINESS_SKIP_GAME5M", False)
+    skip_pf = _readiness_bool("ML_READINESS_SKIP_PORTFOLIO", False)
 
     g5_inv: Dict[str, Any] = {}
     if not skip_g5:
