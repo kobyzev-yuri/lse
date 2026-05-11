@@ -48,12 +48,24 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 |----------|----------------|-------------------------|
 | `trade_history` | `context_json` на BUY, ключ `decision`, стратегия | Крон GAME_5M / портфель; см. [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md) |
 | `knowledge_base` | `event_type`, `outcome_json`, `embedding` | Кроны новостей/earnings, `scripts/sync_vector_kb_cron.py`; см. [KNOWLEDGE_BASE_FIELDS.md](KNOWLEDGE_BASE_FIELDS.md) |
-| `event_reaction_dataset` | `features_before`, `outcomes_after`, `final_label` | Миграция + `scripts/build_event_reaction_dataset.py`; см. [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md), [EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) |
+| `event_reaction_dataset` | `features_before`, `outcomes_after`, `final_label` | Миграция; skeleton: `build_event_reaction_dataset.py`; **признаки и исходы — в БД** (заполняет **feature builder** / outcome writer в `features_before` / `outcomes_after`, см. §3.1) |
 | `quotes` | Покрытие тикеров | Сидеры/Yahoo; см. [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) |
 | CSV датасеты | Stuck / continuation | `scripts/build_game5m_stuck_dataset.py`, `scripts/build_game5m_continuation_dataset.py` |
 | Recovery ML | JSONL экспорт | Анализатор `export_recovery_ml`; см. [GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md](GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md) |
 
 Отчёт `build_ml_data_quality_report` **не изменяет** БД — только читает и профилирует.
+
+## 3.1. Feature builder: что это и как используется в датасете
+
+**Feature builder** — это **модуль кода** (отдельный сервис/скрипт/крон), который для строки события в **`event_reaction_dataset`** (якорь `symbol`, `event_time_et`):
+
+- забирает из **PostgreSQL** сырые ряды и справочники: `quotes`, `premarket_daily_features`, `market_regime_daily`, `peer_graph_edge` (+ цены peer’ов), при необходимости факты из `earnings_event_detail` / ссылку на `knowledge_base_id`;
+- вычисляет **признаки до события** (log-returns, волатильность, фаза цены, peer confirmation, бенчмарк и т.д. — см. [EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §4.2 и §4.2.1);
+- **сохраняет** результат в колонку **`features_before`** (JSONB). Исходы по горизонту — в **`outcomes_after`**; сценарий — в **`final_label`**.
+
+**Использование:** обучение ML и офлайн-метрики читают **готовые JSONB из БД** (по `dataset_version` и версии внутри JSON), без обязательного повторного JOIN всех источников на каждый прогон. CSV-экспорт при необходимости — производная от таблицы, не источник правды.
+
+Подробности и таблица потребителей: **§4.2.1** того же дизайн-документа.
 
 ## 4. DDL event / earnings analytics
 

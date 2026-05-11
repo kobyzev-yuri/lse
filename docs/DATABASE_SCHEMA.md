@@ -208,6 +208,8 @@ DDL: `db/knowledge_pg/sql/022_premarket_daily_features.sql`.
 
 Уникальность: `(symbol, event_time_et, event_type, dataset_version)`.
 
+**Семантика JSONB:** колонка **`features_before`** заполняется **feature builder**’ом — это зафиксированный снимок признаков «до события» (рекомендуется включать `feature_builder_version` в JSON). Колонка **`outcomes_after`** — исходы после события (log-returns по горизонтам, drawdown, z-score объёма и т.д.), пишется отдельным **outcome writer**’ом после созревания окна. Подробнее: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §4.2.1.
+
 ---
 
 ## Экспорт и восстановление
