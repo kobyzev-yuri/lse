@@ -3,7 +3,7 @@
 **Скелет строк** создаётся из KB: `scripts/build_event_reaction_dataset.py --from-kb-earnings`.  
 **MVP авторазметка** (признаки до события, forward-исходы, rule-based `final_label`) из daily **`quotes`**: модуль `services/event_reaction_labeling.py`, CLI `scripts/backfill_event_reaction_labeling.py`.
 
-**Зависимость от `quotes`:** скрипт разметки только читает PostgreSQL. Если в логах **`no_quotes`**, в таблице нет daily-ряда для этого `symbol`. Догрузка: **`scripts/seed_quotes_for_event_reaction_dataset.py`** (по умолчанию только символы из **TICKERS_FAST/MEDIUM/LONG**) или `python update_prices.py AAPL,MSFT --backfill 450`. Регулярный `update_prices_cron` не добавляет тикеры вне конфига.
+**Зависимость от `quotes`:** скрипт разметки только читает PostgreSQL. Если в логах **`no_quotes`**, в таблице нет daily-ряда для этого `symbol`. Догрузка: **`scripts/seed_quotes_for_event_reaction_dataset.py`** (по умолчанию только символы **без ни одной** строки в `quotes`; если строки есть, но история короткая и старые события дают `no_quotes` — **`--all-symbols`** или **`--min-quote-span-days 320`**) или `python update_prices.py AAPL,MSFT --backfill 450`. Регулярный `update_prices_cron` не добавляет тикеры вне конфига.
 
 **Universe датасета:** скелет из KB (`build_event_reaction_dataset.py`) **по умолчанию** вставляет только строки, где `kb.ticker` входит в тот же список (**FAST+MEDIUM+LONG**). Полный поток KB без фильтра: флаг **`--include-all-kb-tickers`**. Разметка и seed quotes по умолчанию тоже ограничены конфигом; снять ограничение: **`--include-all-symbols`** / **`--include-all-dataset-symbols`**.
 
