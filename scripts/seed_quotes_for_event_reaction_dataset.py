@@ -4,11 +4,12 @@
 
 `backfill_event_reaction_labeling.py` читает только таблицу `quotes`. Крон
 `scripts/update_prices_cron.py` обновляет портфельные тикеры и те, что уже есть в
-`quotes`, поэтому символы из KB (earnings) часто остаются без рядов → no_quotes.
+`quotes`. По умолчанию этот скрипт берёт символы из датасета, пересечённые с **TICKERS_FAST/MEDIUM/LONG**; полный список символов в таблице: **`--include-all-dataset-symbols`**.
 
 Запуск из корня репозитория / в контейнере lse-bot:
 
   python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0 --dry-run
+  python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0 --include-all-dataset-symbols   # без фильтра конфига
   python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0 --days 450 --limit 100
 
 `--days` передаётся в yfinance как период backfill (нужно ≥ ~400 для окна
@@ -43,27 +44,43 @@ def main() -> int:
         action="store_true",
         help="Обновить все DISTINCT symbol из датасета, даже если в quotes уже есть ряды",
     )
+    ap.add_argument(
+        "--include-all-dataset-symbols",
+        action="store_true",
+        help="Не ограничивать символами из конфига (FAST+MEDIUM+LONG); все тикеры из event_reaction_dataset",
+    )
     ap.add_argument("--dry-run", action="store_true", help="Только список тикеров, без yfinance/БД")
     args = ap.parse_args()
 
-    from sqlalchemy import text
+    from sqlalchemy import bindparam, text
 
     from report_generator import get_engine
+    from services.ticker_groups import get_config_ticker_symbols_upper_unique
     from update_prices import update_all_prices
 
     engine = get_engine()
     lim_sql = ""
     params: dict = {"dv": args.dataset_version}
+    cfg_filter = ""
+    if not args.include_all_dataset_symbols:
+        symbols = get_config_ticker_symbols_upper_unique()
+        if not symbols:
+            logger.error("Пустой список тикеров из конфига (TICKERS_FAST/MEDIUM/LONG).")
+            return 1
+        cfg_filter = "AND UPPER(TRIM(e.symbol)) IN :sym"
+        params["sym"] = symbols
+
     if args.limit and args.limit > 0:
         lim_sql = "LIMIT :lim"
         params["lim"] = int(args.limit)
 
     if args.all_symbols:
         sql = f"""
-            SELECT DISTINCT UPPER(TRIM(symbol)) AS sym
-            FROM event_reaction_dataset
-            WHERE dataset_version = :dv
-              AND TRIM(COALESCE(symbol, '')) != ''
+            SELECT DISTINCT UPPER(TRIM(e.symbol)) AS sym
+            FROM event_reaction_dataset e
+            WHERE e.dataset_version = :dv
+              AND TRIM(COALESCE(e.symbol, '')) != ''
+              {cfg_filter}
             ORDER BY 1
             {lim_sql}
         """
@@ -78,16 +95,23 @@ def main() -> int:
                 WHERE UPPER(TRIM(q.ticker)) = UPPER(TRIM(e.symbol))
                 LIMIT 1
               )
+              {cfg_filter}
             ORDER BY 1
             {lim_sql}
         """
 
+    stmt = text(sql)
+    if cfg_filter:
+        stmt = stmt.bindparams(bindparam("sym", expanding=True))
+
     with engine.connect() as conn:
-        rows = conn.execute(text(sql), params).fetchall()
+        rows = conn.execute(stmt, params).fetchall()
     tickers = [str(r[0]).strip() for r in rows if r and r[0]]
 
     if not tickers:
-        logger.info("Нет тикеров для догрузки (все символы датасета уже имеют хотя бы одну строку в quotes; иначе используйте --all-symbols).")
+        logger.info(
+            "Нет тикеров для догрузки (все символы датасета уже в quotes или нет пересечения с конфигом; см. --include-all-dataset-symbols / --all-symbols)."
+        )
         return 0
 
     logger.info("Тикеров к обработке: %s (all_symbols=%s)", len(tickers), args.all_symbols)

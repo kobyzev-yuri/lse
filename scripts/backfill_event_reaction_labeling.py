@@ -7,6 +7,7 @@ outcome_builder_version=quotes_fwd_1, label_source=auto_quotes_v1).
 
 Примеры:
   python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --limit 500
+  python scripts/backfill_event_reaction_labeling.py --include-all-symbols --limit 500   # все symbol в таблице
   python scripts/backfill_event_reaction_labeling.py --dry-run --limit 20
   python scripts/backfill_event_reaction_labeling.py --dry-run --limit 20 -v
   python scripts/backfill_event_reaction_labeling.py --only-features --limit 2000
@@ -97,6 +98,11 @@ def main() -> int:
     ap.add_argument("--since", type=str, default="", help="Only event_time_et >= (ISO datetime)")
     ap.add_argument("--until", type=str, default="", help="Only event_time_et < (ISO datetime)")
     ap.add_argument("-v", "--verbose", action="store_true", help="Логировать каждый пропуск (id, symbol, причина)")
+    ap.add_argument(
+        "--include-all-symbols",
+        action="store_true",
+        help="Не фильтровать по конфигу: обрабатывать все symbol в датасете (старое поведение)",
+    )
     args = ap.parse_args()
 
     if args.only_features and args.only_outcomes:
@@ -125,30 +131,16 @@ def main() -> int:
             logger.error("bad --until: %s", e)
             return 1
 
-    from sqlalchemy import text
+    from sqlalchemy import bindparam, text
 
     from report_generator import get_engine
     from services.event_reaction_labeling import json_dumps_obj, labeling_updates_for_row
+    from services.ticker_groups import get_config_ticker_symbols_upper_unique
 
     engine = get_engine()
 
-    sql = """
-        SELECT id, symbol, event_time_et, features_before, outcomes_after
-        FROM event_reaction_dataset
-        WHERE dataset_version = :dv
-          AND (
-            (:do_f AND (:ff OR features_before = '{}'::jsonb))
-            OR (:do_o AND (:fo OR outcomes_after = '{}'::jsonb))
-          )
-          AND (:id_from = 0 OR id >= :id_from)
-          AND (:id_to = 0 OR id <= :id_to)
-          AND (:since_ts IS NULL OR event_time_et >= :since_ts)
-          AND (:until_ts IS NULL OR event_time_et < :until_ts)
-        ORDER BY id
-        LIMIT :lim
-    """
-
-    params = {
+    cfg_filter = ""
+    params: dict = {
         "dv": args.dataset_version,
         "do_f": do_features,
         "do_o": do_outcomes,
@@ -160,9 +152,37 @@ def main() -> int:
         "until_ts": until_ts,
         "lim": max(1, int(args.limit)),
     }
+    if not args.include_all_symbols:
+        symbols = get_config_ticker_symbols_upper_unique()
+        if not symbols:
+            logger.error("Пустой список тикеров из конфига (TICKERS_FAST/MEDIUM/LONG).")
+            return 1
+        cfg_filter = "AND UPPER(TRIM(symbol)) IN :sym"
+        params["sym"] = symbols
+
+    sql = f"""
+        SELECT id, symbol, event_time_et, features_before, outcomes_after
+        FROM event_reaction_dataset
+        WHERE dataset_version = :dv
+          {cfg_filter}
+          AND (
+            (:do_f AND (:ff OR features_before = '{{}}'::jsonb))
+            OR (:do_o AND (:fo OR outcomes_after = '{{}}'::jsonb))
+          )
+          AND (:id_from = 0 OR id >= :id_from)
+          AND (:id_to = 0 OR id <= :id_to)
+          AND (:since_ts IS NULL OR event_time_et >= :since_ts)
+          AND (:until_ts IS NULL OR event_time_et < :until_ts)
+        ORDER BY id
+        LIMIT :lim
+    """
+
+    stmt = text(sql)
+    if cfg_filter:
+        stmt = stmt.bindparams(bindparam("sym", expanding=True))
 
     with engine.connect() as conn:
-        rows = conn.execute(text(sql), params).fetchall()
+        rows = conn.execute(stmt, params).fetchall()
 
     if not rows:
         logger.info("Нет строк для обработки (фильтр / уже заполнено).")

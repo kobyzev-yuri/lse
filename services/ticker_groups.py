@@ -117,6 +117,19 @@ def get_all_ticker_groups() -> List[str]:
     return result
 
 
+def get_config_ticker_symbols_upper_unique() -> List[str]:
+    """Тикеры из FAST+MEDIUM+LONG (config.env), нормализованные UPPER(TRIM), без дубликатов.
+    Для event_reaction_dataset, seed quotes, backfill разметки — только «наш» universe."""
+    seen: set[str] = set()
+    out: List[str] = []
+    for t in get_all_ticker_groups():
+        u = str(t).strip().upper()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
 def get_tracked_tickers_for_kb() -> List[str]:
     """Тикеры «нашего» списка для knowledge_base (FAST+MEDIUM+LONG + MACRO/US_MACRO).
     Фильтрация при записи включается только если `KB_INGEST_TRACKED_TICKERS_ONLY=true` (см. `kb_ingest_tracked_tickers_only`)."""
