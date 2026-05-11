@@ -103,9 +103,11 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 | `ML_READINESS_GAME5M_AUC_MIN` | Порог AUC valid (default `0.52`) |
 | `ML_READINESS_GAME5M_MIN_TRAIN` | Мин. `n_train` (default `40`) |
 | `ML_READINESS_PORTFOLIO_RMSE_MAX` | Макс. RMSE valid (default `0.08`) |
+| `ML_READINESS_PORTFOLIO_MIN_TRAIN` | Мин. `n_train` (default `80`) |
 
 В Docker контейнер `lse-bot` получает `config.env` как **файл** `/app/config.env` (volume), без `env_file` в compose — переменные `ML_READINESS_*` в `docker exec … env` могут быть пустыми; скрипт `run_ml_train_readiness_cron.py` читает пороги через `config_loader` (env процесса **или** файл).
-| `ML_READINESS_PORTFOLIO_MIN_TRAIN` | Мин. `n_train` (default `80`) |
+
+В веб-интерфейсе на странице **`/analyzer`** блок «ML: готовность…» и JSON **`GET /api/ml/data-quality`** (тот же сборщик, что `run_ml_data_quality_report`, без профилирования `local/datasets/*.csv` для скорости).
 
 Пример cron (после сессии, без смены моделей). На хосте с `lse-bot` строки ставятся через **`setup_cron_docker.sh`** (будни **23:50** MSK — readiness, **23:52** — `run_ml_data_quality_report.py --no-default-datasets`); см. также `crontab/lse-docker.crontab`.
 

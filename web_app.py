@@ -696,6 +696,61 @@ async def get_analyzer(
         raise HTTPException(status_code=500, detail=f"Ошибка анализатора: {e!s}")
 
 
+def _compute_ml_data_quality_bundle() -> Dict[str, Any]:
+    """
+    Единый снимок для веба: как run_ml_data_quality_report без профилирования CSV (dataset_paths=[]).
+    Плюс пути к last_game5m / last_portfolio metrics, если файлы есть.
+    """
+    from services.ml_data_quality_report import build_ml_data_quality_report
+
+    root = Path(__file__).resolve().parent
+    engine = get_engine()
+    if Path("/app/logs").exists():
+        q_dir = Path("/app/logs/ml/ml_data_quality")
+    else:
+        q_dir = root / "local" / "logs" / "ml_data_quality"
+    tpaths: Dict[str, Path] = {}
+    g5 = q_dir / "last_game5m_train_metrics.json"
+    pf = q_dir / "last_portfolio_train_metrics.json"
+    if g5.is_file():
+        tpaths["game5m_entry_last"] = g5
+    if pf.is_file():
+        tpaths["portfolio_last"] = pf
+    tickers: Optional[List[str]] = None
+    try:
+        tf = get_tickers_fast()
+        if tf:
+            tickers = list(tf)
+    except Exception:
+        tickers = None
+    bundle = build_ml_data_quality_report(
+        project_root=root,
+        engine=engine,
+        dataset_paths=[],
+        fast_tickers=tickers,
+        train_metrics_paths=tpaths if tpaths else None,
+    )
+    rd = q_dir / "report_daily.json"
+    bundle["ui_hints"] = {
+        "dataset_csv_profile": "skipped (empty dataset_paths); full CSV profiles: scripts/run_ml_data_quality_report.py",
+        "report_daily_json": {"path": str(rd), "exists": rd.is_file()},
+        "api": "/api/ml/data-quality",
+    }
+    return bundle
+
+
+@app.get("/api/ml/data-quality", response_class=JSONResponse)
+async def api_ml_data_quality():
+    """ML: гейты readiness (JSONL), последние train-metrics, KB/история/quotes/event_analytics (без тяжёлого профиля CSV)."""
+    try:
+        loop = asyncio.get_event_loop()
+        bundle = await loop.run_in_executor(None, _compute_ml_data_quality_bundle)
+        return _to_jsonable(bundle)
+    except Exception as e:
+        logger.exception("api_ml_data_quality failed")
+        raise HTTPException(status_code=500, detail=f"Ошибка ML data-quality: {e!s}")
+
+
 def _parse_csv_str(s: str) -> List[str]:
     s = (s or "").strip()
     if not s:

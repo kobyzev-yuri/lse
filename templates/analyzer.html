@@ -73,6 +73,17 @@
     <p id="analyzerJsonDownloadStatus" class="muted" style="margin-top:0.5rem; min-height:1.2em;"></p>
 </div>
 
+<div class="card" style="border: 1px solid rgba(196, 181, 253, 0.35);">
+    <h2>ML: готовность к обучению и качество данных</h2>
+    <p class="muted" style="font-size:0.9rem;">Тот же источник, что <code>scripts/run_ml_data_quality_report.py</code>, но <strong>без</strong> профилирования CSV в <code>local/datasets/</code> (быстрый снимок). Гейты — хвост <code>ml_train_readiness.jsonl</code>; метрики — <code>last_*_train_metrics.json</code> после cron readiness.</p>
+    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
+        <button type="button" id="mlDataQualityRefresh" class="btn" style="padding:0.45rem 0.85rem;">Обновить блок</button>
+        <a id="mlDataQualityJsonUrl" href="/api/ml/data-quality" target="_blank" rel="noopener" class="muted" style="font-size:0.9rem;">Открыть JSON <code>GET /api/ml/data-quality</code></a>
+    </div>
+    <p id="mlDataQualityStatus" class="muted" style="min-height:1.2em;">Загрузка…</p>
+    <div id="mlDataQualityInner" class="dashboard-text" style="margin-top:0.5rem;">—</div>
+</div>
+
 <div class="card" style="border: 1px solid rgba(34,197,94,0.35);">
     <h2>GAME_5M tuning: регламент и live-эксперимент</h2>
     <p class="muted" style="font-size:0.9rem;">Один параметр за раз: apply → наблюдение → review/rollback. Данные берутся из <code>local/game5m_tuning_ledger.json</code>, изменения проходят через общие guardrails.</p>
@@ -253,6 +264,165 @@ function esc(s) {
     const d = document.createElement('div');
     d.textContent = s == null ? '' : String(s);
     return d.innerHTML;
+}
+
+function fmtGateGame5m(g) {
+    if (!g || g.ready === null || g.ready === undefined) {
+        return '<span class="muted">—</span>';
+    }
+    const ok = g.ready;
+    const r = (g.reasons || []).filter(Boolean).join(', ');
+    const line = (ok ? '<span style="color:#86efac;">✓</span> ' : '<span style="color:#fca5a5;">✗</span> ') +
+        (r ? '<span class="muted">' + esc(r) + '</span>' : '');
+    return line + '<br><code>AUC=' + esc(g.auc_valid) + ', n_train=' + esc(g.n_train) + '</code>';
+}
+
+function fmtGatePortfolio(g) {
+    if (!g || g.ready === null || g.ready === undefined) {
+        return '<span class="muted">—</span>';
+    }
+    const ok = g.ready;
+    const r = (g.reasons || []).filter(Boolean).join(', ');
+    const line = (ok ? '<span style="color:#86efac;">✓</span> ' : '<span style="color:#fca5a5;">✗</span> ') +
+        (r ? '<span class="muted">' + esc(r) + '</span>' : '');
+    return line + '<br><code>RMSE=' + esc(g.rmse_valid) + ', n_train=' + esc(g.n_train) + '</code>';
+}
+
+function renderMlDataQuality(data) {
+    let html = '';
+    html += '<p style="margin:0 0 0.65rem 0;font-size:0.9rem;color:#cbd5e1;">Снимок: <code>' + esc(data.generated_at_utc) + '</code> · <code>v' + esc(data.report_version) + '</code></p>';
+
+    const mr = data.ml_train_readiness_jsonl || {};
+    html += '<h3 style="margin:0.6rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Гейты (<code>ml_train_readiness.jsonl</code>)</h3>';
+    html += '<p class="muted" style="margin:0 0 0.4rem 0;font-size:0.85rem;">Путь: <code>' + esc(mr.path || 'не найден') + '</code></p>';
+    const recs = (mr.last_records || []).slice().reverse();
+    if (!recs.length) {
+        html += '<p class="muted">Нет записей — выполните <code>run_ml_train_readiness_cron.py</code>.</p>';
+    } else {
+        html += '<div style="overflow-x:auto;"><table style="width:100%;min-width:520px;border-collapse:collapse;font-size:0.86rem;">';
+        html += '<thead><tr style="text-align:left;border-bottom:1px solid rgba(148,163,184,0.35);">';
+        html += '<th style="padding:6px 8px;">ts_utc / mode</th><th style="padding:6px 8px;">overall</th>';
+        html += '<th style="padding:6px 8px;">GAME_5M</th><th style="padding:6px 8px;">Portfolio</th></tr></thead><tbody>';
+        recs.forEach(function (row) {
+            const g5 = (row.game5m && row.game5m.gate) || {};
+            const pf = (row.portfolio && row.portfolio.gate) || {};
+            html += '<tr style="vertical-align:top;border-bottom:1px solid rgba(30,41,59,0.65);">';
+            html += '<td style="padding:8px;"><code style="font-size:0.8rem;">' + esc(row.ts_utc || '—') + '</code><br><span class="muted">' + esc(row.train_mode || '') + '</span></td>';
+            html += '<td style="padding:8px;">' + (row.overall_production_ready
+                ? '<strong style="color:#86efac;">true</strong>'
+                : '<strong style="color:#fca5a5;">false</strong>') + '</td>';
+            html += '<td style="padding:8px;">' + fmtGateGame5m(g5) + '</td>';
+            html += '<td style="padding:8px;">' + fmtGatePortfolio(pf) + '</td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table></div>';
+    }
+
+    const ext = data.external_train_metrics || {};
+    const extKeys = Object.keys(ext);
+    html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Файлы метрик dry-run</h3>';
+    if (!extKeys.length) {
+        html += '<p class="muted">Нет <code>last_game5m_train_metrics.json</code> / <code>last_portfolio_train_metrics.json</code> в каталоге ml_data_quality.</p>';
+    } else {
+        extKeys.forEach(function (k) {
+            const slot = ext[k] || {};
+            const d = slot.data;
+            html += '<p style="margin:0.35rem 0;"><strong>' + esc(k) + '</strong> <code class="muted">' + esc(slot.path || '') + '</code></p>';
+            if (!d) {
+                html += '<p class="muted">' + esc(slot.note || 'нет данных') + '</p>';
+                return;
+            }
+            if (k.indexOf('game5m') >= 0) {
+                html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · AUC valid <code>' + esc(d.auc_valid) + '</code> · n_train <code>' + esc(d.n_train) + '</code> · n_valid <code>' + esc(d.n_valid) + '</code></p>';
+            } else {
+                const m = d.metrics || {};
+                html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · RMSE valid <code>' + esc(m.rmse_valid) + '</code> · n_train <code>' + esc(d.n_train) + '</code></p>';
+            }
+        });
+    }
+
+    const ea = data.event_analytics || {};
+    html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Event / earnings (<code>event_analytics</code>)</h3>';
+    if (ea.error) {
+        html += '<p class="text-danger" style="font-size:0.9rem;">' + esc(ea.error) + '</p>';
+    } else {
+        const er = ea.event_reaction_dataset || {};
+        if (er && Object.keys(er).length) {
+            html += '<table style="font-size:0.86rem;border-collapse:collapse;margin:0.25rem 0 0.5rem 0;">';
+            ['rows_total', 'labeled', 'unlabeled', 'with_features_before', 'with_outcomes_after', 'distinct_symbols', 'label_coverage_rate'].forEach(function (key) {
+                if (er[key] === undefined || er[key] === null) {
+                    return;
+                }
+                html += '<tr><td style="padding:2px 8px 2px 0;color:#94a3b8;">' + esc(key) + '</td><td><code>' + esc(er[key]) + '</code></td></tr>';
+            });
+            html += '</table>';
+            const ver = er.by_dataset_version;
+            if (ver && typeof ver === 'object' && Object.keys(ver).length) {
+                html += '<p class="muted" style="font-size:0.85rem;margin:0.2rem 0;">По <code>dataset_version</code>: ' +
+                    esc(JSON.stringify(ver)) + '</p>';
+            }
+        } else {
+            html += '<p class="muted">Нет сводки event_reaction_dataset.</p>';
+        }
+        if (ea.earnings_event_detail_rows != null) {
+            html += '<p style="font-size:0.88rem;margin:0.2rem 0;"><code>earnings_event_detail</code> rows: <strong>' + esc(ea.earnings_event_detail_rows) + '</strong></p>';
+        }
+    }
+
+    function tailLine(label, block) {
+        const b = block || {};
+        const path = b.path;
+        const lr = (b.last_records || [])[b.last_records.length - 1];
+        html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.88rem;"><strong>' + esc(label) + '</strong> <code class="muted">' + esc(path || '—') + '</code></p>';
+        if (!lr) {
+            html += '<p class="muted" style="margin:0 0 0.5rem 0.5rem;">Нет строк в хвосте.</p>';
+            return;
+        }
+        html += '<pre style="font-size:0.75rem;overflow:auto;max-height:140px;padding:0.45rem;background:rgba(15,23,42,0.85);border-radius:6px;border:1px solid rgba(148,163,184,0.2);">' + esc(JSON.stringify(lr, null, 2)) + '</pre>';
+    }
+    html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Хвосты ежедневных ML-отчётов (JSONL)</h3>';
+    tailLine('GAME_5M daily', data.game5m_daily_ml_report_jsonl);
+    tailLine('Portfolio daily', data.portfolio_ml_report_jsonl);
+
+    const kb = data.knowledge_base || {};
+    const th = data.trade_history_ml || {};
+    html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">База и история (сжато)</h3>';
+    html += '<p style="font-size:0.88rem;margin:0.2rem 0;">KB rows: <code>' + esc(kb.error || kb.rows_total) + '</code>';
+    html += ' · trade_history_ml закрытых с контекстом: <code>' + esc(th.error || (th.closed_with_context != null ? th.closed_with_context : '—')) + '</code></p>';
+
+    const cat = data.catboost_meta_artifacts;
+    if (cat && typeof cat === 'object' && !Array.isArray(cat) && Object.keys(cat).length) {
+        html += '<p style="font-size:0.88rem;margin:0.35rem 0;"><strong>CatBoost артефакты</strong> (фрагмент ключей): <code>' + esc(Object.keys(cat).slice(0, 8).join(', ')) + (Object.keys(cat).length > 8 ? '…' : '') + '</code></p>';
+    }
+
+    const hints = data.ui_hints || {};
+    const rd = hints.report_daily_json || {};
+    html += '<p class="muted" style="margin-top:0.75rem;font-size:0.82rem;">' + esc(hints.dataset_csv_profile || '') + '</p>';
+    html += '<p class="muted" style="font-size:0.82rem;">Cron-отчёт: <code>' + esc(rd.path || '') + '</code> — ' + (rd.exists ? 'есть' : 'нет файла') + '.</p>';
+
+    return html;
+}
+
+async function loadMlDataQuality() {
+    const statusEl = document.getElementById('mlDataQualityStatus');
+    const inner = document.getElementById('mlDataQualityInner');
+    if (!statusEl || !inner) {
+        return;
+    }
+    statusEl.textContent = 'Загрузка /api/ml/data-quality…';
+    inner.innerHTML = '…';
+    try {
+        const r = await fetch('/api/ml/data-quality');
+        const data = await r.json();
+        if (!r.ok) {
+            throw new Error((data && data.detail) || r.statusText || 'ошибка API');
+        }
+        inner.innerHTML = renderMlDataQuality(data);
+        statusEl.textContent = 'Обновлено: ' + new Date().toLocaleString();
+    } catch (e) {
+        inner.innerHTML = '—';
+        statusEl.innerHTML = '<span class="text-danger">' + esc(e.message || e) + '</span>';
+    }
 }
 
 function fmtSummary(s) {
@@ -737,12 +907,14 @@ document.getElementById('strategy').addEventListener('change', updateAnalyzerJso
 document.getElementById('useLlm').addEventListener('change', updateAnalyzerJsonLinks);
 document.getElementById('analyzerDownloadJson').addEventListener('click', function() { downloadAnalyzerJson(false); });
 document.getElementById('analyzerDownloadJsonFull').addEventListener('click', function() { downloadAnalyzerJson(true); });
+document.getElementById('mlDataQualityRefresh').addEventListener('click', loadMlDataQuality);
 document.getElementById('tuningRefreshBtn').addEventListener('click', loadTuningStatus);
 document.getElementById('tuningObserveBtn').addEventListener('click', observeTuningExperiment);
 document.getElementById('tuningApplyBtn').addEventListener('click', applyTuningKeyValue);
 document.getElementById('tuningRollbackBtn').addEventListener('click', rollbackTuningExperiment);
 updateAnalyzerJsonLinks();
 loadTuningStatus();
+loadMlDataQuality();
 
 async function applyEnvOverride() {
     const applyBtn = document.getElementById('applyEnvBtn');
