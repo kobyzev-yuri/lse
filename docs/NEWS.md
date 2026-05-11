@@ -20,7 +20,7 @@
 |---------|-----------|
 | **Экономический календарь Investing.com** | JSON API (`investing_calendar_api.py`), как NYSE; `save_events_to_db` и дедуп по `external_id`. См. `services/kb_extended_fields.py`, `services/investing_calendar_parser.py`. |
 | **Тикерные новости (как в NYSE `news_merge`)** | Модуль `services/ticker_news_merge_fetcher.py`: **Yahoo** (`yfinance.get_news`) + опционально **Marketaux** при `MARKETAUX_API_KEY`; merge/dedup; вставка с `external_id` / `content_sha256` / `raw_payload`. |
-| **Оркестратор** | `scripts/fetch_news_cron.py`: режимы `--mode tickers` (только TickerNews), `core` и `all` включают TickerNews; `core-fast` — по-прежнему RSS + Alpha Vantage **без** TickerNews. |
+| **Оркестратор** | `scripts/fetch_news_cron.py`: режимы `--mode tickers` (только TickerNews), `core` и `all` включают TickerNews; `core-fast` — RSS + Alpha Vantage + **календарь earnings Yahoo (yfinance)** **без** TickerNews. |
 | **Ключи и конфиг** | Имена `NEWSAPI_KEY`, `ALPHAVANTAGE_KEY`, `MARKETAUX_API_KEY` согласованы с NYSE; опционально `NYSE_CONFIG_PATH` подмешивает пустые ключи из `nyse/config.env` (`config_loader.py`). Шпаргалка — в `config.env.example` (блок «News: источники…»). |
 | **Диагностика** | `scripts/check_news_sources.py` показывает наличие ключа Marketaux и `NYSE_CONFIG_PATH`. |
 
@@ -50,6 +50,7 @@
 | **Investing.com News** | Да | Да | Лента stock-market-news; тикеры из TICKERS_FAST, ключевые слова встроенные + опционально из конфига (см. ниже) |
 | **NewsAPI** | Да | Да (ключ) | ~100 запросов/день (каждая страница /everything = отдельный запрос) |
 | **Alpha Vantage** (Earnings + News Sentiment) | Да | Да (ключ) | ~25 запросов/день |
+| **Yahoo earnings calendar (yfinance)** | Да | Да (без ключа) | Даты отчётов по тикерам в KB (`event_type=EARNINGS`); см. `services/yfinance_earnings_fetcher.py`, `YFINANCE_*` в `config.env.example`. Зависит от Yahoo; пауза `YFINANCE_EARNINGS_DELAY_SEC`. |
 | **Alpha Vantage** (Economic) | Код есть | Нет | В cron выключено; free tier часто пусто |
 
 ### 1.0. Ключи и имена (LSE и NYSE)

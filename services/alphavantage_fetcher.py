@@ -304,7 +304,6 @@ def save_earnings_to_db(earnings: List[Dict]):
                         WHERE ticker = :ticker 
                         AND event_type = 'EARNINGS'
                         AND DATE(ts) = DATE(:report_date)
-                        AND source = 'Alpha Vantage Earnings Calendar'
                     """),
                     {
                         "ticker": earning['symbol'],

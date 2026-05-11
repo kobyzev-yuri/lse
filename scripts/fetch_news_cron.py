@@ -57,6 +57,7 @@ def fetch_all_news_sources(mode: str = "all"):
     newsapi_saved = 0
     n_investing = 0
     ticker_news_saved = 0
+    yfinance_earnings_saved = 0
 
     run_investing = mode in ("all", "investing")
     run_core_fast = mode in ("all", "core", "core-fast")
@@ -66,7 +67,7 @@ def fetch_all_news_sources(mode: str = "all"):
     if run_core_fast:
         # 1. RSS фиды центральных банков (всегда работает, бесплатно)
         try:
-            logger.info("\n📡 Источник core-fast 1/2: RSS фиды центральных банков")
+            logger.info("\n📡 Источник core-fast 1/3: RSS фиды центральных банков")
             rss_saved, rss_skipped = fetch_and_save_rss_news()
             if rss_saved or rss_skipped:
                 if rss_saved == 0 and rss_skipped > 0:
@@ -83,7 +84,7 @@ def fetch_all_news_sources(mode: str = "all"):
 
         # 2. Alpha Vantage (требует API ключ)
         try:
-            logger.info("\n📊 Источник core-fast 2/2: Alpha Vantage API")
+            logger.info("\n📊 Источник core-fast 2/3: Alpha Vantage API")
             # Получаем тикеры из конфига или используем дефолтные (get_config_value — импорт на уровне модуля)
             tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
             tickers = [t.strip() for t in tickers_str.split(',')]
@@ -102,6 +103,23 @@ def fetch_all_news_sources(mode: str = "all"):
         except Exception as e:
             logger.error(f"❌ Ошибка Alpha Vantage: {e}")
             sources_status['Alpha Vantage'] = f'❌ Ошибка: {e}'
+
+        # 3. Yahoo earnings calendar (yfinance, без ключа)
+        try:
+            raw_yfe = (get_config_value("YFINANCE_EARNINGS_CALENDAR_SAVE", "true") or "true").strip().lower()
+            if raw_yfe in ("1", "true", "yes"):
+                logger.info("\n📅 Источник core-fast 3/3: Yahoo earnings (yfinance)")
+                from services.yfinance_earnings_fetcher import fetch_and_save_yfinance_earnings
+
+                yfinance_earnings_saved = int(fetch_and_save_yfinance_earnings() or 0)
+                sources_status["Yahoo Earnings (yfinance)"] = (
+                    f"✅ новых в KB: {yfinance_earnings_saved}" if yfinance_earnings_saved else "✅ 0 новых"
+                )
+            else:
+                sources_status["Yahoo Earnings (yfinance)"] = "⏭ пропуск (YFINANCE_EARNINGS_CALENDAR_SAVE не true)"
+        except Exception as e:
+            logger.error("❌ Ошибка Yahoo earnings (yfinance): %s", e)
+            sources_status["Yahoo Earnings (yfinance)"] = f"❌ Ошибка: {e}"
 
     if run_newsapi:
         # NewsAPI (отдельный режим, чтобы не тормозить core-fast при 429 backoff)
@@ -161,7 +179,7 @@ def fetch_all_news_sources(mode: str = "all"):
             sources_status['Investing.com News'] = f'❌ Ошибка: {e}'
 
     # Итоговый отчет
-    total_new = rss_saved + newsapi_saved + n_investing + ticker_news_saved
+    total_new = rss_saved + newsapi_saved + n_investing + ticker_news_saved + yfinance_earnings_saved
     logger.info("\n" + "=" * 60)
     logger.info("📊 Итоговый статус источников:")
     for source, status in sources_status.items():
