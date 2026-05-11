@@ -7,6 +7,7 @@
 
   python scripts/migrate_ml_event_analytics.py   # сначала DDL
   python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0
+  python scripts/build_event_reaction_dataset.py --from-kb-earnings --kb-since 2026-02-01   # только события KB с этой даты (эра проекта)
   python scripts/build_event_reaction_dataset.py --from-kb-earnings --include-all-kb-tickers   # все тикеры из KB (старое поведение)
   python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --limit 500
   python scripts/build_event_reaction_dataset.py --stats
@@ -28,6 +29,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def _parse_kb_since(s: str) -> Any:
+    """ISO дата/время для фильтра kb.ts; без таймзоны — UTC."""
+    import pandas as pd
+
+    t = pd.Timestamp(str(s).strip())
+    if t.tzinfo is None:
+        t = t.tz_localize("UTC")
+    return t.to_pydatetime()
+
+
 def _stats(engine) -> dict[str, Any]:
     from sqlalchemy import text
 
@@ -47,6 +58,7 @@ def _backfill_from_kb(
     dataset_version: str,
     dry_run: bool,
     config_tickers_only: bool,
+    kb_since: Any | None,
 ) -> int:
     from sqlalchemy import bindparam, text
 
@@ -71,6 +83,12 @@ def _backfill_from_kb(
     else:
         logger.info("Фильтр по конфигу выключен (--include-all-kb-tickers): все подходящие тикеры KB")
 
+    since_filter = ""
+    if kb_since is not None:
+        since_filter = "AND kb.ts >= :kb_since"
+        params["kb_since"] = kb_since
+        logger.info("Фильтр: только KB с kb.ts >= %s", kb_since)
+
     insert_sql = f"""
         INSERT INTO event_reaction_dataset (
             knowledge_base_id, symbol, event_time_et, event_type,
@@ -88,6 +106,7 @@ def _backfill_from_kb(
         FROM knowledge_base kb
         WHERE {base_where}
         {sym_filter}
+        {since_filter}
         ON CONFLICT (symbol, event_time_et, event_type, dataset_version) DO NOTHING
     """
     stmt = text(insert_sql)
@@ -95,7 +114,7 @@ def _backfill_from_kb(
         stmt = stmt.bindparams(bindparam("sym", expanding=True))
 
     if dry_run:
-        count_q = f"SELECT COUNT(*) FROM knowledge_base kb WHERE {base_where} {sym_filter}"
+        count_q = f"SELECT COUNT(*) FROM knowledge_base kb WHERE {base_where} {sym_filter} {since_filter}"
         count_stmt = text(count_q)
         if config_tickers_only:
             count_stmt = count_stmt.bindparams(bindparam("sym", expanding=True))
@@ -124,9 +143,25 @@ def main() -> int:
     )
     ap.add_argument("--dataset-version", type=str, default="v0", help="dataset_version для вставок")
     ap.add_argument("--dry-run", action="store_true", help="Не писать в БД (только лог для --from-kb-earnings)")
+    ap.add_argument(
+        "--kb-since",
+        type=str,
+        default="",
+        help="Только строки KB с kb.ts >= даты (ISO, напр. 2026-02-01). Пусто — из EVENT_REACTION_KB_SINCE в config или без фильтра",
+    )
     args = ap.parse_args()
 
+    from config_loader import get_config_value
     from report_generator import get_engine
+
+    kb_since_raw = (args.kb_since or "").strip() or (get_config_value("EVENT_REACTION_KB_SINCE", "") or "").strip()
+    kb_since_dt = None
+    if kb_since_raw:
+        try:
+            kb_since_dt = _parse_kb_since(kb_since_raw)
+        except Exception as e:
+            logger.error("Некорректный --kb-since / EVENT_REACTION_KB_SINCE: %s", e)
+            return 1
 
     engine = get_engine()
     if args.stats:
@@ -138,6 +173,7 @@ def main() -> int:
             dataset_version=args.dataset_version.strip() or "v0",
             dry_run=bool(args.dry_run),
             config_tickers_only=not bool(args.include_all_kb_tickers),
+            kb_since=kb_since_dt,
         )
     logger.error("Укажите --stats или --from-kb-earnings")
     return 1
