@@ -14,12 +14,14 @@
     li { margin: 0 0 3pt; }
     .part { margin-top: 10pt; }
     .small { font-size: 9.5pt; color: #444; }
+    a { color: #0969da; text-decoration: none; }
+    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
 
 <h1>Задачи для агента — вопросы и ответы (проект LSE)</h1>
-<p class="small">Документ подготовлен для репозитория LSE. Исходные формулировки — из файла «Задачи для агента»; ответы привязаны к архитектуре LSE (PostgreSQL, knowledge_base, GAME_5M, LLM). Доходности — log-returns; учёт издержек — при симуляции сделок.</p>
+<p class="small">Документ подготовлен для репозитория LSE. На GitHub удобнее открывать <strong>zadachi_dlya_agenta_voprosy_otvety.md</strong> — там кликабельные относительные ссылки. Ниже — версия для печати в PDF; ссылки ведут на файлы в ветке <code>main</code> на GitHub.</p>
 
 <div class="part">
 <h2>Часть A. Вопросы и постановка (из исходного документа)</h2>
@@ -57,18 +59,19 @@
 
 <h3>B.0 Главный вывод</h3>
 <p>Нужен <strong>отдельный контур event / earnings intelligence</strong>, а не расширение одной ML-модели «в лоб» под автоторговлю. GAME_5M и прочие исполнители могут потреблять <strong>флаги режима и риска</strong>, но ядро — база событий, признаки до/после, peers, режим индекса, RAG похожих кейсов и калиброванные вероятности сценариев.</p>
+<p>Связка с висяками и упущенной прибылью: <a href="https://github.com/kobyzev-yuri/lse/blob/main/docs/GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md">GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md</a>.</p>
 
 <h3>B.1 ML + LLM</h3>
-<p><strong>Да, гибрид.</strong> ML на структурированных признаках и размеченных исходах; LLM — для извлечения смысла из текста отчёта/guidance/новостей и для объяснения в фиксированной JSON-схеме. Финальное решение для продукта — слияние с техникой, корреляциями и лимитами; см. <em>docs/NEWS_SIGNAL_ARCHITECTURE.md</em> (этапы A/B).</p>
+<p><strong>Да, гибрид.</strong> ML на структурированных признаках и размеченных исходах; LLM — для извлечения смысла из текста отчёта/guidance/новостей и для объяснения в фиксированной JSON-схеме. Финальное решение для продукта — слияние с техникой, корреляциями и лимитами; см. <a href="https://github.com/kobyzev-yuri/lse/blob/main/docs/NEWS_SIGNAL_ARCHITECTURE.md">NEWS_SIGNAL_ARCHITECTURE.md</a> (этапы A/B).</p>
 
 <h3>B.2 Что предсказывать вместо «вверх/вниз»</h3>
-<p>Набор <strong>сценариев</strong>: pullback vs revaluation down; follow-through vs fade; cross-contagion. На выходе — вероятности, диапазоны (log-returns), зоны входа/invalidation, горизонт (intraday / 1–2 дня / недели). Итоги событий хранить в <code>knowledge_base.outcome_json</code> или выделенной сущности earnings-event (см. <em>EARNINGS_EVENT_AGENT_DESIGN.md</em>).</p>
+<p>Набор <strong>сценариев</strong>: pullback vs revaluation down; follow-through vs fade; cross-contagion. На выходе — вероятности, диапазоны (log-returns), зоны входа/invalidation, горизонт (intraday / 1–2 дня / недели). Итоги событий хранить в <code>knowledge_base.outcome_json</code> или выделенной сущности earnings-event (см. <a href="https://github.com/kobyzev-yuri/lse/blob/main/docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md">EARNINGS_EVENT_AGENT_DESIGN.md</a>). Схема БД: <a href="https://github.com/kobyzev-yuri/lse/blob/main/docs/DATABASE_SCHEMA.md">DATABASE_SCHEMA.md</a>.</p>
 
 <h3>B.3 Pullback vs новый коридор</h3>
 <p>Различать по сочетанию: сохранность тезиса отчёта и guidance, поведение peers, глубина и скорость vs типичная волатильность, close location / объём, удержание уровней на 1–2 сессии. ASML-подобный кейс ближе к pullback при отсутствии ломки тезиса; LITE-подобный — к revaluation/fade при слабом bounce.</p>
 
 <h3>B.4 Кросс-отчёты</h3>
-<p>Ввести <strong>peer_graph / affected_tickers</strong> и дневные корреляции к теме и к NDX. Событие по одному тикеру порождает ожидаемый spillover с весами. Усилить существующий корреляционный контекст GAME_5M дневным горизонтом.</p>
+<p>Ввести <strong>peer_graph / affected_tickers</strong> и дневные корреляции к теме и к NDX. Событие по одному тикеру порождает ожидаемый spillover с весами. Усилить существующий корреляционный контекст GAME_5M дневным горизонтом — <a href="https://github.com/kobyzev-yuri/lse/blob/main/docs/GAME_5M_DEAL_PARAMS_JSON.md">GAME_5M_DEAL_PARAMS_JSON.md</a>.</p>
 
 <h3>B.5 Рост после отчёта и «вход в догонку»</h3>
 <p>Отдельные метки: <strong>demand dominant</strong> (SNDK/DDOG: объём, закрытие у хая, второй день не продают) vs <strong>fully priced</strong> (MSFT: слабый follow-through, intraday fade). Агент выдаёт условия входа (например удержание VWAP/уровня) и invalidation, а не бинарное «страшно/не страшно».</p>
@@ -83,7 +86,7 @@
 <p><strong>market_regime_daily</strong> для NDX/SPY/DIA + VIX + breadth (если доступно). Использовать как множитель размера идеи и veto на агрессивный вход, даже при локально «хорошем» earnings setup.</p>
 
 <h3>B.9 Почему агент LSE может быть лучше «голой» LLM</h3>
-<p>Потому что у него есть <strong>память в БД</strong>: похожие события (pgvector), фактические котировки, премаркет-фичи, история сделок и контекст. LLM без этого даёт общие рассуждения; LSE-агент должен опираться на измеримые факты и калибровку.</p>
+<p>Потому что у него есть <strong>память в БД</strong>: похожие события (pgvector), фактические котировки, премаркет-фичи, история сделок и контекст. См. <a href="https://github.com/kobyzev-yuri/lse/blob/main/docs/VECTOR_KB_USAGE.md">VECTOR_KB_USAGE.md</a>. LLM без этого даёт общие рассуждения; LSE-агент должен опираться на измеримые факты и калибровку.</p>
 
 <h3>B.10 План внедрения (кратко)</h3>
 <ul>
@@ -94,7 +97,7 @@
   <li>LLM extractor по схеме + кэш;</li>
   <li>вывод в Telegram/веб как аналитика (не обязательный автовход).</li>
 </ul>
-<p class="small">Полный дизайн: <em>docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md</em></p>
+<p class="small">Полный дизайн: <a href="https://github.com/kobyzev-yuri/lse/blob/main/docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md">EARNINGS_EVENT_AGENT_DESIGN.md</a>. Новости: <a href="https://github.com/kobyzev-yuri/lse/blob/main/docs/NEWS.md">NEWS.md</a>, <a href="https://github.com/kobyzev-yuri/lse/blob/main/docs/NEWS_LIMITS.md">NEWS_LIMITS.md</a>.</p>
 </div>
 
 </body>

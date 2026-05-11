@@ -29,4 +29,4 @@
 
 | Материал | Ссылка |
 |----------|--------|
-| Папка: дизайн-док, PDF «вопросы — ответы», HTML для пересборки PDF | [earnings-event-agent-lse/](earnings-event-agent-lse/README.md) |
+| Earnings/event agent: дизайн, **Q&amp;A в Markdown** (удобно на GitHub), PDF/HTML | [earnings-event-agent-lse/](earnings-event-agent-lse/README.md) |
