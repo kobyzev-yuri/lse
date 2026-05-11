@@ -316,6 +316,13 @@ function renderMlDataQuality(data) {
             html += '</tr>';
         });
         html += '</tbody></table></div>';
+        const staleRmse08 = recs.some(function (row) {
+            const pf = (row.portfolio && row.portfolio.gate) || {};
+            return (pf.reasons || []).some(function (r) { return String(r).indexOf('0.08') >= 0; });
+        });
+        if (staleRmse08) {
+            html += '<p class="muted" style="font-size:0.82rem;margin:0.5rem 0 0 0;">Записи с <code>rmse_valid&gt;0.08</code> — от прогонов до порога <code>ML_READINESS_PORTFOLIO_RMSE_MAX</code> в <code>config.env</code>; ориентируйтесь на <strong>самую новую</strong> строку.</p>';
+        }
     }
 
     const ext = data.external_train_metrics || {};
@@ -361,11 +368,33 @@ function renderMlDataQuality(data) {
                 html += '<p class="muted" style="font-size:0.85rem;margin:0.2rem 0;">По <code>dataset_version</code>: ' +
                     esc(JSON.stringify(ver)) + '</p>';
             }
+            const nRows = Number(er.rows_total) || 0;
+            const nLab = Number(er.labeled) || 0;
+            if (nRows > 0 && nLab === 0) {
+                html += '<p style="margin:0.45rem 0;padding:0.5rem 0.65rem;border-radius:6px;border:1px solid rgba(250,204,21,0.4);background:rgba(113,63,18,0.22);font-size:0.85rem;line-height:1.45;">';
+                html += '<strong>Внимание:</strong> в <code>event_reaction_dataset</code> уже <code>rows_total=' + esc(nRows) + '</code>, но <code>labeled=0</code> и нет <code>with_features_before</code> / <code>with_outcomes_after</code> — ';
+                html += 'это по сути «сырой» набор строк (часто после bulk из KB); пайплайн разметки/фич/исходов по таблице ещё не заполнял поля.';
+                html += '</p>';
+            }
+            const edR = ea.earnings_event_detail_rows;
+            const peerR = ea.peer_graph_edge_rows;
+            const mrR = ea.market_regime_daily_rows;
+            const auxEmpty = (edR == null || edR === 0) && (peerR == null || peerR === 0) && (mrR == null || mrR === 0);
+            if (nRows > 0 && auxEmpty) {
+                html += '<p style="margin:0.35rem 0;font-size:0.84rem;color:#fcd34d;">Таблицы <code>earnings_event_detail</code>, <code>peer_graph_edge</code>, <code>market_regime_daily</code> сейчас пустые — расширенные фичи/граф для event-ML из них не подтянуты.</p>';
+            }
         } else {
             html += '<p class="muted">Нет сводки event_reaction_dataset.</p>';
         }
         if (ea.earnings_event_detail_rows != null) {
-            html += '<p style="font-size:0.88rem;margin:0.2rem 0;"><code>earnings_event_detail</code> rows: <strong>' + esc(ea.earnings_event_detail_rows) + '</strong></p>';
+            html += '<p style="font-size:0.88rem;margin:0.2rem 0;"><code>earnings_event_detail</code> rows: <strong>' + esc(ea.earnings_event_detail_rows) + '</strong>';
+            if (ea.peer_graph_edge_rows != null) {
+                html += ' · <code>peer_graph_edge</code> rows: <strong>' + esc(ea.peer_graph_edge_rows) + '</strong>';
+            }
+            if (ea.market_regime_daily_rows != null) {
+                html += ' · <code>market_regime_daily</code> rows: <strong>' + esc(ea.market_regime_daily_rows) + '</strong>';
+            }
+            html += '</p>';
         }
     }
 
@@ -382,13 +411,30 @@ function renderMlDataQuality(data) {
     }
     html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Хвосты ежедневных ML-отчётов (JSONL)</h3>';
     tailLine('GAME_5M daily', data.game5m_daily_ml_report_jsonl);
+    const g5j = data.game5m_daily_ml_report_jsonl || {};
+    const g5last = (g5j.last_records || [])[g5j.last_records.length - 1];
+    if (g5last && g5last.ts_utc) {
+        const t = Date.parse(g5last.ts_utc);
+        if (!isNaN(t) && (Date.now() - t) > 48 * 3600 * 1000) {
+            html += '<p style="font-size:0.82rem;margin:-0.2rem 0 0.5rem 0;color:#fcd34d;">Последняя строка GAME_5M daily: <code>' + esc(g5last.ts_utc) + '</code> — старше ~2 суток; проверьте cron <code>run_daily_game5m_ml_pipeline</code> (или шаблон <code>lse-docker.crontab</code>).</p>';
+        }
+    }
     tailLine('Portfolio daily', data.portfolio_ml_report_jsonl);
 
     const kb = data.knowledge_base || {};
     const th = data.trade_history_ml || {};
     html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">База и история (сжато)</h3>';
-    html += '<p style="font-size:0.88rem;margin:0.2rem 0;">KB rows: <code>' + esc(kb.error || kb.rows_total) + '</code>';
-    html += ' · trade_history_ml закрытых с контекстом: <code>' + esc(th.error || (th.closed_with_context != null ? th.closed_with_context : '—')) + '</code></p>';
+    const kbLine = kb.error != null && kb.error !== '' ? kb.error : ('rows_total=' + (kb.rows_total != null ? kb.rows_total : '—'));
+    const g5s = (th.strategies && th.strategies['GAME_5M']) || {};
+    let thLine = '—';
+    if (th.error != null && th.error !== '') {
+        thLine = String(th.error);
+    } else if (g5s.buy_rows != null) {
+        const pct = g5s.context_json_fill_rate != null ? (Number(g5s.context_json_fill_rate) * 100).toFixed(1) + '%' : '—';
+        thLine = 'GAME_5M BUY ' + g5s.buy_rows + ', context_json fill ' + pct;
+    }
+    html += '<p style="font-size:0.88rem;margin:0.2rem 0;">KB: <code>' + esc(kbLine) + '</code>';
+    html += ' · trade_history_ml: <code>' + esc(thLine) + '</code></p>';
 
     const cat = data.catboost_meta_artifacts;
     if (cat && typeof cat === 'object' && !Array.isArray(cat) && Object.keys(cat).length) {
