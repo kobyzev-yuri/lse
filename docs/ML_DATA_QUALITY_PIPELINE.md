@@ -109,7 +109,24 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 
 В веб-интерфейсе на странице **`/analyzer`** блок «ML: готовность…» и JSON **`GET /api/ml/data-quality`** (тот же сборщик, что `run_ml_data_quality_report`, без профилирования `local/datasets/*.csv` для скорости).
 
-Пример cron (после сессии, без смены моделей). На хосте с `lse-bot` строки ставятся через **`setup_cron_docker.sh`** (будни **23:50** MSK — readiness, **23:52** — `run_ml_data_quality_report.py --no-default-datasets`); см. также `crontab/lse-docker.crontab`.
+### 5.2 Включить инференс в проде (после зелёного readiness)
+
+Гейты проверяют **dry-run** метрики; в рантайме модели по умолчанию **выключены** (`GAME_5M_CATBOOST_ENABLED` / `PORTFOLIO_CATBOOST_ENABLED`).
+
+1. **Обновить артефакты** (если нужны свежие `.cbm` под текущие данные):  
+   `ML_READINESS_TRAIN_MODE=full python scripts/run_ml_train_readiness_cron.py`  
+   (осторожно: перезапишет модели по путям из `train_*` скриптов, обычно `/app/logs/ml/models/*.cbm`).
+2. В **`config.env`** на хосте (монтируется в контейнер):  
+   - `GAME_5M_CATBOOST_ENABLED=true`  
+   - `PORTFOLIO_CATBOOST_ENABLED=true`  
+   Пути к файлам уже задаются в примере: `GAME_5M_CATBOOST_MODEL_PATH`, `PORTFOLIO_CATBOOST_MODEL_PATH`.
+3. **GAME_5M fusion** (опционально): по умолчанию `GAME_5M_CATBOOST_FUSION=none` — только вероятность в ответе, **правила входа не меняются**. Для осторожного влияния на вход: `hold_if_buy_below_p` + `GAME_5M_CATBOOST_HOLD_BELOW_P` — см. `docs/GAME_5M_CATBOOST_FUSION.md`.
+4. Портфельная модель — **только advisory** (карточки / API), исполнение сделок ею не подменяется.
+5. `docker compose restart lse` (или деплой), затем в логах/карточках проверить `catboost_signal_status` / `portfolio_ml_status`.
+
+Шаблон строк см. **`config.env.example`** (блок «Включение ML в проде»).
+
+**Пример cron** (после сессии, без смены моделей): на хосте с `lse-bot` — **`setup_cron_docker.sh`** (будни **23:50** MSK — readiness, **23:52** — `run_ml_data_quality_report.py --no-default-datasets`); см. также `crontab/lse-docker.crontab`.
 
 ```bash
 docker compose exec -T lse python3 scripts/run_ml_train_readiness_cron.py >> /app/logs/ml_train_readiness_cron.log 2>&1
