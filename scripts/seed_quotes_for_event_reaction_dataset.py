@@ -9,11 +9,16 @@
 Запуск из корня репозитория / в контейнере lse-bot:
 
   python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0 --dry-run
+  python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0 --all-symbols --days 450
+  python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0 --min-quote-span-days 320 --days 450
   python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0 --include-all-dataset-symbols   # без фильтра конфига
-  python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0 --days 450 --limit 100
 
 `--days` передаётся в yfinance как период backfill (нужно ≥ ~400 для окна
 `event_reaction_labeling.load_quotes_window` + горизонты вперёд).
+
+По умолчанию догружаются только тикеры **без ни одной** строки в `quotes`. Если строки есть, но **короткая** история,
+разметка даёт `no_quotes` на старых событиях — используйте **`--all-symbols`** (принудительно все символы датасета ∩ конфиг)
+или **`--min-quote-span-days 320`**: догрузить, если MAX(date)−MIN(date) меньше порога.
 """
 from __future__ import annotations
 
@@ -48,6 +53,12 @@ def main() -> int:
         "--include-all-dataset-symbols",
         action="store_true",
         help="Не ограничивать символами из конфига (FAST+MEDIUM+LONG); все тикеры из event_reaction_dataset",
+    )
+    ap.add_argument(
+        "--min-quote-span-days",
+        type=int,
+        default=0,
+        help="Если >0: догрузить тикеры без quotes ИЛИ с (MAX(date)−MIN(date)) < порога (короткая история → no_quotes на старых событиях)",
     )
     ap.add_argument("--dry-run", action="store_true", help="Только список тикеров, без yfinance/БД")
     args = ap.parse_args()
@@ -84,6 +95,21 @@ def main() -> int:
             ORDER BY 1
             {lim_sql}
         """
+    elif args.min_quote_span_days and args.min_quote_span_days > 0:
+        params["min_span"] = int(args.min_quote_span_days)
+        sql = f"""
+            SELECT UPPER(TRIM(e.symbol)) AS sym
+            FROM event_reaction_dataset e
+            LEFT JOIN quotes q ON UPPER(TRIM(q.ticker)) = UPPER(TRIM(e.symbol))
+            WHERE e.dataset_version = :dv
+              AND TRIM(COALESCE(e.symbol, '')) != ''
+              {cfg_filter}
+            GROUP BY UPPER(TRIM(e.symbol))
+            HAVING COUNT(q.id) = 0
+                OR COALESCE(MAX(q.date::date) - MIN(q.date::date), 0) < :min_span
+            ORDER BY 1
+            {lim_sql}
+        """
     else:
         sql = f"""
             SELECT DISTINCT UPPER(TRIM(e.symbol)) AS sym
@@ -110,11 +136,17 @@ def main() -> int:
 
     if not tickers:
         logger.info(
-            "Нет тикеров для догрузки (все символы датасета уже в quotes или нет пересечения с конфигом; см. --include-all-dataset-symbols / --all-symbols)."
+            "Нет тикеров для догрузки. Варианты: все уже с глубокой историей; нет пересечения с конфигом; "
+            "или нужен принудительный backfill: --all-symbols или --min-quote-span-days 320 (см. docstring)."
         )
         return 0
 
-    logger.info("Тикеров к обработке: %s (all_symbols=%s)", len(tickers), args.all_symbols)
+    logger.info(
+        "Тикеров к обработке: %s (all_symbols=%s, min_quote_span_days=%s)",
+        len(tickers),
+        args.all_symbols,
+        args.min_quote_span_days or 0,
+    )
     if args.dry_run:
         for t in tickers[:50]:
             logger.info("  %s", t)
