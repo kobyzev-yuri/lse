@@ -27,6 +27,7 @@
 | `scripts/migrate_ml_event_analytics.py` | DDL: `event_reaction_dataset`, `market_regime_daily`, … |
 | `scripts/build_event_reaction_dataset.py` | Skeleton строк датасета из KB (`--from-kb-earnings`) |
 | `scripts/backfill_event_reaction_labeling.py` | Авторазметка `event_reaction_dataset` из daily `quotes` (MVP) |
+| `scripts/seed_quotes_for_event_reaction_dataset.py` | Догрузка `quotes` по тикерам из датасета (если `no_quotes`) |
 | `scripts/run_ml_train_readiness_cron.py` | Регулярные метрики + гейты готовности → `ml_train_readiness.jsonl` |
 | `scripts/snapshot_analyzer_report.py` | Снимок JSON анализатора для офлайна / cron |
 

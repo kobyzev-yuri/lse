@@ -3,6 +3,8 @@
 **Скелет строк** создаётся из KB: `scripts/build_event_reaction_dataset.py --from-kb-earnings`.  
 **MVP авторазметка** (признаки до события, forward-исходы, rule-based `final_label`) из daily **`quotes`**: модуль `services/event_reaction_labeling.py`, CLI `scripts/backfill_event_reaction_labeling.py`.
 
+**Зависимость от `quotes`:** скрипт разметки только читает PostgreSQL. Если в логах **`no_quotes`**, в таблице нет daily-ряда для этого `symbol` (часто тикеры из KB не входят в портфельный список, который обновляет `scripts/update_prices_cron.py`). Сначала догрузите историю: **`scripts/seed_quotes_for_event_reaction_dataset.py`** или вручную `python update_prices.py AAPL,MSFT --backfill 450`.
+
 Вспомогательные таблицы (`market_regime_daily`, `peer_graph_edge`, …) по-прежнему опциональны; их можно подключать в следующих версиях `feature_builder_version` внутри JSON.
 
 Дизайн-источник: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §4.2.1.
