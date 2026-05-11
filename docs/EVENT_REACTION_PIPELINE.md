@@ -1,6 +1,9 @@
-# Event / earnings: feature builder, outcomes и регулярный контроль
+# Event / earnings: авторазметка `event_reaction_dataset`, cron и контроль
 
-Состояние репозитория: **`event_reaction_dataset`** заполняется скелетом из KB (`scripts/build_event_reaction_dataset.py`); колонки **`features_before` / `outcomes_after` / `final_label`** и вспомогательные таблицы пока не ведутся кодом. Ниже — как это **реализовать по шагам**, **гонять регулярно** и **контролировать**.
+**Скелет строк** создаётся из KB: `scripts/build_event_reaction_dataset.py --from-kb-earnings`.  
+**MVP авторазметка** (признаки до события, forward-исходы, rule-based `final_label`) из daily **`quotes`**: модуль `services/event_reaction_labeling.py`, CLI `scripts/backfill_event_reaction_labeling.py`.
+
+Вспомогательные таблицы (`market_regime_daily`, `peer_graph_edge`, …) по-прежнему опциональны; их можно подключать в следующих версиях `feature_builder_version` внутри JSON.
 
 Дизайн-источник: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §4.2.1.
 
@@ -44,46 +47,97 @@
 
 ---
 
-## Пункт 1 — `features_before`
+## Авторазметка (MVP): `features_before`, `outcomes_after`, `final_label`
 
-- **Вход:** строки `event_reaction_dataset` с `features_before = '{}'` (и при необходимости фильтр `dataset_version`).
-- **Логика (MVP → расширение):**  
-  1. **Календарь:** `event_time_et` → якорная **торговая дата** `as_of` (последний close **не позже** события, по правилам leak-safe из дизайна).  
-  2. Из **`quotes`** (daily): log-returns 5d/20d до `as_of`, волатильность, расстояние от high20, объём z — всё уже в духе `portfolio_ml_features`.  
-  3. Опционально: снимок из **`market_regime_daily`** на `as_of`, peer-агрегаты по **`peer_graph_edge`**.  
-  4. Сериализовать в один JSON, добавить `feature_builder_version`, `as_of_trade_date`, `built_at_utc`.
-- **Код:** новый модуль `services/event_reaction_features.py` + CLI `scripts/backfill_event_reaction_features.py` с `--limit`, `--dataset-version`, `--dry-run`.
-- **Регулярность:**  
-  - **Инкрементально:** cron **ежедневно** — обработать не более N новых/пустых строк (например 500).  
-  - **Полный пересчёт** при смене `feature_builder_version`: отдельный запуск с другим фильтром или новым `dataset_version`.
+| Компонент | Назначение |
+|-----------|------------|
+| `services/event_reaction_labeling.py` | Якорь: последний торговый день с `date <=` дня события в **America/New_York**; из `quotes` — log-returns до/после close якоря; `final_label` UP/DOWN/FLAT по \|forward 5d log-ret\| vs порог |
+| `scripts/backfill_event_reaction_labeling.py` | Батчевый `UPDATE` пустых (или с `--force-*`) строк |
+
+**Версии в JSON:** `feature_builder_version` = `quotes_mvp_1`, `outcome_builder_version` = `quotes_fwd_1`. После смены формул — новая строка версии в JSON и/или новый `dataset_version` в таблице.
+
+**Порог для меток:** конфиг `EVENT_REACTION_LABEL_THRESHOLD_LOG` (log-пространство); если не задан — используется тот же effective edge, что и `portfolio_ml_threshold_log()` (согласованность с портфельным ML). См. `config.env.example`.
+
+**CLI (важные флаги):** `--dataset-version`, `--limit`, `--dry-run`, `--only-features`, `--only-outcomes`, `--force-features`, `--force-outcomes`, `--horizons 1,5,20`, `--id-from` / `--id-to`, `--since` / `--until` (ISO time, сравнение с `event_time_et`).
+
+**Ограничения MVP:** нет peer/regime фич; для исходов нужно ≥5 торговых дней вперёд от якоря (иначе `outcomes_after` не пишется); для полноты признаков желательно ≥20 баров истории до якоря.
 
 ---
 
-## Пункт 2 — `outcomes_after` и `final_label`
+## Ручная правка разметки (когда нужна)
 
-- **Когда:** только если от `event_time_et` прошло **достаточно календарных/торговых дней** (горизонты 1d / 5d / 20d — как в дизайне).
-- **Логика:** по тем же **daily** `quotes`: forward log-returns от якорной цены (close T0 или open T+1 — зафиксировать в доке и не менять без новой версии), max drawdown в окне, опционально объём.
-- **`final_label`:** rule-based из `outcomes_after` (например UP/DOWN/FLAT по порогу в log-space с учётом издержек — аналогично `PORTFOLIO_ML_*_BPS` в портфельной модели).
-- **Код:** `services/event_reaction_outcomes.py` + `scripts/backfill_event_reaction_outcomes.py` с `--min-age-days`, `--horizons 1,5,20`.
-- **Регулярность:** cron **ежедневно** (ночь US): обновлять только строки, у которых «событие + max горизонт» уже в прошлом и `outcomes_after` пустой.
+Авторазметка может ошибаться на корпоративных действиях, сплитах, тонком тайминге отчёта относительно якоря, или если нужен **другой** экономический смысл метки (например, горизонт не 5d). Тогда правят **источник правды в БД**:
+
+1. Найти строку: по `id`, или по `(symbol, event_time_et, dataset_version)`.
+2. Обновить JSON и/или метку; выставить **`label_source = 'manual'`**, чтобы отличить от `auto_quotes_v1`.
+
+Пример (подставьте свой `id` и JSON; ключи внутри JSON должны соответствовать принятой схеме версии билдера):
+
+```sql
+UPDATE event_reaction_dataset
+SET
+  outcomes_after = '{"outcome_builder_version":"quotes_fwd_1","forward_log_ret_5d":0.012,"threshold_log_used":0.004}'::jsonb,
+  final_label = 'UP',
+  label_source = 'manual',
+  updated_at = NOW()
+WHERE id = 12345;
+```
+
+Точечная правка только сценария без пересчёта JSON (редко имеет смысл — рассинхрон с `outcomes_after`):
+
+```sql
+UPDATE event_reaction_dataset
+SET final_label = 'FLAT', label_source = 'manual', updated_at = NOW()
+WHERE id = 12345;
+```
+
+Правка **признаков** (например, после исправления котировок):
+
+```sql
+UPDATE event_reaction_dataset
+SET
+  features_before = features_before || '{"note":"manual_adjusted_as_of","feature_builder_version":"quotes_mvp_1"}'::jsonb,
+  label_source = 'manual',
+  updated_at = NOW()
+WHERE id = 12345;
+```
+
+После массовых ручных правок имеет смысл зафиксировать выборку в отдельном `dataset_version` (например `v0_manual_q1`) экспортом/копированием строк, чтобы не смешивать с сырым авто-слоем.
+
+---
+
+## Обучение метрик, анализ, прод
+
+Тот же контур, что и для остальных ML-задач в репозитории:
+
+1. **Полнота данных:** `GET /api/ml/data-quality` → `event_analytics` (доли `with_features_before`, `with_outcomes_after`, `labeled`).
+2. **Единый отчёт:** `python scripts/run_ml_data_quality_report.py` (см. [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md)).
+3. **Обучение CatBoost** для event-слоя в коде пока не вынесено в отдельный скрипт; ориентир по структуре датасета/метрик — `scripts/train_portfolio_catboost.py` (log-returns, `--json-metrics-out`, пороговые метрики). Практически: выгрузка строк с непустыми `features_before` / `outcomes_after`, целевая переменная — например `forward_log_ret_5d` из `outcomes_after` или класс из `final_label`.
+4. **Прод-инференс** — только после появления `.cbm`, гейтов в `ml_train_readiness.jsonl` и явного включения в конфиге/сервисе (как GAME_5M / портфель); до этого слой остаётся офлайн-аналитикой.
 
 ---
 
 ## Регулярность и cron (пример)
 
-Порядок зависимостей: **котировки** → (опционально) **`market_regime_daily`** → **features** → спустя время → **outcomes**.
+Порядок зависимостей: **котировки** → (опционально) вспомогательные таблицы → **авторазметка** `backfill_event_reaction_labeling.py` (можно два прохода: сначала `--only-features`, позже `--only-outcomes` для «созревших» по календарю строк).
 
 Пример строк (хост, `docker exec lse-bot`, логи на volume):
 
 ```text
+# MVP: признаки + исходы одним скриптом (строки без исходов останутся с частичным заполнением до появления forward-баров)
+30 2 * * *     flock -n /tmp/lse_erd_label.lock docker exec lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --limit 3000 >> ~/lse/logs/event_reaction_labeling.log 2>&1
+```
+
+Опционально разнести нагрузку:
+
+```text
+32 2 * * *     flock -n /tmp/lse_erd_feat.lock docker exec lse-bot python scripts/backfill_event_reaction_labeling.py --only-features --dataset-version v0 --limit 5000 >> ~/lse/logs/event_reaction_features.log 2>&1
+48 2 * * *     flock -n /tmp/lse_erd_out.lock docker exec lse-bot python scripts/backfill_event_reaction_labeling.py --only-outcomes --dataset-version v0 --limit 8000 >> ~/lse/logs/event_reaction_outcomes.log 2>&1
+```
+
+```text
 # Режим рынка (если скрипт добавлен)
 15 1 * * 1-5  flock -n /tmp/lse_market_regime.lock docker exec lse-bot python scripts/ingest_market_regime_daily.py >> ~/lse/logs/event_regime.log 2>&1
-
-# Признаки: батч пустых строк
-30 2 * * *     flock -n /tmp/lse_erd_features.lock docker exec lse-bot python scripts/backfill_event_reaction_features.py --limit 2000 >> ~/lse/logs/event_reaction_features.log 2>&1
-
-# Исходы: только созревшие по дате
-45 2 * * *     flock -n /tmp/lse_erd_outcomes.lock docker exec lse-bot python scripts/backfill_event_reaction_outcomes.py --min-age-days 25 --limit 5000 >> ~/lse/logs/event_reaction_outcomes.log 2>&1
 ```
 
 Скелет KB → `event_reaction_dataset` при необходимости **реже** (после массового импорта в KB):
@@ -106,12 +160,11 @@
 
 ---
 
-## Что сделать в коде первым (минимальный PR-план)
+## Дальнейшее развитие (по желанию)
 
-1. `scripts/ingest_market_regime_daily.py` + UPSERT в `market_regime_daily` (если нужен режим в фичах с первого дня).  
-2. `scripts/backfill_event_reaction_features.py` + `services/event_reaction_features.py` (только quotes-MVP, без peer).  
-3. `scripts/backfill_event_reaction_outcomes.py` + `services/event_reaction_outcomes.py` (1d/5d/20d + простой `final_label`).  
-4. Подключить строки в `setup_cron_docker.sh` / шаблон crontab (закомментированно, как остальные).  
-5. Расширить `collect_event_analytics_stats` при желании полем `feature_builder_versions` (DISTINCT из jsonb) — опционально.
+1. `scripts/ingest_market_regime_daily.py` + UPSERT в `market_regime_daily` (режим в фичах).  
+2. Расширить `features_before`: peer-граф, `earnings_event_detail`, новая `feature_builder_version`.  
+3. Отдельный `scripts/train_event_reaction_catboost.py` + гейты в `run_ml_train_readiness_cron.py` (по аналогии с портфелем / GAME_5M).  
+4. `collect_event_analytics_stats`: опционально DISTINCT `feature_builder_version` из JSONB.
 
-После этого блок **Event / earnings** в анализаторе начнёт отражать реальный прогресс без ручного SQL.
+После стабильной авторазметки блок **Event / earnings** в анализаторе отражает реальный прогресс; ручные правки учитывайте через `label_source` и при необходимости отдельный `dataset_version`.

@@ -7,6 +7,7 @@
 
   python scripts/migrate_ml_event_analytics.py   # сначала DDL
   python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0
+  python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --limit 500
   python scripts/build_event_reaction_dataset.py --stats
 
 См. docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md §4.2

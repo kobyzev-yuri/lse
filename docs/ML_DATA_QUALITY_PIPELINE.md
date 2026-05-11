@@ -48,7 +48,7 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 |----------|----------------|-------------------------|
 | `trade_history` | `context_json` на BUY, ключ `decision`, стратегия | Крон GAME_5M / портфель; см. [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md) |
 | `knowledge_base` | `event_type`, `outcome_json`, `embedding` | Кроны новостей/earnings, `scripts/sync_vector_kb_cron.py`; см. [KNOWLEDGE_BASE_FIELDS.md](KNOWLEDGE_BASE_FIELDS.md) |
-| `event_reaction_dataset` | `features_before`, `outcomes_after`, `final_label` | Миграция; skeleton: `build_event_reaction_dataset.py`; **признаки и исходы — в БД** (заполняет **feature builder** / outcome writer в `features_before` / `outcomes_after`, см. §3.1) |
+| `event_reaction_dataset` | `features_before`, `outcomes_after`, `final_label` | Миграция; skeleton: `build_event_reaction_dataset.py`; авторазметка из `quotes`: **`scripts/backfill_event_reaction_labeling.py`** (`services/event_reaction_labeling.py`), см. [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md) |
 | `quotes` | Покрытие тикеров | Сидеры/Yahoo; см. [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) |
 | CSV датасеты | Stuck / continuation | `scripts/build_game5m_stuck_dataset.py`, `scripts/build_game5m_continuation_dataset.py` |
 | Recovery ML | JSONL экспорт | Анализатор `export_recovery_ml`; см. [GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md](GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md) |
@@ -74,7 +74,8 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 | Создать таблицы | `python scripts/migrate_ml_event_analytics.py` |
 | SQL на просмотр | `scripts/sql/ml_event_analytics_schema.sql` |
 | Skeleton из KB (EARNINGS*) | `python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0` |
-| План джобов features/outcomes и cron | [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md) |
+| Авторазметка features/outcomes/label (MVP) | `python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --limit 500` |
+| План cron, ручная правка, обучение/метрики | [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md) |
 
 Таблицы: `earnings_event_detail`, `peer_graph_edge`, `market_regime_daily`, `event_reaction_dataset`. Дамп: см. `scripts/export_pg_dump.sh` (список `LSE_TABLES` дополнен).
 
