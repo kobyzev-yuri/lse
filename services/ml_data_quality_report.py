@@ -15,7 +15,7 @@ from sqlalchemy import bindparam, text
 
 logger = logging.getLogger(__name__)
 
-REPORT_VERSION = "1.0"
+REPORT_VERSION = "1.1"
 
 
 def _json_load(path: Path) -> Optional[Dict[str, Any]]:
@@ -245,6 +245,120 @@ def collect_catboost_artifact_meta(project_root: Path) -> Dict[str, Any]:
     return found
 
 
+def _table_exists(conn, table_name: str) -> bool:
+    r = conn.execute(
+        text(
+            """
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = :t
+            """
+        ),
+        {"t": table_name},
+    ).scalar()
+    return r is not None
+
+
+def collect_event_analytics_stats(engine) -> Dict[str, Any]:
+    """
+    Таблицы миграции migrate_ml_event_analytics + статистика event_reaction_dataset.
+    """
+    out: Dict[str, Any] = {"error": None, "tables": {}, "event_reaction_dataset": None}
+    expected = (
+        "earnings_event_detail",
+        "peer_graph_edge",
+        "market_regime_daily",
+        "event_reaction_dataset",
+    )
+    try:
+        with engine.connect() as conn:
+            present = {t: _table_exists(conn, t) for t in expected}
+            out["tables"] = present
+            out["tables_present_all"] = all(present.values())
+            if not present.get("event_reaction_dataset"):
+                out["event_reaction_dataset"] = {
+                    "note": "Таблица отсутствует — выполните scripts/migrate_ml_event_analytics.py",
+                }
+                return out
+            row = conn.execute(text("SELECT COUNT(*) FROM event_reaction_dataset")).scalar()
+            n = int(row or 0)
+            row = conn.execute(
+                text(
+                    """
+                    SELECT
+                      COUNT(*) FILTER (WHERE final_label IS NULL OR TRIM(final_label) = '') AS unlabeled,
+                      COUNT(*) FILTER (WHERE final_label IS NOT NULL AND TRIM(final_label) != '') AS labeled,
+                      COUNT(*) FILTER (WHERE features_before IS NOT NULL AND features_before <> '{}'::jsonb) AS with_features,
+                      COUNT(*) FILTER (WHERE outcomes_after IS NOT NULL AND outcomes_after <> '{}'::jsonb) AS with_outcomes,
+                      MIN(event_time_et)::text AS min_event_et,
+                      MAX(event_time_et)::text AS max_event_et
+                    FROM event_reaction_dataset
+                    """
+                )
+            ).mappings().first()
+            ver = conn.execute(
+                text(
+                    """
+                    SELECT dataset_version AS v, COUNT(*) AS c
+                    FROM event_reaction_dataset
+                    GROUP BY dataset_version
+                    ORDER BY c DESC
+                    """
+                )
+            ).mappings().all()
+            sym = conn.execute(
+                text("SELECT COUNT(DISTINCT symbol) FROM event_reaction_dataset")
+            ).scalar()
+            out["event_reaction_dataset"] = {
+                "rows_total": n,
+                "distinct_symbols": int(sym or 0),
+                "by_dataset_version": {str(x["v"]): int(x["c"]) for x in ver},
+                "unlabeled": int((row or {}).get("unlabeled") or 0) if row else 0,
+                "labeled": int((row or {}).get("labeled") or 0) if row else 0,
+                "with_features_before": int((row or {}).get("with_features") or 0) if row else 0,
+                "with_outcomes_after": int((row or {}).get("with_outcomes") or 0) if row else 0,
+                "min_event_time_et": (row or {}).get("min_event_et"),
+                "max_event_time_et": (row or {}).get("max_event_et"),
+                "label_coverage_rate": round((row or {}).get("labeled", 0) / n, 4) if n and row else 0.0,
+            }
+            if present.get("earnings_event_detail"):
+                ed = conn.execute(text("SELECT COUNT(*) FROM earnings_event_detail")).scalar()
+                out["earnings_event_detail_rows"] = int(ed or 0)
+            if present.get("peer_graph_edge"):
+                pe = conn.execute(text("SELECT COUNT(*) FROM peer_graph_edge")).scalar()
+                out["peer_graph_edge_rows"] = int(pe or 0)
+            if present.get("market_regime_daily"):
+                mr = conn.execute(text("SELECT COUNT(*) FROM market_regime_daily")).scalar()
+                out["market_regime_daily_rows"] = int(mr or 0)
+    except Exception as e:
+        out["error"] = str(e)
+        logger.warning("event analytics stats: %s", e)
+    return out
+
+
+def collect_ml_train_readiness_tail(project_root: Path, *, max_lines: int = 3) -> Dict[str, Any]:
+    paths = [
+        Path("/app/logs/ml/logs/ml_train_readiness.jsonl"),
+        project_root / "local" / "logs" / "ml_train_readiness.jsonl",
+    ]
+    for p in paths:
+        tail = _tail_jsonl(p, max_lines=max_lines)
+        if tail:
+            return {"path": str(p), "last_records": tail}
+    return {"path": None, "last_records": []}
+
+
+def collect_game5m_daily_ml_tail(project_root: Path, *, max_lines: int = 2) -> Dict[str, Any]:
+    paths = [
+        Path("/app/logs/ml/logs/game5m_daily_ml_report.jsonl"),
+        project_root / "local" / "logs" / "ml" / "game5m_daily_ml_report.jsonl",
+    ]
+    for p in paths:
+        tail = _tail_jsonl(p, max_lines=max_lines)
+        if tail:
+            return {"path": str(p), "last_records": tail}
+    return {"path": None, "last_records": []}
+
+
 def collect_portfolio_ml_report_tail(project_root: Path, *, max_lines: int = 2) -> Dict[str, Any]:
     paths = [
         Path("/app/logs/ml/logs/portfolio_daily_ml_report.jsonl"),
@@ -282,6 +396,9 @@ def build_ml_data_quality_report(
         "dataset_files": datasets,
         "catboost_meta_artifacts": collect_catboost_artifact_meta(project_root),
         "portfolio_ml_report_jsonl": collect_portfolio_ml_report_tail(project_root),
+        "game5m_daily_ml_report_jsonl": collect_game5m_daily_ml_tail(project_root),
+        "ml_train_readiness_jsonl": collect_ml_train_readiness_tail(project_root),
+        "event_analytics": collect_event_analytics_stats(engine),
         "external_train_metrics": {},
     }
     if train_metrics_paths:

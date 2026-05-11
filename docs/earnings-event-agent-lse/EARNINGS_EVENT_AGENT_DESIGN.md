@@ -38,6 +38,10 @@
 
 ## 4. Данные и схема (предлагаемая)
 
+### 4.1.1 DDL в репозитории
+
+Таблицы **`earnings_event_detail`**, **`peer_graph_edge`**, **`market_regime_daily`**, **`event_reaction_dataset`**: SQL `scripts/sql/ml_event_analytics_schema.sql`, применение `python scripts/migrate_ml_event_analytics.py`. Skeleton-строки датасета из KB: `scripts/build_event_reaction_dataset.py --from-kb-earnings`.
+
 ### 4.1 Расширение событий в KB или отдельная таблица
 
 Минимум полей для записи типа `EARNINGS` (имена — для обсуждения):
@@ -52,7 +56,7 @@
 
 ### 4.2 Датасет `event_reaction_dataset` (логическое имя)
 
-Строка = одно событие + окно признаков **до** события + исходы **после**:
+Физическая таблица **`event_reaction_dataset`** (колонки `features_before`, `outcomes_after`, `final_label`, …) создаётся миграцией §4.1.1. Строка = одно событие + окно признаков **до** события + исходы **после**:
 
 - дневные/внутридневные агрегаты из `quotes`, `premarket_daily_features`
 - корреляции / beta к NDX, к группе

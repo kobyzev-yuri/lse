@@ -145,6 +145,71 @@ DDL: `db/knowledge_pg/sql/022_premarket_daily_features.sql`.
 
 ---
 
+## Event / earnings analytics (ML)
+
+Миграция: **`scripts/migrate_ml_event_analytics.py`** (SQL: `scripts/sql/ml_event_analytics_schema.sql`). См. [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md).
+
+### Таблица `earnings_event_detail`
+
+Расширение фактов earnings для строки `knowledge_base` (1:1 по `knowledge_base_id`, PK).
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
+| knowledge_base_id | INTEGER PK FK → knowledge_base | Связь с событием в KB |
+| fiscal_period | VARCHAR(32) | Фискальный период |
+| eps_actual, eps_estimate | NUMERIC | EPS факт / консенсус |
+| revenue_actual, revenue_estimate | NUMERIC | Выручка |
+| guidance_summary | JSONB | Структурированный guidance |
+| affected_tickers | JSONB | Аналоги / цепочка с весами |
+| created_at, updated_at | TIMESTAMPTZ | Служебные |
+
+### Таблица `peer_graph_edge`
+
+Рёбра графа влияния между тикерами.
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
+| id | BIGSERIAL | PK |
+| source_ticker, target_ticker | VARCHAR(16) | Узлы |
+| relation_type | VARCHAR(32) | Например peer, supply |
+| weight | NUMERIC | Сила связи |
+| valid_from, valid_to | DATE | Интервал актуальности |
+| meta | JSONB | Доп. поля |
+
+Уникальность: `(source_ticker, target_ticker, relation_type, valid_from)`.
+
+### Таблица `market_regime_daily`
+
+Снимок по календарному дню (индексы, VIX, JSON-флаги).
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
+| trade_date | DATE PK | Торговый день |
+| spy_close, ndx_close, dia_close, vix_close | NUMERIC | Уровни |
+| regime_flags, features_json | JSONB | Режим, ширина рынка и т.д. |
+
+### Таблица `event_reaction_dataset`
+
+Строки для обучения сценариев реакции на события (признаки до / исходы после).
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
+| id | BIGSERIAL | PK |
+| knowledge_base_id | INTEGER FK | Опционально |
+| symbol | VARCHAR(16) | Тикер |
+| event_time_et | TIMESTAMPTZ | Якорь события (ET) |
+| event_type | VARCHAR(48) | Обычно EARNINGS |
+| features_before, outcomes_after | JSONB | Признаки и метки исхода |
+| final_label | VARCHAR(72) | Класс сценария §6 дизайна |
+| label_source | VARCHAR(32) | human / derived / kb_skeleton |
+| ticker_price_regime | VARCHAR(32) | См. §4.5 дизайна |
+| market_regime_date | DATE | Ссылка на день режима |
+| dataset_version | VARCHAR(24) | Версия сборки датасета |
+
+Уникальность: `(symbol, event_time_et, event_type, dataset_version)`.
+
+---
+
 ## Экспорт и восстановление
 
 - Таблицы LSE для переноса: см. **`scripts/export_pg_dump.sh`** (список `-t public.*`).

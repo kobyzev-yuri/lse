@@ -1,13 +1,15 @@
 # Конвейер разметки, ML и контроля качества данных
 
-Документ связывает **подготовку данных в PostgreSQL**, **обучение CatBoost**, **метрики** и **единый отчёт** с опциональным **LLM-анализатором** применимости к задачам LSE (GAME_5M, портфель, `knowledge_base` / earnings, recovery). Доходности в моделях и отчётах — **log-returns**; симуляции — с **transaction costs** (правила проекта).
+Документ связывает **подготовку данных в PostgreSQL**, **обучение CatBoost**, **метрики** и **единый отчёт** с опциональным **LLM-анализатором** применимости к задачам LSE (GAME_5M, портфель, `knowledge_base` / earnings, `event_reaction_dataset`, recovery). Доходности в моделях и отчётах — **log-returns**; симуляции — с **transaction costs** (правила проекта).
 
 ## 1. Цели
 
 1. Видеть **полноту** разметки: `context_json` на BUY, `outcome_json` / embedding в KB, покрытие `quotes`.
-2. Видеть **качество** датасетов: CSV из `build_game5m_*`, доли пропусков, наличие файлов.
-3. Видеть **состояние ML-артефактов**: `.meta.json` у CatBoost, последние записи `portfolio_daily_ml_report.jsonl`.
-4. Получать **один JSON** и при необходимости **LLM-резюме** (готовность, пробелы, следующие шаги, приоритет ручной разметки).
+2. Видеть **event ML слой**: наличие таблиц миграции, строки в `event_reaction_dataset`, доля `final_label` и заполненных `features_before` / `outcomes_after`.
+3. Видеть **качество** датасетов: CSV из `build_game5m_*`, доли пропусков, наличие файлов.
+4. Видеть **состояние ML-артефактов**: `.meta.json` у CatBoost, хвосты `portfolio_daily_ml_report.jsonl`, `game5m_daily_ml_report.jsonl`, **`ml_train_readiness.jsonl`**.
+5. Получать **один JSON** и при необходимости **LLM-резюме** (готовность, пробелы, следующие шаги, приоритет ручной разметки).
+6. **Регулярно** прогонять dry-run (или полное) обучение и фиксировать **гейты готовности к продакшену** (`run_ml_train_readiness_cron.py`).
 
 ## 2. Точка входа: единый отчёт
 
@@ -20,11 +22,13 @@
 Примеры:
 
 ```bash
-# Только машинный JSON (БД + датасеты + мета моделей)
+# Только машинный JSON (БД + датасеты + мета моделей + event_analytics)
 python scripts/run_ml_data_quality_report.py --json-out local/logs/ml_data_quality/report.json
 
-# Плюс dry-run обучения GAME_5M (нужен catboost в окружении) и запись метрик в JSON
-python scripts/run_ml_data_quality_report.py --game5m-train-dry-run --json-out local/logs/ml_data_quality/report.json
+# Плюс dry-run GAME_5M и портфеля → JSON метрик в /app/logs/ml/ml_data_quality/ (или local/...)
+python scripts/run_ml_data_quality_report.py \
+  --game5m-train-dry-run --portfolio-train-dry-run \
+  --json-out local/logs/ml_data_quality/report.json
 
 # Плюс LLM-оценка (ключ в config.env / ProxyAPI — см. .cursorrules)
 python scripts/run_ml_data_quality_report.py --json-out local/logs/ml_data_quality/report.json --llm --print-llm-summary
@@ -44,33 +48,67 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 |----------|----------------|-------------------------|
 | `trade_history` | `context_json` на BUY, ключ `decision`, стратегия | Крон GAME_5M / портфель; см. [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md) |
 | `knowledge_base` | `event_type`, `outcome_json`, `embedding` | Кроны новостей/earnings, `scripts/sync_vector_kb_cron.py`; см. [KNOWLEDGE_BASE_FIELDS.md](KNOWLEDGE_BASE_FIELDS.md) |
+| `event_reaction_dataset` | `features_before`, `outcomes_after`, `final_label` | Миграция + `scripts/build_event_reaction_dataset.py`; см. [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md), [EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) |
 | `quotes` | Покрытие тикеров | Сидеры/Yahoo; см. [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) |
 | CSV датасеты | Stuck / continuation | `scripts/build_game5m_stuck_dataset.py`, `scripts/build_game5m_continuation_dataset.py` |
 | Recovery ML | JSONL экспорт | Анализатор `export_recovery_ml`; см. [GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md](GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md) |
 
 Отчёт `build_ml_data_quality_report` **не изменяет** БД — только читает и профилирует.
 
-## 4. Обучение и метрики (существующие скрипты)
+## 4. DDL event / earnings analytics
+
+| Шаг | Команда |
+|-----|---------|
+| Создать таблицы | `python scripts/migrate_ml_event_analytics.py` |
+| SQL на просмотр | `scripts/sql/ml_event_analytics_schema.sql` |
+| Skeleton из KB (EARNINGS*) | `python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0` |
+
+Таблицы: `earnings_event_detail`, `peer_graph_edge`, `market_regime_daily`, `event_reaction_dataset`. Дамп: см. `scripts/export_pg_dump.sh` (список `LSE_TABLES` дополнен).
+
+## 5. Обучение и метрики (скрипты)
 
 | Скрипт | Назначение |
 |--------|------------|
-| `scripts/train_game5m_catboost.py` | Entry CatBoost; `--dry-run`, **`--json-metrics-out`** → JSON с `n_*`, `auc_valid`, статус `insufficient_rows` |
-| `scripts/train_portfolio_catboost.py` | Дневной портфель; `--dry-run` пишет строку в `PORTFOLIO_ML_REPORT_JSONL` |
+| `scripts/train_game5m_catboost.py` | Entry CatBoost; `--dry-run`, **`--json-metrics-out`** |
+| `scripts/train_portfolio_catboost.py` | Портфель; `--dry-run`, **`--json-metrics-out`**, плюс append в `PORTFOLIO_ML_REPORT_JSONL` |
 | `scripts/train_game5m_recovery_catboost.py` | Recovery по JSONL |
-| `scripts/run_daily_game5m_ml_pipeline.py` | Stuck + continuation CSV + CatBoost + строка в `game5m_daily_ml_report.jsonl` |
+| `scripts/run_daily_game5m_ml_pipeline.py` | Stuck + continuation CSV + CatBoost + `game5m_daily_ml_report.jsonl` |
+| **`scripts/run_ml_train_readiness_cron.py`** | Регулярный dry-run/full train + **гейты** + append **`ml_train_readiness.jsonl`** |
 
-См. также [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md), [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md) (операционный разбор сделок + LLM).
+См. также [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md), [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md).
 
-## 5. LLM-блок в отчёте
+### 5.1 Готовность к продакшену (гейты)
 
-`analyze_ml_data_quality_with_llm` передаёт модели **только** сформированный JSON (без выдуманных чисел). Ответ — структурированный JSON: `summary_ru`, `completeness`, `quality_risks`, `applicability` по контурам, `recommended_next_steps`, `human_labeling`.
+`run_ml_train_readiness_cron.py` пишет строку с `game5m.gate`, `portfolio.gate`, `overall_production_ready`.
 
-Таймаут HTTP берётся как у тяжёлых промптов (`OPENAI_TIMEOUT_PROMPT_ENTRY` при наличии).
+Переменные окружения (основные):
 
-## 6. Связь с event / earnings
+| Переменная | Смысл |
+|------------|--------|
+| `ML_READINESS_JSONL` | Путь JSONL (default: `.../ml_train_readiness.jsonl`) |
+| `ML_READINESS_TRAIN_MODE` | `dry_run` (по умолчанию) или `full` — перезапись `.cbm` |
+| `ML_READINESS_SKIP_GAME5M` / `ML_READINESS_SKIP_PORTFOLIO` | `1` — пропустить модель |
+| `ML_READINESS_GAME5M_AUC_MIN` | Порог AUC valid (default `0.52`) |
+| `ML_READINESS_GAME5M_MIN_TRAIN` | Мин. `n_train` (default `40`) |
+| `ML_READINESS_PORTFOLIO_RMSE_MAX` | Макс. RMSE valid (default `0.08`) |
+| `ML_READINESS_PORTFOLIO_MIN_TRAIN` | Мин. `n_train` (default `80`) |
 
-План разметки сценариев и `outcome_json`: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md). Отчёт качества показывает **долю заполненных** `outcome_json` по KB — это прокси готовности к `event_reaction_dataset`.
+Пример cron (после сессии, без смены моделей):
 
-## 7. Версионирование
+```bash
+docker compose exec -T lse python3 scripts/run_ml_train_readiness_cron.py >> /app/logs/ml_train_readiness_cron.log 2>&1
+```
 
-Поле `report_version` в корне JSON отчёта (`services/ml_data_quality_report.REPORT_VERSION`). При изменении схемы — поднять версию и кратко описать в коммите.
+## 6. LLM-блок в отчёте
+
+`analyze_ml_data_quality_with_llm` передаёт модели **только** сформированный JSON. В `applicability` учитывай блок **`event_analytics`** (таблицы и `event_reaction_dataset`).
+
+Таймаут HTTP: `OPENAI_TIMEOUT_PROMPT_ENTRY` при наличии.
+
+## 7. Связь с event / earnings
+
+План сценариев: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md). Отчёт качества добавляет **`event_analytics`**: строки датасета, разметка, версии `dataset_version`.
+
+## 8. Версионирование
+
+Поле `report_version` в корне JSON (`services/ml_data_quality_report.REPORT_VERSION`). Текущее: **1.1** (event_analytics + хвосты readiness / game5m daily).

@@ -7,6 +7,7 @@ The model output is advisory and is not used for automatic execution.
 
 Examples:
   python scripts/train_portfolio_catboost.py --dry-run
+  python scripts/train_portfolio_catboost.py --dry-run --json-metrics-out local/logs/ml_data_quality/portfolio_metrics.json
   python scripts/train_portfolio_catboost.py --horizon-days 5 --min-rows 300
 """
 from __future__ import annotations
@@ -18,6 +19,7 @@ import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -71,7 +73,22 @@ def main() -> int:
         default="",
         help="Output .cbm path (meta written alongside as .meta.json)",
     )
+    parser.add_argument(
+        "--json-metrics-out",
+        type=str,
+        default="",
+        help="Путь JSON с метриками/статусом (run_ml_data_quality_report, ml_train_readiness)",
+    )
     args = parser.parse_args()
+
+    def _write_metrics_json(path_str: str, payload: dict[str, Any]) -> None:
+        ps = (path_str or "").strip()
+        if not ps:
+            return
+        outp = Path(ps).expanduser()
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        with open(outp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
     try:
         from catboost import CatBoostRegressor, Pool
@@ -119,6 +136,15 @@ def main() -> int:
     target_col = "target_log_return"
     if df.empty or target_col not in df.columns:
         logger.error("Нет строк датасета или target_log_return. Проверьте quotes.")
+        _write_metrics_json(
+            args.json_metrics_out,
+            {
+                "script": "train_portfolio_catboost",
+                "status": "no_dataset",
+                "trained_at": datetime.now(timezone.utc).isoformat(),
+                "note": "empty_or_no_target_log_return",
+            },
+        )
         return 2
     df = df.dropna(subset=[target_col]).copy()
     df = df.sort_values(["date", "ticker"]).reset_index(drop=True)
@@ -135,6 +161,18 @@ def main() -> int:
     )
     if n_total < max(20, int(args.min_rows)):
         logger.warning("Строк меньше порога %s — модель не пишем.", args.min_rows)
+        _write_metrics_json(
+            args.json_metrics_out,
+            {
+                "script": "train_portfolio_catboost",
+                "status": "insufficient_rows",
+                "trained_at": datetime.now(timezone.utc).isoformat(),
+                "n_total": int(n_total),
+                "min_rows_config": int(args.min_rows),
+                "horizon_days": int(args.horizon_days),
+                "corr_window_days": int(args.corr_window_days),
+            },
+        )
         return 2
 
     feature_names, cat_features, _ = get_portfolio_ml_feature_schema()
@@ -184,6 +222,27 @@ def main() -> int:
         metrics.get("top_decile_mean_simple_pct", float("nan")),
         metrics.get("top_decile_hit_rate_pct", float("nan")),
     )
+
+    metrics_blob = {
+        "script": "train_portfolio_catboost",
+        "status": "ok",
+        "dry_run": bool(args.dry_run),
+        "model_version": MODEL_VERSION,
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "n_train": n_train,
+        "n_valid": n_valid,
+        "n_total": n_total,
+        "tickers_n": int(df["ticker"].nunique()),
+        "horizon_days": int(args.horizon_days),
+        "corr_window_days": int(args.corr_window_days),
+        "min_rows_config": int(args.min_rows),
+        "metrics": {k: (round(v, 8) if isinstance(v, float) and math.isfinite(v) else v) for k, v in metrics.items()},
+        "out_model_path": out_final,
+        "portfolio_tickers": universe.portfolio_tickers,
+        "game5m_tickers": universe.game5m_tickers,
+        "leader_tickers": universe.leaders,
+    }
+    _write_metrics_json(args.json_metrics_out, metrics_blob)
 
     if args.dry_run:
         logger.info("Dry-run: модель не записываем.")

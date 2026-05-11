@@ -7,7 +7,7 @@ set -e
 set -o pipefail
 
 # Таблицы LSE (init_db.py): только они попадут в дамп
-LSE_TABLES="quotes knowledge_base portfolio_state trade_history strategy_parameters"
+LSE_TABLES="quotes knowledge_base portfolio_state trade_history strategy_parameters earnings_event_detail peer_graph_edge market_regime_daily event_reaction_dataset"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

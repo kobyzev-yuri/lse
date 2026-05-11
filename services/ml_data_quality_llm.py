@@ -42,6 +42,8 @@ def analyze_ml_data_quality_with_llm(bundle: Dict[str, Any], *, http_timeout_sec
     "game5m_entry_catboost": "not_ready|weak|moderate|good — кратко почему",
     "portfolio_daily": "…",
     "event_earnings_outcome_kb": "…",
+    "event_reaction_dataset_table": "готовность таблицы и строк: features/outcomes/labels (см. event_analytics в JSON)",
+    "ml_train_readiness_gates": "интерпретация last_records ml_train_readiness_jsonl если есть",
     "recovery_ml": "…"
   },
   "recommended_next_steps": ["конкретный шаг 1", "…"],

@@ -23,7 +23,10 @@
 | `scripts/build_game5m_stuck_dataset.py` | Датасет риска зависания |
 | `scripts/build_game5m_continuation_dataset.py` | Датасет underprofit / continuation |
 | `scripts/train_game5m_catboost.py` | Обучение entry-модели; **`--json-metrics-out`** для машинного снимка метрик |
-| `scripts/run_ml_data_quality_report.py` | **Единый отчёт** БД/датасетов/CatBoost + опц. dry-run train + **LLM** |
+| `scripts/run_ml_data_quality_report.py` | **Единый отчёт** БД / event_analytics / датасеты / CatBoost + опц. dry-run train + **LLM** |
+| `scripts/migrate_ml_event_analytics.py` | DDL: `event_reaction_dataset`, `market_regime_daily`, … |
+| `scripts/build_event_reaction_dataset.py` | Skeleton строк датасета из KB (`--from-kb-earnings`) |
+| `scripts/run_ml_train_readiness_cron.py` | Регулярные метрики + гейты готовности → `ml_train_readiness.jsonl` |
 | `scripts/snapshot_analyzer_report.py` | Снимок JSON анализатора для офлайна / cron |
 
 ## Earnings / event agent (дизайн)
