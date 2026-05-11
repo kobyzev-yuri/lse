@@ -8,6 +8,7 @@ outcome_builder_version=quotes_fwd_1, label_source=auto_quotes_v1).
 Примеры:
   python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --limit 500
   python scripts/backfill_event_reaction_labeling.py --dry-run --limit 20
+  python scripts/backfill_event_reaction_labeling.py --dry-run --limit 20 -v
   python scripts/backfill_event_reaction_labeling.py --only-features --limit 2000
   python scripts/backfill_event_reaction_labeling.py --only-outcomes --limit 5000
   python scripts/backfill_event_reaction_labeling.py --force-outcomes --limit 100
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -94,6 +96,7 @@ def main() -> int:
     ap.add_argument("--id-to", type=int, default=0, help="Only id <= this (0 = no bound)")
     ap.add_argument("--since", type=str, default="", help="Only event_time_et >= (ISO datetime)")
     ap.add_argument("--until", type=str, default="", help="Only event_time_et < (ISO datetime)")
+    ap.add_argument("-v", "--verbose", action="store_true", help="Логировать каждый пропуск (id, symbol, причина)")
     args = ap.parse_args()
 
     if args.only_features and args.only_outcomes:
@@ -168,6 +171,7 @@ def main() -> int:
     updated = 0
     skipped = 0
     partial_notes = 0
+    skip_reasons: Counter[str] = Counter()
 
     for r in rows:
         d = _row_from_db(r)
@@ -182,7 +186,12 @@ def main() -> int:
         )
         if not upd:
             skipped += 1
-            logger.debug("skip id=%s note=%s", rid, note)
+            reason_key = (note or "unknown").strip() or "unknown"
+            skip_reasons[reason_key] += 1
+            if args.verbose:
+                logger.info("skip id=%s symbol=%s note=%s", rid, d.get("symbol"), note)
+            else:
+                logger.debug("skip id=%s note=%s", rid, note)
             continue
         if note:
             partial_notes += 1
@@ -203,6 +212,10 @@ def main() -> int:
         partial_notes,
         args.dry_run,
     )
+    if skip_reasons:
+        logger.info("Причины пропуска (пустой UPDATE): %s", dict(skip_reasons))
+        if not args.verbose and skipped:
+            logger.info("Повторите с -v / --verbose, чтобы увидеть id и symbol по каждой строке.")
     return 0
 
 
