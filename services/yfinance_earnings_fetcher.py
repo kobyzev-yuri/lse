@@ -90,6 +90,12 @@ def fetch_yfinance_earnings_for_symbol(symbol: str, limit: int) -> List[Dict[str
         df = None
     if df is None or getattr(df, "empty", True):
         return out
+    # yfinance может вернуть больше строк, чем limit — режем для контроля объёма KB
+    try:
+        if len(df) > int(limit):
+            df = df.iloc[: int(limit)]
+    except Exception:
+        pass
 
     for idx, row in df.iterrows():
         rd = _report_datetime_from_index(idx)
