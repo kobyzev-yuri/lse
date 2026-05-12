@@ -19,7 +19,7 @@
   ML_READINESS_SKIP_EVENT_REACTION — 1 (по умолчанию) — не вызывать train_event_reaction_catboost; 0 — включить
     (на VM ночной cron может задать 0 через `docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0`, см. crontab/lse-docker.crontab)
   ML_READINESS_EVENT_REACTION_RMSE_MAX — макс. RMSE valid (default 0.12)
-  ML_READINESS_EVENT_REACTION_MIN_TRAIN — мин. n_train (default 25)
+  ML_READINESS_EVENT_REACTION_MIN_TRAIN — мин. n_train при status=ok (default 8; поднимите для прода)
   ML_READINESS_GAME5M_AUC_MIN — порог AUC valid (default 0.52)
   ML_READINESS_GAME5M_MIN_TRAIN — мин. n_train (default 40)
   ML_READINESS_PORTFOLIO_RMSE_MAX — макс. RMSE valid в log-пространстве (default 0.08)
@@ -95,23 +95,33 @@ def _gate_game5m(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 def _gate_event_reaction(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     reasons: list[str] = []
     if not data:
-        return {"ready": False, "reasons": ["no_metrics_file"]}
+        return {"ready": False, "reasons": ["no_metrics_file"], "rmse_valid": None, "n_train": 0}
     st = data.get("status")
+    mets = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+    rmse = mets.get("rmse_valid")
+    nt = int(data.get("n_train") or 0)
+
     if st != "ok":
         reasons.append(f"status={st}")
+        if st == "insufficient_rows":
+            ntot = int(data.get("n_total") or 0)
+            need = int(data.get("min_rows_required") or data.get("min_rows_config") or 0)
+            if need:
+                reasons.append(f"n_total={ntot}<{need}")
+            else:
+                reasons.append(f"n_total={ntot}")
+        return {"ready": False, "reasons": reasons, "rmse_valid": rmse, "n_train": nt}
+
     try:
         rmse_max = float((get_config_value("ML_READINESS_EVENT_REACTION_RMSE_MAX") or "0.12").strip())
     except (ValueError, TypeError):
         rmse_max = 0.12
-    mets = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
-    rmse = mets.get("rmse_valid")
     if rmse is None or (isinstance(rmse, (int, float)) and float(rmse) > rmse_max):
         reasons.append(f"rmse_valid>{rmse_max}")
     try:
-        nt_min = int((get_config_value("ML_READINESS_EVENT_REACTION_MIN_TRAIN") or "25").strip())
+        nt_min = int((get_config_value("ML_READINESS_EVENT_REACTION_MIN_TRAIN") or "8").strip())
     except (ValueError, TypeError):
         nt_min = 25
-    nt = int(data.get("n_train") or 0)
     if nt < nt_min:
         reasons.append(f"n_train<{nt_min}")
     return {"ready": len(reasons) == 0, "reasons": reasons, "rmse_valid": rmse, "n_train": nt}

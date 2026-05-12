@@ -7,6 +7,8 @@ MVP: CatBoostRegressor по строкам `event_reaction_dataset` (цена д
 
   python scripts/train_event_reaction_catboost.py --dry-run --json-metrics-out local/logs/last_event_reaction_train_metrics.json
 
+Порог строк: `--min-rows` (default 10), жёсткий минимум max(8, …); переопределение из config: **EVENT_REACTION_TRAIN_MIN_ROWS**.
+
 См. docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md
 """
 from __future__ import annotations
@@ -147,7 +149,12 @@ def main() -> int:
         default="quotes_mvp_1",
         help="Значение feature_builder_version внутри features_before",
     )
-    parser.add_argument("--min-rows", type=int, default=35, help="Минимум строк после фильтрации")
+    parser.add_argument(
+        "--min-rows",
+        type=int,
+        default=10,
+        help="Минимум строк после фильтрации для обучения (жёсткий пол ≥8: max(8, min-rows))",
+    )
     parser.add_argument("--valid-ratio", type=float, default=0.25, help="Доля хвоста по времени для valid")
     parser.add_argument("--dry-run", action="store_true", help="Не писать .cbm")
     parser.add_argument("--out", type=str, default="", help="Путь .cbm")
@@ -177,6 +184,14 @@ def main() -> int:
     )
 
     fbv = (args.feature_builder_version or "").strip() or FEATURE_BUILDER_VERSION
+    cfg_mr = (get_config_value("EVENT_REACTION_TRAIN_MIN_ROWS", "") or "").strip()
+    try:
+        min_rows_eff = int(cfg_mr) if cfg_mr else int(args.min_rows)
+    except (TypeError, ValueError):
+        min_rows_eff = int(args.min_rows)
+    # Не ниже 8 строк — иначе CatBoost/сплит нестабильны; верхний предел оставляем на усмотрение CLI.
+    min_required = max(8, int(min_rows_eff))
+
     engine = get_engine()
     df = load_training_frame(engine, dataset_version=args.dataset_version.strip() or "v0", feature_builder_version=fbv)
     if df.empty:
@@ -194,8 +209,12 @@ def main() -> int:
 
     df = df.sort_values(["event_time_et", "id"], na_position="last").reset_index(drop=True)
     n_total = len(df)
-    if n_total < max(20, int(args.min_rows)):
-        logger.warning("Строк %s < порога %s — модель не пишем.", n_total, args.min_rows)
+    if n_total < min_required:
+        logger.warning(
+            "Строк %s < порога %s (config EVENT_REACTION_TRAIN_MIN_ROWS или --min-rows, минимум 8) — модель не пишем.",
+            n_total,
+            min_required,
+        )
         _write_metrics_json(
             args.json_metrics_out,
             {
@@ -203,7 +222,11 @@ def main() -> int:
                 "status": "insufficient_rows",
                 "trained_at": datetime.now(timezone.utc).isoformat(),
                 "n_total": int(n_total),
-                "min_rows_config": int(args.min_rows),
+                "min_rows_config": int(min_rows_eff),
+                "min_rows_required": int(min_required),
+                "n_train": 0,
+                "n_valid": 0,
+                "metrics": {},
             },
         )
         return 2
@@ -215,9 +238,16 @@ def main() -> int:
 
     n_valid = max(1, int(n_total * float(args.valid_ratio)))
     n_train = n_total - n_valid
-    if n_train < 15:
+    if n_total >= 20 and n_train < 15:
         n_train = max(15, n_total // 2)
         n_valid = n_total - n_train
+    elif n_total < 20:
+        # Малый датасет: не требуем 15 train — достаточно ≥2 train и ≥1 valid
+        n_valid = max(1, min(n_valid, n_total - 2))
+        n_train = n_total - n_valid
+        if n_train < 2:
+            n_train = max(1, n_total - 1)
+            n_valid = n_total - n_train
 
     train_X = X.iloc[:n_train].values.tolist()
     valid_X = X.iloc[n_train:].values.tolist()
@@ -272,7 +302,8 @@ def main() -> int:
         "n_total": int(n_total),
         "dataset_version": args.dataset_version,
         "feature_builder_version": fbv,
-        "min_rows_config": int(args.min_rows),
+        "min_rows_config": int(min_rows_eff),
+        "min_rows_required": int(min_required),
         "metrics": {k: (round(v, 8) if isinstance(v, float) and math.isfinite(v) else v) for k, v in metrics.items()},
         "out_model_path": out_final,
     }

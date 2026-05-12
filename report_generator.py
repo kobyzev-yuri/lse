@@ -218,8 +218,8 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
         elif side == "SELL":
             if position_qty[ticker] <= 0:
                 # Нет позиции — считаем PnL неизвестным, но фиксируем сделку
-                logger.warning(
-                    "⚠️ Продажа без позиции: %s, qty=%.2f, price=%.2f", ticker, qty, price
+                logger.debug(
+                    "Продажа без позиции (replay): %s, qty=%.2f, price=%.2f", ticker, qty, price
                 )
                 continue
 

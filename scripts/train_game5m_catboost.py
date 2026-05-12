@@ -180,7 +180,7 @@ def main() -> int:
         if (t.entry_strategy or "").strip().upper() != GAME_5M:
             continue
         if _is_incorrect_0925_open_boundary_exit(t):
-            logger.info(
+            logger.debug(
                 "skip trade_id=%s %s: incorrect_0925_open_boundary_exit",
                 getattr(t, "trade_id", None),
                 getattr(t, "ticker", "?"),
@@ -188,7 +188,7 @@ def main() -> int:
             continue
         if _is_false_take_profit_by_session_high(t):
             skipped_false_take += 1
-            logger.info(
+            logger.debug(
                 "skip trade_id=%s %s: false_take_profit_by_session_high",
                 getattr(t, "trade_id", None),
                 getattr(t, "ticker", "?"),
