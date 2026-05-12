@@ -50,18 +50,18 @@ cat >> "$CRON_FILE" << EOF
 45 * * * * docker exec $CONTAINER_NAME python scripts/cron_watchdog.py --execute >> "$PROJECT_DIR/logs/cron_watchdog.log" 2>&1
 # 5m/30m в Postgres для бэктеста (Yahoo, UPSERT). Ежедневно 23:25 по системному TZ сервера (ожидается MSK).
 25 23 * * * flock -n /tmp/lse_market_bars_intraday.lock docker exec $CONTAINER_NAME python scripts/ingest_market_bars_intraday.py >> "$PROJECT_DIR/logs/cron_market_bars_intraday.log" 2>&1
+# Event / earnings: скелет из KB → разметка из daily quotes. EVENT_REACTION_KB_SINCE в config.env; --since — event_time_et.
+33 23 * * 1-5 flock -n /tmp/lse_erd_build.lock docker exec $CONTAINER_NAME python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0 >> "$PROJECT_DIR/logs/event_reaction_build.log" 2>&1
+36 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec $CONTAINER_NAME python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --since 2026-02-01 --limit 8000 >> "$PROJECT_DIR/logs/event_reaction_labeling.log" 2>&1
 # Recovery ML (анализатор + train): будни после US сессии (ожидается MSK). Без параллельных запусков.
 40 23 * * 1-5 flock -n /tmp/lse_daily_recovery_pipeline.lock docker exec $CONTAINER_NAME python scripts/run_daily_game5m_recovery_pipeline.py >> "$PROJECT_DIR/logs/game5m_daily_recovery_pipeline.log" 2>&1
-# ML train readiness (dry-run по умолчанию): гейты GAME_5M + portfolio → ml_train_readiness.jsonl. После recovery; env из compose (config.env).
-50 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec $CONTAINER_NAME python scripts/run_ml_train_readiness_cron.py >> "$PROJECT_DIR/logs/ml_train_readiness_cron.log" 2>&1
+# ML train readiness (dry-run по умолчанию): гейты GAME_5M + portfolio + event_reaction → ml_train_readiness.jsonl. -e включает train event-reaction (метрики в last_event_reaction_train_metrics.json для анализатора).
+50 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0 $CONTAINER_NAME python scripts/run_ml_train_readiness_cron.py >> "$PROJECT_DIR/logs/ml_train_readiness_cron.log" 2>&1
 # Единый отчёт качества данных (без LLM, без тяжёлых CSV): JSON в /app/logs/ml/ml_data_quality/ (на хосте — при монтировании logs).
 52 23 * * 1-5 flock -n /tmp/lse_ml_data_quality_report.lock docker exec $CONTAINER_NAME python scripts/run_ml_data_quality_report.py --no-default-datasets --json-out /app/logs/ml/ml_data_quality/report_daily.json >> "$PROJECT_DIR/logs/ml_data_quality_report_cron.log" 2>&1
-# --- Event / earnings dataset (опционально; даты и dataset_version под среду; EVENT_REACTION_KB_SINCE в config.env) ---
-# 8 3 * * 1-5 flock -n /tmp/lse_erd_build.lock docker exec $CONTAINER_NAME python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0 >> "$PROJECT_DIR/logs/event_reaction_build.log" 2>&1
-# 18 3 * * 1-5 flock -n /tmp/lse_erd_out.lock docker exec $CONTAINER_NAME python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --since 2026-02-01 --only-outcomes --limit 4000 >> "$PROJECT_DIR/logs/event_reaction_labeling.log" 2>&1
 EOF
 
 crontab "$CRON_FILE"
 rm -f "$CRON_FILE"
 echo "✅ Cron для Docker установлен (контейнер: $CONTAINER_NAME). Проверка: crontab -l"
-echo "   В т.ч. ingest_market_bars_intraday: ежедневно 23:25 → logs/cron_market_bars_intraday.log (таблицы: migrate_market_bars_intraday.py один раз)"
+echo "   Event/earnings: 23:33 build_event_reaction_dataset, 23:36 backfill → logs/event_reaction_*.log; readiness 23:50 с ML_READINESS_SKIP_EVENT_REACTION=0 для метрик в анализаторе."

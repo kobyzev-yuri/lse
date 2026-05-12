@@ -17,6 +17,7 @@
   ML_READINESS_SKIP_GAME5M — 1 — не вызывать train_game5m_catboost
   ML_READINESS_SKIP_PORTFOLIO — 1 — не вызывать train_portfolio_catboost
   ML_READINESS_SKIP_EVENT_REACTION — 1 (по умолчанию) — не вызывать train_event_reaction_catboost; 0 — включить
+    (на VM ночной cron может задать 0 через `docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0`, см. crontab/lse-docker.crontab)
   ML_READINESS_EVENT_REACTION_RMSE_MAX — макс. RMSE valid (default 0.12)
   ML_READINESS_EVENT_REACTION_MIN_TRAIN — мин. n_train (default 25)
   ML_READINESS_GAME5M_AUC_MIN — порог AUC valid (default 0.52)

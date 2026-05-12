@@ -62,9 +62,14 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 
 Альтернатива: новый `dataset_version` (например `v0_from_feb26`) и сборка скелета только в него.
 
-### 4. Cron (шаблон)
+### 4. Cron (репозиторий)
 
-Закомментированные строки в **`setup_cron_docker.sh`** — порядок: **quotes** → при необходимости **seed** → **build** KB → **backfill** (часто достаточно `--only-outcomes` после первичной разметки). Даты и `dataset_version` подставить под среду; `kb.ts` можно централизовать через **`EVENT_REACTION_KB_SINCE`** в `config.env`.
+Активные строки (будни, ~MSK после US):
+
+- **`crontab/lse-docker.crontab`** — эталон для ручной установки `crontab …` на VM: **23:33** `build_event_reaction_dataset.py`, **23:36** `backfill_event_reaction_labeling.py` (`--since` / `EVENT_REACTION_KB_SINCE` под среду), **23:50** `run_ml_train_readiness_cron.py` с **`docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0`** (train + `last_event_reaction_train_metrics.json` + гейт в JSONL для анализатора).
+- **`setup_cron_docker.sh`** — тот же порядок с `$PROJECT_DIR` / `$CONTAINER_NAME`.
+
+Порядок данных: дневные **`quotes`** (в т.ч. `update_prices_cron`) → build → backfill → readiness. При необходимости разнести `--only-features` / `--only-outcomes` — см. [EVENT_REACTION_PIPELINE.md](../EVENT_REACTION_PIPELINE.md).
 
 ### 5. Обучение CatBoost (MVP) + readiness
 
@@ -87,3 +92,4 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 |--------|------|-----------|
 | 0.1 | 2026-05-12 | Первая рабочая сборка: фазы 1–5, источники, ссылки на скрипты |
 | 0.2 | 2026-05-12 | Добавлены `train_event_reaction_catboost.py`, readiness `event_reaction`, закомментированный cron в `setup_cron_docker.sh` |
+| 0.3 | 2026-05-12 | Cron в `crontab/lse-docker.crontab` и `setup_cron_docker.sh`: build + backfill + readiness с train event_reaction (`-e ML_READINESS_SKIP_EVENT_REACTION=0`) |

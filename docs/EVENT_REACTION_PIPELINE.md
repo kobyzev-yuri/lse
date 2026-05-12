@@ -118,23 +118,22 @@ WHERE id = 12345;
 
 1. **Полнота данных:** `GET /api/ml/data-quality` → `event_analytics` (доли `with_features_before`, `with_outcomes_after`, `labeled`).
 2. **Единый отчёт:** `python scripts/run_ml_data_quality_report.py` (см. [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md)).
-3. **Обучение CatBoost** для event-слоя в коде пока не вынесено в отдельный скрипт; ориентир по структуре датасета/метрик — `scripts/train_portfolio_catboost.py` (log-returns, `--json-metrics-out`, пороговые метрики). Практически: выгрузка строк с непустыми `features_before` / `outcomes_after`, целевая переменная — например `forward_log_ret_5d` из `outcomes_after` или класс из `final_label`.
+3. **Обучение CatBoost:** `scripts/train_event_reaction_catboost.py` (регрессия на `forward_log_ret_5d`, `--json-metrics-out`, гейты в `run_ml_train_readiness_cron.py`). Прод-инференс — после `.cbm` и явного включения в сервисе (как GAME_5M / портфель).
 4. **Прод-инференс** — только после появления `.cbm`, гейтов в `ml_train_readiness.jsonl` и явного включения в конфиге/сервисе (как GAME_5M / портфель); до этого слой остаётся офлайн-аналитикой.
 
 ---
 
-## Регулярность и cron (пример)
+## Регулярность и cron
 
-Порядок зависимостей: **котировки** → (опционально) вспомогательные таблицы → **авторазметка** `backfill_event_reaction_labeling.py` (можно два прохода: сначала `--only-features`, позже `--only-outcomes` для «созревших» по календарю строк).
+**Эталон в репозитории:** `crontab/lse-docker.crontab` (ручная установка на хост) и **`setup_cron_docker.sh`** (генерация crontab из корня проекта). Будни ~23:33–23:36 MSK: `build_event_reaction_dataset.py` → `backfill_event_reaction_labeling.py`; **23:50** — `run_ml_train_readiness_cron.py` с `docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0` (dry-run train, `last_event_reaction_train_metrics.json`, гейт в `ml_train_readiness.jsonl` для анализатора). Уберите `-e …=0` в строке readiness, если train event-reaction должен читаться только из `config.env`.
 
-Пример строк (хост, `docker exec lse-bot`, логи на volume):
+Порядок зависимостей: **котировки** (`quotes`, в т.ч. `update_prices_cron`) → (опционально) seed → **build** → **backfill** (одним проходом заполняются пустые `features_before` и/или `outcomes_after`; при больших объёмах можно разнести `--only-features` / `--only-outcomes`).
+
+Альтернативные сдвиги по времени (если не используете файлы из репо):
 
 ```text
-# MVP: признаки + исходы одним скриптом (строки без исходов останутся с частичным заполнением до появления forward-баров)
 30 2 * * *     flock -n /tmp/lse_erd_label.lock docker exec lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --limit 3000 >> ~/lse/logs/event_reaction_labeling.log 2>&1
 ```
-
-Опционально разнести нагрузку:
 
 ```text
 32 2 * * *     flock -n /tmp/lse_erd_feat.lock docker exec lse-bot python scripts/backfill_event_reaction_labeling.py --only-features --dataset-version v0 --limit 5000 >> ~/lse/logs/event_reaction_features.log 2>&1
@@ -146,7 +145,7 @@ WHERE id = 12345;
 15 1 * * 1-5  flock -n /tmp/lse_market_regime.lock docker exec lse-bot python scripts/ingest_market_regime_daily.py >> ~/lse/logs/event_regime.log 2>&1
 ```
 
-Скелет KB → `event_reaction_dataset` при необходимости **реже** (после массового импорта в KB):
+Скелет KB → `event_reaction_dataset` при необходимости **реже** (если не гоняете nightly build из репо):
 
 ```text
 0 6 * * 0      docker exec lse-bot python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0
@@ -170,7 +169,7 @@ WHERE id = 12345;
 
 1. `scripts/ingest_market_regime_daily.py` + UPSERT в `market_regime_daily` (режим в фичах).  
 2. Расширить `features_before`: peer-граф, `earnings_event_detail`, новая `feature_builder_version`.  
-3. Отдельный `scripts/train_event_reaction_catboost.py` + гейты в `run_ml_train_readiness_cron.py` (по аналогии с портфелем / GAME_5M).  
+3. Отдельный `scripts/train_event_reaction_catboost.py` + гейты в `run_ml_train_readiness_cron.py` (см. `crontab/lse-docker.crontab`: nightly train при `-e ML_READINESS_SKIP_EVENT_REACTION=0`).  
 4. `collect_event_analytics_stats`: опционально DISTINCT `feature_builder_version` из JSONB.
 
 После стабильной авторазметки блок **Event / earnings** в анализаторе отражает реальный прогресс; ручные правки учитывайте через `label_source` и при необходимости отдельный `dataset_version`.
