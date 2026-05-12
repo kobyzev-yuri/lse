@@ -147,6 +147,7 @@ all_ = get_all_ticker_groups()  # быстрые → средние → долг
 
 ## См. также
 
+- [earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md](earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md) — официальные IR и квартальная отчётность: дефолтные акции из этой таблицы групп + ASML, ARM; примеры кварталов
 - [GAME_5M_CALCULATIONS_AND_REPORTING.md](GAME_5M_CALCULATIONS_AND_REPORTING.md) — игра по 5m, быстрые тикеры
 - [TELEGRAM_BOT_SETUP.md](TELEGRAM_BOT_SETUP.md) — дашборд, рассылка сигналов
 - [RISK_MANAGEMENT.md](RISK_MANAGEMENT.md) — бюджет и лимиты компании для игры

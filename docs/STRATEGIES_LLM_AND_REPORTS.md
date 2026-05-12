@@ -213,7 +213,17 @@ Strategy-level параметры `PORTFOLIO_<STRATEGY>_TAKE_PROFIT_PCT` не з
 
 ---
 
-## 5. Связанные файлы и команды
+## 5. Earnings: стратегия данных и материалы отчётности
+
+Портфельные стратегии и LLM опираются на **новости и режим рынка**; отдельный контур — **реакция цены на события earnings** и накопление фактов под event/earnings ML и будущий агент (см. [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md), [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md)).
+
+**Официальные страницы IR и квартальные материалы** по тикерам из дефолтных групп и примерам команды (press release, презентация, транскрипты) собраны в одном месте, чтобы не искать URL перед пилотом ingest или ручной разметкой:
+
+- [earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md](earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md)
+
+---
+
+## 6. Связанные файлы и команды
 
 | Компонент | Файлы | Команды бота |
 |-----------|--------|---------------|

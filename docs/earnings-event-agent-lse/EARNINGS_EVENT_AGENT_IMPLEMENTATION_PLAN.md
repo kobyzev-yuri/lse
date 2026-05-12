@@ -55,6 +55,7 @@
 | Область | Где в репо |
 |---------|------------|
 | Дизайн-концепция | [EARNINGS_EVENT_AGENT_DESIGN.md](EARNINGS_EVENT_AGENT_DESIGN.md) |
+| **IR и квартальные материалы по тикерам** (хабы, примеры кварталов; заготовка под ingest) | [PUBLIC_IR_EARNINGS_SOURCES.md](PUBLIC_IR_EARNINGS_SOURCES.md) |
 | DDL `event_reaction_dataset`, `earnings_event_detail`, … | `scripts/sql/ml_event_analytics_schema.sql`, `scripts/migrate_ml_event_analytics.py` |
 | Скелет из KB, фильтр конфига, «эра» по `kb.ts` | `scripts/build_event_reaction_dataset.py` (`--kb-since` / `EVENT_REACTION_KB_SINCE`) |
 | Авторазметка ценами (MVP) | `services/event_reaction_labeling.py`, `scripts/backfill_event_reaction_labeling.py` |
@@ -74,7 +75,7 @@
 
 ### После 1–5 (отложено)
 
-- **Автоматизация «тяжёлого» источника:** как правило **лицензированный API/подписка** (транскрипты, саммари, факты) или поддерживаемые **официальные** каналы (SEC EDGAR, IR RSS). Подключается отдельным ingest, когда зафиксирован шаблон полей и объём данных из пилота (1–2 темы, ручной/LLM-проход).
+- **Автоматизация «тяжёлого» источника:** как правило **лицензированный API/подписка** (транскрипты, саммари, факты) или поддерживаемые **официальные** каналы (SEC EDGAR, IR RSS). Подключается отдельным ingest, когда зафиксирован шаблон полей и объём данных из пилота (1–2 темы, ручной/LLM-проход). Список стартовых URL по нашим тикерам: [PUBLIC_IR_EARNINGS_SOURCES.md](PUBLIC_IR_EARNINGS_SOURCES.md).
 
 ---
 

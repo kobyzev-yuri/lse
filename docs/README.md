@@ -37,4 +37,5 @@
 | Материал | Ссылка |
 |----------|--------|
 | **План внедрения 1–5 + источники (рабочая версия)** | [EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md) |
+| **IR и квартальная отчётность:** дефолтные акции из `TICKER_GROUPS` + ASML, ARM, примеры кварталов | [PUBLIC_IR_EARNINGS_SOURCES.md](earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md) |
 | Earnings/event agent: дизайн, **Q&amp;A в Markdown** (удобно на GitHub), PDF/HTML | [earnings-event-agent-lse/](earnings-event-agent-lse/README.md) |
