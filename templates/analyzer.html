@@ -74,11 +74,11 @@
 </div>
 
 <div class="card" style="border: 1px solid rgba(196, 181, 253, 0.35);">
-    <h2>ML: готовность к обучению и качество данных</h2>
-    <p class="muted" style="font-size:0.9rem;">Тот же источник, что <code>scripts/run_ml_data_quality_report.py</code>, но <strong>без</strong> профилирования CSV в <code>local/datasets/</code> (быстрый снимок). Гейты — хвост <code>ml_train_readiness.jsonl</code> (в т.ч. колонка <strong>Event reaction</strong>); метрики — <code>last_game5m_train_metrics.json</code>, <code>last_portfolio_train_metrics.json</code>, при включённом train — <code>last_event_reaction_train_metrics.json</code> в <code>…/ml_data_quality/</code> после cron readiness.</p>
+    <h2>ML: готовность и качество данных</h2>
+    <p class="muted" style="font-size:0.88rem;margin:0 0 0.5rem 0;">Снимок <code>GET /api/ml/data-quality</code> (без тяжёлого CSV). Ниже — раскрывающиеся пояснения; таблица гейтов по умолчанию открыта.</p>
     <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
         <button type="button" id="mlDataQualityRefresh" class="btn" style="padding:0.45rem 0.85rem;">Обновить блок</button>
-        <a id="mlDataQualityJsonUrl" href="/api/ml/data-quality" target="_blank" rel="noopener" class="muted" style="font-size:0.9rem;">Открыть JSON <code>GET /api/ml/data-quality</code></a>
+        <a id="mlDataQualityJsonUrl" href="/api/ml/data-quality" target="_blank" rel="noopener" class="muted" style="font-size:0.9rem;">Открыть JSON</a>
     </div>
     <p id="mlDataQualityStatus" class="muted" style="min-height:1.2em;">Загрузка…</p>
     <div id="mlDataQualityInner" class="dashboard-text" style="margin-top:0.5rem;">—</div>
@@ -308,12 +308,44 @@ function fmtGateEventReaction(erBlock) {
 }
 
 function renderMlDataQuality(data) {
+    const dbox = 'margin:0.45rem 0;border:1px solid rgba(148,163,184,0.22);border-radius:8px;padding:0.4rem 0.65rem;background:rgba(15,23,42,0.35);';
+    const sumy = 'cursor:pointer;font-weight:600;color:#e2e8f0;user-select:none;';
     let html = '';
-    html += '<p style="margin:0 0 0.65rem 0;font-size:0.9rem;color:#cbd5e1;">Снимок: <code>' + esc(data.generated_at_utc) + '</code> · <code>v' + esc(data.report_version) + '</code></p>';
+    html += '<p style="margin:0 0 0.5rem 0;font-size:0.9rem;color:#cbd5e1;">Снимок: <code>' + esc(data.generated_at_utc) + '</code> · <code>v' + esc(data.report_version) + '</code></p>';
+
+    const rt = data.ml_runtime || {};
+    const g5on = rt.game5m_catboost_used_in_runtime ? 'да' : 'нет';
+    const pfon = rt.portfolio_catboost_used_in_runtime ? 'да' : 'нет';
+    const erPath = rt.event_reaction_model_path_configured ? 'путь задан' : 'путь не задан';
+    const erFile = rt.event_reaction_cbm_file_exists ? 'файл .cbm есть' : 'файла .cbm нет';
+    html += '<div style="margin:0 0 0.65rem 0;padding:0.5rem 0.65rem;border-radius:8px;border:1px solid rgba(129,140,248,0.4);background:rgba(49,46,129,0.2);font-size:0.84rem;line-height:1.5;color:#e2e8f0;">';
+    html += '<strong>Сейчас в рантайме бота</strong> (из <code>config.env</code>): ';
+    html += 'GAME_5M CatBoost — <code>' + esc(g5on) + '</code> · ';
+    html += 'Portfolio CatBoost — <code>' + esc(pfon) + '</code> · ';
+    html += 'Event reaction — <code>не подключён к сделкам</code> (<code>' + esc(erPath) + '</code>, ' + esc(erFile) + '). ';
+    html += '<span class="muted" style="font-size:0.8rem;">' + esc(rt.readiness_kill_switch_note || '') + '</span>';
+    html += '</div>';
+
+    html += '<details open style="' + dbox + '"><summary style="' + sumy + '">Cron, датасеты и чем «гейт» отличается от «в проде»</summary>';
+    html += '<div style="margin-top:0.55rem;font-size:0.84rem;color:#cbd5e1;line-height:1.55;">';
+    html += '<p style="margin:0 0 0.5rem 0;"><strong>Автообновление.</strong> По расписанию на хосте (см. <code>crontab/lse-docker.crontab</code>): дневные <code>quotes</code>, при необходимости build/backfill <code>event_reaction_dataset</code>, ночной <code>run_ml_train_readiness_cron.py</code> дописывает строку в <code>ml_train_readiness.jsonl</code> и перезаписывает <code>last_*_train_metrics.json</code> в <code>…/ml_data_quality/</code>. Этот блок только <strong>читает</strong> эти файлы по кнопке «Обновить».</p>';
+    html += '<p style="margin:0 0 0.5rem 0;"><strong>Гейт (✓/✗ в таблице).</strong> Сравнение метрик последнего dry-run train с порогами <code>ML_READINESS_*</code>. <code>overall_production_ready</code> = все включённые в расчёт модели прошли порог. <strong>Не отключает</strong> модели в проде.</p>';
+    html += '<p style="margin:0;"><strong>Прод.</strong> Реальное использование CatBoost в сигналах/карточках задаётся только флагами <code>GAME_5M_CATBOOST_ENABLED</code> и <code>PORTFOLIO_CATBOOST_ENABLED</code> (и путями к .cbm). Их нужно менять осознанно после обучения; гейт — ориентир, не предохранитель.</p>';
+    html += '</div></details>';
+
+    html += '<details style="' + dbox + '"><summary style="' + sumy + '">Event reaction: зачем ключи в config.env (если ещё не в проде)</summary>';
+    html += '<div style="margin-top:0.55rem;font-size:0.84rem;color:#cbd5e1;line-height:1.55;">';
+    html += '<ul style="margin:0;padding-left:1.15rem;">';
+    html += '<li><code>EVENT_REACTION_CATBOOST_MODEL_PATH</code> — куда сохранять/откуда грузить <code>.cbm</code> при <strong>будущем</strong> подключении inference (сейчас бот сделки по этой модели не фильтрует).</li>';
+    html += '<li><code>EVENT_REACTION_KB_SINCE</code> / <code>EVENT_REACTION_LABEL_THRESHOLD_LOG</code> — эра KB для скелета и порог UP/DOWN/FLAT в разметке; см. <code>docs/EVENT_REACTION_PIPELINE.md</code>.</li>';
+    html += '<li><code>EVENT_REACTION_TRAIN_MIN_ROWS</code> — минимум строк для попытки train в скрипте (перекрывает дефолт <code>--min-rows</code>).</li>';
+    html += '<li><code>ML_READINESS_SKIP_EVENT_REACTION</code>, <code>ML_READINESS_EVENT_REACTION_RMSE_MAX</code>, <code>ML_READINESS_EVENT_REACTION_MIN_TRAIN</code> — только для гейта в JSONL и анализатора, не для рантайма.</li>';
+    html += '</ul></div></details>';
 
     const mr = data.ml_train_readiness_jsonl || {};
-    html += '<h3 style="margin:0.6rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Гейты (<code>ml_train_readiness.jsonl</code>)</h3>';
-    html += '<p class="muted" style="margin:0 0 0.4rem 0;font-size:0.85rem;">Путь: <code>' + esc(mr.path || 'не найден') + '</code></p>';
+    html += '<details open style="' + dbox + ';margin-top:0.55rem;"><summary style="' + sumy + '">Таблица гейтов (<code>ml_train_readiness.jsonl</code>)</summary>';
+    html += '<div style="margin-top:0.45rem;">';
+    html += '<p class="muted" style="margin:0 0 0.4rem 0;font-size:0.82rem;">Путь: <code>' + esc(mr.path || 'не найден') + '</code></p>';
     const recs = (mr.last_records || []).slice().reverse();
     if (!recs.length) {
         html += '<p class="muted">Нет записей — выполните <code>run_ml_train_readiness_cron.py</code>.</p>';
@@ -339,23 +371,25 @@ function renderMlDataQuality(data) {
         html += '</tbody></table></div>';
         const erMissingInTail = recs.some(function (row) { return row.event_reaction == null; });
         if (erMissingInTail) {
-            html += '<p class="muted" style="font-size:0.82rem;margin:0.45rem 0 0 0;line-height:1.45;">В хвосте JSONL есть строки <strong>без</strong> объекта <code>event_reaction</code> — их писал старый cron. Чтобы в таблице появились гейт и «пропущено»/RMSE, один раз выполните на контейнере с актуальным образом: <code>python scripts/run_ml_train_readiness_cron.py</code> (при необходимости <code>ML_READINESS_SKIP_EVENT_REACTION=0</code> для train и файла метрик).</p>';
+            html += '<p class="muted" style="font-size:0.82rem;margin:0.45rem 0 0 0;line-height:1.45;">В хвосте JSONL есть строки без <code>event_reaction</code> — старый cron. Перезапустите <code>run_ml_train_readiness_cron.py</code> на актуальном образе.</p>';
         }
         const staleRmse08 = recs.some(function (row) {
             const pf = (row.portfolio && row.portfolio.gate) || {};
             return (pf.reasons || []).some(function (r) { return String(r).indexOf('0.08') >= 0; });
         });
         if (staleRmse08) {
-            html += '<p class="muted" style="font-size:0.82rem;margin:0.5rem 0 0 0;">Записи с <code>rmse_valid&gt;0.08</code> — от прогонов до порога <code>ML_READINESS_PORTFOLIO_RMSE_MAX</code> в <code>config.env</code>; ориентируйтесь на <strong>самую новую</strong> строку.</p>';
+            html += '<p class="muted" style="font-size:0.82rem;margin:0.5rem 0 0 0;">Старые строки с <code>rmse_valid&gt;0.08</code> — смотрите <strong>самую новую</strong> дату; порог в <code>ML_READINESS_PORTFOLIO_RMSE_MAX</code>.</p>';
         }
     }
+    html += '</div></details>';
 
     const ext = data.external_train_metrics || {};
     const extKeys = Object.keys(ext);
-    html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Файлы метрик dry-run</h3>';
+    html += '<details style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">Файлы метрик последнего dry-run train (<code>ml_data_quality/last_*</code>)</summary>';
+    html += '<div style="margin-top:0.45rem;font-size:0.84rem;color:#cbd5e1;">';
     if (!extKeys.length) {
-        html += '<p class="muted">Нет <code>last_game5m_train_metrics.json</code> / <code>last_portfolio_train_metrics.json</code> / <code>last_event_reaction_train_metrics.json</code> в каталоге ml_data_quality.</p>';
-        html += '<p style="margin:0.45rem 0 0 0;font-size:0.84rem;color:#94a3b8;line-height:1.45;"><code>last_event_reaction_train_metrics.json</code> создаётся при <code>ML_READINESS_SKIP_EVENT_REACTION=0</code> и прогоне <code>run_ml_train_readiness_cron.py</code> (или вручную через <code>train_event_reaction_catboost.py --json-metrics-out</code>).</p>';
+        html += '<p class="muted">Нет файлов last_* в каталоге ml_data_quality.</p>';
+        html += '<p class="muted" style="margin:0.35rem 0 0 0;"><code>last_event_reaction_train_metrics.json</code> появляется после readiness с <code>ML_READINESS_SKIP_EVENT_REACTION=0</code> (или вручную <code>train_event_reaction_catboost.py --json-metrics-out</code>).</p>';
     } else {
         extKeys.forEach(function (k) {
             const slot = ext[k] || {};
@@ -381,14 +415,16 @@ function renderMlDataQuality(data) {
         });
         const hasErMetrics = extKeys.some(function (k) { return k.indexOf('event_reaction') >= 0; });
         if (!hasErMetrics) {
-            html += '<p style="margin:0.55rem 0 0 0;font-size:0.84rem;color:#94a3b8;line-height:1.45;"><strong>event_reaction_last</strong> — файла <code>last_event_reaction_train_metrics.json</code> в каталоге <code>ml_data_quality</code> сейчас нет (API не подставляет пустышку). Он появится после прогона <code>run_ml_train_readiness_cron.py</code> с <code>ML_READINESS_SKIP_EVENT_REACTION=0</code> или ручного <code>train_event_reaction_catboost.py --json-metrics-out …/last_event_reaction_train_metrics.json</code>. По умолчанию train event-reaction в readiness <strong>выключен</strong>, чтобы не менять <code>overall_production_ready</code>.</p>';
+            html += '<p class="muted" style="margin:0.5rem 0 0 0;">Нет <code>event_reaction_last</code> — см. крон / <code>ML_READINESS_SKIP_EVENT_REACTION</code>.</p>';
         }
     }
+    html += '</div></details>';
 
     const ea = data.event_analytics || {};
-    html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Event / earnings (<code>event_analytics</code>)</h3>';
+    html += '<details style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">БД: event / earnings (<code>event_analytics</code>)</summary>';
+    html += '<div style="margin-top:0.45rem;font-size:0.84rem;color:#cbd5e1;">';
     if (ea.error) {
-        html += '<p class="text-danger" style="font-size:0.9rem;">' + esc(ea.error) + '</p>';
+        html += '<p class="text-danger">' + esc(ea.error) + '</p>';
     } else {
         const er = ea.event_reaction_dataset || {};
         if (er && Object.keys(er).length) {
@@ -409,16 +445,14 @@ function renderMlDataQuality(data) {
             const nLab = Number(er.labeled) || 0;
             if (nRows > 0 && nLab === 0) {
                 html += '<p style="margin:0.45rem 0;padding:0.5rem 0.65rem;border-radius:6px;border:1px solid rgba(250,204,21,0.4);background:rgba(113,63,18,0.22);font-size:0.85rem;line-height:1.45;">';
-                html += '<strong>Внимание:</strong> в <code>event_reaction_dataset</code> уже <code>rows_total=' + esc(nRows) + '</code>, но <code>labeled=0</code> и нет <code>with_features_before</code> / <code>with_outcomes_after</code> — ';
-                html += 'это по сути «сырой» набор строк (часто после bulk из KB); пайплайн разметки/фич/исходов по таблице ещё не заполнял поля.';
-                html += '</p>';
+                html += '<strong>Внимание:</strong> в <code>event_reaction_dataset</code> уже <code>rows_total=' + esc(nRows) + '</code>, но <code>labeled=0</code> — нужен <code>backfill_event_reaction_labeling.py</code>.</p>';
             }
             const edR = ea.earnings_event_detail_rows;
             const peerR = ea.peer_graph_edge_rows;
             const mrR = ea.market_regime_daily_rows;
             const auxEmpty = (edR == null || edR === 0) && (peerR == null || peerR === 0) && (mrR == null || mrR === 0);
             if (nRows > 0 && auxEmpty) {
-                html += '<p style="margin:0.35rem 0;font-size:0.84rem;color:#fcd34d;">Таблицы <code>earnings_event_detail</code>, <code>peer_graph_edge</code>, <code>market_regime_daily</code> сейчас пустые — расширенные фичи/граф для event-ML из них не подтянуты.</p>';
+                html += '<p style="margin:0.35rem 0;font-size:0.84rem;color:#fcd34d;">Таблицы <code>earnings_event_detail</code>, <code>peer_graph_edge</code>, <code>market_regime_daily</code> пустые — расширенные фичи пока не подключены.</p>';
             }
         } else {
             html += '<p class="muted">Нет сводки event_reaction_dataset.</p>';
@@ -434,6 +468,7 @@ function renderMlDataQuality(data) {
             html += '</p>';
         }
     }
+    html += '</div></details>';
 
     function tailLine(label, block) {
         const b = block || {};
@@ -444,23 +479,26 @@ function renderMlDataQuality(data) {
             html += '<p class="muted" style="margin:0 0 0.5rem 0.5rem;">Нет строк в хвосте.</p>';
             return;
         }
-        html += '<pre style="font-size:0.75rem;overflow:auto;max-height:140px;padding:0.45rem;background:rgba(15,23,42,0.85);border-radius:6px;border:1px solid rgba(148,163,184,0.2);">' + esc(JSON.stringify(lr, null, 2)) + '</pre>';
+        html += '<pre style="font-size:0.75rem;overflow:auto;max-height:120px;padding:0.45rem;background:rgba(15,23,42,0.85);border-radius:6px;border:1px solid rgba(148,163,184,0.2);">' + esc(JSON.stringify(lr, null, 2)) + '</pre>';
     }
-    html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Хвосты ежедневных ML-отчётов (JSONL)</h3>';
+    html += '<details style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">Хвосты JSONL (GAME_5M / Portfolio daily)</summary>';
+    html += '<div style="margin-top:0.45rem;">';
     tailLine('GAME_5M daily', data.game5m_daily_ml_report_jsonl);
     const g5j = data.game5m_daily_ml_report_jsonl || {};
     const g5last = (g5j.last_records || [])[g5j.last_records.length - 1];
     if (g5last && g5last.ts_utc) {
         const t = Date.parse(g5last.ts_utc);
         if (!isNaN(t) && (Date.now() - t) > 48 * 3600 * 1000) {
-            html += '<p style="font-size:0.82rem;margin:-0.2rem 0 0.5rem 0;color:#fcd34d;">Последняя строка GAME_5M daily: <code>' + esc(g5last.ts_utc) + '</code> — старше ~2 суток; проверьте cron <code>run_daily_game5m_ml_pipeline</code> (или шаблон <code>lse-docker.crontab</code>).</p>';
+            html += '<p style="font-size:0.82rem;margin:-0.2rem 0 0.5rem 0;color:#fcd34d;">Последняя строка GAME_5M daily старше ~2 суток — проверьте cron.</p>';
         }
     }
     tailLine('Portfolio daily', data.portfolio_ml_report_jsonl);
+    html += '</div></details>';
 
     const kb = data.knowledge_base || {};
     const th = data.trade_history_ml || {};
-    html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">База и история (сжато)</h3>';
+    html += '<details style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">KB, trade_history, отчёт daily</summary>';
+    html += '<div style="margin-top:0.45rem;font-size:0.88rem;color:#cbd5e1;">';
     const kbLine = kb.error != null && kb.error !== '' ? kb.error : ('rows_total=' + (kb.rows_total != null ? kb.rows_total : '—'));
     const g5s = (th.strategies && th.strategies['GAME_5M']) || {};
     let thLine = '—';
@@ -470,18 +508,16 @@ function renderMlDataQuality(data) {
         const pct = g5s.context_json_fill_rate != null ? (Number(g5s.context_json_fill_rate) * 100).toFixed(1) + '%' : '—';
         thLine = 'GAME_5M BUY ' + g5s.buy_rows + ', context_json fill ' + pct;
     }
-    html += '<p style="font-size:0.88rem;margin:0.2rem 0;">KB: <code>' + esc(kbLine) + '</code>';
-    html += ' · trade_history_ml: <code>' + esc(thLine) + '</code></p>';
-
+    html += '<p style="margin:0.2rem 0;">KB: <code>' + esc(kbLine) + '</code> · trade_history_ml: <code>' + esc(thLine) + '</code></p>';
     const cat = data.catboost_meta_artifacts;
     if (cat && typeof cat === 'object' && !Array.isArray(cat) && Object.keys(cat).length) {
-        html += '<p style="font-size:0.88rem;margin:0.35rem 0;"><strong>CatBoost артефакты</strong> (фрагмент ключей): <code>' + esc(Object.keys(cat).slice(0, 8).join(', ')) + (Object.keys(cat).length > 8 ? '…' : '') + '</code></p>';
+        html += '<p style="margin:0.35rem 0;"><strong>CatBoost артефакты</strong> (ключи): <code>' + esc(Object.keys(cat).slice(0, 8).join(', ')) + (Object.keys(cat).length > 8 ? '…' : '') + '</code></p>';
     }
-
     const hints = data.ui_hints || {};
     const rd = hints.report_daily_json || {};
-    html += '<p class="muted" style="margin-top:0.75rem;font-size:0.82rem;">' + esc(hints.dataset_csv_profile || '') + '</p>';
+    html += '<p class="muted" style="margin:0.35rem 0 0 0;font-size:0.82rem;">' + esc(hints.dataset_csv_profile || '') + '</p>';
     html += '<p class="muted" style="font-size:0.82rem;">Cron-отчёт: <code>' + esc(rd.path || '') + '</code> — ' + (rd.exists ? 'есть' : 'нет файла') + '.</p>';
+    html += '</div></details>';
 
     return html;
 }

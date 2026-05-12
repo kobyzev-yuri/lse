@@ -696,6 +696,34 @@ async def get_analyzer(
         raise HTTPException(status_code=500, detail=f"Ошибка анализатора: {e!s}")
 
 
+def _ml_runtime_snapshot_for_ui() -> Dict[str, Any]:
+    """
+    Флаги из config.env для анализатора: участвует ли модель в рантайме vs только dry-run метрики.
+    overall_production_ready нигде в торговом коде не используется — это мониторинг в JSONL.
+    """
+    from pathlib import Path
+
+    from config_loader import get_config_value
+
+    def _truthy(key: str, default: str = "false") -> bool:
+        raw = get_config_value(key, default) or default
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+    er_path = (get_config_value("EVENT_REACTION_CATBOOST_MODEL_PATH", "") or "").strip()
+    er_p = Path(er_path) if er_path else None
+    return {
+        "game5m_catboost_used_in_runtime": _truthy("GAME_5M_CATBOOST_ENABLED"),
+        "portfolio_catboost_used_in_runtime": _truthy("PORTFOLIO_CATBOOST_ENABLED"),
+        "event_reaction_model_path_configured": bool(er_path),
+        "event_reaction_cbm_file_exists": bool(er_p and er_p.is_file()),
+        "event_reaction_used_in_runtime": False,
+        "readiness_kill_switch_note": (
+            "Флаг overall_production_ready в ml_train_readiness.jsonl — только сводка гейтов для дашборда; "
+            "он не выключает GAME_5M_CATBOOST_ENABLED / PORTFOLIO_CATBOOST_ENABLED и не меняет правила входа автоматически."
+        ),
+    }
+
+
 def _compute_ml_data_quality_bundle() -> Dict[str, Any]:
     """
     Единый снимок для веба: как run_ml_data_quality_report без профилирования CSV (dataset_paths=[]).
@@ -739,12 +767,13 @@ def _compute_ml_data_quality_bundle() -> Dict[str, Any]:
         "report_daily_json": {"path": str(rd), "exists": rd.is_file()},
         "api": "/api/ml/data-quality",
     }
+    bundle["ml_runtime"] = _ml_runtime_snapshot_for_ui()
     return bundle
 
 
 @app.get("/api/ml/data-quality", response_class=JSONResponse)
 async def api_ml_data_quality():
-    """ML: гейты readiness (JSONL), последние train-metrics, KB/история/quotes/event_analytics (без тяжёлого профиля CSV)."""
+    """ML: гейты readiness (JSONL), last_* train metrics, event_analytics, плюс ml_runtime (флаги *_CATBOOST_ENABLED из config)."""
     try:
         loop = asyncio.get_event_loop()
         bundle = await loop.run_in_executor(None, _compute_ml_data_quality_bundle)
