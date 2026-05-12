@@ -16,6 +16,9 @@
   ML_READINESS_TRAIN_MODE  — dry_run | full
   ML_READINESS_SKIP_GAME5M — 1 — не вызывать train_game5m_catboost
   ML_READINESS_SKIP_PORTFOLIO — 1 — не вызывать train_portfolio_catboost
+  ML_READINESS_SKIP_EVENT_REACTION — 1 (по умолчанию) — не вызывать train_event_reaction_catboost; 0 — включить
+  ML_READINESS_EVENT_REACTION_RMSE_MAX — макс. RMSE valid (default 0.12)
+  ML_READINESS_EVENT_REACTION_MIN_TRAIN — мин. n_train (default 25)
   ML_READINESS_GAME5M_AUC_MIN — порог AUC valid (default 0.52)
   ML_READINESS_GAME5M_MIN_TRAIN — мин. n_train (default 40)
   ML_READINESS_PORTFOLIO_RMSE_MAX — макс. RMSE valid в log-пространстве (default 0.08)
@@ -88,6 +91,31 @@ def _gate_game5m(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {"ready": len(reasons) == 0, "reasons": reasons, "auc_valid": auc, "n_train": nt}
 
 
+def _gate_event_reaction(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    reasons: list[str] = []
+    if not data:
+        return {"ready": False, "reasons": ["no_metrics_file"]}
+    st = data.get("status")
+    if st != "ok":
+        reasons.append(f"status={st}")
+    try:
+        rmse_max = float((get_config_value("ML_READINESS_EVENT_REACTION_RMSE_MAX") or "0.12").strip())
+    except (ValueError, TypeError):
+        rmse_max = 0.12
+    mets = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+    rmse = mets.get("rmse_valid")
+    if rmse is None or (isinstance(rmse, (int, float)) and float(rmse) > rmse_max):
+        reasons.append(f"rmse_valid>{rmse_max}")
+    try:
+        nt_min = int((get_config_value("ML_READINESS_EVENT_REACTION_MIN_TRAIN") or "25").strip())
+    except (ValueError, TypeError):
+        nt_min = 25
+    nt = int(data.get("n_train") or 0)
+    if nt < nt_min:
+        reasons.append(f"n_train<{nt_min}")
+    return {"ready": len(reasons) == 0, "reasons": reasons, "rmse_valid": rmse, "n_train": nt}
+
+
 def _gate_portfolio(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     reasons: list[str] = []
     if not data:
@@ -131,9 +159,16 @@ def main() -> int:
     q_dir.mkdir(parents=True, exist_ok=True)
     g5_path = q_dir / "last_game5m_train_metrics.json"
     pf_path = q_dir / "last_portfolio_train_metrics.json"
+    er_path = q_dir / "last_event_reaction_train_metrics.json"
 
     skip_g5 = _readiness_bool("ML_READINESS_SKIP_GAME5M", False)
     skip_pf = _readiness_bool("ML_READINESS_SKIP_PORTFOLIO", False)
+    skip_er = (get_config_value("ML_READINESS_SKIP_EVENT_REACTION", "1") or "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
 
     g5_inv: Dict[str, Any] = {}
     if not skip_g5:
@@ -159,17 +194,33 @@ def main() -> int:
     else:
         pf_inv = {"skipped": True}
 
+    er_inv: Dict[str, Any] = {}
+    if not skip_er:
+        cmd_er = [py, str(root / "scripts" / "train_event_reaction_catboost.py")]
+        if not full_train:
+            cmd_er.append("--dry-run")
+        cmd_er += ["--json-metrics-out", str(er_path)]
+        logger.info("Event reaction: %s", " ".join(cmd_er))
+        p3 = subprocess.run(cmd_er, cwd=str(root))
+        er_inv = {"cmd": cmd_er, "returncode": p3.returncode}
+    else:
+        er_inv = {"skipped": True}
+
     g5_data = _load_json(g5_path)
     pf_data = _load_json(pf_path)
+    er_data = _load_json(er_path)
     g5_gate = _gate_game5m(g5_data) if not skip_g5 else {"ready": None, "reasons": ["skipped"]}
     pf_gate = _gate_portfolio(pf_data) if not skip_pf else {"ready": None, "reasons": ["skipped"]}
+    er_gate = _gate_event_reaction(er_data) if not skip_er else {"ready": None, "reasons": ["skipped"]}
 
     overall = True
     if not skip_g5:
         overall = overall and bool(g5_gate.get("ready"))
     if not skip_pf:
         overall = overall and bool(pf_gate.get("ready"))
-    if skip_g5 and skip_pf:
+    if not skip_er:
+        overall = overall and bool(er_gate.get("ready"))
+    if skip_g5 and skip_pf and skip_er:
         overall = False
 
     record = {
@@ -177,6 +228,7 @@ def main() -> int:
         "train_mode": "full" if full_train else "dry_run",
         "game5m": {"invocation": g5_inv, "metrics_path": str(g5_path), "gate": g5_gate, "metrics": g5_data},
         "portfolio": {"invocation": pf_inv, "metrics_path": str(pf_path), "gate": pf_gate, "metrics": pf_data},
+        "event_reaction": {"invocation": er_inv, "metrics_path": str(er_path), "gate": er_gate, "metrics": er_data},
         "overall_production_ready": overall,
     }
     with jsonl.open("a", encoding="utf-8") as f:

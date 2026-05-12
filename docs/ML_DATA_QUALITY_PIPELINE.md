@@ -86,6 +86,7 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 |--------|------------|
 | `scripts/train_game5m_catboost.py` | Entry CatBoost; `--dry-run`, **`--json-metrics-out`** |
 | `scripts/train_portfolio_catboost.py` | Портфель; `--dry-run`, **`--json-metrics-out`**, плюс append в `PORTFOLIO_ML_REPORT_JSONL` |
+| `scripts/train_event_reaction_catboost.py` | Event / earnings (MVP): `event_reaction_dataset` → forward 5d log-ret; **`--json-metrics-out`** |
 | `scripts/train_game5m_recovery_catboost.py` | Recovery по JSONL |
 | `scripts/run_daily_game5m_ml_pipeline.py` | Stuck + continuation CSV + CatBoost + `game5m_daily_ml_report.jsonl` |
 | **`scripts/run_ml_train_readiness_cron.py`** | Регулярный dry-run/full train + **гейты** + append **`ml_train_readiness.jsonl`** |
@@ -94,7 +95,7 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 
 ### 5.1 Готовность к продакшену (гейты)
 
-`run_ml_train_readiness_cron.py` пишет строку с `game5m.gate`, `portfolio.gate`, `overall_production_ready`.
+`run_ml_train_readiness_cron.py` пишет строку с `game5m.gate`, `portfolio.gate`, `event_reaction.gate` (если не отключён), `overall_production_ready`.
 
 Переменные окружения (основные):
 
