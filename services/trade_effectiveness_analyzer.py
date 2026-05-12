@@ -723,10 +723,12 @@ def _read_market_bars_5m_cached(
     days_back: int,
 ) -> Optional[pd.DataFrame]:
     """
-    DB-first загрузка 5m из Postgres (market_bars_5m), чтобы отчёт был воспроизводим и не зависел
-    от нестабильности Yahoo/yfinance (обрезанные ответы, разные окна).
+    Загрузка 5m из Postgres (market_bars_5m), опционально для офлайн-анализа.
 
-    Кешируем по тикеру, потому что анализатор вызывает окно для множества сделок на один тикер.
+    При TRADE_ANALYZER_5M_OHLC_SOURCE=postgres_first кэш собирается сначала отсюда; иначе —
+    fallback после yfinance (игра и рекомендации всегда на fetch_5m_ohlc).
+
+    Кешируем по тикеру в переданном dict cache.
     """
     t = (ticker or "").strip().upper()
     if not t:
@@ -778,15 +780,45 @@ def _read_market_bars_5m_cached(
     return cache[t]
 
 
+def _trade_analyzer_5m_ohlc_db_first() -> bool:
+    """
+    Источник 5m для офлайн-анализа сделок (не live-игра).
+
+    По умолчанию — как в игре: сначала yfinance (fetch_5m_ohlc), Postgres — только fallback.
+    postgres_first — прежнее поведение (сначала market_bars_5m для воспроизводимости).
+    """
+    raw = (get_config_value("TRADE_ANALYZER_5M_OHLC_SOURCE", "yfinance") or "yfinance").strip().lower()
+    if raw in ("postgres_first", "db_first", "database", "market_bars", "postgres", "pg", "db"):
+        return True
+    if raw in (
+        "yfinance_first",
+        "yfinance",
+        "yahoo",
+        "yf",
+        "game",
+        "game_aligned",
+    ):
+        return False
+    return False
+
+
 def _prepare_ohlc_cache(tickers: List[str], days: int) -> Dict[str, Optional[pd.DataFrame]]:
     cache: Dict[str, Optional[pd.DataFrame]] = {}
     fetch_days = min(30, max(3, days + 2))
+    db_first = _trade_analyzer_5m_ohlc_db_first()
     for t in sorted(set(tickers)):
         try:
-            df_db = _read_market_bars_5m_cached(cache, t, days_back=fetch_days)
-            df = df_db
-            if df is None or getattr(df, "empty", True):
+            df: Optional[pd.DataFrame] = None
+            if db_first:
+                df_db = _read_market_bars_5m_cached(cache, t, days_back=fetch_days)
+                df = df_db
+                if df is None or getattr(df, "empty", True):
+                    df = fetch_5m_ohlc(t, days=fetch_days)
+            else:
                 df = fetch_5m_ohlc(t, days=fetch_days)
+                if df is None or getattr(df, "empty", True):
+                    df_db = _read_market_bars_5m_cached(cache, t, days_back=fetch_days)
+                    df = df_db
             if df is None or df.empty:
                 cache[t] = None
                 continue
@@ -1061,19 +1093,34 @@ def _build_time_exit_early_review(
         if exit_px <= 0:
             continue
         t0_raw = pd.Timestamp(e.exit_ts)
-        t0 = t0_raw.tz_convert("America/New_York") if t0_raw.tzinfo else t0_raw.tz_localize("America/New_York")
-        # If the recorded exit_ts is outside our 5m OHLC coverage (often RTH-only),
-        # start from the next available 5m bar so the counterfactual is meaningful.
+        if t0_raw.tzinfo is None:
+            t0_exit = t0_raw.tz_localize(
+                "America/New_York", ambiguous="infer", nonexistent="shift_forward"
+            )
+        else:
+            t0_exit = t0_raw.tz_convert("America/New_York")
+        post_exit_anchor_mode = "on_exit_ts"
+        # Если exit_ts попал в «дыру» (нет 5m-бара >= exit, типично ночь/выход между сессиями),
+        # якорим контрфакт на первый бар после последнего бара <= exit_ts (как и при RTH-only Yahoo).
         try:
-            nxt = df.loc[df["datetime"] >= t0]
-            if nxt is None or nxt.empty:
-                continue
-            t0_eff = pd.Timestamp(nxt["datetime"].iloc[0])
+            nxt = df.loc[df["datetime"] >= t0_exit]
+            if nxt is not None and not nxt.empty:
+                t0_eff = pd.Timestamp(nxt["datetime"].iloc[0])
+            else:
+                prev = df.loc[df["datetime"] <= t0_exit]
+                if prev is None or prev.empty:
+                    continue
+                last_at_or_before = pd.Timestamp(prev["datetime"].iloc[-1])
+                after_prev = df.loc[df["datetime"] > last_at_or_before]
+                if after_prev is None or after_prev.empty:
+                    continue
+                t0_eff = pd.Timestamp(after_prev["datetime"].iloc[0])
+                post_exit_anchor_mode = "first_bar_after_gap"
         except Exception:
             continue
         start_shift_min = None
         try:
-            start_shift_min = float((t0_eff - t0) / pd.Timedelta(minutes=1))
+            start_shift_min = float((t0_eff - t0_exit) / pd.Timedelta(minutes=1))
         except Exception:
             start_shift_min = None
         t0 = t0_eff
@@ -1134,6 +1181,7 @@ def _build_time_exit_early_review(
                 if minutes_after_rth_open is None
                 else round(float(minutes_after_rth_open), 1),
                 "post_exit_start_bar_et": str(t0),
+                "post_exit_anchor_mode": post_exit_anchor_mode,
                 "post_exit_start_shift_min": None if start_shift_min is None else round(float(start_shift_min), 1),
                 "post_exit_mfe_pct_1h": None if post_mfe_1h is None else round(float(post_mfe_1h), 3),
                 "post_exit_mae_pct_1h": None if post_mae_1h is None else round(float(post_mae_1h), 3),
@@ -1157,7 +1205,10 @@ def _build_time_exit_early_review(
             "proposals_capped_small_sample": False,
             "by_exit_detail": {},
             "config_candidates": {"proposals": []},
-            "note": "TIME_EXIT_EARLY есть, но нет строк с 5m OHLC в кэше (тикер/окно).",
+            "note": (
+                "TIME_EXIT_EARLY есть, но ни одна сделка не сопоставилась с рядом 5m: нет кэша по тикеру, "
+                "exit_ts вне окна загрузки, или нет баров после exit (расширьте days; проверьте exit_ts и fetch_5m_ohlc)."
+            ),
         }
 
     def _avg(vals: List[Optional[float]]) -> Optional[float]:
