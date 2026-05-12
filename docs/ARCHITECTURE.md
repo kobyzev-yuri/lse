@@ -78,6 +78,8 @@ flowchart TB
 
 **Premarket-контекст:** отдельная торговля в премаркете не является целевым режимом. `scripts/ingest_premarket_daily_features.py` сохраняет агрегированные premarket-снимки в `premarket_daily_features`; они используются как общий ML-контекст для основного trading flow обеих игр: для фильтрации входов после открытия, оценки gap continuation / gap fade, stuck-risk в `GAME_5M` и advisory ML в портфеле.
 
+**5m OHLC: live GAME_5M vs офлайн-анализатор.** В горячем пути входа/решения 5m используется **`fetch_5m_ohlc` (Yahoo / yfinance)** — см. `services/recommend_5m.py`. Офлайн **`trade_effectiveness_analyzer`** для контрфакта выходов (`TIME_EXIT_EARLY`, MFE и т.д.) собирает кэш 5m по тем же тикерам: по умолчанию **сначала yfinance**, при пустом ответе — fallback на **`market_bars_5m`** в Postgres (если таблица заполнена); режим **`TRADE_ANALYZER_5M_OHLC_SOURCE=postgres_first`** меняет приоритет на «сначала БД» (воспроизводимость офлайн-отчёта). При «дыре» между моментом `exit_ts` и ближайшим 5m-баром контрфакт в **`time_exit_early_review`** якорится на первый доступимый бар (см. `services/trade_effectiveness_analyzer.py`). Веб-графики 5m могут отдельно читать **`market_bars_5m`** для стабильности — это **не** замена yfinance в игре.
+
 ### 3.1. Пайплайн настройки параметров GAME_5M (анализатор + `game5m_tuning_controller`)
 
 **Исполняемые пороги** везде читаются из **`config.env`** (и overlays) через **`config_loader.get_config_value`** — и крон, и веб, и офлайн-скрипты видят один merge. Запись в `config.env` для ключей GAME_5M — только через **`services/game5m_tuning_policy.apply_game5m_update`** (валидация, guardrails), вызываемую и с веба, и из CLI.
@@ -115,8 +117,9 @@ flowchart LR
 
 | Шаг | Компонент | Назначение |
 |-----|-----------|------------|
-| Сводка по закрытым | `services/trade_effectiveness_analyzer.py` | `/api/analyzer`, `/analyzer`: `summary`, hanger v2, continuation gate, CatBoost backtest, `practical_parameter_suggestions`, опц. LLM (`use_llm=1`). |
+| Сводка по закрытым | `services/trade_effectiveness_analyzer.py` | `/api/analyzer`, `/analyzer`: `summary`, hanger v2, continuation gate, CatBoost backtest, `practical_parameter_suggestions`, `time_exit_early_review` (5m OHLC + контрфакт; см. §3 выше), опц. LLM (`use_llm=1`). |
 | Снимок для офлайна | `scripts/snapshot_analyzer_report.py` | JSON в `local/analyzer_snapshots/`; при заданном `ANALYZER_SNAPSHOT_URL` — HTTP к уже поднятому вебу (удобно cron на хосте без pandas). |
+| Отчёт с LLM на хосте (VM + Docker) | `scripts/run_analyzer_docker.sh` | `docker exec lse-bot` → `export_analyzer_report.py`; по умолчанию 2 дня, LLM, JSON в `/tmp` на хосте. |
 | Реплей-кандидаты | `scripts/game5m_tuning_controller.py propose` | Вызывает `build_game5m_replay_proposals` → ранжированный список пар `env_key` / `proposed` + `proposal_id`; пишет в **`local/game5m_tuning_ledger.json`** (`latest_proposals`). Не дублирует ежедневный ML-конвейер. |
 | Применение | `apply` (CLI) или **`POST /api/analyzer/tuning/apply`** (веб) | Один ключ за раз; `observe` / **`tuning/observe`** фиксируют окно сделок; статус — **`GET .../tuning/status`**. |
 | Политика | `services/game5m_tuning_policy.py` | Общие проверки для веба и controller. |
@@ -134,7 +137,7 @@ flowchart LR
 | Портфельная игра: алгоритм, стратегии, аллокация, тейк/стоп | [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md) |
 | Portfolio ML | [ML_PORTFOLIO_CATBOOST.md](ML_PORTFOLIO_CATBOOST.md) |
 | Игра 5m: сделки, JSON, крон | [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md), [CRONS_AND_TAKE_STOP.md](CRONS_AND_TAKE_STOP.md), [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md) |
-| GAME_5M: тейк, висяки, расчёты, **вход начала дня** | [GAME_5M_CALCULATIONS_AND_REPORTING.md](GAME_5M_CALCULATIONS_AND_REPORTING.md), [GAME_5M_PREMARKET_AND_IMPULSE.md](GAME_5M_PREMARKET_AND_IMPULSE.md) |
+| GAME_5M: тейк, висяки, расчёты, **вход начала дня**, **открытые риски (early exit / overnight)** | [GAME_5M_CALCULATIONS_AND_REPORTING.md](GAME_5M_CALCULATIONS_AND_REPORTING.md), [GAME_5M_PREMARKET_AND_IMPULSE.md](GAME_5M_PREMARKET_AND_IMPULSE.md) |
 | GAME_5M: развитие hanger/stale exits/continuation (**пайплайн**) | [GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md](GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md) |
 | Индекс документов GAME_5M / ML / анализатор | [README.md](README.md) (этот каталог `docs/`) |
 | GAME_5M ML | [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md), [GAME_5M_CATBOOST_FUSION.md](GAME_5M_CATBOOST_FUSION.md) |

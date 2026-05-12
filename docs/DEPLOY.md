@@ -128,6 +128,7 @@ docker compose restart lse
   - или скопировать изменения к себе, закоммитить и запушить с локальной машины.
 - **Перед деплоем** убедитесь, что всё нужное запушено в `main`, тогда на сервере `deploy_from_github.sh` подтянет актуальное.
 - **Нужен ли `git pull` перед деплоем?** Нет. `./scripts/deploy_from_github.sh` сам делает `fetch` и `pull`. Достаточно выполнить `./scripts/deploy_from_github.sh` (при изменениях пересоберёт) или `./scripts/deploy_from_github.sh --force` (всегда пересборка).
+- **Ошибка pull: untracked file would be overwritten by merge** — на сервере лежит неотслеживаемый файл с тем же путём, что приходит из репозитория (пример: вручную скопировали `scripts/run_analyzer_docker.sh`, затем тот же файл добавили в `git`). Переименуйте или удалите конфликтующий файл на хосте (`mv scripts/run_analyzer_docker.sh …`), снова запустите `./scripts/deploy_from_github.sh`. Образ **`lse-bot`** содержит код из **Dockerfile**; если после `pull` скрипт пишет **«No changes. Skip rebuild»**, а нужна новая версия Python внутри контейнера, выполните **`./scripts/deploy_from_github.sh --force`**.
 
 ---
 
