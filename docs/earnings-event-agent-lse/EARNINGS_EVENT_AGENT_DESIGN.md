@@ -4,7 +4,7 @@
 **Дата:** 2026-05-11  
 **Контекст:** проект LSE (PostgreSQL + pgvector, `knowledge_base`, `quotes`, `premarket_daily_features`, `trade_history`, GAME_5M, портфельная игра, `AnalystAgent`, LLM). Документ задаёт терминологию для event-контура **над** интрадей-играми; нижележащие документы (GAME_5M, портфель) используют те же английские идентификаторы в коде/JSON и при необходимости поясняются по этому словарю.
 
-**Рабочий план внедрения (фазы 1–5, источники, cron, обучение):** [EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md).
+**Рабочий план внедрения (фазы 1–5, источники, cron, обучение, статус выполнения и сводка по §2):** [EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md).
 
 Текущая ML-ветка, заточенная под **автоторговлю по одному тикеру**, плохо покрывает задачи инвестора:
 

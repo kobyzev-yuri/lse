@@ -3,6 +3,51 @@
 **Статус:** рабочий документ; детализирует практические шаги поверх [EARNINGS_EVENT_AGENT_DESIGN.md](EARNINGS_EVENT_AGENT_DESIGN.md).  
 **Принципы проекта:** log-returns, издержки в симуляциях, данные в PostgreSQL — см. корневые правила репозитория.
 
+**Фазы 1–5 (MVP ценового контура):** зафиксировано выполнение **2026-05-11 — 2026-05-12** (деплой на GCP, crontab, правки анализатора и readiness). Ниже — чеклист, сводка по **стратегическим целям §2 дизайн-дока** и **где копить факты** для следующих слоёв.
+
+---
+
+## Выполнение фаз 1–5 (зафиксировано)
+
+| Фаза | Сделано |
+|------|---------|
+| **1. Исходы после созревания** | `backfill_event_reaction_labeling.py` в ночном cron (`crontab/lse-docker.crontab` / `setup_cron_docker.sh`); ручной прогон на VM; повтор для свежих строк до появления `forward_log_ret_5d`. |
+| **2. Контроль качества** | `GET /api/ml/data-quality` → `event_analytics`; блок **«ML: готовность и качество данных»** в `templates/analyzer.html` (гейты, `last_*` метрики, `<details>` с пояснениями); поле **`ml_runtime`** в JSON API — **гейт ≠ автовыключение** `*_CATBOOST_ENABLED` в проде. |
+| **3. Чистка хвоста (опционально)** | SQL в этом документе; на проде массовая чистка не обязательна — эра задаётся `EVENT_REACTION_KB_SINCE` / `--since` в backfill. |
+| **4. Cron** | Активные задания: **23:33** build из KB, **23:36** backfill, **23:50** `run_ml_train_readiness_cron.py` с `docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0` (метрики event в анализаторе). |
+| **5. Обучение + readiness** | `train_event_reaction_catboost.py` (регрессия `forward_log_ret_5d`, пороги строк/гейта см. коммиты 2026-05-12); запись `last_event_reaction_train_metrics.json`; гейт `event_reaction` в `ml_train_readiness.jsonl`. **Инференс event в сделках не подключён** — только пайплайн данных и мониторинг. |
+
+Ограничение этапа: признаки **`quotes_mvp_1`** (дневные `quotes` до якоря); таблицы **`earnings_event_detail`**, **`peer_graph_edge`**, **`market_regime_daily`** на проде **пустые** — расширенные фичи и сценарии из §6 дизайна **впереди**.
+
+---
+
+## Стратегический план шефа (дизайн §2) — где мы и что дальше
+
+Ориентир: [EARNINGS_EVENT_AGENT_DESIGN.md](EARNINGS_EVENT_AGENT_DESIGN.md) §2 «Цели».
+
+| # | Цель (кратко) | Статус на 2026-05-12 | Что можно сделать дальше | Где копить факты |
+|---|----------------|----------------------|---------------------------|------------------|
+| 1 | **Классификация сценария** (pullback, follow-through, fade, …) | Частично: rule-based **UP/DOWN/FLAT** по \|5d log-ret\| vs порог; нет таксономии сценариев. | Пилот разметки сценария (человек/LLM) → поле в JSON или `final_label` + версия; позже отдельная голова модели. | `event_reaction_dataset.final_label` / `outcome_json` в KB; чеклисты шефа по окнам после отчёта. |
+| 2 | **Кросс-отчёты** (A → группа B) | Не автоматизировано; дневная **corr** по `quotes` (`/corr`, `cluster_recommend`) ≠ корреляция «по событиям». | `peer_graph_edge` + event-study / признаки peer в новом `feature_builder_version`. | Рёбра графа (конфиг → БД); история **одновременных** forward-окон вокруг события лидера; не смешивать с дневной матрицей без переопределения. |
+| 3 | **Циклы и фазы** (групповой цикл, AI-chips и т.д.) | Не в `features_before` MVP. | Подключить `ticker_price_regime` / агрегаты по группе в builder v2. | `quotes` + правила из дизайна §4.5; при необходимости ручные метки фазы группы. |
+| 4 | **Синхронность / ротация** (лидер vs laggard) | Не в event-ML; есть контекст корреляций для GAME_5M. | Явные признаки «лидер события» и отклик follower в `features_before`. | `knowledge_base` (тип события, кластер темы); цены peer’ов; время событий ET. |
+| 5 | **Режим индекса** (NDX/SPY/VIX, veto) | Таблица `market_regime_daily` пуста; скрипт ingest в репо **ещё не добавлен** (см. [EVENT_REACTION_PIPELINE.md](../EVENT_REACTION_PIPELINE.md)). | Реализовать `ingest_market_regime_daily.py` + cron; затем ключи режима в фичах. | Дневные ряды индексов/VIX (тот же принцип, что `quotes`); breadth — если появится источник. |
+
+Итого по стратегии: **MVP 1–5 закрывает «календарь + цена до/после + первая регрессия + мониторинг»** — это **фундамент** под цели §2, но **не заменяет** сценарную классификацию, кросс-эффекты и режим рынка из дизайна.
+
+---
+
+## Где накапливать факты для БД и моделей (практика)
+
+| Хранилище | Что копить | Зачем |
+|-----------|------------|--------|
+| **`knowledge_base`** | EARNINGS-события, текст, `embedding`, при пилоте — структурированный `outcome_json` / ссылка на транскрипт | Ingest уже кормит `build_event_reaction_dataset`; дальше — RAG и поля для LLM. |
+| **`event_reaction_dataset`** | Уже: строки событий, `features_before` (`quotes_mvp_1`), `outcomes_after` (1d/5d/20d log-ret), `final_label` | Единый материализованный датасет для CatBoost и контроля качества. |
+| **`earnings_event_detail`** | EPS/revenue actual vs estimate, guidance, ссылка на KB | Сюрприз отчёта как признак; пока таблица пустая — нужен отдельный ingest/API. |
+| **`peer_graph_edge`** | `(source, target, relation_type, weight)` из конфига или корреляций **с явной постановкой под события** | Кросс-эффекты и «лидер → кластер». |
+| **`market_regime_daily`** | Снимок режима по `trade_date` (индексы, VIX, флаги) | Veto / множитель риска по §2.5 дизайна. |
+| **Вне БД (временно)** | Таблицы шефа по окнам, скриншоты сценариев, список «META capex → инфра» | Для проектирования полей и пилота разметки до автоматизации. |
+
 ---
 
 ## Связь с кодом и документами
@@ -93,3 +138,4 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 | 0.1 | 2026-05-12 | Первая рабочая сборка: фазы 1–5, источники, ссылки на скрипты |
 | 0.2 | 2026-05-12 | Добавлены `train_event_reaction_catboost.py`, readiness `event_reaction`, закомментированный cron в `setup_cron_docker.sh` |
 | 0.3 | 2026-05-12 | Cron в `crontab/lse-docker.crontab` и `setup_cron_docker.sh`: build + backfill + readiness с train event_reaction (`-e ML_READINESS_SKIP_EVENT_REACTION=0`) |
+| 0.4 | 2026-05-12 | Зафиксировано выполнение фаз 1–5 (11–12.05); сводка по целям §2 дизайна; таблица накопления фактов для БД/моделей |
