@@ -75,7 +75,7 @@
 
 <div class="card" style="border: 1px solid rgba(196, 181, 253, 0.35);">
     <h2>ML: готовность к обучению и качество данных</h2>
-    <p class="muted" style="font-size:0.9rem;">Тот же источник, что <code>scripts/run_ml_data_quality_report.py</code>, но <strong>без</strong> профилирования CSV в <code>local/datasets/</code> (быстрый снимок). Гейты — хвост <code>ml_train_readiness.jsonl</code>; метрики — <code>last_*_train_metrics.json</code> после cron readiness.</p>
+    <p class="muted" style="font-size:0.9rem;">Тот же источник, что <code>scripts/run_ml_data_quality_report.py</code>, но <strong>без</strong> профилирования CSV в <code>local/datasets/</code> (быстрый снимок). Гейты — хвост <code>ml_train_readiness.jsonl</code> (в т.ч. колонка <strong>Event reaction</strong>); метрики — <code>last_game5m_train_metrics.json</code>, <code>last_portfolio_train_metrics.json</code>, при включённом train — <code>last_event_reaction_train_metrics.json</code> в <code>…/ml_data_quality/</code> после cron readiness.</p>
     <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
         <button type="button" id="mlDataQualityRefresh" class="btn" style="padding:0.45rem 0.85rem;">Обновить блок</button>
         <a id="mlDataQualityJsonUrl" href="/api/ml/data-quality" target="_blank" rel="noopener" class="muted" style="font-size:0.9rem;">Открыть JSON <code>GET /api/ml/data-quality</code></a>
@@ -288,16 +288,17 @@ function fmtGatePortfolio(g) {
     return line + '<br><code>RMSE=' + esc(g.rmse_valid) + ', n_train=' + esc(g.n_train) + '</code>';
 }
 
-function fmtGateEventReaction(g) {
-    if (!g) {
-        return '<span class="muted">—</span>';
+function fmtGateEventReaction(erBlock) {
+    if (erBlock === undefined || erBlock === null) {
+        return '<span class="muted" style="font-size:0.82rem;line-height:1.35;">нет поля <code>event_reaction</code><br><span style="font-size:0.78rem;">старая строка JSONL</span></span>';
     }
+    const g = (erBlock.gate != null && typeof erBlock.gate === 'object') ? erBlock.gate : {};
     if (g.ready === null || g.ready === undefined) {
         const rs = (g.reasons || []).map(String);
         if (rs.indexOf('skipped') >= 0) {
-            return '<span class="muted">пропущено</span><br><code style="font-size:0.78rem;">ML_READINESS_SKIP_EVENT_REACTION</code>';
+            return '<span class="muted">пропущено</span><br><code style="font-size:0.78rem;">ML_READINESS_SKIP_EVENT_REACTION=1</code>';
         }
-        return '<span class="muted">—</span>';
+        return '<span class="muted" style="font-size:0.82rem;">нет <code>gate</code> в блоке</span>';
     }
     const ok = g.ready;
     const r = (g.reasons || []).filter(Boolean).join(', ');
@@ -325,7 +326,6 @@ function renderMlDataQuality(data) {
         recs.forEach(function (row) {
             const g5 = (row.game5m && row.game5m.gate) || {};
             const pf = (row.portfolio && row.portfolio.gate) || {};
-            const erG = (row.event_reaction && row.event_reaction.gate) || {};
             html += '<tr style="vertical-align:top;border-bottom:1px solid rgba(30,41,59,0.65);">';
             html += '<td style="padding:8px;"><code style="font-size:0.8rem;">' + esc(row.ts_utc || '—') + '</code><br><span class="muted">' + esc(row.train_mode || '') + '</span></td>';
             html += '<td style="padding:8px;">' + (row.overall_production_ready
@@ -333,10 +333,14 @@ function renderMlDataQuality(data) {
                 : '<strong style="color:#fca5a5;">false</strong>') + '</td>';
             html += '<td style="padding:8px;">' + fmtGateGame5m(g5) + '</td>';
             html += '<td style="padding:8px;">' + fmtGatePortfolio(pf) + '</td>';
-            html += '<td style="padding:8px;">' + fmtGateEventReaction(erG) + '</td>';
+            html += '<td style="padding:8px;">' + fmtGateEventReaction(row.event_reaction) + '</td>';
             html += '</tr>';
         });
         html += '</tbody></table></div>';
+        const erMissingInTail = recs.some(function (row) { return row.event_reaction == null; });
+        if (erMissingInTail) {
+            html += '<p class="muted" style="font-size:0.82rem;margin:0.45rem 0 0 0;line-height:1.45;">В хвосте JSONL есть строки <strong>без</strong> объекта <code>event_reaction</code> — их писал старый cron. Чтобы в таблице появились гейт и «пропущено»/RMSE, один раз выполните на контейнере с актуальным образом: <code>python scripts/run_ml_train_readiness_cron.py</code> (при необходимости <code>ML_READINESS_SKIP_EVENT_REACTION=0</code> для train и файла метрик).</p>';
+        }
         const staleRmse08 = recs.some(function (row) {
             const pf = (row.portfolio && row.portfolio.gate) || {};
             return (pf.reasons || []).some(function (r) { return String(r).indexOf('0.08') >= 0; });
@@ -351,6 +355,7 @@ function renderMlDataQuality(data) {
     html += '<h3 style="margin:1rem 0 0.35rem 0;font-size:1rem;color:#e2e8f0;">Файлы метрик dry-run</h3>';
     if (!extKeys.length) {
         html += '<p class="muted">Нет <code>last_game5m_train_metrics.json</code> / <code>last_portfolio_train_metrics.json</code> / <code>last_event_reaction_train_metrics.json</code> в каталоге ml_data_quality.</p>';
+        html += '<p style="margin:0.45rem 0 0 0;font-size:0.84rem;color:#94a3b8;line-height:1.45;"><code>last_event_reaction_train_metrics.json</code> создаётся при <code>ML_READINESS_SKIP_EVENT_REACTION=0</code> и прогоне <code>run_ml_train_readiness_cron.py</code> (или вручную через <code>train_event_reaction_catboost.py --json-metrics-out</code>).</p>';
     } else {
         extKeys.forEach(function (k) {
             const slot = ext[k] || {};
@@ -374,6 +379,10 @@ function renderMlDataQuality(data) {
                 html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · RMSE valid <code>' + esc(m.rmse_valid) + '</code> · n_train <code>' + esc(d.n_train) + '</code></p>';
             }
         });
+        const hasErMetrics = extKeys.some(function (k) { return k.indexOf('event_reaction') >= 0; });
+        if (!hasErMetrics) {
+            html += '<p style="margin:0.55rem 0 0 0;font-size:0.84rem;color:#94a3b8;line-height:1.45;"><strong>event_reaction_last</strong> — файла <code>last_event_reaction_train_metrics.json</code> в каталоге <code>ml_data_quality</code> сейчас нет (API не подставляет пустышку). Он появится после прогона <code>run_ml_train_readiness_cron.py</code> с <code>ML_READINESS_SKIP_EVENT_REACTION=0</code> или ручного <code>train_event_reaction_catboost.py --json-metrics-out …/last_event_reaction_train_metrics.json</code>. По умолчанию train event-reaction в readiness <strong>выключен</strong>, чтобы не менять <code>overall_production_ready</code>.</p>';
+        }
     }
 
     const ea = data.event_analytics || {};
