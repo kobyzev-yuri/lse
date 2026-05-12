@@ -699,7 +699,7 @@ async def get_analyzer(
 def _compute_ml_data_quality_bundle() -> Dict[str, Any]:
     """
     Единый снимок для веба: как run_ml_data_quality_report без профилирования CSV (dataset_paths=[]).
-    Плюс пути к last_game5m / last_portfolio metrics, если файлы есть.
+    Плюс пути к last_game5m / last_portfolio / last_event_reaction metrics, если файлы есть.
     """
     from services.ml_data_quality_report import build_ml_data_quality_report
 
@@ -712,10 +712,13 @@ def _compute_ml_data_quality_bundle() -> Dict[str, Any]:
     tpaths: Dict[str, Path] = {}
     g5 = q_dir / "last_game5m_train_metrics.json"
     pf = q_dir / "last_portfolio_train_metrics.json"
+    er = q_dir / "last_event_reaction_train_metrics.json"
     if g5.is_file():
         tpaths["game5m_entry_last"] = g5
     if pf.is_file():
         tpaths["portfolio_last"] = pf
+    if er.is_file():
+        tpaths["event_reaction_last"] = er
     tickers: Optional[List[str]] = None
     try:
         tf = get_tickers_fast()
