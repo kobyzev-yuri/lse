@@ -1,6 +1,6 @@
 # Документация LSE — навигация
 
-Корневой обзор архитектуры: [ARCHITECTURE.md](ARCHITECTURE.md). Длинные бизнес-процессы: [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md). **Разметка БД, ML, метрики и LLM-отчёт о качестве данных:** [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md).
+Корневой обзор архитектуры: [ARCHITECTURE.md](ARCHITECTURE.md). Длинные бизнес-процессы: [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md). **Актуальный статус планов (что сделано / что висит / ссылки):** [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md). **Разметка БД, ML, метрики и LLM-отчёт о качестве данных:** [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md). **Четыре CatBoost-сетки (5m, portfolio, recovery, event):** [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md).
 
 ## Игра GAME_5M (одна цепочка: вход → удержание → выход → разбор)
 

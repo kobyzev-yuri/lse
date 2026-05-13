@@ -1,5 +1,7 @@
 # План: ранние выходы (TIME_EXIT_EARLY) — параметры по данным, затем ML recovery
 
+**Статус-сводка (все подсистемы):** [PROJECT_STATUS_AND_ROADMAP.md](../PROJECT_STATUS_AND_ROADMAP.md). Ниже — детальный чеклист recovery (A–D).
+
 Цель: уменьшить **преждевременные** выходы в убытке, сохранив защиту капитала. Реализация идёт **через анализатор** (`services/trade_effectiveness_analyzer.py` и API отчёта), а не разрозненными ручными правками вне этого контура.
 
 Принципы:
@@ -178,6 +180,11 @@ WHERE strategy_name='GAME_5M' AND side='SELL' AND signal_type='TIME_EXIT_EARLY'
      гварды: `GAME_5M_RECOVERY_HARD_STOP_*`, `GAME_5M_RECOVERY_DEFER_MAX_AGE_MINUTES`, `GAME_5M_RECOVERY_DEFER_NEAR_CLOSE_MINUTES`.
    - При закрытии `TIME_EXIT_EARLY`: считается `recovery_proba`, в `context_json` пишется объект **`recovery_ml_time_exit_early`**; в лог — `RECOVERY_ML_GATE`. Закрытие **не** меняется.
 
+1b. **D4a rollup (накопление τ×K) — [x]** (`scripts/run_recovery_d4a_stats_cron.py`, поле анализатора `recovery_ml_d4a_live_review`):
+   - Ночной крон дописывает одну строку в **`GAME_5M_RECOVERY_D4A_STATS_JSONL`** (append-only): `tau_sweep_by_k`, `best_tau_by_k`, счётчики по окну `GAME_5M_RECOVERY_D4A_STATS_WINDOW_DAYS`, сетка K из `GAME_5M_RECOVERY_D4A_STATS_K_BARS` (всегда включается `GAME_5M_RECOVERY_LIVE_DEFER_BARS`).
+   - В той же строке — **`shallow_gate_by_window_days`** и **`window_suggestion`**: по календарным 7/14/21/… дням только числа TE и gate в БД (без OHLC), чтобы **периодически пересматривать**, не избыточно ли длинное окно для обзора τ×K.
+   - Для оперативного разбора — страница анализатора и `GET /api/analyzer` (тот же блок в JSON; опционально `GAME_5M_RECOVERY_D4A_STATS_ATTACH_TO_ANALYZER=true`).
+
 2. **D4b (apply) — [ ] после go/no-go** (см. выше «Критерии go / no-go»):
    - При `TIME_EXIT_EARLY`: если `recovery_proba >= TAU_HOLD` и гварды не сработали — **не закрывать**, отложить решение на K баров (defer budget).
    - Стоп / конец сессии / прочие жёсткие выходы без изменений.
@@ -208,7 +215,7 @@ WHERE strategy_name='GAME_5M' AND side='SELL' AND signal_type='TIME_EXIT_EARLY'
 1. **Спокойный режим:** не включать D4b и не отключать log-only ради «проверки эффекта» — эффект на PnL от ML на этом этапе по определению отсутствует.
 2. **После появления новых `TIME_EXIT_EARLY`:** убедиться, что в `context_json` есть ключ `recovery_ml_time_exit_early` и поля `status`, `recovery_proba`, `would_defer_exit`, `deny_reasons` (SQL — см. выше в этом документе).
 3. **Логи:** при необходимости искать в `cron_sndk_signal.log` строки `RECOVERY_ML_GATE` (в контейнере нет `rg`, достаточно `grep`).
-4. **Периодичность:** раз в несколько дней — быстрый SQL по последним SELL `TIME_EXIT_EARLY`; **раз в 1–2 недели** — прогон анализатора на том же окне дней (`time_exit_early_*`, `recovery_scenario_backtest`, `game5m_recovery_model_status`).
+4. **Периодичность:** раз в несколько дней — быстрый SQL по последним SELL `TIME_EXIT_EARLY`; **раз в 1–2 недели** — прогон анализатора на том же окне дней (`time_exit_early_*`, `recovery_scenario_backtest`, `game5m_recovery_model_status`). **Ежедневно** (после деплоя крона) смотрите хвост `recovery_d4a_rollup.jsonl` из `run_recovery_d4a_stats_cron.py` — там снимок `best_tau_by_k` по нарастающей выборке.
 5. **Параллельно:** ежедневный recovery pipeline (если включён в cron) — следить, что модель и `meta.json` обновляются без ошибок.
 
 ### Когда этап наблюдения считается достаточным для решения

@@ -30,6 +30,14 @@ FULL_ENTRY_KEYS = (
     "atr_5m_pct", "volume_5m_last", "volume_vs_avg_pct",
     "decision_rule_version", "decision_rule_params",
     "technical_entry_branch", "entry_strong_buy_downgraded", "entry_condition", "entry_intuition",
+    # CatBoost на входе (для анализатора без логов): core/effective, P, fusion
+    "technical_decision_core",
+    "technical_decision_effective",
+    "catboost_fusion_mode",
+    "catboost_fusion_note",
+    "catboost_signal_status",
+    "catboost_entry_proba_good",
+    "catboost_signal_note",
     # Прогноз цены 30/60/120 мин (лог-норм. по 5m) — для LLM и истории входа
     "price_forecast_5m", "price_forecast_5m_summary",
     # Время бара решения (get_decision_5m) — для графика / бэктеста, не только ts INSERT в trade_history

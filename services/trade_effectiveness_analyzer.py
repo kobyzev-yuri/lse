@@ -113,6 +113,11 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Проверка CatBoost entry (GAME_5M): берём сохранённый BUY context_json → считаем P(благоприятный исход) "
         "и сопоставляем с фактом realized_pct. Нужен файл модели .cbm + meta.json и включение GAME_5M_CATBOOST_ENABLED."
     ),
+    "game5m_catboost_fusion_entry_review": (
+        "Таблица по закрытым сделкам: что было сохранено в BUY context_json при входе (technical_decision_core/effective, P, статус). "
+        "Поле would_hold_at_runtime_p_threshold — оценка «не вошли бы сейчас» при текущем GAME_5M_CATBOOST_HOLD_BELOW_P и сохранённом P; "
+        "сделка уже в БД — это не факт блокировки в прошлом, а удобный контрфакт без чтения логов крона."
+    ),
     "catboost_signal_status": (
         "Статус CatBoost-сигнала в payload сделки/проверки: ok|disabled|no_model_file|feature_mismatch|predict_error|… "
         "При ошибке CatBoost не ломает решение правил — остаётся базовый сигнал."
@@ -165,6 +170,14 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
     "recovery_scenario_backtest": (
         "Фаза D3: для сделок TIME_EXIT_EARLY (GAME_5M) — скор recovery на последнем баре удержания; если P < τ, "
         "считаем упрощённый контрфакт «выход на K 5m-баров позже» по Close (без комиссий). Пороги τ и K — GAME_5M_RECOVERY_SCENARIO_*."
+    ),
+    "recovery_ml_d4a_live_review": (
+        "Фаза D4a: по закрытым SELL с `recovery_ml_time_exit_early` в `exit_context_json` — сопоставление live P, "
+        "`would_defer_exit` с пост-выходными метриками (`time_exit_early_review.detail_rows`) и контрфактом «K баров позже» "
+        "(как планируемый D4b, `GAME_5M_RECOVERY_LIVE_DEFER_BARS`). Таблица `tau_sweep`: при политике крона defer iff P≥τ "
+        "(не путать с `recovery_scenario_backtest`, где триггер по другому порогу P<τ). "
+        "Поле `tau_sweep_by_k` / `best_tau_by_k` — то же по нескольким K из `GAME_5M_RECOVERY_D4A_STATS_K_BARS` для подбора τ и горизонта пролонгации. "
+        "`shallow_gate_by_window_days` + `window_suggestion` — лёгкий пересмотр: хватает ли **меньшего** календарного окна по числу TIME_EXIT_EARLY с gate (без OHLC); крон и опционально анализатор (`GAME_5M_RECOVERY_D4A_STATS_ATTACH_TO_ANALYZER`)."
     ),
     "realized_pct": (
         "Результат сделки в % от cost basis из net_pnl (как в отчёте); для рядов также считается realized_log_return = log(1+p/100)."
@@ -1081,6 +1094,7 @@ def _build_time_exit_early_review(
                 "proposals": [],
             },
             "note": "Нет сделок TIME_EXIT_EARLY в выборке.",
+            "detail_rows": [],
         }
 
     rows: List[Dict[str, Any]] = []
@@ -1209,6 +1223,7 @@ def _build_time_exit_early_review(
                 "TIME_EXIT_EARLY есть, но ни одна сделка не сопоставилась с рядом 5m: нет кэша по тикеру, "
                 "exit_ts вне окна загрузки, или нет баров после exit (расширьте days; проверьте exit_ts и fetch_5m_ohlc)."
             ),
+            "detail_rows": [],
         }
 
     def _avg(vals: List[Optional[float]]) -> Optional[float]:
@@ -1502,6 +1517,8 @@ def _build_time_exit_early_review(
             "post-exit MFE/MAE — от цены выхода; post_exit_recovery_entry_pct_1h — насколько за 1h поднялся High относительно входа. "
             "Контрфакт, без учёта проскальзывания/исполнения."
         ),
+        # Полные строки TE для сопоставления с D4a (recovery_ml_d4a_live_review); на UI не выводятся целиком — см. JSON.
+        "detail_rows": rows[:300],
     }
     if focused_trade_ids:
         fs = {int(x) for x in focused_trade_ids}
@@ -4211,6 +4228,138 @@ def _build_catboost_entry_backtest(strategy: str, closed: List[Any], effects: Li
     return out
 
 
+def _build_game5m_catboost_fusion_entry_review(
+    strategy: str,
+    closed: List[Any],
+    effects: List[TradeEffect],
+) -> Dict[str, Any]:
+    """
+    Сводка по влиянию CatBoost на вход: поля из BUY context_json (после деплоя — technical_decision_*, catboost_*).
+
+    would_hold_at_runtime_p_threshold: контрфакт при текущем GAME_5M_CATBOOST_HOLD_BELOW_P и сохранённом P
+    (вход уже состоялся; для старых сделок без P в JSON поле false).
+    """
+    su = (strategy or "").strip().upper()
+    if su == "PORTFOLIO":
+        return {"mode": "skipped", "note": "Раздел только для GAME_5M и ALL (входы GAME_5M)."}
+    if su not in ("GAME_5M", "ALL"):
+        return {"mode": "skipped", "note": f"Стратегия {strategy!r}: обзор fusion только GAME_5M / ALL."}
+
+    cb_on = (get_config_value("GAME_5M_CATBOOST_ENABLED", "false") or "false").strip().lower() in ("1", "true", "yes")
+    try:
+        p_min_rt = float((get_config_value("GAME_5M_CATBOOST_HOLD_BELOW_P", "0.45") or "0.45").strip())
+    except (ValueError, TypeError):
+        p_min_rt = 0.45
+    fusion_rt = (get_config_value("GAME_5M_CATBOOST_FUSION", "none") or "none").strip().lower()
+
+    by_tid: Dict[int, Any] = {}
+    for t in closed:
+        try:
+            tid = int(getattr(t, "trade_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if tid:
+            by_tid[tid] = t
+
+    per_trade: List[Dict[str, Any]] = []
+    n_considered = 0
+    n_with_snapshot = 0
+    n_would_hold = 0
+    n_would_hold_wins = 0
+    n_would_hold_losses = 0
+
+    for e in effects:
+        tp = by_tid.get(int(e.trade_id))
+        if not tp or not _trade_qualifies_for_game5m_catboost(strategy, tp):
+            continue
+        n_considered += 1
+        ctx = normalize_entry_context(getattr(tp, "context_json", None))
+        core = ctx.get("technical_decision_core")
+        eff = ctx.get("technical_decision_effective")
+        if core is None:
+            core = ctx.get("decision")
+        if eff is None:
+            eff = ctx.get("decision")
+        branch = ctx.get("technical_entry_branch")
+        st = ctx.get("catboost_signal_status")
+        p_raw = ctx.get("catboost_entry_proba_good")
+        p_ok: Optional[float] = None
+        if p_raw is not None:
+            try:
+                p_ok = float(p_raw)
+            except (TypeError, ValueError):
+                p_ok = None
+        fusion_note = ctx.get("catboost_fusion_note")
+        fusion_mode_ctx = ctx.get("catboost_fusion_mode")
+
+        has_snap = bool(
+            st is not None
+            or p_ok is not None
+            or ctx.get("technical_decision_core") is not None
+            or ctx.get("technical_decision_effective") is not None
+        )
+        if has_snap:
+            n_with_snapshot += 1
+
+        would_hold = False
+        if fusion_rt == "hold_if_buy_below_p" and st == "ok" and p_ok is not None:
+            if core in ("BUY", "STRONG_BUY") and p_ok < p_min_rt:
+                would_hold = True
+        if would_hold:
+            n_would_hold += 1
+            if e.realized_pct > 0:
+                n_would_hold_wins += 1
+            else:
+                n_would_hold_losses += 1
+
+        per_trade.append(
+            {
+                "trade_id": e.trade_id,
+                "ticker": e.ticker,
+                "technical_entry_branch": branch,
+                "technical_decision_core": core,
+                "technical_decision_effective": eff,
+                "catboost_signal_status": st,
+                "catboost_entry_proba_good": round(p_ok, 4) if p_ok is not None else None,
+                "catboost_fusion_note_entry": fusion_note,
+                "catboost_fusion_mode_entry": fusion_mode_ctx,
+                "would_hold_at_runtime_p_threshold": would_hold,
+                "realized_pct": round(float(e.realized_pct), 4),
+                "win": bool(e.realized_pct > 0),
+            }
+        )
+
+    per_trade_recent = list(reversed(per_trade))[:40]
+    coverage_note: Optional[str] = None
+    if n_considered and n_with_snapshot < n_considered:
+        coverage_note = (
+            "В части сделок в context_json ещё нет technical_decision_* / catboost_* "
+            "(записи до деплоя с расширенным deal_params). После новых входов покрытие вырастет."
+        )
+
+    return {
+        "mode": "game5m_entry_context",
+        "description": (
+            "По закрытым сделкам GAME_5M: снимок из BUY context_json (core/effective, P, статус CatBoost). "
+            "would_hold_at_runtime_p_threshold — оценка при текущем пороге HOLD_BELOW_P; сделка уже открывалась в прошлом."
+        ),
+        "runtime": {
+            "GAME_5M_CATBOOST_ENABLED": cb_on,
+            "GAME_5M_CATBOOST_FUSION": fusion_rt,
+            "GAME_5M_CATBOOST_HOLD_BELOW_P": p_min_rt,
+        },
+        "trades_considered": n_considered,
+        "trades_with_catboost_snapshot": n_with_snapshot,
+        "would_hold_at_runtime_threshold_count": n_would_hold,
+        "would_hold_breakdown": {
+            "among_hypothetical_holds_would_be_losses": n_would_hold_losses,
+            "among_hypothetical_holds_would_be_wins": n_would_hold_wins,
+        },
+        "context_coverage_note": coverage_note,
+        "per_trade_recent": per_trade_recent,
+    }
+
+
 def _recovery_delayed_close_after_exit(
     df: Optional[pd.DataFrame],
     exit_ts_et: pd.Timestamp,
@@ -4230,6 +4379,583 @@ def _recovery_delayed_close_after_exit(
         return float(fwd["Close"].iloc[ix])
     except Exception:
         return None
+
+
+def _recovery_d4a_k_bars_candidates() -> List[int]:
+    """K для офлайн-оценки пролонгации: всегда включаем LIVE_DEFER_BARS + сетку из env (или 3,6,9,12)."""
+    try:
+        live_k = int((get_config_value("GAME_5M_RECOVERY_LIVE_DEFER_BARS", "6") or "6").strip())
+    except (TypeError, ValueError):
+        live_k = 6
+    live_k = max(1, min(48, live_k))
+    raw = (get_config_value("GAME_5M_RECOVERY_D4A_STATS_K_BARS", "") or "").strip()
+    ks: Set[int] = {live_k}
+    if raw:
+        for part in raw.replace(";", ",").split(","):
+            p = part.strip()
+            if not p:
+                continue
+            try:
+                ks.add(int(float(p)))
+            except (TypeError, ValueError):
+                continue
+    else:
+        ks.update({3, 6, 9, 12})
+    return sorted({max(1, min(48, int(x))) for x in ks})
+
+
+def _recovery_d4a_tau_grid() -> List[float]:
+    return [round(x, 3) for x in (0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85)]
+
+
+def _recovery_d4a_tau_sweep_for_k(merged: List[Dict[str, Any]], k: int, tau_grid: List[float]) -> List[Dict[str, Any]]:
+    k_s = str(k)
+    base = []
+    for m in merged:
+        p = m.get("recovery_proba")
+        db = m.get("deltas_by_k_bars")
+        if p is None or not isinstance(db, dict):
+            continue
+        if db.get(k_s) is None:
+            continue
+        base.append(m)
+    out: List[Dict[str, Any]] = []
+    for tau in tau_grid:
+        sel = [m for m in base if float(m["recovery_proba"]) >= float(tau)]
+        out.append(
+            {
+                "tau": tau,
+                "defer_count": len(sel),
+                "mean_delta_delayed_minus_actual_pct": _mean_finite(
+                    [float((m.get("deltas_by_k_bars") or {}).get(k_s)) for m in sel]
+                ),
+                "mean_post_exit_mfe_pct_1h": _mean_finite([m.get("post_exit_mfe_pct_1h") for m in sel]),
+            }
+        )
+    return out
+
+
+def _recovery_d4a_best_tau_from_sweep(sweep: List[Dict[str, Any]], *, min_defer: int) -> Optional[Dict[str, Any]]:
+    """τ с максимальным средним Δ при достаточном n defer; tie-break — больший τ."""
+    cand: List[Dict[str, Any]] = []
+    for x in sweep:
+        try:
+            n = int(x.get("defer_count") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        md = x.get("mean_delta_delayed_minus_actual_pct")
+        if n < min_defer or md is None:
+            continue
+        cand.append(x)
+    if not cand:
+        for x in sweep:
+            try:
+                n = int(x.get("defer_count") or 0)
+            except (TypeError, ValueError):
+                n = 0
+            md = x.get("mean_delta_delayed_minus_actual_pct")
+            if n >= 1 and md is not None:
+                cand.append(x)
+    if not cand:
+        return None
+
+    def sort_key(x: Dict[str, Any]) -> Tuple[float, float]:
+        md = x.get("mean_delta_delayed_minus_actual_pct")
+        tau = float(x.get("tau") or 0.0)
+        return (float(md) if md is not None else float("-inf"), tau)
+
+    best = max(cand, key=sort_key)
+    return {
+        "tau": best.get("tau"),
+        "defer_count": best.get("defer_count"),
+        "mean_delta_delayed_minus_actual_pct": best.get("mean_delta_delayed_minus_actual_pct"),
+        "mean_post_exit_mfe_pct_1h": best.get("mean_post_exit_mfe_pct_1h"),
+        "min_defer_met": min_defer,
+    }
+
+
+def _empty_recovery_ml_d4a_live_review(note: str) -> Dict[str, Any]:
+    return {
+        "mode": "skipped",
+        "note": note,
+        "policy_live_d4a": "defer iff recovery_proba >= GAME_5M_RECOVERY_LIVE_TAU_HOLD (как в send_sndk D4a телеметрия).",
+        "policy_offline_d3": "recovery_scenario_backtest: delay iff P < GAME_5M_RECOVERY_SCENARIO_TAU — другая полярность, см. metric_definitions.",
+        "time_exit_early_game5m_in_window": 0,
+        "trades_with_recovery_gate": 0,
+        "trades_gate_ok_with_proba": 0,
+        "trades_with_delta_k": 0,
+        "live_tau_hold_config": None,
+        "defer_delay_bars_config": None,
+        "k_bars_evaluated": [],
+        "n_delta_by_k": {},
+        "tau_sweep": [],
+        "tau_sweep_by_k": {},
+        "best_tau_by_k": {},
+        "min_defer_for_best_tau": None,
+        "shallow_gate_by_window_days": None,
+        "window_suggestion": None,
+        "p_buckets": [],
+        "recorded_would_defer_summary": None,
+        "per_trade_recent": [],
+    }
+
+
+def _mean_finite(xs: List[Optional[float]]) -> Optional[float]:
+    vs = [float(x) for x in xs if x is not None and math.isfinite(float(x))]
+    return round(float(np.mean(vs)), 4) if vs else None
+
+
+def _build_recovery_ml_d4a_live_review(
+    closed: List[Any],
+    te_review: Dict[str, Any],
+    effects: List[TradeEffect],
+    ohlc_cache: Dict[str, Optional[pd.DataFrame]],
+    *,
+    strategy: str,
+) -> Dict[str, Any]:
+    """
+    Сводка D4a: SELL TIME_EXIT_EARLY с recovery_ml_time_exit_early + пост-выход + контрфакт K баров (LIVE_DEFER_BARS).
+    """
+    su = (strategy or "").strip().upper()
+    if su not in ("GAME_5M", "ALL"):
+        return _empty_recovery_ml_d4a_live_review("Только для стратегии GAME_5M или ALL.")
+
+    try:
+        delay_bars = int((get_config_value("GAME_5M_RECOVERY_LIVE_DEFER_BARS", "6") or "6").strip())
+    except (TypeError, ValueError):
+        delay_bars = 6
+    delay_bars = max(1, min(48, delay_bars))
+    try:
+        live_tau = float((get_config_value("GAME_5M_RECOVERY_LIVE_TAU_HOLD", "0.65") or "0.65").strip().replace(",", "."))
+    except (TypeError, ValueError):
+        live_tau = 0.65
+    live_tau = max(0.0, min(1.0, live_tau))
+
+    k_candidates = _recovery_d4a_k_bars_candidates()
+    try:
+        min_defer_best = int((get_config_value("GAME_5M_RECOVERY_D4A_STATS_MIN_DEFER", "2") or "2").strip())
+    except (TypeError, ValueError):
+        min_defer_best = 2
+    min_defer_best = max(1, min(25, min_defer_best))
+
+    te_rows = te_review.get("detail_rows") if isinstance(te_review.get("detail_rows"), list) else []
+    te_by_tid: Dict[int, Dict[str, Any]] = {}
+    for r in te_rows:
+        if not isinstance(r, dict):
+            continue
+        try:
+            tid = int(r.get("trade_id") or -1)
+        except (TypeError, ValueError):
+            continue
+        if tid > 0:
+            te_by_tid[tid] = r
+
+    eff_by_id: Dict[int, TradeEffect] = {e.trade_id: e for e in effects}
+
+    te_game5m_n = 0
+    merged: List[Dict[str, Any]] = []
+    for t in closed:
+        sig = str(getattr(t, "signal_type", "") or "").strip().upper()
+        if sig != "TIME_EXIT_EARLY":
+            continue
+        exs = str(getattr(t, "exit_strategy", "") or "").strip().upper()
+        if exs != "GAME_5M":
+            continue
+        te_game5m_n += 1
+        tid = int(getattr(t, "trade_id", 0) or 0)
+        ec = _json_dict(getattr(t, "exit_context_json", None))
+        gate = ec.get("recovery_ml_time_exit_early")
+        if not isinstance(gate, dict):
+            continue
+        st = str(gate.get("status") or "")
+        proba = _safe_float(gate.get("recovery_proba"))
+        tau_at_close = _safe_float(gate.get("tau_hold"))
+        wd_exit = gate.get("would_defer_exit")
+        wd_model = gate.get("would_defer_by_model")
+        rec_log_only = gate.get("log_only")
+        deny = gate.get("deny_reasons")
+        e = eff_by_id.get(tid)
+        te_r = te_by_tid.get(tid)
+        row: Dict[str, Any] = {
+            "trade_id": tid,
+            "ticker": str(getattr(t, "ticker", "") or "").strip().upper(),
+            "gate_status": st,
+            "recovery_proba": round(proba, 4) if proba is not None else None,
+            "tau_hold_at_close": round(tau_at_close, 4) if tau_at_close is not None else None,
+            "would_defer_exit_recorded": bool(wd_exit) if wd_exit is not None else None,
+            "would_defer_by_model_recorded": bool(wd_model) if wd_model is not None else None,
+            "log_only_recorded": bool(rec_log_only) if rec_log_only is not None else None,
+            "deny_reasons": deny if isinstance(deny, list) else None,
+            "post_exit_mfe_pct_1h": te_r.get("post_exit_mfe_pct_1h") if isinstance(te_r, dict) else None,
+            "likely_premature_whipsaw_1h": bool(te_r.get("likely_premature_whipsaw_1h")) if isinstance(te_r, dict) else None,
+            "deltas_by_k_bars": {},
+            "delta_delayed_minus_actual_pct": None,
+            "actual_close_pct_vs_entry_approx": None,
+            "delayed_close_pct_vs_entry_approx": None,
+        }
+        if e is not None and proba is not None:
+            entry_px = float(e.entry_price)
+            act_px = float(e.exit_price)
+            if entry_px > 0 and act_px > 0:
+                actual_pct = (act_px / entry_px - 1.0) * 100.0
+                row["actual_close_pct_vs_entry_approx"] = round(actual_pct, 4)
+                df = ohlc_cache.get(e.ticker)
+                dk: Dict[str, Optional[float]] = {}
+                for kb in k_candidates:
+                    del_close = _recovery_delayed_close_after_exit(df, e.exit_ts, kb)
+                    if del_close is not None and entry_px > 0:
+                        delayed_pct = (del_close / entry_px - 1.0) * 100.0
+                        dk[str(kb)] = round(delayed_pct - actual_pct, 4)
+                    else:
+                        dk[str(kb)] = None
+                row["deltas_by_k_bars"] = dk
+                pk = str(delay_bars)
+                if pk in dk and dk[pk] is not None:
+                    row["delta_delayed_minus_actual_pct"] = dk[pk]
+                    del_c = _recovery_delayed_close_after_exit(df, e.exit_ts, delay_bars)
+                    if del_c is not None:
+                        row["delayed_close_pct_vs_entry_approx"] = round((del_c / entry_px - 1.0) * 100.0, 4)
+        merged.append(row)
+
+    if te_game5m_n == 0:
+        return _empty_recovery_ml_d4a_live_review("Нет закрытых TIME_EXIT_EARLY с exit_strategy=GAME_5M в окне.")
+
+    n_gate = len(merged)
+    if n_gate == 0:
+        return {
+            "mode": "no_live_gate",
+            "note": (
+                f"В окне {te_game5m_n} сделок TIME_EXIT_EARLY (GAME_5M), но в SELL context_json нет ключа "
+                "`recovery_ml_time_exit_early` — типично старые сделки до D4a или recovery ML выключен на кроне."
+            ),
+            "policy_live_d4a": "defer iff recovery_proba >= GAME_5M_RECOVERY_LIVE_TAU_HOLD (как в send_sndk D4a телеметрия).",
+            "policy_offline_d3": "recovery_scenario_backtest: delay iff P < GAME_5M_RECOVERY_SCENARIO_TAU — другая полярность, см. metric_definitions.",
+            "time_exit_early_game5m_in_window": te_game5m_n,
+            "trades_with_recovery_gate": 0,
+            "trades_gate_ok_with_proba": 0,
+            "trades_with_delta_k": 0,
+            "live_tau_hold_config": live_tau,
+            "defer_delay_bars_config": delay_bars,
+            "k_bars_evaluated": k_candidates,
+            "n_delta_by_k": {},
+            "tau_sweep": [],
+            "tau_sweep_by_k": {},
+            "best_tau_by_k": {},
+            "min_defer_for_best_tau": min_defer_best,
+            "p_buckets": [],
+            "recorded_would_defer_summary": None,
+            "per_trade_recent": [],
+        }
+
+    with_p = [m for m in merged if m.get("recovery_proba") is not None]
+    n_p = len(with_p)
+    pk = str(delay_bars)
+    with_delta = [m for m in merged if m.get("delta_delayed_minus_actual_pct") is not None]
+    n_delta = len(with_delta)
+
+    tau_grid = _recovery_d4a_tau_grid()
+    tau_sweep = _recovery_d4a_tau_sweep_for_k(merged, delay_bars, tau_grid)
+
+    tau_sweep_by_k: Dict[str, List[Dict[str, Any]]] = {}
+    n_delta_by_k: Dict[str, int] = {}
+    best_tau_by_k: Dict[str, Any] = {}
+    for kb in k_candidates:
+        sw = _recovery_d4a_tau_sweep_for_k(merged, kb, tau_grid)
+        tau_sweep_by_k[str(kb)] = sw
+        n_delta_by_k[str(kb)] = sum(
+            1
+            for m in merged
+            if m.get("recovery_proba") is not None
+            and isinstance(m.get("deltas_by_k_bars"), dict)
+            and (m.get("deltas_by_k_bars") or {}).get(str(kb)) is not None
+        )
+        bt = _recovery_d4a_best_tau_from_sweep(sw, min_defer=min_defer_best)
+        if bt is not None:
+            best_tau_by_k[str(kb)] = bt
+
+    p_buckets_spec = [
+        ("0.00–0.50", 0.0, 0.5),
+        ("0.50–0.60", 0.5, 0.6),
+        ("0.60–0.70", 0.6, 0.7),
+        ("0.70–0.80", 0.7, 0.8),
+        ("0.80–1.00", 0.8, 1.0001),
+    ]
+    p_buckets: List[Dict[str, Any]] = []
+    for label, lo, hi in p_buckets_spec:
+        ms = [m for m in with_p if lo <= float(m["recovery_proba"]) < hi]
+        delta_primary = []
+        for m in ms:
+            db = m.get("deltas_by_k_bars")
+            if isinstance(db, dict) and db.get(pk) is not None:
+                delta_primary.append(float(db[pk]))
+        p_buckets.append(
+            {
+                "p_range": label,
+                "count": len(ms),
+                "mean_post_exit_mfe_pct_1h": _mean_finite([m.get("post_exit_mfe_pct_1h") for m in ms]),
+                "premature_rate": (
+                    round(
+                        sum(1 for m in ms if m.get("likely_premature_whipsaw_1h")) / float(len(ms)),
+                        4,
+                    )
+                    if ms
+                    else None
+                ),
+                "mean_delta_primary_k_pct": _mean_finite(delta_primary),
+            }
+        )
+
+    rec_wd = [
+        m
+        for m in merged
+        if m.get("would_defer_exit_recorded") is True
+        and isinstance(m.get("deltas_by_k_bars"), dict)
+        and (m.get("deltas_by_k_bars") or {}).get(pk) is not None
+    ]
+    recorded_summary = None
+    if rec_wd:
+        recorded_summary = {
+            "count": len(rec_wd),
+            "mean_delta_delayed_minus_actual_pct": _mean_finite(
+                [float((m.get("deltas_by_k_bars") or {}).get(pk)) for m in rec_wd]
+            ),
+            "mean_post_exit_mfe_pct_1h": _mean_finite([m.get("post_exit_mfe_pct_1h") for m in rec_wd]),
+        }
+
+    merged_sorted = sorted(merged, key=lambda m: int(m.get("trade_id") or 0), reverse=True)
+    per_recent = merged_sorted[:36]
+    for pr in per_recent:
+        if "deltas_by_k_bars" in pr and isinstance(pr["deltas_by_k_bars"], dict):
+            pr["deltas_by_k_bars"] = dict(pr["deltas_by_k_bars"])
+
+    return {
+        "mode": "ok",
+        "note": (
+            "Контрфакт K баров — упрощение (Close K×5m после exit_ts), без комиссий. "
+            "`tau_sweep` — для LIVE_DEFER_BARS; `tau_sweep_by_k` — для всех K из k_bars_evaluated. "
+            "`best_tau_by_k` — τ с max mean Δ при defer_count ≥ min_defer_for_best_tau (смягчение до n≥1 если мало данных)."
+        ),
+        "policy_live_d4a": "defer iff recovery_proba >= tau (как в cron; фактическое удержание — только после D4b).",
+        "policy_offline_d3": "recovery_scenario_backtest использует P < SCENARIO_TAU — не смешивать с live без проверки.",
+        "time_exit_early_game5m_in_window": te_game5m_n,
+        "trades_with_recovery_gate": n_gate,
+        "trades_gate_ok_with_proba": n_p,
+        "trades_with_delta_k": n_delta,
+        "live_tau_hold_config": live_tau,
+        "defer_delay_bars_config": delay_bars,
+        "k_bars_evaluated": k_candidates,
+        "n_delta_by_k": n_delta_by_k,
+        "min_defer_for_best_tau": min_defer_best,
+        "tau_sweep": tau_sweep,
+        "tau_sweep_by_k": tau_sweep_by_k,
+        "best_tau_by_k": best_tau_by_k,
+        "p_buckets": p_buckets,
+        "recorded_would_defer_summary": recorded_summary,
+        "per_trade_recent": per_recent,
+    }
+
+
+def compute_recovery_ml_d4a_live_review_for_window(
+    days: int = 21,
+    strategy: str = "GAME_5M",
+    *,
+    shallow_lookback_days: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Лёгкий вход для крона D4a: то же, что внутри analyze_trade_effectiveness для recovery_ml_d4a_live_review,
+    без LLM и без полного payload анализатора.
+
+    Если задан ``shallow_lookback_days`` (например 30), дополнительно считаются только **числа** TE/gate
+    по календарным окнам 7/14/21/… дней без второго прохода OHLC — чтобы пересматривать достаточность выборки.
+    """
+    days = max(1, min(30, int(days)))
+    closed = _load_closed_trades(days=days, strategy_name=strategy)
+    if not closed:
+        te0 = _build_time_exit_early_review([], {})
+        out = _build_recovery_ml_d4a_live_review([], te0, [], {}, strategy=strategy)
+        _maybe_fill_recovery_d4a_shallow(out, strategy=strategy, analysis_days=days, shallow_lookback_days=shallow_lookback_days)
+        return out
+    tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
+    cache = _prepare_ohlc_cache(tickers=tickers, days=days)
+    effects = _estimate_trade_effects(closed, cache)
+    te_review = _build_time_exit_early_review(effects, cache)
+    out = _build_recovery_ml_d4a_live_review(closed, te_review, effects, cache, strategy=strategy)
+    _maybe_fill_recovery_d4a_shallow(out, strategy=strategy, analysis_days=days, shallow_lookback_days=shallow_lookback_days)
+    return out
+
+
+def _maybe_fill_recovery_d4a_shallow(
+    review: Dict[str, Any],
+    *,
+    strategy: str,
+    analysis_days: int,
+    shallow_lookback_days: Optional[int],
+) -> None:
+    if shallow_lookback_days is None:
+        return
+    try:
+        lb = max(1, min(30, int(shallow_lookback_days)))
+    except (TypeError, ValueError):
+        lb = 30
+    lb = max(lb, int(analysis_days))
+    if (strategy or "").strip().upper() not in ("GAME_5M", "ALL"):
+        return
+    strat = "GAME_5M" if (strategy or "").strip().upper() == "ALL" else (strategy or "").strip().upper()
+    closed_sh = _load_closed_trades(days=lb, strategy_name=strat)
+    windows = sorted({7, 14, 21, int(analysis_days), lb})
+    shallow = recovery_d4a_shallow_gate_counts_by_windows(closed_sh, windows=tuple(windows))
+    review["shallow_gate_by_window_days"] = shallow
+    try:
+        suf = int((get_config_value("GAME_5M_RECOVERY_D4A_STATS_SUFFICIENT_GATE_MIN", "5") or "5").strip())
+    except (TypeError, ValueError):
+        suf = 5
+    suf = max(2, min(50, suf))
+    try:
+        comf = int((get_config_value("GAME_5M_RECOVERY_D4A_STATS_COMFORTABLE_GATE_MIN", "10") or "10").strip())
+    except (TypeError, ValueError):
+        comf = 10
+    comf = max(suf, min(100, comf))
+    review["window_suggestion"] = recovery_d4a_window_suggestion(
+        shallow,
+        sufficient_gate_min=suf,
+        comfortable_gate_min=comf,
+        current_analysis_window_days=int(analysis_days),
+    )
+
+
+def _maybe_attach_recovery_d4a_shallow_for_analyzer(review: Dict[str, Any], *, days: int, strategy: str) -> None:
+    """Опционально для GET /api/analyzer: второй лёгкий запрос к БД, без второго OHLC."""
+    try:
+        raw = (get_config_value("GAME_5M_RECOVERY_D4A_STATS_ATTACH_TO_ANALYZER", "false") or "false").strip().lower()
+        on = raw in ("1", "true", "yes")
+    except Exception:
+        on = False
+    if not on:
+        return
+    try:
+        lb = int((get_config_value("GAME_5M_RECOVERY_D4A_STATS_SHALLOW_LOOKBACK_DAYS", "30") or "30").strip())
+    except (TypeError, ValueError):
+        lb = 30
+    lb = max(days, min(30, lb))
+    _maybe_fill_recovery_d4a_shallow(review, strategy=strategy, analysis_days=days, shallow_lookback_days=lb)
+
+
+def recovery_d4a_rollup_snapshot_for_jsonl(review: Dict[str, Any], *, window_days: int) -> Dict[str, Any]:
+    """Компактная строка для append-only JSONL (накопление τ×K по дням)."""
+    if not isinstance(review, dict):
+        return {"schema_version": "recovery_d4a_rollup_v1", "ts_utc": datetime.now(timezone.utc).isoformat(), "error": "bad_review"}
+    return {
+        "schema_version": "recovery_d4a_rollup_v1",
+        "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "window_days": int(window_days),
+        "mode": review.get("mode"),
+        "note": review.get("note"),
+        "time_exit_early_game5m_in_window": review.get("time_exit_early_game5m_in_window"),
+        "trades_with_recovery_gate": review.get("trades_with_recovery_gate"),
+        "trades_gate_ok_with_proba": review.get("trades_gate_ok_with_proba"),
+        "k_bars_evaluated": review.get("k_bars_evaluated"),
+        "n_delta_by_k": review.get("n_delta_by_k"),
+        "live_tau_hold_config": review.get("live_tau_hold_config"),
+        "defer_delay_bars_config": review.get("defer_delay_bars_config"),
+        "min_defer_for_best_tau": review.get("min_defer_for_best_tau"),
+        "tau_sweep_by_k": review.get("tau_sweep_by_k"),
+        "best_tau_by_k": review.get("best_tau_by_k"),
+        "tau_sweep_primary_k": review.get("tau_sweep"),
+        "p_buckets": review.get("p_buckets"),
+        "recorded_would_defer_summary": review.get("recorded_would_defer_summary"),
+        "shallow_gate_by_window_days": review.get("shallow_gate_by_window_days"),
+        "window_suggestion": review.get("window_suggestion"),
+    }
+
+
+def recovery_d4a_shallow_gate_counts_by_windows(
+    closed: List[Any],
+    *,
+    windows: Tuple[int, ...] = (7, 14, 21, 30),
+) -> Dict[str, Any]:
+    """
+    Без OHLC: сколько TIME_EXIT_EARLY (GAME_5M) и сколько с recovery gate / с P в exit_context за последние W календарных дней.
+    `closed` должен покрывать max(windows) дней (например загрузка на 30 дней).
+    """
+    now = pd.Timestamp.now(tz=timezone.utc)
+    ws = sorted({max(1, min(120, int(w))) for w in windows if int(w) > 0})
+    by_w: Dict[str, Dict[str, int]] = {}
+    for w in ws:
+        cutoff = now - pd.Timedelta(days=w)
+        te_n = gate_n = proba_n = 0
+        for t in closed:
+            ts_raw = pd.Timestamp(getattr(t, "ts", None))
+            if ts_raw.tzinfo is None:
+                ts = ts_raw.tz_localize("UTC")
+            else:
+                ts = ts_raw.tz_convert("UTC")
+            if ts < cutoff:
+                continue
+            sig = str(getattr(t, "signal_type", "") or "").strip().upper()
+            if sig != "TIME_EXIT_EARLY":
+                continue
+            exs = str(getattr(t, "exit_strategy", "") or "").strip().upper()
+            if exs != "GAME_5M":
+                continue
+            te_n += 1
+            ec = _json_dict(getattr(t, "exit_context_json", None))
+            gate = ec.get("recovery_ml_time_exit_early")
+            if not isinstance(gate, dict):
+                continue
+            gate_n += 1
+            if _safe_float(gate.get("recovery_proba")) is not None:
+                proba_n += 1
+        by_w[str(w)] = {
+            "time_exit_early_game5m": te_n,
+            "with_recovery_gate": gate_n,
+            "with_recovery_proba": proba_n,
+        }
+    return {"by_window_days": by_w, "windows_requested": [str(x) for x in ws]}
+
+
+def recovery_d4a_window_suggestion(
+    shallow: Dict[str, Any],
+    *,
+    sufficient_gate_min: int,
+    comfortable_gate_min: int,
+    current_analysis_window_days: int,
+) -> Dict[str, Any]:
+    """
+    Подсказка: достаточно ли короткого календарного окна для обзора τ×K (по числу SELL с gate, без OHLC).
+    """
+    by_w = shallow.get("by_window_days") if isinstance(shallow.get("by_window_days"), dict) else {}
+    ordered = sorted(((int(k), v) for k, v in by_w.items() if str(k).isdigit()), key=lambda kv: kv[0])
+    smallest_sufficient: Optional[int] = None
+    smallest_comfortable: Optional[int] = None
+    for w, d in ordered:
+        g = int((d or {}).get("with_recovery_gate") or 0)
+        if smallest_sufficient is None and g >= sufficient_gate_min:
+            smallest_sufficient = w
+        if smallest_comfortable is None and g >= comfortable_gate_min:
+            smallest_comfortable = w
+    hints: List[str] = []
+    if smallest_sufficient is not None and smallest_sufficient < current_analysis_window_days:
+        hints.append(
+            f"За {smallest_sufficient}д уже ≥{sufficient_gate_min} SELL с recovery gate — для грубого обзора τ×K можно временно снизить "
+            f"GAME_5M_RECOVERY_D4A_STATS_WINDOW_DAYS (сейчас основной расчёт на {current_analysis_window_days}д)."
+        )
+    if smallest_comfortable is not None:
+        hints.append(
+            f"Окно ≥{smallest_comfortable}д даёт ≥{comfortable_gate_min} gate — комфортнее для устойчивого best τ по K."
+        )
+    if not hints:
+        hints.append(
+            f"Мало событий с gate (пороги {sufficient_gate_min}/{comfortable_gate_min}); оставьте окно "
+            f"{current_analysis_window_days}д или дождитесь новых TIME_EXIT_EARLY после D4a."
+        )
+    return {
+        "sufficient_gate_min": sufficient_gate_min,
+        "comfortable_gate_min": comfortable_gate_min,
+        "smallest_window_days_gate_ge_sufficient": smallest_sufficient,
+        "smallest_window_days_gate_ge_comfortable": smallest_comfortable,
+        "current_analysis_window_days": current_analysis_window_days,
+        "hints_ru": hints,
+    }
 
 
 def _build_recovery_scenario_backtest(
@@ -4489,6 +5215,7 @@ def analyze_trade_effectiveness(
             },
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
+            "game5m_catboost_fusion_entry_review": _build_game5m_catboost_fusion_entry_review(strategy, [], []),
         }
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
             htr = _build_game5m_hanger_tune_json_review([], {"total": 0}, strategy=strategy)
@@ -4520,6 +5247,9 @@ def analyze_trade_effectiveness(
             empty_payload["game5m_hold_recovery_export"] = None
         empty_payload["game5m_recovery_model_status"] = _build_game5m_recovery_model_status()
         empty_payload["recovery_scenario_backtest"] = _build_recovery_scenario_backtest([], {}, strategy=strategy)
+        empty_payload["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
+            [], te0, [], {}, strategy=strategy
+        )
         return empty_payload
 
     tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
@@ -4546,8 +5276,11 @@ def analyze_trade_effectiveness(
     game_5m_config_hints.extend(_config_hints_from_time_exit_early_review(te_review))
     entry_review = _build_entry_underperformance_review(effects, limit=8)
     catboost_entry_backtest = _build_catboost_entry_backtest(strategy, closed, effects)
+    catboost_fusion_entry_review = _build_game5m_catboost_fusion_entry_review(strategy, closed, effects)
     hanger_v2_review = _build_hanger_v2_review(effects)
     continuation_gate_review = _build_continuation_gate_review(effects)
+    recovery_d4a_live = _build_recovery_ml_d4a_live_review(closed, te_review, effects, cache, strategy=strategy)
+    _maybe_attach_recovery_d4a_shallow_for_analyzer(recovery_d4a_live, days=days, strategy=strategy)
     payload: Dict[str, Any] = {
         "meta": {
             "days": days,
@@ -4574,12 +5307,14 @@ def analyze_trade_effectiveness(
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
+        "game5m_catboost_fusion_entry_review": catboost_fusion_entry_review,
         "game5m_catboost_status": _build_game5m_catboost_status(),
         "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
         "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
         "portfolio_catboost_status": _build_portfolio_catboost_status(),
         "time_exit_early_review": te_review,
         "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review),
+        "recovery_ml_d4a_live_review": recovery_d4a_live,
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
@@ -4654,6 +5389,7 @@ def analyze_trade_effectiveness_focused(
             },
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
+            "game5m_catboost_fusion_entry_review": _build_game5m_catboost_fusion_entry_review(strategy, [], []),
         }
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
             htr_f = _build_game5m_hanger_tune_json_review([], {"total": 0}, strategy=strategy)
@@ -4685,6 +5421,9 @@ def analyze_trade_effectiveness_focused(
             empty_focus["game5m_hold_recovery_export"] = None
         empty_focus["game5m_recovery_model_status"] = _build_game5m_recovery_model_status()
         empty_focus["recovery_scenario_backtest"] = _build_recovery_scenario_backtest([], {}, strategy=strategy)
+        empty_focus["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
+            [], te_f0, [], {}, strategy=strategy
+        )
         return empty_focus
 
     tickers_list = [str(t.ticker) for t in filtered if getattr(t, "ticker", None)]
@@ -4707,8 +5446,13 @@ def analyze_trade_effectiveness_focused(
     game_5m_config_hints.extend(_config_hints_from_time_exit_early_review(te_review_f))
     entry_review = _build_entry_underperformance_review(effects, limit=8)
     catboost_entry_backtest = _build_catboost_entry_backtest(strategy, filtered, effects)
+    catboost_fusion_entry_review = _build_game5m_catboost_fusion_entry_review(strategy, filtered, effects)
     hanger_v2_review = _build_hanger_v2_review(effects)
     continuation_gate_review = _build_continuation_gate_review(effects)
+    recovery_d4a_live_f = _build_recovery_ml_d4a_live_review(
+        filtered, te_review_f, effects, cache, strategy=strategy
+    )
+    _maybe_attach_recovery_d4a_shallow_for_analyzer(recovery_d4a_live_f, days=days, strategy=strategy)
 
     payload: Dict[str, Any] = {
         "meta": {
@@ -4735,12 +5479,14 @@ def analyze_trade_effectiveness_focused(
         "game_5m_config_hints": game_5m_config_hints,
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
+        "game5m_catboost_fusion_entry_review": catboost_fusion_entry_review,
         "game5m_catboost_status": _build_game5m_catboost_status(),
         "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
         "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
         "portfolio_catboost_status": _build_portfolio_catboost_status(),
         "time_exit_early_review": te_review_f,
         "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review_f),
+        "recovery_ml_d4a_live_review": recovery_d4a_live_f,
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
@@ -4904,6 +5650,49 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             top_m = sorted(((k, int(v)) for k, v in missing.items() if isinstance(v, int)), key=lambda kv: -kv[1])[:2]
             if top_m:
                 lines.append("• delta missing: " + ", ".join([f"{k}={v}" for k, v in top_m]))
+    d4a = report.get("recovery_ml_d4a_live_review") or {}
+    if isinstance(d4a, dict) and d4a.get("mode") == "ok":
+        lines.append("")
+        lines.append("Recovery ML D4a (live телеметрия в SELL context_json):")
+        lines.append(
+            f"• TE GAME_5M={d4a.get('time_exit_early_game5m_in_window')}, с gate={d4a.get('trades_with_recovery_gate')}, "
+            f"n_P={d4a.get('trades_gate_ok_with_proba')}, n_ΔK={d4a.get('trades_with_delta_k')} "
+            f"(defer-bars={d4a.get('defer_delay_bars_config')}, live_τ={d4a.get('live_tau_hold_config')})"
+        )
+        rw = d4a.get("recorded_would_defer_summary")
+        if isinstance(rw, dict) and rw.get("count"):
+            lines.append(
+                f"• recorded would_defer: n={rw.get('count')}, meanΔ={rw.get('mean_delta_delayed_minus_actual_pct')}, "
+                f"mean post-MFE 1h={rw.get('mean_post_exit_mfe_pct_1h')}"
+            )
+        sweep = d4a.get("tau_sweep") or []
+        lt = d4a.get("live_tau_hold_config")
+        pick = None
+        if isinstance(lt, (int, float)) and sweep:
+            pick = next(
+                (x for x in sweep if abs(float(x.get("tau") or 0) - float(lt)) < 1e-9),
+                None,
+            )
+        if isinstance(pick, dict):
+            lines.append(
+                f"• tau_sweep @ live τ: defer n={pick.get('defer_count')}, meanΔ={pick.get('mean_delta_delayed_minus_actual_pct')}"
+            )
+        btk = d4a.get("best_tau_by_k") or {}
+        if isinstance(btk, dict) and btk:
+            parts = []
+            for ks, row in sorted(btk.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
+                if isinstance(row, dict):
+                    parts.append(
+                        f"K={ks}: τ*={row.get('tau')}, meanΔ={row.get('mean_delta_delayed_minus_actual_pct')}, n={row.get('defer_count')}"
+                    )
+            if parts:
+                lines.append("• best τ by K (max mean Δ): " + " | ".join(parts[:8]))
+        wsg = d4a.get("window_suggestion") or {}
+        if isinstance(wsg, dict) and wsg.get("hints_ru"):
+            lines.append("• окно (shallow): " + " ".join(str(x) for x in (wsg.get("hints_ru") or [])[:2]))
+    elif isinstance(d4a, dict) and d4a.get("note"):
+        lines.append("")
+        lines.append(f"Recovery ML D4a: {d4a.get('note')}")
     cb = report.get("catboost_entry_backtest") or {}
     if cb.get("mode") == "game5m_entry_context":
         cal = cb.get("calibration") or {}

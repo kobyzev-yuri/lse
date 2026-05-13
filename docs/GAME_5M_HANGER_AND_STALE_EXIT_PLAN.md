@@ -2,7 +2,9 @@
 
 ## Текущий статус
 
-На 2026-04-29 мы находимся в **итерации 2**: rule-based диагностика + логирование для будущего ML.
+**Сводка по всем планам:** [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md).
+
+Ниже — детализация hanger/stale (исторически «итерация 2» с 2026-04-29; nightly ML-датасеты stuck/continuation и анализатор — уже в прод-контуре, см. тот же статус-док и `crontab/lse-docker.crontab`).
 
 Уже сделано:
 

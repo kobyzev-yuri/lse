@@ -127,8 +127,12 @@
 </div>
 
 <div class="card">
-    <h2>CatBoost на входе (бэктест) <code>catboost_entry_backtest</code></h2>
-    <p class="muted" style="font-size:0.9rem;">Для <strong>GAME_5M</strong> и <strong>ALL</strong> (только сделки с <code>entry_strategy=GAME_5M</code>): та же модель, что при живом входе, но признаки <strong>только из сохранённого <code>context_json</code> на BUY</strong> — проверка благоприятности входа vs факт <code>realized_pct</code>. Опционально: корреляция <code>estimated_upside_pct_day</code> на входе с результатом. Портфельная игра — блок пропускается (другой контекст).</p>
+    <h2>CatBoost GAME_5M (вход)</h2>
+    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Два среза: <strong>снимок из сделок</strong> (что сохранено в BUY <code>context_json</code> при входе — без логов крона) и <strong>бэктест скора</strong> vs <code>realized_pct</code>. Для старых сделок до деплоя расширенного дампа часть полей может отсутствовать.</p>
+    <h3 style="font-size:1rem;margin:0.5rem 0 0.35rem 0;color:#e2e8f0;">Снимок fusion / P по закрытым сделкам <code>game5m_catboost_fusion_entry_review</code></h3>
+    <div id="catboostFusionBlock" class="dashboard-text">—</div>
+    <h3 style="font-size:1rem;margin:0.85rem 0 0.35rem 0;color:#e2e8f0;">Бэктест скора <code>catboost_entry_backtest</code></h3>
+    <p class="muted" style="font-size:0.86rem;margin:0 0 0.45rem 0;">Для <strong>GAME_5M</strong> и <strong>ALL</strong> (только сделки с <code>entry_strategy=GAME_5M</code>): пересчёт P из сохранённого контекста vs факт.</p>
     <div id="catboostBlock" class="dashboard-text">—</div>
 </div>
 
@@ -148,6 +152,16 @@
     <h2>Continuation gate <code>continuation_gate_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Сравнение log-only решения <code>continuation_gate</code> с фактическим недобором после закрытия. Помогает понять, где тейк был слишком ранним.</p>
     <div id="continuationGateBlock" class="dashboard-text">—</div>
+</div>
+
+<div class="card" style="border: 1px solid rgba(251, 191, 36, 0.35);">
+    <h2>Recovery ML D4a (live телеметрия) <code>recovery_ml_d4a_live_review</code></h2>
+    <p class="muted" style="font-size:0.9rem;">
+        Сопоставление <code>recovery_ml_time_exit_early</code> из SELL с пост-выходом (<code>time_exit_early_review.detail_rows</code>)
+        и контрфактом «K баров позже» (<code>GAME_5M_RECOVERY_LIVE_DEFER_BARS</code>). Таблица <strong>tau_sweep</strong> — политика как в кроне:
+        defer при <code>P ≥ τ</code> (не путать с офлайн <code>recovery_scenario_backtest</code>, там другой знак).
+    </p>
+    <div id="recoveryMlD4aBlock" class="dashboard-text">—</div>
 </div>
 
 <div class="card">
@@ -719,6 +733,72 @@ function toLine(r) {
     return `• ${esc(r.ticker)} #${esc(r.trade_id)}: результат ${Number(r.realized_pct).toFixed(2)}% | недобор ${Number(r.missed_upside_pct || 0).toFixed(2)}% | выход ${esc(r.exit_signal || '—')}`;
 }
 
+function renderCatboostFusionBlock(data) {
+    const el = document.getElementById('catboostFusionBlock');
+    if (!el) {
+        return;
+    }
+    const fr = data.game5m_catboost_fusion_entry_review || {};
+    if (fr.mode === 'skipped') {
+        el.innerHTML = '<span class="muted">' + esc(fr.note || '—') + '</span>';
+        return;
+    }
+    if (fr.mode !== 'game5m_entry_context') {
+        el.textContent = '—';
+        return;
+    }
+    const rt = fr.runtime || {};
+    let html = '<p style="margin:0 0 0.45rem 0;font-size:0.88rem;color:#94a3b8;">' + esc(fr.description || '') + '</p>';
+    html += '<p style="margin:0.35rem 0;font-size:0.88rem;">Текущий конфиг (на сервере при расчёте): ';
+    html += '<code>ENABLED=' + esc(rt.GAME_5M_CATBOOST_ENABLED) + '</code> · ';
+    html += '<code>FUSION=' + esc(rt.GAME_5M_CATBOOST_FUSION) + '</code> · ';
+    html += '<code>HOLD_BELOW_P=' + esc(rt.GAME_5M_CATBOOST_HOLD_BELOW_P) + '</code></p>';
+    html += '<p style="margin:0.35rem 0;">Сделок в окне: <strong>' + esc(fr.trades_considered) + '</strong> · ';
+    html += 'со снимком CatBoost/core в JSON: <strong>' + esc(fr.trades_with_catboost_snapshot) + '</strong></p>';
+    html += '<p style="margin:0.35rem 0;">Контрфакт при текущем пороге P (см. <code>metric_definitions.game5m_catboost_fusion_entry_review</code>): ';
+    html += '«не вошли бы» — <strong>' + esc(fr.would_hold_at_runtime_threshold_count) + '</strong>';
+    const br = fr.would_hold_breakdown || {};
+    if (br.among_hypothetical_holds_would_be_losses != null) {
+        html += ' (из них убытков: <strong>' + esc(br.among_hypothetical_holds_would_be_losses) + '</strong>, ';
+        html += 'плюсов: <strong>' + esc(br.among_hypothetical_holds_would_be_wins) + '</strong>)';
+    }
+    html += '</p>';
+    if (fr.context_coverage_note) {
+        html += '<p class="muted" style="margin:0.45rem 0 0.5rem 0;font-size:0.84rem;">' + esc(fr.context_coverage_note) + '</p>';
+    }
+    const rows = Array.isArray(fr.per_trade_recent) ? fr.per_trade_recent : [];
+    if (!rows.length) {
+        html += '<p class="muted">Нет строк (нет закрытых сделок в выборке).</p>';
+        el.innerHTML = html;
+        return;
+    }
+    html += '<div style="overflow-x:auto;margin-top:0.5rem;"><table style="width:100%;min-width:720px;border-collapse:collapse;font-size:0.82rem;">';
+    html += '<thead><tr style="text-align:left;border-bottom:1px solid rgba(148,163,184,0.35);">';
+    html += '<th style="padding:6px 8px;">id</th><th style="padding:6px 8px;">ticker</th>';
+    html += '<th style="padding:6px 8px;">branch</th><th style="padding:6px 8px;">core→eff</th>';
+    html += '<th style="padding:6px 8px;">P</th><th style="padding:6px 8px;">status</th>';
+    html += '<th style="padding:6px 8px;">ниже P?</th><th style="padding:6px 8px;">realized</th></tr></thead><tbody>';
+    rows.forEach(function (row) {
+        const core = row.technical_decision_core != null ? String(row.technical_decision_core) : '—';
+        const eff = row.technical_decision_effective != null ? String(row.technical_decision_effective) : '—';
+        const wh = row.would_hold_at_runtime_p_threshold ? '<span style="color:#fca5a5;">да</span>' : '<span style="color:#86efac;">нет</span>';
+        const p = row.catboost_entry_proba_good != null ? esc(row.catboost_entry_proba_good) : '—';
+        const st = row.catboost_signal_status != null ? esc(row.catboost_signal_status) : '—';
+        html += '<tr style="border-bottom:1px solid rgba(30,41,59,0.55);vertical-align:top;">';
+        html += '<td style="padding:6px 8px;"><code>' + esc(row.trade_id) + '</code></td>';
+        html += '<td style="padding:6px 8px;">' + esc(row.ticker) + '</td>';
+        html += '<td style="padding:6px 8px;"><code style="font-size:0.78rem;">' + esc(row.technical_entry_branch || '—') + '</code></td>';
+        html += '<td style="padding:6px 8px;"><code style="font-size:0.78rem;">' + esc(core) + '→' + esc(eff) + '</code></td>';
+        html += '<td style="padding:6px 8px;">' + p + '</td>';
+        html += '<td style="padding:6px 8px;">' + st + '</td>';
+        html += '<td style="padding:6px 8px;">' + wh + '</td>';
+        html += '<td style="padding:6px 8px;">' + esc(row.realized_pct) + '%</td>';
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+}
+
 function renderCatboostBlock(data) {
     const el = document.getElementById('catboostBlock');
     if (!el) {
@@ -905,6 +985,128 @@ function renderContinuationGateBlock(data) {
     el.innerHTML = html;
 }
 
+function renderRecoveryMlD4aBlock(data) {
+    const el = document.getElementById('recoveryMlD4aBlock');
+    if (!el) {
+        return;
+    }
+    const r = data.recovery_ml_d4a_live_review || {};
+    const mode = r.mode || '—';
+    if (mode === 'skipped' || mode === 'no_live_gate') {
+        el.innerHTML = '<span class="muted">' + esc(r.note || mode) + '</span>';
+        return;
+    }
+    let html = '';
+    html += esc(r.note || '') + '<br><br>';
+    const wsug = r.window_suggestion || {};
+    if (wsug && Array.isArray(wsug.hints_ru) && wsug.hints_ru.length) {
+        html += '<div style="border-left:3px solid #38bdf8;padding-left:0.65rem;margin:0 0 0.65rem 0;color:#e2e8f0;">';
+        html += '<strong>Подсказка по окну (пересмотр)</strong><ul style="margin:0.35rem 0 0 1rem;">';
+        wsug.hints_ru.forEach(function (h) {
+            html += '<li>' + esc(h) + '</li>';
+        });
+        html += '</ul></div>';
+    }
+    const shallow = r.shallow_gate_by_window_days || {};
+    const byw = shallow.by_window_days || {};
+    if (shallow && typeof byw === 'object' && Object.keys(byw).length) {
+        html += '<p style="margin:0 0 0.35rem 0;"><strong>TE / gate по календарным дням</strong> (без OHLC; те же сделки, что в БД за lookback)</p>';
+        html += '<table class="forecast-table" role="table"><thead><tr><th>окно</th><th>TE</th><th>+gate</th><th>+P</th></tr></thead><tbody>';
+        Object.keys(byw).sort(function (a, b) { return parseInt(a, 10) - parseInt(b, 10); }).forEach(function (k) {
+            const row = byw[k] || {};
+            html += '<tr><td class="num">' + esc(k) + 'd</td><td class="num">' + esc(row.time_exit_early_game5m) + '</td>';
+            html += '<td class="num">' + esc(row.with_recovery_gate) + '</td><td class="num">' + esc(row.with_recovery_proba) + '</td></tr>';
+        });
+        html += '</tbody></table><br>';
+    }
+    html += '<strong>Окно</strong>: TIME_EXIT_EARLY GAME_5M = <code>' + esc(r.time_exit_early_game5m_in_window) + '</code>, ';
+    html += 'с <code>recovery_ml_time_exit_early</code> = <code>' + esc(r.trades_with_recovery_gate) + '</code>, ';
+    html += 'с P = <code>' + esc(r.trades_gate_ok_with_proba) + '</code>, ';
+    html += 'с Δ(K баров) = <code>' + esc(r.trades_with_delta_k) + '</code><br>';
+    html += '<strong>Конфиг</strong>: <code>GAME_5M_RECOVERY_LIVE_TAU_HOLD</code>=' + esc(r.live_tau_hold_config) + ', ';
+    html += '<code>GAME_5M_RECOVERY_LIVE_DEFER_BARS</code>=' + esc(r.defer_delay_bars_config) + ', ';
+    html += 'K для анализа: <code>' + esc((r.k_bars_evaluated || []).join(',')) + '</code>, ';
+    html += 'min defer для best τ: <code>' + esc(r.min_defer_for_best_tau) + '</code><br><br>';
+    const ndk = r.n_delta_by_k || {};
+    if (ndk && typeof ndk === 'object' && Object.keys(ndk).length) {
+        html += '<strong>n с Δ по K</strong>: <code>' + esc(JSON.stringify(ndk)) + '</code><br><br>';
+    }
+    const btk = r.best_tau_by_k || {};
+    if (btk && typeof btk === 'object' && Object.keys(btk).length) {
+        html += '<p style="margin:0 0 0.35rem 0;"><strong>best τ по K</strong> (max mean Δ при min defer; иначе n≥1)</p><ul style="margin:0;padding-left:1.1rem;">';
+        Object.keys(btk).sort(function (a, b) { return parseInt(a, 10) - parseInt(b, 10); }).forEach(function (k) {
+            const row = btk[k] || {};
+            html += '<li>K=' + esc(k) + ': τ*=<strong>' + esc(row.tau) + '</strong>, meanΔ=' + esc(row.mean_delta_delayed_minus_actual_pct) + ', defer n=' + esc(row.defer_count) + '</li>';
+        });
+        html += '</ul>';
+    }
+    const sweep = Array.isArray(r.tau_sweep) ? r.tau_sweep : [];
+    if (sweep.length) {
+        html += '<p style="margin:0.75rem 0 0.35rem 0;"><strong>tau_sweep</strong> для primary K=<code>' + esc(r.defer_delay_bars_config) + '</code> (defer если P≥τ)</p>';
+        html += '<table class="forecast-table" role="table"><thead><tr>';
+        html += '<th>τ</th><th>n defer</th><th>mean Δ%</th><th>mean post-MFE 1h %</th></tr></thead><tbody>';
+        sweep.forEach(function (row) {
+            html += '<tr><td class="num">' + esc(row.tau) + '</td><td class="num">' + esc(row.defer_count) + '</td>';
+            html += '<td class="num">' + esc(row.mean_delta_delayed_minus_actual_pct != null ? row.mean_delta_delayed_minus_actual_pct : '—') + '</td>';
+            html += '<td class="num">' + esc(row.mean_post_exit_mfe_pct_1h != null ? row.mean_post_exit_mfe_pct_1h : '—') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    const tsbk = r.tau_sweep_by_k || {};
+    if (tsbk && typeof tsbk === 'object' && Object.keys(tsbk).length) {
+        html += '<p style="margin:0.85rem 0 0.35rem 0;"><strong>tau_sweep_by_k</strong> (все K из конфига)</p>';
+        Object.keys(tsbk).sort(function (a, b) { return parseInt(a, 10) - parseInt(b, 10); }).forEach(function (k) {
+            const rows = tsbk[k] || [];
+            if (!Array.isArray(rows) || !rows.length) return;
+            html += '<div style="margin:0.4rem 0 0.2rem 0;font-weight:600;color:#cbd5e1;">K=' + esc(k) + '</div>';
+            html += '<table class="forecast-table" role="table" style="margin-bottom:0.5rem;"><thead><tr>';
+            html += '<th>τ</th><th>n</th><th>mean Δ%</th><th>mean post-MFE</th></tr></thead><tbody>';
+            rows.forEach(function (row) {
+                html += '<tr><td class="num">' + esc(row.tau) + '</td><td class="num">' + esc(row.defer_count) + '</td>';
+                html += '<td class="num">' + esc(row.mean_delta_delayed_minus_actual_pct != null ? row.mean_delta_delayed_minus_actual_pct : '—') + '</td>';
+                html += '<td class="num">' + esc(row.mean_post_exit_mfe_pct_1h != null ? row.mean_post_exit_mfe_pct_1h : '—') + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        });
+    }
+    const buckets = Array.isArray(r.p_buckets) ? r.p_buckets : [];
+    if (buckets.length) {
+        html += '<p style="margin:0.85rem 0 0.25rem 0;"><strong>P-бакеты</strong> (mean Δ для primary K)</p>';
+        html += '<table class="forecast-table" role="table"><thead><tr>';
+        html += '<th>диапазон P</th><th>n</th><th>mean post-MFE 1h</th><th>premature rate</th><th>mean Δ%</th></tr></thead><tbody>';
+        buckets.forEach(function (b) {
+            const md = b.mean_delta_primary_k_pct != null ? b.mean_delta_primary_k_pct : b.mean_delta_if_available;
+            html += '<tr><td>' + esc(b.p_range) + '</td><td class="num">' + esc(b.count) + '</td>';
+            html += '<td class="num">' + esc(b.mean_post_exit_mfe_pct_1h != null ? b.mean_post_exit_mfe_pct_1h : '—') + '</td>';
+            html += '<td class="num">' + esc(b.premature_rate != null ? b.premature_rate : '—') + '</td>';
+            html += '<td class="num">' + esc(md != null ? md : '—') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    const rw = r.recorded_would_defer_summary;
+    if (rw && rw.count) {
+        html += '<p style="margin:0.75rem 0 0.25rem 0;"><strong>Записанные would_defer_exit=true</strong> (n=' + esc(rw.count) + '): ';
+        html += 'mean Δ%=' + esc(rw.mean_delta_delayed_minus_actual_pct != null ? rw.mean_delta_delayed_minus_actual_pct : '—');
+        html += ', mean post-MFE 1h=' + esc(rw.mean_post_exit_mfe_pct_1h != null ? rw.mean_post_exit_mfe_pct_1h : '—') + '</p>';
+    }
+    const pt = Array.isArray(r.per_trade_recent) ? r.per_trade_recent : [];
+    if (pt.length) {
+        html += '<p style="margin:0.75rem 0 0.25rem 0;"><strong>Последние сделки</strong> (trade_id ↓)</p>';
+        html += '<table class="forecast-table" role="table" style="font-size:0.88rem;"><thead><tr>';
+        html += '<th>#</th><th>tkr</th><th>P</th><th>defer?</th><th>post-MFE 1h</th><th>Δ K%</th><th>prem?</th></tr></thead><tbody>';
+        pt.slice(0, 20).forEach(function (x) {
+            html += '<tr><td class="num">' + esc(x.trade_id) + '</td><td>' + esc(x.ticker) + '</td>';
+            html += '<td class="num">' + esc(x.recovery_proba != null ? x.recovery_proba : '—') + '</td>';
+            html += '<td>' + esc(x.would_defer_exit_recorded === true ? 'да' : (x.would_defer_exit_recorded === false ? 'нет' : '—')) + '</td>';
+            html += '<td class="num">' + esc(x.post_exit_mfe_pct_1h != null ? x.post_exit_mfe_pct_1h : '—') + '</td>';
+            html += '<td class="num">' + esc(x.delta_delayed_minus_actual_pct != null ? x.delta_delayed_minus_actual_pct : '—') + '</td>';
+            html += '<td>' + esc(x.likely_premature_whipsaw_1h ? 'да' : 'нет') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    el.innerHTML = html || '<span class="muted">Нет данных.</span>';
+}
+
 async function runAnalyzer() {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
@@ -920,6 +1122,8 @@ async function runAnalyzer() {
     const hangerV2Block = document.getElementById('hangerV2Block');
     const hangerTuneJsonBlock = document.getElementById('hangerTuneJsonBlock');
     const continuationGateBlock = document.getElementById('continuationGateBlock');
+    const recoveryMlD4aBlock = document.getElementById('recoveryMlD4aBlock');
+    const catboostFusionBlock = document.getElementById('catboostFusionBlock');
     const applyBtn = document.getElementById('applyEnvBtn');
     const applyStatus = document.getElementById('applyStatus');
     summary.innerHTML = 'Загрузка...';
@@ -929,6 +1133,12 @@ async function runAnalyzer() {
     hangerV2Block.innerHTML = '—';
     hangerTuneJsonBlock.innerHTML = '—';
     continuationGateBlock.innerHTML = '—';
+    if (recoveryMlD4aBlock) {
+        recoveryMlD4aBlock.innerHTML = '—';
+    }
+    if (catboostFusionBlock) {
+        catboostFusionBlock.innerHTML = '—';
+    }
     llmBlock.textContent = '—';
     envBlock.textContent = '—';
     envManual.textContent = '—';
@@ -945,10 +1155,12 @@ async function runAnalyzer() {
             summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(data.detail || r.statusText)}</span>`;
             return;
         }
+        renderCatboostFusionBlock(data);
         renderCatboostBlock(data);
         renderHangerV2Block(data);
         renderHangerTuneJsonBlock(data);
         renderContinuationGateBlock(data);
+        renderRecoveryMlD4aBlock(data);
         const s = data.summary || {};
         if (!s.total) {
             summary.innerHTML = 'За период нет закрытых сделок.';
