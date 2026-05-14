@@ -28,7 +28,7 @@
 
 - В рантайме `get_decision_5m()` ошибки загрузки пишутся в **`logger.debug`** (`log_return_multiday_forecast для TICKER: …`) — на проде по умолчанию часто не видно; при отладке поднимите уровень логгера для `services.recommend_5m` или `services.log_return_multiday_forecast`.
 - Однострочный итог в **текст reasoning** появляется только если `GAME_5M_MULTIDAY_LR_REG_APPEND_REASONING=true` (ключ `log_return_multiday_forecast_summary`).
-- **Обучение JSON-артефактов** (метрики по λ, in-sample RMSE по горизонтам): `python scripts/train_game5m_multiday_lr.py TICKER …` — строки **`INFO`** в консоли и опционально `--json-metrics-out path.json`.
+- **Обучение JSON-артефактов** (метрики по λ, in-sample RMSE по горизонтам): `python scripts/train_game5m_multiday_lr.py …` — строки **`INFO`** в консоли и опционально `--json-metrics-out path.json`. Список тикеров: вручную в конце команды, либо **`--tickers-source game5m`** (как игра 5m), **`--tickers-source config`** (FAST+MEDIUM+LONG из `config.env`), **`--tickers-source merged`** (как `/tickers` в Telegram: `quotes` ∪ конфиг).
 
 ---
 

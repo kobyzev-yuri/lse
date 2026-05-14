@@ -7,10 +7,17 @@
 
 Примеры:
   python scripts/train_game5m_multiday_lr.py AAPL MSFT
+  python scripts/train_game5m_multiday_lr.py --tickers-source game5m --dry-run
+  python scripts/train_game5m_multiday_lr.py --tickers-source config --json-metrics-out /tmp/mlr.json
+  python scripts/train_game5m_multiday_lr.py --tickers-source merged --source auto
   python scripts/train_game5m_multiday_lr.py NVDA --no-premarket
   python scripts/train_game5m_multiday_lr.py TSLA --source yahoo --period-days 500
-  python scripts/train_game5m_multiday_lr.py AAPL --json-metrics-out /tmp/mlr_metrics.json
-  python scripts/train_game5m_multiday_lr.py MSFT --dry-run
+
+Источники тикеров (как в рантайме / Telegram):
+  manual   — явный список в конце командной строки (по умолчанию).
+  game5m   — GAME_5M_TICKERS из config.env, иначе TICKERS_FAST (см. services.ticker_groups.get_tickers_game_5m).
+  config   — FAST + MEDIUM + LONG без дублей (get_config_ticker_symbols_upper_unique).
+  merged   — DISTINCT ticker из quotes ∪ группы конфига, затем sort — как /tickers в telegram_bot.
 """
 from __future__ import annotations
 
@@ -19,7 +26,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
@@ -28,9 +35,56 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def resolve_tickers_from_source(source: str, engine: Optional[Any]) -> List[str]:
+    """Список тикеров для обучения: см. --tickers-source в docstring."""
+    src = (source or "manual").strip().lower()
+    if src == "game5m":
+        from services.ticker_groups import get_tickers_game_5m
+
+        out = [str(t).strip().upper() for t in get_tickers_game_5m() if str(t).strip()]
+        return list(dict.fromkeys(out))
+    if src == "config":
+        from services.ticker_groups import get_config_ticker_symbols_upper_unique
+
+        return list(get_config_ticker_symbols_upper_unique())
+    if src == "merged":
+        from sqlalchemy import text
+
+        from services.ticker_groups import get_all_ticker_groups
+
+        from_quotes: List[str] = []
+        if engine is not None:
+            try:
+                with engine.connect() as conn:
+                    rows = conn.execute(text("SELECT DISTINCT ticker FROM quotes ORDER BY ticker"))
+                    from_quotes = [str(r[0]).strip().upper() for r in rows if r and r[0]]
+            except Exception as e:
+                logger.warning("merged: quotes DISTINCT failed: %s", e)
+        seen: set[str] = set()
+        ordered: List[str] = []
+        for t in from_quotes + get_all_ticker_groups():
+            u = str(t).strip().upper()
+            if u and u not in seen:
+                seen.add(u)
+                ordered.append(u)
+        return sorted(ordered)
+    raise ValueError(f"unknown tickers source: {source!r}")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Train multiday LR ridge JSON artifacts per ticker.")
-    p.add_argument("tickers", nargs="+", help="Ticker symbols, e.g. AAPL MSFT")
+    p.add_argument(
+        "tickers",
+        nargs="*",
+        default=[],
+        help="Ticker symbols when --tickers-source=manual (default). Ignored for game5m/config/merged.",
+    )
+    p.add_argument(
+        "--tickers-source",
+        choices=("manual", "game5m", "config", "merged"),
+        default="manual",
+        help="manual: CLI list; game5m: GAME_5M_TICKERS or TICKERS_FAST; config: FAST+MEDIUM+LONG; merged: quotes∪config (as /tickers)",
+    )
     p.add_argument("--period-days", type=int, default=400, help="Yahoo window if source needs Yahoo")
     p.add_argument(
         "--source",
@@ -71,6 +125,21 @@ def main() -> int:
     except Exception as e:
         logger.warning("DB engine unavailable: %s", e)
 
+    if args.tickers_source == "manual":
+        ticker_list = [str(x).strip().upper() for x in (args.tickers or []) if str(x).strip()]
+        if not ticker_list:
+            p.error("with --tickers-source=manual, pass at least one ticker, e.g. scripts/train_game5m_multiday_lr.py SNDK MU")
+    else:
+        if args.tickers:
+            logger.warning("Positional tickers ignored (--tickers-source=%s)", args.tickers_source)
+        try:
+            ticker_list = resolve_tickers_from_source(args.tickers_source, engine)
+        except ValueError as e:
+            p.error(str(e))
+        if not ticker_list:
+            p.error(f"--tickers-source={args.tickers_source!r} produced an empty list")
+        logger.info("Resolved %s tickers from %s (showing first 20): %s", len(ticker_list), args.tickers_source, ticker_list[:20])
+
     use_pm = not args.no_premarket and engine is not None
     if args.no_premarket:
         logger.info("Premarket DB features disabled (--no-premarket).")
@@ -79,7 +148,7 @@ def main() -> int:
 
     ok = 0
     metrics_rows: List[Dict[str, Any]] = []
-    for raw in args.tickers:
+    for raw in ticker_list:
         t = str(raw).strip().upper()
         if not t:
             continue
@@ -128,6 +197,7 @@ def main() -> int:
         metrics_rows.append(
             {
                 "ticker": t,
+                "tickers_source": args.tickers_source,
                 "artifact_version": art.get("artifact_version"),
                 "training_source": src,
                 "training": tr,
