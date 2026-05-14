@@ -24,6 +24,12 @@
 
 Таким образом, данные и форматирование сообщений 5m идут из одних и тех же модулей во всех приложениях.
 
+### Где в логах мультидневный ridge
+
+- В рантайме `get_decision_5m()` ошибки загрузки пишутся в **`logger.debug`** (`log_return_multiday_forecast для TICKER: …`) — на проде по умолчанию часто не видно; при отладке поднимите уровень логгера для `services.recommend_5m` или `services.log_return_multiday_forecast`.
+- Однострочный итог в **текст reasoning** появляется только если `GAME_5M_MULTIDAY_LR_REG_APPEND_REASONING=true` (ключ `log_return_multiday_forecast_summary`).
+- **Обучение JSON-артефактов** (метрики по λ, in-sample RMSE по горизонтам): `python scripts/train_game5m_multiday_lr.py TICKER …` — строки **`INFO`** в консоли и опционально `--json-metrics-out path.json`.
+
 ---
 
 ## Данные в карточке (без LLM)
@@ -38,6 +44,7 @@
 | **Upside** | estimated_upside_pct_day, suggested_take_profit_price | Наш расчёт: апсайд на день (тейк), цель по цене |
 | **Downside** | estimated_downside_pct_day, prob_up, prob_down | Наш расчёт: риск просадки за день %; P(up)/P(down). Стоп (правило) — stop_loss_pct, только если GAME_5M_STOP_LOSS_ENABLED |
 | **Прогноз цены** | price_forecast_5m, price_forecast_5m_summary | Квантили p10/p50/p90 на 30/60/120 мин и P(цена>spot); см. `docs/GAME_5M_PRICE_FORECAST.md` |
+| **Мультидн. log-ret (ridge)** | log_return_multiday_forecast, log_return_multiday_forecast_summary; плоские `multiday_lr_horizon_{1,2,3}d_pct_vs_spot`, `multiday_lr_bias`, `multiday_lr_daily_last_date` | Дневные Yahoo/DB close + опц. премаркет из БД; горизонты **1–3 торговых дня** (не путать с 30/60/120 **минут** выше). Включение: `GAME_5M_MULTIDAY_LR_REG_ENABLED`. В карточке — отдельная таблица под блоком 30/60/120 м. |
 | **«Когда дроп» / откат** | pullback_from_high_pct, session_high, recent_bars_low_min | Откат от хая сессии %, уровень хая; при приближении к стопу — «риск дропа» |
 | **Техника** | price, rsi_5m, momentum_2h_pct, period_str | Цена, RSI, импульс 2ч, период данных |
 | **Контекст** | kb_news_impact, market_session.session_phase | Влияние новостей, премаркет/регулярная сессия |

@@ -40,6 +40,11 @@ FULL_ENTRY_KEYS = (
     "catboost_signal_note",
     # Прогноз цены 30/60/120 мин (лог-норм. по 5m) — для LLM и истории входа
     "price_forecast_5m", "price_forecast_5m_summary",
+    # Мультидневный ridge по дневным close (+ опц. премаркет БД) — горизонты 1–3 торговых дня
+    "log_return_multiday_forecast", "log_return_multiday_forecast_summary",
+    "multiday_lr_horizon_1d_pct_vs_spot", "multiday_lr_horizon_2d_pct_vs_spot", "multiday_lr_horizon_3d_pct_vs_spot",
+    "multiday_lr_horizon_1d_train_rmse_log", "multiday_lr_horizon_2d_train_rmse_log", "multiday_lr_horizon_3d_train_rmse_log",
+    "multiday_lr_bias", "multiday_lr_daily_last_date", "multiday_lr_method", "multiday_lr_premarket_db_used",
     # Время бара решения (get_decision_5m) — для графика / бэктеста, не только ts INSERT в trade_history
     "exit_bar_close_ts",
     "exit_bar_start_et",

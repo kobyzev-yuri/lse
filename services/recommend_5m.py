@@ -1134,6 +1134,12 @@ TECHNICAL_SIGNAL_KEYS = (
     "technical_entry_branch", "entry_strong_buy_downgraded", "entry_condition", "entry_intuition",
     # Прогноз цены на 30/60/120 мин (лог-нормаль по 5m лог-доходностям)
     "price_forecast_5m", "price_forecast_5m_summary",
+    # Ridge на дневных лог-доходностях 1–3 торговых дня + контекст 5m (см. log_return_multiday_forecast)
+    "log_return_multiday_forecast", "log_return_multiday_forecast_summary",
+    # Плоские поля мультидневного ridge (% vs spot по торговым дням 1/2/3, для карточек/правил/контекста сделки)
+    "multiday_lr_horizon_1d_pct_vs_spot", "multiday_lr_horizon_2d_pct_vs_spot", "multiday_lr_horizon_3d_pct_vs_spot",
+    "multiday_lr_horizon_1d_train_rmse_log", "multiday_lr_horizon_2d_train_rmse_log", "multiday_lr_horizon_3d_train_rmse_log",
+    "multiday_lr_bias", "multiday_lr_daily_last_date", "multiday_lr_method", "multiday_lr_premarket_db_used",
 )
 
 
@@ -2187,6 +2193,93 @@ def get_decision_5m(
                     out["target_mode"] = "forecast_60_120"
     except Exception as e:
         logger.debug("price_forecast_5m: %s", e)
+
+    # Наивный мультидневной прогноз лог-доходности: ridge на дневных close + хвост 5m в точке прогноза (опционально).
+    try:
+        mlr_on = (_gcv("GAME_5M_MULTIDAY_LR_REG_ENABLED", "false") or "false").strip().lower() in ("1", "true", "yes")
+    except Exception:
+        mlr_on = False
+    if mlr_on:
+        try:
+            from services.log_return_multiday_forecast import (
+                compute_log_return_multiday_forecast,
+                format_multiday_forecast_one_line,
+            )
+
+            try:
+                mlr_period = int((_gcv("GAME_5M_MULTIDAY_LR_REG_PERIOD_DAYS", "400") or "400").strip())
+            except (ValueError, TypeError):
+                mlr_period = 400
+            try:
+                mlr_lam = float((_gcv("GAME_5M_MULTIDAY_LR_REG_RIDGE_LAMBDA", "1.0") or "1.0").strip())
+            except (ValueError, TypeError):
+                mlr_lam = 1.0
+            try:
+                mlr_min = int((_gcv("GAME_5M_MULTIDAY_LR_REG_MIN_SAMPLES", "80") or "80").strip())
+            except (ValueError, TypeError):
+                mlr_min = 80
+            use5 = (_gcv("GAME_5M_MULTIDAY_LR_REG_USE_5M_TAIL", "true") or "true").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            mlr_engine = None
+            try:
+                from report_generator import get_engine
+
+                mlr_engine = get_engine()
+            except Exception:
+                pass
+            mlr_fc = compute_log_return_multiday_forecast(
+                ticker,
+                volatility_5m_pct=out.get("volatility_5m_pct"),
+                momentum_2h_pct=out.get("momentum_2h_pct"),
+                period_days=mlr_period,
+                ridge_lambda=mlr_lam,
+                min_train_rows=mlr_min,
+                use_intraday_features=use5,
+                db_engine=mlr_engine,
+            )
+            if mlr_fc:
+                out["log_return_multiday_forecast"] = mlr_fc
+                out["log_return_multiday_forecast_summary"] = format_multiday_forecast_one_line(mlr_fc)
+                hz_m = mlr_fc.get("horizons") or {}
+                for hk, suffix in (("1", "1d"), ("2", "2d"), ("3", "3d")):
+                    cell = hz_m.get(hk)
+                    if not isinstance(cell, dict):
+                        continue
+                    pp = cell.get("predicted_pct_vs_spot")
+                    trm = cell.get("train_rmse_log")
+                    if pp is not None:
+                        try:
+                            out[f"multiday_lr_horizon_{suffix}_pct_vs_spot"] = round(float(pp), 3)
+                        except (TypeError, ValueError):
+                            pass
+                    if trm is not None:
+                        try:
+                            out[f"multiday_lr_horizon_{suffix}_train_rmse_log"] = round(float(trm), 6)
+                        except (TypeError, ValueError):
+                            pass
+                bs = (mlr_fc.get("bias_summary") or "").strip()
+                if bs:
+                    out["multiday_lr_bias"] = bs
+                if mlr_fc.get("daily_last_date"):
+                    out["multiday_lr_daily_last_date"] = mlr_fc.get("daily_last_date")
+                if mlr_fc.get("method"):
+                    out["multiday_lr_method"] = mlr_fc.get("method")
+                if "premarket_db_used" in mlr_fc:
+                    out["multiday_lr_premarket_db_used"] = bool(mlr_fc.get("premarket_db_used"))
+                mlr_append = (_gcv("GAME_5M_MULTIDAY_LR_REG_APPEND_REASONING", "false") or "false").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                )
+                summ = out.get("log_return_multiday_forecast_summary")
+                if mlr_append and isinstance(summ, str) and summ.strip():
+                    reasoning = (reasoning + " [" + summ.strip() + "]").strip()
+                    out["reasoning"] = reasoning
+        except Exception as e:
+            logger.debug("log_return_multiday_forecast для %s: %s", ticker, e)
 
     # Совет по входу: ALLOW / CAUTION / AVOID — фильтр по новостям (KB), волатильности 5m и премаркет-гэпу.
     # Логика и согласование с чек-листом Квена (риск/ревард, мат. ожидание): docs/GAME_5M_WEB_CARDS.md

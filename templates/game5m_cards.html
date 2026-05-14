@@ -194,6 +194,39 @@
             }
             return '';
         }
+        function renderMultidayLrTable(c) {
+            var fc = c.log_return_multiday_forecast;
+            if (fc && fc.horizons && typeof fc.horizons === 'object') {
+                var keys = ['1', '2', '3'];
+                var rows = [];
+                for (var i = 0; i < keys.length; i++) {
+                    var h = fc.horizons[keys[i]];
+                    if (!h || typeof h !== 'object') continue;
+                    var pct = h.predicted_pct_vs_spot;
+                    var rmse = h.train_rmse_log;
+                    var pctStr = '—';
+                    if (pct != null && pct !== undefined && Number.isFinite(Number(pct))) {
+                        var p = Number(pct);
+                        pctStr = (p >= 0 ? '+' : '') + p.toFixed(2) + '%';
+                    }
+                    var rmseStr = (rmse != null && rmse !== undefined && Number.isFinite(Number(rmse))) ? Number(rmse).toFixed(4) : '—';
+                    rows.push('<tr><td>' + escapeHtml(keys[i] + ' торг. дн.') + '</td><td class="num">' + escapeHtml(pctStr) + '</td><td class="num">' + escapeHtml(rmseStr) + '</td></tr>');
+                }
+                if (rows.length) {
+                    var meta = [];
+                    if (fc.daily_last_date) meta.push('посл. день: ' + escapeHtml(String(fc.daily_last_date)));
+                    if (fc.premarket_db_used) meta.push('премаркет БД');
+                    var sub = meta.length ? '<div class="forecast-fallback" style="margin-top:0.2rem;">' + meta.join(' · ') + '</div>' : '';
+                    return '<table class="forecast-table" role="table"><thead><tr>' +
+                        '<th>Горизонт</th><th>% vs spot</th><th>train RMSE (log)</th></tr></thead><tbody>' +
+                        rows.join('') + '</tbody></table>' + sub;
+                }
+            }
+            if (c.log_return_multiday_forecast_summary) {
+                return '<div class="forecast-fallback">' + escapeHtml(c.log_return_multiday_forecast_summary) + '</div>';
+            }
+            return '';
+        }
         function renderCard(c) {
             const isNoData = c.decision === 'NO_DATA';
             const upside = c.estimated_upside_pct_day != null ? c.estimated_upside_pct_day : c.take_profit_pct;
@@ -249,6 +282,11 @@
             if (fcBlock) {
                 html += '<div class="block-title">Прогноз цены к spot (30/60/120 м, %)</div>';
                 html += fcBlock;
+            }
+            var mlrBlock = renderMultidayLrTable(c);
+            if (mlrBlock) {
+                html += '<div class="block-title">Мультидневный ridge (лог-доходность, торг. дни)</div>';
+                html += mlrBlock;
             }
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
             if (LSE_WEB_LLM_ENABLED) {

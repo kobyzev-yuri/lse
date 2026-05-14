@@ -70,6 +70,9 @@ def build_5m_technical_short_text(tech: Dict[str, Any], ticker: str) -> str:
     summ = tech.get("price_forecast_5m_summary")
     if summ:
         lines.append(f"Прогноз цены: {summ}")
+    mlr = tech.get("log_return_multiday_forecast_summary")
+    if mlr:
+        lines.append(f"Мультидн. log-ret (ridge): {mlr}")
     return "\n".join(s for s in lines if s)
 
 
@@ -147,6 +150,9 @@ def build_5m_entry_signal_text(
     summ = d5.get("price_forecast_5m_summary")
     if summ:
         lines.append(f"📈 Прогноз цены (p10–p50–p90): {summ}")
+    mlr_s = d5.get("log_return_multiday_forecast_summary")
+    if mlr_s:
+        lines.append(f"📅 Мультидневный ridge (1–3 торг. дня vs spot): {mlr_s}")
     entry_advice = d5.get("entry_advice")
     if entry_advice == "ALLOW":
         entry_rec = d5.get("entry_price_recommended")
