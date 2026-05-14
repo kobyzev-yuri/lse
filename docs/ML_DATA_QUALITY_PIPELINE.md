@@ -88,10 +88,11 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 | `scripts/train_portfolio_catboost.py` | Портфель; `--dry-run`, **`--json-metrics-out`**, плюс append в `PORTFOLIO_ML_REPORT_JSONL` |
 | `scripts/train_event_reaction_catboost.py` | Event / earnings (MVP): `event_reaction_dataset` → forward 5d log-ret; **`--json-metrics-out`** |
 | `scripts/train_game5m_recovery_catboost.py` | Recovery по JSONL |
+| **`scripts/train_game5m_multiday_lr.py`** | Multiday ridge (дневка 1–3 торг. дня); `--dry-run`, **`--json-metrics-out`**, `--tickers-source` — см. [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md) |
 | `scripts/run_daily_game5m_ml_pipeline.py` | Stuck + continuation CSV + CatBoost + `game5m_daily_ml_report.jsonl` |
-| **`scripts/run_ml_train_readiness_cron.py`** | Регулярный dry-run/full train + **гейты** + append **`ml_train_readiness.jsonl`** |
+| **`scripts/run_ml_train_readiness_cron.py`** | Регулярный dry-run/full train + **гейты** + append **`ml_train_readiness.jsonl`** (multiday в гейты **пока не входит**) |
 
-См. также [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md), [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md).
+См. также [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md), [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md).
 
 ### 5.1 Готовность к продакшену (гейты)
 
