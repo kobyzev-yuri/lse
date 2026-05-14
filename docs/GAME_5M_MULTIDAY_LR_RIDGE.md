@@ -44,7 +44,7 @@
 | **v1** | 7 дневных + 2 intraday (нули в train) |
 | **v2** | 7 дневных + 4 премаркет + 2 intraday |
 
-Офлайн-обучение и сохранение JSON: `scripts/train_game5m_multiday_lr.py` → каталог **`GAME_5M_MULTIDAY_LR_MODEL_DIR`** (по умолчанию `local/multiday_lr_models` относительно корня репо). **Текущий live-прогноз в `compute_log_return_multiday_forecast` артефакты с диска не подгружает** — ridge переоценивается на скользящем окне; артефакты нужны для метрик, сравнения весов и возможного перехода на `predict_from_artifact` позже.
+Офлайн-обучение и сохранение JSON: `scripts/train_game5m_multiday_lr.py` → каталог **`GAME_5M_MULTIDAY_LR_MODEL_DIR`**. На прод-боте по умолчанию (если переменная не задана и существует `/app/logs/ml/models/`) — **`/app/logs/ml/models/multiday_lr/`** (рядом с `.cbm`); локально без этого пути — `local/multiday_lr_models/` от корня репо. Явно задайте `GAME_5M_MULTIDAY_LR_MODEL_DIR` в `config.env`, если нужен другой том.
 
 ---
 

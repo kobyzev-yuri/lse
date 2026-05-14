@@ -38,14 +38,28 @@ PREMARKET_N = 4
 
 
 def multiday_lr_model_dir() -> Path:
+    """
+    Каталог JSON-артефактов по тикеру (TICKER.json). На VM с тем же bind-mount,
+    что и CatBoost, по умолчанию используем /app/logs/ml/models/multiday_lr, если
+    каталог существует; иначе — local/multiday_lr_models от корня репо.
+    Переопределение: GAME_5M_MULTIDAY_LR_MODEL_DIR в config.env.
+    """
     try:
         from config_loader import get_config_value
 
-        raw = (get_config_value("GAME_5M_MULTIDAY_LR_MODEL_DIR", "local/multiday_lr_models") or "").strip()
+        raw = (get_config_value("GAME_5M_MULTIDAY_LR_MODEL_DIR", "") or "").strip()
     except Exception:
         raw = ""
     if not raw:
-        raw = "local/multiday_lr_models"
+        app_ml = Path("/app/logs/ml/models/multiday_lr")
+        try:
+            parent = app_ml.parent
+            if parent.is_dir():
+                raw = str(app_ml)
+            else:
+                raw = "local/multiday_lr_models"
+        except OSError:
+            raw = "local/multiday_lr_models"
     p = Path(raw)
     if not p.is_absolute():
         p = Path(__file__).resolve().parent.parent / p
