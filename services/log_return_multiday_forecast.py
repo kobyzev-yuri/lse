@@ -111,53 +111,20 @@ def _aligned_lr(c: np.ndarray) -> np.ndarray:
     return out
 
 
-def compute_log_return_multiday_forecast(
+def _forecast_multiday_from_daily_series(
     ticker: str,
+    s: pd.Series,
+    daily_source_label: str,
     *,
-    volatility_5m_pct: Optional[float] = None,
-    momentum_2h_pct: Optional[float] = None,
-    period_days: int = 400,
-    horizons: Sequence[int] = HORIZONS_DEFAULT,
-    ridge_lambda: float = 1.0,
-    min_train_rows: int = 80,
-    use_intraday_features: bool = True,
-    db_engine: Any = None,
+    volatility_5m_pct: Optional[float],
+    momentum_2h_pct: Optional[float],
+    horizons: Sequence[int],
+    ridge_lambda: float,
+    min_train_rows: int,
+    use_intraday_features: bool,
+    db_engine: Any,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Возвращает словарь с прогнозами log-ret и % от spot, либо None при нехватке данных/ошибке.
-    db_engine: при наличии и GAME_5M_MULTIDAY_LR_USE_PREMARKET_DB — подмешиваются premarket_daily_features.
-    Источник дневных close: env ``GAME_5M_MULTIDAY_LR_DAILY_CLOSE_SOURCE`` = auto | quotes | yahoo (по умолчанию
-    **auto**: при ``db_engine`` сначала ``public.quotes``, при нехватке строк — Yahoo; как walk-forward анализатора).
-    """
-    try:
-        from config_loader import get_config_value as _gcv_src
-
-        src_pref = (_gcv_src("GAME_5M_MULTIDAY_LR_DAILY_CLOSE_SOURCE", "auto") or "auto").strip().lower()
-    except Exception:
-        src_pref = "auto"
-    if src_pref not in ("auto", "yahoo", "quotes"):
-        src_pref = "auto"
-
-    resolved_src = "none"
-    s: Optional[pd.Series] = None
-    if src_pref == "yahoo":
-        s = fetch_daily_close_series(ticker, period_days=period_days)
-        resolved_src = "yahoo" if s is not None else "none"
-    else:
-        from services.multiday_lr_pipeline import resolve_daily_close_series
-
-        s, resolved_src = resolve_daily_close_series(
-            ticker, period_days=period_days, engine=db_engine, source=src_pref
-        )
-        if (s is None or len(s) < min_train_rows) and src_pref == "auto":
-            s_yf = fetch_daily_close_series(ticker, period_days=period_days)
-            if s_yf is not None and len(s_yf) >= min_train_rows:
-                s, resolved_src = s_yf, "yahoo"
-            elif s_yf is not None and (s is None or len(s_yf) > len(s)):
-                s, resolved_src = s_yf, "yahoo"
-
-    if s is None or len(s) < min_train_rows:
-        return None
+    """Полный ridge-прогноз по уже выбранному ряду дневных close (quotes или Yahoo)."""
     c = s.values.astype(float)
     n = len(c)
     lr = _aligned_lr(c)
@@ -288,7 +255,7 @@ def compute_log_return_multiday_forecast(
 
     return {
         "ticker": ticker,
-        "daily_close_source": resolved_src,
+        "daily_close_source": daily_source_label,
         "method": "ridge_daily_lags_pm_db_plus_intraday_tail" if n_pm else "ridge_daily_lags_plus_intraday_tail",
         "daily_last_date": last_date_s,
         "ridge_lambda": float(ridge_lambda),
@@ -299,6 +266,99 @@ def compute_log_return_multiday_forecast(
         "premarket_db_used": bool(n_pm),
         "n_features": int(len(x_pred)),
     }
+
+
+def compute_log_return_multiday_forecast(
+    ticker: str,
+    *,
+    volatility_5m_pct: Optional[float] = None,
+    momentum_2h_pct: Optional[float] = None,
+    period_days: int = 400,
+    horizons: Sequence[int] = HORIZONS_DEFAULT,
+    ridge_lambda: float = 1.0,
+    min_train_rows: int = 80,
+    use_intraday_features: bool = True,
+    db_engine: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает словарь с прогнозами log-ret и % от spot, либо None при нехватке данных/ошибке.
+    db_engine: при наличии и GAME_5M_MULTIDAY_LR_USE_PREMARKET_DB — подмешиваются premarket_daily_features.
+    Источник дневных close: env ``GAME_5M_MULTIDAY_LR_DAILY_CLOSE_SOURCE`` = auto | quotes | yahoo (по умолчанию
+    **auto**: при ``db_engine`` сначала ``public.quotes``, при нехватке строк — Yahoo; как walk-forward анализатора).
+    """
+    try:
+        from config_loader import get_config_value as _gcv_src
+
+        src_pref = (_gcv_src("GAME_5M_MULTIDAY_LR_DAILY_CLOSE_SOURCE", "auto") or "auto").strip().lower()
+    except Exception:
+        src_pref = "auto"
+    if src_pref not in ("auto", "yahoo", "quotes"):
+        src_pref = "auto"
+
+    resolved_src = "none"
+    s: Optional[pd.Series] = None
+    if src_pref == "yahoo":
+        s = fetch_daily_close_series(ticker, period_days=period_days)
+        resolved_src = "yahoo" if s is not None else "none"
+    else:
+        from services.multiday_lr_pipeline import resolve_daily_close_series
+
+        s, resolved_src = resolve_daily_close_series(
+            ticker, period_days=period_days, engine=db_engine, source=src_pref
+        )
+        if (s is None or len(s) < min_train_rows) and src_pref == "auto":
+            s_yf = fetch_daily_close_series(ticker, period_days=period_days)
+            if s_yf is not None and len(s_yf) >= min_train_rows:
+                s, resolved_src = s_yf, "yahoo"
+            elif s_yf is not None and (s is None or len(s_yf) > len(s)):
+                s, resolved_src = s_yf, "yahoo"
+
+    if s is None or len(s) < min_train_rows:
+        logger.debug(
+            "multiday_lr_forecast_none ticker=%s reason=short_daily_series n=%s min=%s",
+            ticker,
+            len(s) if s is not None else None,
+            min_train_rows,
+        )
+        return None
+
+    r = _forecast_multiday_from_daily_series(
+        ticker,
+        s,
+        resolved_src,
+        volatility_5m_pct=volatility_5m_pct,
+        momentum_2h_pct=momentum_2h_pct,
+        horizons=horizons,
+        ridge_lambda=ridge_lambda,
+        min_train_rows=min_train_rows,
+        use_intraday_features=use_intraday_features,
+        db_engine=db_engine,
+    )
+    if r is None and src_pref != "quotes" and resolved_src == "quotes":
+        s_yf = fetch_daily_close_series(ticker, period_days=period_days)
+        if s_yf is not None and len(s_yf) >= min_train_rows:
+            r = _forecast_multiday_from_daily_series(
+                ticker,
+                s_yf,
+                "yahoo",
+                volatility_5m_pct=volatility_5m_pct,
+                momentum_2h_pct=momentum_2h_pct,
+                horizons=horizons,
+                ridge_lambda=ridge_lambda,
+                min_train_rows=min_train_rows,
+                use_intraday_features=use_intraday_features,
+                db_engine=db_engine,
+            )
+            if r is not None:
+                r["daily_close_source"] = "yahoo_fallback_after_quotes"
+    if r is None:
+        logger.warning(
+            "multiday_lr_forecast_none ticker=%s after_passes n_daily=%s resolved=%s",
+            ticker,
+            len(s),
+            resolved_src,
+        )
+    return r
 
 
 def format_multiday_forecast_one_line(fc: Optional[Dict[str, Any]]) -> str:

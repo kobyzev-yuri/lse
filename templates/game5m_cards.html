@@ -290,6 +290,10 @@
             if (mlrBlock) {
                 html += '<div class="block-title">Мультидневный ridge (лог-доходность, торг. дни)</div>';
                 html += mlrBlock;
+            } else if (c.multiday_lr_forecast_unavailable) {
+                html += '<div class="block-title">Мультидневный ridge (лог-доходность, торг. дни)</div>';
+                var why = c.multiday_lr_forecast_error ? escapeHtml(String(c.multiday_lr_forecast_error)) : 'Нет прогноза (мало валидных дневных строк / Yahoo). См. логи контейнера: multiday_lr_forecast_none.';
+                html += '<div class="forecast-fallback muted">' + why + '</div>';
             }
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
             if (LSE_WEB_LLM_ENABLED) {

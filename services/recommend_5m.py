@@ -1141,6 +1141,8 @@ TECHNICAL_SIGNAL_KEYS = (
     "multiday_lr_horizon_1d_train_rmse_log", "multiday_lr_horizon_2d_train_rmse_log", "multiday_lr_horizon_3d_train_rmse_log",
     "multiday_lr_bias", "multiday_lr_daily_last_date", "multiday_lr_method", "multiday_lr_premarket_db_used",
     "multiday_lr_daily_close_source",
+    "multiday_lr_forecast_unavailable",
+    "multiday_lr_forecast_error",
 )
 
 
@@ -2282,8 +2284,12 @@ def get_decision_5m(
                 if mlr_append and isinstance(summ, str) and summ.strip():
                     reasoning = (reasoning + " [" + summ.strip() + "]").strip()
                     out["reasoning"] = reasoning
+            else:
+                out["multiday_lr_forecast_unavailable"] = True
         except Exception as e:
             logger.debug("log_return_multiday_forecast для %s: %s", ticker, e)
+            out["multiday_lr_forecast_unavailable"] = True
+            out["multiday_lr_forecast_error"] = str(e)[:240]
 
     # Совет по входу: ALLOW / CAUTION / AVOID — фильтр по новостям (KB), волатильности 5m и премаркет-гэпу.
     # Логика и согласование с чек-листом Квена (риск/ревард, мат. ожидание): docs/GAME_5M_WEB_CARDS.md
