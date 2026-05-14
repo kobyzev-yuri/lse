@@ -190,7 +190,11 @@ def _forecast_multiday_from_daily_series(
     out_horizons: Dict[str, Any] = {}
     for h in horizons:
         hh = int(h)
-        y = np.array(targets.get(hh) or [], dtype=float)
+        raw_y = targets.get(hh)
+        if raw_y is None:
+            y = np.array([], dtype=float)
+        else:
+            y = np.asarray(raw_y, dtype=float)
         if len(y) != X_train.shape[0]:
             continue
         try:
