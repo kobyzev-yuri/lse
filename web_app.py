@@ -2068,13 +2068,16 @@ async def get_game5m_cards(days: int = 5):
         raise HTTPException(status_code=501, detail="Модули recommend_5m / ticker_groups недоступны")
     tickers = list(get_tickers_game_5m() or [])
     if not tickers:
-        return _to_jsonable(
-            {
-                "tickers": [],
-                "cards": [],
-                "updated_at": None,
-                "web_llm_enabled": web_llm_enabled(),
-            }
+        return JSONResponse(
+            content=_to_jsonable(
+                {
+                    "tickers": [],
+                    "cards": [],
+                    "updated_at": None,
+                    "web_llm_enabled": web_llm_enabled(),
+                }
+            ),
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
         )
     days = min(max(1, days), 7)
     cards = []
@@ -2089,13 +2092,16 @@ async def get_game5m_cards(days: int = 5):
         session = (d5 or {}).get("market_session") or {}
         card["session_phase"] = session.get("session_phase")
         cards.append(card)
-    return _to_jsonable(
-        {
-            "tickers": tickers,
-            "cards": cards,
-            "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
-            "web_llm_enabled": web_llm_enabled(),
-        }
+    return JSONResponse(
+        content=_to_jsonable(
+            {
+                "tickers": tickers,
+                "cards": cards,
+                "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
+                "web_llm_enabled": web_llm_enabled(),
+            }
+        ),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
 
 
@@ -2446,7 +2452,11 @@ async def get_game5m_card_llm(ticker: str):
 @app.get("/game5m/cards", response_class=HTMLResponse)
 async def game5m_cards_page(request: Request):
     """Страница карточек 5m для мониторинга в Telegram (компактный скролл, LLM по кнопке)."""
-    return HTMLResponse(render_template("game5m_cards.html", {"request": request}))
+    html = render_template("game5m_cards.html", {"request": request})
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
 
 
 @app.get("/api/portfolio/cards", response_class=JSONResponse)
