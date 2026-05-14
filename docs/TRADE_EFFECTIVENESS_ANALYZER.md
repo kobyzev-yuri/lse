@@ -38,6 +38,11 @@
 - В JSON: сводная **калибровка** (средний P при win/loss, квантили P vs win rate), массив **`per_trade`** (статус CatBoost, P, `realized_pct`, при наличии — `estimated_upside_pct_day_at_entry`, `prob_up_at_entry`, укороченный `price_forecast_5m_summary_excerpt`), опционально **`price_context_at_entry`** — корреляция сохранённого upside на входе с фактическим результатом (справочно).
 - Для **`PORTFOLIO`** блок осознанно **пропускается** (модель не про дневной портфель); отдельная модель — по плану в `docs/ML_GAME5M_CATBOOST.md` §9.
 
+### Multiday ridge OOS и арбитр ML (`multiday_lr_reality_check`, `ml_production_arbiter`)
+
+- **`multiday_lr_reality_check`**: walk-forward OOS по дневным `quotes` для тикеров GAME_5M (`walkforward_oos_multiday_single_ticker`), те же λ и премаркет, что в live; пул метрик по горизонтам 1/2/3d, вердикт `walkforward_production_verdict`, выборка строк `trade_alignment_sample` (прогноз на день входа vs log-факт и `realized_pct_trade` — разные шкалы).
+- **`ml_production_arbiter`**: сводка готовности к продакшену по multiday, CatBoost entry, портфельному CatBoost (RMSE из meta) и наличию recovery `.cbm`; **`conclusion_ru`** — готовый текст для оператора (рядом с LLM-сводкой), **не** меняет `config.env`.
+
 ### Hanger v2 и continuation gate
 
 Новые SELL `context_json` могут содержать:

@@ -136,6 +136,18 @@
     <div id="catboostBlock" class="dashboard-text">—</div>
 </div>
 
+<div class="card" style="border: 1px solid rgba(56, 189, 248, 0.35);">
+    <h2>Multiday ridge vs факт <code>multiday_lr_reality_check</code></h2>
+    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Walk-forward OOS по дневным <code>quotes</code> для тикеров GAME_5M (как в live: ridge λ из config, опционально премаркет). Срез по сделкам — справочно: log-ret vs <code>realized_pct</code> на разных шкалах.</p>
+    <div id="multidayLrBlock" class="dashboard-text">—</div>
+</div>
+
+<div class="card" style="border: 1px solid rgba(167, 139, 250, 0.35);">
+    <h2>Арбитр готовности ML <code>ml_production_arbiter</code></h2>
+    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Сводка для оператора: multiday OOS, CatBoost entry, портфельный CatBoost, recovery .cbm. Текст не меняет <code>config.env</code> — для финального заключения рядом с LLM.</p>
+    <div id="mlArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
+</div>
+
 <div class="card">
     <h2>Hanger v2 / stale exits <code>game5m_hanger_v2_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Разбор закрытых сделок по диагностике <code>position_state_v2</code>, сохранённой в SELL <code>context_json</code>. Live-наблюдение открытых позиций — отдельно по логам крона.</p>
@@ -853,6 +865,62 @@ function renderCatboostBlock(data) {
     el.innerHTML = html;
 }
 
+function renderMultidayLrBlock(data) {
+    const el = document.getElementById('multidayLrBlock');
+    if (!el) {
+        return;
+    }
+    const m = data.multiday_lr_reality_check || {};
+    if (m.mode === 'skipped' && m.note) {
+        el.innerHTML = '<span class="muted">' + esc(m.note) + '</span>';
+        return;
+    }
+    if (m.mode !== 'ok') {
+        el.innerHTML = '<span class="muted">' + esc(m.note || '—') + '</span>';
+        return;
+    }
+    let html = '<p style="margin:0 0 0.5rem 0;font-size:0.9rem;color:#cbd5e1;">' + esc(m.description || '') + '</p>';
+    html += '<p style="margin:0.35rem 0;">Вердикт (прод): <strong>' + esc(m.walkforward_production_verdict || '—') + '</strong> — ' +
+        esc(m.walkforward_verdict_rationale_ru || '') + '</p>';
+    html += '<p style="margin:0.35rem 0;font-size:0.88rem;">λ ridge: <code>' + esc(m.ridge_lambda_config) + '</code>, тикеров в OOS: ' +
+        esc((m.tickers_walkforward || []).length) + '</p>';
+    const ph = m.pooled_by_horizon || {};
+    ['1', '2', '3'].forEach(function (hk) {
+        const b = ph[hk];
+        if (!b || typeof b !== 'object') {
+            return;
+        }
+        html += '<p style="margin:0.25rem 0 0 0;font-size:0.88rem;">Горизонт ' + esc(hk) + 'd: средн. RMSE(log)≈ <strong>' +
+            esc(b.mean_rmse_oos_log_across_tickers) + '</strong>, знак≈ <strong>' + esc(b.mean_sign_accuracy) +
+            '</strong>, сумм. n=<strong>' + esc(b.n_points_sum) + '</strong></p>';
+    });
+    const sample = Array.isArray(m.trade_alignment_sample) ? m.trade_alignment_sample : [];
+    if (sample.length) {
+        html += '<p style="margin:0.6rem 0 0.25rem 0;font-size:0.88rem;color:#94a3b8;">Срез по сделкам (до 8):</p><ul style="margin:0;padding-left:1.1rem;font-size:0.85rem;">';
+        sample.slice(0, 8).forEach(function (row) {
+            html += '<li><code>' + esc(row.ticker) + '</code> #' + esc(row.trade_id) + ': realized=' + esc(row.realized_pct_trade) +
+                '%, pred1d=' + esc(row.pred_log_ret_1d) + ', act1d=' + esc(row.actual_log_ret_1d) + '</li>';
+        });
+        html += '</ul>';
+    }
+    el.innerHTML = html;
+}
+
+function renderMlArbiterBlock(data) {
+    const el = document.getElementById('mlArbiterBlock');
+    if (!el) {
+        return;
+    }
+    const a = data.ml_production_arbiter || {};
+    if (!a.conclusion_ru && !a.overall_verdict) {
+        el.textContent = '—';
+        return;
+    }
+    const ov = a.overall_verdict != null ? String(a.overall_verdict) : '—';
+    const body = a.conclusion_ru != null ? String(a.conclusion_ru) : '';
+    el.textContent = 'Итог: ' + ov + '\n\n' + body;
+}
+
 function renderHangerV2Block(data) {
     const el = document.getElementById('hangerV2Block');
     if (!el) {
@@ -1124,6 +1192,8 @@ async function runAnalyzer() {
     const continuationGateBlock = document.getElementById('continuationGateBlock');
     const recoveryMlD4aBlock = document.getElementById('recoveryMlD4aBlock');
     const catboostFusionBlock = document.getElementById('catboostFusionBlock');
+    const multidayLrBlock = document.getElementById('multidayLrBlock');
+    const mlArbiterBlock = document.getElementById('mlArbiterBlock');
     const applyBtn = document.getElementById('applyEnvBtn');
     const applyStatus = document.getElementById('applyStatus');
     summary.innerHTML = 'Загрузка...';
@@ -1138,6 +1208,12 @@ async function runAnalyzer() {
     }
     if (catboostFusionBlock) {
         catboostFusionBlock.innerHTML = '—';
+    }
+    if (multidayLrBlock) {
+        multidayLrBlock.innerHTML = '—';
+    }
+    if (mlArbiterBlock) {
+        mlArbiterBlock.textContent = '—';
     }
     llmBlock.textContent = '—';
     envBlock.textContent = '—';
@@ -1157,16 +1233,20 @@ async function runAnalyzer() {
         }
         renderCatboostFusionBlock(data);
         renderCatboostBlock(data);
+        renderMultidayLrBlock(data);
+        renderMlArbiterBlock(data);
         renderHangerV2Block(data);
         renderHangerTuneJsonBlock(data);
         renderContinuationGateBlock(data);
         renderRecoveryMlD4aBlock(data);
         const s = data.summary || {};
         if (!s.total) {
-            summary.innerHTML = 'За период нет закрытых сделок.';
-            return;
-        }
-        summary.innerHTML =
+            summary.innerHTML = 'За период нет закрытых сделок. Ниже — CatBoost, multiday OOS и арбитр ML по данным окна.';
+            topLosses.innerHTML = '—';
+            topMissed.innerHTML = '—';
+            topWinMissed.innerHTML = '—';
+        } else {
+            summary.innerHTML =
             `Сделок: <strong>${esc(s.total)}</strong> (<code>summary.total</code>)<br>` +
             `Доля прибыльных: <strong>${esc(s.win_rate_pct)}%</strong> (<code>win_rate_pct</code>)<br>` +
             `Суммарный PnL: <strong>${esc(s.sum_net_pnl_usd)}</strong> (<code>sum_net_pnl_usd</code>)<br>` +
@@ -1185,6 +1265,7 @@ async function runAnalyzer() {
         topMissed.innerHTML = missed.length ? missed.slice(0, 8).map(toLine).join('<br>') : '—';
         const winMissedLines = winMissed.filter(r => Number(r.missed_upside_pct || 0) >= 0.25).slice(0, 8);
         topWinMissed.innerHTML = winMissedLines.length ? winMissedLines.map(toLine).join('<br>') : '—';
+        }
         if (data.llm) {
             llmBlock.textContent = JSON.stringify(data.llm, null, 2);
         }

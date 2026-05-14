@@ -144,3 +144,9 @@ python scripts/train_game5m_multiday_lr.py --tickers-source merged --source auto
 | `services/multiday_lr_pipeline.py` | Quotes, премаркет, `build_training_stack`, `fit_artifact_for_ticker`, readiness-хелперы. |
 | `scripts/train_game5m_multiday_lr.py` | Обучение JSON, `--tickers-source`, `--json-metrics-out`. |
 | `tests/test_log_return_multiday_forecast.py` | Синтетические проверки без сети. |
+
+---
+
+## 10. Анализатор эффективности сделок
+
+В `services/trade_effectiveness_analyzer.py` каждый запуск добавляет в JSON **`multiday_lr_reality_check`** (walk-forward OOS ridge vs дневной факт) и **`ml_production_arbiter`** (сводный вердикт по multiday, CatBoost entry, портфельному CatBoost, recovery; поле **`conclusion_ru`** — текст для финального заключения оператора). См. `docs/TRADE_EFFECTIVENESS_ANALYZER.md`, раздел про эти ключи.

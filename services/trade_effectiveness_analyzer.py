@@ -15,6 +15,7 @@ import pandas as pd
 from report_generator import get_engine, load_trade_history, compute_closed_trade_pnls
 from services.recommend_5m import fetch_5m_ohlc
 from services.deal_params_5m import normalize_entry_context
+from services.analyzer_ml_arbiter import build_ml_production_arbiter, build_multiday_lr_reality_check
 from config_loader import get_config_value, load_config, is_editable_config_env_key
 
 # Дольше — считаем позицию «подвисшей» для пристрастного разбора порогов входа vs выхода.
@@ -112,6 +113,15 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
     "catboost_entry_backtest": (
         "Проверка CatBoost entry (GAME_5M): берём сохранённый BUY context_json → считаем P(благоприятный исход) "
         "и сопоставляем с фактом realized_pct. Нужен файл модели .cbm + meta.json и включение GAME_5M_CATBOOST_ENABLED."
+    ),
+    "multiday_lr_reality_check": (
+        "Walk-forward OOS ridge multiday (как в live): средний RMSE log-return и доля верного знака по горизонтам 1/2/3 дня "
+        "по дневным quotes для тикеров GAME_5M; trade_alignment_sample — прогноз на день входа vs факт log-ret и realized_pct "
+        "сделки (интрадей — другой масштаб, справочно)."
+    ),
+    "ml_production_arbiter": (
+        "Сводный вердикт готовности ML к продакшену: multiday ridge OOS, CatBoost entry, портфельный CatBoost (meta RMSE), "
+        "recovery .cbm. Поля overall_verdict, verdicts, conclusion_ru — ориентир для оператора; не меняют config."
     ),
     "game5m_catboost_fusion_entry_review": (
         "Таблица по закрытым сделкам: что было сохранено в BUY context_json при входе (technical_decision_core/effective, P, статус). "
@@ -5192,6 +5202,27 @@ def _attach_game5m_param_hypothesis_backtest_optional(
         payload["game5m_param_hypothesis_backtest"] = {"status": "error", "reason": str(exc)}
 
 
+def _analyzer_engine_safe():
+    try:
+        return get_engine()
+    except Exception:
+        return None
+
+
+def _attach_multiday_lr_and_ml_arbiter(
+    payload: Dict[str, Any],
+    *,
+    strategy: str,
+    closed_trades: List[Any],
+    effects: List[Any],
+) -> None:
+    eng = _analyzer_engine_safe()
+    payload["multiday_lr_reality_check"] = build_multiday_lr_reality_check(
+        eng, strategy, closed_trades=closed_trades, effects=effects
+    )
+    payload["ml_production_arbiter"] = build_ml_production_arbiter(payload)
+
+
 def analyze_trade_effectiveness(
     days: int = 7,
     strategy: str = "GAME_5M",
@@ -5216,6 +5247,7 @@ def analyze_trade_effectiveness(
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
             "game5m_catboost_fusion_entry_review": _build_game5m_catboost_fusion_entry_review(strategy, [], []),
+            "portfolio_catboost_status": _build_portfolio_catboost_status(),
         }
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
             htr = _build_game5m_hanger_tune_json_review([], {"total": 0}, strategy=strategy)
@@ -5250,6 +5282,7 @@ def analyze_trade_effectiveness(
         empty_payload["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
             [], te0, [], {}, strategy=strategy
         )
+        _attach_multiday_lr_and_ml_arbiter(empty_payload, strategy=strategy, closed_trades=[], effects=[])
         return empty_payload
 
     tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
@@ -5338,6 +5371,7 @@ def analyze_trade_effectiveness(
         export_recovery_ml=export_recovery_ml,
         recovery_ml_export_path=recovery_ml_export_path,
     )
+    _attach_multiday_lr_and_ml_arbiter(payload, strategy=strategy, closed_trades=closed, effects=effects)
     _save_analyzer_state(
         {
             "last_run": {
@@ -5390,6 +5424,7 @@ def analyze_trade_effectiveness_focused(
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
             "game5m_catboost_fusion_entry_review": _build_game5m_catboost_fusion_entry_review(strategy, [], []),
+            "portfolio_catboost_status": _build_portfolio_catboost_status(),
         }
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
             htr_f = _build_game5m_hanger_tune_json_review([], {"total": 0}, strategy=strategy)
@@ -5424,6 +5459,7 @@ def analyze_trade_effectiveness_focused(
         empty_focus["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
             [], te_f0, [], {}, strategy=strategy
         )
+        _attach_multiday_lr_and_ml_arbiter(empty_focus, strategy=strategy, closed_trades=[], effects=[])
         return empty_focus
 
     tickers_list = [str(t.ticker) for t in filtered if getattr(t, "ticker", None)]
@@ -5510,7 +5546,50 @@ def analyze_trade_effectiveness_focused(
         export_recovery_ml=export_recovery_ml,
         recovery_ml_export_path=recovery_ml_export_path,
     )
+    _attach_multiday_lr_and_ml_arbiter(payload, strategy=strategy, closed_trades=filtered, effects=effects)
     return payload
+
+
+def _append_multiday_lr_and_arbiter_text_lines(lines: List[str], report: Dict[str, Any]) -> None:
+    mlr = report.get("multiday_lr_reality_check") or {}
+    if mlr.get("mode") == "ok":
+        lines.append("")
+        lines.append("Multiday ridge (walk-forward OOS, дневные quotes):")
+        lines.append(
+            f"• Вердикт для прод: **{mlr.get('walkforward_production_verdict')}** — {mlr.get('walkforward_verdict_rationale_ru') or ''}"
+        )
+        ph = mlr.get("pooled_by_horizon") or {}
+        for hk, lab in (("1", "1d"), ("2", "2d"), ("3", "3d")):
+            b = ph.get(hk) if isinstance(ph, dict) else None
+            if not isinstance(b, dict):
+                continue
+            rm, sg, nsum = (
+                b.get("mean_rmse_oos_log_across_tickers"),
+                b.get("mean_sign_accuracy"),
+                b.get("n_points_sum"),
+            )
+            if rm is None and sg is None:
+                continue
+            lines.append(f"• Пул {lab}: средн. RMSE(log)≈{rm}, доля верного знака≈{sg}, сумм. n={nsum}")
+        tas = mlr.get("trade_alignment_sample") or []
+        if tas:
+            lines.append("• Выборка сделок (pred/actual log vs realized % — разные шкалы):")
+            for row in tas[:5]:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    f"  — {row.get('ticker')} #{row.get('trade_id')}: realized={row.get('realized_pct_trade')}% "
+                    f"pred1d={row.get('pred_log_ret_1d')} actual1d={row.get('actual_log_ret_1d')}"
+                )
+    elif mlr.get("note"):
+        lines.append("")
+        lines.append(f"Multiday ridge: {mlr.get('note')}")
+    arb = report.get("ml_production_arbiter") or {}
+    concl = arb.get("conclusion_ru")
+    if concl:
+        lines.append("")
+        lines.append("Арбитр готовности ML к продакшену:")
+        lines.extend(str(concl).split("\n"))
 
 
 def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
@@ -5525,8 +5604,12 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             if flt.get("trade_ids"):
                 parts.append("trade_id: " + ", ".join(str(x) for x in flt["trade_ids"]))
             extra = (" (" + "; ".join(parts) + ")") if parts else ""
-            return f"За выбранный период по узкому фильтру закрытых сделок не найдено{extra}."
-        return "За выбранный период закрытых сделок не найдено."
+            head = f"За выбранный период по узкому фильтру закрытых сделок не найдено{extra}."
+        else:
+            head = "За выбранный период закрытых сделок не найдено."
+        out0: List[str] = [head]
+        _append_multiday_lr_and_arbiter_text_lines(out0, report)
+        return "\n".join(out0)
     top = report.get("top_cases") or {}
     title = (
         "📊 Узкий анализ (выбранные сделки / окно)"
@@ -5717,6 +5800,7 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
     elif cb.get("note"):
         lines.append("")
         lines.append(f"CatBoost: {cb.get('note')}")
+    _append_multiday_lr_and_arbiter_text_lines(lines, report)
     entry_rev = report.get("entry_underperformance_review") or []
     if entry_rev:
         lines.append("")

@@ -551,6 +551,133 @@ def predict_from_artifact(
     }
 
 
+def walkforward_oos_multiday_single_ticker(
+    engine: Engine,
+    ticker: str,
+    *,
+    horizons: Sequence[int] = HORIZONS_DEFAULT,
+    ridge_lambda: float = 1.0,
+    min_train_rows: int = 80,
+    stride: int = 5,
+    max_eval_points: int = 72,
+    use_premarket_db: bool = True,
+) -> Dict[str, Any]:
+    """
+    OOS-оценка multiday ridge: на каждой дате end (последний день подвыборки) — тот же вектор предсказания,
+    что в live (последний close + премаркет на эту дату; 5m в train — нули), ridge на всей матрице X до end,
+    сравнение с фактическим log(c[end+h]/c[end]) по полному ряду quotes.
+
+    Не использует сохранённые JSON-артефакты — чистая проверка модели на истории БД.
+    """
+    t = str(ticker).strip().upper()
+    max_h = max(int(h) for h in horizons)
+    s = fetch_daily_close_series_from_quotes(engine, t, min_date=None)
+    if s is None or len(s) < min_train_rows + max_h + 15:
+        return {
+            "ticker": t,
+            "mode": "skip",
+            "skip_reason": "insufficient_quotes",
+            "n_closes": int(len(s)) if s is not None else 0,
+        }
+    dates = s.index
+    c_full = s.values.astype(float)
+    n = len(c_full)
+    pm_full: Optional[pd.DataFrame] = None
+    if use_premarket_db:
+        try:
+            d0 = dates[0]
+            min_d = d0.strftime("%Y-%m-%d") if hasattr(d0, "strftime") else str(d0)[:10]
+            pm_full = fetch_premarket_features_dataframe(engine, t, min_date=min_d)
+        except Exception as e:
+            logger.debug("walkforward pm %s: %s", t, e)
+            pm_full = None
+    use_pm = bool(use_premarket_db and pm_full is not None and not pm_full.empty)
+
+    start_end = max(15, min_train_rows) + max_h + 2
+    end_list = list(range(start_end, n - max_h - 1, max(1, int(stride))))
+    if len(end_list) > int(max_eval_points):
+        end_list = end_list[-int(max_eval_points) :]
+
+    per_h_err: Dict[int, List[float]] = {int(h): [] for h in horizons}
+    per_h_sign: Dict[int, List[int]] = {int(h): [] for h in horizons}
+    n_ok = 0
+
+    for end in end_list:
+        sub_dates = dates[: end + 1]
+        sub_c = c_full[: end + 1]
+        try:
+            X, ydict, _, _, n_pm = build_training_stack(
+                sub_dates, sub_c, horizons, pm_df=pm_full, use_premarket=use_pm
+            )
+        except Exception:
+            continue
+        if X is None or X.shape[0] < min_train_rows:
+            continue
+        lr = _aligned_lr(sub_c)
+        last_i = len(sub_c) - 1
+        row_base = _build_feature_row(sub_c, lr, last_i, vol_window=10, mean_window=5)
+        if row_base is None:
+            continue
+        pm_live = _premarket_vec_for_date(pm_full, sub_dates[-1]) if n_pm else np.zeros(0, dtype=float)
+        intra2 = np.zeros(2, dtype=float)
+        if n_pm:
+            x_pred = np.concatenate([row_base, pm_live, intra2])
+        else:
+            x_pred = np.concatenate([row_base, intra2])
+        ok_h = 0
+        for h in horizons:
+            hh = int(h)
+            y = ydict.get(hh)
+            if y is None or len(y) != X.shape[0]:
+                continue
+            try:
+                w = _ridge_weights(X, y, float(ridge_lambda))
+                pred = float(x_pred @ w)
+            except Exception:
+                continue
+            if end + hh >= n or c_full[end] <= 0 or c_full[end + hh] <= 0:
+                continue
+            act = float(math.log(c_full[end + hh] / c_full[end]))
+            if not math.isfinite(pred) or not math.isfinite(act):
+                continue
+            per_h_err[hh].append(pred - act)
+            hit = 1 if pred * act > 0 else (1 if abs(pred) < 1e-9 and abs(act) < 1e-9 else 0)
+            per_h_sign[hh].append(hit)
+            ok_h += 1
+        if ok_h == len(tuple(horizons)):
+            n_ok += 1
+
+    per_horizon: Dict[str, Any] = {}
+    for h in horizons:
+        hh = int(h)
+        errs = per_h_err.get(hh) or []
+        signs = per_h_sign.get(hh) or []
+        if not errs:
+            per_horizon[str(hh)] = {"n_points": 0, "rmse_oos_log": None, "mae_oos_log": None, "sign_accuracy": None}
+            continue
+        arr = np.array(errs, dtype=float)
+        rmse = float(math.sqrt(float(np.mean(arr**2))))
+        mae = float(np.mean(np.abs(arr)))
+        sa = float(sum(signs) / len(signs)) if signs else None
+        per_horizon[str(hh)] = {
+            "n_points": len(errs),
+            "rmse_oos_log": round(rmse, 6),
+            "mae_oos_log": round(mae, 6),
+            "sign_accuracy": round(sa, 4) if sa is not None else None,
+        }
+
+    return {
+        "ticker": t,
+        "mode": "ok",
+        "n_eval_dates": int(n_ok),
+        "stride": int(stride),
+        "ridge_lambda": float(ridge_lambda),
+        "use_premarket_db": use_pm,
+        "n_closes_total": int(n),
+        "per_horizon": per_horizon,
+    }
+
+
 def build_readiness_report(
     engine: Optional[Engine],
     *,
