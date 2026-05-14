@@ -53,11 +53,12 @@
 | Переменная | Смысл |
 |------------|--------|
 | `GAME_5M_MULTIDAY_LR_REG_ENABLED` | Вкл/выкл расчёт в `get_decision_5m` (по умолчанию выкл.). |
-| `GAME_5M_MULTIDAY_LR_REG_PERIOD_DAYS` | Глубина дневного ряда для Yahoo при отсутствии quotes. |
+| `GAME_5M_MULTIDAY_LR_REG_PERIOD_DAYS` | Глубина запроса к **Yahoo** (дневки), когда ряд берётся не из `quotes`. |
 | `GAME_5M_MULTIDAY_LR_REG_RIDGE_LAMBDA` | Фиксированный λ онлайн-ridge (не сетка, в отличие от `fit_artifact_for_ticker`). |
 | `GAME_5M_MULTIDAY_LR_REG_MIN_SAMPLES` | Минимум строк обучения. |
 | `GAME_5M_MULTIDAY_LR_REG_USE_5M_TAIL` | Подмешивать ли vol/mom в вектор предсказания. |
 | `GAME_5M_MULTIDAY_LR_USE_PREMARKET_DB` | Подгрузка премаркета из БД при наличии `db_engine` в вызове. |
+| `GAME_5M_MULTIDAY_LR_DAILY_CLOSE_SOURCE` | `auto` \| `quotes` \| `yahoo`: источник дневных close в онлайн-ridge (`compute_log_return_multiday_forecast`). По умолчанию **auto** — при `db_engine` сначала `public.quotes` (как walk-forward анализатора), при нехватке длины ряда для обучения — Yahoo. |
 | `GAME_5M_MULTIDAY_LR_REG_APPEND_REASONING` | Добавлять однострочник в `reasoning`. |
 
 Плоские поля для UI/контекста сделки: `multiday_lr_horizon_{1,2,3}d_pct_vs_spot`, `multiday_lr_bias`, и др. (см. `TECHNICAL_SIGNAL_KEYS` в `services/recommend_5m.py`, дамп входа в `services/deal_params_5m.py`).

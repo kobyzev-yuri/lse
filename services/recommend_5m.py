@@ -1140,6 +1140,7 @@ TECHNICAL_SIGNAL_KEYS = (
     "multiday_lr_horizon_1d_pct_vs_spot", "multiday_lr_horizon_2d_pct_vs_spot", "multiday_lr_horizon_3d_pct_vs_spot",
     "multiday_lr_horizon_1d_train_rmse_log", "multiday_lr_horizon_2d_train_rmse_log", "multiday_lr_horizon_3d_train_rmse_log",
     "multiday_lr_bias", "multiday_lr_daily_last_date", "multiday_lr_method", "multiday_lr_premarket_db_used",
+    "multiday_lr_daily_close_source",
 )
 
 
@@ -2269,6 +2270,9 @@ def get_decision_5m(
                     out["multiday_lr_method"] = mlr_fc.get("method")
                 if "premarket_db_used" in mlr_fc:
                     out["multiday_lr_premarket_db_used"] = bool(mlr_fc.get("premarket_db_used"))
+                dcs = mlr_fc.get("daily_close_source")
+                if dcs:
+                    out["multiday_lr_daily_close_source"] = str(dcs)
                 mlr_append = (_gcv("GAME_5M_MULTIDAY_LR_REG_APPEND_REASONING", "false") or "false").strip().lower() in (
                     "1",
                     "true",

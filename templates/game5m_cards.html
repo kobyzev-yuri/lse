@@ -214,6 +214,9 @@
                 }
                 if (rows.length) {
                     var meta = [];
+                    if (c.multiday_lr_daily_close_source) {
+                        meta.push('дневка: ' + escapeHtml(String(c.multiday_lr_daily_close_source)));
+                    }
                     if (fc.daily_last_date) meta.push('посл. день: ' + escapeHtml(String(fc.daily_last_date)));
                     if (fc.premarket_db_used) meta.push('премаркет БД');
                     var sub = meta.length ? '<div class="forecast-fallback" style="margin-top:0.2rem;">' + meta.join(' · ') + '</div>' : '';

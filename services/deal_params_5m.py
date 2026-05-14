@@ -45,6 +45,7 @@ FULL_ENTRY_KEYS = (
     "multiday_lr_horizon_1d_pct_vs_spot", "multiday_lr_horizon_2d_pct_vs_spot", "multiday_lr_horizon_3d_pct_vs_spot",
     "multiday_lr_horizon_1d_train_rmse_log", "multiday_lr_horizon_2d_train_rmse_log", "multiday_lr_horizon_3d_train_rmse_log",
     "multiday_lr_bias", "multiday_lr_daily_last_date", "multiday_lr_method", "multiday_lr_premarket_db_used",
+    "multiday_lr_daily_close_source",
     # Время бара решения (get_decision_5m) — для графика / бэктеста, не только ts INSERT в trade_history
     "exit_bar_close_ts",
     "exit_bar_start_et",

@@ -126,9 +126,37 @@ def compute_log_return_multiday_forecast(
     """
     Возвращает словарь с прогнозами log-ret и % от spot, либо None при нехватке данных/ошибке.
     db_engine: при наличии и GAME_5M_MULTIDAY_LR_USE_PREMARKET_DB — подмешиваются premarket_daily_features.
+    Источник дневных close: env ``GAME_5M_MULTIDAY_LR_DAILY_CLOSE_SOURCE`` = auto | quotes | yahoo (по умолчанию
+    **auto**: при ``db_engine`` сначала ``public.quotes``, при нехватке строк — Yahoo; как walk-forward анализатора).
     """
-    s = fetch_daily_close_series(ticker, period_days=period_days)
-    if s is None:
+    try:
+        from config_loader import get_config_value as _gcv_src
+
+        src_pref = (_gcv_src("GAME_5M_MULTIDAY_LR_DAILY_CLOSE_SOURCE", "auto") or "auto").strip().lower()
+    except Exception:
+        src_pref = "auto"
+    if src_pref not in ("auto", "yahoo", "quotes"):
+        src_pref = "auto"
+
+    resolved_src = "none"
+    s: Optional[pd.Series] = None
+    if src_pref == "yahoo":
+        s = fetch_daily_close_series(ticker, period_days=period_days)
+        resolved_src = "yahoo" if s is not None else "none"
+    else:
+        from services.multiday_lr_pipeline import resolve_daily_close_series
+
+        s, resolved_src = resolve_daily_close_series(
+            ticker, period_days=period_days, engine=db_engine, source=src_pref
+        )
+        if (s is None or len(s) < min_train_rows) and src_pref == "auto":
+            s_yf = fetch_daily_close_series(ticker, period_days=period_days)
+            if s_yf is not None and len(s_yf) >= min_train_rows:
+                s, resolved_src = s_yf, "yahoo"
+            elif s_yf is not None and (s is None or len(s_yf) > len(s)):
+                s, resolved_src = s_yf, "yahoo"
+
+    if s is None or len(s) < min_train_rows:
         return None
     c = s.values.astype(float)
     n = len(c)
@@ -260,6 +288,7 @@ def compute_log_return_multiday_forecast(
 
     return {
         "ticker": ticker,
+        "daily_close_source": resolved_src,
         "method": "ridge_daily_lags_pm_db_plus_intraday_tail" if n_pm else "ridge_daily_lags_plus_intraday_tail",
         "daily_last_date": last_date_s,
         "ridge_lambda": float(ridge_lambda),
