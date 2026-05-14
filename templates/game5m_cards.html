@@ -210,7 +210,7 @@
                         pctStr = (p >= 0 ? '+' : '') + p.toFixed(2) + '%';
                     }
                     var rmseStr = (rmse != null && rmse !== undefined && Number.isFinite(Number(rmse))) ? Number(rmse).toFixed(4) : '—';
-                    rows.push('<tr><td>' + escapeHtml(keys[i] + ' торг. дн.') + '</td><td class="num">' + escapeHtml(pctStr) + '</td><td class="num">' + escapeHtml(rmseStr) + '</td></tr>');
+                    rows.push('<tr><td>' + escapeHtml(keys[i] + ' торг. дн.') + '</td><td class="num">' + escapeHtml(pctStr) + '</td><td class="num" title="Насколько хорошо ряд описывается на истории (RMSE в log; не OOS)">' + escapeHtml(rmseStr) + '</td></tr>');
                 }
                 if (rows.length) {
                     var meta = [];
@@ -220,8 +220,9 @@
                     if (fc.daily_last_date) meta.push('посл. день: ' + escapeHtml(String(fc.daily_last_date)));
                     if (fc.premarket_db_used) meta.push('премаркет БД');
                     var sub = meta.length ? '<div class="forecast-fallback" style="margin-top:0.2rem;">' + meta.join(' · ') + '</div>' : '';
-                    return '<table class="forecast-table" role="table"><thead><tr>' +
-                        '<th>Горизонт</th><th>% vs spot</th><th>train RMSE (log)</th></tr></thead><tbody>' +
+                    return '<p class="forecast-fallback muted" style="margin:0 0 0.35rem 0;font-size:0.78rem;">Ожидаемое изменение к <strong>текущей цене</strong> по горизонту в торговых днях; последний столбец — справочная подгонка на истории (не walk-forward).</p>' +
+                        '<table class="forecast-table" role="table"><thead><tr>' +
+                        '<th>Горизонт</th><th>Ожидаемо к spot</th><th title="RMSE в log на обучающем окне; для оператора — грубая «плотность» описания ряда">На истории</th></tr></thead><tbody>' +
                         rows.join('') + '</tbody></table>' + sub;
                 }
             }
@@ -288,10 +289,10 @@
             }
             var mlrBlock = renderMultidayLrTable(c);
             if (mlrBlock) {
-                html += '<div class="block-title">Мультидневный ridge (лог-доходность, торг. дни)</div>';
+                html += '<div class="block-title">Дневка — ожидаемый % к spot (1–3 торг. дня)</div>';
                 html += mlrBlock;
             } else if (c.multiday_lr_forecast_unavailable) {
-                html += '<div class="block-title">Мультидневный ridge (лог-доходность, торг. дни)</div>';
+                html += '<div class="block-title">Дневка — ожидаемый % к spot (1–3 торг. дня)</div>';
                 var why = c.multiday_lr_forecast_error ? escapeHtml(String(c.multiday_lr_forecast_error)) : 'Нет прогноза (мало валидных дневных строк / Yahoo). См. логи контейнера: multiday_lr_forecast_none.';
                 html += '<div class="forecast-fallback muted">' + why + '</div>';
             }
