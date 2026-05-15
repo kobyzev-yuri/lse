@@ -297,6 +297,9 @@
                 html += '<div class="forecast-fallback muted">' + why + '</div>';
             }
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
+            if (c.entry_advice_reason && c.entry_advice !== 'ALLOW') {
+                html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.78rem;">' + escapeHtml(String(c.entry_advice_reason)) + '</span></div>';
+            }
             if (c.macro_risk_level && c.macro_risk_level !== 'NEUTRAL') {
                 var macroLine = escapeHtml(String(c.macro_risk_level));
                 if (c.macro_equity_gap_bias) macroLine += ' · ' + escapeHtml(String(c.macro_equity_gap_bias));
