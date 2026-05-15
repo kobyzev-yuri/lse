@@ -297,6 +297,14 @@
                 html += '<div class="forecast-fallback muted">' + why + '</div>';
             }
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
+            if (c.macro_risk_level && c.macro_risk_level !== 'NEUTRAL') {
+                var macroLine = escapeHtml(String(c.macro_risk_level));
+                if (c.macro_equity_gap_bias) macroLine += ' · ' + escapeHtml(String(c.macro_equity_gap_bias));
+                if (c.macro_risk_reasons && c.macro_risk_reasons.length) {
+                    macroLine += ' — ' + escapeHtml(c.macro_risk_reasons.slice(0, 2).join('; '));
+                }
+                html += '<div class="row"><span class="label">Макро</span><span class="value muted" style="font-size:0.85rem;">' + macroLine + '</span></div>';
+            }
             if (LSE_WEB_LLM_ENABLED) {
                 html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">Вывод LLM</button>';
                 html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';

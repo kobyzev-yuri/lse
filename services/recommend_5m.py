@@ -2347,10 +2347,30 @@ def get_decision_5m(
     elif session_phase == "PRE_MARKET" and premarket_context and premarket_context.get("premarket_gap_pct") is not None and premarket_context["premarket_gap_pct"] < -2:
         entry_advice = "CAUTION"
         entry_advice_reason = f"Премаркет: гэп {premarket_context['premarket_gap_pct']:+.2f}% — лучше войти после открытия или лимитом"
+    macro_risk: Dict[str, Any] = {}
+    try:
+        from services.macro_premarket_risk import apply_macro_to_entry_advice, evaluate_macro_premarket_risk
+
+        macro_risk = evaluate_macro_premarket_risk()
+        entry_advice, entry_advice_reason = apply_macro_to_entry_advice(
+            entry_advice, entry_advice_reason, macro_risk
+        )
+    except Exception as e:
+        logger.debug("macro_premarket_risk для %s: %s", ticker, e)
     if not entry_advice_reason and entry_advice == "ALLOW":
         entry_advice_reason = "Нет явных ограничений на вход"
     out["entry_advice"] = entry_advice
     out["entry_advice_reason"] = entry_advice_reason
+    if macro_risk.get("enabled"):
+        out["macro_risk_level"] = macro_risk.get("risk_level")
+        out["macro_equity_gap_bias"] = macro_risk.get("equity_gap_bias")
+        out["macro_risk_reasons"] = macro_risk.get("reasons")
+        out["macro_indicators"] = {
+            k: v.get("gap_pct") for k, v in (macro_risk.get("indicators") or {}).items()
+        }
+        if macro_risk.get("macro_predicted_sector_gap_pct") is not None:
+            out["macro_predicted_sector_gap_pct"] = macro_risk.get("macro_predicted_sector_gap_pct")
+            out["macro_sector_proxy"] = macro_risk.get("macro_sector_proxy")
     # Рекомендованный вход и ожидаемая прибыль при достижении цели (если цель/цена доступны).
     try:
         p_now = out.get("price") or price

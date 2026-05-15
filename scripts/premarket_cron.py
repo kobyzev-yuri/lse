@@ -206,27 +206,65 @@ def main() -> None:
     elif alert and (not token or not chat_ids):
         logger.debug("PREMARKET_ALERT_TELEGRAM=true, но нет TELEGRAM_BOT_TOKEN или chat id")
 
-    # Опционально: алерт «геополитический/премаркет-стресс» — сильный гэп вниз по Forex/индикаторам
-    # Рекомендация: закрыть GAME_5m и рассмотреть закрытие прочих позиций (в пятницу — до выходных)
-    stress_tickers_raw = get_config_value("PREMARKET_STRESS_TICKERS", "").strip()
-    stress_gap_threshold = -1.5
-    try:
-        stress_gap_threshold = float(get_config_value("PREMARKET_STRESS_GAP_PCT", "-1.5").strip())
-    except (ValueError, TypeError):
-        pass
+    # Премаркет-стресс: VIX↑ / Forex↓ / нефть↑ (макро-модуль) или legacy «любой гэп ≤ порога»
+    use_macro = get_config_value("PREMARKET_STRESS_USE_MACRO_RISK", "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     friday_only = get_config_value("PREMARKET_STRESS_ALERT_FRIDAY_ONLY", "true").strip().lower() in ("1", "true", "yes")
-    stress_tickers = [t.strip() for t in stress_tickers_raw.split(",") if t.strip()]
-    stress_detected = False
-    stress_details = []
-    if stress_tickers:
+    favorable_alert = get_config_value("PREMARKET_FAVORABLE_ALERT_TELEGRAM", "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    try:
+        from datetime import timezone
+
         try:
-            from datetime import timezone
+            from zoneinfo import ZoneInfo
+
+            et_now = datetime.now(ZoneInfo("America/New_York"))
+        except ImportError:
+            et_now = datetime.now(timezone.utc)
+        is_friday = et_now.weekday() == 4
+        day_note = " В пятницу — по возможности закрыть позиции до выходных." if is_friday else ""
+
+        if use_macro:
+            from services.macro_premarket_risk import evaluate_macro_premarket_risk, format_macro_telegram_lines
+
+            macro = evaluate_macro_premarket_risk()
+            if macro.get("enabled") and token and chat_ids:
+                if macro.get("close_game_alert") and (not friday_only or is_friday):
+                    lines_stress = ["⚠️ <b>Премаркет: макро risk-off (VIX / Forex / нефть)</b>"]
+                    for line in format_macro_telegram_lines(macro):
+                        lines_stress.append(html.escape(line))
+                    lines_stress.append("")
+                    lines_stress.append(
+                        "Рекомендуется закрыть позиции <b>GAME_5m</b> и рассмотреть закрытие прочих до открытия сессии."
+                        + html.escape(day_note)
+                    )
+                    _send_telegram_message("\n".join(lines_stress), label="Премаркет-стресс (макро)")
+                    logger.info("Макро risk-off алерт: %s", macro.get("reasons"))
+                elif (
+                    favorable_alert
+                    and macro.get("equity_gap_bias") == "UP"
+                    and (macro.get("favorable_score") or 0) >= 1
+                ):
+                    lines_fav = ["📈 <b>Премаркет: ожидание гэпа вверх по риск-активам</b>"]
+                    for line in format_macro_telegram_lines(macro):
+                        lines_fav.append(html.escape(line))
+                    _send_telegram_message("\n".join(lines_fav), label="Премаркет favorable (макро)")
+        else:
+            stress_tickers_raw = get_config_value("PREMARKET_STRESS_TICKERS", "").strip()
+            stress_gap_threshold = -1.5
             try:
-                from zoneinfo import ZoneInfo
-                et_now = datetime.now(ZoneInfo("America/New_York"))
-            except ImportError:
-                et_now = datetime.now(timezone.utc)
-            is_friday = et_now.weekday() == 4
+                stress_gap_threshold = float(get_config_value("PREMARKET_STRESS_GAP_PCT", "-1.5").strip())
+            except (ValueError, TypeError):
+                pass
+            stress_tickers = [t.strip() for t in stress_tickers_raw.split(",") if t.strip()]
+            stress_detected = False
+            stress_details = []
             for ticker in stress_tickers:
                 pm = get_premarket_context(ticker)
                 if pm.get("error"):
@@ -237,9 +275,8 @@ def main() -> None:
                     stress_details.append((ticker, gap))
                     logger.info("Стресс-индикатор: %s гэп %.2f%% <= %.2f%%", ticker, gap, stress_gap_threshold)
             if stress_detected and (not friday_only or is_friday) and token and chat_ids:
-                day_note = " В пятницу — по возможности закрыть позиции до выходных." if is_friday else ""
                 lines_stress = [
-                    "⚠️ <b>Премаркет-стресс (геополитика/риск)</b>",
+                    "⚠️ <b>Премаркет-стресс (legacy)</b>",
                     "Сильный гэп вниз по индикаторам:",
                 ]
                 for t, g in stress_details:
@@ -249,10 +286,9 @@ def main() -> None:
                     "Рекомендуется закрыть позиции <b>GAME_5m</b> и рассмотреть закрытие прочих до открытия сессии."
                     + html.escape(day_note)
                 )
-                text_stress = "\n".join(lines_stress)
-                _send_telegram_message(text_stress, label="Премаркет-стресс алерт")
-        except Exception as e:
-            logger.warning("Проверка премаркет-стресс: %s", e)
+                _send_telegram_message("\n".join(lines_stress), label="Премаркет-стресс (legacy)")
+    except Exception as e:
+        logger.warning("Проверка премаркет-стресс: %s", e)
 
     sys.exit(0)
 

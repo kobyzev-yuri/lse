@@ -16,6 +16,7 @@ from report_generator import get_engine, load_trade_history, compute_closed_trad
 from services.recommend_5m import fetch_5m_ohlc
 from services.deal_params_5m import normalize_entry_context
 from services.analyzer_ml_arbiter import build_ml_production_arbiter, build_multiday_lr_reality_check
+from services.analyzer_product_ideas_arbiter import build_product_ideas_arbiter
 from config_loader import get_config_value, load_config, is_editable_config_env_key
 
 # Дольше — считаем позицию «подвисшей» для пристрастного разбора порогов входа vs выхода.
@@ -122,6 +123,11 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
     "ml_production_arbiter": (
         "Сводный вердикт готовности ML к продакшену: multiday ridge OOS, CatBoost entry, портфельный CatBoost (meta RMSE), "
         "recovery .cbm. Поля overall_verdict, verdicts, conclusion_ru — ориентир для оператора; не меняют config."
+    ),
+    "product_ideas_arbiter": (
+        "Вердикт по продуктовым идеям песочницы (макро VIX/Forex, прогноз гэпа сектора, defer early exit): "
+        "сравнение PnL по macro_risk_level / entry_advice на закрытых сделках. "
+        "verdict: insufficient_data | keep | caution | remove. Не включает флаги в config автоматически."
     ),
     "game5m_catboost_fusion_entry_review": (
         "Таблица по закрытым сделкам: что было сохранено в BUY context_json при входе (technical_decision_core/effective, P, статус). "
@@ -5221,6 +5227,9 @@ def _attach_multiday_lr_and_ml_arbiter(
         eng, strategy, closed_trades=closed_trades, effects=effects
     )
     payload["ml_production_arbiter"] = build_ml_production_arbiter(payload)
+    payload["product_ideas_arbiter"] = build_product_ideas_arbiter(
+        payload, effects=effects, closed_trades=closed_trades
+    )
 
 
 def analyze_trade_effectiveness(
@@ -5590,6 +5599,12 @@ def _append_multiday_lr_and_arbiter_text_lines(lines: List[str], report: Dict[st
         lines.append("")
         lines.append("Арбитр готовности ML к продакшену:")
         lines.extend(str(concl).split("\n"))
+    pia = report.get("product_ideas_arbiter") or {}
+    pconcl = pia.get("conclusion_ru")
+    if pconcl:
+        lines.append("")
+        lines.append("Арбитр продуктовых идей (песочница):")
+        lines.extend(str(pconcl).split("\n"))
 
 
 def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:

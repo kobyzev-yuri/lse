@@ -20,6 +20,8 @@ FULL_ENTRY_KEYS = (
     "momentum_2h_pct", "premarket_intraday_momentum_pct", "rsi_5m", "volatility_5m_pct", "session_high", "period_str",
     "stop_loss_enabled", "stop_loss_pct", "take_profit_pct",
     "entry_advice", "entry_advice_reason",
+    "macro_risk_level", "macro_equity_gap_bias", "macro_risk_reasons", "macro_indicators",
+    "macro_predicted_sector_gap_pct", "macro_sector_proxy",
     "high_5d", "low_5d", "pullback_from_high_pct",
     "last_bar_high", "last_bar_low", "recent_bars_high_max", "recent_bars_low_min",
     "bars_count", "kb_news_impact",

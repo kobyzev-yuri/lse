@@ -53,6 +53,7 @@
 
 ## Полезные ссылки
 
+- **Песочница идей + арбитр:** `docs/GAME_5M_PRODUCT_IDEAS_ARBITER.md` (вердикт по макро и др. в `/analyzer` → `product_ideas_arbiter`)
 - Recovery: `docs/GAME_5M_TIME_EXIT_RECOVERY_PLAN.md`
 - Hanger / stuck / continuation: `docs/GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md`
 - Event: `docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md`, `docs/EVENT_REACTION_PIPELINE.md`
