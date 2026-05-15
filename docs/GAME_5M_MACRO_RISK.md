@@ -14,10 +14,11 @@
 | Вход в решение 5m | `services/recommend_5m.py` | `apply_macro_to_entry_advice()` ужесточает `entry_advice` |
 | Карточки / API | `get_5m_card_payload()` | Поля `macro_*`, `entry_advice_reason_local` |
 | Премаркет Telegram | `scripts/premarket_cron.py` | Алерт risk-off / favorable (флаг `PREMARKET_STRESS_USE_MACRO_RISK`) |
+| Исполнение входа 5m | `scripts/send_sndk_signal_cron.py` | Опц. блок первого BUY при `entry_advice=AVOID` (`GAME_5M_MACRO_BLOCK_NEW_BUY_ON_AVOID`) |
 | Телеметрия сделок | `services/deal_params_5m.py` | `macro_*` в `context_json` на BUY |
 | Арбитр идей | `services/analyzer_product_ideas_arbiter.py` | Вердикт по закрытым сделкам в `/api/analyzer` |
 
-**Важно:** `entry_advice` (ALLOW / CAUTION / AVOID) — **совет оператору** на карточках и в Telegram. Крон `game_5m.py` **не блокирует** BUY только из-за `entry_advice` или макро.
+**Важно:** по умолчанию `entry_advice` (ALLOW / CAUTION / AVOID) — **совет** на карточках и в Telegram. Крон **не** смотрит на макро, пока не включён **`GAME_5M_MACRO_BLOCK_NEW_BUY_ON_AVOID=true`** — тогда при **AVOID** и **отсутствии** открытой позиции новый long не открывается (докуп при позиции и выходы не затрагиваются).
 
 Нефть **вниз** сама по себе **не** даёт risk-off (в отличие от legacy `PREMARKET_STRESS_GAP_PCT` по всем тикерам).
 
@@ -77,6 +78,7 @@
 | Ключ | Дефолт | Смысл |
 |------|--------|--------|
 | `GAME_5M_MACRO_RISK_ENABLED` | `true` | Включить расчёт |
+| `GAME_5M_MACRO_BLOCK_NEW_BUY_ON_AVOID` | `false` | При `true`: крон не открывает **первый** long, если `entry_advice=AVOID` (макро/новости/вола); докуп не блокируется |
 | `GAME_5M_MACRO_FOREX_TICKERS` | `GBPUSD=X,EURUSD=X` | Forex для макро |
 | `GAME_5M_MACRO_VIX_TICKER` | `^VIX` | VIX |
 | `GAME_5M_MACRO_OIL_TICKER` | `CL=F` | Нефть |
@@ -103,7 +105,7 @@ Legacy: `PREMARKET_STRESS_USE_MACRO_RISK=false` — старый алерт «л
 
 1. `GAME_5M_MACRO_RISK_ENABLED=true` (дефолт в коде).
 2. Карточки 5m и Telegram показывают AVOID/CAUTION и блок «Макро».
-3. **Не** менять `game_5m.py` для блокировки BUY по макро.
+3. При желании согласовать карточку с ботом: `GAME_5M_MACRO_BLOCK_NEW_BUY_ON_AVOID=true` в `config.env` (только первый вход; выходы без изменений).
 4. Премаркет: `PREMARKET_STRESS_USE_MACRO_RISK=true` — risk-off в Telegram утром.
 
 **Критерий перехода:** ≥2 недели, в BUY `context_json` есть `macro_risk_level` на большинстве новых сделок.
@@ -129,9 +131,9 @@ Legacy: `PREMARKET_STRESS_USE_MACRO_RISK=false` — старый алерт «л
 2. Коэффициенты OLS — из отчёта SMH или переопределение в config.
 3. Арбитр: `macro_predicted_sector_gap` в `product_ideas_registry`.
 
-### Фаза 5 — НЕ делать без отдельного эксперимента
+### Фаза 5 — осторожно
 
-- Блокировать BUY в кроне по `entry_advice=AVOID`.
+- **Блок первого BUY при AVOID** — опционально через `GAME_5M_MACRO_BLOCK_NEW_BUY_ON_AVOID` (см. выше); не смешивать с выходами и recovery без арбитра.
 - Defer `TIME_EXIT_EARLY` по макро UP (идея `macro_defer_time_exit_early` — только sandbox + арбитр; recovery D4a на текущих данных defer **не** поддерживает).
 
 ---

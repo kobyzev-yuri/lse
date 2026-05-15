@@ -818,6 +818,24 @@ def process_ticker(
             )
             return False
 
+    # Опционально: не открывать первый long при entry_advice=AVOID (макро/новости/вола совпадают с карточкой).
+    # Докуп при открытой позиции не блокируем (GAME_5M_ALLOW_PYRAMID_*).
+    block_macro_avoid = (get_config_value("GAME_5M_MACRO_BLOCK_NEW_BUY_ON_AVOID", "false") or "false").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if block_macro_avoid:
+        advice = (d5.get("entry_advice") or "").strip().upper()
+        if advice == "AVOID":
+            pos_new_entry = resolve_open_position_for_game5m_close(ticker)
+            if pos_new_entry is None:
+                logger.info(
+                    "%s: пропуск нового входа — entry_advice=AVOID (GAME_5M_MACRO_BLOCK_NEW_BUY_ON_AVOID=true); открытой позиции нет",
+                    ticker,
+                )
+                return False
+
     # Стратегия входа: technical (по умолчанию) или llm — с учётом корреляций (для тестирования)
     entry_strategy = (get_config_value("GAME_5M_ENTRY_STRATEGY", "technical") or "technical").strip().lower()
     if entry_strategy == "llm" and cluster_context and cluster_context.get("correlation"):
