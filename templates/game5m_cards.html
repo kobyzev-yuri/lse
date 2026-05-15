@@ -297,14 +297,26 @@
                 html += '<div class="forecast-fallback muted">' + why + '</div>';
             }
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
-            if (c.entry_advice_reason && c.entry_advice !== 'ALLOW') {
-                html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.78rem;">' + escapeHtml(String(c.entry_advice_reason)) + '</span></div>';
+            var localEntryReason = (c.entry_advice_reason_local != null && String(c.entry_advice_reason_local).trim())
+                ? String(c.entry_advice_reason_local).trim()
+                : '';
+            if (!localEntryReason && c.entry_advice_reason && (!c.macro_risk_level || c.macro_risk_level === 'NEUTRAL')) {
+                localEntryReason = String(c.entry_advice_reason).trim();
+            }
+            if (localEntryReason && c.entry_advice !== 'ALLOW') {
+                html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.78rem;">' + escapeHtml(localEntryReason) + '</span></div>';
             }
             if (c.macro_risk_level && c.macro_risk_level !== 'NEUTRAL') {
                 var macroLine = escapeHtml(String(c.macro_risk_level));
                 if (c.macro_equity_gap_bias) macroLine += ' · ' + escapeHtml(String(c.macro_equity_gap_bias));
-                if (c.macro_risk_reasons && c.macro_risk_reasons.length) {
-                    macroLine += ' — ' + escapeHtml(c.macro_risk_reasons.slice(0, 2).join('; '));
+                var macroReasons = Array.isArray(c.macro_risk_reasons) ? c.macro_risk_reasons : [];
+                if (macroReasons.length) {
+                    macroLine += ' — ' + escapeHtml(macroReasons.join('; '));
+                }
+                if (c.macro_predicted_sector_gap_pct != null && c.macro_sector_proxy) {
+                    macroLine += '; прогноз гэпа ' + escapeHtml(String(c.macro_sector_proxy)) + ' '
+                        + (Number(c.macro_predicted_sector_gap_pct) >= 0 ? '+' : '')
+                        + escapeHtml(String(c.macro_predicted_sector_gap_pct)) + '%';
                 }
                 html += '<div class="row"><span class="label">Макро</span><span class="value muted" style="font-size:0.85rem;">' + macroLine + '</span></div>';
             }

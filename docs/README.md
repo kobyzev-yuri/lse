@@ -7,6 +7,8 @@
 | Задача | Документ |
 |--------|----------|
 | Основной цикл крона, тейк/стоп, **вход в начале RTH** (премаркет, NEAR_OPEN, импульс) | [GAME_5M_CALCULATIONS_AND_REPORTING.md](GAME_5M_CALCULATIONS_AND_REPORTING.md) |
+| **Макро VIX / Forex / нефть** (entry_advice, карточки, премаркет, порядок внедрения) | [GAME_5M_MACRO_RISK.md](GAME_5M_MACRO_RISK.md) |
+| **Песочница идей + арбитр** (вердикт по макро в анализаторе) | [GAME_5M_PRODUCT_IDEAS_ARBITER.md](GAME_5M_PRODUCT_IDEAS_ARBITER.md) |
 | Премаркет: цена, импульс в первые минуты | [GAME_5M_PREMARKET_AND_IMPULSE.md](GAME_5M_PREMARKET_AND_IMPULSE.md) |
 | **Пайплайн** висяки / упущенная выгода / датасеты / анализатор | [GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md](GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md) (раздел «Пайплайн») |
 | JSON сделки, `context_json` | [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md) |

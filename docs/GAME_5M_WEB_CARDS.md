@@ -40,7 +40,8 @@
 
 | Блок | Поля | Пояснение |
 |------|------|-----------|
-| **Решение** | decision, entry_advice, entry_advice_reason | BUY/HOLD/SELL, ALLOW/CAUTION/AVOID |
+| **Решение** | decision, entry_advice, entry_advice_reason_local, entry_advice_reason | BUY/HOLD/SELL; совет входа; локальная причина (новости/вола) vs полная (в т.ч. макро в API) |
+| **Макро** | macro_risk_level, macro_equity_gap_bias, macro_risk_reasons, macro_indicators | Risk-off VIX/Forex/нефть; на UI — отдельная строка «Макро», без дубля в «Вход». См. [GAME_5M_MACRO_RISK.md](GAME_5M_MACRO_RISK.md) |
 | **Upside** | estimated_upside_pct_day, suggested_take_profit_price | Наш расчёт: апсайд на день (тейк), цель по цене |
 | **Downside** | estimated_downside_pct_day, prob_up, prob_down | Наш расчёт: риск просадки за день %; P(up)/P(down). Стоп (правило) — stop_loss_pct, только если GAME_5M_STOP_LOSS_ENABLED |
 | **Прогноз цены** | price_forecast_5m, price_forecast_5m_summary | Квантили p10/p50/p90 на 30/60/120 мин и P(цена>spot); см. `docs/GAME_5M_PRICE_FORECAST.md` |

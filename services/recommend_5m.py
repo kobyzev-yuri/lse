@@ -1119,7 +1119,7 @@ TECHNICAL_SIGNAL_KEYS = (
     "entry_price_recommended", "entry_price_range_low", "entry_price_range_high", "expected_profit_pct_if_take",
     "estimated_downside_pct_day", "prob_up", "prob_down",
     "pullback_from_high_pct", "session_high",
-    "kb_news_impact", "entry_advice", "entry_advice_reason",
+    "kb_news_impact", "entry_advice", "entry_advice_reason", "entry_advice_reason_local",
     "macro_risk_level", "macro_equity_gap_bias", "macro_risk_reasons", "macro_indicators",
     "macro_predicted_sector_gap_pct", "macro_sector_proxy",
     "market_session",
@@ -2350,6 +2350,7 @@ def get_decision_5m(
     elif session_phase == "PRE_MARKET" and premarket_context and premarket_context.get("premarket_gap_pct") is not None and premarket_context["premarket_gap_pct"] < -2:
         entry_advice = "CAUTION"
         entry_advice_reason = f"Премаркет: гэп {premarket_context['premarket_gap_pct']:+.2f}% — лучше войти после открытия или лимитом"
+    entry_advice_reason_local = entry_advice_reason
     macro_risk: Dict[str, Any] = {}
     try:
         from services.macro_premarket_risk import apply_macro_to_entry_advice, evaluate_macro_premarket_risk
@@ -2364,6 +2365,7 @@ def get_decision_5m(
         entry_advice_reason = "Нет явных ограничений на вход"
     out["entry_advice"] = entry_advice
     out["entry_advice_reason"] = entry_advice_reason
+    out["entry_advice_reason_local"] = entry_advice_reason_local
     if macro_risk.get("enabled"):
         out["macro_risk_level"] = macro_risk.get("risk_level")
         out["macro_equity_gap_bias"] = macro_risk.get("equity_gap_bias")

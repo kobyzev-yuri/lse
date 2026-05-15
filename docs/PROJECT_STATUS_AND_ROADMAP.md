@@ -1,6 +1,6 @@
 # Статус планов и дорожная карта
 
-**Обновлено:** 2026-05-13 (срез по репозиторию `lse` и эталонному `crontab/lse-docker.crontab`).
+**Обновлено:** 2026-05-15 (срез по репозиторию `lse` и эталонному `crontab/lse-docker.crontab`).
 
 Этот файл — **единая точка входа**: что уже сделано, где мы сейчас, что осталось. Детальные чеклисты остаются в профильных документах (ссылки ниже).
 
@@ -16,6 +16,7 @@
 | **Event / earnings MVP** | Build KB → backfill quotes; **train_event_reaction** в readiness с `-e ML_READINESS_SKIP_EVENT_REACTION=0`; анализатор / `/api/ml/data-quality` | `docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md` |
 | **Четыре CatBoost-сетки (док)** | Описание целей 5m / portfolio / recovery / event | `docs/TRADE_ML_DATASETS_AND_TARGETS_RU.md` |
 | **Аудит config (локально)** | `code_to_example` доведён до 0; артефакты в `docs/audit_*.txt` | `docs/CLEANUP_CONFIG_AND_CODE_PLAN_2026-05-07.md` |
+| **Макро VIX/Forex/нефть** | Фаза 1 в проде: карточки, `entry_advice`, премаркет-крон, телеметрия `macro_*`; офлайн `analyze_macro_gap_indicators.py` | `docs/GAME_5M_MACRO_RISK.md` (порядок внедрения фазы 2–4) |
 
 ---
 
