@@ -4,7 +4,7 @@
 
 Модель **не заменяет** правила входа/выхода и по умолчанию **выключена** (`GAME_5M_MULTIDAY_LR_REG_ENABLED=false`). Доходности в смысле таргета — **log-returns**; при сравнении с торговыми решениями учитывайте **transaction costs** (правила проекта).
 
-См. также: [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md) (единые фазы калибровки по всем ML-сеткам), [GAME_5M_WEB_CARDS.md](GAME_5M_WEB_CARDS.md) (поля карточек и логи), `scripts/ingest_premarket_daily_features.py`.
+См. также: [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md) (единые фазы калибровки по всем ML-сеткам), [GAME_5M_WEB_CARDS.md](GAME_5M_WEB_CARDS.md) (поля карточек и логи), `scripts/ingest_premarket_daily_features.py`. **План обогащения X (новости, календарь):** [GAME_5M_MULTIDAY_LR_FEATURE_ENRICHMENT_PLAN.md](GAME_5M_MULTIDAY_LR_FEATURE_ENRICHMENT_PLAN.md).
 
 ---
 
