@@ -24,11 +24,312 @@ def _ridge_lambda_from_config() -> float:
 
 
 def _use_premarket_from_config() -> bool:
-    return (get_config_value("GAME_5M_MULTIDAY_LR_USE_PREMARKET_DB", "true") or "true").strip().lower() in (
-        "1",
-        "true",
-        "yes",
+    return _env_flag_true("GAME_5M_MULTIDAY_LR_USE_PREMARKET_DB", "true")
+
+
+def _env_flag_true(key: str, default: str = "false") -> bool:
+    return (get_config_value(key, default) or default).strip().lower() in ("1", "true", "yes")
+
+
+# Наборы для walk-forward сравнения (OOS). v3c = macro+symbol вместе; v3mac/v3sym — по отдельности.
+MULTIDAY_FEATURE_SET_SPECS: Dict[str, Dict[str, Any]] = {
+    "v2": {
+        "label_ru": "цена + премаркет (текущий прод по умолчанию)",
+        "use_premarket_db": True,
+        "use_news_db": False,
+        "use_macro_calendar_db": False,
+        "use_symbol_calendar_db": False,
+    },
+    "v3n": {
+        "label_ru": "v2 + news_daily_features",
+        "use_premarket_db": True,
+        "use_news_db": True,
+        "use_macro_calendar_db": False,
+        "use_symbol_calendar_db": False,
+    },
+    "v3mac": {
+        "label_ru": "v2 + macro_calendar_daily_features",
+        "use_premarket_db": True,
+        "use_news_db": False,
+        "use_macro_calendar_db": True,
+        "use_symbol_calendar_db": False,
+    },
+    "v3sym": {
+        "label_ru": "v2 + symbol_calendar_daily_features",
+        "use_premarket_db": True,
+        "use_news_db": False,
+        "use_macro_calendar_db": False,
+        "use_symbol_calendar_db": True,
+    },
+    "v3c": {
+        "label_ru": "v2 + macro + symbol (без news)",
+        "use_premarket_db": True,
+        "use_news_db": False,
+        "use_macro_calendar_db": True,
+        "use_symbol_calendar_db": True,
+    },
+    "v3": {
+        "label_ru": "полный v3 (news + macro + symbol)",
+        "use_premarket_db": True,
+        "use_news_db": True,
+        "use_macro_calendar_db": True,
+        "use_symbol_calendar_db": True,
+    },
+}
+
+ENV_FLAG_SPECS: Tuple[Tuple[str, str, str], ...] = (
+    ("GAME_5M_MULTIDAY_LR_USE_NEWS_DB", "v3n", "новости (news_daily_features)"),
+    ("GAME_5M_MULTIDAY_LR_USE_MACRO_CALENDAR_DB", "v3mac", "макро-календарь (macro_calendar_daily_features)"),
+    ("GAME_5M_MULTIDAY_LR_USE_SYMBOL_CALENDAR_DB", "v3sym", "календарь тикера / earnings (symbol_calendar_daily_features)"),
+)
+
+
+def _live_feature_set_key() -> str:
+    news = _env_flag_true("GAME_5M_MULTIDAY_LR_USE_NEWS_DB", "false")
+    macro = _env_flag_true("GAME_5M_MULTIDAY_LR_USE_MACRO_CALENDAR_DB", "false")
+    sym = _env_flag_true("GAME_5M_MULTIDAY_LR_USE_SYMBOL_CALENDAR_DB", "false")
+    if news and macro and sym:
+        return "v3"
+    if news and not macro and not sym:
+        return "v3n"
+    if not news and macro and not sym:
+        return "v3mac"
+    if not news and not macro and sym:
+        return "v3sym"
+    if not news and macro and sym:
+        return "v3c"
+    return "v2"
+
+
+def _pool_walkforward_runs(per_ticker: List[Dict[str, Any]]) -> Dict[str, Any]:
+    pooled_rmse: Dict[str, Optional[float]] = {}
+    pooled_sign: Dict[str, Optional[float]] = {}
+    pooled_n: Dict[str, int] = {}
+    for hk in ("1", "2", "3"):
+        rmses: List[float] = []
+        signs: List[float] = []
+        ns = 0
+        for one in per_ticker:
+            if one.get("mode") != "ok":
+                continue
+            ph = one.get("per_horizon") or {}
+            b = ph.get(hk) if isinstance(ph, dict) else None
+            if not isinstance(b, dict) or not b.get("n_points"):
+                continue
+            if b.get("rmse_oos_log") is not None:
+                try:
+                    rmses.append(float(b["rmse_oos_log"]))
+                except (TypeError, ValueError):
+                    pass
+            if b.get("sign_accuracy") is not None:
+                try:
+                    signs.append(float(float(b["sign_accuracy"])))
+                except (TypeError, ValueError):
+                    pass
+            ns += int(b.get("n_points") or 0)
+        pooled_rmse[hk] = round(float(sum(rmses) / len(rmses)), 6) if rmses else None
+        pooled_sign[hk] = round(float(sum(signs) / len(signs)), 4) if signs else None
+        pooled_n[hk] = ns
+    return {
+        "pooled_by_horizon": {
+            str(h): {
+                "mean_rmse_oos_log_across_tickers": pooled_rmse.get(str(h)),
+                "mean_sign_accuracy": pooled_sign.get(str(h)),
+                "n_points_sum": pooled_n.get(str(h)),
+            }
+            for h in (1, 2, 3)
+        },
+        "pooled_rmse": pooled_rmse,
+        "pooled_sign": pooled_sign,
+        "pooled_n": pooled_n,
+    }
+
+
+def _run_walkforward_for_feature_set(
+    engine: Engine,
+    tickers: Sequence[str],
+    ridge_lambda: float,
+    spec: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    from services.multiday_lr_pipeline import walkforward_oos_multiday_single_ticker
+
+    out: List[Dict[str, Any]] = []
+    for t in tickers:
+        one = walkforward_oos_multiday_single_ticker(
+            engine,
+            t,
+            ridge_lambda=ridge_lambda,
+            min_train_rows=80,
+            stride=5,
+            max_eval_points=72,
+            use_premarket_db=bool(spec.get("use_premarket_db")),
+            use_news_db=bool(spec.get("use_news_db")),
+            use_macro_calendar_db=bool(spec.get("use_macro_calendar_db")),
+            use_symbol_calendar_db=bool(spec.get("use_symbol_calendar_db")),
+        )
+        out.append(one)
+    return out
+
+
+def _enrichment_tables_populated(engine: Engine) -> bool:
+    try:
+        from sqlalchemy import text
+
+        with engine.connect() as conn:
+            n_news = conn.execute(text("SELECT COUNT(*)::int FROM news_daily_features")).scalar()
+            n_macro = conn.execute(text("SELECT COUNT(*)::int FROM macro_calendar_daily_features")).scalar()
+        return int(n_news or 0) >= 50 and int(n_macro or 0) >= 50
+    except Exception:
+        return False
+
+
+def _horizon_better_or_tied(
+    baseline_rmse: Optional[float],
+    test_rmse: Optional[float],
+    baseline_sign: Optional[float],
+    test_sign: Optional[float],
+    *,
+    rmse_tol: float = 1.01,
+    sign_tol: float = 0.02,
+) -> bool:
+    if baseline_rmse is None or test_rmse is None or baseline_sign is None or test_sign is None:
+        return False
+    if float(test_rmse) > float(baseline_rmse) * rmse_tol:
+        return False
+    if float(test_sign) < float(baseline_sign) - sign_tol:
+        return False
+    return True
+
+
+def _recommend_env_flag(
+    v2_pool: Dict[str, Any],
+    test_pool: Dict[str, Any],
+    env_key: str,
+    label_ru: str,
+) -> Dict[str, Any]:
+    v2n = (v2_pool.get("pooled_n") or {}).get("1") or 0
+    if int(v2n) < 120:
+        return {
+            "env_key": env_key,
+            "label_ru": label_ru,
+            "config_current": _env_flag_true(env_key, "false"),
+            "recommendation": "insufficient_data",
+            "rationale_ru": "Мало OOS-точек по v2 (нужна история quotes и ingest feature-таблиц).",
+        }
+    pr2 = v2_pool.get("pooled_rmse") or {}
+    prt = test_pool.get("pooled_rmse") or {}
+    ps2 = v2_pool.get("pooled_sign") or {}
+    pst = test_pool.get("pooled_sign") or {}
+    wins = 0
+    deltas: Dict[str, Optional[float]] = {}
+    for h in ("1", "2", "3"):
+        b_rm, t_rm = pr2.get(h), prt.get(h)
+        b_sg, t_sg = ps2.get(h), pst.get(h)
+        if b_rm is not None and t_rm is not None:
+            deltas[h] = round(float(t_rm) - float(b_rm), 6)
+        if _horizon_better_or_tied(b_rm, t_rm, b_sg, t_sg):
+            wins += 1
+    cur = _env_flag_true(env_key, "false")
+    if wins >= 2:
+        rec = "try_true" if not cur else "keep_true"
+        rat = (
+            f"OOS: на {wins}/3 горизонтах RMSE не хуже v2 (допуск 1%) и знак не просел. "
+            f"ΔRMSE 1d/2d/3d: {deltas.get('1')}/{deltas.get('2')}/{deltas.get('3')}."
+        )
+    elif wins == 1:
+        rec = "caution"
+        rat = (
+            f"Смешанный OOS (лучше только на части горизонтов). ΔRMSE: {deltas}. "
+            "Включайте флаг вручную и перепроверьте на карточках."
+        )
+    else:
+        rec = "keep_false" if not cur else "try_false"
+        rat = (
+            f"OOS не лучше v2 на 2+ горизонтах (ΔRMSE 1d/2d/3d: {deltas.get('1')}/{deltas.get('2')}/{deltas.get('3')}). "
+            "Оставить false."
+        )
+    return {
+        "env_key": env_key,
+        "label_ru": label_ru,
+        "config_current": cur,
+        "recommendation": rec,
+        "rationale_ru": rat,
+        "horizons_better_count": wins,
+        "rmse_delta_vs_v2": deltas,
+    }
+
+
+def _build_feature_set_comparison(
+    pools: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    v2 = pools.get("v2") or {}
+    v2_rm = v2.get("pooled_rmse") or {}
+    rows: List[Dict[str, Any]] = []
+    for key, pool in pools.items():
+        if key == "v2":
+            continue
+        pr = pool.get("pooled_rmse") or {}
+        row = {"feature_set": key, "label_ru": MULTIDAY_FEATURE_SET_SPECS.get(key, {}).get("label_ru", key)}
+        for h in ("1", "2", "3"):
+            b, t = v2_rm.get(h), pr.get(h)
+            if b is not None and t is not None:
+                row[f"rmse_{h}d"] = t
+                row[f"rmse_delta_vs_v2_{h}d"] = round(float(t) - float(b), 6)
+        rows.append(row)
+    full = pools.get("v3") or {}
+    summary = "v2"
+    if full:
+        v3_wins = sum(
+            1
+            for h in ("1", "2", "3")
+            if _horizon_better_or_tied(
+                v2_rm.get(h),
+                (full.get("pooled_rmse") or {}).get(h),
+                (v2.get("pooled_sign") or {}).get(h),
+                (full.get("pooled_sign") or {}).get(h),
+            )
+        )
+        if v3_wins >= 2:
+            summary = "v3_better_oos"
+        elif v3_wins == 0:
+            summary = "v2_better_oos"
+        else:
+            summary = "mixed"
+    return {"vs_v2": rows, "summary_ru": summary}
+
+
+def _build_multiday_env_recommendations(
+    pools: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    v2 = pools.get("v2") or {}
+    items: List[Dict[str, Any]] = []
+    for env_key, test_key, label in ENV_FLAG_SPECS:
+        test_pool = pools.get(test_key) or {}
+        items.append(_recommend_env_flag(v2, test_pool, env_key, label))
+    v3_pool = pools.get("v3") or {}
+    full_rec = _recommend_env_flag(
+        v2,
+        v3_pool,
+        "GAME_5M_MULTIDAY_LR_USE_ALL_ENRICHMENT",
+        "все три флага enrichment вместе (v3)",
     )
+    lines: List[str] = []
+    for it in items:
+        if it.get("env_key") == "GAME_5M_MULTIDAY_LR_USE_ALL_ENRICHMENT":
+            continue
+        cur = "true" if it.get("config_current") else "false"
+        lines.append(
+            f"• `{it.get('env_key')}` (сейчас {cur}): **{it.get('recommendation')}** — {it.get('rationale_ru')}"
+        )
+    lines.append(
+        f"• Полный v3 (все флаги): **{full_rec.get('recommendation')}** — {full_rec.get('rationale_ru')}"
+    )
+    return {
+        "flags": items,
+        "full_v3": full_rec,
+        "summary_lines_ru": lines,
+        "note_ru": "Рекомендации не меняют config.env автоматически. После true — restart lse-bot.",
+    }
 
 
 def _daily_index_on_or_before_entry(dates: pd.DatetimeIndex, entry_ts: Any) -> Optional[int]:
@@ -64,6 +365,8 @@ def build_multiday_lr_reality_check(
     """
     Walk-forward OOS по тикерам игры 5m + срез «на день входа» vs дневной forward 1d/2d/3d
     (и отдельно realized сделки — другой масштаб, см. trade_rows).
+
+    При заполненных таблицах enrichment — сравнение v2 vs v3n/v3mac/v3sym/v3 и рекомендации env-флагов.
     """
     su = (strategy or "").strip().upper()
     if su == "PORTFOLIO":
@@ -76,80 +379,101 @@ def build_multiday_lr_reality_check(
     if engine is None:
         return {"mode": "skipped", "note": "Нет подключения к БД (engine)."}
 
-    from services.multiday_lr_pipeline import (
-        fetch_daily_close_series_from_quotes,
-        walkforward_oos_multiday_single_ticker,
-    )
     from services.ticker_groups import get_tickers_game_5m
 
     tickers = [str(x).strip().upper() for x in get_tickers_game_5m() if str(x).strip()]
     lam = _ridge_lambda_from_config()
     use_pm = _use_premarket_from_config()
+    live_key = _live_feature_set_key()
+    compare_all = _env_flag_true("GAME_5M_MULTIDAY_LR_ANALYZER_COMPARE_FEATURE_SETS", "true")
+    enrichment_ready = _enrichment_tables_populated(engine)
 
-    per_ticker: List[Dict[str, Any]] = []
+    pools: Dict[str, Dict[str, Any]] = {}
+    per_ticker_by_set: Dict[str, List[Dict[str, Any]]] = {}
 
-    for t in tickers:
-        one = walkforward_oos_multiday_single_ticker(
-            engine,
-            t,
-            ridge_lambda=lam,
-            min_train_rows=80,
-            stride=5,
-            max_eval_points=72,
-            use_premarket_db=use_pm,
+    pt_v2 = _run_walkforward_for_feature_set(engine, tickers, lam, MULTIDAY_FEATURE_SET_SPECS["v2"])
+    per_ticker_by_set["v2"] = pt_v2
+    pools["v2"] = _pool_walkforward_runs(pt_v2)
+
+    comparison_note: Optional[str] = None
+    if compare_all and enrichment_ready:
+        for key in ("v3n", "v3mac", "v3sym", "v3"):
+            spec = MULTIDAY_FEATURE_SET_SPECS[key]
+            pt = _run_walkforward_for_feature_set(engine, tickers, lam, spec)
+            per_ticker_by_set[key] = pt
+            pools[key] = _pool_walkforward_runs(pt)
+    elif not enrichment_ready:
+        comparison_note = (
+            "Сравнение v2/v3 не запущено: мало строк в news_daily_features / macro_calendar_daily_features "
+            "(запустите ingest_* и migrate 023–025)."
         )
-        per_ticker.append(one)
+    elif not compare_all:
+        comparison_note = "Сравнение наборов отключено (GAME_5M_MULTIDAY_LR_ANALYZER_COMPARE_FEATURE_SETS=false)."
 
-    pooled_rmse: Dict[str, Optional[float]] = {}
-    pooled_sign: Dict[str, Optional[float]] = {}
-    pooled_n: Dict[str, int] = {}
-    for hk in ("1", "2", "3"):
-        rmses: List[float] = []
-        signs: List[float] = []
-        ns = 0
-        for one in per_ticker:
-            if one.get("mode") != "ok":
-                continue
-            ph = one.get("per_horizon") or {}
-            b = ph.get(hk) if isinstance(ph, dict) else None
-            if not isinstance(b, dict) or not b.get("n_points"):
-                continue
-            if b.get("rmse_oos_log") is not None:
-                try:
-                    rmses.append(float(b["rmse_oos_log"]))
-                except (TypeError, ValueError):
-                    pass
-            if b.get("sign_accuracy") is not None:
-                try:
-                    signs.append(float(b["sign_accuracy"]))
-                except (TypeError, ValueError):
-                    pass
-            ns += int(b.get("n_points") or 0)
-        pooled_rmse[hk] = round(float(sum(rmses) / len(rmses)), 6) if rmses else None
-        pooled_sign[hk] = round(float(sum(signs) / len(signs)), 4) if signs else None
-        pooled_n[hk] = ns
+    active_spec = MULTIDAY_FEATURE_SET_SPECS.get(live_key) or MULTIDAY_FEATURE_SET_SPECS["v2"]
+    if live_key not in per_ticker_by_set:
+        pt_live = _run_walkforward_for_feature_set(engine, tickers, lam, active_spec)
+        per_ticker_by_set[live_key] = pt_live
+        pools[live_key] = _pool_walkforward_runs(pt_live)
+
+    per_ticker = per_ticker_by_set.get(live_key) or per_ticker_by_set["v2"]
+    active_pool = pools.get(live_key) or pools["v2"]
+    pooled_rmse = dict(active_pool.get("pooled_rmse") or {})
+    pooled_sign = dict(active_pool.get("pooled_sign") or {})
+    pooled_n = dict(active_pool.get("pooled_n") or {})
 
     verdict, rationale = _multiday_walkforward_verdict(pooled_rmse, pooled_sign, pooled_n)
+    if live_key != "v2" and rationale:
+        rationale = f"{rationale} (вердикт по активному набору {live_key}: {active_spec.get('label_ru', live_key)}.)"
 
     trade_rows = _multiday_trade_alignment_rows(engine, closed_trades, effects, strategy, lam, use_pm)
+
+    env_recs: Dict[str, Any] = {"note_ru": comparison_note or "Нет сравнения с v2 — рекомендации по флагам недоступны."}
+    feature_comparison: Dict[str, Any] = {}
+    if len(pools) >= 2 and "v2" in pools:
+        env_recs = _build_multiday_env_recommendations(pools)
+        if comparison_note:
+            env_recs["comparison_skipped_note_ru"] = comparison_note
+        feature_comparison = _build_feature_set_comparison(pools)
+
+    pooled_by_horizon = (active_pool.get("pooled_by_horizon") or {}).copy()
+    if not pooled_by_horizon:
+        pooled_by_horizon = {
+            str(h): {
+                "mean_rmse_oos_log_across_tickers": pooled_rmse.get(str(h)),
+                "mean_sign_accuracy": pooled_sign.get(str(h)),
+                "n_points_sum": pooled_n.get(str(h)),
+            }
+            for h in (1, 2, 3)
+        }
 
     return {
         "mode": "ok",
         "description": (
             "Walk-forward OOS: на каждой контрольной дате end — ridge как в live (последний дневной close, "
             "премаркет при включении), ошибка предсказания log-ret vs факт log(c[end+h]/c[end]) по quotes. "
+            "При ingest enrichment — сравнение v2/v3* и multiday_env_recommendations для GAME_5M_MULTIDAY_LR_USE_*_DB. "
             "Сделки: дневной forward с дня входа vs realized_pct сделки (интрадей — разные шкалы)."
         ),
         "ridge_lambda_config": lam,
         "tickers_walkforward": tickers,
-        "per_ticker_walkforward": per_ticker,
-        "pooled_by_horizon": {
-            "1": {"mean_rmse_oos_log_across_tickers": pooled_rmse.get("1"), "mean_sign_accuracy": pooled_sign.get("1"), "n_points_sum": pooled_n.get("1")},
-            "2": {"mean_rmse_oos_log_across_tickers": pooled_rmse.get("2"), "mean_sign_accuracy": pooled_sign.get("2"), "n_points_sum": pooled_n.get("2")},
-            "3": {"mean_rmse_oos_log_across_tickers": pooled_rmse.get("3"), "mean_sign_accuracy": pooled_sign.get("3"), "n_points_sum": pooled_n.get("3")},
+        "active_feature_set": live_key,
+        "active_feature_set_label_ru": active_spec.get("label_ru", live_key),
+        "config_flags": {
+            "premarket": use_pm,
+            "news": _env_flag_true("GAME_5M_MULTIDAY_LR_USE_NEWS_DB", "false"),
+            "macro_calendar": _env_flag_true("GAME_5M_MULTIDAY_LR_USE_MACRO_CALENDAR_DB", "false"),
+            "symbol_calendar": _env_flag_true("GAME_5M_MULTIDAY_LR_USE_SYMBOL_CALENDAR_DB", "false"),
         },
+        "per_ticker_walkforward": per_ticker,
+        "pooled_by_horizon": pooled_by_horizon,
         "walkforward_production_verdict": verdict,
         "walkforward_verdict_rationale_ru": rationale,
+        "multiday_lr_feature_comparison": feature_comparison,
+        "multiday_env_recommendations": env_recs,
+        "pooled_by_feature_set": {
+            k: v.get("pooled_by_horizon") for k, v in pools.items() if isinstance(v, dict)
+        },
         "trade_alignment_sample": trade_rows,
     }
 
@@ -314,6 +638,14 @@ def build_ml_production_arbiter(report: Dict[str, Any]) -> Dict[str, Any]:
                 f"  (пул 1d: средний RMSE по тикерам ≈ {b1.get('mean_rmse_oos_log_across_tickers')}, "
                 f"средняя доля верного знака ≈ {b1.get('mean_sign_accuracy')}, суммарно точек n≈ {b1.get('n_points_sum')})"
             )
+        env_rec = mlr.get("multiday_env_recommendations") or {}
+        for sl in env_rec.get("summary_lines_ru") or []:
+            lines.append(f"  {sl}")
+        if env_rec.get("note_ru"):
+            lines.append(f"  ({env_rec.get('note_ru')})")
+        fc = mlr.get("multiday_lr_feature_comparison") or {}
+        if fc.get("summary_ru"):
+            lines.append(f"  Сводка OOS v2 vs v3: {fc.get('summary_ru')}")
     elif mlr.get("note"):
         verdicts["multiday_ridge"] = "skipped"
         lines.append(f"• Multiday ridge: пропуск — {mlr.get('note')}")

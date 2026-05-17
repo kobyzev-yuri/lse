@@ -24,6 +24,7 @@ from services.ingest_multiday_lr_daily_features_common import (
     apply_sql_migrations,
     default_date_range,
     parse_date_arg,
+    resolve_tickers_for_ingest,
     session_close_utc,
     trading_dates_from_quotes,
 )
@@ -132,7 +133,11 @@ def main() -> int:
     p.add_argument("--region", default="US")
     p.add_argument("--exchange", default="US")
     p.add_argument("--snapshot-label", default="latest")
-    p.add_argument("--anchor-symbol", default="SPY", help="quotes dates for US trading calendar")
+    p.add_argument(
+        "--anchor-symbol",
+        default="",
+        help="quotes trading calendar anchor (default: first GAME_5M ticker with quotes, else MU)",
+    )
     p.add_argument("--ensure-table", action="store_true")
     args = p.parse_args()
 
@@ -146,9 +151,19 @@ def main() -> int:
     else:
         d0, d1 = default_date_range(args.period_days)
 
-    tdates = trading_dates_from_quotes(engine, args.anchor_symbol.strip().upper(), d0, d1)
+    anchor = (args.anchor_symbol or "").strip().upper()
+    tdates: List[date] = []
+    if anchor:
+        tdates = trading_dates_from_quotes(engine, anchor, d0, d1)
     if not tdates:
-        logger.error("No trading dates from quotes for anchor %s", args.anchor_symbol)
+        for sym in resolve_tickers_for_ingest("game5m", engine) + ["MU", "SNDK", "ASML"]:
+            tdates = trading_dates_from_quotes(engine, sym, d0, d1)
+            if tdates:
+                anchor = sym
+                logger.info("Using quotes anchor symbol %s (%d trading days)", anchor, len(tdates))
+                break
+    if not tdates:
+        logger.error("No trading dates from quotes (tried GAME_5M tickers and MU/SNDK/ASML)")
         return 1
 
     events = _load_calendar_events(engine, d0, d1, args.region)

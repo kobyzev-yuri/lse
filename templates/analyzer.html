@@ -884,6 +884,38 @@ function renderMultidayLrBlock(data) {
         esc(m.walkforward_verdict_rationale_ru || '') + '</p>';
     html += '<p style="margin:0.35rem 0;font-size:0.88rem;">λ ridge: <code>' + esc(m.ridge_lambda_config) + '</code>, тикеров в OOS: ' +
         esc((m.tickers_walkforward || []).length) + '</p>';
+    const cf = m.config_flags || {};
+    if (m.active_feature_set) {
+        html += '<p style="margin:0.35rem 0;font-size:0.88rem;">Активный набор (config): <strong>' + esc(m.active_feature_set) + '</strong> — ' +
+            esc(m.active_feature_set_label_ru || '') + '<br>Флаги: premarket=' + esc(cf.premarket) + ', news=' + esc(cf.news) +
+            ', macro=' + esc(cf.macro_calendar) + ', symbol=' + esc(cf.symbol_calendar) + '</p>';
+    }
+    const envRec = m.multiday_env_recommendations || {};
+    const envLines = Array.isArray(envRec.summary_lines_ru) ? envRec.summary_lines_ru : [];
+    if (envLines.length) {
+        html += '<p style="margin:0.55rem 0 0.25rem 0;font-size:0.9rem;color:#7dd3fc;"><strong>Рекомендации env-флагов enrichment</strong> (OOS walk-forward vs v2):</p><ul style="margin:0;padding-left:1.1rem;font-size:0.85rem;">';
+        envLines.forEach(function (line) {
+            html += '<li style="margin:0.2rem 0;">' + esc(line) + '</li>';
+        });
+        html += '</ul>';
+        if (envRec.note_ru) {
+            html += '<p class="muted" style="margin:0.25rem 0;font-size:0.82rem;">' + esc(envRec.note_ru) + '</p>';
+        }
+    } else if (envRec.note_ru || envRec.comparison_skipped_note_ru) {
+        html += '<p class="muted" style="margin:0.45rem 0;font-size:0.86rem;">' +
+            esc(envRec.comparison_skipped_note_ru || envRec.note_ru) + '</p>';
+    }
+    const fc = m.multiday_lr_feature_comparison || {};
+    const vs = Array.isArray(fc.vs_v2) ? fc.vs_v2 : [];
+    if (vs.length) {
+        html += '<p style="margin:0.45rem 0 0.25rem 0;font-size:0.88rem;color:#94a3b8;">Сравнение pooled RMSE vs v2' +
+            (fc.summary_ru ? ' (<strong>' + esc(fc.summary_ru) + '</strong>)' : '') + ':</p><ul style="margin:0;padding-left:1.1rem;font-size:0.82rem;">';
+        vs.forEach(function (row) {
+            html += '<li><code>' + esc(row.feature_set) + '</code>: ΔRMSE 1d/2d/3d = ' +
+                esc(row.rmse_delta_vs_v2_1d) + ' / ' + esc(row.rmse_delta_vs_v2_2d) + ' / ' + esc(row.rmse_delta_vs_v2_3d) + '</li>';
+        });
+        html += '</ul>';
+    }
     const ph = m.pooled_by_horizon || {};
     ['1', '2', '3'].forEach(function (hk) {
         const b = ph[hk];

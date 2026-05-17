@@ -116,9 +116,9 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "и сопоставляем с фактом realized_pct. Нужен файл модели .cbm + meta.json и включение GAME_5M_CATBOOST_ENABLED."
     ),
     "multiday_lr_reality_check": (
-        "Walk-forward OOS ridge multiday (как в live): средний RMSE log-return и доля верного знака по горизонтам 1/2/3 дня "
-        "по дневным quotes для тикеров GAME_5M; trade_alignment_sample — прогноз на день входа vs факт log-ret и realized_pct "
-        "сделки (интрадей — другой масштаб, справочно)."
+        "Walk-forward OOS ridge multiday: вердикт по активному набору из config (v2/v3*); при ingest enrichment — "
+        "сравнение pooled RMSE v2 vs v3n/v3mac/v3sym/v3 и multiday_env_recommendations (try_true|keep_false|caution) "
+        "для GAME_5M_MULTIDAY_LR_USE_NEWS_DB / USE_MACRO_CALENDAR_DB / USE_SYMBOL_CALENDAR_DB."
     ),
     "ml_production_arbiter": (
         "Сводный вердикт готовности ML к продакшену: multiday ridge OOS, CatBoost entry, портфельный CatBoost (meta RMSE), "
@@ -5580,6 +5580,22 @@ def _append_multiday_lr_and_arbiter_text_lines(lines: List[str], report: Dict[st
             if rm is None and sg is None:
                 continue
             lines.append(f"• Пул {lab}: средн. RMSE(log)≈{rm}, доля верного знака≈{sg}, сумм. n={nsum}")
+        ak = mlr.get("active_feature_set")
+        if ak:
+            lines.append(
+                f"• Активный набор (config): **{ak}** — {mlr.get('active_feature_set_label_ru') or ''}"
+            )
+        env_rec = mlr.get("multiday_env_recommendations") or {}
+        sum_env = env_rec.get("summary_lines_ru") or []
+        if sum_env:
+            lines.append("• Рекомендации env-флагов enrichment (OOS vs v2):")
+            for sl in sum_env:
+                lines.append(f"  {sl}")
+            if env_rec.get("note_ru"):
+                lines.append(f"  _{env_rec.get('note_ru')}_")
+        fc = mlr.get("multiday_lr_feature_comparison") or {}
+        if fc.get("summary_ru"):
+            lines.append(f"• Сводка сравнения наборов: **{fc.get('summary_ru')}**")
         tas = mlr.get("trade_alignment_sample") or []
         if tas:
             lines.append("• Выборка сделок (pred/actual log vs realized % — разные шкалы):")
