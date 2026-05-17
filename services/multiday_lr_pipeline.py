@@ -34,7 +34,11 @@ logger = logging.getLogger(__name__)
 
 ARTIFACT_VERSION_V1 = 1
 ARTIFACT_VERSION_V2 = 2
+ARTIFACT_VERSION_V3 = 3
 PREMARKET_N = 4
+NEWS_DAILY_N = 7
+MACRO_CAL_N = 5
+SYM_CAL_N = 5
 
 
 def multiday_lr_model_dir() -> Path:
@@ -236,6 +240,237 @@ def _premarket_vec_for_date(pm: Optional[pd.DataFrame], trade_d: Any) -> np.ndar
         return z
 
 
+def _importance_score(raw: Any) -> float:
+    s = str(raw or "").strip().upper()
+    if s == "HIGH":
+        return 1.0
+    if s in ("MEDIUM", "MED"):
+        return 0.5
+    return 0.0
+
+
+def fetch_news_daily_features_dataframe(
+    engine: Engine,
+    symbol: str,
+    *,
+    min_date: Optional[str] = None,
+    exchange: str = "US",
+    snapshot_label: str = "latest",
+) -> Optional[pd.DataFrame]:
+    sym = str(symbol).strip().upper()
+    sql = """
+        SELECT trade_date::date AS d,
+               sentiment_mean, sentiment_min, sentiment_max, article_count,
+               negative_count, very_negative_count, positive_count
+        FROM public.news_daily_features
+        WHERE symbol = :sym AND exchange = :exch AND snapshot_label = :slab
+    """
+    params: Dict[str, Any] = {"sym": sym, "exch": exchange, "slab": snapshot_label}
+    if min_date:
+        sql += " AND trade_date >= :min_date"
+        params["min_date"] = min_date
+    sql += " ORDER BY trade_date ASC"
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text(sql), conn, params=params)
+    except Exception as e:
+        logger.debug("news_daily_features %s: %s", sym, e)
+        return None
+    if df is None or df.empty:
+        return None
+    df["d"] = pd.to_datetime(df["d"]).dt.normalize()
+    return df.drop_duplicates(subset=["d"], keep="last").set_index("d")
+
+
+def fetch_macro_calendar_daily_features_dataframe(
+    engine: Engine,
+    *,
+    region: str = "US",
+    min_date: Optional[str] = None,
+    exchange: str = "US",
+    snapshot_label: str = "latest",
+) -> Optional[pd.DataFrame]:
+    reg = str(region).strip().upper()
+    sql = """
+        SELECT trade_date::date AS d,
+               high_impact_fwd_1d, high_impact_fwd_3d, high_impact_back_1d,
+               hours_to_next_high_impact, hours_since_last_high_impact
+        FROM public.macro_calendar_daily_features
+        WHERE region = :reg AND exchange = :exch AND snapshot_label = :slab
+    """
+    params: Dict[str, Any] = {"reg": reg, "exch": exchange, "slab": snapshot_label}
+    if min_date:
+        sql += " AND trade_date >= :min_date"
+        params["min_date"] = min_date
+    sql += " ORDER BY trade_date ASC"
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text(sql), conn, params=params)
+    except Exception as e:
+        logger.debug("macro_calendar_daily_features: %s", e)
+        return None
+    if df is None or df.empty:
+        return None
+    df["d"] = pd.to_datetime(df["d"]).dt.normalize()
+    return df.drop_duplicates(subset=["d"], keep="last").set_index("d")
+
+
+def fetch_symbol_calendar_daily_features_dataframe(
+    engine: Engine,
+    symbol: str,
+    *,
+    min_date: Optional[str] = None,
+    exchange: str = "US",
+    snapshot_label: str = "latest",
+) -> Optional[pd.DataFrame]:
+    sym = str(symbol).strip().upper()
+    sql = """
+        SELECT trade_date::date AS d,
+               days_to_next_earnings, days_since_last_earnings,
+               is_earnings_day, earnings_within_3d, next_earnings_importance
+        FROM public.symbol_calendar_daily_features
+        WHERE symbol = :sym AND exchange = :exch AND snapshot_label = :slab
+    """
+    params: Dict[str, Any] = {"sym": sym, "exch": exchange, "slab": snapshot_label}
+    if min_date:
+        sql += " AND trade_date >= :min_date"
+        params["min_date"] = min_date
+    sql += " ORDER BY trade_date ASC"
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text(sql), conn, params=params)
+    except Exception as e:
+        logger.debug("symbol_calendar_daily_features %s: %s", sym, e)
+        return None
+    if df is None or df.empty:
+        return None
+    df["d"] = pd.to_datetime(df["d"]).dt.normalize()
+    return df.drop_duplicates(subset=["d"], keep="last").set_index("d")
+
+
+def _news_vec_for_date(df: Optional[pd.DataFrame], trade_d: Any) -> np.ndarray:
+    z = np.zeros(NEWS_DAILY_N, dtype=float)
+    if df is None or df.empty:
+        return z
+    try:
+        dt = pd.Timestamp(trade_d).normalize()
+        hit = df.loc[dt]
+    except (KeyError, TypeError):
+        return z
+    if isinstance(hit, pd.DataFrame):
+        hit = hit.iloc[-1]
+
+    def _f(key: str, default: float = 0.0) -> float:
+        try:
+            v = float(hit.get(key, default) or default)
+            return v if math.isfinite(v) else default
+        except (TypeError, ValueError):
+            return default
+
+    ac = max(_f("article_count", 0.0), 0.0)
+    acs = min(ac / 10.0, 3.0)
+    denom = max(ac, 1.0)
+    z[0] = _f("sentiment_mean", 0.5)
+    z[1] = _f("sentiment_min", 0.5)
+    z[2] = _f("sentiment_max", 0.5)
+    z[3] = acs
+    z[4] = _f("negative_count", 0.0) / denom
+    z[5] = _f("very_negative_count", 0.0) / denom
+    z[6] = _f("positive_count", 0.0) / denom
+    return z
+
+
+def _macro_cal_vec_for_date(df: Optional[pd.DataFrame], trade_d: Any) -> np.ndarray:
+    z = np.zeros(MACRO_CAL_N, dtype=float)
+    if df is None or df.empty:
+        return z
+    try:
+        dt = pd.Timestamp(trade_d).normalize()
+        hit = df.loc[dt]
+    except (KeyError, TypeError):
+        return z
+    if isinstance(hit, pd.DataFrame):
+        hit = hit.iloc[-1]
+
+    def _f(key: str) -> float:
+        try:
+            v = hit.get(key)
+            if v is None:
+                return 0.0
+            x = float(v)
+            return x if math.isfinite(x) else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    z[0] = min(_f("high_impact_fwd_1d") / 5.0, 3.0)
+    z[1] = min(_f("high_impact_fwd_3d") / 8.0, 3.0)
+    z[2] = min(_f("high_impact_back_1d") / 5.0, 3.0)
+    z[3] = min(_f("hours_to_next_high_impact") / 168.0, 1.0)
+    z[4] = min(_f("hours_since_last_high_impact") / 168.0, 1.0)
+    return z
+
+
+def _sym_cal_vec_for_date(df: Optional[pd.DataFrame], trade_d: Any) -> np.ndarray:
+    z = np.zeros(SYM_CAL_N, dtype=float)
+    if df is None or df.empty:
+        return z
+    try:
+        dt = pd.Timestamp(trade_d).normalize()
+        hit = df.loc[dt]
+    except (KeyError, TypeError):
+        return z
+    if isinstance(hit, pd.DataFrame):
+        hit = hit.iloc[-1]
+
+    def _f(key: str) -> float:
+        try:
+            v = hit.get(key)
+            if v is None:
+                return 0.0
+            x = float(v)
+            return x if math.isfinite(x) else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    dtn = _f("days_to_next_earnings")
+    if dtn >= 0:
+        z[0] = min(dtn / 10.0, 3.0)
+    dts = _f("days_since_last_earnings")
+    if dts >= 0:
+        z[1] = min(dts / 10.0, 3.0)
+    z[2] = 1.0 if int(_f("is_earnings_day")) else 0.0
+    z[3] = 1.0 if int(_f("earnings_within_3d")) else 0.0
+    z[4] = _importance_score(hit.get("next_earnings_importance"))
+    return z
+
+
+def _concat_optional_daily_features(
+    row: np.ndarray,
+    trade_d: Any,
+    *,
+    pm_df: Optional[pd.DataFrame],
+    news_df: Optional[pd.DataFrame],
+    macro_df: Optional[pd.DataFrame],
+    sym_df: Optional[pd.DataFrame],
+    use_premarket: bool,
+    use_news: bool,
+    use_macro_calendar: bool,
+    use_symbol_calendar: bool,
+    intra2: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    parts: List[np.ndarray] = [row]
+    if use_premarket:
+        parts.append(_premarket_vec_for_date(pm_df, trade_d))
+    if use_news:
+        parts.append(_news_vec_for_date(news_df, trade_d))
+    if use_macro_calendar:
+        parts.append(_macro_cal_vec_for_date(macro_df, trade_d))
+    if use_symbol_calendar:
+        parts.append(_sym_cal_vec_for_date(sym_df, trade_d))
+    parts.append(intra2 if intra2 is not None else np.zeros(2, dtype=float))
+    return np.concatenate(parts).astype(float)
+
+
 def build_training_stack(
     dates: pd.DatetimeIndex,
     c: np.ndarray,
@@ -243,12 +478,19 @@ def build_training_stack(
     *,
     pm_df: Optional[pd.DataFrame] = None,
     use_premarket: bool = False,
+    news_df: Optional[pd.DataFrame] = None,
+    use_news: bool = False,
+    macro_cal_df: Optional[pd.DataFrame] = None,
+    use_macro_calendar: bool = False,
+    sym_cal_df: Optional[pd.DataFrame] = None,
+    use_symbol_calendar: bool = False,
 ) -> Tuple[Optional[np.ndarray], Dict[int, np.ndarray], int, int, int]:
     """
     Матрица X и y по горизонтам.
     use_premarket True: 7 + 4 (premarket_daily_features по trade_date, иначе нули) + 2 (5m в train — нули).
     use_premarket False: 7 + 2 (как раньше).
-    Возвращает (X или None, ydict, min_i, max_i, n_pm_cols).
+    Опционально v3: + news (7) + macro_cal (5) + sym_cal (5).
+    Возвращает (X или None, ydict, min_i, max_i, n_pm_cols) — n_pm_cols = число колонок премаркета (0 или 4).
     """
     lr = _aligned_lr(c)
     n = len(c)
@@ -276,12 +518,19 @@ def build_training_stack(
         if not ok:
             continue
         td = dates[i]
-        pm_vec = _premarket_vec_for_date(pm_df, td) if n_pm else np.zeros(0, dtype=float)
-        intra2 = np.zeros(2, dtype=float)
-        if n_pm:
-            full = np.concatenate([row, pm_vec, intra2])
-        else:
-            full = np.concatenate([row, intra2])
+        full = _concat_optional_daily_features(
+            row,
+            td,
+            pm_df=pm_df,
+            news_df=news_df,
+            macro_df=macro_cal_df,
+            sym_df=sym_cal_df,
+            use_premarket=use_premarket,
+            use_news=use_news,
+            use_macro_calendar=use_macro_calendar,
+            use_symbol_calendar=use_symbol_calendar,
+            intra2=np.zeros(2, dtype=float),
+        )
         rows.append(full)
         for h in horizons:
             targets[int(h)].append(rt[int(h)])
@@ -332,7 +581,13 @@ def select_lambda_mean_cv(
     return best_lam, {"lambda_grid_cv": grid_out, "selected_lambda": best_lam}
 
 
-def _feature_names_for_artifact(use_premarket: bool) -> List[str]:
+def _feature_names_for_artifact(
+    *,
+    use_premarket: bool,
+    use_news: bool = False,
+    use_macro_calendar: bool = False,
+    use_symbol_calendar: bool = False,
+) -> List[str]:
     base = [
         "intercept",
         "lr_lag1",
@@ -344,8 +599,83 @@ def _feature_names_for_artifact(use_premarket: bool) -> List[str]:
     ]
     if use_premarket:
         base.extend(["pm_gap_frac", "pm_ret_frac", "pm_range_frac", "pm_gap_vs_vol_frac"])
+    if use_news:
+        base.extend(
+            [
+                "news_sent_mean",
+                "news_sent_min",
+                "news_sent_max",
+                "news_art_cap",
+                "news_neg_frac",
+                "news_vneg_frac",
+                "news_pos_frac",
+            ]
+        )
+    if use_macro_calendar:
+        base.extend(
+            [
+                "macro_hi_fwd_1d",
+                "macro_hi_fwd_3d",
+                "macro_hi_back_1d",
+                "macro_hrs_to_next",
+                "macro_hrs_since",
+            ]
+        )
+    if use_symbol_calendar:
+        base.extend(
+            [
+                "sym_days_to_earn",
+                "sym_days_since_earn",
+                "sym_is_earn_day",
+                "sym_earn_within_3d",
+                "sym_next_earn_imp",
+            ]
+        )
     base.extend(["vol_5m_frac", "mom_2h_frac"])
     return base
+
+
+def _artifact_version_for_flags(
+    *,
+    use_premarket: bool,
+    use_news: bool,
+    use_macro_calendar: bool,
+    use_symbol_calendar: bool,
+) -> int:
+    if use_news or use_macro_calendar or use_symbol_calendar:
+        return ARTIFACT_VERSION_V3
+    if use_premarket:
+        return ARTIFACT_VERSION_V2
+    return ARTIFACT_VERSION_V1
+
+
+def _load_optional_daily_feature_frames(
+    engine: Optional[Engine],
+    ticker: str,
+    closes: pd.Series,
+    *,
+    use_premarket_db: bool,
+    use_news_db: bool,
+    use_macro_calendar_db: bool,
+    use_symbol_calendar_db: bool,
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    if engine is None:
+        return None, None, None, None
+    try:
+        d0 = closes.index[0]
+        min_d = d0.strftime("%Y-%m-%d") if hasattr(d0, "strftime") else str(d0)[:10]
+    except Exception:
+        min_d = None
+    pm_df = news_df = macro_df = sym_df = None
+    if use_premarket_db:
+        pm_df = fetch_premarket_features_dataframe(engine, ticker, min_date=min_d)
+    if use_news_db:
+        news_df = fetch_news_daily_features_dataframe(engine, ticker, min_date=min_d)
+    if use_macro_calendar_db:
+        macro_df = fetch_macro_calendar_daily_features_dataframe(engine, min_date=min_d)
+    if use_symbol_calendar_db:
+        sym_df = fetch_symbol_calendar_daily_features_dataframe(engine, ticker, min_date=min_d)
+    return pm_df, news_df, macro_df, sym_df
 
 
 def fit_artifact_for_ticker(
@@ -354,6 +684,9 @@ def fit_artifact_for_ticker(
     *,
     engine: Optional[Engine] = None,
     use_premarket_db: bool = False,
+    use_news_db: bool = False,
+    use_macro_calendar_db: bool = False,
+    use_symbol_calendar_db: bool = False,
     horizons: Sequence[int] = HORIZONS_DEFAULT,
     lambda_candidates: Sequence[float] = (0.25, 0.5, 1.0, 2.0, 4.0),
     holdout_frac: float = 0.12,
@@ -361,17 +694,31 @@ def fit_artifact_for_ticker(
     min_train_rows: int = 80,
 ) -> Optional[Dict[str, Any]]:
     c = closes.astype(float).values
-    pm_df: Optional[pd.DataFrame] = None
     use_pm = bool(use_premarket_db and engine is not None)
-    if use_pm:
-        try:
-            d0 = closes.index[0]
-            min_d = d0.strftime("%Y-%m-%d") if hasattr(d0, "strftime") else str(d0)[:10]
-        except Exception:
-            min_d = None
-        pm_df = fetch_premarket_features_dataframe(engine, ticker, min_date=min_d)
+    use_news = bool(use_news_db and engine is not None)
+    use_macro = bool(use_macro_calendar_db and engine is not None)
+    use_sym = bool(use_symbol_calendar_db and engine is not None)
+    pm_df, news_df, macro_df, sym_df = _load_optional_daily_feature_frames(
+        engine,
+        ticker,
+        closes,
+        use_premarket_db=use_pm,
+        use_news_db=use_news,
+        use_macro_calendar_db=use_macro,
+        use_symbol_calendar_db=use_sym,
+    )
     X, y_by_h, _, _, n_pm = build_training_stack(
-        closes.index, c, horizons, pm_df=pm_df, use_premarket=use_pm
+        closes.index,
+        c,
+        horizons,
+        pm_df=pm_df,
+        use_premarket=use_pm,
+        news_df=news_df,
+        use_news=use_news,
+        macro_cal_df=macro_df,
+        use_macro_calendar=use_macro,
+        sym_cal_df=sym_df,
+        use_symbol_calendar=use_sym,
     )
     if X is None or X.shape[0] < min_train_rows:
         return None
@@ -399,7 +746,12 @@ def fit_artifact_for_ticker(
         d1 = idx1.strftime("%Y-%m-%d") if hasattr(idx1, "strftime") else str(idx1)[:10]
     except Exception:
         d0, d1 = str(idx0), str(idx1)
-    art_ver = ARTIFACT_VERSION_V2 if use_pm else ARTIFACT_VERSION_V1
+    art_ver = _artifact_version_for_flags(
+        use_premarket=use_pm,
+        use_news=use_news,
+        use_macro_calendar=use_macro,
+        use_symbol_calendar=use_sym,
+    )
     return {
         "artifact_version": art_ver,
         "ticker": str(ticker).strip().upper(),
@@ -411,13 +763,24 @@ def fit_artifact_for_ticker(
             "last_date": d1,
             "ridge_lambda": lam,
             "use_premarket_db": use_pm,
+            "use_news_db": use_news,
+            "use_macro_calendar_db": use_macro,
+            "use_symbol_calendar_db": use_sym,
             "premarket_rows_loaded": int(len(pm_df)) if pm_df is not None else 0,
+            "news_rows_loaded": int(len(news_df)) if news_df is not None else 0,
+            "macro_calendar_rows_loaded": int(len(macro_df)) if macro_df is not None else 0,
+            "symbol_calendar_rows_loaded": int(len(sym_df)) if sym_df is not None else 0,
             **grid_info,
             "holdout_frac": float(holdout_frac),
             "min_train_rows": int(min_train_rows),
         },
         "horizons": horizons_out,
-        "feature_names": _feature_names_for_artifact(use_pm),
+        "feature_names": _feature_names_for_artifact(
+            use_premarket=use_pm,
+            use_news=use_news,
+            use_macro_calendar=use_macro,
+            use_symbol_calendar=use_sym,
+        ),
     }
 
 
@@ -441,7 +804,7 @@ def load_artifact(ticker: str, model_dir: Optional[Path] = None) -> Optional[Dic
     if not isinstance(data, dict):
         return None
     ver = int(data.get("artifact_version") or 0)
-    if ver not in (ARTIFACT_VERSION_V1, ARTIFACT_VERSION_V2):
+    if ver not in (ARTIFACT_VERSION_V1, ARTIFACT_VERSION_V2, ARTIFACT_VERSION_V3):
         return None
     return data
 
@@ -474,22 +837,39 @@ def predict_from_artifact(
         if use_intraday_features and momentum_2h_pct is not None and math.isfinite(float(momentum_2h_pct))
         else 0.0
     )
-    pm_live = np.zeros(PREMARKET_N, dtype=float)
-    if ver == ARTIFACT_VERSION_V2 and db_engine is not None and ticker:
-        try:
-            td = closes.index[last_i]
-            pm_df = fetch_premarket_features_dataframe(
-                db_engine,
-                ticker,
-                min_date=str(pd.Timestamp(td).normalize())[:10],
-            )
-            pm_live = _premarket_vec_for_date(pm_df, td)
-        except Exception as e:
-            logger.debug("premarket live row %s: %s", ticker, e)
-    if ver == ARTIFACT_VERSION_V2:
-        x_pred = np.concatenate([row_base, pm_live, np.array([v5, m2], dtype=float)])
-    else:
-        x_pred = np.concatenate([row_base, np.array([v5, m2], dtype=float)])
+    tr = artifact.get("training") or {}
+    use_pm = bool(tr.get("use_premarket_db")) or ver >= ARTIFACT_VERSION_V2
+    use_news = bool(tr.get("use_news_db")) or ver >= ARTIFACT_VERSION_V3
+    use_macro = bool(tr.get("use_macro_calendar_db")) or ver >= ARTIFACT_VERSION_V3
+    use_sym = bool(tr.get("use_symbol_calendar_db")) or ver >= ARTIFACT_VERSION_V3
+    if ver < ARTIFACT_VERSION_V3:
+        use_news = use_macro = use_sym = False
+    if ver < ARTIFACT_VERSION_V2:
+        use_pm = False
+    pm_df = news_df = macro_df = sym_df = None
+    if db_engine is not None and ticker:
+        pm_df, news_df, macro_df, sym_df = _load_optional_daily_feature_frames(
+            db_engine,
+            str(ticker),
+            closes,
+            use_premarket_db=use_pm,
+            use_news_db=use_news,
+            use_macro_calendar_db=use_macro,
+            use_symbol_calendar_db=use_sym,
+        )
+    x_pred = _concat_optional_daily_features(
+        row_base,
+        closes.index[last_i],
+        pm_df=pm_df,
+        news_df=news_df,
+        macro_df=macro_df,
+        sym_df=sym_df,
+        use_premarket=use_pm,
+        use_news=use_news,
+        use_macro_calendar=use_macro,
+        use_symbol_calendar=use_sym,
+        intra2=np.array([v5, m2], dtype=float),
+    )
     horizons_art = artifact.get("horizons") or {}
     out_horizons: Dict[str, Any] = {}
     for key, block in horizons_art.items():
@@ -531,8 +911,7 @@ def predict_from_artifact(
             bias = "up"
         elif neg >= 2 and pos == 0:
             bias = "down"
-    tr = artifact.get("training") or {}
-    method = "artifact_ridge_v2_pm" if ver == ARTIFACT_VERSION_V2 else "artifact_ridge_v1"
+    method = f"artifact_ridge_v{ver}"
     return {
         "ticker": artifact.get("ticker"),
         "method": method,
@@ -561,6 +940,9 @@ def walkforward_oos_multiday_single_ticker(
     stride: int = 5,
     max_eval_points: int = 72,
     use_premarket_db: bool = True,
+    use_news_db: bool = False,
+    use_macro_calendar_db: bool = False,
+    use_symbol_calendar_db: bool = False,
 ) -> Dict[str, Any]:
     """
     OOS-оценка multiday ridge: на каждой дате end (последний день подвыборки) — тот же вектор предсказания,
@@ -592,6 +974,31 @@ def walkforward_oos_multiday_single_ticker(
             logger.debug("walkforward pm %s: %s", t, e)
             pm_full = None
     use_pm = bool(use_premarket_db and pm_full is not None and not pm_full.empty)
+    news_full = macro_full = sym_full = None
+    if use_news_db:
+        try:
+            d0 = dates[0]
+            min_d = d0.strftime("%Y-%m-%d") if hasattr(d0, "strftime") else str(d0)[:10]
+            news_full = fetch_news_daily_features_dataframe(engine, t, min_date=min_d)
+        except Exception as e:
+            logger.debug("walkforward news %s: %s", t, e)
+    if use_macro_calendar_db:
+        try:
+            d0 = dates[0]
+            min_d = d0.strftime("%Y-%m-%d") if hasattr(d0, "strftime") else str(d0)[:10]
+            macro_full = fetch_macro_calendar_daily_features_dataframe(engine, min_date=min_d)
+        except Exception as e:
+            logger.debug("walkforward macro %s: %s", t, e)
+    if use_symbol_calendar_db:
+        try:
+            d0 = dates[0]
+            min_d = d0.strftime("%Y-%m-%d") if hasattr(d0, "strftime") else str(d0)[:10]
+            sym_full = fetch_symbol_calendar_daily_features_dataframe(engine, t, min_date=min_d)
+        except Exception as e:
+            logger.debug("walkforward symcal %s: %s", t, e)
+    use_news = bool(use_news_db and news_full is not None and not news_full.empty)
+    use_macro = bool(use_macro_calendar_db and macro_full is not None and not macro_full.empty)
+    use_sym = bool(use_symbol_calendar_db and sym_full is not None and not sym_full.empty)
 
     start_end = max(15, min_train_rows) + max_h + 2
     end_list = list(range(start_end, n - max_h - 1, max(1, int(stride))))
@@ -606,8 +1013,18 @@ def walkforward_oos_multiday_single_ticker(
         sub_dates = dates[: end + 1]
         sub_c = c_full[: end + 1]
         try:
-            X, ydict, _, _, n_pm = build_training_stack(
-                sub_dates, sub_c, horizons, pm_df=pm_full, use_premarket=use_pm
+            X, ydict, _, _, _n_pm = build_training_stack(
+                sub_dates,
+                sub_c,
+                horizons,
+                pm_df=pm_full,
+                use_premarket=use_pm,
+                news_df=news_full,
+                use_news=use_news,
+                macro_cal_df=macro_full,
+                use_macro_calendar=use_macro,
+                sym_cal_df=sym_full,
+                use_symbol_calendar=use_sym,
             )
         except Exception:
             continue
@@ -618,12 +1035,19 @@ def walkforward_oos_multiday_single_ticker(
         row_base = _build_feature_row(sub_c, lr, last_i, vol_window=10, mean_window=5)
         if row_base is None:
             continue
-        pm_live = _premarket_vec_for_date(pm_full, sub_dates[-1]) if n_pm else np.zeros(0, dtype=float)
-        intra2 = np.zeros(2, dtype=float)
-        if n_pm:
-            x_pred = np.concatenate([row_base, pm_live, intra2])
-        else:
-            x_pred = np.concatenate([row_base, intra2])
+        x_pred = _concat_optional_daily_features(
+            row_base,
+            sub_dates[-1],
+            pm_df=pm_full,
+            news_df=news_full,
+            macro_df=macro_full,
+            sym_df=sym_full,
+            use_premarket=use_pm,
+            use_news=use_news,
+            use_macro_calendar=use_macro,
+            use_symbol_calendar=use_sym,
+            intra2=np.zeros(2, dtype=float),
+        )
         ok_h = 0
         for h in horizons:
             hh = int(h)
@@ -673,6 +1097,9 @@ def walkforward_oos_multiday_single_ticker(
         "stride": int(stride),
         "ridge_lambda": float(ridge_lambda),
         "use_premarket_db": use_pm,
+        "use_news_db": use_news,
+        "use_macro_calendar_db": use_macro,
+        "use_symbol_calendar_db": use_sym,
         "n_closes_total": int(n),
         "per_horizon": per_horizon,
     }

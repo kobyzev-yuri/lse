@@ -97,6 +97,15 @@ def main() -> int:
         action="store_true",
         help="Disable premarket_daily_features (artifact v1, 7+2 features)",
     )
+    p.add_argument("--no-news-db", action="store_true", help="Disable news_daily_features (v3 partial)")
+    p.add_argument("--no-macro-calendar-db", action="store_true", help="Disable macro_calendar_daily_features")
+    p.add_argument("--no-symbol-calendar-db", action="store_true", help="Disable symbol_calendar_daily_features")
+    p.add_argument(
+        "--feature-set",
+        choices=("v2", "v3", "v3n", "v3c", "v3m"),
+        default="v2",
+        help="v2=price+pm; v3=all; v3n=+news; v3c=+calendar; v3m=macro+symbol cal only",
+    )
     p.add_argument("--min-train-rows", type=int, default=80)
     p.add_argument(
         "--json-metrics-out",
@@ -140,11 +149,24 @@ def main() -> int:
             p.error(f"--tickers-source={args.tickers_source!r} produced an empty list")
         logger.info("Resolved %s tickers from %s (showing first 20): %s", len(ticker_list), args.tickers_source, ticker_list[:20])
 
-    use_pm = not args.no_premarket and engine is not None
+    fs = (args.feature_set or "v2").strip().lower()
+    use_pm = not args.no_premarket and engine is not None and fs in ("v2", "v3", "v3n", "v3c", "v3m")
+    use_news = engine is not None and fs in ("v3", "v3n") and not args.no_news_db
+    use_macro = engine is not None and fs in ("v3", "v3c", "v3m") and not args.no_macro_calendar_db
+    use_sym = engine is not None and fs in ("v3", "v3c", "v3m") and not args.no_symbol_calendar_db
     if args.no_premarket:
+        use_pm = False
         logger.info("Premarket DB features disabled (--no-premarket).")
     elif engine is None:
         logger.info("No DB engine: training without premarket (v1).")
+    logger.info(
+        "Feature set %s: premarket=%s news=%s macro_cal=%s sym_cal=%s",
+        fs,
+        use_pm,
+        use_news,
+        use_macro,
+        use_sym,
+    )
 
     ok = 0
     metrics_rows: List[Dict[str, Any]] = []
@@ -166,6 +188,9 @@ def main() -> int:
             closes,
             engine=engine,
             use_premarket_db=use_pm,
+            use_news_db=use_news,
+            use_macro_calendar_db=use_macro,
+            use_symbol_calendar_db=use_sym,
             min_train_rows=int(args.min_train_rows),
             training_source=src,
         )

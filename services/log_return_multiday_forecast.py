@@ -129,35 +129,51 @@ def _forecast_multiday_from_daily_series(
     n = len(c)
     lr = _aligned_lr(c)
 
-    use_pm = False
-    pm_df = None
-    if db_engine is not None:
+    def _env_true(key: str, default: str = "false") -> bool:
         try:
-            from config_loader import get_config_value as _gcv_pm
+            from config_loader import get_config_value as _gcv
 
-            use_pm = (_gcv_pm("GAME_5M_MULTIDAY_LR_USE_PREMARKET_DB", "true") or "true").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-            )
+            return (_gcv(key, default) or default).strip().lower() in ("1", "true", "yes")
         except Exception:
-            use_pm = False
-        if use_pm:
-            try:
-                from services.multiday_lr_pipeline import fetch_premarket_features_dataframe
+            return default.strip().lower() in ("1", "true", "yes")
 
-                d0 = s.index[0]
-                min_d = d0.strftime("%Y-%m-%d") if hasattr(d0, "strftime") else str(d0)[:10]
-                pm_df = fetch_premarket_features_dataframe(db_engine, ticker, min_date=min_d)
-            except Exception as e:
-                logger.debug("premarket load для online ridge %s: %s", ticker, e)
-                pm_df = None
+    use_pm = use_news = use_macro = use_sym = False
+    pm_df = news_df = macro_df = sym_df = None
+    if db_engine is not None:
+        use_pm = _env_true("GAME_5M_MULTIDAY_LR_USE_PREMARKET_DB", "true")
+        use_news = _env_true("GAME_5M_MULTIDAY_LR_USE_NEWS_DB", "false")
+        use_macro = _env_true("GAME_5M_MULTIDAY_LR_USE_MACRO_CALENDAR_DB", "false")
+        use_sym = _env_true("GAME_5M_MULTIDAY_LR_USE_SYMBOL_CALENDAR_DB", "false")
+        try:
+            from services.multiday_lr_pipeline import _load_optional_daily_feature_frames
+
+            pm_df, news_df, macro_df, sym_df = _load_optional_daily_feature_frames(
+                db_engine,
+                ticker,
+                s,
+                use_premarket_db=use_pm,
+                use_news_db=use_news,
+                use_macro_calendar_db=use_macro,
+                use_symbol_calendar_db=use_sym,
+            )
+        except Exception as e:
+            logger.debug("optional daily features load %s: %s", ticker, e)
 
     try:
-        from services.multiday_lr_pipeline import build_training_stack, _premarket_vec_for_date
+        from services.multiday_lr_pipeline import build_training_stack, _concat_optional_daily_features
 
         X_train, targets, _min_i, _max_i, n_pm = build_training_stack(
-            s.index, c, horizons, pm_df=pm_df, use_premarket=use_pm
+            s.index,
+            c,
+            horizons,
+            pm_df=pm_df,
+            use_premarket=use_pm,
+            news_df=news_df,
+            use_news=use_news,
+            macro_cal_df=macro_df,
+            use_macro_calendar=use_macro,
+            sym_cal_df=sym_df,
+            use_symbol_calendar=use_sym,
         )
     except Exception as e:
         logger.debug("build_training_stack %s: %s", ticker, e)
@@ -181,11 +197,19 @@ def _forecast_multiday_from_daily_series(
         if use_intraday_features and momentum_2h_pct is not None and math.isfinite(float(momentum_2h_pct))
         else 0.0
     )
-    if n_pm:
-        pm_live = _premarket_vec_for_date(pm_df, s.index[last_i])
-        x_pred = np.concatenate([row_pred_base, pm_live, np.array([v5, m2], dtype=float)])
-    else:
-        x_pred = np.concatenate([row_pred_base, np.array([v5, m2], dtype=float)])
+    x_pred = _concat_optional_daily_features(
+        row_pred_base,
+        s.index[last_i],
+        pm_df=pm_df,
+        news_df=news_df,
+        macro_df=macro_df,
+        sym_df=sym_df,
+        use_premarket=use_pm,
+        use_news=use_news,
+        use_macro_calendar=use_macro,
+        use_symbol_calendar=use_sym,
+        intra2=np.array([v5, m2], dtype=float),
+    )
 
     out_horizons: Dict[str, Any] = {}
     for h in horizons:
@@ -244,30 +268,35 @@ def _forecast_multiday_from_daily_series(
         elif neg >= 2 and pos == 0:
             bias = "down"
 
-    fnames = [
-        "intercept",
-        "lr_lag1",
-        "lr_lag2",
-        "lr_lag3",
-        "lr_mean5d",
-        "lr_std10d",
-        "log_ret_5d",
-    ]
-    if n_pm:
-        fnames.extend(["pm_gap_frac", "pm_ret_frac", "pm_range_frac", "pm_gap_vs_vol_frac"])
-    fnames.extend(["vol_5m_frac", "mom_2h_frac"])
+    from services.multiday_lr_pipeline import _feature_names_for_artifact
+
+    fnames = _feature_names_for_artifact(
+        use_premarket=use_pm,
+        use_news=use_news,
+        use_macro_calendar=use_macro,
+        use_symbol_calendar=use_sym,
+    )
+    method = "ridge_daily_lags"
+    if use_sym or use_macro or use_news:
+        method += "_v3_enriched"
+    elif use_pm:
+        method += "_pm_db"
+    method += "_plus_intraday_tail"
 
     return {
         "ticker": ticker,
         "daily_close_source": daily_source_label,
-        "method": "ridge_daily_lags_pm_db_plus_intraday_tail" if n_pm else "ridge_daily_lags_plus_intraday_tail",
+        "method": method,
         "daily_last_date": last_date_s,
         "ridge_lambda": float(ridge_lambda),
         "feature_names": fnames,
         "horizons": out_horizons,
         "bias_summary": bias,
         "intraday_used": bool(use_intraday_features and (volatility_5m_pct is not None or momentum_2h_pct is not None)),
-        "premarket_db_used": bool(n_pm),
+        "premarket_db_used": bool(use_pm),
+        "news_db_used": bool(use_news),
+        "macro_calendar_db_used": bool(use_macro),
+        "symbol_calendar_db_used": bool(use_sym),
         "n_features": int(len(x_pred)),
     }
 
