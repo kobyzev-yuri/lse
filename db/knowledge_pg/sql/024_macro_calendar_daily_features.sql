@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS macro_calendar_daily_features (
 );
 
 COMMENT ON TABLE macro_calendar_daily_features IS
-  'Macro calendar density around trade_date for multiday ridge; forward counts use scheduled times only.';
+  'Macro calendar density around trade_date for multiday ridge. Forward counts use scheduled times only.';
 
 CREATE INDEX IF NOT EXISTS macro_calendar_daily_features_region_date
   ON macro_calendar_daily_features (region, trade_date DESC);

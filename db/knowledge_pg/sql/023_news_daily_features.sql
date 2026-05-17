@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS news_daily_features (
 );
 
 COMMENT ON TABLE news_daily_features IS
-  'Per-symbol daily news features for multiday ridge X; as-of session close, no outcome_json.';
+  'Per-symbol daily news features for multiday ridge (as-of session close, no outcome_json).';
 
 CREATE INDEX IF NOT EXISTS news_daily_features_symbol_date
   ON news_daily_features (symbol, trade_date DESC);

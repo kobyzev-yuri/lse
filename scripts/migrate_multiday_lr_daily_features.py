@@ -24,6 +24,25 @@ SQL_FILES = (
 )
 
 
+def _sql_statements(ddl: str) -> list[str]:
+    """Split DDL on statement boundaries (semicolon + newline), not on ';' inside strings."""
+    import re
+
+    lines: list[str] = []
+    for line in ddl.splitlines():
+        if line.strip().startswith("--"):
+            continue
+        lines.append(line)
+    body = "\n".join(lines)
+    parts = re.split(r";\s*\n", body)
+    out: list[str] = []
+    for part in parts:
+        part = part.strip()
+        if part:
+            out.append(part + ";")
+    return out
+
+
 def main() -> int:
     from sqlalchemy import create_engine, text
 
@@ -37,11 +56,9 @@ def main() -> int:
             print(f"MISSING {path}")
             return 1
         ddl = path.read_text(encoding="utf-8")
-        parts = [p.strip() for p in ddl.split(";")]
         with engine.begin() as conn:
-            for part in parts:
-                if part:
-                    conn.execute(text(part + ";"))
+            for stmt in _sql_statements(ddl):
+                conn.execute(text(stmt))
         print(f"OK {name}")
     return 0
 
