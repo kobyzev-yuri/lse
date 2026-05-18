@@ -99,16 +99,16 @@ def ensure_gap_forecast_table(engine=None) -> None:
     from sqlalchemy import text
 
     root = Path(__file__).resolve().parent.parent
-    ddl = (root / DDL_PATH).read_text(encoding="utf-8")
-    with eng.begin() as conn:
-        for part in [p.strip() for p in ddl.split(";") if p.strip()]:
-            conn.execute(text(part + ";"))
+
+    def _run_sql_file(path: Path) -> None:
+        raw = path.read_text(encoding="utf-8")
+        with eng.begin() as conn:
+            conn.execute(text(raw))
+
+    _run_sql_file(root / DDL_PATH)
     mig_path = root / DDL_MIGRATION_TICKER
     if mig_path.is_file():
-        mig = mig_path.read_text(encoding="utf-8")
-        with eng.begin() as conn:
-            for part in [p.strip() for p in mig.split(";") if p.strip()]:
-                conn.execute(text(part + ";"))
+        _run_sql_file(mig_path)
 
 
 def _symbols_for_log() -> List[str]:

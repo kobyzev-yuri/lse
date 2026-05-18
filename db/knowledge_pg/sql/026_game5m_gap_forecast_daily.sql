@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS game5m_gap_forecast_daily (
 );
 
 COMMENT ON TABLE game5m_gap_forecast_daily IS
-  'Премаркет-прогноз гэпа (OLS sector + гэп тикера) и факт open vs prev_close; для арбитра анализатора.';
+  'Премаркет-прогноз гэпа (OLS sector + гэп тикера) и факт open vs prev_close — для арбитра анализатора.';
 
 CREATE INDEX IF NOT EXISTS game5m_gap_forecast_daily_date
   ON game5m_gap_forecast_daily (trade_date DESC);
