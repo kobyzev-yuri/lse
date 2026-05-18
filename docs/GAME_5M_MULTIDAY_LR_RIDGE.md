@@ -124,6 +124,8 @@ python scripts/train_game5m_multiday_lr.py --tickers-source merged --source auto
 
 Пока **`GAME_5M_MULTIDAY_LR_REG_ENABLED=false`**, фаза D в проде **не активна** — можно только копить метрики фазы C офлайн.
 
+**Гейты входа/удержания (реализованы):** `services/multiday_lr_gate.py`, режимы `GAME_5M_MULTIDAY_*_GATE_MODE` (`none` | `log_only` | `apply`). Пошаговый rollout и пороги арбитра — **[GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md](GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md)**.
+
 ### Фаза E — прод и мониторинг
 
 - Включить флаг **только** после зелёной фазы C/D на отложенном окне.
@@ -150,4 +152,4 @@ python scripts/train_game5m_multiday_lr.py --tickers-source merged --source auto
 
 ## 10. Анализатор эффективности сделок
 
-В `services/trade_effectiveness_analyzer.py` каждый запуск добавляет в JSON **`multiday_lr_reality_check`** (walk-forward OOS ridge vs дневной факт) и **`ml_production_arbiter`** (сводный вердикт по multiday, CatBoost entry, портфельному CatBoost, recovery; поле **`conclusion_ru`** — текст для финального заключения оператора). См. `docs/TRADE_EFFECTIVENESS_ANALYZER.md`, раздел про эти ключи.
+В `services/trade_effectiveness_analyzer.py` каждый запуск добавляет в JSON **`multiday_lr_reality_check`** (walk-forward OOS ridge vs дневной факт), **`multiday_lr_gates_arbiter`** (достаточность log-only выборки для перехода в `apply`) и **`ml_production_arbiter`** (сводный вердикт по multiday, CatBoost entry, портфельному CatBoost, recovery; поле **`conclusion_ru`** — текст для финального заключения оператора). См. `docs/TRADE_EFFECTIVENESS_ANALYZER.md`, раздел про эти ключи; rollout гейтов — [GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md](GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md).
