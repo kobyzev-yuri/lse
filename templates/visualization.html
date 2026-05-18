@@ -10,8 +10,8 @@
     <p class="muted" style="margin-bottom:0.5rem;">Тикеры игры 5m (как в карточках). Список <strong>Все</strong> — график по каждому; выберите тикер или откройте ссылку <code>/visualization?ticker=SNDK</code> с карточки. Ось времени — US Eastern (NYSE/NASDAQ).</p>
     <label>Режим:</label>
     <select id="chart5mMode">
-        <option value="live" selected>Live (Yahoo, 1 день)</option>
-        <option value="history">History (DB/auto)</option>
+        <option value="live" selected>Live (2 сессии: вчера + сегодня, auto)</option>
+        <option value="history">History (DB/auto, выбор дней)</option>
     </select>
     <label>Дней:</label>
     <select id="days5mSelect">
@@ -56,9 +56,9 @@ function syncChart5mControls() {
     const daysSel = document.getElementById('days5mSelect');
     if (!daysSel) return;
     if (mode === 'live') {
-        daysSel.value = '1';
+        daysSel.value = '2';
         daysSel.disabled = true;
-        daysSel.title = 'Live режим всегда показывает 1 день (текущая сессия).';
+        daysSel.title = 'Live: 2 последние RTH-сессии (9:30–16:00 ET), источник auto (БД + Yahoo).';
     } else {
         daysSel.disabled = false;
         daysSel.title = '';
@@ -696,9 +696,9 @@ function get5mTickersToPlot() {
 async function loadChart5mAll() {
     const tickers = get5mTickersToPlot();
     const mode = getChart5mMode();
-    const source = (mode === 'live') ? 'live' : 'auto';
+    const source = 'auto';
     const daysSel = document.getElementById('days5mSelect');
-    const days = (mode === 'live') ? 1 : (parseInt(daysSel && daysSel.value ? daysSel.value : '1', 10) || 1);
+    const days = (mode === 'live') ? 2 : (parseInt(daysSel && daysSel.value ? daysSel.value : '1', 10) || 1);
     const container = document.getElementById('chart5mContainer');
     if (!container) return;
     if (!tickers.length) {
@@ -731,7 +731,13 @@ async function loadChart5mAll() {
             if (legendEl) {
                 const lastIso = (data && data.dt_max) ? data.dt_max : ((data.times && data.times.length) ? data.times[data.times.length - 1] : null);
                 const lastEt = lastIso ? _fmtTz(lastIso, 'America/New_York', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-                if (lastEt) legendEl.textContent = 'Данные до: ' + lastEt + ' ET';
+                const sess = (data && Array.isArray(data.sessions) && data.sessions.length)
+                    ? (' · сессии ' + data.sessions.join(', '))
+                    : '';
+                const nBars = (data && data.times && data.times.length) ? data.times.length : 0;
+                let leg = (nBars ? ('Свечей: ' + nBars) : '') + sess;
+                if (lastEt) leg += (leg ? ' · ' : '') + 'до ' + lastEt + ' ET';
+                if (leg) legendEl.textContent = leg;
             }
         } catch (err) {
             if (legendEl) legendEl.textContent = 'Ошибка: ' + (err.message || 'нет данных');

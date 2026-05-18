@@ -1433,11 +1433,22 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
 def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Optional[Dict[str, Any]]:
     """Строит данные для графика 5m с пролонгацией (те же функции, что в Telegram)."""
     try:
-        from services.recommend_5m import fetch_5m_ohlc, get_decision_5m
+        from services.recommend_5m import (
+            fetch_5m_ohlc,
+            filter_to_last_n_us_sessions,
+            get_decision_5m,
+        )
         from services.chart_prolongation import fit_and_prolong
         from services.game_5m import get_open_position, get_open_position_any, get_trades_for_chart
     except ImportError:
         return None
+
+    try:
+        display_sessions = max(1, min(int(days or 1), 7))
+    except (TypeError, ValueError):
+        display_sessions = 1
+    # Как /chart5m в Telegram: тянем запас календарных дней, режем до n сессий 9:30–16:00 ET.
+    fetch_days = min(max(display_sessions + 2, 5), 7)
 
     def _fetch_5m_from_db(symbol: str, days_back: int) -> Optional[pd.DataFrame]:
         """
@@ -1494,13 +1505,13 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
         source = "live"
     try:
         if source == "db":
-            df = _fetch_5m_from_db(ticker, days)
+            df = _fetch_5m_from_db(ticker, fetch_days)
             if df is None or df.empty:
-                df = fetch_5m_ohlc(ticker, days=days)
+                df = fetch_5m_ohlc(ticker, days=fetch_days)
         elif source == "auto":
-            df = _fetch_5m_from_db(ticker, days)
+            df = _fetch_5m_from_db(ticker, fetch_days)
             if df is None or df.empty:
-                df = fetch_5m_ohlc(ticker, days=days)
+                df = fetch_5m_ohlc(ticker, days=fetch_days)
             else:
                 # Если БД явно устарела — пробуем Yahoo для "живого" окна.
                 try:
@@ -1512,7 +1523,7 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
                     else:
                         dt_max_db = dt_max_db.tz_convert("America/New_York")
                     if now_et - dt_max_db > pd.Timedelta(minutes=45):
-                        df_y = fetch_5m_ohlc(ticker, days=days)
+                        df_y = fetch_5m_ohlc(ticker, days=fetch_days)
                         if df_y is not None and not df_y.empty and "datetime" in df_y.columns:
                             dt_max_y = pd.Timestamp(pd.to_datetime(df_y["datetime"]).max())
                             if dt_max_y.tzinfo is None:
@@ -1525,14 +1536,14 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
                     pass
         else:
             # live: сначала Yahoo (реальное время), затем БД как fallback.
-            df = fetch_5m_ohlc(ticker, days=days)
+            df = fetch_5m_ohlc(ticker, days=fetch_days)
             if df is None or df.empty:
-                df = _fetch_5m_from_db(ticker, days)
+                df = _fetch_5m_from_db(ticker, fetch_days)
     except Exception:
         return None
     if df is None or df.empty or "Close" not in df.columns:
         for fallback_days in (7, 5, 2, 1):
-            if fallback_days == days:
+            if fallback_days == fetch_days:
                 continue
             try:
                 if source == "live":
@@ -1546,15 +1557,21 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
             except Exception:
                 continue
             if df is not None and not df.empty and "Close" in df.columns:
-                days = fallback_days
+                fetch_days = fallback_days
                 break
         else:
             # Нет 5m свечей (тикер вне FAST или Yahoo не отдаёт 5m) — всё равно отдаём сделки GAME_5M за период
-            return _build_chart5m_trades_only(ticker, days)
+            return _build_chart5m_trades_only(ticker, display_sessions)
     try:
         df["datetime"] = pd.to_datetime(df["datetime"])
     except Exception:
         return None
+    try:
+        df = filter_to_last_n_us_sessions(df, n=display_sessions)
+    except Exception:
+        pass
+    if df is None or df.empty:
+        return _build_chart5m_trades_only(ticker, display_sessions)
     dt_min = df["datetime"].min()
     dt_max = df["datetime"].max()
     last_close = float(df["Close"].iloc[-1])
@@ -1602,7 +1619,7 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
         pass
 
     try:
-        d5_chart = get_decision_5m(ticker, days=days, use_llm_news=False)
+        d5_chart = get_decision_5m(ticker, days=display_sessions, use_llm_news=False)
     except Exception:
         d5_chart = None
     session_high = None
@@ -1645,12 +1662,12 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
             forecast_defined = True
             forecast_label = "Прогноз ↑" if slope_per_bar >= min_slope else "Прогноз ↓"
         else:
-            prolongation_times = [_ts_str(dt_max), _ts_str(dt_max_ext)]
-            prolongation_prices = [float(last_close), float(last_close)]
+            prolongation_times = [_ts_str(dt_max_ext)]
+            prolongation_prices = [float(last_close)]
             forecast_label = None
     else:
-        prolongation_times = [_ts_str(dt_max), _ts_str(dt_max_ext)]
-        prolongation_prices = [float(last_close), float(last_close)]
+        prolongation_times = [_ts_str(dt_max_ext)]
+        prolongation_prices = [float(last_close)]
 
     trades = []
     # Время первой покупки в ET (для честного "high so far" на момент входа).
@@ -1750,9 +1767,21 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
     if d5_chart:
         pf5 = d5_chart.get("price_forecast_5m")
 
+    session_dates: List[str] = []
+    try:
+        dts = pd.to_datetime(df["datetime"])
+        if dts.dt.tz is None:
+            dts = dts.dt.tz_localize("America/New_York", ambiguous=True)
+        else:
+            dts = dts.dt.tz_convert("America/New_York")
+        session_dates = sorted({str(d.date()) for d in dts})
+    except Exception:
+        pass
+
     return {
         "ticker": str(ticker),
-        "days": int(days),
+        "days": int(display_sessions),
+        "sessions": session_dates,
         "times": list(times),
         "day_boundaries": list(day_boundaries),
         "close": [float(c) for c in close],
