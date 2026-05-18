@@ -150,7 +150,7 @@
 
 <div class="card" style="border: 1px solid rgba(251, 191, 36, 0.35);">
     <h2>Арбитр прогноза гэпа <code>game5m_gap_forecast_arbiter</code></h2>
-    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Премаркет OLS pred vs факт open (лог <code>game5m_gap_forecast_daily</code>): MAE, знак, достаточность истории. Скрипты: <code>ingest_game5m_gap_forecast.py</code>, <code>analyze_game5m_gap_forecast.py --suggest-coefs</code>.</p>
+    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Контур <code>gap_forecast</code>: sector OLS + <strong>ticker v2</strong> (<code>pred_ticker_gap_pct</code>) vs open. Вердикты: insufficient_data → accumulating → caution → <code>ready_for_apply</code>. Лог: <code>game5m_gap_forecast_daily</code>; DDL 027; premarket_cron + <code>ingest_game5m_gap_forecast.py --phase open</code>.</p>
     <div id="gapForecastArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
 </div>
 </div>

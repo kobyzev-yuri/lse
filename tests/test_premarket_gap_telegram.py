@@ -26,7 +26,7 @@ def test_format_sector_and_game5m_gap_lines():
     }
     with patch(
         "services.ticker_open_gap_predict.predict_ticker_open_gap_pct",
-        return_value=(0.366, "ticker_ols"),
+        return_value=(0.366, "ticker_ols_v2"),
     ):
         lines = format_sector_and_game5m_gap_lines(macro)
     assert any("Сектор SMH" in ln and "-0.14" in ln for ln in lines)

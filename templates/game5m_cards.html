@@ -223,7 +223,8 @@
                 var p = Number(pred);
                 var pCls = p >= 0 ? 'positive' : 'negative';
                 var src = (c.ticker_open_gap_predicted_source || '').toLowerCase();
-                var srcHint = src === 'ticker_ols' ? 'OLS по истории тикера' : (src === 'sector_proxy' ? 'прокси SMH' : src);
+                var srcHint = src === 'ticker_ols_v2_premarket_blend' ? 'OLS v2 + премаркет'
+                    : (src === 'ticker_ols_v2' || src === 'ticker_ols' ? 'OLS v2 по тикеру' : (src === 'sector_proxy' ? 'прокси SMH' : src));
                 html += '<div class="row"><span class="label">Прогноз</span><span class="value ' + pCls + '" title="' + escapeHtml(srcHint) + '">' +
                     (p >= 0 ? '+' : '') + fmt(p, 2) + '%</span></div>';
             }

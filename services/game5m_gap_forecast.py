@@ -18,19 +18,24 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 logger = logging.getLogger(__name__)
 
 DDL_PATH = "db/knowledge_pg/sql/026_game5m_gap_forecast_daily.sql"
+DDL_MIGRATION_TICKER = "db/knowledge_pg/sql/027_game5m_gap_forecast_ticker_pred.sql"
 
 UPSERT_PREMARKET_SQL = """
 INSERT INTO game5m_gap_forecast_daily (
   trade_date, symbol, exchange,
   snapshot_ts_premarket, premarket_last, prev_close, premarket_gap_pct,
   pred_sector_gap_pct, sector_proxy, macro_risk_level, macro_equity_gap_bias,
-  macro_indicators_json, source_premarket, updated_at
+  macro_indicators_json, source_premarket,
+  pred_ticker_gap_pct, pred_ticker_source, pred_ticker_model_version,
+  updated_at
 )
 VALUES (
   :trade_date, :symbol, :exchange,
   :snapshot_ts_premarket, :premarket_last, :prev_close, :premarket_gap_pct,
   :pred_sector_gap_pct, :sector_proxy, :macro_risk_level, :macro_equity_gap_bias,
-  CAST(:macro_indicators_json AS jsonb), :source_premarket, NOW()
+  CAST(:macro_indicators_json AS jsonb), :source_premarket,
+  :pred_ticker_gap_pct, :pred_ticker_source, :pred_ticker_model_version,
+  NOW()
 )
 ON CONFLICT (trade_date, symbol) DO UPDATE SET
   snapshot_ts_premarket = COALESCE(EXCLUDED.snapshot_ts_premarket, game5m_gap_forecast_daily.snapshot_ts_premarket),
@@ -43,6 +48,9 @@ ON CONFLICT (trade_date, symbol) DO UPDATE SET
   macro_equity_gap_bias = COALESCE(EXCLUDED.macro_equity_gap_bias, game5m_gap_forecast_daily.macro_equity_gap_bias),
   macro_indicators_json = COALESCE(EXCLUDED.macro_indicators_json, game5m_gap_forecast_daily.macro_indicators_json),
   source_premarket = COALESCE(EXCLUDED.source_premarket, game5m_gap_forecast_daily.source_premarket),
+  pred_ticker_gap_pct = COALESCE(EXCLUDED.pred_ticker_gap_pct, game5m_gap_forecast_daily.pred_ticker_gap_pct),
+  pred_ticker_source = COALESCE(EXCLUDED.pred_ticker_source, game5m_gap_forecast_daily.pred_ticker_source),
+  pred_ticker_model_version = COALESCE(EXCLUDED.pred_ticker_model_version, game5m_gap_forecast_daily.pred_ticker_model_version),
   updated_at = NOW()
 """
 
@@ -54,6 +62,7 @@ SET
   open_gap_pct = :open_gap_pct,
   error_pred_vs_open_pct = :error_pred_vs_open_pct,
   error_premarket_vs_open_pct = :error_premarket_vs_open_pct,
+  error_pred_ticker_vs_open_pct = :error_pred_ticker_vs_open_pct,
   source_open = :source_open,
   updated_at = NOW()
 WHERE trade_date = :trade_date AND symbol = :symbol
@@ -94,6 +103,12 @@ def ensure_gap_forecast_table(engine=None) -> None:
     with eng.begin() as conn:
         for part in [p.strip() for p in ddl.split(";") if p.strip()]:
             conn.execute(text(part + ";"))
+    mig_path = root / DDL_MIGRATION_TICKER
+    if mig_path.is_file():
+        mig = mig_path.read_text(encoding="utf-8")
+        with eng.begin() as conn:
+            for part in [p.strip() for p in mig.split(";") if p.strip()]:
+                conn.execute(text(part + ";"))
 
 
 def _symbols_for_log() -> List[str]:
@@ -119,7 +134,7 @@ def record_premarket_gap_snapshots(
     force: bool = False,
 ) -> Dict[str, Any]:
     """
-    PRE_MARKET: гэп тикера + OLS sector pred (одинаковый pred на все строки дня).
+    PRE_MARKET: гэп тикера + OLS sector pred + pred_ticker (v2) для GAME_5m.
     """
     if not _cfg_bool("GAME_5M_GAP_FORECAST_LOG_ENABLED", True):
         return {"mode": "skipped", "note": "GAME_5M_GAP_FORECAST_LOG_ENABLED=false"}
@@ -141,11 +156,25 @@ def record_premarket_gap_snapshots(
     ensure_gap_forecast_table(eng)
     from sqlalchemy import text
 
+    from services.ticker_open_gap_predict import (
+        get_ticker_gap_model_version,
+        predict_ticker_open_gap_pct,
+    )
+
     n_ok = 0
     errors: List[str] = []
     now_utc = datetime.now(timezone.utc)
+    model_ver = get_ticker_gap_model_version()
     for sym in _symbols_for_log():
         det = get_indicator_gap_detail(sym)
+        pm_gap = det.get("gap_pct")
+        pred_ticker, pred_ticker_src = predict_ticker_open_gap_pct(
+            sym,
+            macro_risk=macro,
+            premarket_gap_pct=float(pm_gap) if pm_gap is not None else None,
+        )
+        if sym == proxy and pred_ticker is None and pred is not None:
+            pred_ticker, pred_ticker_src = float(pred), "sector_row"
         try:
             with eng.begin() as conn:
                 conn.execute(
@@ -157,13 +186,16 @@ def record_premarket_gap_snapshots(
                         "snapshot_ts_premarket": now_utc,
                         "premarket_last": det.get("premarket_last"),
                         "prev_close": det.get("prev_close"),
-                        "premarket_gap_pct": det.get("gap_pct"),
+                        "premarket_gap_pct": pm_gap,
                         "pred_sector_gap_pct": pred,
                         "sector_proxy": proxy,
                         "macro_risk_level": macro.get("risk_level"),
                         "macro_equity_gap_bias": macro.get("equity_gap_bias"),
                         "macro_indicators_json": indicators_json,
                         "source_premarket": det.get("source") or "none",
+                        "pred_ticker_gap_pct": pred_ticker,
+                        "pred_ticker_source": pred_ticker_src,
+                        "pred_ticker_model_version": model_ver if pred_ticker is not None else None,
                     },
                 )
             n_ok += 1
@@ -230,7 +262,7 @@ def record_open_gap_for_symbol(
         row = conn.execute(
             text(
                 """
-                SELECT pred_sector_gap_pct, premarket_gap_pct, open_gap_pct
+                SELECT pred_sector_gap_pct, pred_ticker_gap_pct, premarket_gap_pct, open_gap_pct
                 FROM game5m_gap_forecast_daily
                 WHERE trade_date = :td AND symbol = :sym
                 """
@@ -255,16 +287,21 @@ def record_open_gap_for_symbol(
                     "macro_equity_gap_bias": None,
                     "macro_indicators_json": "{}",
                     "source_premarket": "open_only",
+                    "pred_ticker_gap_pct": None,
+                    "pred_ticker_source": None,
+                    "pred_ticker_model_version": None,
                 },
             )
-        row = (None, None, None)
+        row = (None, None, None, None)
 
-    if row and row[2] is not None and source_open != "backfill":
+    if row and row[3] is not None and source_open != "backfill":
         return False
 
-    pred = float(row[0]) if row and row[0] is not None else None
-    pm_gap = float(row[1]) if row and row[1] is not None else None
-    err_pred = round(float(gap) - pred, 4) if pred is not None else None
+    pred_sec = float(row[0]) if row and row[0] is not None else None
+    pred_ticker = float(row[1]) if row and row[1] is not None else None
+    pm_gap = float(row[2]) if row and row[2] is not None else None
+    err_pred = round(float(gap) - pred_sec, 4) if pred_sec is not None else None
+    err_ticker = round(float(gap) - pred_ticker, 4) if pred_ticker is not None else None
     err_pm = round(float(gap) - pm_gap, 4) if pm_gap is not None else None
 
     with eng.begin() as conn:
@@ -278,6 +315,7 @@ def record_open_gap_for_symbol(
                 "open_gap_pct": gap,
                 "error_pred_vs_open_pct": err_pred,
                 "error_premarket_vs_open_pct": err_pm,
+                "error_pred_ticker_vs_open_pct": err_ticker,
                 "source_open": source_open,
             },
         )
@@ -311,7 +349,9 @@ def fetch_gap_forecast_rows(
 
     q = """
         SELECT trade_date, symbol, premarket_gap_pct, pred_sector_gap_pct, sector_proxy,
-               open_gap_pct, error_pred_vs_open_pct, error_premarket_vs_open_pct,
+               pred_ticker_gap_pct, pred_ticker_source, pred_ticker_model_version,
+               open_gap_pct, error_pred_vs_open_pct, error_pred_ticker_vs_open_pct,
+               error_premarket_vs_open_pct,
                macro_equity_gap_bias, snapshot_ts_premarket, open_filled_ts
         FROM game5m_gap_forecast_daily
         WHERE trade_date >= CURRENT_DATE - CAST(:days AS integer)
@@ -338,34 +378,50 @@ def _rmse(xs: List[float]) -> Optional[float]:
 
 def pool_gap_forecast_metrics(rows: Sequence[Dict[str, Any]], *, sector_proxy: str = "SMH") -> Dict[str, Any]:
     """
-    Агрегаты для арбитра: sector row pred vs open; game tickers pooled.
+    Агрегаты для арбитра: sector pred vs open; ticker v2 pred vs open; legacy baseline (sector pred на тикерах).
     """
     proxy = (sector_proxy or "SMH").strip().upper()
     complete_sector: List[Dict[str, Any]] = []
-    complete_game: List[Dict[str, Any]] = []
+    complete_ticker: List[Dict[str, Any]] = []
+    complete_game_sector_baseline: List[Dict[str, Any]] = []
     for r in rows:
         og = r.get("open_gap_pct")
         if og is None:
             continue
         sym = str(r.get("symbol") or "").upper()
-        pred = r.get("pred_sector_gap_pct")
-        if sym == proxy and pred is not None:
+        if sym == proxy and r.get("pred_sector_gap_pct") is not None:
             complete_sector.append(r)
-        elif sym != proxy and pred is not None:
-            complete_game.append(r)
+        elif sym != proxy:
+            if r.get("pred_ticker_gap_pct") is not None:
+                complete_ticker.append(r)
+            if r.get("pred_sector_gap_pct") is not None:
+                complete_game_sector_baseline.append(r)
 
-    def _pack(sub: List[Dict[str, Any]], label: str) -> Dict[str, Any]:
+    def _pack(
+        sub: List[Dict[str, Any]],
+        label: str,
+        *,
+        pred_key: str = "pred_sector_gap_pct",
+        err_key: str = "error_pred_vs_open_pct",
+    ) -> Dict[str, Any]:
         if not sub:
             return {"label": label, "n_complete": 0}
-        err_pred = [float(x["error_pred_vs_open_pct"]) for x in sub if x.get("error_pred_vs_open_pct") is not None]
+        err_pred = []
+        for x in sub:
+            if x.get(err_key) is not None:
+                err_pred.append(float(x[err_key]))
+            else:
+                p, o = x.get(pred_key), x.get("open_gap_pct")
+                if p is not None and o is not None:
+                    err_pred.append(float(o) - float(p))
         err_pm = [
             float(x["error_premarket_vs_open_pct"]) for x in sub if x.get("error_premarket_vs_open_pct") is not None
         ]
-        preds = [float(x["pred_sector_gap_pct"]) for x in sub if x.get("pred_sector_gap_pct") is not None]
+        preds = [float(x[pred_key]) for x in sub if x.get(pred_key) is not None]
         opens = [float(x["open_gap_pct"]) for x in sub if x.get("open_gap_pct") is not None]
         sign_ok = 0
         for x in sub:
-            p, o = x.get("pred_sector_gap_pct"), x.get("open_gap_pct")
+            p, o = x.get(pred_key), x.get("open_gap_pct")
             if p is not None and o is not None and (float(p) >= 0) == (float(o) >= 0):
                 sign_ok += 1
         n = len(sub)
@@ -382,10 +438,33 @@ def pool_gap_forecast_metrics(rows: Sequence[Dict[str, Any]], *, sector_proxy: s
         }
 
     premarket_only = sum(1 for r in rows if r.get("premarket_gap_pct") is not None and r.get("open_gap_pct") is None)
+    ticker_block = _pack(
+        complete_ticker,
+        "Ticker v2 pred vs open (GAME_5m)",
+        pred_key="pred_ticker_gap_pct",
+        err_key="error_pred_ticker_vs_open_pct",
+    )
+    sector_on_game = _pack(
+        complete_game_sector_baseline,
+        f"Legacy: sector pred на тикерах ({proxy})",
+        pred_key="pred_sector_gap_pct",
+        err_key="error_pred_vs_open_pct",
+    )
     return {
         "n_rows": len(rows),
         "n_premarket_only": premarket_only,
         "sector_proxy": proxy,
-        "sector": _pack(complete_sector, f"OLS pred vs open ({proxy})"),
-        "game_tickers_pooled": _pack(complete_game, "OLS pred vs open (тикеры GAME_5m)"),
+        "sector": _pack(complete_sector, f"Sector OLS pred vs open ({proxy})"),
+        "ticker_v2": ticker_block,
+        "game_tickers_pooled": ticker_block,
+        "game_sector_baseline": sector_on_game,
+        "ticker_vs_sector_mae_delta_pp": (
+            round(
+                float(ticker_block["mean_abs_error_pred_pp"]) - float(sector_on_game["mean_abs_error_pred_pp"]),
+                4,
+            )
+            if ticker_block.get("mean_abs_error_pred_pp") is not None
+            and sector_on_game.get("mean_abs_error_pred_pp") is not None
+            else None
+        ),
     }

@@ -47,6 +47,20 @@ PRODUCT_IDEAS: Dict[str, Dict[str, Any]] = {
         "min_trades_per_bucket": 12,
         "arbiter_metric": "gap_forecast_arbiter",
     },
+    "game5m_ticker_gap_v2": {
+        "title_ru": "Прогноз гэпа на open по тикеру (v2 sector+macro+premarket blend)",
+        "config_flags": [
+            "GAME_5M_TICKER_OPEN_GAP_PREDICT_ENABLED",
+            "GAME_5M_GAP_FORECAST_LOG_ENABLED",
+        ],
+        "context_fields_entry": [
+            "ticker_open_gap_predicted_pct",
+            "ticker_open_gap_fact_pct",
+            "ticker_open_gap_predicted_source",
+        ],
+        "min_trades_per_bucket": 12,
+        "arbiter_metric": "gap_forecast_arbiter.ticker_verdict",
+    },
     "macro_defer_time_exit_early": {
         "title_ru": "Не закрывать TIME_EXIT_EARLY до open при прогнозе гэпа вверх",
         "config_flags": ["GAME_5M_MACRO_DEFER_EARLY_EXIT_ENABLED"],

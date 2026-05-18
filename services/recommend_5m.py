@@ -1177,7 +1177,7 @@ TECHNICAL_SIGNAL_KEYS = (
     "premarket_entry_recommendation", "premarket_suggested_limit_price",
     "rth_open_gap_pct", "rth_open_price",
     "ticker_open_gap_predicted_pct", "ticker_open_gap_predicted_source",
-    "ticker_open_gap_fact_pct", "ticker_open_gap_fact_basis",
+    "ticker_open_gap_fact_pct", "ticker_open_gap_fact_basis", "ticker_open_gap_model_version",
     "is_preliminary",
     # CatBoost (опционально); итог для входа/LLM — technical_decision_effective
     "catboost_entry_proba_good", "catboost_signal_status", "catboost_signal_note",

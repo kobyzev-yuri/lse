@@ -945,17 +945,20 @@ def build_game5m_gap_forecast_arbiter(
     rows = fetch_gap_forecast_rows(engine, days=days)
     pooled = pool_gap_forecast_metrics(rows, sector_proxy=proxy)
     sec = pooled.get("sector") or {}
-    game = pooled.get("game_tickers_pooled") or {}
+    ticker = pooled.get("ticker_v2") or pooled.get("game_tickers_pooled") or {}
+    sec_on_game = pooled.get("game_sector_baseline") or {}
 
     min_complete = 12
     min_ready = 20
     mae_caution_pp = 1.5
+    mae_ticker_caution_pp = 2.5
     sign_ready = 0.55
     sign_caution = 0.48
 
     n_sec = int(sec.get("n_complete") or 0)
-    n_game = int(game.get("n_complete") or 0)
+    n_ticker = int(ticker.get("n_complete") or 0)
     n_pm_only = int(pooled.get("n_premarket_only") or 0)
+    mae_delta = pooled.get("ticker_vs_sector_mae_delta_pp")
 
     def _verdict(block: Dict[str, Any]) -> Tuple[str, str, List[str]]:
         steps: List[str] = []
@@ -987,47 +990,124 @@ def build_game5m_gap_forecast_arbiter(
         steps.append("Продолжать log_only ещё 1–2 недели.")
         return "accumulating", rat, steps
 
+    def _verdict_ticker(block: Dict[str, Any]) -> Tuple[str, str, List[str]]:
+        steps: List[str] = []
+        n = int(block.get("n_complete") or 0)
+        if n < min_complete:
+            steps.append(
+                f"Копите лог ticker v2: нужно ≥{min_complete} дней pred_ticker+open; сейчас {n}."
+            )
+            steps.append("Убедитесь, что миграция 027 применена и premarket_cron пишет pred_ticker_gap_pct.")
+            steps.append("Модель: GAME_5M_TICKER_OPEN_GAP_MODEL_VERSION=v2_sector_premarket_blend.")
+            return "insufficient_data", f"Мало пар pred_ticker/open: {n} < {min_complete}.", steps
+        mae = block.get("mean_abs_error_pred_pp")
+        sign = block.get("sign_agreement_rate")
+        bias = block.get("mean_signed_error_pred_pp")
+        rat = (
+            f"n={n}, MAE(ticker-open)={mae} п.п., знак={sign}, смещение={bias} п.п., "
+            f"mean open={block.get('mean_open_pp')}%, mean pred={block.get('mean_pred_pp')}%."
+        )
+        if mae_delta is not None:
+            rat += f" ΔMAE vs sector-on-ticker={mae_delta:+.2f} п.п. (отриц. = ticker лучше)."
+        if sign is not None and float(sign) < sign_caution:
+            steps.append("Увеличить GAME_5M_TICKER_OPEN_GAP_PREMARKET_BLEND_WEIGHT или refit OLS.")
+            return "caution", f"Слабый знак ticker pred vs open: {rat}", steps
+        if mae is not None and float(mae) > mae_ticker_caution_pp:
+            steps.append("Запустить analyze_game5m_gap_forecast.py --ticker-metrics; проверить blend premarket.")
+            return "caution", f"Большая ошибка ticker pred: {rat}", steps
+        if n >= min_ready and sign is not None and float(sign) >= sign_ready:
+            steps.append("Ticker v2 лучше или сопоставим с sector baseline — можно опираться на карточки/Telegram.")
+            if mae_delta is not None and float(mae_delta) < -0.2:
+                steps.append("ΔMAE отрицательный: ticker v2 точнее sector-only на тикерах GAME_5m.")
+            return "ready_for_apply", f"Ticker v2 готов к operational use (log_only→apply по политике): {rat}", steps
+        steps.append("Продолжать накопление лога ticker v2.")
+        return "accumulating", rat, steps
+
     sec_v, sec_r, sec_steps = _verdict(sec)
-    game_v, game_r, game_steps = _verdict(game)
+    ticker_v, ticker_r, ticker_steps = _verdict_ticker(ticker)
 
     overall = "accumulating"
-    if sec_v == "insufficient_data" and game_v == "insufficient_data":
+    if sec_v == "insufficient_data" and ticker_v == "insufficient_data":
         overall = "insufficient_data"
-    elif sec_v == "ready_for_coef_update" or game_v == "ready_for_coef_update":
-        overall = "ready_for_coef_update"
-    elif sec_v == "caution" or game_v == "caution":
+    elif ticker_v == "ready_for_apply" or sec_v == "ready_for_coef_update":
+        overall = "ready_for_apply" if ticker_v == "ready_for_apply" else "ready_for_coef_update"
+    elif sec_v == "caution" or ticker_v == "caution":
         overall = "caution"
 
+    from services.ticker_open_gap_predict import get_ticker_gap_model_version
+
+    model_ver = get_ticker_gap_model_version()
+    promotion_eligible = ticker_v == "ready_for_apply"
+    promotion = {
+        "eligible": promotion_eligible,
+        "contour_id": "gap_forecast",
+        "role": "policy_gate",
+        "proposed_env": {
+            "GAME_5M_TICKER_OPEN_GAP_MODEL_VERSION": model_ver,
+            "GAME_5M_TICKER_OPEN_GAP_PREDICT_ENABLED": "true",
+        },
+        "requires": [
+            "game5m_gap_forecast_arbiter.ticker_verdict == ready_for_apply",
+            f"n_ticker_complete >= {min_ready}",
+        ],
+        "note_ru": "Не меняет config.env автоматически — только рекомендация оператору.",
+    }
+
     lines = [
-        "• **Прогноз гэпа (премаркет → open):**",
+        "• **Прогноз гэпа (премаркет → open), контур gap_forecast:**",
         f"  Сектор ({proxy}): **{sec_v}** — {sec_r}",
-        f"  Тикеры GAME_5m (pooled): **{game_v}** — {game_r}",
-        f"  Строк в логе: {pooled.get('n_rows')}, только премаркет (без open): {n_pm_only}",
-        "",
-        "**Следующие шаги:**",
+        f"  Тикер v2 ({model_ver}): **{ticker_v}** — {ticker_r}",
     ]
-    for i, s in enumerate(sec_steps + game_steps, 1):
+    if sec_on_game.get("n_complete"):
+        lines.append(
+            f"  Baseline (sector pred на тикерах): MAE={sec_on_game.get('mean_abs_error_pred_pp')} п.п., "
+            f"n={sec_on_game.get('n_complete')}."
+        )
+    lines.extend(
+        [
+            f"  Строк в логе: {pooled.get('n_rows')}, только премаркет (без open): {n_pm_only}",
+            "",
+            "**Следующие шаги:**",
+        ]
+    )
+    all_steps = sec_steps + ticker_steps
+    for i, s in enumerate(all_steps, 1):
         lines.append(f"  {i}. {s}")
 
     return {
         "mode": "ok",
         "description": (
-            "Сравнение macro_predicted_sector_gap (премаркет) с фактическим open_gap_pct из game5m_gap_forecast_daily. "
-            "Не меняет config автоматически."
+            "Контур gap_forecast: sector OLS + ticker v2 (сектор+макро+blend премаркет) vs open_gap_pct "
+            "в game5m_gap_forecast_daily. Вердикты: insufficient_data → accumulating → caution → ready_for_apply."
         ),
         "window_days": days,
         "sector_proxy": proxy,
+        "ticker_model_version": model_ver,
         "pooled": pooled,
         "sector_verdict": sec_v,
-        "game_verdict": game_v,
+        "ticker_verdict": ticker_v,
+        "game_verdict": ticker_v,
         "overall_verdict": overall,
+        "promotion": promotion,
+        "contour": {
+            "id": "gap_forecast",
+            "phase": "D",
+            "kind": "policy",
+            "policy_gate": {
+                "overall_verdict": overall,
+                "sector_verdict": sec_v,
+                "ticker_verdict": ticker_v,
+                "promotion": promotion,
+            },
+        },
         "thresholds": {
             "min_complete_pairs": min_complete,
             "min_ready_pairs": min_ready,
             "mae_caution_pp": mae_caution_pp,
+            "mae_ticker_caution_pp": mae_ticker_caution_pp,
             "sign_ready": sign_ready,
         },
-        "next_steps_ru": sec_steps + game_steps,
+        "next_steps_ru": all_steps,
         "summary_lines_ru": lines,
         "conclusion_ru": "\n".join(lines),
     }

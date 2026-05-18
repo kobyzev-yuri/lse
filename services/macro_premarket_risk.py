@@ -384,6 +384,8 @@ def _format_game5m_ticker_gap_forecast_line(det: Dict[str, Any], macro: Dict[str
     if pred is not None:
         src_lbl = {
             "ticker_ols": "OLS тикер",
+            "ticker_ols_v2": "OLS v2",
+            "ticker_ols_v2_premarket_blend": "OLS v2+премаркет",
             "sector_proxy": f"прокси {(macro.get('macro_sector_proxy') or 'SMH')}",
         }.get(src or "", src or "")
         label = f"прогноз {float(pred):+.2f}%"

@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Прогноз гэпа на open RTH по тикеру (OLS: gap_ticker ~ VIX + Forex + нефть).
+Прогноз гэпа на open RTH по тикеру.
 
-Факт гэпа — premarket_gap_pct (до open) или rth_open_gap_pct (после 9:30 ET).
-Кэш коэффициентов на календарный день ET (refit по дневным Yahoo).
+v2 (GAME_5M_TICKER_OPEN_GAP_MODEL_VERSION): OLS gap(ticker) ~ sector + VIX + Forex + oil;
+опциональный blend с премаркет-гэпом тикера. Кэш коэффициентов на календарный день ET.
+
+Факт: premarket_gap_pct (до open) или rth_open_gap_pct (после 9:30 ET).
+Телеметрия / арбитр: game5m_gap_forecast_daily + game5m_gap_forecast_arbiter.
 """
 from __future__ import annotations
 
@@ -14,6 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+TICKER_GAP_MODEL_VERSION = "v2_sector_premarket_blend"
 
 _COEF_CACHE: Dict[str, Tuple[str, Dict[str, float]]] = {}
 
@@ -34,6 +39,24 @@ def _cfg_int(key: str, default: int) -> int:
         return default
 
 
+def _cfg_float(key: str, default: float) -> float:
+    from config_loader import get_config_value
+
+    try:
+        return float((get_config_value(key, str(default)) or str(default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _configured_model_version() -> str:
+    from config_loader import get_config_value
+
+    return (
+        get_config_value("GAME_5M_TICKER_OPEN_GAP_MODEL_VERSION", TICKER_GAP_MODEL_VERSION)
+        or TICKER_GAP_MODEL_VERSION
+    ).strip()
+
+
 def _et_today_str() -> str:
     try:
         from datetime import datetime
@@ -44,12 +67,18 @@ def _et_today_str() -> str:
         return date.today().isoformat()
 
 
+def _sector_proxy_ticker() -> str:
+    from config_loader import get_config_value
+
+    return (get_config_value("GAME_5M_MACRO_SECTOR_PROXY", "SMH") or "SMH").strip().upper()
+
+
 def _fit_ticker_ols_coefs(ticker: str, *, history_days: int = 400) -> Optional[Dict[str, float]]:
-    """Коэффициенты OLS: gap_open(ticker) ~ const + gaps макро-индикаторов."""
+    """OLS: gap_open(ticker) ~ const + gap(sector) + gaps макро-индикаторов."""
     t = (ticker or "").strip().upper()
     if not t:
         return None
-    cache_key = f"{t}|{history_days}"
+    cache_key = f"{t}|v2|{history_days}"
     today = _et_today_str()
     if cache_key in _COEF_CACHE and _COEF_CACHE[cache_key][0] == today:
         return _COEF_CACHE[cache_key][1]
@@ -72,10 +101,11 @@ def _fit_ticker_ols_coefs(ticker: str, *, history_days: int = 400) -> Optional[D
         get_macro_vix_ticker,
     )
 
+    sector = _sector_proxy_ticker()
     vix_t = get_macro_vix_ticker()
     forex = get_macro_forex_tickers()
     oil_t = get_macro_oil_ticker()
-    tickers = [t, vix_t] + list(forex) + [oil_t]
+    tickers = [t, sector, vix_t] + list(forex) + [oil_t]
     panels = []
     for sym in tickers:
         p = _daily_ohlc_panel(sym, history_days)
@@ -89,7 +119,8 @@ def _fit_ticker_ols_coefs(ticker: str, *, history_days: int = 400) -> Optional[D
     y_col = f"{t}|gap_open"
     if y_col not in df.columns:
         return None
-    x_map: List[Tuple[str, str]] = [(vix_t, "beta_vix")]
+    x_map: List[Tuple[str, str]] = [(sector, "beta_sector")]
+    x_map.append((vix_t, "beta_vix"))
     for f in forex:
         key = "beta_gbp" if "GBP" in f else "beta_eur" if "EUR" in f else f"beta_{f.replace('=X', '').lower()}"
         x_map.append((f, key))
@@ -104,7 +135,7 @@ def _fit_ticker_ols_coefs(ticker: str, *, history_days: int = 400) -> Optional[D
     y = sub[y_col].to_numpy(dtype=float)
     X = np.column_stack([np.ones(len(y)), *(sub[c].to_numpy(dtype=float) for c in x_cols)])
     beta, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
-    out: Dict[str, float] = {"const": round(float(beta[0]), 4)}
+    out: Dict[str, float] = {"const": round(float(beta[0]), 4), "model_version": 2.0}
     for i, c in enumerate(x_cols, start=1):
         sym = c.split("|")[0]
         for s, key in x_map:
@@ -116,7 +147,7 @@ def _fit_ticker_ols_coefs(ticker: str, *, history_days: int = 400) -> Optional[D
 
 
 def _macro_gaps_for_predict(macro_risk: Optional[Dict[str, Any]]) -> Dict[str, float]:
-    """Текущие gap_pct макро-индикаторов (из evaluate_macro_premarket_risk или live fetch)."""
+    """Текущие gap_pct макро-индикаторов и сектора (live / evaluate_macro)."""
     gaps: Dict[str, float] = {}
     if isinstance(macro_risk, dict) and macro_risk.get("indicators"):
         for k, v in (macro_risk.get("indicators") or {}).items():
@@ -125,14 +156,25 @@ def _macro_gaps_for_predict(macro_risk: Optional[Dict[str, Any]]) -> Dict[str, f
                     gaps[str(k)] = float(v["gap_pct"])
                 except (TypeError, ValueError):
                     pass
-        if gaps:
-            return gaps
+    sector = _sector_proxy_ticker()
+    if sector not in gaps and isinstance(macro_risk, dict):
+        for det in macro_risk.get("game_5m_gaps") or []:
+            if not isinstance(det, dict):
+                continue
+            if str(det.get("ticker") or "").upper() == sector and det.get("gap_pct") is not None:
+                try:
+                    gaps[sector] = float(det["gap_pct"])
+                except (TypeError, ValueError):
+                    pass
+                break
+    if gaps:
+        return gaps
     try:
         from services.macro_premarket_risk import (
+            get_indicator_gap_detail,
             get_macro_forex_tickers,
             get_macro_oil_ticker,
             get_macro_vix_ticker,
-            get_indicator_gap_detail,
         )
 
         for sym in [get_macro_vix_ticker()] + get_macro_forex_tickers() + [get_macro_oil_ticker()]:
@@ -140,48 +182,86 @@ def _macro_gaps_for_predict(macro_risk: Optional[Dict[str, Any]]) -> Dict[str, f
             g = det.get("gap_pct")
             if g is not None:
                 gaps[sym] = float(g)
+        det_sec = get_indicator_gap_detail(sector)
+        if det_sec.get("gap_pct") is not None:
+            gaps[sector] = float(det_sec["gap_pct"])
     except Exception as e:
         logger.debug("ticker_open_gap_predict: macro gaps: %s", e)
     return gaps
+
+
+def _ols_predict_from_coefs(
+    coefs: Dict[str, float],
+    gaps: Dict[str, float],
+) -> Optional[float]:
+    from services.macro_premarket_risk import (
+        get_macro_forex_tickers,
+        get_macro_oil_ticker,
+        get_macro_vix_ticker,
+    )
+
+    sector = _sector_proxy_ticker()
+    pred = float(coefs.get("const") or 0.0)
+    if "beta_sector" in coefs and sector in gaps:
+        pred += float(coefs["beta_sector"]) * gaps[sector]
+    vix_t = get_macro_vix_ticker()
+    if vix_t in gaps and "beta_vix" in coefs:
+        pred += float(coefs["beta_vix"]) * gaps[vix_t]
+    for f in get_macro_forex_tickers():
+        g = gaps.get(f)
+        if g is None:
+            continue
+        key = "beta_gbp" if "GBP" in f else "beta_eur" if "EUR" in f else None
+        if key and key in coefs:
+            pred += float(coefs[key]) * float(g)
+    oil_t = get_macro_oil_ticker()
+    if oil_t in gaps and "beta_cl" in coefs:
+        pred += float(coefs["beta_cl"]) * gaps[oil_t]
+    return pred
+
+
+def _blend_premarket(
+    pred: float,
+    premarket_gap_pct: Optional[float],
+) -> Tuple[float, bool]:
+    """Blend OLS с наблюдаемым премаркет-гэпом тикера (если |pm| выше порога)."""
+    if premarket_gap_pct is None:
+        return pred, False
+    try:
+        pm = float(premarket_gap_pct)
+    except (TypeError, ValueError):
+        return pred, False
+    min_abs = _cfg_float("GAME_5M_TICKER_OPEN_GAP_PREMARKET_BLEND_MIN_ABS", 1.0)
+    if abs(pm) < min_abs:
+        return pred, False
+    w = _cfg_float("GAME_5M_TICKER_OPEN_GAP_PREMARKET_BLEND_WEIGHT", 0.45)
+    w = max(0.0, min(1.0, w))
+    return round((1.0 - w) * pred + w * pm, 3), True
 
 
 def predict_ticker_open_gap_pct(
     ticker: str,
     *,
     macro_risk: Optional[Dict[str, Any]] = None,
+    premarket_gap_pct: Optional[float] = None,
 ) -> Tuple[Optional[float], str]:
     """
-  Returns (predicted_pct, source).
-  source: ticker_ols | sector_proxy | unavailable
+    Returns (predicted_pct, source).
+    source: ticker_ols_v2 | ticker_ols_v2_premarket_blend | sector_proxy | unavailable
     """
     if not _cfg_bool("GAME_5M_TICKER_OPEN_GAP_PREDICT_ENABLED", True):
         return None, "disabled"
     t = (ticker or "").strip().upper()
-    coefs = _fit_ticker_ols_coefs(t)
     gaps = _macro_gaps_for_predict(macro_risk)
+    coefs = _fit_ticker_ols_coefs(t)
     if coefs and gaps:
         try:
-            from services.macro_premarket_risk import (
-                get_macro_forex_tickers,
-                get_macro_oil_ticker,
-                get_macro_vix_ticker,
-            )
-
-            pred = float(coefs.get("const") or 0.0)
-            vix_t = get_macro_vix_ticker()
-            if vix_t in gaps and "beta_vix" in coefs:
-                pred += float(coefs["beta_vix"]) * gaps[vix_t]
-            for f in get_macro_forex_tickers():
-                g = gaps.get(f)
-                if g is None:
-                    continue
-                key = "beta_gbp" if "GBP" in f else "beta_eur" if "EUR" in f else None
-                if key and key in coefs:
-                    pred += float(coefs[key]) * float(g)
-            oil_t = get_macro_oil_ticker()
-            if oil_t in gaps and "beta_cl" in coefs:
-                pred += float(coefs["beta_cl"]) * gaps[oil_t]
-            return round(pred, 3), "ticker_ols"
+            raw = _ols_predict_from_coefs(coefs, gaps)
+            if raw is not None:
+                blended, did_blend = _blend_premarket(float(raw), premarket_gap_pct)
+                if did_blend:
+                    return blended, "ticker_ols_v2_premarket_blend"
+                return round(float(raw), 3), "ticker_ols_v2"
         except Exception as e:
             logger.debug("ticker_open_gap_predict %s: %s", t, e)
     if isinstance(macro_risk, dict) and macro_risk.get("macro_predicted_sector_gap_pct") is not None:
@@ -190,6 +270,10 @@ def predict_ticker_open_gap_pct(
         except (TypeError, ValueError):
             pass
     return None, "unavailable"
+
+
+def get_ticker_gap_model_version() -> str:
+    return _configured_model_version()
 
 
 def resolve_ticker_open_gap_fact(
@@ -215,12 +299,18 @@ def attach_ticker_open_gap_fields(
     ticker: str,
     macro_risk: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Заполняет ticker_open_gap_predicted_pct / ticker_open_gap_fact_pct на карточке."""
-    pred, pred_src = predict_ticker_open_gap_pct(ticker, macro_risk=macro_risk)
+    """Заполняет ticker_open_gap_* на карточке / в get_decision_5m."""
+    pm = out.get("premarket_gap_pct")
+    pred, pred_src = predict_ticker_open_gap_pct(
+        ticker,
+        macro_risk=macro_risk,
+        premarket_gap_pct=float(pm) if pm is not None else None,
+    )
     fact, fact_basis = resolve_ticker_open_gap_fact(out)
     if pred is not None:
         out["ticker_open_gap_predicted_pct"] = pred
     out["ticker_open_gap_predicted_source"] = pred_src
+    out["ticker_open_gap_model_version"] = get_ticker_gap_model_version()
     if fact is not None:
         out["ticker_open_gap_fact_pct"] = fact
         out["ticker_open_gap_fact_basis"] = fact_basis

@@ -132,7 +132,7 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "ready_for_hold_apply | caution; next_steps_ru — что сделать дальше. Не меняет config."
     ),
     "game5m_gap_forecast_arbiter": (
-        "Точность премаркет-прогноза гэпа: таблица game5m_gap_forecast_daily (OLS pred_sector vs open_gap_pct, "
+        "Контур gap_forecast: game5m_gap_forecast_daily — sector OLS + pred_ticker v2 vs open_gap_pct; "
         "дрейф premarket→open). verdict: insufficient_data | accumulating | caution | ready_for_coef_update. "
         "Скрипты: ingest_game5m_gap_forecast.py, analyze_game5m_gap_forecast.py."
     ),
