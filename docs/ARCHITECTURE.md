@@ -152,14 +152,28 @@ flowchart LR
 
 ---
 
-## 5. Режимы работы бота
+## 5. План оптимизации архитектуры (2026-05)
+
+Поэтапное выравнивание анализатора, арбитров, promotion gate и config registry (без big bang):
+
+| Документ | Содержание |
+|----------|------------|
+| [ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md](ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md) | фазы 0–14, feature flags, порядок PR |
+| [ANALYZER_CONTOUR_ARCHITECTURE.md](ANALYZER_CONTOUR_ARCHITECTURE.md) | контуры, роли `model_eval` / `diagnostic` / `policy_gate`, реестр |
+| [CONFIG_REGISTRY_ARCHITECTURE.md](CONFIG_REGISTRY_ARCHITECTURE.md) | гибрид `config.env` + PostgreSQL (каталог, experiments, audit) |
+
+Пример узкого rollout по одному контуру: [GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md](GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md).
+
+---
+
+## 6. Режимы работы бота
 
 - **Polling (по умолчанию в docker-compose):** контейнер `lse-bot` запускает `run_telegram_bot.py`.
 - **Webhook:** альтернатива, см. [TELEGRAM_BOT_SETUP.md](TELEGRAM_BOT_SETUP.md) и [DEPLOY_GCP.md](DEPLOY_GCP.md).
 
 ---
 
-## 6. Версионирование логики 5m
+## 7. Версионирование логики 5m
 
 - `recommend_5m.py`: `decision_rule_version` / параметры в `get_decision_5m` — часть полей уходит в `context_json` для воспроизводимости.
 - Выходы по тейку: флаги `GAME_5M_EXIT_ONLY_TAKE` / `PORTFOLIO_EXIT_ONLY_TAKE` в `config.env` (см. `config.env.example`).
