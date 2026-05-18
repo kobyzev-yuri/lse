@@ -618,6 +618,288 @@ def _multiday_trade_alignment_rows(
     return rows_out
 
 
+def _as_bool(v: Any) -> bool:
+    if v is True:
+        return True
+    if v is False or v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes")
+
+
+def _mean_pct(xs: List[float]) -> Optional[float]:
+    return round(sum(xs) / len(xs), 4) if xs else None
+
+
+def build_multiday_lr_gates_arbiter(
+    report: Dict[str, Any],
+    *,
+    strategy: str,
+    closed_trades: Sequence[Any],
+    effects: Sequence[Any],
+) -> Dict[str, Any]:
+    """
+    Арбитр log-only гейтов multiday ridge: достаточность выборки телеметрии и следующие шаги (config вручную).
+
+    Смотрит BUY context_json (entry gate) и SELL exit_context_json (hold gate на TIME_EXIT_EARLY).
+    """
+    su = (strategy or "").strip().upper()
+    if su == "PORTFOLIO":
+        return {
+            "mode": "skipped",
+            "note": "Гейты multiday ridge относятся к GAME_5M; для портфеля не считаем.",
+        }
+    if su not in ("GAME_5M", "ALL"):
+        return {"mode": "skipped", "note": f"strategy={strategy!r}: только GAME_5M или ALL."}
+
+    from config_loader import get_config_value
+    from services.deal_params_5m import normalize_entry_context
+
+    min_buy_ok = 12
+    min_would_hold = 6
+    min_early_telemetry = 8
+    min_would_defer = 5
+    pnl_edge_pp = 0.20
+
+    entry_mode = (get_config_value("GAME_5M_MULTIDAY_ENTRY_GATE_MODE", "none") or "none").strip().lower()
+    hold_mode = (get_config_value("GAME_5M_MULTIDAY_HOLD_GATE_MODE", "none") or "none").strip().lower()
+    reg_on = (get_config_value("GAME_5M_MULTIDAY_LR_REG_ENABLED", "false") or "false").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+    by_tid: Dict[int, Any] = {}
+    for t in closed_trades:
+        try:
+            tid = int(getattr(t, "trade_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if tid:
+            by_tid[tid] = t
+
+    pnl_hold: List[float] = []
+    pnl_pass: List[float] = []
+    n_buy = 0
+    n_forecast = 0
+    n_gate_ok = 0
+    n_would_hold = 0
+
+    for e in effects:
+        tp = by_tid.get(int(e.trade_id))
+        if not tp:
+            continue
+        ctx = normalize_entry_context(getattr(tp, "context_json", None))
+        if not ctx:
+            continue
+        n_buy += 1
+        if ctx.get("multiday_lr_horizon_1d_pct_vs_spot") is not None or ctx.get("multiday_lr_entry_gate_status"):
+            n_forecast += 1
+        st = (ctx.get("multiday_lr_entry_gate_status") or "").strip().lower()
+        if st == "ok":
+            n_gate_ok += 1
+            wh = _as_bool(ctx.get("multiday_lr_entry_gate_would_hold"))
+            rp = float(e.realized_pct)
+            if wh:
+                n_would_hold += 1
+                pnl_hold.append(rp)
+            else:
+                pnl_pass.append(rp)
+
+    pnl_defer: List[float] = []
+    pnl_no_defer: List[float] = []
+    n_early = 0
+    n_hold_telemetry = 0
+    n_would_defer = 0
+
+    for e in effects:
+        if str(e.exit_signal or "").upper() != "TIME_EXIT_EARLY":
+            continue
+        n_early += 1
+        tp = by_tid.get(int(e.trade_id))
+        if not tp:
+            continue
+        raw_exit = getattr(tp, "exit_context_json", None)
+        if isinstance(raw_exit, str):
+            try:
+                import json
+
+                exit_ctx = json.loads(raw_exit) if raw_exit.strip() else {}
+            except Exception:
+                exit_ctx = {}
+        elif isinstance(raw_exit, dict):
+            exit_ctx = raw_exit
+        else:
+            exit_ctx = {}
+        hg = exit_ctx.get("multiday_lr_hold_gate")
+        if not isinstance(hg, dict):
+            continue
+        n_hold_telemetry += 1
+        rp = float(e.realized_pct)
+        if _as_bool(hg.get("would_defer_exit")):
+            n_would_defer += 1
+            pnl_defer.append(rp)
+        else:
+            pnl_no_defer.append(rp)
+
+    mlr = report.get("multiday_lr_reality_check") or {}
+    wf_verdict = str(mlr.get("walkforward_production_verdict") or "unknown") if mlr.get("mode") == "ok" else "unknown"
+
+    def _entry_verdict() -> Tuple[str, str, List[str]]:
+        steps: List[str] = []
+        if not reg_on:
+            steps.append("Включите GAME_5M_MULTIDAY_LR_REG_ENABLED=true (прогноз на карточке).")
+            return "not_configured", "Регрессия multiday выключена в config.", steps
+        if entry_mode == "none":
+            steps.append("Задайте GAME_5M_MULTIDAY_ENTRY_GATE_MODE=log_only для накопления телеметрии.")
+            return "not_configured", "Гейт входа не включён (mode=none).", steps
+        if n_forecast == 0:
+            steps.append("Проверьте деплой multiday_lr_gate.py и перезапуск lse-bot после BUY.")
+            steps.append("Дождитесь новых BUY с полями multiday_lr_* в context_json.")
+            return "insufficient_data", "Нет BUY с multiday-полями в окне отчёта.", steps
+        if n_gate_ok < min_buy_ok:
+            need = min_buy_ok - n_gate_ok
+            steps.append(f"Копите log_only: нужно ещё ≥{need} BUY со status=ok (сейчас {n_gate_ok}/{min_buy_ok}).")
+            return "insufficient_data", f"Мало BUY с гейтом ok: {n_gate_ok} < {min_buy_ok}.", steps
+        if n_would_hold < min_would_hold:
+            need = min_would_hold - n_would_hold
+            steps.append(f"Нужно ещё ≥{need} случаев would_hold для оценки фильтра входа.")
+            return "insufficient_data", f"Мало would_hold: {n_would_hold} < {min_would_hold}.", steps
+
+        mh, mp = _mean_pct(pnl_hold), _mean_pct(pnl_pass)
+        if mh is not None and mp is not None and mh > mp + pnl_edge_pp:
+            steps.append("Не включать ENTRY apply: would_hold сделки в среднем не хуже остальных.")
+            steps.append("Пересмотрите GAME_5M_MULTIDAY_ENTRY_TAU_* или кворум NEGATIVE_HORIZONS_MIN.")
+            return "caution", f"would_hold PnL {mh:+.2f}% vs pass {mp:+.2f}% — фильтр может отрезать прибыль.", steps
+
+        if wf_verdict == "not_ready":
+            steps.append("Сначала улучшите walk-forward (multiday_lr_reality_check → not_ready).")
+            steps.append("Продолжайте log_only ещё 1–2 недели.")
+            return "caution", "OOS multiday not_ready — рано для apply на вход.", steps
+
+        if entry_mode == "log_only":
+            steps.append("Шаг 3: при согласии — GAME_5M_MULTIDAY_ENTRY_GATE_MODE=apply (BUY→HOLD).")
+            steps.append("Сначала 1 неделя apply + мониторинг PnL vs контрфакт в следующем прогоне анализатора.")
+            return "ready_for_entry_apply", f"would_hold PnL {mh:+.2f}% vs pass {mp:+.2f}% — фильтр выглядит полезным.", steps
+
+        if entry_mode == "apply":
+            steps.append("Вход уже в apply — сравните новые закрытия с предыдущим окном log_only.")
+            return "monitoring", "ENTRY apply включён; следите за деградацией PnL.", steps
+
+        return "caution", f"Неизвестный entry_mode={entry_mode!r}.", steps
+
+    def _hold_verdict() -> Tuple[str, str, List[str]]:
+        steps: List[str] = []
+        if not reg_on:
+            return "not_configured", "REG выключен.", steps
+        if hold_mode == "none":
+            steps.append("Задайте GAME_5M_MULTIDAY_HOLD_GATE_MODE=log_only.")
+            return "not_configured", "Гейт удержания не включён.", steps
+        if n_early == 0:
+            steps.append("Дождитесь TIME_EXIT_EARLY (early_derisk / stale_reversal).")
+            return "insufficient_data", "Нет TIME_EXIT_EARLY в окне.", steps
+        if n_hold_telemetry == 0:
+            steps.append("Проверьте деплой и SELL context_json → multiday_lr_hold_gate.")
+            return "insufficient_data", "Нет телеметрии hold_gate на ранних выходах.", steps
+        if n_hold_telemetry < min_early_telemetry:
+            need = min_early_telemetry - n_hold_telemetry
+            steps.append(f"Копите log_only: ещё ≥{need} SELL с multiday_lr_hold_gate.")
+            return "insufficient_data", f"Мало SELL с hold_gate: {n_hold_telemetry}/{min_early_telemetry}.", steps
+        if n_would_defer < min_would_defer:
+            need = min_would_defer - n_would_defer
+            steps.append(f"Нужно ещё ≥{need} would_defer для оценки отложенного выхода.")
+            return "insufficient_data", f"Мало would_defer: {n_would_defer}/{min_would_defer}.", steps
+
+        md, mn = _mean_pct(pnl_defer), _mean_pct(pnl_no_defer)
+        if md is not None and mn is not None and md <= mn - pnl_edge_pp:
+            steps.append("Не включать HOLD apply: ранние выходы с would_defer не лучше по PnL.")
+            return "caution", f"would_defer PnL {md:+.2f}% vs остальные {mn:+.2f}%.", steps
+
+        if entry_mode != "apply":
+            steps.append("Рекомендуется сначала пройти шаг ENTRY apply и мониторинг 1–2 недели.")
+            return "caution", "Держите hold в log_only до стабилизации entry apply.", steps
+
+        if hold_mode == "log_only":
+            steps.append("Шаг 4 (после ревью recovery D4b): HOLD apply — отдельный PR defer TIME_EXIT.")
+            steps.append("Сверьте с time_exit_early_review и recovery_ml_time_exit_early.")
+            return "ready_for_hold_apply", f"would_defer PnL {md:+.2f}% vs {mn:+.2f}% — кандидат на defer.", steps
+
+        return "monitoring", "HOLD apply пока не реализован в кроне.", steps
+
+    ev, erat, esteps = _entry_verdict()
+    hv, hrat, hsteps = _hold_verdict()
+
+    overall = "accumulating"
+    if ev == "ready_for_entry_apply" and hv in ("insufficient_data", "not_configured", "caution"):
+        overall = "ready_entry_step"
+    if ev in ("monitoring", "ready_for_entry_apply") and hv == "ready_for_hold_apply":
+        overall = "ready_hold_step"
+    if ev == "insufficient_data" and hv == "insufficient_data":
+        overall = "accumulating"
+    if ev == "caution" or hv == "caution":
+        overall = "caution"
+
+    lines: List[str] = [
+        "• **Multiday ridge — гейты входа/удержания** (log-only телеметрия):",
+        f"  Вход: mode={entry_mode}, вердикт **{ev}** — {erat}",
+        f"  (BUY n={n_buy}, forecast={n_forecast}, gate_ok={n_gate_ok}, would_hold={n_would_hold}; "
+        f"mean PnL hold={_mean_pct(pnl_hold)}% pass={_mean_pct(pnl_pass)}%)",
+        f"  Удержание: mode={hold_mode}, вердикт **{hv}** — {hrat}",
+        f"  (TIME_EXIT_EARLY n={n_early}, hold_telemetry={n_hold_telemetry}, would_defer={n_would_defer}; "
+        f"mean PnL defer={_mean_pct(pnl_defer)}% other={_mean_pct(pnl_no_defer)}%)",
+        f"  Walk-forward OOS (справочно): **{wf_verdict}**",
+        "",
+        "**Следующие шаги:**",
+    ]
+    for i, s in enumerate(esteps + hsteps, 1):
+        lines.append(f"  {i}. {s}")
+
+    thresholds = {
+        "min_buy_gate_ok": min_buy_ok,
+        "min_would_hold": min_would_hold,
+        "min_early_exit_with_hold_gate": min_early_telemetry,
+        "min_would_defer": min_would_defer,
+        "pnl_edge_pp": pnl_edge_pp,
+    }
+
+    return {
+        "mode": "ok",
+        "description": (
+            "Оценка достаточности выборки для перевода multiday ridge gates из log_only в apply. "
+            "Не меняет config.env автоматически."
+        ),
+        "config": {
+            "GAME_5M_MULTIDAY_LR_REG_ENABLED": reg_on,
+            "GAME_5M_MULTIDAY_ENTRY_GATE_MODE": entry_mode,
+            "GAME_5M_MULTIDAY_HOLD_GATE_MODE": hold_mode,
+        },
+        "thresholds": thresholds,
+        "entry_gate": {
+            "verdict": ev,
+            "rationale_ru": erat,
+            "n_buy": n_buy,
+            "n_with_forecast": n_forecast,
+            "n_gate_ok": n_gate_ok,
+            "n_would_hold": n_would_hold,
+            "mean_realized_pct_would_hold": _mean_pct(pnl_hold),
+            "mean_realized_pct_pass": _mean_pct(pnl_pass),
+            "next_steps_ru": esteps,
+        },
+        "hold_gate": {
+            "verdict": hv,
+            "rationale_ru": hrat,
+            "n_time_exit_early": n_early,
+            "n_with_hold_telemetry": n_hold_telemetry,
+            "n_would_defer": n_would_defer,
+            "mean_realized_pct_would_defer": _mean_pct(pnl_defer),
+            "mean_realized_pct_other": _mean_pct(pnl_no_defer),
+            "next_steps_ru": hsteps,
+        },
+        "overall_verdict": overall,
+        "summary_lines_ru": lines,
+        "conclusion_ru": "\n".join(lines),
+    }
+
+
 def build_ml_production_arbiter(report: Dict[str, Any]) -> Dict[str, Any]:
     """
     Сводная рекомендация по ML в прод: multiday ridge, CatBoost entry, портфельный CatBoost, recovery (файлы/мета).
@@ -694,6 +976,15 @@ def build_ml_production_arbiter(report: Dict[str, Any]) -> Dict[str, Any]:
     else:
         verdicts["recovery_catboost"] = "no_model"
         lines.append("• Recovery CatBoost: нет .cbm / meta — офлайн-контур.")
+
+    mga = report.get("multiday_lr_gates_arbiter") or {}
+    if mga.get("mode") == "ok":
+        verdicts["multiday_lr_gates"] = str(mga.get("overall_verdict") or "accumulating")
+        for sl in mga.get("summary_lines_ru") or []:
+            lines.append(sl)
+    elif mga.get("note"):
+        verdicts["multiday_lr_gates"] = "skipped"
+        lines.append(f"• Multiday gates arbiter: {mga.get('note')}")
 
     overall = "not_ready"
     if verdicts.get("multiday_ridge") == "ready" and verdicts.get("catboost_entry") in ("ready", "caution"):

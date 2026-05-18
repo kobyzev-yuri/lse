@@ -142,6 +142,12 @@
     <div id="multidayLrBlock" class="dashboard-text">—</div>
 </div>
 
+<div class="card" style="border: 1px solid rgba(52, 211, 153, 0.35);">
+    <h2>Арбитр multiday gates <code>multiday_lr_gates_arbiter</code></h2>
+    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Достаточность выборки log_only (вход / удержание), средний PnL по корзинам и следующие шаги (когда включать apply). Не меняет config.</p>
+    <div id="multidayGatesArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
+</div>
+
 <div class="card" style="border: 1px solid rgba(167, 139, 250, 0.35);">
     <h2>Арбитр готовности ML <code>ml_production_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Сводка для оператора: multiday OOS, CatBoost entry, портфельный CatBoost, recovery .cbm. Текст не меняет <code>config.env</code> — для финального заключения рядом с LLM.</p>
@@ -938,6 +944,21 @@ function renderMultidayLrBlock(data) {
     el.innerHTML = html;
 }
 
+function renderMultidayGatesArbiterBlock(data) {
+    const el = document.getElementById('multidayGatesArbiterBlock');
+    if (!el) {
+        return;
+    }
+    const g = data.multiday_lr_gates_arbiter || {};
+    if (g.mode !== 'ok' || (!g.conclusion_ru && !g.overall_verdict)) {
+        el.textContent = g.note ? String(g.note) : '—';
+        return;
+    }
+    const ov = g.overall_verdict != null ? String(g.overall_verdict) : '—';
+    const body = g.conclusion_ru != null ? String(g.conclusion_ru) : '';
+    el.textContent = 'Итог: ' + ov + '\n\n' + body;
+}
+
 function renderMlArbiterBlock(data) {
     const el = document.getElementById('mlArbiterBlock');
     if (!el) {
@@ -1266,6 +1287,7 @@ async function runAnalyzer() {
         renderCatboostFusionBlock(data);
         renderCatboostBlock(data);
         renderMultidayLrBlock(data);
+        renderMultidayGatesArbiterBlock(data);
         renderMlArbiterBlock(data);
         renderHangerV2Block(data);
         renderHangerTuneJsonBlock(data);

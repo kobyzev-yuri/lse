@@ -681,6 +681,41 @@ def process_ticker(
                             rec_gate.get("would_defer_exit"),
                             ",".join(rec_gate.get("deny_reasons") or []),
                         )
+                    try:
+                        from services.multiday_lr_gate import evaluate_multiday_hold_gate
+
+                        entry_f = open_pos.get("entry_price")
+                        pnl_pct = None
+                        if isinstance(entry_f, (int, float)) and entry_f and price_for_check:
+                            pnl_pct = (float(price_for_check) / float(entry_f) - 1.0) * 100.0
+                        md_hold = evaluate_multiday_hold_gate(
+                            d5,
+                            exit_detail=exit_detail or "",
+                            pnl_current_pct=pnl_pct,
+                        )
+                        close_ctx_enriched["multiday_lr_hold_gate"] = md_hold
+                        logger.info(
+                            "[5m] MULTIDAY_HOLD_GATE %s: mode=%s status=%s would_defer=%s detail=%s note=%s",
+                            ticker,
+                            md_hold.get("mode"),
+                            md_hold.get("status"),
+                            md_hold.get("would_defer_exit"),
+                            md_hold.get("exit_detail"),
+                            md_hold.get("note") or md_hold.get("skip_reason"),
+                        )
+                        if (
+                            md_hold.get("mode") == "apply"
+                            and md_hold.get("status") == "ok"
+                            and md_hold.get("would_defer_exit")
+                        ):
+                            md_hold["applied"] = False
+                            md_hold["skip_reason_apply"] = "hold_gate_apply_not_implemented_use_log_only_first"
+                            logger.warning(
+                                "[5m] %s: GAME_5M_MULTIDAY_HOLD_GATE_MODE=apply пока не откладывает выход — используйте log_only",
+                                ticker,
+                            )
+                    except Exception as e_md:
+                        logger.debug("multiday hold gate %s: %s", ticker, e_md)
                 close_narrative_ctx = close_ctx_enriched
                 close_position(
                     ticker, exit_price, exit_type, position=open_pos,

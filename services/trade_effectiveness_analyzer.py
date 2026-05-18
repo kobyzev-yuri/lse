@@ -15,7 +15,11 @@ import pandas as pd
 from report_generator import get_engine, load_trade_history, compute_closed_trade_pnls
 from services.recommend_5m import fetch_5m_ohlc
 from services.deal_params_5m import normalize_entry_context
-from services.analyzer_ml_arbiter import build_ml_production_arbiter, build_multiday_lr_reality_check
+from services.analyzer_ml_arbiter import (
+    build_ml_production_arbiter,
+    build_multiday_lr_gates_arbiter,
+    build_multiday_lr_reality_check,
+)
 from services.analyzer_product_ideas_arbiter import build_product_ideas_arbiter
 from config_loader import get_config_value, load_config, is_editable_config_env_key
 
@@ -119,6 +123,12 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Walk-forward OOS ridge multiday: вердикт по активному набору из config (v2/v3*); при ingest enrichment — "
         "сравнение pooled RMSE v2 vs v3n/v3mac/v3sym/v3 и multiday_env_recommendations (try_true|keep_false|caution) "
         "для GAME_5M_MULTIDAY_LR_USE_NEWS_DB / USE_MACRO_CALENDAR_DB / USE_SYMBOL_CALENDAR_DB."
+    ),
+    "multiday_lr_gates_arbiter": (
+        "Достаточность выборки log-only гейтов multiday ridge (вход/удержание): считает BUY с "
+        "multiday_lr_entry_gate_* и TIME_EXIT_EARLY с multiday_lr_hold_gate в context_json, сравнивает средний PnL "
+        "would_hold vs pass / would_defer vs остальные. verdict: insufficient_data | ready_for_entry_apply | "
+        "ready_for_hold_apply | caution; next_steps_ru — что сделать дальше. Не меняет config."
     ),
     "ml_production_arbiter": (
         "Сводный вердикт готовности ML к продакшену: multiday ridge OOS, CatBoost entry, портфельный CatBoost (meta RMSE), "
@@ -5226,6 +5236,9 @@ def _attach_multiday_lr_and_ml_arbiter(
     payload["multiday_lr_reality_check"] = build_multiday_lr_reality_check(
         eng, strategy, closed_trades=closed_trades, effects=effects
     )
+    payload["multiday_lr_gates_arbiter"] = build_multiday_lr_gates_arbiter(
+        payload, strategy=strategy, closed_trades=closed_trades, effects=effects
+    )
     payload["ml_production_arbiter"] = build_ml_production_arbiter(payload)
     payload["product_ideas_arbiter"] = build_product_ideas_arbiter(
         payload, effects=effects, closed_trades=closed_trades
@@ -5609,6 +5622,14 @@ def _append_multiday_lr_and_arbiter_text_lines(lines: List[str], report: Dict[st
     elif mlr.get("note"):
         lines.append("")
         lines.append(f"Multiday ridge: {mlr.get('note')}")
+    mga = report.get("multiday_lr_gates_arbiter") or {}
+    if mga.get("mode") == "ok" and mga.get("conclusion_ru"):
+        lines.append("")
+        lines.append("Арбитр multiday gates (выборка log-only):")
+        lines.extend(str(mga.get("conclusion_ru")).split("\n"))
+    elif mga.get("note"):
+        lines.append("")
+        lines.append(f"Multiday gates arbiter: {mga.get('note')}")
     arb = report.get("ml_production_arbiter") or {}
     concl = arb.get("conclusion_ru")
     if concl:

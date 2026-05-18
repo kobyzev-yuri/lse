@@ -50,6 +50,11 @@ FULL_ENTRY_KEYS = (
     "multiday_lr_daily_close_source",
     "multiday_lr_forecast_unavailable",
     "multiday_lr_forecast_error",
+    "multiday_lr_entry_gate_mode",
+    "multiday_lr_entry_gate_status",
+    "multiday_lr_entry_gate_would_hold",
+    "multiday_lr_entry_gate_applied",
+    "multiday_lr_entry_gate_note",
     # Время бара решения (get_decision_5m) — для графика / бэктеста, не только ts INSERT в trade_history
     "exit_bar_close_ts",
     "exit_bar_start_et",

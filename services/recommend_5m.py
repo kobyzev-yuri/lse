@@ -1146,6 +1146,11 @@ TECHNICAL_SIGNAL_KEYS = (
     "multiday_lr_daily_close_source",
     "multiday_lr_forecast_unavailable",
     "multiday_lr_forecast_error",
+    "multiday_lr_entry_gate_mode",
+    "multiday_lr_entry_gate_status",
+    "multiday_lr_entry_gate_would_hold",
+    "multiday_lr_entry_gate_applied",
+    "multiday_lr_entry_gate_note",
 )
 
 
@@ -2503,6 +2508,14 @@ def get_decision_5m(
         out.setdefault("technical_decision_core", out.get("decision"))
         out.setdefault("technical_decision_effective", out.get("decision"))
         out.setdefault("catboost_fusion_mode", "none")
+
+    # Multiday ridge: гейт входа (log_only / apply) после CatBoost fusion.
+    try:
+        from services.multiday_lr_gate import finalize_technical_decision_with_multiday
+
+        finalize_technical_decision_with_multiday(out)
+    except Exception as e:
+        logger.warning("finalize_technical_decision_with_multiday(%s): %s", ticker, e)
 
     dec_eff = out.get("decision")
     branch = out.get("technical_entry_branch")
