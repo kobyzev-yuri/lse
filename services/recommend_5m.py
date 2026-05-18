@@ -273,6 +273,53 @@ def filter_to_last_n_us_sessions(
     return df.sort_values("datetime").reset_index(drop=True)
 
 
+def _compute_rth_open_gap_pct(
+    df: Optional[pd.DataFrame],
+    ticker: str,
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Гэп первого RTH-бара текущего торгового дня (ET) к вчерашнему close, %.
+    Returns (gap_pct, rth_open_price, prev_close).
+    """
+    if df is None or df.empty or "datetime" not in df.columns:
+        return None, None, None
+    try:
+        from datetime import time as dt_time
+
+        from services.premarket import get_prev_close_from_db
+
+        prev_close = get_prev_close_from_db(ticker)
+        if prev_close is None or float(prev_close) <= 0:
+            return None, None, None
+        prev_close = float(prev_close)
+        dts_et = pd.to_datetime(df["datetime"])
+        if dts_et.dt.tz is None:
+            try:
+                dts_et = dts_et.dt.tz_localize("America/New_York", ambiguous=True)
+            except Exception:
+                dts_et = dts_et.dt.tz_localize("UTC", ambiguous=True).dt.tz_convert("America/New_York")
+        else:
+            dts_et = dts_et.dt.tz_convert("America/New_York")
+        last_cal = dts_et.max().date()
+        t_start = dt_time(*US_SESSION_START)
+        t_end = dt_time(*US_SESSION_END)
+        rth_mask = (dts_et.dt.date == last_cal) & (dts_et.dt.time >= t_start) & (dts_et.dt.time <= t_end)
+        df_td = df.loc[rth_mask].sort_values("datetime")
+        if df_td.empty:
+            return None, None, prev_close
+        if "Open" in df_td.columns:
+            open_first = float(df_td["Open"].iloc[0])
+        else:
+            open_first = float(df_td["Close"].iloc[0])
+        if open_first <= 0:
+            return None, None, prev_close
+        gap = round((open_first / prev_close - 1.0) * 100.0, 2)
+        return gap, open_first, prev_close
+    except Exception as e:
+        logger.debug("rth_open_gap %s: %s", ticker, e)
+        return None, None, None
+
+
 def fetch_5m_ohlc(ticker: str, days: int = None) -> Optional[pd.DataFrame]:
     """
     Загружает все доступные 5-минутные OHLC от текущего момента назад на days дней
@@ -1126,7 +1173,9 @@ TECHNICAL_SIGNAL_KEYS = (
     "session_phase", "entry_price_basis",
     "open_guard_triggered", "open_guard_bar_range_pct", "open_guard_mins_since_open",
     "open_guard_prev_decision", "open_guard_next_decision",
-    "premarket_gap_pct", "premarket_last", "bars_count",
+    "premarket_gap_pct", "premarket_last", "prev_close", "minutes_until_open",
+    "premarket_entry_recommendation", "premarket_suggested_limit_price",
+    "rth_open_gap_pct", "rth_open_price",
     "is_preliminary",
     # CatBoost (опционально); итог для входа/LLM — technical_decision_effective
     "catboost_entry_proba_good", "catboost_signal_status", "catboost_signal_note",
@@ -2053,6 +2102,27 @@ def get_decision_5m(
             out["premarket_entry_recommendation"] = premarket_entry_recommendation
         if premarket_suggested_limit_price is not None:
             out["premarket_suggested_limit_price"] = premarket_suggested_limit_price
+    elif session_phase != "PRE_MARKET":
+        rth_gap, rth_open, prev_cl = _compute_rth_open_gap_pct(df, ticker)
+        if rth_gap is not None:
+            out["rth_open_gap_pct"] = rth_gap
+        if rth_open is not None:
+            out["rth_open_price"] = rth_open
+        if prev_cl is not None and out.get("prev_close") is None:
+            out["prev_close"] = prev_cl
+        if rth_gap is not None:
+            try:
+                from services.game5m_gap_forecast import record_open_gap_for_symbol
+
+                record_open_gap_for_symbol(
+                    ticker,
+                    open_gap_pct=rth_gap,
+                    rth_open_price=rth_open,
+                    prev_close=prev_cl,
+                    source_open="rth_5m_lazy",
+                )
+            except Exception as e_gfl:
+                logger.debug("gap_forecast open lazy %s: %s", ticker, e_gfl)
 
     # Оценка апсайда/тейка для входа:
     # - база: эффективный тейк из действующей логики (импульс + тикерный cap);

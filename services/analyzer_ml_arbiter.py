@@ -900,6 +900,139 @@ def build_multiday_lr_gates_arbiter(
     }
 
 
+def build_game5m_gap_forecast_arbiter(
+    report: Dict[str, Any],
+    *,
+    strategy: str,
+    engine: Any,
+    days: int = 90,
+) -> Dict[str, Any]:
+    """
+    Достаточность истории и точность: премаркет OLS pred_sector vs факт open_gap_pct (лог game5m_gap_forecast_daily).
+    """
+    su = (strategy or "").strip().upper()
+    if su == "PORTFOLIO":
+        return {"mode": "skipped", "note": "Прогноз гэпа GAME_5m — только для GAME_5M / ALL."}
+    if su not in ("GAME_5M", "ALL"):
+        return {"mode": "skipped", "note": f"strategy={strategy!r}"}
+    if engine is None:
+        return {"mode": "skipped", "note": "Нет подключения к БД."}
+
+    from config_loader import get_config_value
+    from services.game5m_gap_forecast import (
+        fetch_gap_forecast_rows,
+        pool_gap_forecast_metrics,
+    )
+
+    if not (get_config_value("GAME_5M_GAP_FORECAST_LOG_ENABLED", "true") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return {
+            "mode": "skipped",
+            "note": "GAME_5M_GAP_FORECAST_LOG_ENABLED=false — включите лог и premarket_cron.",
+        }
+
+    try:
+        from services.game5m_gap_forecast import ensure_gap_forecast_table
+
+        ensure_gap_forecast_table(engine)
+    except Exception as e:
+        return {"mode": "skipped", "note": f"Таблица game5m_gap_forecast_daily: {e}"}
+
+    proxy = (get_config_value("GAME_5M_MACRO_SECTOR_PROXY", "SMH") or "SMH").strip().upper()
+    rows = fetch_gap_forecast_rows(engine, days=days)
+    pooled = pool_gap_forecast_metrics(rows, sector_proxy=proxy)
+    sec = pooled.get("sector") or {}
+    game = pooled.get("game_tickers_pooled") or {}
+
+    min_complete = 12
+    min_ready = 20
+    mae_caution_pp = 1.5
+    sign_ready = 0.55
+    sign_caution = 0.48
+
+    n_sec = int(sec.get("n_complete") or 0)
+    n_game = int(game.get("n_complete") or 0)
+    n_pm_only = int(pooled.get("n_premarket_only") or 0)
+
+    def _verdict(block: Dict[str, Any]) -> Tuple[str, str, List[str]]:
+        steps: List[str] = []
+        n = int(block.get("n_complete") or 0)
+        if n < min_complete:
+            steps.append(
+                f"Копите лог: нужно ≥{min_complete} дней с pred+open ({block.get('label')}); сейчас {n}."
+            )
+            steps.append("PRE_MARKET: premarket_cron + GAME_5M_GAP_FORECAST_LOG_ENABLED=true.")
+            steps.append("После 9:30 ET: ingest_game5m_gap_forecast.py --phase open.")
+            return "insufficient_data", f"Мало пар pred/open: {n} < {min_complete}.", steps
+        mae = block.get("mean_abs_error_pred_pp")
+        sign = block.get("sign_agreement_rate")
+        bias = block.get("mean_signed_error_pred_pp")
+        rat = (
+            f"n={n}, MAE(pred-open)={mae} п.п., знак={sign}, смещение={bias} п.п., "
+            f"mean open={block.get('mean_open_pp')}%, mean pred={block.get('mean_pred_pp')}%."
+        )
+        if sign is not None and float(sign) < sign_caution:
+            steps.append("Пересмотреть GAME_5M_MACRO_PREDICT_* или отключить pred на карточках.")
+            return "caution", f"Слабый знак pred vs open: {rat}", steps
+        if mae is not None and float(mae) > mae_caution_pp:
+            steps.append("Запустить scripts/analyze_game5m_gap_forecast.py и обновить коэффициенты OLS.")
+            return "caution", f"Большая ошибка по модулю: {rat}", steps
+        if n >= min_ready and sign is not None and float(sign) >= sign_ready:
+            steps.append("Шаг: analyze_game5m_gap_forecast.py → обновить GAME_5M_MACRO_PREDICT_* в config.env.")
+            steps.append("Сверить с macro_predicted_sector_gap в product_ideas_arbiter (PnL).")
+            return "ready_for_coef_update", f"Достаточно истории для калибровки: {rat}", steps
+        steps.append("Продолжать log_only ещё 1–2 недели.")
+        return "accumulating", rat, steps
+
+    sec_v, sec_r, sec_steps = _verdict(sec)
+    game_v, game_r, game_steps = _verdict(game)
+
+    overall = "accumulating"
+    if sec_v == "insufficient_data" and game_v == "insufficient_data":
+        overall = "insufficient_data"
+    elif sec_v == "ready_for_coef_update" or game_v == "ready_for_coef_update":
+        overall = "ready_for_coef_update"
+    elif sec_v == "caution" or game_v == "caution":
+        overall = "caution"
+
+    lines = [
+        "• **Прогноз гэпа (премаркет → open):**",
+        f"  Сектор ({proxy}): **{sec_v}** — {sec_r}",
+        f"  Тикеры GAME_5m (pooled): **{game_v}** — {game_r}",
+        f"  Строк в логе: {pooled.get('n_rows')}, только премаркет (без open): {n_pm_only}",
+        "",
+        "**Следующие шаги:**",
+    ]
+    for i, s in enumerate(sec_steps + game_steps, 1):
+        lines.append(f"  {i}. {s}")
+
+    return {
+        "mode": "ok",
+        "description": (
+            "Сравнение macro_predicted_sector_gap (премаркет) с фактическим open_gap_pct из game5m_gap_forecast_daily. "
+            "Не меняет config автоматически."
+        ),
+        "window_days": days,
+        "sector_proxy": proxy,
+        "pooled": pooled,
+        "sector_verdict": sec_v,
+        "game_verdict": game_v,
+        "overall_verdict": overall,
+        "thresholds": {
+            "min_complete_pairs": min_complete,
+            "min_ready_pairs": min_ready,
+            "mae_caution_pp": mae_caution_pp,
+            "sign_ready": sign_ready,
+        },
+        "next_steps_ru": sec_steps + game_steps,
+        "summary_lines_ru": lines,
+        "conclusion_ru": "\n".join(lines),
+    }
+
+
 def build_ml_production_arbiter(report: Dict[str, Any]) -> Dict[str, Any]:
     """
     Сводная рекомендация по ML в прод: multiday ridge, CatBoost entry, портфельный CatBoost, recovery (файлы/мета).
@@ -985,6 +1118,15 @@ def build_ml_production_arbiter(report: Dict[str, Any]) -> Dict[str, Any]:
     elif mga.get("note"):
         verdicts["multiday_lr_gates"] = "skipped"
         lines.append(f"• Multiday gates arbiter: {mga.get('note')}")
+
+    gfa = report.get("game5m_gap_forecast_arbiter") or {}
+    if gfa.get("mode") == "ok":
+        verdicts["gap_forecast"] = str(gfa.get("overall_verdict") or "accumulating")
+        for sl in gfa.get("summary_lines_ru") or []:
+            lines.append(sl)
+    elif gfa.get("note"):
+        verdicts["gap_forecast"] = "skipped"
+        lines.append(f"• Gap forecast arbiter: {gfa.get('note')}")
 
     overall = "not_ready"
     if verdicts.get("multiday_ridge") == "ready" and verdicts.get("catboost_entry") in ("ready", "caution"):

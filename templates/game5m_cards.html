@@ -194,6 +194,47 @@
             }
             return '';
         }
+        function renderPremarketGapBlock(c) {
+            var gap = c.premarket_gap_pct;
+            var gapTitle = 'Гэп премаркета';
+            var refPrice = c.premarket_last;
+            if (gap == null && c.rth_open_gap_pct != null) {
+                gap = c.rth_open_gap_pct;
+                gapTitle = 'Гэп на открытие (9:30 ET)';
+                refPrice = c.rth_open_price != null ? c.rth_open_price : refPrice;
+            }
+            if (gap == null && refPrice == null && c.prev_close == null && c.minutes_until_open == null &&
+                !c.premarket_entry_recommendation && c.premarket_suggested_limit_price == null &&
+                c.premarket_intraday_momentum_pct == null) {
+                return '';
+            }
+            var html = '<div class="block-title">Премаркет / гэп</div>';
+            if (gap != null) {
+                var gapCls = Number(gap) >= 0 ? 'positive' : 'negative';
+                html += '<div class="row"><span class="label">' + escapeHtml(gapTitle) + '</span><span class="value ' + gapCls + '">' +
+                    (Number(gap) >= 0 ? '+' : '') + fmt(gap, 2) + '%</span></div>';
+            }
+            if (refPrice != null) {
+                html += '<div class="row"><span class="label">Цена</span><span class="value">' + fmt(refPrice, 2) + '</span></div>';
+            }
+            if (c.prev_close != null) {
+                html += '<div class="row"><span class="label">Вчера close</span><span class="value">' + fmt(c.prev_close, 2) + '</span></div>';
+            }
+            if (c.minutes_until_open != null && c.session_phase === 'PRE_MARKET') {
+                html += '<div class="row"><span class="label">До открытия</span><span class="value">' + escapeHtml(String(c.minutes_until_open)) + ' мин</span></div>';
+            }
+            if (c.premarket_entry_recommendation) {
+                html += '<div class="row"><span class="label">Вход премаркет</span><span class="value muted" style="font-size:0.85em;">' +
+                    escapeHtml(String(c.premarket_entry_recommendation)) + '</span></div>';
+            }
+            if (c.premarket_suggested_limit_price != null) {
+                html += '<div class="row"><span class="label">Лимит</span><span class="value">' + fmt(c.premarket_suggested_limit_price, 2) + '</span></div>';
+            }
+            if (c.premarket_intraday_momentum_pct != null) {
+                html += '<div class="row"><span class="label">Импульс премаркета</span><span class="value">' + fmt(c.premarket_intraday_momentum_pct, 2) + '%</span></div>';
+            }
+            return html;
+        }
         function renderMultidayLrTable(c) {
             var fc = c.log_return_multiday_forecast;
             if (fc && fc.horizons && typeof fc.horizons === 'object') {
@@ -262,6 +303,8 @@
                 }
             }
             html += '<div class="row"><span class="label">Цена</span><span class="value">' + fmt(c.price, 2) + '</span></div>';
+            var pmGapBlock = renderPremarketGapBlock(c);
+            if (pmGapBlock) html += pmGapBlock;
             html += '<div class="row"><span class="label">RSI(5m)</span><span class="value">' + fmt(c.rsi_5m, 1) + '</span></div>';
             var verdict = c.qwen_checklist_verdict || '';
             if (verdict) {

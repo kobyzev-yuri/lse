@@ -56,14 +56,23 @@ def get_macro_oil_ticker() -> str:
     return (get_config_value("GAME_5M_MACRO_OIL_TICKER", "CL=F") or "CL=F").strip()
 
 
-def get_indicator_gap_pct(ticker: str) -> Tuple[Optional[float], str]:
+def get_indicator_gap_detail(ticker: str) -> Dict[str, Any]:
     """
     Гэп % к предыдущему close: премаркет (PRE_MARKET) или последние два дня в quotes.
-    Returns (gap_pct, source).
+    Плюс premarket_last / prev_close для отображения в Telegram.
     """
-    t = (ticker or "").strip()
+    t = (ticker or "").strip().upper()
+    out: Dict[str, Any] = {
+        "ticker": t,
+        "gap_pct": None,
+        "source": "none",
+        "premarket_last": None,
+        "prev_close": None,
+        "error": None,
+    }
     if not t:
-        return None, "none"
+        return out
+
     try:
         from services.market_session import get_market_session_context
 
@@ -73,11 +82,15 @@ def get_indicator_gap_pct(ticker: str) -> Tuple[Optional[float], str]:
 
             pm = get_premarket_context(t)
             if pm.get("error"):
-                pass
+                out["error"] = pm.get("error")
             else:
+                out["prev_close"] = pm.get("prev_close")
+                out["premarket_last"] = pm.get("premarket_last")
                 g = pm.get("premarket_gap_pct")
                 if g is not None:
-                    return float(g), "premarket"
+                    out["gap_pct"] = float(g)
+                    out["source"] = "premarket"
+                    return out
     except Exception as e:
         logger.debug("premarket gap %s: %s", t, e)
 
@@ -101,11 +114,63 @@ def get_indicator_gap_pct(ticker: str) -> Tuple[Optional[float], str]:
         if len(rows) >= 2 and rows[0][0] is not None and rows[1][0] is not None:
             last = float(rows[0][0])
             prev = float(rows[1][0])
+            out["premarket_last"] = last
+            out["prev_close"] = prev
             if prev > 0:
-                return round((last / prev - 1.0) * 100.0, 2), "quotes_2d"
+                out["gap_pct"] = round((last / prev - 1.0) * 100.0, 2)
+                out["source"] = "quotes_2d"
     except Exception as e:
         logger.debug("quotes gap %s: %s", t, e)
-    return None, "none"
+    return out
+
+
+def get_indicator_gap_pct(ticker: str) -> Tuple[Optional[float], str]:
+    """Совместимость: только (gap_pct, source)."""
+    det = get_indicator_gap_detail(ticker)
+    return det.get("gap_pct"), str(det.get("source") or "none")
+
+
+def collect_game_5m_premarket_gaps() -> List[Dict[str, Any]]:
+    """Премаркет-гэпы по всем тикерам GAME_5m (для макро-алерта)."""
+    if not _cfg_bool("GAME_5M_MACRO_INCLUDE_GAME_5M_GAPS_IN_TELEGRAM", True):
+        return []
+    try:
+        from services.ticker_groups import get_tickers_game_5m
+
+        tickers = [str(x).strip().upper() for x in (get_tickers_game_5m() or []) if str(x).strip()]
+    except Exception as e:
+        logger.debug("collect_game_5m_premarket_gaps: %s", e)
+        return []
+    rows: List[Dict[str, Any]] = []
+    for t in tickers:
+        det = get_indicator_gap_detail(t)
+        if det.get("gap_pct") is not None or det.get("premarket_last") is not None:
+            rows.append(det)
+    return rows
+
+
+def _format_gap_telegram_line(ticker: str, info: Dict[str, Any]) -> Optional[str]:
+    g = info.get("gap_pct")
+    last = info.get("premarket_last")
+    if g is None and last is None:
+        return None
+    line = f"• {ticker}:"
+    if last is not None:
+        line += f" {float(last):.2f}"
+    if g is not None:
+        if last is not None:
+            line += ","
+        line += f" гэп {float(g):+.2f}%"
+    extras: List[str] = []
+    prev = info.get("prev_close")
+    if prev is not None:
+        extras.append(f"вчера {float(prev):.2f}")
+    src = (info.get("source") or "").strip()
+    if src and src != "none":
+        extras.append(src)
+    if extras:
+        line += f" ({', '.join(extras)})"
+    return line
 
 
 def evaluate_macro_premarket_risk() -> Dict[str, Any]:
@@ -142,8 +207,14 @@ def evaluate_macro_premarket_risk() -> Dict[str, Any]:
 
     indicators: Dict[str, Dict[str, Any]] = {}
     for t in forex + [vix_t, oil_t]:
-        g, src = get_indicator_gap_pct(t)
-        indicators[t] = {"gap_pct": g, "source": src}
+        det = get_indicator_gap_detail(t)
+        indicators[t] = {
+            "gap_pct": det.get("gap_pct"),
+            "source": det.get("source"),
+            "premarket_last": det.get("premarket_last"),
+            "prev_close": det.get("prev_close"),
+        }
+    game_5m_gaps = collect_game_5m_premarket_gaps()
 
     risk_score = 0
     fav_score = 0
@@ -206,7 +277,7 @@ def evaluate_macro_premarket_risk() -> Dict[str, Any]:
 
     predicted_sector_gap_pct: Optional[float] = None
     sector_proxy = (get_config_value("GAME_5M_MACRO_SECTOR_PROXY", "SMH") or "SMH").strip().upper()
-    if _cfg_bool("GAME_5M_MACRO_PREDICT_SECTOR_GAP_ENABLED", False):
+    if _cfg_bool("GAME_5M_MACRO_PREDICT_SECTOR_GAP_ENABLED", True):
         # OLS SMH n≈326 (analyze_macro_gap_indicators); коэффициенты переопределяются в config
         c0 = _cfg_float("GAME_5M_MACRO_PREDICT_CONST", 0.3867)
         b_vix = _cfg_float("GAME_5M_MACRO_PREDICT_BETA_VIX", -0.1842)
@@ -232,6 +303,7 @@ def evaluate_macro_premarket_risk() -> Dict[str, Any]:
         "risk_score": risk_score,
         "favorable_score": fav_score,
         "indicators": indicators,
+        "game_5m_gaps": game_5m_gaps,
         "reasons": reasons,
         "close_game_alert": close_alert,
         "macro_sector_proxy": sector_proxy,
@@ -279,8 +351,17 @@ def apply_macro_to_entry_advice(
         return advice, reason
 
     if bias == "UP" and advice == "ALLOW":
-        hint = f"Макро: возможен гэп вверх по риск-активам. {macro_note}".strip()
-        reason = hint if not reason or reason.startswith("Нет явных") else f"{reason}; {macro_note}"
+        pred = macro.get("macro_predicted_sector_gap_pct")
+        proxy = (macro.get("macro_sector_proxy") or "SMH").strip()
+        pred_note = ""
+        if pred is not None:
+            pred_note = f"прогноз гэпа {proxy} {float(pred):+.2f}%"
+        hint = f"Макро: возможен гэп вверх по риск-активам"
+        if pred_note:
+            hint = f"{hint} ({pred_note})"
+        if macro_note:
+            hint = f"{hint}. {macro_note}"
+        reason = hint if not reason or reason.startswith("Нет явных") else f"{reason}; {hint}"
         return advice, reason
 
     return advice, reason
@@ -293,12 +374,25 @@ def format_macro_telegram_lines(macro: Dict[str, Any]) -> List[str]:
     lines = [
         f"Макро: {macro.get('risk_level')}, ожидание по риск-активам: {macro.get('equity_gap_bias')}",
     ]
+    pred = macro.get("macro_predicted_sector_gap_pct")
+    proxy = (macro.get("macro_sector_proxy") or "SMH").strip()
+    if pred is not None:
+        lines.append(f"Прогноз гэпа {proxy} (OLS): {float(pred):+.2f}%")
     for t, info in (macro.get("indicators") or {}).items():
-        g = info.get("gap_pct")
-        if g is None:
-            continue
-        src = info.get("source") or ""
-        lines.append(f"• {t}: гэп {float(g):+.2f}% ({src})")
+        row = _format_gap_telegram_line(t, info if isinstance(info, dict) else {})
+        if row:
+            lines.append(row)
+    game_rows = macro.get("game_5m_gaps") or []
+    if game_rows:
+        lines.append("")
+        lines.append("GAME 5m (премаркет):")
+        for det in game_rows:
+            t = (det.get("ticker") or "?").strip()
+            row = _format_gap_telegram_line(t, det)
+            if row:
+                lines.append(row)
+            elif det.get("error"):
+                lines.append(f"• {t}: нет данных ({det.get('error')})")
     for r in (macro.get("reasons") or [])[:5]:
         lines.append(f"  — {r}")
     return lines

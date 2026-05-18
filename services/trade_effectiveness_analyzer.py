@@ -17,6 +17,7 @@ from services.recommend_5m import fetch_5m_ohlc
 from services.deal_params_5m import normalize_entry_context
 from services.analyzer_ml_arbiter import (
     build_ml_production_arbiter,
+    build_game5m_gap_forecast_arbiter,
     build_multiday_lr_gates_arbiter,
     build_multiday_lr_reality_check,
 )
@@ -129,6 +130,11 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "multiday_lr_entry_gate_* и TIME_EXIT_EARLY с multiday_lr_hold_gate в context_json, сравнивает средний PnL "
         "would_hold vs pass / would_defer vs остальные. verdict: insufficient_data | ready_for_entry_apply | "
         "ready_for_hold_apply | caution; next_steps_ru — что сделать дальше. Не меняет config."
+    ),
+    "game5m_gap_forecast_arbiter": (
+        "Точность премаркет-прогноза гэпа: таблица game5m_gap_forecast_daily (OLS pred_sector vs open_gap_pct, "
+        "дрейф premarket→open). verdict: insufficient_data | accumulating | caution | ready_for_coef_update. "
+        "Скрипты: ingest_game5m_gap_forecast.py, analyze_game5m_gap_forecast.py."
     ),
     "ml_production_arbiter": (
         "Сводный вердикт готовности ML к продакшену: multiday ridge OOS, CatBoost entry, портфельный CatBoost (meta RMSE), "
@@ -5231,13 +5237,18 @@ def _attach_multiday_lr_and_ml_arbiter(
     strategy: str,
     closed_trades: List[Any],
     effects: List[Any],
+    days: int = 60,
 ) -> None:
     eng = _analyzer_engine_safe()
+    win = max(30, int(days))
     payload["multiday_lr_reality_check"] = build_multiday_lr_reality_check(
         eng, strategy, closed_trades=closed_trades, effects=effects
     )
     payload["multiday_lr_gates_arbiter"] = build_multiday_lr_gates_arbiter(
         payload, strategy=strategy, closed_trades=closed_trades, effects=effects
+    )
+    payload["game5m_gap_forecast_arbiter"] = build_game5m_gap_forecast_arbiter(
+        payload, strategy=strategy, engine=eng, days=win
     )
     payload["ml_production_arbiter"] = build_ml_production_arbiter(payload)
     payload["product_ideas_arbiter"] = build_product_ideas_arbiter(
@@ -5304,7 +5315,7 @@ def analyze_trade_effectiveness(
         empty_payload["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
             [], te0, [], {}, strategy=strategy
         )
-        _attach_multiday_lr_and_ml_arbiter(empty_payload, strategy=strategy, closed_trades=[], effects=[])
+        _attach_multiday_lr_and_ml_arbiter(empty_payload, strategy=strategy, closed_trades=[], effects=[], days=days)
         return empty_payload
 
     tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
@@ -5393,7 +5404,7 @@ def analyze_trade_effectiveness(
         export_recovery_ml=export_recovery_ml,
         recovery_ml_export_path=recovery_ml_export_path,
     )
-    _attach_multiday_lr_and_ml_arbiter(payload, strategy=strategy, closed_trades=closed, effects=effects)
+    _attach_multiday_lr_and_ml_arbiter(payload, strategy=strategy, closed_trades=closed, effects=effects, days=days)
     _save_analyzer_state(
         {
             "last_run": {
@@ -5481,7 +5492,7 @@ def analyze_trade_effectiveness_focused(
         empty_focus["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
             [], te_f0, [], {}, strategy=strategy
         )
-        _attach_multiday_lr_and_ml_arbiter(empty_focus, strategy=strategy, closed_trades=[], effects=[])
+        _attach_multiday_lr_and_ml_arbiter(empty_focus, strategy=strategy, closed_trades=[], effects=[], days=days)
         return empty_focus
 
     tickers_list = [str(t.ticker) for t in filtered if getattr(t, "ticker", None)]
@@ -5568,7 +5579,7 @@ def analyze_trade_effectiveness_focused(
         export_recovery_ml=export_recovery_ml,
         recovery_ml_export_path=recovery_ml_export_path,
     )
-    _attach_multiday_lr_and_ml_arbiter(payload, strategy=strategy, closed_trades=filtered, effects=effects)
+    _attach_multiday_lr_and_ml_arbiter(payload, strategy=strategy, closed_trades=filtered, effects=effects, days=days)
     return payload
 
 
@@ -5630,6 +5641,14 @@ def _append_multiday_lr_and_arbiter_text_lines(lines: List[str], report: Dict[st
     elif mga.get("note"):
         lines.append("")
         lines.append(f"Multiday gates arbiter: {mga.get('note')}")
+    gfa = report.get("game5m_gap_forecast_arbiter") or {}
+    if gfa.get("mode") == "ok" and gfa.get("conclusion_ru"):
+        lines.append("")
+        lines.append("Арбитр прогноза гэпа (премаркет → open):")
+        lines.extend(str(gfa.get("conclusion_ru")).split("\n"))
+    elif gfa.get("note"):
+        lines.append("")
+        lines.append(f"Gap forecast arbiter: {gfa.get('note')}")
     arb = report.get("ml_production_arbiter") or {}
     concl = arb.get("conclusion_ru")
     if concl:

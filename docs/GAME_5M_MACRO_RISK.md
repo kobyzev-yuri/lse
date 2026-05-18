@@ -50,7 +50,41 @@
 
 ### Источник гэпа
 
-`get_indicator_gap_pct(ticker)`: премаркет (`PRE_MARKET`) → `premarket`; иначе два последних close в `quotes` → `quotes_2d`.
+`get_indicator_gap_detail(ticker)`: премаркет (`PRE_MARKET`) → `premarket` + `premarket_last` / `prev_close`; иначе два последних close в `quotes` → `quotes_2d`.
+
+В Telegram (макро favorable / risk-off) при `GAME_5M_MACRO_INCLUDE_GAME_5M_GAPS_IN_TELEGRAM=true` добавляется блок **GAME 5m (премаркет)** по всем тикерам `get_tickers_game_5m()`.
+
+### Точность OLS-прогноза гэпа сектора (`macro_predicted_sector_gap_pct`)
+
+Офлайн: `scripts/analyze_macro_gap_indicators.py` (≈400 торговых дней, SMH и др.):
+
+| Что предсказываем | Типичный R² (макро-гэпы → equity) | Вывод |
+|-------------------|-----------------------------------|--------|
+| **Гэп на открытие RTH** (`Open/PrevClose`) | **~0.4–0.5** | Умеренная связь; порядок величины полезен как **ориентир**, не как точный % |
+| Просадка от open до low дня | ~0.01 | Макро-гэпы **не** предсказывают внутридневной drawdown |
+| Первые 30 мин RTH | ~0.01 | То же для раннего выхода |
+
+Коэффициенты в `GAME_5M_MACRO_PREDICT_*` — из OLS **SMH**, n≈326 совпадающих дней (см. комментарий в коде). Это **не** walk-forward и **не** калибровка по вашим сделкам GAME_5m — вердикт по сделкам: `product_ideas_arbiter` → `macro_predicted_sector_gap`.
+
+**Ограничения live:**
+
+- В проде на вход OLS идут **премаркет-гэпы** VIX/Forex/нефти; в обучении — **дневной** гэп на open (близко, но не идентично).
+- Прогноз относится к **прокси** (`GAME_5M_MACRO_SECTOR_PROXY`, по умолчанию SMH), не к каждому тикеру игры; гэпы **ваших** тикеров — отдельные строки в алерте.
+- При R²≈0.45 типичная ошибка по модулю — **порядка 1–2 п.п.** и выше; знак совпадает чаще, чем случайно, но не всегда.
+
+Переоценивать точность не стоит: использовать как **вес к макро-bias** и сравнение с фактическими гэпами GAME_5m в том же сообщении.
+
+### Калибровка по факту open (пайплайн как multiday gates)
+
+| Шаг | Действие |
+|-----|----------|
+| 1 | `GAME_5M_GAP_FORECAST_LOG_ENABLED=true`, DDL: `python scripts/ingest_game5m_gap_forecast.py --ensure-table` |
+| 2 | PRE_MARKET: `premarket_cron` → `record_premarket_gap_snapshots()` (pred + гэп тикеров в `game5m_gap_forecast_daily`) |
+| 3 | После 9:30 ET: `ingest_game5m_gap_forecast.py --phase open` или лениво из `get_decision_5m` |
+| 4 | Анализатор: `game5m_gap_forecast_arbiter` — MAE, знак, `insufficient_data` / `ready_for_coef_update` |
+| 5 | Офлайн refit: `analyze_game5m_gap_forecast.py --days 120 --suggest-coefs` → обновить `GAME_5M_MACRO_PREDICT_*` вручную |
+
+Вердикты арбитра: `insufficient_data` → `accumulating` → `caution` → **`ready_for_coef_update`** (не меняет config автоматически).
 
 ---
 
@@ -85,7 +119,8 @@
 | `GAME_5M_MACRO_*_GAP_*` | см. example | Пороги avoid/favorable |
 | `PREMARKET_STRESS_USE_MACRO_RISK` | `true` | Новые премаркет-алерты |
 | `PREMARKET_FAVORABLE_ALERT_TELEGRAM` | `false` | Алерт «гэп вверх» |
-| `GAME_5M_MACRO_PREDICT_SECTOR_GAP_ENABLED` | `false` | OLS-прогноз гэпа SMH (песочница) |
+| `GAME_5M_MACRO_INCLUDE_GAME_5M_GAPS_IN_TELEGRAM` | `true` | Блок гэпа/цены по тикерам GAME_5m в макро-алерте |
+| `GAME_5M_MACRO_PREDICT_SECTOR_GAP_ENABLED` | `true` | OLS-прогноз **величины** гэпа SMH (VIX/Forex/нефть → %); в Telegram и карточках |
 
 Legacy: `PREMARKET_STRESS_USE_MACRO_RISK=false` — старый алерт «любой гэп ≤ −1.5%» по `PREMARKET_STRESS_TICKERS`.
 

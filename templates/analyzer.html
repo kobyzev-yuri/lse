@@ -146,6 +146,13 @@
     <h2>Арбитр multiday gates <code>multiday_lr_gates_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Достаточность выборки log_only (вход / удержание), средний PnL по корзинам и следующие шаги (когда включать apply). Не меняет config.</p>
     <div id="multidayGatesArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
+
+
+<div class="card" style="border: 1px solid rgba(251, 191, 36, 0.35);">
+    <h2>Арбитр прогноза гэпа <code>game5m_gap_forecast_arbiter</code></h2>
+    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Премаркет OLS pred vs факт open (лог <code>game5m_gap_forecast_daily</code>): MAE, знак, достаточность истории. Скрипты: <code>ingest_game5m_gap_forecast.py</code>, <code>analyze_game5m_gap_forecast.py --suggest-coefs</code>.</p>
+    <div id="gapForecastArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
+</div>
 </div>
 
 <div class="card" style="border: 1px solid rgba(167, 139, 250, 0.35);">
@@ -959,6 +966,20 @@ function renderMultidayGatesArbiterBlock(data) {
     el.textContent = 'Итог: ' + ov + '\n\n' + body;
 }
 
+
+function renderGapForecastArbiterBlock(data) {
+    const el = document.getElementById('gapForecastArbiterBlock');
+    if (!el) return;
+    const g = data.game5m_gap_forecast_arbiter || {};
+    if (g.mode !== 'ok' || (!g.conclusion_ru && !g.overall_verdict)) {
+        el.textContent = g.note ? String(g.note) : '—';
+        return;
+    }
+    const ov = g.overall_verdict != null ? String(g.overall_verdict) : '—';
+    const body = g.conclusion_ru != null ? String(g.conclusion_ru) : '';
+    el.textContent = 'Итог: ' + ov + '\n\n' + body;
+}
+
 function renderMlArbiterBlock(data) {
     const el = document.getElementById('mlArbiterBlock');
     if (!el) {
@@ -1288,6 +1309,7 @@ async function runAnalyzer() {
         renderCatboostBlock(data);
         renderMultidayLrBlock(data);
         renderMultidayGatesArbiterBlock(data);
+        renderGapForecastArbiterBlock(data);
         renderMlArbiterBlock(data);
         renderHangerV2Block(data);
         renderHangerTuneJsonBlock(data);

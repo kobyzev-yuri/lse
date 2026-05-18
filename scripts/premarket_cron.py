@@ -233,6 +233,19 @@ def main() -> None:
         if use_macro:
             from services.macro_premarket_risk import evaluate_macro_premarket_risk, format_macro_telegram_lines
 
+            try:
+                from services.game5m_gap_forecast import record_premarket_gap_snapshots
+
+                gfl = record_premarket_gap_snapshots()
+                if gfl.get("mode") == "ok":
+                    logger.info(
+                        "gap_forecast premarket: %s symbols, pred=%s",
+                        gfl.get("symbols_written"),
+                        gfl.get("pred_sector_gap_pct"),
+                    )
+            except Exception as e_gfl:
+                logger.debug("gap_forecast premarket log: %s", e_gfl)
+
             macro = evaluate_macro_premarket_risk()
             if macro.get("enabled") and token and chat_ids:
                 if macro.get("close_game_alert") and (not friday_only or is_friday):

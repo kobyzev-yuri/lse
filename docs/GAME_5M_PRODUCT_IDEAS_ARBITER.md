@@ -37,7 +37,7 @@
 
 - **Гипотеза:** знак `macro_predicted_sector_gap_pct` согласован с исходом сделки.
 - **Не путать** с гэпом на open SMH (нужен отдельный бэктест `analyze_macro_gap_indicators.py` по датам).
-- Включение: `GAME_5M_MACRO_PREDICT_SECTOR_GAP_ENABLED=true` (по умолчанию **false**).
+- Включение: `GAME_5M_MACRO_PREDICT_SECTOR_GAP_ENABLED=true` (по умолчанию **true**; на VM — в `config.env` после деплоя).
 
 ## Офлайн-анализ гэпа (исследование)
 

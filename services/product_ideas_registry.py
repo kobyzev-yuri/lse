@@ -37,6 +37,16 @@ PRODUCT_IDEAS: Dict[str, Dict[str, Any]] = {
         "min_trades_per_bucket": 12,
         "arbiter_metric": "predicted_gap_calibration",
     },
+    "game5m_gap_forecast_log": {
+        "title_ru": "Лог pred vs open (game5m_gap_forecast_daily) + калибровка OLS",
+        "config_flags": [
+            "GAME_5M_GAP_FORECAST_LOG_ENABLED",
+            "GAME_5M_MACRO_PREDICT_SECTOR_GAP_ENABLED",
+        ],
+        "context_fields_entry": ["macro_predicted_sector_gap_pct", "rth_open_gap_pct", "premarket_gap_pct"],
+        "min_trades_per_bucket": 12,
+        "arbiter_metric": "gap_forecast_arbiter",
+    },
     "macro_defer_time_exit_early": {
         "title_ru": "Не закрывать TIME_EXIT_EARLY до open при прогнозе гэпа вверх",
         "config_flags": ["GAME_5M_MACRO_DEFER_EARLY_EXIT_ENABLED"],
