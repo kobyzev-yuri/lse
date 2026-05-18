@@ -194,6 +194,24 @@
             }
             return '';
         }
+        function formatGapPctSigned(v, decimals) {
+            if (v == null || v === undefined || isNaN(Number(v))) return null;
+            var n = Number(v);
+            return (n >= 0 ? '+' : '') + fmt(n, decimals) + '%';
+        }
+        function tickerGapMacroSuffix(c) {
+            var pred = formatGapPctSigned(c.ticker_open_gap_predicted_pct, 2);
+            var fact = formatGapPctSigned(c.ticker_open_gap_fact_pct, 2);
+            if (!pred && !fact) return '';
+            var parts = [];
+            if (pred) parts.push('прогноз ' + pred);
+            if (fact) {
+                var basis = c.ticker_open_gap_fact_basis || '';
+                var sfx = basis === 'open_9_30_et' ? ' (open)' : (basis === 'premarket' ? ' (премаркет)' : '');
+                parts.push('факт ' + fact + sfx);
+            }
+            return '; гэп ' + escapeHtml(String(c.ticker || '')) + ': ' + parts.join(' · ');
+        }
         function renderPremarketGapBlock(c) {
             var pred = c.ticker_open_gap_predicted_pct;
             var fact = c.ticker_open_gap_fact_pct;
@@ -287,8 +305,6 @@
                 }
             }
             html += '<div class="row"><span class="label">Цена</span><span class="value">' + fmt(c.price, 2) + '</span></div>';
-            var pmGapBlock = renderPremarketGapBlock(c);
-            if (pmGapBlock) html += pmGapBlock;
             html += '<div class="row"><span class="label">RSI(5m)</span><span class="value">' + fmt(c.rsi_5m, 1) + '</span></div>';
             var verdict = c.qwen_checklist_verdict || '';
             if (verdict) {
@@ -323,6 +339,8 @@
                 var why = c.multiday_lr_forecast_error ? escapeHtml(String(c.multiday_lr_forecast_error)) : 'Нет прогноза (мало валидных дневных строк / Yahoo). См. логи контейнера: multiday_lr_forecast_none.';
                 html += '<div class="forecast-fallback muted">' + why + '</div>';
             }
+            var pmGapBlock = renderPremarketGapBlock(c);
+            if (pmGapBlock) html += pmGapBlock;
             html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
             var localEntryReason = (c.entry_advice_reason_local != null && String(c.entry_advice_reason_local).trim())
                 ? String(c.entry_advice_reason_local).trim()
@@ -340,7 +358,10 @@
                 if (macroReasons.length) {
                     macroLine += ' — ' + escapeHtml(macroReasons.join('; '));
                 }
-                if (c.macro_predicted_sector_gap_pct != null && c.macro_sector_proxy) {
+                var gapMacro = tickerGapMacroSuffix(c);
+                if (gapMacro) {
+                    macroLine += gapMacro;
+                } else if (c.macro_predicted_sector_gap_pct != null && c.macro_sector_proxy) {
                     macroLine += '; прогноз гэпа ' + escapeHtml(String(c.macro_sector_proxy)) + ' '
                         + (Number(c.macro_predicted_sector_gap_pct) >= 0 ? '+' : '')
                         + escapeHtml(String(c.macro_predicted_sector_gap_pct)) + '%';
@@ -360,7 +381,7 @@
             const updatedEl = document.getElementById('updatedAt');
             if (!silent) container.innerHTML = '<div class="loading-llm" style="padding:1rem;">Загрузка…</div>';
             try {
-                const r = await fetch('/api/game5m/cards?days=5', { cache: 'no-store' });
+                const r = await fetch('/api/game5m/cards?days=5&_=' + Date.now(), { cache: 'no-store' });
                 if (!r.ok) { container.innerHTML = '<div style="color:#fca5a5;">Ошибка ' + r.status + '</div>'; return; }
                 const data = await r.json();
                 if (typeof data.web_llm_enabled === 'boolean') {

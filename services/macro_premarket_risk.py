@@ -367,6 +367,64 @@ def apply_macro_to_entry_advice(
     return advice, reason
 
 
+def _format_game5m_ticker_gap_forecast_line(det: Dict[str, Any], macro: Dict[str, Any]) -> Optional[str]:
+    """Строка GAME_5m: прогноз гэпа на open (OLS тикер / прокси сектора) + факт премаркета."""
+    t = (det.get("ticker") or "?").strip().upper()
+    if det.get("error") and det.get("gap_pct") is None and det.get("premarket_last") is None:
+        return f"• {t}: нет данных ({det.get('error')})"
+    pred: Optional[float] = None
+    src = ""
+    try:
+        from services.ticker_open_gap_predict import predict_ticker_open_gap_pct
+
+        pred, src = predict_ticker_open_gap_pct(t, macro_risk=macro)
+    except Exception as e:
+        logger.debug("game5m gap forecast line %s: %s", t, e)
+    parts: List[str] = []
+    if pred is not None:
+        src_lbl = {
+            "ticker_ols": "OLS тикер",
+            "sector_proxy": f"прокси {(macro.get('macro_sector_proxy') or 'SMH')}",
+        }.get(src or "", src or "")
+        label = f"прогноз {float(pred):+.2f}%"
+        if src_lbl:
+            label += f" ({src_lbl})"
+        parts.append(label)
+    fact = det.get("gap_pct")
+    if fact is not None:
+        parts.append(f"премаркет {float(fact):+.2f}%")
+    last = det.get("premarket_last")
+    if not parts:
+        if last is not None:
+            return f"• {t}: {float(last):.2f} (гэп н/д)"
+        return None
+    prefix = f"• {t}"
+    if last is not None:
+        prefix = f"• {t} {float(last):.2f}"
+    return f"{prefix}: " + ", ".join(parts)
+
+
+def format_sector_and_game5m_gap_lines(macro: Dict[str, Any]) -> List[str]:
+    """Секторный прогноз гэпа (OLS SMH) и по тикерам GAME_5m: прогноз open + факт премаркета."""
+    if not macro.get("enabled"):
+        return []
+    lines: List[str] = []
+    pred = macro.get("macro_predicted_sector_gap_pct")
+    proxy = (macro.get("macro_sector_proxy") or "SMH").strip()
+    if pred is not None:
+        lines.append(f"Сектор {proxy} (прогноз OLS): {float(pred):+.2f}%")
+    game_rows = macro.get("game_5m_gaps") or []
+    if game_rows:
+        if lines:
+            lines.append("")
+        lines.append("GAME 5m — гэп на open:")
+        for det in game_rows:
+            row = _format_game5m_ticker_gap_forecast_line(det if isinstance(det, dict) else {}, macro)
+            if row:
+                lines.append(row)
+    return lines
+
+
 def format_macro_telegram_lines(macro: Dict[str, Any]) -> List[str]:
     """Строки для Telegram (plain text)."""
     if not macro.get("enabled"):
@@ -374,25 +432,14 @@ def format_macro_telegram_lines(macro: Dict[str, Any]) -> List[str]:
     lines = [
         f"Макро: {macro.get('risk_level')}, ожидание по риск-активам: {macro.get('equity_gap_bias')}",
     ]
-    pred = macro.get("macro_predicted_sector_gap_pct")
-    proxy = (macro.get("macro_sector_proxy") or "SMH").strip()
-    if pred is not None:
-        lines.append(f"Прогноз гэпа {proxy} (OLS): {float(pred):+.2f}%")
     for t, info in (macro.get("indicators") or {}).items():
         row = _format_gap_telegram_line(t, info if isinstance(info, dict) else {})
         if row:
             lines.append(row)
-    game_rows = macro.get("game_5m_gaps") or []
-    if game_rows:
+    gap_block = format_sector_and_game5m_gap_lines(macro)
+    if gap_block:
         lines.append("")
-        lines.append("GAME 5m (премаркет):")
-        for det in game_rows:
-            t = (det.get("ticker") or "?").strip()
-            row = _format_gap_telegram_line(t, det)
-            if row:
-                lines.append(row)
-            elif det.get("error"):
-                lines.append(f"• {t}: нет данных ({det.get('error')})")
+        lines.extend(gap_block)
     for r in (macro.get("reasons") or [])[:5]:
         lines.append(f"  — {r}")
     return lines

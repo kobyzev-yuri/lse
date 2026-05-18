@@ -168,6 +168,21 @@ def main() -> None:
                 + " до открытия "
                 + html.escape(str(mins_str))
             )
+        try:
+            from services.macro_premarket_risk import (
+                evaluate_macro_premarket_risk,
+                format_sector_and_game5m_gap_lines,
+            )
+
+            macro_gap = evaluate_macro_premarket_risk()
+            gap_lines = format_sector_and_game5m_gap_lines(macro_gap)
+            if gap_lines:
+                lines.append("")
+                lines.append("📐 <b>Гэп на open (прогноз)</b>")
+                for gl in gap_lines:
+                    lines.append(html.escape(gl))
+        except Exception as e_gap:
+            logger.debug("Премаркет: блок гэпа сектор/GAME_5m: %s", e_gap)
         # Прогноз на вступление (5m): по тикерам игры 5m — решение до открытия (трейдеру информация по возможности раньше)
         if entry_preview_5m:
             try:
