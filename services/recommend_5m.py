@@ -1176,6 +1176,8 @@ TECHNICAL_SIGNAL_KEYS = (
     "premarket_gap_pct", "premarket_last", "prev_close", "minutes_until_open",
     "premarket_entry_recommendation", "premarket_suggested_limit_price",
     "rth_open_gap_pct", "rth_open_price",
+    "ticker_open_gap_predicted_pct", "ticker_open_gap_predicted_source",
+    "ticker_open_gap_fact_pct", "ticker_open_gap_fact_basis",
     "is_preliminary",
     # CatBoost (опционально); итог для входа/LLM — technical_decision_effective
     "catboost_entry_proba_good", "catboost_signal_status", "catboost_signal_note",
@@ -2451,6 +2453,12 @@ def get_decision_5m(
         if macro_risk.get("macro_predicted_sector_gap_pct") is not None:
             out["macro_predicted_sector_gap_pct"] = macro_risk.get("macro_predicted_sector_gap_pct")
             out["macro_sector_proxy"] = macro_risk.get("macro_sector_proxy")
+    try:
+        from services.ticker_open_gap_predict import attach_ticker_open_gap_fields
+
+        attach_ticker_open_gap_fields(out, ticker=ticker, macro_risk=macro_risk or None)
+    except Exception as e_tog:
+        logger.debug("ticker_open_gap_predict для %s: %s", ticker, e_tog)
     # Рекомендованный вход и ожидаемая прибыль при достижении цели (если цель/цена доступны).
     try:
         p_now = out.get("price") or price
