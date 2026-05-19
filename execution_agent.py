@@ -581,7 +581,14 @@ class ExecutionAgent:
 
             # Записываем сделку в trade_history (strategy_name не должен быть NULL)
             strategy_name = (strategy_name or "").strip() or "Portfolio"
-            signal_type = "TAKE_PROFIT" if "Take-profit" in reason else ("STOP_LOSS" if "Stop-loss" in reason else "SELL")
+            if "TRAILING_TAKE" in reason or "Trailing take" in reason:
+                signal_type = "TRAILING_TAKE"
+            elif "Take-profit" in reason or "TAKE_PROFIT" in reason:
+                signal_type = "TAKE_PROFIT"
+            elif "Stop-loss" in reason:
+                signal_type = "STOP_LOSS"
+            else:
+                signal_type = "SELL"
             conn.execute(
                 text("""
                     INSERT INTO trade_history (
@@ -1009,7 +1016,9 @@ class ExecutionAgent:
                         if cluster_context is not None:
                             other_signals[ticker] = "HOLD"
                         continue
-                    context_json = merge_portfolio_buy_context(context_json, ticker)
+                    context_json = merge_portfolio_buy_context(
+                        context_json, ticker, base_take_profit=take_profit
+                    )
                 except Exception as e:
                     logger.debug("portfolio_entry_guards %s: %s", ticker, e)
 
@@ -1123,38 +1132,53 @@ class ExecutionAgent:
             if strategy_name == "GAME_5M":
                 logger.info("✅ %s — GAME_5M, тейк/стоп проверяет send_sndk_signal_cron", ticker)
                 continue
-            take_pct = self._get_last_take_profit(ticker)
-            from_config = False
-            if take_pct is None:
-                try:
-                    take_pct = float(get_config_value("PORTFOLIO_TAKE_PROFIT_PCT", "0").strip() or "0")
-                    from_config = True
-                except (ValueError, TypeError):
-                    take_pct = 0.0
+            buy_take = self._get_last_take_profit(ticker)
+            ctx_json = getattr(p_open, "context_json", None)
             pnl_pct = (current_price - entry_price) / entry_price * 100.0
-            if take_pct is not None and take_pct > 0:
-                if from_config:
-                    logger.info("📈 Тейк для %s: из конфига PORTFOLIO_TAKE_PROFIT_PCT=%.1f%%, pnl=%.2f%%", ticker, take_pct, pnl_pct)
-                if pnl_pct >= take_pct:
-                    reason = (
-                        f"Take-profit triggered: pnl={pnl_pct:.2f}% >= {take_pct}% "
-                        f"(entry={entry_price:.2f}, current={current_price:.2f})"
-                    )
-                    position = Position(
-                        ticker=ticker,
-                        quantity=quantity,
-                        entry_price=entry_price,
-                        entry_ts=entry_ts,
-                    )
-                    self._execute_sell(ticker, position, reason, strategy_name)
-                    continue
+            try:
+                from services.portfolio_exit_policy import evaluate_portfolio_exit
+
+                should_close, exit_reason, exit_sig = evaluate_portfolio_exit(
+                    engine=self.engine,
+                    ticker=ticker,
+                    entry_price=entry_price,
+                    entry_ts=entry_ts,
+                    current_price=current_price,
+                    buy_take_pct=buy_take,
+                    context_json=ctx_json,
+                )
+            except Exception as e:
+                logger.warning("portfolio_exit_policy %s: %s", ticker, e)
+                should_close, exit_reason, exit_sig = False, "", ""
+
+            if should_close:
+                reason = (
+                    f"{exit_sig}: {exit_reason} "
+                    f"(entry={entry_price:.2f}, current={current_price:.2f})"
+                )
+                position = Position(
+                    ticker=ticker,
+                    quantity=quantity,
+                    entry_price=entry_price,
+                    entry_ts=entry_ts,
+                )
+                self._execute_sell(ticker, position, reason, strategy_name)
+                continue
+
+            from services.portfolio_exit_policy import resolve_effective_take_pct
+
+            eff_take, take_note = resolve_effective_take_pct(ticker, buy_take, context_json=ctx_json)
+            if eff_take > 0:
                 logger.info(
-                    "📈 Тейк‑профит для %s: порог=%.1f%%, pnl=%.2f%% — не достигнут",
-                    ticker, take_pct, pnl_pct,
+                    "📈 Тейк‑профит для %s: порог=%.1f%% (%s), pnl=%.2f%% — не достигнут",
+                    ticker,
+                    eff_take,
+                    take_note,
+                    pnl_pct,
                 )
             else:
                 logger.info(
-                    "📈 Тейк‑профит для %s не задан (задайте PORTFOLIO_TAKE_PROFIT_PCT в config.env, напр. 3.0)",
+                    "📈 Тейк‑профит для %s не задан (PORTFOLIO_TAKE_PROFIT_PCT или take на BUY)",
                     ticker,
                 )
             logger.info(

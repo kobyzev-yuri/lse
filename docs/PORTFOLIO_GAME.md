@@ -332,6 +332,8 @@ StrategyManager.select_strategy(...)
 
 Опционально: `PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK` режет слабые входы по `portfolio_ml_entry_score` (см. `docs/ML_PORTFOLIO_CATBOOST.md`).
 
+**Выход (фаза 5):** `services/portfolio_exit_policy.py` — на BUY в `context_json` пишется `portfolio_effective_take_pct_at_entry` (max стратегия, `factor × portfolio_ml_expected_return_pct`, clamp floor/cap). При проверке в `check_stop_losses`: сначала **trailing** (откат от пика по `MAX(high)` в `quotes` с даты входа), затем тейк. Ключи: `PORTFOLIO_ML_TAKE_*`, `PORTFOLIO_TRAILING_TAKE_*`.
+
 ---
 
 ## 10. Как закрываются позиции

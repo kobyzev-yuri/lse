@@ -62,10 +62,22 @@ def portfolio_catboost_blocks_buy(ticker: str) -> Tuple[bool, str]:
 def merge_portfolio_buy_context(
     context_json: Optional[Dict[str, Any]],
     ticker: str,
+    *,
+    base_take_profit: Optional[float] = None,
 ) -> Dict[str, Any]:
     base = dict(context_json) if isinstance(context_json, dict) else {}
     ml = portfolio_ml_snapshot(ticker)
     for k, v in ml.items():
         if k.startswith("portfolio_ml_"):
             base[k] = v
+    if base_take_profit is not None and base_take_profit > 0:
+        try:
+            from services.portfolio_exit_policy import compute_entry_effective_take_for_ticker
+
+            eff, note = compute_entry_effective_take_for_ticker(ticker, float(base_take_profit), base)
+            if eff is not None and eff > 0:
+                base["portfolio_effective_take_pct_at_entry"] = round(eff, 3)
+                base["portfolio_effective_take_note"] = note
+        except Exception as e:
+            logger.debug("entry effective take %s: %s", ticker, e)
     return base

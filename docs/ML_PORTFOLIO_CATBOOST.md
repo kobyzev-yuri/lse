@@ -100,8 +100,9 @@ When disabled, missing, or misconfigured, the API returns status fields and keep
 
 When `PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK=true`, `ExecutionAgent` skips a **new** portfolio `BUY` if
 `portfolio_ml_entry_score` on the last feature row is below `PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE` (default 48).
-ML fields are stored in `trade_history.context_json` on BUY. **Take-profit is not driven by CatBoost yet** (phase 5:
-dynamic cap from `portfolio_ml_expected_return_pct`).
+ML fields are stored in `trade_history.context_json` on BUY. With `PORTFOLIO_ML_TAKE_ENABLED=true`, entry snapshot sets
+`portfolio_effective_take_pct_at_entry` = clamp(max(base_take, factor × expected_return_pct), floor, cap).
+Trailing exit: `PORTFOLIO_TRAILING_TAKE_*` in `portfolio_exit_policy.py`.
 
 ## Limitations
 
