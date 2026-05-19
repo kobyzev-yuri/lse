@@ -137,7 +137,7 @@ def _load_closes(engine, tickers: List[str], d0: date, d1: date) -> pd.DataFrame
         )
     if df is None or df.empty:
         return pd.DataFrame(columns=["ticker", "trade_date", "close"])
-    df["ticker"] = df["ticker"].astype(str).str.strip().upper()
+    df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
     return df
 
 
