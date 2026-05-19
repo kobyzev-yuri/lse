@@ -1072,8 +1072,8 @@ def _as_et(ts: pd.Timestamp) -> pd.Timestamp:
 def _load_closed_trades(days: int, strategy_name: Optional[str]) -> List[Any]:
     engine = get_engine()
     su = (strategy_name or "").strip().upper()
-    # PORTFOLIO = все закрытия с entry_strategy ≠ GAME_5M (в БД strategy_name — Momentum, Portfolio, …).
-    if su == "PORTFOLIO":
+    # PORTFOLIO / GAME_5M — по entry_strategy (как в portfolio_ml и catboost backtest), не только strategy_name в БД.
+    if su in ("PORTFOLIO", "GAME_5M"):
         raw = load_trade_history(engine)
     elif strategy_name and su != "ALL":
         raw = load_trade_history(engine, strategy_name=strategy_name)
@@ -1085,6 +1085,12 @@ def _load_closed_trades(days: int, strategy_name: Optional[str]) -> List[Any]:
             t
             for t in closed
             if (getattr(t, "entry_strategy", None) or "").strip().upper() != "GAME_5M"
+        ]
+    elif su == "GAME_5M":
+        closed = [
+            t
+            for t in closed
+            if (getattr(t, "entry_strategy", None) or "").strip().upper() == "GAME_5M"
         ]
     if not closed:
         return []
@@ -3158,6 +3164,134 @@ def _analyzer_llm_skip_model_compare() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+_ANALYZER_SECTION_SKIPPED: Dict[str, Any] = {
+    "status": "skipped",
+    "reason": "секция не запрошена (см. meta.sections_applied)",
+}
+
+
+def _parse_analyzer_sections(sections: Optional[str], *, light: bool) -> Set[str]:
+    """
+    Секции отчёта (веб и API):
+    core — summary, top_cases, entry/critical;
+    strategy — portfolio_* или game5m hints;
+    exits — time_exit / continuation (GAME_5M);
+    catboost — backtest + fusion + status;
+    game5m_extra — hanger, recovery model status;
+    ml_arbiters — multiday, gap, ml_production_arbiter;
+    recovery — recovery scenario, d4a, hold dataset.
+    """
+    if sections is not None and str(sections).strip():
+        return {x.strip().lower() for x in str(sections).split(",") if x.strip()}
+    if light:
+        return {"core", "strategy", "exits"}
+    return {
+        "core",
+        "strategy",
+        "exits",
+        "catboost",
+        "game5m_extra",
+        "ml_arbiters",
+        "recovery",
+    }
+
+
+def _section_want(secs: Set[str], name: str) -> bool:
+    return name in secs
+
+
+def _section_skip(name: str) -> Dict[str, Any]:
+    return {**_ANALYZER_SECTION_SKIPPED, "section": name}
+
+
+def _strategy_u(strategy: str) -> str:
+    return (strategy or "GAME_5M").strip().upper()
+
+
+def _env_key_allowed_for_strategy(env_key: str, strategy: str) -> bool:
+    k = (env_key or "").strip().upper()
+    su = _strategy_u(strategy)
+    if su == "PORTFOLIO":
+        return k.startswith("PORTFOLIO_")
+    if su == "GAME_5M":
+        return k.startswith("GAME_5M_")
+    return True
+
+
+def _filter_effects_for_strategy(
+    effects: List[TradeEffect],
+    closed: List[Any],
+    strategy: str,
+) -> List[TradeEffect]:
+    su = _strategy_u(strategy)
+    if su == "ALL":
+        return effects
+    by_tid: Dict[int, Any] = {}
+    for t in closed:
+        try:
+            tid = int(getattr(t, "trade_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if tid:
+            by_tid[tid] = t
+    out: List[TradeEffect] = []
+    for e in effects:
+        tp = by_tid.get(int(e.trade_id))
+        if not tp:
+            continue
+        if su == "GAME_5M" and _trade_qualifies_for_game5m_catboost("ALL", tp):
+            out.append(e)
+        elif su == "PORTFOLIO" and _trade_qualifies_for_portfolio("PORTFOLIO", tp):
+            out.append(e)
+    return out
+
+
+def _summary_scope_breakdown(closed: List[Any]) -> Dict[str, int]:
+    g5 = p = 0
+    for t in closed:
+        es = (getattr(t, "entry_strategy", None) or "").strip().upper()
+        if es == "GAME_5M":
+            g5 += 1
+        elif es:
+            p += 1
+    return {"game_5m_closed": g5, "portfolio_closed": p}
+
+
+def _analyzer_llm_generate(
+    llm: Any,
+    *,
+    messages: List[Dict[str, str]],
+    system_prompt: str,
+    temperature: float,
+    max_tokens: int,
+    http_timeout_sec: float,
+) -> Dict[str, Any]:
+    """Отдельная модель/эндпоинт для анализатора (по умолчанию OpenAI GPT на ProxyAPI, не Anthropic)."""
+    from services.llm_service import normalize_openai_sdk_proxyapi_base_model
+
+    model = (get_config_value("ANALYZER_LLM_MODEL") or get_config_value("OPENAI_MODEL") or "gpt-4o-mini").strip()
+    base = (
+        (get_config_value("ANALYZER_LLM_BASE_URL") or get_config_value("OPENAI_BASE_URL") or "https://api.proxyapi.ru/openai/v1")
+        .strip()
+        .rstrip("/")
+    )
+    base, model = normalize_openai_sdk_proxyapi_base_model(base, model)
+    out = llm.generate_response_with_model(
+        base,
+        model,
+        messages,
+        system_prompt=system_prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        http_timeout_sec=http_timeout_sec,
+    )
+    if not out:
+        raise RuntimeError(f"LLM empty response (model={model}, base={base})")
+    out["model"] = model
+    out["base_url"] = base
+    return out
+
+
 def _compact_report_for_llm(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Урезанный отчёт для LLM: без trade_effects и тяжёлых backtest/OOS. Полный JSON — в API."""
     meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
@@ -3202,10 +3336,14 @@ def _compact_report_for_llm(payload: Dict[str, Any]) -> Dict[str, Any]:
         "game5m_catboost_status": payload.get("game5m_catboost_status"),
         "game5m_recovery_model_status": payload.get("game5m_recovery_model_status"),
     }
-    if isinstance(payload.get("portfolio_ml_status_review"), dict):
-        out["portfolio_ml_status_review"] = payload["portfolio_ml_status_review"]
-    if isinstance(payload.get("portfolio_entry_review"), dict):
-        out["portfolio_entry_review"] = payload["portfolio_entry_review"]
+    if isinstance(payload.get("portfolio_catboost_status"), dict):
+        out["portfolio_catboost_status"] = payload["portfolio_catboost_status"]
+    if isinstance(payload.get("portfolio_ml_entry_review"), dict):
+        out["portfolio_ml_entry_review"] = payload["portfolio_ml_entry_review"]
+    if isinstance(payload.get("portfolio_exit_policy_review"), dict):
+        out["portfolio_exit_policy_review"] = payload["portfolio_exit_policy_review"]
+    if isinstance(payload.get("portfolio_config_grid"), dict):
+        out["portfolio_config_grid"] = {"note": "см. UI / полный JSON"}
     return {k: v for k, v in out.items() if v is not None}
 
 
@@ -3427,21 +3565,26 @@ def _build_llm_recommendations(
 
         llm = get_llm_service()
         _heavy_llm_http_timeout = get_openai_http_timeout_prompt_entry()
-        if not getattr(llm, "client", None):
-            return {"status": "disabled", "reason": "LLM client unavailable"}
+        if not getattr(llm, "api_key", None) and not getattr(llm, "client", None):
+            return {"status": "disabled", "reason": "LLM client unavailable (нет API key)"}
 
         meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        strategy = _strategy_u(meta.get("strategy") or "GAME_5M")
         current_rules = (
             meta.get("current_decision_rule_params")
             if isinstance(meta.get("current_decision_rule_params"), dict)
             else {}
         )
-        algorithm_context = {
+        param_map = {
+            k: v for k, v in PARAM_TO_ENV_KEY.items() if _env_key_allowed_for_strategy(str(v), strategy)
+        }
+        algorithm_context: Dict[str, Any] = {
+            "report_strategy": strategy,
             "decision_source_expected": meta.get("decision_source_expected"),
             "current_decision_rule_params": current_rules,
             "metric_definitions": meta.get("metric_definitions") or ANALYZER_METRIC_DEFINITIONS,
             "algorithm_digest": ANALYZER_LLM_ALGORITHM_DIGEST,
-            "parameter_to_env_key": dict(PARAM_TO_ENV_KEY),
+            "parameter_to_env_key": param_map,
             "llm_critical_notes": [
                 "summary.late_polling_signals НЕ означает задержку опроса/cron. См. metric_definitions.late_polling_signals.",
                 "Жёсткий запрет: не включать GAME_5M_SIGNAL_CRON_MINUTES в in_algorithm_parameter_changes, config_env_proposals и monitoring_fixes, если главное «доказательство» — late_polling_signals / exit_below_window_mfe_count / формулировки про «late polling» или «запаздывание опроса».",
@@ -3477,7 +3620,13 @@ def _build_llm_recommendations(
                 "do not suggest vague ideas without target parameter, env_key, or code area",
             ],
         }
-        if game_5m_config_focus:
+        if strategy == "PORTFOLIO":
+            algorithm_context["portfolio_env_keys"] = [k for k, _, _ in PORTFOLIO_CONFIG_GRID_ROWS]
+            algorithm_context["llm_critical_notes"].append(
+                "Только ключи PORTFOLIO_* из portfolio_env_keys / portfolio_config_grid; не предлагай GAME_5M_*."
+            )
+            algorithm_context["parameter_to_env_key_hint"] = {}
+        if game_5m_config_focus and strategy != "PORTFOLIO":
             algorithm_context["game_5m_exit_and_tuning_env_keys"] = [
                 "GAME_5M_TAKE_PROFIT_PCT",
                 "GAME_5M_TAKE_PROFIT_PCT_<TICKER>",
@@ -3520,10 +3669,22 @@ def _build_llm_recommendations(
         llm_input: Dict[str, Any] = {"algorithm_context": algorithm_context, "report": report_for_llm}
         if isinstance(payload.get("game_5m_config_hints"), list):
             llm_input["heuristic_hints"] = (payload["game_5m_config_hints"] or [])[:10]
+        if strategy == "PORTFOLIO":
+            task_line = (
+                "Твоя задача: улучшения портфельной игры — только PORTFOLIO_* (тейки, trailing, CatBoost entry, ML take). "
+                "Опирайся на portfolio_exit_policy_review, portfolio_ml_entry_review, missed_upside по TRAILING_TAKE."
+            )
+            env_line = "env_key только PORTFOLIO_* (см. portfolio_env_keys)."
+        else:
+            task_line = (
+                "Твоя задача: улучшения GAME_5M — перенастройка GAME_5M_* / порогов из current_decision_rule_params, "
+                "затем точечные изменения кода."
+            )
+            env_line = "env_key из parameter_to_env_key или GAME_5M_*."
         system_prompt = (
             "Ты senior quant и инженер по торговым системам; у тебя есть только входной JSON (отчёт + algorithm_context).\n"
-            "Твоя задача: предложить дельные улучшения — в первую очередь перенастройка GAME_5M_* / порогов из "
-            "current_decision_rule_params, во вторую — точечные изменения кода (ветки входа/выхода), если порогом не лечится.\n"
+            f"{task_line}\n"
+            f"report_strategy={strategy}; {env_line}\n"
             "Сначала прочитай algorithm_context.algorithm_digest (как считаются метрики окна и откуда context_json), "
             "затем metric_definitions и llm_critical_notes.\n"
             "Используй только факты из отчёта; не выдумывай сделки, тикеры и значения, которых нет во входе.\n"
@@ -3591,7 +3752,8 @@ def _build_llm_recommendations(
                 if str(x).strip()
             }
         max_tok = _analyzer_llm_max_output_tokens(game_5m_config_focus=game_5m_config_focus)
-        out = llm.generate_response(
+        out = _analyzer_llm_generate(
+            llm,
             messages=[
                 {
                     "role": "user",
@@ -3713,15 +3875,33 @@ def _build_practical_parameter_suggestions(
     effects: List[TradeEffect],
     summary: Dict[str, Any],
     current_rules: Dict[str, Any],
+    *,
+    strategy: str = "GAME_5M",
 ) -> List[Dict[str, Any]]:
     """Грубые, но практичные рекомендации по порогам на основе текущей выборки."""
     if not effects:
         return []
+    su = _strategy_u(strategy)
     losses = [e for e in effects if e.realized_pct <= 0]
     wins = [e for e in effects if e.realized_pct > 0]
     suggestions: List[Dict[str, Any]] = []
 
-    # 1) Volatility gate
+    if su == "PORTFOLIO":
+        missed = [e.missed_upside_pct or 0.0 for e in effects]
+        mean_missed = float(np.mean(missed)) if missed else 0.0
+        if mean_missed >= 1.5:
+            suggestions.append(
+                {
+                    "parameter": "portfolio_trailing_pullback",
+                    "current": (get_config_value("PORTFOLIO_TRAILING_PULLBACK_PCT", "3") or "3"),
+                    "proposed": "2.5",
+                    "why": f"Средний missed_upside={mean_missed:.2f}% при trailing — рассмотреть меньший pullback или выше arm.",
+                    "expected_effect": "Меньше раннего TRAILING_TAKE; см. PORTFOLIO_TRAILING_* / ML take.",
+                }
+            )
+        return suggestions
+
+    # 1) Volatility gate (GAME_5M / ALL)
     loss_high_vol = [e for e in losses if e.entry_vol_5m_pct is not None and e.entry_vol_5m_pct >= 0.6]
     win_high_vol = [e for e in wins if e.entry_vol_5m_pct is not None and e.entry_vol_5m_pct >= 0.6]
     if len(loss_high_vol) >= 3 and len(loss_high_vol) >= len(win_high_vol):
@@ -4185,6 +4365,7 @@ def _coerce_polling_minutes(proposed: Any) -> Optional[str]:
 
 def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
     cfg = load_config()
+    strategy = _strategy_u((report.get("meta") or {}).get("strategy") or "GAME_5M")
     llm = report.get("llm") if isinstance(report.get("llm"), dict) else {}
     llm_ana = llm.get("analysis") if isinstance(llm.get("analysis"), dict) else {}
     llm_changes = llm_ana.get("in_algorithm_parameter_changes")
@@ -4296,6 +4477,16 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             if env_key in seen:
                 continue
+            if not _env_key_allowed_for_strategy(env_key, strategy):
+                skipped.append(
+                    {
+                        "parameter": env_key,
+                        "env_key": env_key,
+                        "reason": "wrong_strategy",
+                        "note": f"Ключ не для strategy={strategy}.",
+                    }
+                )
+                continue
             if not is_editable_config_env_key(env_key):
                 skipped.append(
                     {
@@ -4368,6 +4559,8 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
             if not env_key and parameter.startswith("GAME_5M_") and is_editable_config_env_key(parameter):
                 env_key = parameter
             if not env_key or env_key in seen:
+                continue
+            if not _env_key_allowed_for_strategy(env_key, strategy):
                 continue
             if not is_editable_config_env_key(env_key):
                 continue
@@ -5715,8 +5908,11 @@ def analyze_trade_effectiveness(
     export_recovery_ml: bool = False,
     recovery_ml_export_path: Optional[str] = None,
     light: bool = False,
+    sections: Optional[str] = None,
 ) -> Dict[str, Any]:
     days = max(1, min(30, int(days)))
+    secs = _parse_analyzer_sections(sections, light=light)
+    strategy_u = _strategy_u(strategy)
     closed = _load_closed_trades(days=days, strategy_name=strategy)
     if not closed:
         empty_payload: Dict[str, Any] = {
@@ -5781,6 +5977,7 @@ def analyze_trade_effectiveness(
     tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
     cache = _prepare_ohlc_cache(tickers=tickers, days=days)
     effects = _estimate_trade_effects(closed, cache)
+    effects = _filter_effects_for_strategy(effects, closed, strategy)
     summary = _aggregate(effects)
     tops = _top_cases(effects)
     current_rules = _get_current_decision_rule_params()
@@ -5790,34 +5987,78 @@ def analyze_trade_effectiveness(
     if isinstance(prev_state.get("last_run"), dict):
         ps = prev_state["last_run"].get("game_5m_config_snapshot")
         prev_snap = ps if isinstance(ps, dict) else None
-    hanger_tune_review = _build_game5m_hanger_tune_json_review(effects, summary, strategy=strategy)
-    te_review = _build_time_exit_early_review(effects, cache)
-    practical = _build_practical_parameter_suggestions(effects, summary, current_rules)
-    add_pr = hanger_tune_review.get("practical_parameter_additions") if isinstance(hanger_tune_review, dict) else None
-    if isinstance(add_pr, list):
-        practical.extend([x for x in add_pr if isinstance(x, dict)])
-    practical.extend(_practical_suggestions_from_time_exit_early_review(te_review))
-    critical_cases = _build_critical_case_analysis(effects, limit=5)
-    game_5m_config_hints = _build_game5m_config_hints(effects, summary, hanger_tune_review=hanger_tune_review)
-    game_5m_config_hints.extend(_config_hints_from_time_exit_early_review(te_review))
-    entry_review = _build_entry_underperformance_review(effects, limit=8)
-    catboost_entry_backtest = _build_catboost_entry_backtest(strategy, closed, effects)
-    catboost_fusion_entry_review = _build_game5m_catboost_fusion_entry_review(strategy, closed, effects)
-    hanger_v2_review = _build_hanger_v2_review(effects)
-    continuation_gate_review = _build_continuation_gate_review(effects)
-    if light:
-        recovery_d4a_live = dict(_ANALYZER_LIGHT_SKIP)
-        recovery_scenario = dict(_ANALYZER_LIGHT_SKIP)
+
+    want_g5m = strategy_u in ("GAME_5M", "ALL")
+    if _section_want(secs, "game5m_extra") and want_g5m:
+        hanger_tune_review = _build_game5m_hanger_tune_json_review(effects, summary, strategy=strategy)
     else:
+        hanger_tune_review = _section_skip("game5m_extra")
+    if _section_want(secs, "exits") and want_g5m:
+        te_review = _build_time_exit_early_review(effects, cache)
+    else:
+        te_review = _section_skip("exits")
+    practical = (
+        _build_practical_parameter_suggestions(effects, summary, current_rules, strategy=strategy)
+        if _section_want(secs, "core")
+        else []
+    )
+    if isinstance(hanger_tune_review, dict):
+        add_pr = hanger_tune_review.get("practical_parameter_additions")
+        if isinstance(add_pr, list):
+            practical.extend([x for x in add_pr if isinstance(x, dict)])
+    if isinstance(te_review, dict) and te_review.get("config_candidates"):
+        practical.extend(_practical_suggestions_from_time_exit_early_review(te_review))
+    critical_cases = (
+        _build_critical_case_analysis(effects, limit=5) if _section_want(secs, "core") else []
+    )
+    if _section_want(secs, "strategy") and want_g5m:
+        htr_arg = (
+            hanger_tune_review
+            if isinstance(hanger_tune_review, dict) and hanger_tune_review.get("status") != "skipped"
+            else None
+        )
+        game_5m_config_hints = _build_game5m_config_hints(effects, summary, hanger_tune_review=htr_arg)
+        if isinstance(te_review, dict) and te_review.get("status") != "skipped":
+            game_5m_config_hints.extend(_config_hints_from_time_exit_early_review(te_review))
+    else:
+        game_5m_config_hints = []
+    entry_review = (
+        _build_entry_underperformance_review(effects, limit=8) if _section_want(secs, "core") else {"mode": "skipped"}
+    )
+    if _section_want(secs, "catboost") and want_g5m:
+        catboost_entry_backtest = _build_catboost_entry_backtest(strategy, closed, effects)
+        catboost_fusion_entry_review = _build_game5m_catboost_fusion_entry_review(strategy, closed, effects)
+        game5m_catboost_status = _build_game5m_catboost_status()
+    else:
+        catboost_entry_backtest = _section_skip("catboost")
+        catboost_fusion_entry_review = _section_skip("catboost")
+        game5m_catboost_status = _section_skip("catboost")
+    if _section_want(secs, "game5m_extra") and want_g5m:
+        hanger_v2_review = _build_hanger_v2_review(effects)
+        game5m_recovery_model_status = _build_game5m_recovery_model_status()
+    else:
+        hanger_v2_review = _section_skip("game5m_extra")
+        game5m_recovery_model_status = _section_skip("game5m_extra")
+    continuation_gate_review = (
+        _build_continuation_gate_review(effects)
+        if _section_want(secs, "exits") and want_g5m
+        else _section_skip("exits")
+    )
+    if _section_want(secs, "recovery") and want_g5m:
         recovery_d4a_live = _build_recovery_ml_d4a_live_review(closed, te_review, effects, cache, strategy=strategy)
         _maybe_attach_recovery_d4a_shallow_for_analyzer(recovery_d4a_live, days=days, strategy=strategy)
         recovery_scenario = _build_recovery_scenario_backtest(effects, cache, strategy=strategy)
+    else:
+        recovery_d4a_live = _section_skip("recovery")
+        recovery_scenario = _section_skip("recovery")
     payload: Dict[str, Any] = {
         "meta": {
             "days": days,
             "strategy": strategy,
             "trades_analyzed": len(effects),
             "light_mode": bool(light),
+            "sections_applied": sorted(secs),
+            "scope_breakdown": _summary_scope_breakdown(closed) if strategy_u == "ALL" else None,
             "include_trade_details": bool(include_trade_details),
             "export_recovery_ml": bool(export_recovery_ml),
             "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness",
@@ -5840,8 +6081,8 @@ def analyze_trade_effectiveness(
         "entry_underperformance_review": entry_review,
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_catboost_fusion_entry_review": catboost_fusion_entry_review,
-        "game5m_catboost_status": _build_game5m_catboost_status(),
-        "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
+        "game5m_catboost_status": game5m_catboost_status,
+        "game5m_recovery_model_status": game5m_recovery_model_status,
         "recovery_scenario_backtest": recovery_scenario,
         "time_exit_early_review": te_review,
         "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review),
@@ -5862,7 +6103,7 @@ def analyze_trade_effectiveness(
         effects=effects,
         include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
     )
-    if not light:
+    if _section_want(secs, "recovery") and want_g5m:
         _attach_game5m_hold_recovery_to_payload(
             payload,
             effects,
@@ -5872,9 +6113,14 @@ def analyze_trade_effectiveness(
             recovery_ml_export_path=recovery_ml_export_path,
         )
     elif export_recovery_ml:
-        payload["game5m_hold_recovery_export"] = {"status": "skipped", "reason": "light=1"}
+        payload["game5m_hold_recovery_export"] = {"status": "skipped", "reason": "section recovery off"}
     _attach_multiday_lr_and_ml_arbiter(
-        payload, strategy=strategy, closed_trades=closed, effects=effects, days=days, light=light
+        payload,
+        strategy=strategy,
+        closed_trades=closed,
+        effects=effects,
+        days=days,
+        light=not _section_want(secs, "ml_arbiters"),
     )
     _save_analyzer_state(
         {

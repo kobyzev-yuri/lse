@@ -681,6 +681,7 @@ def _analyze_trade_effectiveness_sync(
     include_trade_details: bool,
     export_recovery_ml: bool,
     light: bool,
+    sections: Optional[str],
 ) -> Dict[str, Any]:
     from services.trade_effectiveness_analyzer import analyze_trade_effectiveness
 
@@ -691,6 +692,7 @@ def _analyze_trade_effectiveness_sync(
         include_trade_details=include_trade_details,
         export_recovery_ml=export_recovery_ml,
         light=light,
+        sections=sections,
     )
 
 
@@ -702,6 +704,7 @@ async def get_analyzer(
     include_trade_details: bool = False,
     export_recovery_ml: bool = False,
     light: bool = True,
+    sections: str = "",
 ):
     """API: анализ эффективности закрытых сделок (единый код с /analyser в Telegram)."""
     try:
@@ -713,6 +716,7 @@ async def get_analyzer(
             include_trade_details=bool(include_trade_details),
             export_recovery_ml=bool(export_recovery_ml),
             light=bool(light),
+            sections=(sections or "").strip() or None,
         )
         body = _to_jsonable(payload)
         # Fail fast if response cannot be serialized (avoids empty/truncated body to browser).

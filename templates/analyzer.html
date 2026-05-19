@@ -51,6 +51,15 @@
             <button id="runBtn" type="button">Запустить анализ</button>
         </div>
     </div>
+    <p class="muted" style="margin:0.65rem 0 0 0; font-size:0.9rem;">
+        Быстрый отчёт: сводка, кейсы и блок выбранной игры. Опционально — тяжёлые секции ниже.
+    </p>
+    <div style="display:flex; flex-wrap:wrap; gap:0.75rem 1.25rem; margin-top:0.5rem; font-size:0.9rem;">
+        <label><input id="optSectionCatboost" type="checkbox"> CatBoost / fusion</label>
+        <label><input id="optSectionAdvanced" type="checkbox"> ML-арбитры</label>
+        <label><input id="optSectionRecovery" type="checkbox"> Recovery / D4a</label>
+        <label><input id="optSectionGame5mExtra" type="checkbox"> Hanger / tune</label>
+    </div>
 </div>
 
 <div class="card" style="border: 1px solid rgba(125, 211, 252, 0.35);">
@@ -84,7 +93,7 @@
     <div id="mlDataQualityInner" class="dashboard-text" style="margin-top:0.5rem;">—</div>
 </div>
 
-<div class="card analyzer-game5m-only" style="border: 1px solid rgba(34,197,94,0.35);">
+<div class="card analyzer-game5m-only analyzer-tuning-only" style="border: 1px solid rgba(34,197,94,0.35);">
     <h2>GAME_5M tuning: регламент и live-эксперимент</h2>
     <p class="muted" style="font-size:0.9rem;">Один параметр за раз: apply → наблюдение → review/rollback. Данные берутся из <code>local/game5m_tuning_ledger.json</code>, изменения проходят через общие guardrails.</p>
     <div id="tuningStatus" class="dashboard-text">Загрузка tuning status...</div>
@@ -142,7 +151,7 @@
     <div id="portfolioConfigGridBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card analyzer-game5m-only">
+<div class="card analyzer-game5m-only analyzer-section-optional" data-section="catboost">
     <h2>CatBoost GAME_5M (вход)</h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Два среза: <strong>снимок из сделок</strong> (что сохранено в BUY <code>context_json</code> при входе — без логов крона) и <strong>бэктест скора</strong> vs <code>realized_pct</code>. Для старых сделок до деплоя расширенного дампа часть полей может отсутствовать.</p>
     <h3 style="font-size:1rem;margin:0.5rem 0 0.35rem 0;color:#e2e8f0;">Снимок fusion / P по закрытым сделкам <code>game5m_catboost_fusion_entry_review</code></h3>
@@ -152,38 +161,38 @@
     <div id="catboostBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card analyzer-game5m-only" style="border: 1px solid rgba(56, 189, 248, 0.35);">
+<div class="card analyzer-game5m-only analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(56, 189, 248, 0.35);">
     <h2>Multiday ridge vs факт <code>multiday_lr_reality_check</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Walk-forward OOS по дневным <code>quotes</code> для тикеров GAME_5M (как в live: ridge λ из config, опционально премаркет). Срез по сделкам — справочно: log-ret vs <code>realized_pct</code> на разных шкалах.</p>
     <div id="multidayLrBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card analyzer-game5m-only" style="border: 1px solid rgba(52, 211, 153, 0.35);">
+<div class="card analyzer-game5m-only analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(52, 211, 153, 0.35);">
     <h2>Арбитр multiday gates <code>multiday_lr_gates_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Достаточность выборки log_only (вход / удержание), средний PnL по корзинам и следующие шаги (когда включать apply). Не меняет config.</p>
     <div id="multidayGatesArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
 
 
-<div class="card analyzer-game5m-only" style="border: 1px solid rgba(251, 191, 36, 0.35);">
+<div class="card analyzer-game5m-only analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(251, 191, 36, 0.35);">
     <h2>Арбитр прогноза гэпа <code>game5m_gap_forecast_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Контур <code>gap_forecast</code>: sector OLS + <strong>ticker v2</strong> (<code>pred_ticker_gap_pct</code>) vs open. Вердикты: insufficient_data → accumulating → caution → <code>ready_for_apply</code>. Лог: <code>game5m_gap_forecast_daily</code>; DDL 027; premarket_cron + <code>ingest_game5m_gap_forecast.py --phase open</code>.</p>
     <div id="gapForecastArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
 </div>
 </div>
 
-<div class="card" style="border: 1px solid rgba(167, 139, 250, 0.35);">
+<div class="card analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(167, 139, 250, 0.35);">
     <h2>Арбитр готовности ML <code>ml_production_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Сводка для оператора: multiday OOS, CatBoost entry, портфельный CatBoost, recovery .cbm. Текст не меняет <code>config.env</code> — для финального заключения рядом с LLM.</p>
     <div id="mlArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
 </div>
 
-<div class="card analyzer-game5m-only">
+<div class="card analyzer-game5m-only analyzer-section-optional" data-section="game5m_extra">
     <h2>Hanger v2 / stale exits <code>game5m_hanger_v2_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Разбор закрытых сделок по диагностике <code>position_state_v2</code>, сохранённой в SELL <code>context_json</code>. Live-наблюдение открытых позиций — отдельно по логам крона.</p>
     <div id="hangerV2Block" class="dashboard-text">—</div>
 </div>
 
-<div class="card analyzer-game5m-only">
+<div class="card analyzer-game5m-only analyzer-section-optional" data-section="game5m_extra">
     <h2>Hanger JSON / TAKE_PROFIT_SUSPEND <code>game5m_hanger_tune_json_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Файл <code>GAME_5M_HANGER_TUNE_JSON</code>, возраст, капы по тикеру, смесь <code>TAKE_PROFIT</code> vs <code>TAKE_PROFIT_SUSPEND</code> в окне; кандидаты на offline-перегенерацию и на <code>GAME_5M_HANGER_TUNE_APPLY_TAKE</code> (см. также <code>practical_parameter_suggestions</code> / <code>auto_config_override</code>).</p>
     <div id="hangerTuneJsonBlock" class="dashboard-text">—</div>
@@ -195,7 +204,7 @@
     <div id="continuationGateBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card analyzer-game5m-only" style="border: 1px solid rgba(251, 191, 36, 0.35);">
+<div class="card analyzer-game5m-only analyzer-section-optional" data-section="recovery" style="border: 1px solid rgba(251, 191, 36, 0.35);">
     <h2>Recovery ML D4a (live телеметрия) <code>recovery_ml_d4a_live_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">
         Сопоставление <code>recovery_ml_time_exit_early</code> из SELL с пост-выходом (<code>time_exit_early_review.detail_rows</code>)
@@ -252,8 +261,17 @@ function updateAnalyzerJsonLinks() {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
     const useLlm = document.getElementById('useLlm').checked;
-    const q = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0' });
-    const qFull = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0', include_trade_details: '1' });
+    const sections = getAnalyzerSectionsParam();
+    const hasHeavy = sections.indexOf('catboost') >= 0 || sections.indexOf('ml_arbiters') >= 0;
+    const baseQ = {
+        days: String(days),
+        strategy: strategy,
+        use_llm: useLlm ? '1' : '0',
+        sections: sections,
+        light: hasHeavy ? '0' : '1',
+    };
+    const q = new URLSearchParams(baseQ);
+    const qFull = new URLSearchParams(Object.assign({}, baseQ, { include_trade_details: '1' }));
     const path = '/api/analyzer?' + q.toString();
     const pathFull = '/api/analyzer?' + qFull.toString();
     const origin = window.location.origin || '';
@@ -1265,15 +1283,56 @@ function renderRecoveryMlD4aBlock(data) {
     el.innerHTML = html || '<span class="muted">Нет данных.</span>';
 }
 
+function getAnalyzerSectionsParam() {
+    const parts = ['core', 'strategy', 'exits'];
+    if (document.getElementById('optSectionCatboost') && document.getElementById('optSectionCatboost').checked) {
+        parts.push('catboost');
+    }
+    if (document.getElementById('optSectionAdvanced') && document.getElementById('optSectionAdvanced').checked) {
+        parts.push('ml_arbiters');
+    }
+    if (document.getElementById('optSectionRecovery') && document.getElementById('optSectionRecovery').checked) {
+        parts.push('recovery');
+    }
+    if (document.getElementById('optSectionGame5mExtra') && document.getElementById('optSectionGame5mExtra').checked) {
+        parts.push('game5m_extra');
+    }
+    return parts.join(',');
+}
+
+function applyAnalyzerOptionalSectionsVisibility() {
+    const anyOpt =
+        (document.getElementById('optSectionCatboost') && document.getElementById('optSectionCatboost').checked) ||
+        (document.getElementById('optSectionAdvanced') && document.getElementById('optSectionAdvanced').checked) ||
+        (document.getElementById('optSectionRecovery') && document.getElementById('optSectionRecovery').checked) ||
+        (document.getElementById('optSectionGame5mExtra') && document.getElementById('optSectionGame5mExtra').checked);
+    document.querySelectorAll('.analyzer-section-optional').forEach(function (el) {
+        el.style.display = anyOpt ? '' : 'none';
+    });
+}
+
 function applyAnalyzerStrategyVisibility() {
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
     const isPortfolio = strategy === 'PORTFOLIO';
+    const isAll = strategy === 'ALL';
     document.querySelectorAll('.analyzer-game5m-only').forEach(function (el) {
         el.style.display = isPortfolio ? 'none' : '';
     });
     document.querySelectorAll('.analyzer-portfolio-only').forEach(function (el) {
-        el.style.display = isPortfolio ? '' : 'none';
+        el.style.display = (isPortfolio || isAll) ? '' : 'none';
     });
+    document.querySelectorAll('.analyzer-tuning-only').forEach(function (el) {
+        el.style.display = isPortfolio ? 'none' : '';
+    });
+    ['optSectionCatboost', 'optSectionRecovery', 'optSectionGame5mExtra'].forEach(function (id) {
+        const inp = document.getElementById(id);
+        if (!inp) return;
+        const lab = inp.closest('label');
+        if (lab) {
+            lab.style.display = isPortfolio ? 'none' : '';
+        }
+    });
+    applyAnalyzerOptionalSectionsVisibility();
 }
 
 function renderPortfolioCatboostStatusBlock(data) {
@@ -1411,14 +1470,18 @@ function renderPortfolioBlocks(data) {
     renderPortfolioConfigGridBlock(data);
 }
 
-async function fetchAnalyzerApi(useLlm, timeoutMs, lightMode) {
+async function fetchAnalyzerApi(useLlm, timeoutMs) {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
+    const sections = getAnalyzerSectionsParam();
+    const hasHeavy = sections.indexOf('catboost') >= 0 || sections.indexOf('ml_arbiters') >= 0 ||
+        sections.indexOf('recovery') >= 0 || sections.indexOf('game5m_extra') >= 0;
     const q = new URLSearchParams({
         days: String(days),
         strategy: strategy,
         use_llm: useLlm ? '1' : '0',
-        light: lightMode ? '1' : '0',
+        light: hasHeavy ? '0' : '1',
+        sections: sections,
     });
     const ctrl = new AbortController();
     const timer = setTimeout(function () { ctrl.abort(); }, timeoutMs);
@@ -1516,12 +1579,17 @@ async function runAnalyzer() {
     updateAnalyzerJsonLinks();
     try {
         const timeoutMs = useLlm ? 600000 : 300000;
-        const { ok, data } = await fetchAnalyzerApi(useLlm, timeoutMs, true);
+        const { ok, data } = await fetchAnalyzerApi(useLlm, timeoutMs);
         if (!ok) {
             summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(data.detail || 'API error')}</span>`;
             return;
         }
         applyAnalyzerStrategyVisibility();
+        const meta = data.meta || {};
+        const scopeLine = meta.scope_breakdown
+            ? ('<br><span class="muted">ALL: GAME_5M=' + esc(meta.scope_breakdown.game_5m_closed) +
+                ', portfolio=' + esc(meta.scope_breakdown.portfolio_closed) + '</span>')
+            : '';
         renderPortfolioBlocks(data);
         renderCatboostFusionBlock(data);
         renderCatboostBlock(data);
@@ -1551,7 +1619,8 @@ async function runAnalyzer() {
             `Сумма избежимых просадок по окну: <strong>${esc(s.sum_avoidable_loss_pct)}%</strong> (<code>sum_avoidable_loss_pct</code>)<br>` +
             `<span class="muted" style="font-size:0.92em;">Счётчики: выход ниже MFE окна <strong>${esc(s.exit_below_window_mfe_count != null ? s.exit_below_window_mfe_count : s.late_polling_signals != null ? s.late_polling_signals : '—')}</strong> (<code>exit_below_window_mfe_count</code> / <code>late_polling_signals</code>), ` +
             `убытки при волатильности ≥0.6% <strong>${esc(s.high_vol_losses_count != null ? s.high_vol_losses_count : '—')}</strong> (<code>high_vol_losses_count</code>), ` +
-            `убытки при слабом <code>prob_up</code> <strong>${esc(s.weak_prob_up_losses_count != null ? s.weak_prob_up_losses_count : '—')}</strong> (<code>weak_prob_up_losses_count</code>)</span>`;
+            `убытки при слабом <code>prob_up</code> <strong>${esc(s.weak_prob_up_losses_count != null ? s.weak_prob_up_losses_count : '—')}</strong> (<code>weak_prob_up_losses_count</code>)</span>` +
+            scopeLine;
         const losses = (data.top_cases && data.top_cases.top_losses) ? data.top_cases.top_losses : [];
         const missed = (data.top_cases && data.top_cases.top_missed_upside) ? data.top_cases.top_missed_upside : [];
         const winMissed = (data.top_cases && data.top_cases.top_profitable_missed_upside) ? data.top_cases.top_profitable_missed_upside : [];
@@ -1561,7 +1630,21 @@ async function runAnalyzer() {
         topWinMissed.innerHTML = winMissedLines.length ? winMissedLines.map(toLine).join('<br>') : '—';
         }
         if (data.llm) {
-            llmBlock.textContent = JSON.stringify(data.llm, null, 2);
+            const llm = data.llm;
+            if (llm.status === 'error' || llm.status === 'disabled') {
+                llmBlock.textContent = JSON.stringify(llm, null, 2);
+            } else if (llm.analysis && typeof llm.analysis === 'object') {
+                const pri = Array.isArray(llm.analysis.priorities) ? llm.analysis.priorities : [];
+                let t = 'LLM (' + (llm.model || llm.status || '?') + ')\n\nПриоритеты:\n' +
+                    (pri.length ? pri.map(function (p, i) { return (i + 1) + '. ' + p; }).join('\n') : '—');
+                const ch = llm.analysis.in_algorithm_parameter_changes;
+                if (Array.isArray(ch) && ch.length) {
+                    t += '\n\nПараметры:\n' + JSON.stringify(ch, null, 2);
+                }
+                llmBlock.textContent = t;
+            } else {
+                llmBlock.textContent = JSON.stringify(llm, null, 2);
+            }
         }
         const auto = data.auto_config_override || {};
         const updates = Array.isArray(auto.updates) ? auto.updates : [];
@@ -1618,6 +1701,15 @@ document.getElementById('strategy').addEventListener('change', function () {
     applyAnalyzerStrategyVisibility();
 });
 document.getElementById('useLlm').addEventListener('change', updateAnalyzerJsonLinks);
+['optSectionCatboost', 'optSectionAdvanced', 'optSectionRecovery', 'optSectionGame5mExtra'].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.addEventListener('change', function () {
+            applyAnalyzerOptionalSectionsVisibility();
+            updateAnalyzerJsonLinks();
+        });
+    }
+});
 document.getElementById('analyzerDownloadJson').addEventListener('click', function() { downloadAnalyzerJson(false); });
 document.getElementById('analyzerDownloadJsonFull').addEventListener('click', function() { downloadAnalyzerJson(true); });
 document.getElementById('mlDataQualityRefresh').addEventListener('click', loadMlDataQuality);
@@ -1627,6 +1719,7 @@ document.getElementById('tuningApplyBtn').addEventListener('click', applyTuningK
 document.getElementById('tuningRollbackBtn').addEventListener('click', rollbackTuningExperiment);
 updateAnalyzerJsonLinks();
 applyAnalyzerStrategyVisibility();
+applyAnalyzerOptionalSectionsVisibility();
 loadTuningStatus();
 loadMlDataQuality();
 
