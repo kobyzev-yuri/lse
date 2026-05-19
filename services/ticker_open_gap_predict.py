@@ -78,6 +78,8 @@ def _fit_ticker_ols_coefs(ticker: str, *, history_days: int = 400) -> Optional[D
     t = (ticker or "").strip().upper()
     if not t:
         return None
+    if t == _sector_proxy_ticker():
+        return None
     cache_key = f"{t}|v2|{history_days}"
     today = _et_today_str()
     if cache_key in _COEF_CACHE and _COEF_CACHE[cache_key][0] == today:
@@ -135,12 +137,15 @@ def _fit_ticker_ols_coefs(ticker: str, *, history_days: int = 400) -> Optional[D
     y = sub[y_col].to_numpy(dtype=float)
     X = np.column_stack([np.ones(len(y)), *(sub[c].to_numpy(dtype=float) for c in x_cols)])
     beta, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
-    out: Dict[str, float] = {"const": round(float(beta[0]), 4), "model_version": 2.0}
+    beta_flat = np.asarray(beta, dtype=float).ravel()
+    if beta_flat.size < 1:
+        return None
+    out: Dict[str, float] = {"const": round(float(beta_flat[0]), 4), "model_version": 2.0}
     for i, c in enumerate(x_cols, start=1):
         sym = c.split("|")[0]
         for s, key in x_map:
-            if s == sym and i < len(beta):
-                out[key] = round(float(beta[i]), 4)
+            if s == sym and i < beta_flat.size:
+                out[key] = round(float(beta_flat[i]), 4)
                 break
     _COEF_CACHE[cache_key] = (today, out)
     return out

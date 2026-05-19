@@ -168,11 +168,16 @@ def record_premarket_gap_snapshots(
     for sym in _symbols_for_log():
         det = get_indicator_gap_detail(sym)
         pm_gap = det.get("gap_pct")
-        pred_ticker, pred_ticker_src = predict_ticker_open_gap_pct(
-            sym,
-            macro_risk=macro,
-            premarket_gap_pct=float(pm_gap) if pm_gap is not None else None,
-        )
+        try:
+            pred_ticker, pred_ticker_src = predict_ticker_open_gap_pct(
+                sym,
+                macro_risk=macro,
+                premarket_gap_pct=float(pm_gap) if pm_gap is not None else None,
+            )
+        except Exception as e:
+            pred_ticker, pred_ticker_src = None, "error"
+            errors.append(f"{sym}: predict {e}")
+            logger.warning("gap_forecast premarket predict %s: %s", sym, e)
         if sym == proxy and pred_ticker is None and pred is not None:
             pred_ticker, pred_ticker_src = float(pred), "sector_row"
         try:
