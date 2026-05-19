@@ -172,6 +172,18 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Статус портфельной CatBoost-модели (daily expected return): наличие файлов модели, включение PORTFOLIO_CATBOOST_ENABLED, "
         "и последние метрики обучения (RMSE/MAE/top-decile) из meta.json/JSONL отчёта. Модель advisory: не открывает/не закрывает позиции."
     ),
+    "portfolio_ml_entry_review": (
+        "Срез по закрытым portfolio-сделкам (entry_strategy ≠ GAME_5M): снимок portfolio_ml_* и effective_take из BUY context_json, "
+        "калибровка entry_score vs win, контрфакт PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK."
+    ),
+    "portfolio_exit_policy_review": (
+        "Разбор выходов портфельной игры: take_profit на BUY, portfolio_effective_take_pct_at_entry, сигналы TAKE_PROFIT / trailing; "
+        "сводка по exit_signal и ранние тейки с крупным missed_upside (5m-окно)."
+    ),
+    "portfolio_config_grid": (
+        "Текущие PORTFOLIO_* из config: сетка параметров (стратегические тейки, fallback, ML entry/exit). "
+        "Авто-реплей как game5m_replay_proposals для портфеля не выполняется — ручная настройка."
+    ),
     "game5m_catboost_status": (
         "Статус CatBoost entry (GAME_5M): trained_at/n_train/n_valid/AUC, исключения (например false_take_profit_by_session_high), "
         "и оценка trust_level. Используется для понимания, насколько аккуратно применять ML-слияние (BUY→HOLD) и как интерпретировать P."
@@ -263,6 +275,7 @@ def _build_portfolio_catboost_status() -> Dict[str, Any]:
         except Exception:
             meta = None
         last = _load_last_jsonl_record(report_path)
+        trust = _trust_level_portfolio_catboost(meta if isinstance(meta, dict) else None, last if isinstance(last, dict) else None)
         return {
             "enabled": bool(enabled),
             "model_path": model_path,
@@ -280,9 +293,353 @@ def _build_portfolio_catboost_status() -> Dict[str, Any]:
             }
             if isinstance(meta, dict)
             else None,
+            **trust,
+            "train_command": "python scripts/train_portfolio_catboost.py --horizon-days 5 --min-rows 300",
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+def _trust_level_portfolio_catboost(meta: Optional[Dict[str, Any]], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    rmse_f: Optional[float] = None
+    nv: Optional[int] = None
+    if isinstance(meta, dict):
+        m = meta.get("metrics") if isinstance(meta.get("metrics"), dict) else {}
+        try:
+            rv = m.get("rmse_valid") if m else meta.get("rmse_valid")
+            rmse_f = float(rv) if rv is not None else None
+        except (TypeError, ValueError):
+            rmse_f = None
+        try:
+            nv = int(meta.get("n_valid")) if meta.get("n_valid") is not None else None
+        except (TypeError, ValueError):
+            nv = None
+    if rmse_f is None and isinstance(last, dict):
+        pf = last.get("portfolio_catboost") if isinstance(last.get("portfolio_catboost"), dict) else last
+        try:
+            rv = pf.get("rmse_valid")
+            rmse_f = float(rv) if rv is not None else None
+        except (TypeError, ValueError):
+            pass
+    try:
+        rmse_max = float((get_config_value("ML_READINESS_PORTFOLIO_RMSE_MAX", "0.08") or "0.08").strip())
+    except (ValueError, TypeError):
+        rmse_max = 0.08
+    if rmse_f is None:
+        return {"trust_level": "unknown", "trust_reason": "Нет RMSE valid (meta/jsonl)."}
+    if nv is not None and nv < 80:
+        return {
+            "trust_level": "low",
+            "trust_reason": f"Мало validation строк (n_valid={nv}); только мягкий фильтр входа.",
+            "rmse_valid": round(rmse_f, 6),
+        }
+    if rmse_f > rmse_max:
+        return {
+            "trust_level": "caution",
+            "trust_reason": f"RMSE={rmse_f:.4f} > порога {rmse_max} (ML_READINESS_PORTFOLIO_RMSE_MAX).",
+            "rmse_valid": round(rmse_f, 6),
+        }
+    if rmse_f > rmse_max * 0.85:
+        return {
+            "trust_level": "medium",
+            "trust_reason": f"RMSE={rmse_f:.4f} у верхней границы; осторожно с BLOCK_BUY_ON_WEAK.",
+            "rmse_valid": round(rmse_f, 6),
+        }
+    return {
+        "trust_level": "ready",
+        "trust_reason": f"RMSE={rmse_f:.4f} ≤ {rmse_max}; модель для advisory/фильтра входа.",
+        "rmse_valid": round(rmse_f, 6),
+    }
+
+
+def _trade_qualifies_for_portfolio(strategy: str, trade_pnl: Any) -> bool:
+    es = (getattr(trade_pnl, "entry_strategy", None) or "").strip().upper()
+    if es == "GAME_5M":
+        return False
+    su = (strategy or "").strip().upper()
+    if su == "PORTFOLIO":
+        return True
+    if su == "ALL":
+        return bool(es)
+    return False
+
+
+PORTFOLIO_CONFIG_GRID_ROWS: List[Tuple[str, str, str]] = [
+    ("PORTFOLIO_TAKE_PROFIT_PCT", "fallback_take", "check_stop_losses, если нет per-strategy take"),
+    ("PORTFOLIO_MOMENTUM_TAKE_PROFIT_PCT", "strategy_take", "BUY Momentum"),
+    ("PORTFOLIO_VOLATILE_GAP_TAKE_PROFIT_PCT", "strategy_take", "BUY Volatile Gap"),
+    ("PORTFOLIO_MEAN_REVERSION_TAKE_PROFIT_PCT", "strategy_take", "BUY Mean Reversion"),
+    ("PORTFOLIO_GEOPOLITICAL_BOUNCE_TAKE_PROFIT_PCT", "strategy_take", "BUY Geopolitical Bounce"),
+    ("PORTFOLIO_CATBOOST_ENABLED", "ml_entry", "карточки / portfolio_ml_snapshot"),
+    ("PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK", "ml_entry", "portfolio_entry_guards"),
+    ("PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE", "ml_entry", "порог entry_score"),
+    ("PORTFOLIO_ML_TAKE_ENABLED", "ml_take", "portfolio_exit_policy на BUY"),
+    ("PORTFOLIO_ML_TAKE_FACTOR", "ml_take", "множитель к expected return"),
+    ("PORTFOLIO_ML_TAKE_FLOOR_PCT", "ml_take", "мин. effective take %"),
+    ("PORTFOLIO_ML_TAKE_CAP_PCT", "ml_take", "макс. effective take %"),
+    ("PORTFOLIO_TRAILING_TAKE_ENABLED", "trailing", "portfolio_exit_policy"),
+    ("PORTFOLIO_TRAILING_MIN_PROFIT_PCT", "trailing", "arm trailing после +N%"),
+    ("PORTFOLIO_TRAILING_PULLBACK_PCT", "trailing", "выход при откате от пика"),
+    ("PORTFOLIO_STOP_LOSS_ENABLED", "risk", "strategy_parameters / config"),
+    ("PORTFOLIO_EXIT_ONLY_TAKE", "risk", "только тейк, без стопа"),
+]
+
+
+def _extract_portfolio_config_snapshot() -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for key, _group, _note in PORTFOLIO_CONFIG_GRID_ROWS:
+        raw = get_config_value(key, "")
+        out[key] = (raw or "").strip() if raw is not None else ""
+    return out
+
+
+def _build_portfolio_config_grid() -> Dict[str, Any]:
+    rows: List[Dict[str, Any]] = []
+    for key, group, applied_in in PORTFOLIO_CONFIG_GRID_ROWS:
+        raw = get_config_value(key, "")
+        rows.append(
+            {
+                "env_key": key,
+                "group": group,
+                "current": (raw or "").strip() if raw is not None else "",
+                "applied_in": applied_in,
+            }
+        )
+    return {
+        "mode": "portfolio_config_grid",
+        "description": (
+            "Текущие значения PORTFOLIO_* (config.env / VM). Автоматический офлайн-реплей сетки, "
+            "как game5m_replay_proposals, для портфеля не выполняется — меняйте по одному ключу и смотрите analyzer."
+        ),
+        "rows": rows,
+        "manual_tuning_note_ru": (
+            "Обучение: scripts/train_portfolio_catboost.py. После смены .cbm — docker restart lse-bot. "
+            "Тейки на открытых позициях: /reports/pending или SQL take_profit."
+        ),
+    }
+
+
+def _build_portfolio_ml_entry_review(
+    strategy: str,
+    closed: List[Any],
+    effects: List[TradeEffect],
+) -> Dict[str, Any]:
+    su = (strategy or "").strip().upper()
+    if su not in ("PORTFOLIO", "ALL"):
+        return {"mode": "skipped", "note": "Раздел для strategy=PORTFOLIO или ALL (сделки с entry_strategy ≠ GAME_5M)."}
+
+    block_weak = (get_config_value("PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK", "true") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    try:
+        min_score = float((get_config_value("PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE", "48") or "48").strip())
+    except (ValueError, TypeError):
+        min_score = 48.0
+
+    by_tid: Dict[int, Any] = {}
+    for t in closed:
+        try:
+            tid = int(getattr(t, "trade_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if tid:
+            by_tid[tid] = t
+
+    per_trade: List[Dict[str, Any]] = []
+    paired: List[Tuple[float, bool]] = []
+    skipped_status: Dict[str, int] = {}
+    n_would_block = 0
+    n_considered = 0
+
+    for e in effects:
+        tp = by_tid.get(int(e.trade_id))
+        if not tp or not _trade_qualifies_for_portfolio(strategy, tp):
+            continue
+        n_considered += 1
+        ctx = normalize_entry_context(getattr(tp, "context_json", None))
+        st = (ctx.get("portfolio_ml_status") or "").strip()
+        score_raw = ctx.get("portfolio_ml_entry_score")
+        score: Optional[float] = None
+        if score_raw is not None:
+            try:
+                score = float(score_raw)
+            except (TypeError, ValueError):
+                score = None
+        exp_raw = ctx.get("portfolio_ml_expected_return_pct")
+        eff_take = ctx.get("portfolio_effective_take_pct_at_entry")
+        would_block = bool(
+            block_weak and st == "ok" and score is not None and math.isfinite(score) and score < min_score
+        )
+        if would_block:
+            n_would_block += 1
+        row = {
+            "trade_id": e.trade_id,
+            "ticker": e.ticker,
+            "entry_strategy": getattr(tp, "entry_strategy", None),
+            "portfolio_ml_status": st or None,
+            "portfolio_ml_entry_score": score,
+            "portfolio_ml_expected_return_pct": exp_raw,
+            "portfolio_effective_take_pct_at_entry": eff_take,
+            "entry_advice": ctx.get("entry_advice"),
+            "would_block_at_runtime_threshold": would_block,
+            "realized_pct": round(e.realized_pct, 4),
+            "win": bool(e.realized_pct > 0),
+        }
+        per_trade.append(row)
+        if st == "ok" and score is not None and math.isfinite(score):
+            paired.append((score, bool(e.realized_pct > 0)))
+        else:
+            skipped_status[st or "missing"] = skipped_status.get(st or "missing", 0) + 1
+
+    out: Dict[str, Any] = {
+        "mode": "portfolio_entry_context",
+        "description": (
+            "Снимок portfolio_ml_* на BUY (context_json). Контрфакт would_block — при текущих "
+            "PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK и HOLD_BELOW_SCORE; сделка уже закрыта."
+        ),
+        "runtime_block_weak": block_weak,
+        "runtime_min_score": min_score,
+        "trades_considered": n_considered,
+        "trades_with_score_ok": len(paired),
+        "would_block_count": n_would_block,
+        "skipped_by_status": skipped_status,
+        "per_trade": per_trade[-40:],
+    }
+    if len(paired) < 2:
+        out["calibration"] = {"note": f"Мало пар score vs исход (n={len(paired)})."}
+        return out
+
+    wins_s = [s for s, w in paired if w]
+    loss_s = [s for s, w in paired if not w]
+    out["calibration"] = {
+        "mean_score_given_win": round(float(np.mean(wins_s)), 2) if wins_s else None,
+        "mean_score_given_loss": round(float(np.mean(loss_s)), 2) if loss_s else None,
+        "win_rate_pct": round(100.0 * sum(1 for _, w in paired if w) / len(paired), 2),
+        "buckets": [],
+    }
+    edges = [(0.0, 40.0), (40.0, 48.0), (48.0, 60.0), (60.0, 100.01)]
+    for lo, hi in edges:
+        sub = [(s, w) for s, w in paired if lo <= s < hi]
+        if not sub:
+            out["calibration"]["buckets"].append({"score_range": f"[{lo:.0f},{hi:.0f})", "n": 0, "win_rate_pct": None})
+            continue
+        wr = 100.0 * sum(1 for _, w in sub if w) / len(sub)
+        out["calibration"]["buckets"].append(
+            {"score_range": f"[{lo:.0f},{hi:.0f})", "n": len(sub), "win_rate_pct": round(wr, 2)}
+        )
+    return out
+
+
+def _build_portfolio_exit_policy_review(closed: List[Any], effects: List[TradeEffect]) -> Dict[str, Any]:
+    by_tid: Dict[int, Any] = {}
+    for t in closed:
+        try:
+            tid = int(getattr(t, "trade_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if tid:
+            by_tid[tid] = t
+
+    exit_signals: Dict[str, int] = {}
+    n_with_eff_take = 0
+    n_take_exit = 0
+    n_trailing_hint = 0
+    early_take_wins = 0
+    per_recent: List[Dict[str, Any]] = []
+
+    for e in effects:
+        tp = by_tid.get(int(e.trade_id))
+        if not tp:
+            continue
+        sig = str(getattr(tp, "signal_type", "") or e.exit_signal or "").strip().upper()
+        exit_signals[sig or "—"] = exit_signals.get(sig or "—", 0) + 1
+        ctx = normalize_entry_context(getattr(tp, "context_json", None))
+        eff = ctx.get("portfolio_effective_take_pct_at_entry")
+        take_db = getattr(tp, "take_profit", None)
+        if eff is not None:
+            n_with_eff_take += 1
+        if "TAKE" in sig or "PROFIT" in sig:
+            n_take_exit += 1
+        exit_ctx = _json_dict(getattr(tp, "exit_context_json", None))
+        ed = str(exit_ctx.get("exit_detail") or exit_ctx.get("portfolio_exit_note") or "").upper()
+        if "TRAIL" in sig or "TRAIL" in ed:
+            n_trailing_hint += 1
+        missed = float(e.missed_upside_pct or 0.0)
+        if e.realized_pct > 0 and missed >= 2.0 and ("TAKE" in sig or "PROFIT" in sig):
+            early_take_wins += 1
+        per_recent.append(
+            {
+                "trade_id": e.trade_id,
+                "ticker": e.ticker,
+                "exit_signal": sig,
+                "realized_pct": round(e.realized_pct, 3),
+                "missed_upside_pct": round(missed, 3) if missed else None,
+                "take_profit_db": take_db,
+                "effective_take_at_entry": eff,
+                "hold_days": round(e.hold_minutes / (60.0 * 24), 2) if e.hold_minutes else None,
+            }
+        )
+
+    try:
+        from services.portfolio_exit_policy import ml_take_params, trailing_take_params
+
+        ml_on, ml_factor, ml_floor, ml_cap = ml_take_params()
+        tr_on, tr_arm, tr_pull = trailing_take_params()
+        policy_snapshot = {
+            "ml_take_enabled": ml_on,
+            "ml_take_factor": ml_factor,
+            "ml_take_floor_pct": ml_floor,
+            "ml_take_cap_pct": ml_cap,
+            "trailing_enabled": tr_on,
+            "trailing_min_profit_pct": tr_arm,
+            "trailing_pullback_pct": tr_pull,
+        }
+    except Exception as exc:
+        policy_snapshot = {"error": str(exc)}
+
+    per_recent.sort(key=lambda r: int(r.get("trade_id") or 0), reverse=True)
+    return {
+        "mode": "portfolio_exit_policy",
+        "description": "Закрытые portfolio-сделки: сигнал выхода, take в БД, effective_take из context_json, ранние тейки с missed≥2%.",
+        "policy_snapshot": policy_snapshot,
+        "exit_signal_counts": exit_signals,
+        "n_trades": len(effects),
+        "n_with_effective_take_snapshot": n_with_eff_take,
+        "n_take_profit_like_exits": n_take_exit,
+        "n_trailing_like_exits": n_trailing_hint,
+        "n_early_take_on_wins_missed_ge_2pct": early_take_wins,
+        "per_trade_recent": per_recent[:25],
+    }
+
+
+def _attach_portfolio_analyzer_blocks(
+    payload: Dict[str, Any],
+    *,
+    strategy: str,
+    closed: List[Any],
+    effects: List[TradeEffect],
+) -> None:
+    payload["portfolio_catboost_status"] = _build_portfolio_catboost_status()
+    su = (strategy or "").strip().upper()
+    if su in ("PORTFOLIO", "ALL"):
+        payload["portfolio_ml_entry_review"] = _build_portfolio_ml_entry_review(strategy, closed, effects)
+        payload["portfolio_exit_policy_review"] = _build_portfolio_exit_policy_review(closed, effects)
+        payload["portfolio_config_grid"] = _build_portfolio_config_grid()
+        meta = payload.get("meta")
+        if isinstance(meta, dict):
+            meta["current_portfolio_config_snapshot"] = _extract_portfolio_config_snapshot()
+            if su == "PORTFOLIO":
+                meta["decision_source_expected"] = (
+                    "Portfolio: analyst_agent.get_decision + execution_agent; "
+                    "exits: portfolio_exit_policy + check_stop_losses"
+                )
+    else:
+        skip = "Только при strategy=PORTFOLIO или ALL."
+        payload["portfolio_ml_entry_review"] = {"mode": "skipped", "note": skip}
+        payload["portfolio_exit_policy_review"] = {"mode": "skipped", "note": skip}
+        payload["portfolio_config_grid"] = {"mode": "skipped", "note": skip}
 
 
 def _trust_level_game5m_catboost(meta: Optional[Dict[str, Any]], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -714,11 +1071,21 @@ def _as_et(ts: pd.Timestamp) -> pd.Timestamp:
 
 def _load_closed_trades(days: int, strategy_name: Optional[str]) -> List[Any]:
     engine = get_engine()
-    if strategy_name and strategy_name.upper() != "ALL":
+    su = (strategy_name or "").strip().upper()
+    # PORTFOLIO = все закрытия с entry_strategy ≠ GAME_5M (в БД strategy_name — Momentum, Portfolio, …).
+    if su == "PORTFOLIO":
+        raw = load_trade_history(engine)
+    elif strategy_name and su != "ALL":
         raw = load_trade_history(engine, strategy_name=strategy_name)
     else:
         raw = load_trade_history(engine)
     closed = compute_closed_trade_pnls(raw)
+    if su == "PORTFOLIO":
+        closed = [
+            t
+            for t in closed
+            if (getattr(t, "entry_strategy", None) or "").strip().upper() != "GAME_5M"
+        ]
     if not closed:
         return []
     cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
@@ -4137,7 +4504,7 @@ def _build_catboost_entry_backtest(strategy: str, closed: List[Any], effects: Li
     if su == "PORTFOLIO":
         return {
             "mode": "skipped",
-            "note": "Модель CatBoost в репозитории обучена на входах GAME_5M; для портфеля отдельный контур не подключён.",
+            "note": "GAME_5M CatBoost не применяется к портфелю; см. portfolio_ml_entry_review и portfolio_catboost_status.",
         }
     if su not in ("GAME_5M", "ALL"):
         return {
@@ -5280,8 +5647,8 @@ def analyze_trade_effectiveness(
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
             "game5m_catboost_fusion_entry_review": _build_game5m_catboost_fusion_entry_review(strategy, [], []),
-            "portfolio_catboost_status": _build_portfolio_catboost_status(),
         }
+        _attach_portfolio_analyzer_blocks(empty_payload, strategy=strategy, closed=[], effects=[])
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
             htr = _build_game5m_hanger_tune_json_review([], {"total": 0}, strategy=strategy)
             empty_payload["game5m_hanger_tune_json_review"] = htr
@@ -5377,7 +5744,6 @@ def analyze_trade_effectiveness(
         "game5m_catboost_status": _build_game5m_catboost_status(),
         "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
         "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
-        "portfolio_catboost_status": _build_portfolio_catboost_status(),
         "time_exit_early_review": te_review,
         "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review),
         "recovery_ml_d4a_live_review": recovery_d4a_live,
@@ -5385,6 +5751,7 @@ def analyze_trade_effectiveness(
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
     }
+    _attach_portfolio_analyzer_blocks(payload, strategy=strategy, closed=closed, effects=effects)
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
     if use_llm:
@@ -5457,8 +5824,8 @@ def analyze_trade_effectiveness_focused(
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
             "game5m_catboost_fusion_entry_review": _build_game5m_catboost_fusion_entry_review(strategy, [], []),
-            "portfolio_catboost_status": _build_portfolio_catboost_status(),
         }
+        _attach_portfolio_analyzer_blocks(empty_focus, strategy=strategy, closed=[], effects=[])
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
             htr_f = _build_game5m_hanger_tune_json_review([], {"total": 0}, strategy=strategy)
             empty_focus["game5m_hanger_tune_json_review"] = htr_f
@@ -5552,7 +5919,6 @@ def analyze_trade_effectiveness_focused(
         "game5m_catboost_status": _build_game5m_catboost_status(),
         "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
         "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
-        "portfolio_catboost_status": _build_portfolio_catboost_status(),
         "time_exit_early_review": te_review_f,
         "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review_f),
         "recovery_ml_d4a_live_review": recovery_d4a_live_f,
@@ -5560,6 +5926,7 @@ def analyze_trade_effectiveness_focused(
         "continuation_gate_review": continuation_gate_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
     }
+    _attach_portfolio_analyzer_blocks(payload, strategy=strategy, closed=filtered, effects=effects)
     if include_trade_details:
         payload["trade_effects"] = [_trade_effect_detail_dict(e) for e in effects]
     if use_llm:
@@ -5581,6 +5948,52 @@ def analyze_trade_effectiveness_focused(
     )
     _attach_multiday_lr_and_ml_arbiter(payload, strategy=strategy, closed_trades=filtered, effects=effects, days=days)
     return payload
+
+
+def _append_portfolio_analyzer_text_lines(lines: List[str], report: Dict[str, Any]) -> None:
+    meta = report.get("meta") or {}
+    strategy = (meta.get("strategy") or "").strip().upper()
+    if strategy not in ("PORTFOLIO", "ALL"):
+        return
+    pf = report.get("portfolio_catboost_status") or {}
+    if isinstance(pf, dict) and not pf.get("error"):
+        lines.append("")
+        lines.append("Portfolio CatBoost (daily expected return):")
+        ms = pf.get("meta_summary") if isinstance(pf.get("meta_summary"), dict) else {}
+        met = ms.get("metrics") if isinstance(ms.get("metrics"), dict) else {}
+        rmse = met.get("rmse_valid") or pf.get("rmse_valid")
+        lines.append(
+            f"• enabled={pf.get('enabled')}, model={'ok' if pf.get('model_file_exists') else 'missing'}, "
+            f"trust={pf.get('trust_level')}: {pf.get('trust_reason') or '—'}"
+        )
+        if rmse is not None:
+            lines.append(f"• RMSE valid={rmse}, n_valid={ms.get('n_valid')}")
+    pm = report.get("portfolio_ml_entry_review") or {}
+    if pm.get("mode") == "portfolio_entry_context":
+        cal = pm.get("calibration") or {}
+        lines.append("")
+        lines.append("Portfolio ML вход (context_json):")
+        lines.append(
+            f"• сделок={pm.get('trades_considered')}, со score ok={pm.get('trades_with_score_ok')}, "
+            f"would_block сейчас={pm.get('would_block_count')} (порог {pm.get('runtime_min_score')})"
+        )
+        if cal.get("mean_score_given_win") is not None:
+            lines.append(
+                f"• mean score | win={cal.get('mean_score_given_win')} | loss={cal.get('mean_score_given_loss')}, "
+                f"win_rate={cal.get('win_rate_pct')}%"
+            )
+    pe = report.get("portfolio_exit_policy_review") or {}
+    if pe.get("mode") == "portfolio_exit_policy":
+        lines.append("")
+        lines.append("Portfolio выходы (take / trailing):")
+        esc = pe.get("exit_signal_counts") or {}
+        if esc:
+            parts = [f"{k}={v}" for k, v in sorted(esc.items(), key=lambda kv: -int(kv[1]))[:6]]
+            lines.append("• exit_signal: " + ", ".join(parts))
+        lines.append(
+            f"• effective_take в context: {pe.get('n_with_effective_take_snapshot')}, "
+            f"ранние тейки (missed≥2%): {pe.get('n_early_take_on_wins_missed_ge_2pct')}"
+        )
 
 
 def _append_multiday_lr_and_arbiter_text_lines(lines: List[str], report: Dict[str, Any]) -> None:
@@ -5680,6 +6093,7 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
             head = "За выбранный период закрытых сделок не найдено."
         out0: List[str] = [head]
         _append_multiday_lr_and_arbiter_text_lines(out0, report)
+        _append_portfolio_analyzer_text_lines(out0, report)
         return "\n".join(out0)
     top = report.get("top_cases") or {}
     title = (
@@ -5934,4 +6348,5 @@ def format_trade_effectiveness_text(report: Dict[str, Any]) -> str:
                 lines.append(str(ana)[:1800])
         else:
             lines.append(f"{llm.get('status')}: {llm.get('reason')}")
+    _append_portfolio_analyzer_text_lines(lines, report)
     return "\n".join(lines)

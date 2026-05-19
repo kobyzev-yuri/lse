@@ -41,7 +41,7 @@
             <select id="strategy">
                 <option value="GAME_5M" selected>GAME_5M</option>
                 <option value="ALL">ALL</option>
-                <option value="Portfolio">Portfolio</option>
+                <option value="PORTFOLIO">PORTFOLIO</option>
             </select>
         </div>
         <div>
@@ -84,7 +84,7 @@
     <div id="mlDataQualityInner" class="dashboard-text" style="margin-top:0.5rem;">—</div>
 </div>
 
-<div class="card" style="border: 1px solid rgba(34,197,94,0.35);">
+<div class="card analyzer-game5m-only" style="border: 1px solid rgba(34,197,94,0.35);">
     <h2>GAME_5M tuning: регламент и live-эксперимент</h2>
     <p class="muted" style="font-size:0.9rem;">Один параметр за раз: apply → наблюдение → review/rollback. Данные берутся из <code>local/game5m_tuning_ledger.json</code>, изменения проходят через общие guardrails.</p>
     <div id="tuningStatus" class="dashboard-text">Загрузка tuning status...</div>
@@ -126,7 +126,23 @@
     <div id="summary" class="dashboard-text">Нажмите «Запустить анализ».</div>
 </div>
 
-<div class="card">
+<div class="card analyzer-portfolio-only" style="display:none; border: 1px solid rgba(244, 114, 182, 0.4);">
+    <h2>Portfolio: CatBoost, вход и выходы</h2>
+    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">
+        Сделки с <code>entry_strategy ≠ GAME_5M</code> (Momentum, Volatile Gap, …). Метрики окна — те же 5m high/low, что и для GAME_5M.
+        Сетка <code>PORTFOLIO_*</code> — ручная настройка (авто-реплей как у GAME_5M нет).
+    </p>
+    <h3 style="font-size:1rem;margin:0.5rem 0 0.35rem 0;color:#e2e8f0;">Модель и обучение <code>portfolio_catboost_status</code></h3>
+    <div id="portfolioCatboostStatusBlock" class="dashboard-text">—</div>
+    <h3 style="font-size:1rem;margin:0.85rem 0 0.35rem 0;color:#e2e8f0;">ML вход по сделкам <code>portfolio_ml_entry_review</code></h3>
+    <div id="portfolioMlEntryBlock" class="dashboard-text">—</div>
+    <h3 style="font-size:1rem;margin:0.85rem 0 0.35rem 0;color:#e2e8f0;">Политика выхода <code>portfolio_exit_policy_review</code></h3>
+    <div id="portfolioExitPolicyBlock" class="dashboard-text">—</div>
+    <h3 style="font-size:1rem;margin:0.85rem 0 0.35rem 0;color:#e2e8f0;">Сетка параметров <code>portfolio_config_grid</code></h3>
+    <div id="portfolioConfigGridBlock" class="dashboard-text">—</div>
+</div>
+
+<div class="card analyzer-game5m-only">
     <h2>CatBoost GAME_5M (вход)</h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Два среза: <strong>снимок из сделок</strong> (что сохранено в BUY <code>context_json</code> при входе — без логов крона) и <strong>бэктест скора</strong> vs <code>realized_pct</code>. Для старых сделок до деплоя расширенного дампа часть полей может отсутствовать.</p>
     <h3 style="font-size:1rem;margin:0.5rem 0 0.35rem 0;color:#e2e8f0;">Снимок fusion / P по закрытым сделкам <code>game5m_catboost_fusion_entry_review</code></h3>
@@ -136,19 +152,19 @@
     <div id="catboostBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card" style="border: 1px solid rgba(56, 189, 248, 0.35);">
+<div class="card analyzer-game5m-only" style="border: 1px solid rgba(56, 189, 248, 0.35);">
     <h2>Multiday ridge vs факт <code>multiday_lr_reality_check</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Walk-forward OOS по дневным <code>quotes</code> для тикеров GAME_5M (как в live: ridge λ из config, опционально премаркет). Срез по сделкам — справочно: log-ret vs <code>realized_pct</code> на разных шкалах.</p>
     <div id="multidayLrBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card" style="border: 1px solid rgba(52, 211, 153, 0.35);">
+<div class="card analyzer-game5m-only" style="border: 1px solid rgba(52, 211, 153, 0.35);">
     <h2>Арбитр multiday gates <code>multiday_lr_gates_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Достаточность выборки log_only (вход / удержание), средний PnL по корзинам и следующие шаги (когда включать apply). Не меняет config.</p>
     <div id="multidayGatesArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
 
 
-<div class="card" style="border: 1px solid rgba(251, 191, 36, 0.35);">
+<div class="card analyzer-game5m-only" style="border: 1px solid rgba(251, 191, 36, 0.35);">
     <h2>Арбитр прогноза гэпа <code>game5m_gap_forecast_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Контур <code>gap_forecast</code>: sector OLS + <strong>ticker v2</strong> (<code>pred_ticker_gap_pct</code>) vs open. Вердикты: insufficient_data → accumulating → caution → <code>ready_for_apply</code>. Лог: <code>game5m_gap_forecast_daily</code>; DDL 027; premarket_cron + <code>ingest_game5m_gap_forecast.py --phase open</code>.</p>
     <div id="gapForecastArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
@@ -161,25 +177,25 @@
     <div id="mlArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
 </div>
 
-<div class="card">
+<div class="card analyzer-game5m-only">
     <h2>Hanger v2 / stale exits <code>game5m_hanger_v2_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Разбор закрытых сделок по диагностике <code>position_state_v2</code>, сохранённой в SELL <code>context_json</code>. Live-наблюдение открытых позиций — отдельно по логам крона.</p>
     <div id="hangerV2Block" class="dashboard-text">—</div>
 </div>
 
-<div class="card">
+<div class="card analyzer-game5m-only">
     <h2>Hanger JSON / TAKE_PROFIT_SUSPEND <code>game5m_hanger_tune_json_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Файл <code>GAME_5M_HANGER_TUNE_JSON</code>, возраст, капы по тикеру, смесь <code>TAKE_PROFIT</code> vs <code>TAKE_PROFIT_SUSPEND</code> в окне; кандидаты на offline-перегенерацию и на <code>GAME_5M_HANGER_TUNE_APPLY_TAKE</code> (см. также <code>practical_parameter_suggestions</code> / <code>auto_config_override</code>).</p>
     <div id="hangerTuneJsonBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card">
+<div class="card analyzer-game5m-only">
     <h2>Continuation gate <code>continuation_gate_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Сравнение log-only решения <code>continuation_gate</code> с фактическим недобором после закрытия. Помогает понять, где тейк был слишком ранним.</p>
     <div id="continuationGateBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card" style="border: 1px solid rgba(251, 191, 36, 0.35);">
+<div class="card analyzer-game5m-only" style="border: 1px solid rgba(251, 191, 36, 0.35);">
     <h2>Recovery ML D4a (live телеметрия) <code>recovery_ml_d4a_live_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">
         Сопоставление <code>recovery_ml_time_exit_early</code> из SELL с пост-выходом (<code>time_exit_early_review.detail_rows</code>)
@@ -1249,6 +1265,152 @@ function renderRecoveryMlD4aBlock(data) {
     el.innerHTML = html || '<span class="muted">Нет данных.</span>';
 }
 
+function applyAnalyzerStrategyVisibility() {
+    const strategy = document.getElementById('strategy').value || 'GAME_5M';
+    const isPortfolio = strategy === 'PORTFOLIO';
+    document.querySelectorAll('.analyzer-game5m-only').forEach(function (el) {
+        el.style.display = isPortfolio ? 'none' : '';
+    });
+    document.querySelectorAll('.analyzer-portfolio-only').forEach(function (el) {
+        el.style.display = isPortfolio ? '' : 'none';
+    });
+}
+
+function renderPortfolioCatboostStatusBlock(data) {
+    const el = document.getElementById('portfolioCatboostStatusBlock');
+    if (!el) return;
+    const pf = data.portfolio_catboost_status || {};
+    if (pf.error) {
+        el.innerHTML = '<span class="text-danger">' + esc(pf.error) + '</span>';
+        return;
+    }
+    const ms = pf.meta_summary || {};
+    const met = ms.metrics || {};
+    let html = '<p style="margin:0 0 0.5rem 0;">enabled=<strong>' + esc(pf.enabled) + '</strong>, model_file=<strong>' +
+        esc(pf.model_file_exists ? 'да' : 'нет') + '</strong>, trust=<strong>' + esc(pf.trust_level || '—') + '</strong></p>';
+    html += '<p class="muted" style="margin:0 0 0.5rem 0;">' + esc(pf.trust_reason || '') + '</p>';
+    if (met.rmse_valid != null || pf.rmse_valid != null) {
+        html += '<p style="margin:0.35rem 0;">RMSE valid=<strong>' + esc(met.rmse_valid != null ? met.rmse_valid : pf.rmse_valid) +
+            '</strong>, n_valid=<strong>' + esc(ms.n_valid) + '</strong>, horizon_days=<strong>' + esc(ms.horizon_days) + '</strong></p>';
+    }
+    if (pf.train_command) {
+        html += '<p class="muted" style="font-size:0.85rem;margin:0.35rem 0;">Обучение: <code>' + esc(pf.train_command) + '</code></p>';
+    }
+    const lt = pf.last_training;
+    if (lt && typeof lt === 'object') {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0.25rem 0;">Последняя строка JSONL: ' + esc(lt.ts || lt.generated_at || lt.trained_at || '—') + '</p>';
+    }
+    el.innerHTML = html;
+}
+
+function renderPortfolioMlEntryBlock(data) {
+    const el = document.getElementById('portfolioMlEntryBlock');
+    if (!el) return;
+    const pm = data.portfolio_ml_entry_review || {};
+    if (pm.mode === 'skipped') {
+        el.innerHTML = '<span class="muted">' + esc(pm.note || '—') + '</span>';
+        return;
+    }
+    if (pm.mode !== 'portfolio_entry_context') {
+        el.textContent = '—';
+        return;
+    }
+    const cal = pm.calibration || {};
+    let html = '<p style="margin:0 0 0.5rem 0;font-size:0.9rem;color:#cbd5e1;">' + esc(pm.description || '') + '</p>';
+    html += '<p style="margin:0.35rem 0;">Сделок: <strong>' + esc(pm.trades_considered) + '</strong>, со score ok: <strong>' +
+        esc(pm.trades_with_score_ok) + '</strong>, would_block (сейчас): <strong>' + esc(pm.would_block_count) + '</strong> при min_score=' +
+        esc(pm.runtime_min_score) + '</p>';
+    if (cal.mean_score_given_win != null) {
+        html += '<p style="margin:0.35rem 0;">mean score | win: <strong>' + esc(cal.mean_score_given_win) + '</strong>';
+        if (cal.mean_score_given_loss != null) {
+            html += ' · loss: <strong>' + esc(cal.mean_score_given_loss) + '</strong>';
+        }
+        html += ' · win_rate: <strong>' + esc(cal.win_rate_pct) + '%</strong></p>';
+    }
+    const buckets = Array.isArray(cal.buckets) ? cal.buckets : [];
+    if (buckets.length) {
+        html += '<table class="forecast-table" role="table" style="margin-top:0.5rem;"><thead><tr><th>score</th><th>n</th><th>win%</th></tr></thead><tbody>';
+        buckets.forEach(function (b) {
+            if (b.n) {
+                html += '<tr><td>' + esc(b.score_range) + '</td><td class="num">' + esc(b.n) + '</td><td class="num">' + esc(b.win_rate_pct) + '</td></tr>';
+            }
+        });
+        html += '</tbody></table>';
+    }
+    if (cal.note) {
+        html += '<p class="muted" style="margin-top:0.45rem;">' + esc(cal.note) + '</p>';
+    }
+    el.innerHTML = html;
+}
+
+function renderPortfolioExitPolicyBlock(data) {
+    const el = document.getElementById('portfolioExitPolicyBlock');
+    if (!el) return;
+    const pe = data.portfolio_exit_policy_review || {};
+    if (pe.mode === 'skipped') {
+        el.innerHTML = '<span class="muted">' + esc(pe.note || '—') + '</span>';
+        return;
+    }
+    if (pe.mode !== 'portfolio_exit_policy') {
+        el.textContent = '—';
+        return;
+    }
+    const pol = pe.policy_snapshot || {};
+    let html = '<p style="margin:0 0 0.5rem 0;font-size:0.88rem;">ML take: ' + esc(pol.ml_take_enabled) + ', trailing: ' + esc(pol.trailing_enabled) +
+        ' (arm ' + esc(pol.trailing_min_profit_pct) + '%, pullback ' + esc(pol.trailing_pullback_pct) + '%)</p>';
+    const escounts = pe.exit_signal_counts || {};
+    const parts = Object.keys(escounts).map(function (k) { return k + '=' + escounts[k]; });
+    if (parts.length) {
+        html += '<p style="margin:0.35rem 0;">exit_signal: ' + esc(parts.join(', ')) + '</p>';
+    }
+    html += '<p style="margin:0.35rem 0;">effective_take в context: <strong>' + esc(pe.n_with_effective_take_snapshot) + '</strong>, ' +
+        'ранние тейки (missed≥2%): <strong>' + esc(pe.n_early_take_on_wins_missed_ge_2pct) + '</strong></p>';
+    const rows = Array.isArray(pe.per_trade_recent) ? pe.per_trade_recent : [];
+    if (rows.length) {
+        html += '<table class="forecast-table" role="table" style="margin-top:0.5rem;font-size:0.88rem;"><thead><tr>';
+        html += '<th>#</th><th>tkr</th><th>exit</th><th>%</th><th>missed</th><th>take</th><th>eff.take</th></tr></thead><tbody>';
+        rows.slice(0, 12).forEach(function (r) {
+            html += '<tr><td class="num">' + esc(r.trade_id) + '</td><td>' + esc(r.ticker) + '</td><td>' + esc(r.exit_signal) + '</td>';
+            html += '<td class="num">' + esc(r.realized_pct) + '</td><td class="num">' + esc(r.missed_upside_pct != null ? r.missed_upside_pct : '—') + '</td>';
+            html += '<td class="num">' + esc(r.take_profit_db != null ? r.take_profit_db : '—') + '</td><td class="num">' +
+                esc(r.effective_take_at_entry != null ? r.effective_take_at_entry : '—') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    el.innerHTML = html;
+}
+
+function renderPortfolioConfigGridBlock(data) {
+    const el = document.getElementById('portfolioConfigGridBlock');
+    if (!el) return;
+    const grid = data.portfolio_config_grid || {};
+    if (grid.mode === 'skipped') {
+        el.innerHTML = '<span class="muted">' + esc(grid.note || '—') + '</span>';
+        return;
+    }
+    let html = '<p class="muted" style="margin:0 0 0.5rem 0;font-size:0.88rem;">' + esc(grid.description || '') + '</p>';
+    if (grid.manual_tuning_note_ru) {
+        html += '<p style="margin:0 0 0.65rem 0;font-size:0.86rem;color:#fde68a;">' + esc(grid.manual_tuning_note_ru) + '</p>';
+    }
+    const rows = Array.isArray(grid.rows) ? grid.rows : [];
+    if (rows.length) {
+        html += '<table class="forecast-table" role="table"><thead><tr><th>Ключ</th><th>Группа</th><th>Значение</th><th>Где</th></tr></thead><tbody>';
+        rows.forEach(function (r) {
+            html += '<tr><td><code>' + esc(r.env_key) + '</code></td><td>' + esc(r.group) + '</td><td class="num"><strong>' +
+                esc(r.current !== '' ? r.current : '—') + '</strong></td><td class="muted" style="font-size:0.82rem;">' + esc(r.applied_in) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    el.innerHTML = html;
+}
+
+function renderPortfolioBlocks(data) {
+    renderPortfolioCatboostStatusBlock(data);
+    renderPortfolioMlEntryBlock(data);
+    renderPortfolioExitPolicyBlock(data);
+    renderPortfolioConfigGridBlock(data);
+}
+
 async function runAnalyzer() {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
@@ -1305,6 +1467,8 @@ async function runAnalyzer() {
             summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(data.detail || r.statusText)}</span>`;
             return;
         }
+        applyAnalyzerStrategyVisibility();
+        renderPortfolioBlocks(data);
         renderCatboostFusionBlock(data);
         renderCatboostBlock(data);
         renderMultidayLrBlock(data);
@@ -1391,7 +1555,10 @@ async function runAnalyzer() {
 
 document.getElementById('runBtn').addEventListener('click', runAnalyzer);
 document.getElementById('days').addEventListener('change', updateAnalyzerJsonLinks);
-document.getElementById('strategy').addEventListener('change', updateAnalyzerJsonLinks);
+document.getElementById('strategy').addEventListener('change', function () {
+    updateAnalyzerJsonLinks();
+    applyAnalyzerStrategyVisibility();
+});
 document.getElementById('useLlm').addEventListener('change', updateAnalyzerJsonLinks);
 document.getElementById('analyzerDownloadJson').addEventListener('click', function() { downloadAnalyzerJson(false); });
 document.getElementById('analyzerDownloadJsonFull').addEventListener('click', function() { downloadAnalyzerJson(true); });
@@ -1401,6 +1568,7 @@ document.getElementById('tuningObserveBtn').addEventListener('click', observeTun
 document.getElementById('tuningApplyBtn').addEventListener('click', applyTuningKeyValue);
 document.getElementById('tuningRollbackBtn').addEventListener('click', rollbackTuningExperiment);
 updateAnalyzerJsonLinks();
+applyAnalyzerStrategyVisibility();
 loadTuningStatus();
 loadMlDataQuality();
 
