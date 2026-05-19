@@ -25,7 +25,7 @@
 | Направление | Статус «сейчас» | Что осталось |
 |-------------|-----------------|--------------|
 | **Recovery D4b** | Не внедрён; торговля как до D4a | Решение go/no-go по SQL + rollup + `recovery_scenario_backtest`; затем PR с defer K баров | `GAME_5M_TIME_EXIT_RECOVERY_PLAN.md` § D4b |
-| **Event фазы «после MVP»** | Таблицы `market_regime_daily`, `peer_graph_edge`, `earnings_event_detail` **пустые**; CatBoost только **5d** таргет | `ingest_market_regime_daily.py` + cron; peer-фичи; опционально multi-horizon train | `EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md` § стратегические цели |
+| **Event фазы «после MVP»** | `ingest_market_regime_daily.py` + cron **23:32** (SPY/QQQ/DIA/^VIX → `market_regime_daily`); `peer_graph_edge`, `earnings_event_detail` ещё пустые | Backfill regime на VM; peer-фичи; regime в `feature_builder_version`; multi-horizon train | `EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md` § стратегические цели |
 | **Hanger / continuation** | Датасеты + анализатор; **отдельного** `train_*_stuck` нет | По данным — модели stuck/continuation или правила continuation gate из log-only | `GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md` фазы 4–5 |
 | **CatBoost entry «измерить эффект»** | Fusion включён осторожно (недельный план) | Метрики BUY→HOLD, walk-forward — вручную/через анализатор; при желании — агрегаты в отчёт | `WEEKLY_PLAN_GAME5M_AND_ML_2026-05-06.md` |
 | **Аудит prod config** | Локальный example выровнен | Повтор `audit_config_unused_keys.py` против **боевого** `/app/config.env`, вычистить мёртвые ключи на VM | `CLEANUP_CONFIG_AND_CODE_PLAN_2026-05-07.md` § Завтра на сервере |
@@ -36,7 +36,7 @@
 
 Ниже — не баги, а **намеренно отложенные** или без владельца в коде:
 
-1. **`ingest_market_regime_daily.py`** — в `EVENT_REACTION_PIPELINE.md` описан, **скрипта в репо пока нет**; без него режим рынка не попадёт в event-фичи.
+1. **Regime в event-фичах** — `scripts/ingest_market_regime_daily.py` есть; следующий шаг — подключить `market_regime_daily` в `feature_builder_version` (сейчас MVP `quotes_mvp_1`).
 2. **Recovery `run_daily_game5m_recovery_pipeline.py`** — не вынесен в отдельную строку `lse-docker.crontab`; обучение recovery зависит от ручного JSONL + запуска скрипта (или будущего крона).
 3. **Фаза 5 hanger-плана** — условный **pyramid / докуп** при `GAME_5M_ALLOW_PYRAMID_BUY=false`; обсуждалось, в код правил не внедрялось.
 4. **Отдельный nightly-cron только под `train_portfolio_catboost`** — в weekly-плане фигурировал как идея; фактически портфель гоняется из **`run_ml_train_readiness_cron`** (23:50), не дублируя отдельный `portfolio_daily_ml_pipeline` в crontab — это нормально, но лог `portfolio_daily_ml_pipeline.log` появится только если где-то вызывают полный train portfolio отдельно.

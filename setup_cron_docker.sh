@@ -18,7 +18,7 @@ mkdir -p "$PROJECT_DIR/logs"
 CRON_FILE=$(mktemp)
 
 # Удаляем старые LSE docker cron-задачи
-crontab -l 2>/dev/null | grep -v "docker.*lse-bot\|LSE.*Docker\|send_sndk_signal_cron\|trading_cycle_cron\|premarket_cron\|update_prices_cron\|fetch_news_cron\|sync_vector_kb_cron\|add_sentiment_to_news\|analyze_event_outcomes\|cleanup_calendar_noise\|cron_watchdog\|update_rsi_local\|update_finviz\|ingest_market_bars_intraday\|run_daily_game5m_recovery_pipeline\|run_ml_train_readiness_cron\|run_ml_data_quality_report\|build_event_reaction_dataset\|backfill_event_reaction_labeling\|seed_quotes_for_event" | grep -v "$PROJECT_DIR" > "$CRON_FILE" || true
+crontab -l 2>/dev/null | grep -v "docker.*lse-bot\|LSE.*Docker\|send_sndk_signal_cron\|trading_cycle_cron\|premarket_cron\|update_prices_cron\|fetch_news_cron\|sync_vector_kb_cron\|add_sentiment_to_news\|analyze_event_outcomes\|cleanup_calendar_noise\|cron_watchdog\|update_rsi_local\|update_finviz\|ingest_market_bars_intraday\|ingest_market_regime_daily\|run_daily_game5m_recovery_pipeline\|run_ml_train_readiness_cron\|run_ml_data_quality_report\|build_event_reaction_dataset\|backfill_event_reaction_labeling\|seed_quotes_for_event" | grep -v "$PROJECT_DIR" > "$CRON_FILE" || true
 if ! grep -q . "$CRON_FILE" 2>/dev/null; then
   : > "$CRON_FILE"
 fi
@@ -50,6 +50,7 @@ cat >> "$CRON_FILE" << EOF
 45 * * * * docker exec $CONTAINER_NAME python scripts/cron_watchdog.py --execute >> "$PROJECT_DIR/logs/cron_watchdog.log" 2>&1
 # 5m/30m в Postgres для бэктеста (Yahoo, UPSERT). Ежедневно 23:25 по системному TZ сервера (ожидается MSK).
 25 23 * * * flock -n /tmp/lse_market_bars_intraday.lock docker exec $CONTAINER_NAME python scripts/ingest_market_bars_intraday.py >> "$PROJECT_DIR/logs/cron_market_bars_intraday.log" 2>&1
+32 23 * * 1-5 flock -n /tmp/lse_market_regime.lock docker exec $CONTAINER_NAME python scripts/ingest_market_regime_daily.py >> "$PROJECT_DIR/logs/event_regime.log" 2>&1
 # Event / earnings: скелет из KB → разметка из daily quotes. EVENT_REACTION_KB_SINCE в config.env; --since — event_time_et.
 33 23 * * 1-5 flock -n /tmp/lse_erd_build.lock docker exec $CONTAINER_NAME python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0 >> "$PROJECT_DIR/logs/event_reaction_build.log" 2>&1
 36 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec $CONTAINER_NAME python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --since 2026-02-01 --limit 8000 >> "$PROJECT_DIR/logs/event_reaction_labeling.log" 2>&1
