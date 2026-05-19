@@ -96,6 +96,30 @@ def _ensure_table(engine) -> None:
                     conn.execute(text(stmt))
 
 
+def _calendar_trade_dates(engine, d0: date, d1: date) -> Tuple[List[date], str]:
+    """Prefer SPY calendar; fall back to any index series present in quotes."""
+    for sym in ("SPY", "QQQ", "DIA", "^VIX"):
+        dates = trading_dates_from_quotes(engine, sym, d0, d1)
+        if dates:
+            return dates, sym
+    return [], ""
+
+
+def _missing_index_tickers(engine, d0: date, d1: date) -> List[str]:
+    out: List[str] = []
+    for sym in INDEX_MAP:
+        if not trading_dates_from_quotes(engine, sym, d0, d1):
+            out.append(sym)
+    return out
+
+
+def _seed_index_quotes(tickers: List[str], days_back: int, force_days: int) -> None:
+    from update_prices import update_all_prices
+
+    logger.info("Seeding quotes (yfinance): %s, force_days_back=%s", ", ".join(tickers), force_days)
+    update_all_prices(tickers=tickers, days_back=max(days_back, 120), force_days_back=force_days)
+
+
 def _load_closes(engine, tickers: List[str], d0: date, d1: date) -> pd.DataFrame:
     with engine.connect() as conn:
         df = pd.read_sql(
@@ -168,6 +192,11 @@ def main() -> int:
     parser.add_argument("--to-date", type=str, default="")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--ensure-table", action="store_true")
+    parser.add_argument(
+        "--no-auto-seed",
+        action="store_true",
+        help="Do not fetch missing SPY/QQQ/DIA/^VIX into quotes via yfinance",
+    )
     args = parser.parse_args()
 
     if args.from_date and args.to_date:
@@ -183,10 +212,17 @@ def main() -> int:
         _ensure_table(engine)
 
     tickers = list(INDEX_MAP.keys())
-    trade_dates = trading_dates_from_quotes(engine, "SPY", d0, d1)
+    if not args.no_auto_seed and not args.dry_run:
+        missing = _missing_index_tickers(engine, d0, d1)
+        if missing:
+            force = max(30, (d1 - d0).days + 30)
+            _seed_index_quotes(missing, days_back=args.days, force_days=force)
+
+    trade_dates, cal_sym = _calendar_trade_dates(engine, d0, d1)
     if not trade_dates:
-        logger.error("No SPY quotes between %s and %s", d0, d1)
+        logger.error("No index quotes (SPY/QQQ/DIA/^VIX) between %s and %s", d0, d1)
         return 1
+    logger.info("Calendar from %s: %s trading days", cal_sym, len(trade_dates))
     closes = _load_closes(engine, tickers, d0, d1)
     missing = [t for t in tickers if t not in set(closes["ticker"].unique())] if not closes.empty else tickers
     if missing:
