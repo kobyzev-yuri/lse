@@ -89,12 +89,22 @@
 | `TRADING_CYCLE_ENABLED` | Главный выключатель `scripts/trading_cycle_cron.py`. Если false или пусто — сделки не исполняются. |
 | `TRADING_CYCLE_USE_LLM` | Включает LLM-шаг `portfolio_fusion` внутри portfolio cron. По умолчанию cron работает без HTTP LLM. |
 | `TRADING_CYCLE_TICKERS` | Явный список торгуемых тикеров портфельной игры. Пусто = `TICKERS_MEDIUM + TICKERS_LONG`. |
-| `PORTFOLIO_TAKE_PROFIT_PCT` | Фолбэк тейка, если стратегия не записала `take_profit`; `0` = не закрывать только по этому правилу. |
-| `PORTFOLIO_<STRATEGY>_STOP_LOSS_PCT`, `PORTFOLIO_<STRATEGY>_TAKE_PROFIT_PCT` | Дефолтные stop/take, которые стратегия записывает в BUY (`MOMENTUM`, `MEAN_REVERSION`, `VOLATILE_GAP`, `GEOPOLITICAL_BOUNCE`, `NEUTRAL`). Видны в `/parameters`; БД `strategy_parameters` может перекрыть их точечно. |
-| `PORTFOLIO_STOP_LOSS_ENABLED` | Включает stop по `STOP_LOSS_LEVEL`; текущая политика — `false`, стоп портфеля выключен как в GAME_5M. Может перекрываться через `strategy_parameters`. |
-| `PORTFOLIO_EXIT_ONLY_TAKE` | Если true — портфель закрывается только по тейку. |
-| `STOP_LOSS_LEVEL` | Порог stop как отношение цены к входу; `0.95` примерно -5%. |
+| `PORTFOLIO_TAKE_PROFIT_PCT` | Фолбэк тейка (example **8%**), если в BUY нет `take_profit` и нет `portfolio_effective_take_pct_at_entry` в `context_json`; `0` = не закрывать по этому правилу. |
+| `PORTFOLIO_<STRATEGY>_STOP_LOSS_PCT`, `PORTFOLIO_<STRATEGY>_TAKE_PROFIT_PCT` | Дефолтные stop/take в BUY (example: Momentum take **10**, Gap **15**, MR/Geo **4**). Видны в `/parameters`; БД `strategy_parameters` может перекрыть. |
+| `PORTFOLIO_CATBOOST_ENABLED` | Inference на карточках `/api/portfolio/cards`. |
+| `PORTFOLIO_CATBOOST_MODEL_PATH` | Путь к `.cbm`. |
+| `PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK` | Блок нового BUY при низком `portfolio_ml_entry_score` (`portfolio_entry_guards`). |
+| `PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE` | Порог score (example **48**). |
+| `PORTFOLIO_ML_TAKE_ENABLED` | Снимок `portfolio_effective_take_pct_at_entry` на BUY (`portfolio_exit_policy`). |
+| `PORTFOLIO_ML_TAKE_FACTOR`, `FLOOR_PCT`, `CAP_PCT` | Подстройка тейка: clamp(max(base, factor×expected%), floor, cap). |
+| `PORTFOLIO_TRAILING_TAKE_ENABLED` | Trailing по откату от пика daily high. |
+| `PORTFOLIO_TRAILING_MIN_PROFIT_PCT`, `PORTFOLIO_TRAILING_PULLBACK_PCT` | Arm ≥8%, закрытие при откате ≥3 п.п. (example). |
+| `PORTFOLIO_STOP_LOSS_ENABLED` | Включает stop по `STOP_LOSS_LEVEL`; текущая политика — `false`. |
+| `PORTFOLIO_EXIT_ONLY_TAKE` | Если true — без стопа, только тейк/trailing. |
+| `STOP_LOSS_LEVEL` | Порог stop как отношение цены к входу; `0.95` ≈ −5%. |
 | `SANDBOX_SLIPPAGE_SELL_PCT` | Консервативное проскальзывание при продаже в sandbox. |
+
+Автосетки/replay для портфеля **нет** — см. §17 в `docs/PORTFOLIO_GAME.md`.
 
 Новые `PORTFOLIO_<STRATEGY>_*_PCT` ключи читаются при расчёте сигнала стратегии. После правки через `/parameters` cron подхватит их на следующем запуске; для ручных вызовов из web/API перезапустите сервис через кнопку restart или `docker compose restart lse`.
 

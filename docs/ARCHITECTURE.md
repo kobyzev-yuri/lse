@@ -135,7 +135,7 @@ flowchart LR
 | Бизнес-процессы и длинные диаграммы | [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md) |
 | Схема БД | [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) |
 | Портфельная игра: алгоритм, стратегии, аллокация, тейк/стоп | [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md) |
-| Portfolio ML | [ML_PORTFOLIO_CATBOOST.md](ML_PORTFOLIO_CATBOOST.md) |
+| Portfolio ML + exit policy | [ML_PORTFOLIO_CATBOOST.md](ML_PORTFOLIO_CATBOOST.md), `services/portfolio_entry_guards.py`, `services/portfolio_exit_policy.py` |
 | Игра 5m: сделки, JSON, крон | [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md), [CRONS_AND_TAKE_STOP.md](CRONS_AND_TAKE_STOP.md), [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md) |
 | GAME_5M: тейк, висяки, расчёты, **вход начала дня**, **открытые риски (early exit / overnight)** | [GAME_5M_CALCULATIONS_AND_REPORTING.md](GAME_5M_CALCULATIONS_AND_REPORTING.md), [GAME_5M_PREMARKET_AND_IMPULSE.md](GAME_5M_PREMARKET_AND_IMPULSE.md) |
 | GAME_5M: развитие hanger/stale exits/continuation (**пайплайн**) | [GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md](GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md) |

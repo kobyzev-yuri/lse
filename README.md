@@ -66,7 +66,8 @@ python web_app.py                  # http://localhost:8080 (порт в compose 
 ### Игра 5m и кроны
 | Документ | Содержание |
 |----------|------------|
-| [docs/PORTFOLIO_GAME.md](docs/PORTFOLIO_GAME.md) | Портфельная игра: алгоритм, стратегии, LLM, аллокация, тейк/стоп |
+| [docs/PORTFOLIO_GAME.md](docs/PORTFOLIO_GAME.md) | Портфельная игра: стратегии, CatBoost-вход, ML-тейк, trailing, справочник `PORTFOLIO_*` |
+| [docs/ML_PORTFOLIO_CATBOOST.md](docs/ML_PORTFOLIO_CATBOOST.md) | Portfolio CatBoost: обучение, inference, execution keys |
 | [docs/RUN_GAME_SERVICES.md](docs/RUN_GAME_SERVICES.md) | Запуск бота, крона 5m, SNDK |
 | [docs/CRONS_AND_TAKE_STOP.md](docs/CRONS_AND_TAKE_STOP.md) | Расписание, тейк/стоп, соответствие боту |
 | [docs/GAME_5M_CALCULATIONS_AND_REPORTING.md](docs/GAME_5M_CALCULATIONS_AND_REPORTING.md) | GAME_5M: алгоритм, тейк/стоп, висяки, отчётность |

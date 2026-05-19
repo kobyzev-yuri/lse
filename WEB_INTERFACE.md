@@ -50,6 +50,14 @@ uvicorn web_app:app --host 0.0.0.0 --port 8000 --reload
 - Графики котировок с SMA
 - Графики PnL по сделкам
 
+### Отчёты (`/reports/pending`, `/reports/closed`)
+- **Открытые позиции** — аналог `/pending` в Telegram; колонки **Take** (эффективный порог выхода: BUY / ML-снимок / `PORTFOLIO_TAKE_PROFIT_PCT`) и **Exit** (подсказка: нет тейка или P/L уже выше порога).
+- **Закрытые** — P/L, Game, Strategy (`Portfolio fallback` = старый BUY без имени стратегии).
+- Логика тейка/trailing: `docs/PORTFOLIO_GAME.md`, `services/portfolio_exit_policy.py`.
+
+### Портфельные карточки (`/portfolio/cards`)
+- Дневной анализ + опционально `portfolio_ml_*` при `PORTFOLIO_CATBOOST_ENABLED=true`.
+
 ## API Endpoints
 
 ### GET `/api/portfolio`

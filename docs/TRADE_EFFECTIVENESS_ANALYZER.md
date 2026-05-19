@@ -36,7 +36,7 @@
 
 - Для стратегий **`GAME_5M`** и **`ALL`** (в режиме ALL только сделки с `entry_strategy=GAME_5M`) по каждой закрытой сделке вызывается `predict_entry_favorability_from_saved_context` — та же модель, что в проде на входе, но признаки **только из `context_json` на BUY** (корреляция не дозаполняется из «текущей» матрицы).
 - В JSON: сводная **калибровка** (средний P при win/loss, квантили P vs win rate), массив **`per_trade`** (статус CatBoost, P, `realized_pct`, при наличии — `estimated_upside_pct_day_at_entry`, `prob_up_at_entry`, укороченный `price_forecast_5m_summary_excerpt`), опционально **`price_context_at_entry`** — корреляция сохранённого upside на входе с фактическим результатом (справочно).
-- Для **`PORTFOLIO`** блок осознанно **пропускается** (модель не про дневной портфель); отдельная модель — по плану в `docs/ML_GAME5M_CATBOOST.md` §9.
+- Для **`PORTFOLIO`** блок `catboost_entry_backtest` **пропускается** (модель GAME_5M entry, не портфельная). Вместо этого в отчёте есть **`portfolio_catboost_status`** (файл модели, RMSE из meta, флаги). Настройка portfolio execution — вручную по `docs/PORTFOLIO_GAME.md` §17 и закрытым сделкам; **replay-сетки как у GAME_5M нет**.
 
 ### Арбитр продуктовых идей (`product_ideas_arbiter`)
 

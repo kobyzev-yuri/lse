@@ -1,8 +1,10 @@
 # Portfolio CatBoost: expected daily return
 
-Advisory ML layer for the portfolio game. It predicts forward log-return from daily `quotes`; it does not open or close positions by itself.
+Advisory and execution-adjacent ML layer for the portfolio game. It predicts forward log-return from daily `quotes`. Training and cards are advisory; **entry filter**, **take snapshot**, and **trailing exit** are optional execution hooks (see below).
 
 Premarket is an input context for regular-session decisions, not a separate execution mode. Portfolio BUY remains blocked outside the regular NYSE session unless `TRADING_CYCLE_ALLOW_OFFHOURS_BUY=true` is explicitly set for an emergency/manual case.
+
+Canonical portfolio flow: [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md). Cron map: [CRONS_AND_TAKE_STOP.md](CRONS_AND_TAKE_STOP.md).
 
 ## Scope
 
@@ -72,20 +74,17 @@ local/models/portfolio_return_catboost.meta.json
 
 Validation is time-based: the last `--valid-ratio` fraction of rows by date is used as holdout. The script reports RMSE, MAE, top-decile mean forward return, and hit-rate over the transaction-cost threshold.
 
-## Runtime
+## Runtime inference
 
 Runtime inference is in `services/portfolio_catboost_signal.py`.
 
-Config:
+### Config (model + cards)
 
 ```env
 PORTFOLIO_CATBOOST_ENABLED=true
 # PORTFOLIO_CATBOOST_MODEL_PATH=/path/to/portfolio_return_catboost.cbm
 # PORTFOLIO_ML_TRANSACTION_COST_BPS=20
 # PORTFOLIO_ML_MIN_EDGE_BPS=30
-# Optional entry filter in trading_cycle_cron (ExecutionAgent):
-PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK=true
-PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE=48
 ```
 
 When disabled, missing, or misconfigured, the API returns status fields and keeps portfolio cards working. When enabled and model files exist, `/api/portfolio/cards` includes:
@@ -96,16 +95,74 @@ When disabled, missing, or misconfigured, the API returns status fields and keep
 - `portfolio_ml_cluster_role`
 - `portfolio_ml_status`
 
-## Execution (entry only)
+### Config (execution — entry)
 
-When `PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK=true`, `ExecutionAgent` skips a **new** portfolio `BUY` if
-`portfolio_ml_entry_score` on the last feature row is below `PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE` (default 48).
-ML fields are stored in `trade_history.context_json` on BUY. With `PORTFOLIO_ML_TAKE_ENABLED=true`, entry snapshot sets
-`portfolio_effective_take_pct_at_entry` = clamp(max(base_take, factor × expected_return_pct), floor, cap).
-Trailing exit: `PORTFOLIO_TRAILING_TAKE_*` in `portfolio_exit_policy.py`.
+| Key | Default (example) | Applied in |
+|-----|-------------------|------------|
+| `PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK` | true | `services/portfolio_entry_guards.py` |
+| `PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE` | 48 | skip **new** portfolio BUY if `entry_score` lower |
+
+When `portfolio_ml_status != ok`, the block does not fire (cron falls back to strategy-only entry).
+
+On every portfolio BUY, ML fields are merged into `trade_history.context_json` via `merge_portfolio_buy_context()`.
+
+### Config (execution — take snapshot on entry)
+
+| Key | Default (example) | Applied in |
+|-----|-------------------|------------|
+| `PORTFOLIO_ML_TAKE_ENABLED` | true | `services/portfolio_exit_policy.py` |
+| `PORTFOLIO_ML_TAKE_FACTOR` | 1.5 | `max(base_take, factor × expected_return_pct)` |
+| `PORTFOLIO_ML_TAKE_FLOOR_PCT` | 4 | clamp floor |
+| `PORTFOLIO_ML_TAKE_CAP_PCT` | 18 | clamp cap |
+
+Snapshot written at BUY:
+
+```text
+portfolio_effective_take_pct_at_entry
+portfolio_effective_take_note
+```
+
+**Exit does not re-run CatBoost** — only the entry snapshot is used (`resolve_effective_take_pct`).
+
+### Config (execution — trailing exit)
+
+| Key | Default (example) | Applied in |
+|-----|-------------------|------------|
+| `PORTFOLIO_TRAILING_TAKE_ENABLED` | true | `trailing_take_should_close` |
+| `PORTFOLIO_TRAILING_MIN_PROFIT_PCT` | 8 | arm trailing after peak P/L ≥ this |
+| `PORTFOLIO_TRAILING_PULLBACK_PCT` | 3 | close if giveback from peak ≥ this |
+
+Peak P/L uses `MAX(high)` from daily `quotes` since entry date. Checked in `ExecutionAgent.check_stop_losses()` **before** fixed take.
+
+## Code map
+
+| Module | Role |
+|--------|------|
+| `services/portfolio_catboost_signal.py` | Load model, predict, score 0–100 |
+| `services/portfolio_entry_guards.py` | Block weak BUY; merge context on BUY |
+| `services/portfolio_exit_policy.py` | ML take snapshot logic, trailing, `evaluate_portfolio_exit` |
+| `execution_agent.py` | Calls guards on BUY, exit policy on close |
+| `scripts/trading_cycle_cron.py` | Cron entrypoint |
+
+## Tuning grid
+
+**There is no automated replay/grid for portfolio** (unlike `services/game5m_replay_proposals.py` for GAME_5M).
+
+Recommended manual grid (change one knob per observation window):
+
+| Knob | Typical values | Notes |
+|------|----------------|-------|
+| `PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE` | 45, 48, 52 | stricter = fewer entries |
+| `PORTFOLIO_ML_TAKE_FACTOR` | 1.2, 1.5, 2.0 | only matters if expected return > 0 |
+| `PORTFOLIO_ML_TAKE_CAP_PCT` | 15, 18, 22 | caps ML-inflated take |
+| `PORTFOLIO_TRAILING_MIN_PROFIT_PCT` | 6, 8, 10 | when trailing arms |
+| `PORTFOLIO_TRAILING_PULLBACK_PCT` | 2, 3, 4 | sensitivity to pullback |
+
+Use `/api/analyzer?strategy=PORTFOLIO` for `portfolio_catboost_status` and closed-trade stats. CatBoost **entry backtest** in the analyzer is **skipped** for `PORTFOLIO` (model is not the GAME_5M entry classifier).
 
 ## Limitations
 
 - MVP uses daily data only. Hourly data can be added later as a separate entry-timing layer.
-- The score is advisory; validate on walk-forward before tightening `PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE`.
+- Typical live `portfolio_ml_expected_return_pct` is ~1% over 5d — ML take often equals strategy take unless factor/cap are retuned after model improves.
+- Validate score threshold and take knobs on walk-forward before aggressive blocking.
 - Leader/core quality depends on keeping `PORTFOLIO_LEADER_CLUSTER` / `PORTFOLIO_CORE_CLUSTER` current.

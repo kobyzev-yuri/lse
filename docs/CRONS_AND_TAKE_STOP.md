@@ -60,11 +60,14 @@
 
 **Как часто:** при каждом запуске trading_cycle_cron (например 9:00, 13:00, 17:00 пн–пт), **после** цикла по тикерам (анализ → BUY/SELL/HOLD).
 
-**Логика:** `execution_agent.py` — для каждой открытой позиции из portfolio_state (с ценой входа из trade_history):
+**Логика:** `services/portfolio_exit_policy.py` + `execution_agent.check_stop_losses()` — открытые позиции из `trade_history` (`compute_open_positions`):
 
-1. Стоп: лог-доходность ≤ порога (~ −5%) → закрытие по стопу.
-2. Позиции **GAME_5M** в этом проходе **не обходятся** (`exclude_strategy_names` в `run_for_tickers`) — тейк/стоп по ним только **send_sndk_signal_cron**.
-3. Тейк: берётся `take_profit` из последней BUY по тикеру или **PORTFOLIO_TAKE_PROFIT_PCT**; если pnl% ≥ тейка → закрытие по тейку.
+1. Позиции **GAME_5M** пропускаются (`exclude_strategy_names`) — их закрывает только **send_sndk_signal_cron**.
+2. Стоп: только если `PORTFOLIO_STOP_LOSS_ENABLED=true` (сейчас обычно **false**).
+3. **Trailing take:** пик P/L по `MAX(high)` в `quotes` с даты входа; при `PORTFOLIO_TRAILING_*` — закрытие `TRAILING_TAKE`, если откат от пика ≥ порога.
+4. **Фиксированный тейк:** `effective_take` из `context_json.portfolio_effective_take_pct_at_entry` → иначе `trade_history.take_profit` → иначе **PORTFOLIO_TAKE_PROFIT_PCT** (example 8%); при `pnl% ≥ effective_take` → `TAKE_PROFIT`.
+
+На BUY перед записью: `portfolio_entry_guards` (опц. блок CatBoost по score) + снимок ML в `context_json`. `get_decision()` возвращает dict с `strategy_name` и `take_profit` стратегии.
 
 **Что видно в логах (trading_cycle_cron):**
 
@@ -107,7 +110,7 @@
 ### 5.2 Параметры
 
 - **5m:** тикеры — **GAME_5M_TICKERS** или TICKERS_FAST; тейк/стоп — **GAME_5M_TAKE_PROFIT_PCT** (потолок), **GAME_5M_TAKE_PROFIT_MIN_PCT** (с какого импульса считать тейк от импульса), **GAME_5M_TAKE_MOMENTUM_FACTOR** (ниже 1 — консервативнее, выше 1 — агрессивнее до потолка; в коде clamp примерно 0.3–2.0), **GAME_5M_TAKE_PROFIT_PCT_SNDK** и т.д. (потолок по тикеру); **GAME_5M_STOP_LOSS_PCT**, **GAME_5M_STOP_LOSS_ENABLED** и др.
-- **Портфель:** тикеры — **TRADING_CYCLE_TICKERS** или TICKERS_MEDIUM + TICKERS_LONG; тейк по умолчанию — **PORTFOLIO_TAKE_PROFIT_PCT** (если 0 или не задан — в логах «Тейк‑профит не задан»). Стоп-лосс: **PORTFOLIO_STOP_LOSS_ENABLED** (true/false); при false в логах предупреждение «стоп отключён», закрытие только по тейку. Порог стопа — **STOP_LOSS_LEVEL** (0.95 ≈ −5%). Оба параметра (PORTFOLIO_STOP_LOSS_ENABLED, STOP_LOSS_LEVEL) можно переопределить в БД (strategy_parameters, GLOBAL) — тогда trading_cycle_cron и /gameparams используют значение из БД.
+- **Портфель:** тикеры — **TRADING_CYCLE_TICKERS** или MEDIUM+LONG; стратегические тейки — **PORTFOLIO_*_TAKE_PROFIT_PCT** (Momentum 10, Gap 15, …); fallback — **PORTFOLIO_TAKE_PROFIT_PCT=8**; ML-снимок — **PORTFOLIO_ML_TAKE_***; trailing — **PORTFOLIO_TRAILING_TAKE_***; вход CatBoost — **PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK** / **HOLD_BELOW_SCORE**. Полный список: `docs/PORTFOLIO_GAME.md` §17. Автосетки replay **нет** (в отличие от GAME_5M).
 
 См. также: [TICKER_GROUPS.md](TICKER_GROUPS.md), [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md).
 
