@@ -138,6 +138,8 @@ def _load_closes(engine, tickers: List[str], d0: date, d1: date) -> pd.DataFrame
     if df is None or df.empty:
         return pd.DataFrame(columns=["ticker", "trade_date", "close"])
     df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
+    df = df.dropna(subset=["close"]).sort_values(["ticker", "trade_date"])
+    df = df.drop_duplicates(subset=["ticker", "trade_date"], keep="last")
     return df
 
 
@@ -153,12 +155,21 @@ def _build_rows(
         if sub.empty:
             piv[col] = pd.Series(dtype=float)
         else:
-            s = sub.set_index("trade_date")["close"].sort_index()
+            s = sub.groupby("trade_date", as_index=True)["close"].last().sort_index()
             piv[col] = s
     rows: List[Dict[str, Any]] = []
     prev: Dict[str, Optional[float]] = {c: None for c in INDEX_MAP.values()}
     for td in sorted(trade_dates):
-        cur = {col: (float(piv[col][td]) if col in piv and td in piv[col].index else None) for col in INDEX_MAP.values()}
+        cur: Dict[str, Optional[float]] = {}
+        for col in INDEX_MAP.values():
+            val: Optional[float] = None
+            if col in piv and td in piv[col].index:
+                raw = piv[col].loc[td]
+                try:
+                    val = float(raw.iloc[-1] if hasattr(raw, "iloc") else raw)
+                except (TypeError, ValueError):
+                    val = None
+            cur[col] = val
         feats: Dict[str, Any] = {"builder_version": "quotes_regime_v1", "ndx_ticker": "QQQ"}
         flags: Dict[str, Any] = {}
         for tkr, col in INDEX_MAP.items():
