@@ -50,6 +50,39 @@ docker compose exec lse python scripts/ingest_premarket_daily_features.py --ensu
 
 The table key includes `snapshot_label`, so the same morning can store several slices (`0800_ET`, `0900_ET`, `0925_ET`) for later comparison.
 
+## Artifact paths
+
+There is **no** `local/ml/` directory in this repo (that path was never used). CatBoost artifacts live under **`models/`** plus optional **`logs/`** for training reports.
+
+| Environment | Model + meta | Training log (append) |
+|-------------|--------------|------------------------|
+| **GCP / Docker (`lse-bot`)** | `~/lse/logs/ml/models/portfolio_return_catboost.cbm` on VM; same files as `/app/logs/ml/models/...` in container | `/app/logs/ml/logs/portfolio_daily_ml_report.jsonl` |
+| **Local dev** (no `/app/logs`) | `local/models/portfolio_return_catboost.cbm` (+ `.meta.json`) | `local/logs/portfolio_daily_ml_report.jsonl` |
+
+`scripts/train_portfolio_catboost.py` picks the output path in this order:
+
+1. `--out path.cbm` (explicit)
+2. `PORTFOLIO_CATBOOST_MODEL_PATH` from `config.env` if set
+3. Else `/app/logs/ml/models/portfolio_return_catboost.cbm` when `/app/logs` exists (container), else `local/models/...`
+
+On production, `config.env` should point inference at the mounted volume, for example:
+
+```env
+PORTFOLIO_CATBOOST_MODEL_PATH=/app/logs/ml/models/portfolio_return_catboost.cbm
+PORTFOLIO_ML_REPORT_JSONL=/app/logs/ml/logs/portfolio_daily_ml_report.jsonl
+```
+
+`.cbm` and `.meta.json` are **not in git** (see `.gitignore` for `local/models/*`). They persist on the VM under `logs/` because `~/lse/logs` is bind-mounted to `/app/logs` in the container.
+
+Check models on the VM:
+
+```bash
+ls -la ~/lse/logs/ml/models/portfolio_return_catboost.*
+docker exec lse-bot ls -la /app/logs/ml/models/portfolio_return_catboost.*
+```
+
+Regular retrain on prod: `scripts/run_ml_train_readiness_cron.py` (cron ~23:50 ET weekdays) may call `train_portfolio_catboost.py` when readiness gates pass; metrics also land in `logs/ml/ml_data_quality/last_portfolio_train_metrics.json` when the data-quality cron runs.
+
 ## Training
 
 Install CatBoost dependencies:
@@ -58,18 +91,21 @@ Install CatBoost dependencies:
 pip install -r requirements-catboost.txt
 ```
 
-Train or dry-run:
+Train or dry-run (from repo root; use `docker exec lse-bot` on GCP so paths resolve to `/app/logs/ml/...`):
 
 ```bash
 python scripts/train_portfolio_catboost.py --dry-run
 python scripts/train_portfolio_catboost.py --horizon-days 5 --min-rows 300
 ```
 
-Default output:
+Optional explicit output (overrides defaults):
 
-```text
-local/models/portfolio_return_catboost.cbm
-local/models/portfolio_return_catboost.meta.json
+```bash
+# local workstation
+python scripts/train_portfolio_catboost.py --out local/models/portfolio_return_catboost.cbm
+
+# inside lse-bot (writes to host ~/lse/logs/ml/models/ via mount)
+docker exec lse-bot python scripts/train_portfolio_catboost.py --horizon-days 5 --min-rows 300
 ```
 
 Validation is time-based: the last `--valid-ratio` fraction of rows by date is used as holdout. The script reports RMSE, MAE, top-decile mean forward return, and hit-rate over the transaction-cost threshold.
@@ -82,7 +118,9 @@ Runtime inference is in `services/portfolio_catboost_signal.py`.
 
 ```env
 PORTFOLIO_CATBOOST_ENABLED=true
-# PORTFOLIO_CATBOOST_MODEL_PATH=/path/to/portfolio_return_catboost.cbm
+# Prod (lse-bot): default bind-mount path — do not use local/models here
+PORTFOLIO_CATBOOST_MODEL_PATH=/app/logs/ml/models/portfolio_return_catboost.cbm
+# PORTFOLIO_ML_REPORT_JSONL=/app/logs/ml/logs/portfolio_daily_ml_report.jsonl
 # PORTFOLIO_ML_TRANSACTION_COST_BPS=20
 # PORTFOLIO_ML_MIN_EDGE_BPS=30
 ```
