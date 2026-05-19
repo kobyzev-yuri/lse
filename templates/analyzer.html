@@ -1411,10 +1411,63 @@ function renderPortfolioBlocks(data) {
     renderPortfolioConfigGridBlock(data);
 }
 
+async function fetchAnalyzerApi(useLlm, timeoutMs, lightMode) {
+    const days = document.getElementById('days').value || 7;
+    const strategy = document.getElementById('strategy').value || 'GAME_5M';
+    const q = new URLSearchParams({
+        days: String(days),
+        strategy: strategy,
+        use_llm: useLlm ? '1' : '0',
+        light: lightMode ? '1' : '0',
+    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(function () { ctrl.abort(); }, timeoutMs);
+    try {
+        const r = await fetch('/api/analyzer?' + q.toString(), { signal: ctrl.signal });
+        const text = await r.text();
+        if (!text || !String(text).trim()) {
+            throw new Error(
+                'Пустой ответ сервера (HTTP ' + r.status + '). Часто: прокси оборвал длинный JSON или uvicorn занят. '
+                + 'Попробуйте light=1 (кнопка на странице), days=5, без LLM; docker restart lse-bot.'
+            );
+        }
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (parseErr) {
+            throw new Error(
+                'Ответ не JSON (обрезан?): HTTP ' + r.status + ', длина ' + text.length
+                + ', начало: ' + text.slice(0, 160)
+            );
+        }
+        return { ok: r.ok, status: r.status, data: data };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+function analyzerFetchErrorMessage(err, useLlm) {
+    const msg = (err && err.message) ? String(err.message) : String(err);
+    if (err && err.name === 'AbortError') {
+        const sec = useLlm ? 600 : 180;
+        return 'Таймаут запроса (' + sec + ' с). Снимите галочку LLM, уменьшите days или перезапустите lse-bot.';
+    }
+    if (msg.indexOf('Unexpected end of JSON input') >= 0 || msg.indexOf('Ответ не JSON') >= 0 || msg.indexOf('Пустой ответ') >= 0) {
+        return msg;
+    }
+    if (msg === 'Failed to fetch' || msg.indexOf('NetworkError') >= 0) {
+        return 'Сервер не ответил (Failed to fetch): uvicorn занят долгим анализом/LLM, '
+            + 'оборвался прокси или контейнер перезапускался. Попробуйте без LLM; '
+            + 'если не помогает — ssh и docker restart lse-bot.';
+    }
+    return msg;
+}
+
 async function runAnalyzer() {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
     const useLlm = document.getElementById('useLlm').checked;
+    const runBtn = document.getElementById('runBtn');
     const summary = document.getElementById('summary');
     const topLosses = document.getElementById('topLosses');
     const topMissed = document.getElementById('topMissed');
@@ -1432,7 +1485,9 @@ async function runAnalyzer() {
     const mlArbiterBlock = document.getElementById('mlArbiterBlock');
     const applyBtn = document.getElementById('applyEnvBtn');
     const applyStatus = document.getElementById('applyStatus');
-    summary.innerHTML = 'Загрузка...';
+    summary.innerHTML = useLlm
+        ? 'Загрузка… с LLM может занять до 10 мин (OPENAI_TIMEOUT_PROMPT_ENTRY). Остальные страницы не блокируются.'
+        : 'Загрузка…';
     topLosses.innerHTML = '—';
     topMissed.innerHTML = '—';
     topWinMissed.innerHTML = '—';
@@ -1458,13 +1513,12 @@ async function runAnalyzer() {
     applyBtn.disabled = true;
     applyStatus.innerHTML = '—';
     lastAutoUpdates = [];
+    updateAnalyzerJsonLinks();
     try {
-        const q = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0' });
-        updateAnalyzerJsonLinks();
-        const r = await fetch('/api/analyzer?' + q.toString());
-        const data = await r.json();
-        if (!r.ok) {
-            summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(data.detail || r.statusText)}</span>`;
+        const timeoutMs = useLlm ? 600000 : 300000;
+        const { ok, data } = await fetchAnalyzerApi(useLlm, timeoutMs, true);
+        if (!ok) {
+            summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(data.detail || 'API error')}</span>`;
             return;
         }
         applyAnalyzerStrategyVisibility();
@@ -1549,7 +1603,11 @@ async function runAnalyzer() {
             }
         }
     } catch (e) {
-        summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(e.message)}</span>`;
+        summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(analyzerFetchErrorMessage(e, useLlm))}</span>`;
+    } finally {
+        if (runBtn) {
+            runBtn.disabled = false;
+        }
     }
 }
 

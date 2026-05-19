@@ -1009,7 +1009,14 @@ class ExecutionAgent:
                         merge_portfolio_buy_context,
                         portfolio_catboost_blocks_buy,
                     )
+                    from services.event_reaction_entry_guards import event_reaction_blocks_buy
 
+                    blocked, block_reason = event_reaction_blocks_buy(ticker)
+                    if blocked:
+                        logger.info("⏭️ %s: portfolio BUY пропущен — %s", ticker, block_reason)
+                        if cluster_context is not None:
+                            other_signals[ticker] = "HOLD"
+                        continue
                     blocked, block_reason = portfolio_catboost_blocks_buy(ticker)
                     if blocked:
                         logger.info("⏭️ %s: portfolio BUY пропущен — %s", ticker, block_reason)

@@ -70,6 +70,15 @@ def merge_portfolio_buy_context(
     for k, v in ml.items():
         if k.startswith("portfolio_ml_"):
             base[k] = v
+    try:
+        from services.event_reaction_entry_guards import event_reaction_ml_snapshot
+
+        er = event_reaction_ml_snapshot(ticker)
+        for k, v in er.items():
+            if k.startswith("event_reaction_ml_"):
+                base[k] = v
+    except Exception as e:
+        logger.debug("event_reaction snapshot %s: %s", ticker, e)
     if base_take_profit is not None and base_take_profit > 0:
         try:
             from services.portfolio_exit_policy import compute_entry_effective_take_for_ticker

@@ -3152,6 +3152,63 @@ def _analyzer_llm_temperature() -> float:
     return max(0.0, min(0.5, t))
 
 
+def _analyzer_llm_skip_model_compare() -> bool:
+    """Анализатор: не гонять LLM_COMPARE_MODELS (иначе 2×–N× время и блокировка uvicorn)."""
+    raw = (get_config_value("ANALYZER_LLM_SKIP_MODEL_COMPARE", "true") or "true").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _compact_report_for_llm(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Урезанный отчёт для LLM: без trade_effects и тяжёлых backtest/OOS. Полный JSON — в API."""
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    meta_slim = {
+        k: meta[k]
+        for k in (
+            "days",
+            "strategy",
+            "trades_analyzed",
+            "decision_source_expected",
+            "current_decision_rule_params",
+            "metric_definitions",
+            "config_delta_from_previous",
+        )
+        if k in meta
+    }
+    tops = payload.get("top_cases") if isinstance(payload.get("top_cases"), dict) else {}
+    tops_slim = {
+        k: (tops.get(k) or [])[:8]
+        for k in ("top_losses", "top_missed_upside", "top_profitable_missed_upside")
+    }
+    te = payload.get("time_exit_early_review") if isinstance(payload.get("time_exit_early_review"), dict) else {}
+    te_slim: Dict[str, Any] = {}
+    if te:
+        cc = te.get("config_candidates")
+        if isinstance(cc, dict):
+            te_slim["config_candidates"] = cc
+        for k in ("sample_confidence", "insufficient_data_for_ml", "dominant_exit_detail"):
+            if k in te:
+                te_slim[k] = te[k]
+
+    out: Dict[str, Any] = {
+        "meta": meta_slim,
+        "summary": payload.get("summary"),
+        "top_cases": tops_slim,
+        "practical_parameter_suggestions": (payload.get("practical_parameter_suggestions") or [])[:12],
+        "critical_case_analysis": payload.get("critical_case_analysis"),
+        "game_5m_config_hints": (payload.get("game_5m_config_hints") or [])[:10],
+        "entry_underperformance_review": payload.get("entry_underperformance_review"),
+        "time_exit_early_review": te_slim or None,
+        "time_exit_early_action_summary": payload.get("time_exit_early_action_summary"),
+        "game5m_catboost_status": payload.get("game5m_catboost_status"),
+        "game5m_recovery_model_status": payload.get("game5m_recovery_model_status"),
+    }
+    if isinstance(payload.get("portfolio_ml_status_review"), dict):
+        out["portfolio_ml_status_review"] = payload["portfolio_ml_status_review"]
+    if isinstance(payload.get("portfolio_entry_review"), dict):
+        out["portfolio_entry_review"] = payload["portfolio_entry_review"]
+    return {k: v for k, v in out.items() if v is not None}
+
+
 def _normalize_llm_proposed_scalar(value: Any) -> str:
     """Сопоставление proposed из LLM с proposed из отчёта (TIME_EXIT и др.)."""
     if value is None:
@@ -3459,9 +3516,10 @@ def _build_llm_recommendations(
                 "(полное имя ключа, например GAME_5M_TAKE_PROFIT_PCT_SNDK). "
                 "Числа предлагай осторожно, с обоснованием по метрикам отчёта (missed_upside, exit_signal, losses)."
             )
-        llm_input: Dict[str, Any] = {"algorithm_context": algorithm_context, "report": payload}
+        report_for_llm = _compact_report_for_llm(payload if isinstance(payload, dict) else {})
+        llm_input: Dict[str, Any] = {"algorithm_context": algorithm_context, "report": report_for_llm}
         if isinstance(payload.get("game_5m_config_hints"), list):
-            llm_input["heuristic_hints"] = payload["game_5m_config_hints"]
+            llm_input["heuristic_hints"] = (payload["game_5m_config_hints"] or [])[:10]
         system_prompt = (
             "Ты senior quant и инженер по торговым системам; у тебя есть только входной JSON (отчёт + algorithm_context).\n"
             "Твоя задача: предложить дельные улучшения — в первую очередь перенастройка GAME_5M_* / порогов из "
@@ -3534,7 +3592,12 @@ def _build_llm_recommendations(
             }
         max_tok = _analyzer_llm_max_output_tokens(game_5m_config_focus=game_5m_config_focus)
         out = llm.generate_response(
-            messages=[{"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, indent=2)}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": json.dumps(llm_input, ensure_ascii=False, separators=(",", ":")),
+                }
+            ],
             system_prompt=system_prompt,
             temperature=_analyzer_llm_temperature(),
             max_tokens=max_tok,
@@ -3577,10 +3640,15 @@ def _build_llm_recommendations(
             "usage": out.get("usage"),
             "analysis": parsed,
         }
-        compare_list = parse_compare_models(load_config())
+        compare_list = [] if _analyzer_llm_skip_model_compare() else parse_compare_models(load_config())
         if compare_list:
             comp: List[Dict[str, Any]] = []
-            msg_user = [{"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, indent=2)}]
+            msg_user = [
+                {
+                    "role": "user",
+                    "content": json.dumps(llm_input, ensure_ascii=False, separators=(",", ":")),
+                }
+            ]
             for cbase, cmodel in compare_list:
                 bu_n, mo_n = normalize_openai_sdk_proxyapi_base_model(cbase, cmodel)
                 if bu_n.rstrip("/") == (llm.base_url or "").rstrip("/") and mo_n == llm.model:
@@ -5598,6 +5666,12 @@ def _analyzer_engine_safe():
         return None
 
 
+_ANALYZER_LIGHT_SKIP: Dict[str, Any] = {
+    "status": "skipped",
+    "reason": "light=1 (веб-быстрый режим). Полный отчёт: /api/analyzer?...&light=0",
+}
+
+
 def _attach_multiday_lr_and_ml_arbiter(
     payload: Dict[str, Any],
     *,
@@ -5605,7 +5679,15 @@ def _attach_multiday_lr_and_ml_arbiter(
     closed_trades: List[Any],
     effects: List[Any],
     days: int = 60,
+    light: bool = False,
 ) -> None:
+    if light:
+        payload["multiday_lr_reality_check"] = dict(_ANALYZER_LIGHT_SKIP)
+        payload["multiday_lr_gates_arbiter"] = dict(_ANALYZER_LIGHT_SKIP)
+        payload["game5m_gap_forecast_arbiter"] = dict(_ANALYZER_LIGHT_SKIP)
+        payload["ml_production_arbiter"] = dict(_ANALYZER_LIGHT_SKIP)
+        payload["product_ideas_arbiter"] = dict(_ANALYZER_LIGHT_SKIP)
+        return
     eng = _analyzer_engine_safe()
     win = max(30, int(days))
     payload["multiday_lr_reality_check"] = build_multiday_lr_reality_check(
@@ -5632,6 +5714,7 @@ def analyze_trade_effectiveness(
     include_game5m_param_hypothesis_backtest: bool = False,
     export_recovery_ml: bool = False,
     recovery_ml_export_path: Optional[str] = None,
+    light: bool = False,
 ) -> Dict[str, Any]:
     days = max(1, min(30, int(days)))
     closed = _load_closed_trades(days=days, strategy_name=strategy)
@@ -5678,11 +5761,21 @@ def analyze_trade_effectiveness(
         else:
             empty_payload["game5m_hold_recovery_export"] = None
         empty_payload["game5m_recovery_model_status"] = _build_game5m_recovery_model_status()
-        empty_payload["recovery_scenario_backtest"] = _build_recovery_scenario_backtest([], {}, strategy=strategy)
-        empty_payload["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
-            [], te0, [], {}, strategy=strategy
+        if light:
+            empty_payload["recovery_scenario_backtest"] = dict(_ANALYZER_LIGHT_SKIP)
+            empty_payload["recovery_ml_d4a_live_review"] = dict(_ANALYZER_LIGHT_SKIP)
+            empty_payload["game5m_hold_recovery_dataset_stats"] = dict(_ANALYZER_LIGHT_SKIP)
+            empty_payload["game5m_hold_recovery_export"] = None
+        else:
+            empty_payload["recovery_scenario_backtest"] = _build_recovery_scenario_backtest([], {}, strategy=strategy)
+            empty_payload["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
+                [], te0, [], {}, strategy=strategy
+            )
+        _attach_multiday_lr_and_ml_arbiter(
+            empty_payload, strategy=strategy, closed_trades=[], effects=[], days=days, light=light
         )
-        _attach_multiday_lr_and_ml_arbiter(empty_payload, strategy=strategy, closed_trades=[], effects=[], days=days)
+        if light:
+            empty_payload["meta"]["light_mode"] = True
         return empty_payload
 
     tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
@@ -5712,13 +5805,19 @@ def analyze_trade_effectiveness(
     catboost_fusion_entry_review = _build_game5m_catboost_fusion_entry_review(strategy, closed, effects)
     hanger_v2_review = _build_hanger_v2_review(effects)
     continuation_gate_review = _build_continuation_gate_review(effects)
-    recovery_d4a_live = _build_recovery_ml_d4a_live_review(closed, te_review, effects, cache, strategy=strategy)
-    _maybe_attach_recovery_d4a_shallow_for_analyzer(recovery_d4a_live, days=days, strategy=strategy)
+    if light:
+        recovery_d4a_live = dict(_ANALYZER_LIGHT_SKIP)
+        recovery_scenario = dict(_ANALYZER_LIGHT_SKIP)
+    else:
+        recovery_d4a_live = _build_recovery_ml_d4a_live_review(closed, te_review, effects, cache, strategy=strategy)
+        _maybe_attach_recovery_d4a_shallow_for_analyzer(recovery_d4a_live, days=days, strategy=strategy)
+        recovery_scenario = _build_recovery_scenario_backtest(effects, cache, strategy=strategy)
     payload: Dict[str, Any] = {
         "meta": {
             "days": days,
             "strategy": strategy,
             "trades_analyzed": len(effects),
+            "light_mode": bool(light),
             "include_trade_details": bool(include_trade_details),
             "export_recovery_ml": bool(export_recovery_ml),
             "analyzer_source": "services.trade_effectiveness_analyzer.analyze_trade_effectiveness",
@@ -5743,7 +5842,7 @@ def analyze_trade_effectiveness(
         "game5m_catboost_fusion_entry_review": catboost_fusion_entry_review,
         "game5m_catboost_status": _build_game5m_catboost_status(),
         "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
-        "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
+        "recovery_scenario_backtest": recovery_scenario,
         "time_exit_early_review": te_review,
         "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review),
         "recovery_ml_d4a_live_review": recovery_d4a_live,
@@ -5763,15 +5862,20 @@ def analyze_trade_effectiveness(
         effects=effects,
         include_game5m_param_hypothesis_backtest=include_game5m_param_hypothesis_backtest,
     )
-    _attach_game5m_hold_recovery_to_payload(
-        payload,
-        effects,
-        cache,
-        strategy=strategy,
-        export_recovery_ml=export_recovery_ml,
-        recovery_ml_export_path=recovery_ml_export_path,
+    if not light:
+        _attach_game5m_hold_recovery_to_payload(
+            payload,
+            effects,
+            cache,
+            strategy=strategy,
+            export_recovery_ml=export_recovery_ml,
+            recovery_ml_export_path=recovery_ml_export_path,
+        )
+    elif export_recovery_ml:
+        payload["game5m_hold_recovery_export"] = {"status": "skipped", "reason": "light=1"}
+    _attach_multiday_lr_and_ml_arbiter(
+        payload, strategy=strategy, closed_trades=closed, effects=effects, days=days, light=light
     )
-    _attach_multiday_lr_and_ml_arbiter(payload, strategy=strategy, closed_trades=closed, effects=effects, days=days)
     _save_analyzer_state(
         {
             "last_run": {

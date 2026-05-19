@@ -673,6 +673,27 @@ async def analyzer_page(request: Request):
     return HTMLResponse(render_template("analyzer.html", {"request": request}))
 
 
+def _analyze_trade_effectiveness_sync(
+    *,
+    days: int,
+    strategy: str,
+    use_llm: bool,
+    include_trade_details: bool,
+    export_recovery_ml: bool,
+    light: bool,
+) -> Dict[str, Any]:
+    from services.trade_effectiveness_analyzer import analyze_trade_effectiveness
+
+    return analyze_trade_effectiveness(
+        days=days,
+        strategy=strategy,
+        use_llm=use_llm,
+        include_trade_details=include_trade_details,
+        export_recovery_ml=export_recovery_ml,
+        light=light,
+    )
+
+
 @app.get("/api/analyzer", response_class=JSONResponse)
 async def get_analyzer(
     days: int = 7,
@@ -680,18 +701,23 @@ async def get_analyzer(
     use_llm: bool = False,
     include_trade_details: bool = False,
     export_recovery_ml: bool = False,
+    light: bool = True,
 ):
     """API: анализ эффективности закрытых сделок (единый код с /analyser в Telegram)."""
     try:
-        from services.trade_effectiveness_analyzer import analyze_trade_effectiveness
-        payload = analyze_trade_effectiveness(
+        payload = await asyncio.to_thread(
+            _analyze_trade_effectiveness_sync,
             days=min(max(1, int(days)), 30),
             strategy=(strategy or "GAME_5M").strip().upper(),
             use_llm=bool(use_llm) and web_llm_enabled(),
             include_trade_details=bool(include_trade_details),
             export_recovery_ml=bool(export_recovery_ml),
+            light=bool(light),
         )
-        return _to_jsonable(payload)
+        body = _to_jsonable(payload)
+        # Fail fast if response cannot be serialized (avoids empty/truncated body to browser).
+        json.dumps(body, ensure_ascii=False, default=str)
+        return body
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка анализатора: {e!s}")
 
@@ -716,7 +742,7 @@ def _ml_runtime_snapshot_for_ui() -> Dict[str, Any]:
         "portfolio_catboost_used_in_runtime": _truthy("PORTFOLIO_CATBOOST_ENABLED"),
         "event_reaction_model_path_configured": bool(er_path),
         "event_reaction_cbm_file_exists": bool(er_p and er_p.is_file()),
-        "event_reaction_used_in_runtime": False,
+        "event_reaction_used_in_runtime": _truthy("EVENT_REACTION_CATBOOST_ENABLED"),
         "readiness_kill_switch_note": (
             "Флаг overall_production_ready в ml_train_readiness.jsonl — только сводка гейтов для дашборда; "
             "он не выключает GAME_5M_CATBOOST_ENABLED / PORTFOLIO_CATBOOST_ENABLED и не меняет правила входа автоматически."
@@ -781,6 +807,25 @@ async def api_ml_data_quality():
     except Exception as e:
         logger.exception("api_ml_data_quality failed")
         raise HTTPException(status_code=500, detail=f"Ошибка ML data-quality: {e!s}")
+
+
+@app.get("/api/ml/event-reaction/{ticker}", response_class=JSONResponse)
+async def api_ml_event_reaction(ticker: str):
+    """Inference event-reaction CatBoost для тикера (dataset ±окно или live features)."""
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker required")
+
+    def _run() -> Dict[str, Any]:
+        from services.event_reaction_catboost_signal import predict_event_reaction_for_ticker
+
+        return predict_event_reaction_for_ticker(t)
+
+    try:
+        data = await asyncio.to_thread(_run)
+        return _to_jsonable(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"event-reaction inference: {e!s}")
 
 
 def _parse_csv_str(s: str) -> List[str]:
@@ -2154,6 +2199,13 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
     except Exception as e:
         logger.debug("portfolio ML batch skipped: %s", e)
         ml_by_ticker = {}
+    try:
+        from services.event_reaction_catboost_signal import predict_event_reaction_for_ticker
+
+        er_by_ticker = {t: predict_event_reaction_for_ticker(t) for t in trade}
+    except Exception as e:
+        logger.debug("event-reaction ML batch skipped: %s", e)
+        er_by_ticker = {}
     agent = AnalystAgent(use_llm=False)
     cards: List[Dict[str, Any]] = []
     for t in trade:
@@ -2169,6 +2221,7 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
             else:
                 card = portfolio_card_payload(t, r, fallback_take_pct=take_fb)
                 card.update(ml_by_ticker.get(t, {}))
+                card.update(er_by_ticker.get(t, {}))
                 cards.append(card)
         except Exception as e:
             cards.append({"ticker": t, "decision": "ERROR", "horizon": "daily", "error": str(e)})
@@ -2206,6 +2259,12 @@ def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int) -> Dict[str, A
         base.update(predict_portfolio_expected_return(ticker))
     except Exception as e:
         logger.debug("portfolio ML single skipped for %s: %s", ticker, e)
+    try:
+        from services.event_reaction_catboost_signal import predict_event_reaction_for_ticker
+
+        base.update(predict_event_reaction_for_ticker(ticker))
+    except Exception as e:
+        logger.debug("event-reaction ML single skipped for %s: %s", ticker, e)
     merged = {
         **base,
         "llm_analysis": _make_json_safe(r.get("llm_analysis")),

@@ -347,6 +347,7 @@ def main() -> int:
         "target": "forward_log_ret_5d",
         "dataset_version": args.dataset_version,
         "feature_builder_version": fbv,
+        "threshold_log_return": thr,
         "metrics": {k: (round(v, 6) if isinstance(v, float) and math.isfinite(v) else v) for k, v in metrics.items()},
         "note": "MVP advisory; join event_reaction_dataset for inference context.",
     }
