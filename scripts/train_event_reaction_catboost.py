@@ -2,7 +2,7 @@
 """
 MVP: CatBoostRegressor по строкам `event_reaction_dataset` (цена до события → forward 5d log-ret).
 
-Признаки: плоские числовые поля из `features_before` (версия `quotes_mvp_1`), плюс категория `symbol`.
+Признаки: плоские числовые поля из `features_before` (`quotes_mvp_1` или `quotes_regime_v1`), плюс `symbol`.
 Цель: `outcomes_after.forward_log_ret_5d` (log-пространство).
 
   python scripts/train_event_reaction_catboost.py --dry-run --json-metrics-out local/logs/last_event_reaction_train_metrics.json
@@ -33,13 +33,10 @@ logger = logging.getLogger(__name__)
 
 MODEL_VERSION = "event_reaction_forward5d_v0"
 
-NUMERIC_FEATURE_KEYS = (
-    "ret_1d_log",
-    "ret_5d_log",
-    "ret_20d_log",
-    "vol_10d_log_ret_std",
-    "rsi_as_of",
-    "close_as_of",
+from services.event_reaction_labeling import (  # noqa: E402
+    FEATURE_BUILDER_VERSION_QUOTES,
+    active_feature_builder_version,
+    event_reaction_numeric_feature_keys,
 )
 
 
@@ -86,7 +83,15 @@ def _rank_metrics(y_true: np.ndarray, y_pred: np.ndarray, threshold_log: float) 
     }
 
 
-def load_training_frame(engine, *, dataset_version: str, feature_builder_version: str) -> pd.DataFrame:
+def load_training_frame(
+    engine,
+    *,
+    dataset_version: str,
+    feature_builder_version: str,
+) -> pd.DataFrame:
+    numeric_keys = event_reaction_numeric_feature_keys(feature_builder_version)
+    quote_keys = event_reaction_numeric_feature_keys(FEATURE_BUILDER_VERSION_QUOTES)
+    regime_keys = tuple(k for k in numeric_keys if k not in quote_keys)
     from sqlalchemy import text
 
     q = text(
@@ -122,7 +127,7 @@ def load_training_frame(engine, *, dataset_version: str, feature_builder_version
             "target_log_ret_5d": y,
         }
         skip = False
-        for k in NUMERIC_FEATURE_KEYS:
+        for k in quote_keys:
             v = fb.get(k)
             try:
                 fv = float(v) if v is not None else float("nan")
@@ -134,6 +139,15 @@ def load_training_frame(engine, *, dataset_version: str, feature_builder_version
             rec[k] = fv
         if skip:
             continue
+        for k in regime_keys:
+            v = fb.get(k)
+            try:
+                fv = float(v) if v is not None else 0.0
+            except (TypeError, ValueError):
+                fv = 0.0
+            if not math.isfinite(fv):
+                fv = 0.0
+            rec[k] = fv
         rows.append(rec)
     if not rows:
         return pd.DataFrame()
@@ -146,8 +160,8 @@ def main() -> int:
     parser.add_argument(
         "--feature-builder-version",
         type=str,
-        default="quotes_mvp_1",
-        help="Значение feature_builder_version внутри features_before",
+        default="",
+        help="features_before.feature_builder_version (default: EVENT_REACTION_FEATURE_BUILDER_VERSION)",
     )
     parser.add_argument(
         "--min-rows",
@@ -178,12 +192,10 @@ def main() -> int:
 
     from config_loader import get_config_value
     from report_generator import get_engine
-    from services.event_reaction_labeling import (
-        FEATURE_BUILDER_VERSION,
-        event_reaction_label_threshold_log,
-    )
+    from services.event_reaction_labeling import event_reaction_label_threshold_log
 
-    fbv = (args.feature_builder_version or "").strip() or FEATURE_BUILDER_VERSION
+    fbv = (args.feature_builder_version or "").strip() or active_feature_builder_version()
+    numeric_keys = event_reaction_numeric_feature_keys(fbv)
     cfg_mr = (get_config_value("EVENT_REACTION_TRAIN_MIN_ROWS", "") or "").strip()
     try:
         min_rows_eff = int(cfg_mr) if cfg_mr else int(args.min_rows)
@@ -231,7 +243,7 @@ def main() -> int:
         )
         return 2
 
-    feature_names = ["symbol"] + list(NUMERIC_FEATURE_KEYS)
+    feature_names = ["symbol"] + list(numeric_keys)
     cat_features = [0]
     X = df[feature_names].copy()
     y = df["target_log_ret_5d"].astype(float).to_numpy()

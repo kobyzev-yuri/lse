@@ -5,7 +5,8 @@
 - outcomes_after: forward log-returns на 1/5/20 торговых дней от close(as_of).
 - final_label: rule-based UP/DOWN/FLAT относительно порога в log-пространстве (как portfolio ML edge).
 
-Полные peer/regime фичи — в следующих версиях feature_builder_version.
+Версия `quotes_regime_v1` добавляет снимок `market_regime_daily` на `as_of_trade_date`
+(SPY/QQQ/DIA/^VIX, 1d log-returns, vix_regime). Peer-фичи — отдельно.
 """
 
 from __future__ import annotations
@@ -26,8 +27,64 @@ from services.portfolio_ml_features import portfolio_ml_threshold_log
 
 logger = logging.getLogger(__name__)
 
-FEATURE_BUILDER_VERSION = "quotes_mvp_1"
+FEATURE_BUILDER_VERSION_QUOTES = "quotes_mvp_1"
+FEATURE_BUILDER_VERSION_REGIME = "quotes_regime_v1"
+# Back-compat alias
+FEATURE_BUILDER_VERSION = FEATURE_BUILDER_VERSION_QUOTES
 OUTCOME_BUILDER_VERSION = "quotes_fwd_1"
+
+VIX_REGIME_ORD: Dict[str, float] = {
+    "LOW_FEAR": 0.0,
+    "NEUTRAL": 1.0,
+    "HIGH_PANIC": 2.0,
+    "NO_DATA": -1.0,
+}
+
+_REGIME_CLOSE_MAP = (
+    ("spy_close", "mkt_spy_close"),
+    ("ndx_close", "mkt_ndx_close"),
+    ("dia_close", "mkt_dia_close"),
+    ("vix_close", "mkt_vix_close"),
+)
+_REGIME_LOG_RET_KEYS = (
+    ("log_ret_1d_spy", "mkt_log_ret_1d_spy"),
+    ("log_ret_1d_ndx", "mkt_log_ret_1d_ndx"),
+    ("log_ret_1d_dia", "mkt_log_ret_1d_dia"),
+)
+
+
+def active_feature_builder_version() -> str:
+    raw = (get_config_value("EVENT_REACTION_FEATURE_BUILDER_VERSION", "") or "").strip()
+    if raw in (FEATURE_BUILDER_VERSION_QUOTES, FEATURE_BUILDER_VERSION_REGIME):
+        return raw
+    return FEATURE_BUILDER_VERSION_REGIME
+
+
+def event_reaction_numeric_feature_keys(feature_builder_version: str) -> Tuple[str, ...]:
+    """Quote keys (required) + optional regime keys for CatBoost train/inference."""
+    quote = (
+        "ret_1d_log",
+        "ret_5d_log",
+        "ret_20d_log",
+        "vol_10d_log_ret_std",
+        "rsi_as_of",
+        "close_as_of",
+    )
+    if feature_builder_version == FEATURE_BUILDER_VERSION_REGIME:
+        regime = (
+            "market_regime_present",
+            "mkt_spy_close",
+            "mkt_ndx_close",
+            "mkt_dia_close",
+            "mkt_vix_close",
+            "mkt_log_ret_1d_spy",
+            "mkt_log_ret_1d_ndx",
+            "mkt_log_ret_1d_dia",
+            "mkt_vix_regime_ord",
+            "mkt_spy_stress_1d",
+        )
+        return quote + regime
+    return quote
 
 try:
     from zoneinfo import ZoneInfo
@@ -116,17 +173,97 @@ def _log_ret_ratio(closes: np.ndarray, i_from: int, i_to: int) -> Optional[float
     return float(math.log(b / a))
 
 
+def _parse_json_field(raw: Any) -> Dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            o = json.loads(raw)
+            return o if isinstance(o, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def load_market_regime_row(trade_date: date) -> Optional[Dict[str, Any]]:
+    q = text(
+        """
+        SELECT trade_date, spy_close, ndx_close, dia_close, vix_close,
+               regime_flags, features_json
+        FROM market_regime_daily
+        WHERE trade_date = :d
+        """
+    )
+    with get_engine().connect() as conn:
+        row = conn.execute(q, {"d": trade_date}).fetchone()
+    if not row:
+        return None
+    return {
+        "trade_date": row[0],
+        "spy_close": row[1],
+        "ndx_close": row[2],
+        "dia_close": row[3],
+        "vix_close": row[4],
+        "regime_flags": _parse_json_field(row[5]),
+        "features_json": _parse_json_field(row[6]),
+    }
+
+
+def enrich_features_with_market_regime(
+    base: Dict[str, Any],
+    regime: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    out = dict(base)
+    out["feature_builder_version"] = FEATURE_BUILDER_VERSION_REGIME
+    if not regime:
+        out["market_regime_present"] = 0
+        out["mkt_vix_regime_ord"] = VIX_REGIME_ORD["NO_DATA"]
+        out["mkt_spy_stress_1d"] = 0.0
+        return out
+
+    out["market_regime_present"] = 1
+    td = regime.get("trade_date")
+    out["market_regime_date"] = str(td) if td is not None else out.get("as_of_trade_date")
+
+    for src_col, dst_key in _REGIME_CLOSE_MAP:
+        val = regime.get(src_col)
+        if val is not None:
+            try:
+                out[dst_key] = round(float(val), 6)
+            except (TypeError, ValueError):
+                pass
+
+    fj = regime.get("features_json") if isinstance(regime.get("features_json"), dict) else {}
+    for src_key, dst_key in _REGIME_LOG_RET_KEYS:
+        val = fj.get(src_key)
+        if val is not None:
+            try:
+                out[dst_key] = round(float(val), 8)
+            except (TypeError, ValueError):
+                pass
+
+    flags = regime.get("regime_flags") if isinstance(regime.get("regime_flags"), dict) else {}
+    vix_label = str(flags.get("vix_regime") or "NO_DATA").strip().upper()
+    out["mkt_vix_regime_ord"] = VIX_REGIME_ORD.get(vix_label, VIX_REGIME_ORD["NO_DATA"])
+    out["mkt_spy_stress_1d"] = 1.0 if flags.get("spy_stress_1d") else 0.0
+    return out
+
+
 def build_features_before(
     df: pd.DataFrame,
     *,
     as_of_idx: int,
     event_d: date,
+    feature_builder_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     closes = df["close"].to_numpy(dtype=float)
     dates = list(df["d"])
     i = as_of_idx
+    fbv = (feature_builder_version or active_feature_builder_version()).strip()
     out: Dict[str, Any] = {
-        "feature_builder_version": FEATURE_BUILDER_VERSION,
+        "feature_builder_version": fbv,
         "as_of_trade_date": str(dates[i]),
         "event_date_et": str(event_d),
     }
@@ -151,6 +288,11 @@ def build_features_before(
     if rsi_row is not None and np.isfinite(rsi_row):
         out["rsi_as_of"] = round(float(rsi_row), 4)
     out["close_as_of"] = round(float(closes[i]), 6)
+
+    if fbv == FEATURE_BUILDER_VERSION_REGIME:
+        as_of_d = dates[i]
+        regime = load_market_regime_row(as_of_d)
+        out = enrich_features_with_market_regime(out, regime)
     return out
 
 
@@ -219,7 +361,8 @@ def compute_row_labeling(
     if as_of_i < min_past_bars:
         return None, None, None, "insufficient_past_bars"
 
-    feats = build_features_before(df, as_of_idx=as_of_i, event_d=event_d)
+    fbv = active_feature_builder_version()
+    feats = build_features_before(df, as_of_idx=as_of_i, event_d=event_d, feature_builder_version=fbv)
     if as_of_i + 5 >= len(dates):
         return feats, None, None, "insufficient_forward_for_5d"
 
@@ -263,6 +406,12 @@ def labeling_updates_for_row(
     if want_f:
         if feats:
             out["features_before"] = feats
+            as_of = feats.get("market_regime_date") or feats.get("as_of_trade_date")
+            if as_of:
+                try:
+                    out["market_regime_date"] = date.fromisoformat(str(as_of)[:10])
+                except ValueError:
+                    pass
         else:
             notes.append(f"features:{reason}")
 

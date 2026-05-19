@@ -2,7 +2,8 @@
 """
 Авторазметка event_reaction_dataset из daily quotes (MVP).
 
-Логика: services/event_reaction_labeling.py (feature_builder_version=quotes_mvp_1,
+Логика: services/event_reaction_labeling.py (feature_builder_version из
+EVENT_REACTION_FEATURE_BUILDER_VERSION, по умолчанию quotes_regime_v1;
 outcome_builder_version=quotes_fwd_1, label_source=auto_quotes_v1).
 
 Примеры:
@@ -79,6 +80,9 @@ def _apply_update(conn, row_id: int, upd: Dict[str, Any], dumps_fn) -> None:
     if "label_source" in upd:
         sets.append("label_source = :ls")
         params["ls"] = upd["label_source"]
+    if "market_regime_date" in upd:
+        sets.append("market_regime_date = :mrd")
+        params["mrd"] = upd["market_regime_date"]
     sql = f"UPDATE event_reaction_dataset SET {', '.join(sets)} WHERE id = :id"
     conn.execute(text(sql), params)
 

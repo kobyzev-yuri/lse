@@ -35,8 +35,9 @@
 ### `market_regime_daily`
 
 - **Назначение:** один ряд на **торговую дату** US: индексы, VIX, агрегаты в `regime_flags` / `features_json`.
-- **Реализация:** отдельный скрипт `scripts/ingest_market_regime_daily.py` (новый): читает **daily** цены из вашей таблицы `quotes` и/или внешний источник для `SPY`/`QQQ`/`DIA`/`^VIX` (как у вас принято в проекте), UPSERT по `trade_date`.
-- **Регулярность:** **раз в торговый день** после обновления daily-котировок (например сразу после `ingest_market_bars_intraday` или отдельный cron 00:30 MSK).
+- **Реализация:** `scripts/ingest_market_regime_daily.py` — UPSERT из `quotes` (SPY/QQQ/DIA/^VIX; при отсутствии рядов — auto-seed через yfinance).
+- **Регулярность:** cron **23:32 MSK** пн–пт (`crontab/lse-docker.crontab`), до `build_event_reaction_dataset` (23:33).
+- **В признаках события:** `EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1` (default) — `services/event_reaction_labeling.py` подмешивает `mkt_*` поля из `market_regime_daily` на `as_of_trade_date` и пишет `market_regime_date` в строку датасета. Старая версия: `quotes_mvp_1` (только тикер).
 
 ### `peer_graph_edge`
 
@@ -168,7 +169,7 @@ WHERE id = 12345;
 
 ## Дальнейшее развитие (по желанию)
 
-1. `scripts/ingest_market_regime_daily.py` + UPSERT в `market_regime_daily` (режим в фичах).  
+1. ~~`scripts/ingest_market_regime_daily.py`~~ — в репо; далее: `backfill_event_reaction_labeling.py --force-features` для пересборки `features_before` под `quotes_regime_v1`.  
 2. Расширить `features_before`: peer-граф, `earnings_event_detail`, новая `feature_builder_version`.  
 3. Отдельный `scripts/train_event_reaction_catboost.py` + гейты в `run_ml_train_readiness_cron.py` (см. `crontab/lse-docker.crontab`: nightly train при `-e ML_READINESS_SKIP_EVENT_REACTION=0`).  
 4. `collect_event_analytics_stats`: опционально DISTINCT `feature_builder_version` из JSONB.
