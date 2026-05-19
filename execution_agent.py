@@ -20,7 +20,24 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Коды второго значения из _execute_buy (False, code) — для лога run_for_tickers
+def _parse_analyst_decision(result) -> tuple[str, str | None, float | None, float | None]:
+    """Строка или dict от get_decision / get_decision_with_llm → decision + strategy + stop/take."""
+    if isinstance(result, str):
+        return result, None, None, None
+    if not isinstance(result, dict):
+        return "HOLD", None, None, None
+    decision = str(result.get("decision") or "HOLD")
+    strategy_name = result.get("selected_strategy")
+    stop_loss = take_profit = None
+    sr = result.get("strategy_result")
+    if isinstance(sr, dict):
+        stop_loss = sr.get("stop_loss")
+        take_profit = sr.get("take_profit")
+    return decision, strategy_name, stop_loss, take_profit
+
+
 _BUY_SKIP_MESSAGES: dict[str, str] = {
+    "catboost_weak": "CatBoost: слабый entry_score (PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK)",
     "already_open": "позиция уже открыта — повторный BUY не выполняется",
     "no_quote": "нет котировки в quotes",
     "outside_hours": "вне торговых часов NYSE (risk_manager)",
@@ -968,21 +985,34 @@ class ExecutionAgent:
                 except Exception as e:
                     logger.warning("⚠️ Ошибка LLM анализа для %s, используем базовый анализ: %s", ticker, e)
                     result = self.analyst.get_decision(ticker)
-                    decision = result if isinstance(result, str) else result.get('decision', 'HOLD')
-                    strategy_name = result.get('selected_strategy') if isinstance(result, dict) else None
+                    decision, strategy_name, stop_loss, take_profit = _parse_analyst_decision(result)
                     logger.info("🎯 Сигнал AnalystAgent (базовый) для %s: %s", ticker, decision)
             else:
                 result = self.analyst.get_decision(ticker)
-                if isinstance(result, dict):
-                    decision = result.get('decision', 'HOLD')
-                    strategy_name = result.get('selected_strategy')
-                else:
-                    decision = result
+                decision, strategy_name, stop_loss, take_profit = _parse_analyst_decision(result)
                 logger.info("🎯 Сигнал AnalystAgent для %s: %s", ticker, decision)
                 if strategy_name:
                     logger.info("   Стратегия: %s", strategy_name)
+                if take_profit is not None:
+                    logger.info("   Тейк из стратегии: %s%%", take_profit)
 
             if decision in ("BUY", "STRONG_BUY"):
+                try:
+                    from services.portfolio_entry_guards import (
+                        merge_portfolio_buy_context,
+                        portfolio_catboost_blocks_buy,
+                    )
+
+                    blocked, block_reason = portfolio_catboost_blocks_buy(ticker)
+                    if blocked:
+                        logger.info("⏭️ %s: portfolio BUY пропущен — %s", ticker, block_reason)
+                        if cluster_context is not None:
+                            other_signals[ticker] = "HOLD"
+                        continue
+                    context_json = merge_portfolio_buy_context(context_json, ticker)
+                except Exception as e:
+                    logger.debug("portfolio_entry_guards %s: %s", ticker, e)
+
                 executed, skip_reason = self._execute_buy(
                     ticker, decision, strategy_name, stop_loss, take_profit, context_json
                 )

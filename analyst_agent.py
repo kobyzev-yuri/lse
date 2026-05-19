@@ -5,7 +5,7 @@ import re
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import logging
 
 # Импорт LLM сервиса (опционально)
@@ -413,8 +413,30 @@ class AnalystAgent:
         else:
             return weighted_sentiment
     
-    def get_decision(self, ticker: str) -> str:
-        """Основной метод принятия решения на основе технического анализа и базы знаний"""
+    def _decision_payload(
+        self,
+        decision: str,
+        *,
+        selected_strategy: Any = None,
+        strategy_result: Optional[Dict[str, Any]] = None,
+        technical_signal: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Единый ответ get_decision для ExecutionAgent (стратегия + take/stop без LLM)."""
+        out: Dict[str, Any] = {
+            "decision": decision,
+            "selected_strategy": selected_strategy.name if selected_strategy else None,
+            "strategy_result": strategy_result,
+        }
+        if technical_signal is not None:
+            out["technical_signal"] = technical_signal
+        return out
+
+    def get_decision(self, ticker: str) -> Union[str, Dict[str, Any]]:
+        """Основной метод принятия решения на основе технического анализа и базы знаний.
+
+        Возвращает dict с decision, selected_strategy, strategy_result (take_profit/stop_loss),
+        чтобы trading_cycle сохранял пороги выхода без TRADING_CYCLE_USE_LLM.
+        """
         logger.info(f"=" * 60)
         logger.info(f"🎯 Анализ для тикера: {ticker}")
         logger.info(f"=" * 60)
@@ -430,7 +452,7 @@ class AnalystAgent:
         
         if technical_signal == "NO_DATA":
             logger.warning("⚠️  Недостаточно данных для принятия решения")
-            return "NO_DATA"
+            return self._decision_payload("NO_DATA", technical_signal=technical_signal)
         
         # Шаг 2: Проверка новостей и sentiment с учетом временного лага и весов
         logger.info("\n📰 ШАГ 2: Анализ новостей и sentiment (с учетом временного лага и весов)")
@@ -539,7 +561,12 @@ class AnalystAgent:
                     if strategy_result.get('insight'):
                         logger.info(f"   Insight: {strategy_result.get('insight')}")
                     logger.info(f"=" * 60)
-                    return decision
+                    return self._decision_payload(
+                        decision,
+                        selected_strategy=selected_strategy,
+                        strategy_result=strategy_result,
+                        technical_signal=technical_signal,
+                    )
                 else:
                     logger.info("⚠️ Менеджер стратегий не выбрал стратегию, используем базовую логику")
             except Exception as e:
@@ -569,7 +596,7 @@ class AnalystAgent:
             logger.info("✅ Режим LOW_FEAR: разрешена агрессивная покупка на пробое максимумов (Breakout).")
 
         logger.info(f"=" * 60)
-        return decision
+        return self._decision_payload(decision, technical_signal=technical_signal)
 
     def _get_benchmark_signal(self, benchmark: str = "MU") -> Optional[str]:
         """Базовый сигнал по бенчмарку (без LLM) — для контекста в промпте при анализе другого тикера."""
@@ -980,6 +1007,7 @@ if __name__ == "__main__":
     test_tickers = ["MSFT", "SNDK"]
     
     for ticker in test_tickers:
-        decision = agent.get_decision(ticker)
+        raw = agent.get_decision(ticker)
+        decision = raw.get("decision", raw) if isinstance(raw, dict) else raw
         print(f"\n🎯 Финальное решение для {ticker}: {decision}\n")
 

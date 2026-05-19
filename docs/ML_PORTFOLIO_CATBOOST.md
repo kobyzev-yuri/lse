@@ -83,6 +83,9 @@ PORTFOLIO_CATBOOST_ENABLED=true
 # PORTFOLIO_CATBOOST_MODEL_PATH=/path/to/portfolio_return_catboost.cbm
 # PORTFOLIO_ML_TRANSACTION_COST_BPS=20
 # PORTFOLIO_ML_MIN_EDGE_BPS=30
+# Optional entry filter in trading_cycle_cron (ExecutionAgent):
+PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK=true
+PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE=48
 ```
 
 When disabled, missing, or misconfigured, the API returns status fields and keeps portfolio cards working. When enabled and model files exist, `/api/portfolio/cards` includes:
@@ -93,8 +96,15 @@ When disabled, missing, or misconfigured, the API returns status fields and keep
 - `portfolio_ml_cluster_role`
 - `portfolio_ml_status`
 
+## Execution (entry only)
+
+When `PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK=true`, `ExecutionAgent` skips a **new** portfolio `BUY` if
+`portfolio_ml_entry_score` on the last feature row is below `PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE` (default 48).
+ML fields are stored in `trade_history.context_json` on BUY. **Take-profit is not driven by CatBoost yet** (phase 5:
+dynamic cap from `portfolio_ml_expected_return_pct`).
+
 ## Limitations
 
 - MVP uses daily data only. Hourly data can be added later as a separate entry-timing layer.
-- The score is advisory and should be validated on walk-forward windows before being used in execution rules.
+- The score is advisory; validate on walk-forward before tightening `PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE`.
 - Leader/core quality depends on keeping `PORTFOLIO_LEADER_CLUSTER` / `PORTFOLIO_CORE_CLUSTER` current.

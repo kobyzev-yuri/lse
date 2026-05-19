@@ -2810,6 +2810,31 @@ def _build_closed_positions_xlsx(rows: List[Dict[str, Any]]) -> bytes:
     return buf.getvalue()
 
 
+def _portfolio_pending_take_info(p, now_price: float | None) -> tuple[str, str]:
+    """Тейк для строки /pending: источник и предупреждение по выходу."""
+    from services.portfolio_card import load_fallback_portfolio_take_pct
+
+    raw = getattr(p, "take_profit", None)
+    try:
+        take = float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        take = None
+    source = "BUY"
+    if take is None or take <= 0:
+        fb = load_fallback_portfolio_take_pct()
+        if fb > 0:
+            take, source = fb, "config"
+        else:
+            return "—", "нет тейка: PORTFOLIO_TAKE_PROFIT_PCT=0 и take_profit в BUY пустой"
+    take_str = f"{take:.1f}% ({source})"
+    if now_price is None or not p.entry_price or p.entry_price <= 0:
+        return take_str, ""
+    pct = (now_price - p.entry_price) / p.entry_price * 100.0
+    if pct >= take:
+        return take_str, f"PnL {pct:+.1f}% ≥ тейк — закроет trading_cycle в RTH"
+    return take_str, ""
+
+
 def _pending_report_rows(limit: int = 50):
     """Данные для отчёта открытых позиций (как /pending): Strategy, P/L по последней цене."""
     report_engine = get_engine()
@@ -2848,6 +2873,8 @@ def _pending_report_rows(limit: int = 50):
             game = "Portfolio game"
             strat = _strategy_display_name(raw_strat)
         now_price = latest_prices.get(p.ticker)
+        take_str = "—"
+        exit_note = ""
         if now_price is not None and p.entry_price and p.entry_price > 0:
             pct = (now_price - p.entry_price) / p.entry_price * 100.0
             usd = (now_price - p.entry_price) * p.quantity
@@ -2855,6 +2882,8 @@ def _pending_report_rows(limit: int = 50):
         else:
             pl_str = "—"
             now_price = None
+        if game == "Portfolio game":
+            take_str, exit_note = _portfolio_pending_take_info(p, now_price)
         open_msk = _to_msk_str(p.entry_ts)
         rows.append({
             "instrument": p.ticker,
@@ -2865,6 +2894,8 @@ def _pending_report_rows(limit: int = 50):
             "pl": pl_str,
             "game": game,
             "strategy": strat,
+            "take": take_str,
+            "exit_note": exit_note,
             "open_msk": open_msk,
             "buy_legs": int(getattr(p, "buy_leg_count", 1) or 1),
         })

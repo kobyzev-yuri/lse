@@ -326,9 +326,11 @@ StrategyManager.select_strategy(...)
    - для долгоживущего web/API процесса нажмите restart в `/parameters` или выполните `docker compose restart lse`, если хотите сразу применять новые значения в ручных API-запусках.
 3. Если для той же стратегии и `TICKER:<ticker>` есть запись в `strategy_parameters`, она перекроет значение из `config.env`.
 
-Важно: в текущей реализации `take_profit` попадает в BUY только когда `ExecutionAgent` получил полный `strategy_result`, то есть в пути `get_decision_with_llm()` (`TRADING_CYCLE_USE_LLM=true`) или если аналитический метод вернул dict с `strategy_result`. В дефолтном cron-режиме без LLM (`TRADING_CYCLE_USE_LLM` пустой/false) `get_decision()` возвращает только строку `BUY` / `HOLD`, поэтому `trade_history.take_profit` для нового BUY может быть `NULL`.
+`get_decision()` (cron без LLM) возвращает **dict** с `selected_strategy` и `strategy_result` (в т.ч. `take_profit` / `stop_loss` из `PORTFOLIO_*_TAKE_PROFIT_PCT` и кода стратегии). Путь `get_decision_with_llm()` делает то же при `TRADING_CYCLE_USE_LLM=true`.
 
-Если в BUY `take_profit` оказался `NULL`, закрытие использует fallback `PORTFOLIO_TAKE_PROFIT_PCT` из config. Если и он равен `0` или пустой, тейк по портфельной позиции не проверяется.
+Если в BUY `take_profit` всё же `NULL`, закрытие использует fallback `PORTFOLIO_TAKE_PROFIT_PCT` (по умолчанию в `config.env.example` — **8%**). Если и он `0`, тейк по портфельной позиции не проверяется.
+
+Опционально: `PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK` режет слабые входы по `portfolio_ml_entry_score` (см. `docs/ML_PORTFOLIO_CATBOOST.md`).
 
 ---
 

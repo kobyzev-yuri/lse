@@ -346,6 +346,10 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
                 position_buy_legs[ticker] = 1
             else:
                 position_buy_legs[ticker] = position_buy_legs.get(ticker, 0) + 1
+                if pd.notna(row.get("take_profit")):
+                    position_take_profit[ticker] = float(row["take_profit"])
+                if pd.notna(row.get("stop_loss")):
+                    position_stop_loss[ticker] = float(row["stop_loss"])
             position_qty[ticker] += qty
             position_cost[ticker] += qty * price + commission
             position_last_strategy[ticker] = strategy
