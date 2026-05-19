@@ -245,7 +245,7 @@ def record_open_gap_for_symbol(
             from services.recommend_5m import _compute_rth_open_gap_pct, fetch_5m_ohlc
 
             df = fetch_5m_ohlc(sym, days=3)
-            g, opx2, prev2 = _compute_rth_open_gap_pct(df, sym)
+            g, opx2, prev2 = _compute_rth_open_gap_pct(df, sym, trade_date=td)
             if gap is None:
                 gap = g
             if opx is None:

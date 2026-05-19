@@ -273,22 +273,54 @@ def filter_to_last_n_us_sessions(
     return df.sort_values("datetime").reset_index(drop=True)
 
 
+def _prev_close_before_trade_date(ticker: str, trade_date: "date") -> Optional[float]:
+    """Close последнего торгового дня строго до trade_date (quotes)."""
+    try:
+        from config_loader import get_database_url
+        from sqlalchemy import create_engine, text
+
+        engine = create_engine(get_database_url())
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT close FROM quotes
+                    WHERE ticker = :ticker AND date < :trade_date
+                    ORDER BY date DESC
+                    LIMIT 1
+                    """
+                ),
+                {"ticker": ticker, "trade_date": trade_date},
+            ).fetchone()
+        if row and row[0] is not None:
+            return float(row[0])
+    except Exception as e:
+        logger.debug("prev_close before %s for %s: %s", trade_date, ticker, e)
+    return None
+
+
 def _compute_rth_open_gap_pct(
     df: Optional[pd.DataFrame],
     ticker: str,
+    trade_date: Optional["date"] = None,
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
-    Гэп первого RTH-бара текущего торгового дня (ET) к вчерашнему close, %.
+    Гэп первого RTH-бара торгового дня (ET) к вчерашнему close, %.
     Returns (gap_pct, rth_open_price, prev_close).
+    trade_date: календарный день ET; если None — последний день в df (live).
     """
     if df is None or df.empty or "datetime" not in df.columns:
         return None, None, None
     try:
+        from datetime import date as date_type
         from datetime import time as dt_time
 
         from services.premarket import get_prev_close_from_db
 
-        prev_close = get_prev_close_from_db(ticker)
+        if trade_date is not None:
+            prev_close = _prev_close_before_trade_date(ticker, trade_date)
+        else:
+            prev_close = get_prev_close_from_db(ticker)
         if prev_close is None or float(prev_close) <= 0:
             return None, None, None
         prev_close = float(prev_close)
@@ -300,10 +332,12 @@ def _compute_rth_open_gap_pct(
                 dts_et = dts_et.dt.tz_localize("UTC", ambiguous=True).dt.tz_convert("America/New_York")
         else:
             dts_et = dts_et.dt.tz_convert("America/New_York")
-        last_cal = dts_et.max().date()
+        target_date = trade_date if trade_date is not None else dts_et.max().date()
+        if not isinstance(target_date, date_type):
+            target_date = pd.Timestamp(target_date).date()
         t_start = dt_time(*US_SESSION_START)
         t_end = dt_time(*US_SESSION_END)
-        rth_mask = (dts_et.dt.date == last_cal) & (dts_et.dt.time >= t_start) & (dts_et.dt.time <= t_end)
+        rth_mask = (dts_et.dt.date == target_date) & (dts_et.dt.time >= t_start) & (dts_et.dt.time <= t_end)
         df_td = df.loc[rth_mask].sort_values("datetime")
         if df_td.empty:
             return None, None, prev_close

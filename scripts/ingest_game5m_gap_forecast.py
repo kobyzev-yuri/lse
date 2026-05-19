@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 project_root = Path(__file__).resolve().parent.parent
@@ -30,7 +31,17 @@ def main() -> None:
         help="premarket=snapshot; open=fill RTH open; all=both",
     )
     parser.add_argument("--force", action="store_true", help="Перезаписать open при --phase open")
+    parser.add_argument(
+        "--trade-date",
+        type=str,
+        default=None,
+        help="Календарный день ET (YYYY-MM-DD); по умолчанию — сегодня ET",
+    )
     args = parser.parse_args()
+
+    trade_date: date | None = None
+    if args.trade_date:
+        trade_date = date.fromisoformat(args.trade_date.strip())
 
     from services.game5m_gap_forecast import (
         ensure_gap_forecast_table,
@@ -44,9 +55,9 @@ def main() -> None:
 
     out = {}
     if args.phase in ("premarket", "all"):
-        out["premarket"] = record_premarket_gap_snapshots(force=args.force)
+        out["premarket"] = record_premarket_gap_snapshots(force=args.force, trade_date=trade_date)
     if args.phase in ("open", "all"):
-        out["open"] = record_open_gaps_all(force=args.force)
+        out["open"] = record_open_gaps_all(force=args.force, trade_date=trade_date)
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
