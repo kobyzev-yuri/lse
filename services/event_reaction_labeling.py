@@ -60,25 +60,20 @@ def active_feature_builder_version() -> str:
     return FEATURE_BUILDER_VERSION_REGIME
 
 
-# Train/inference: RSI часто NULL в quotes — нейтральное значение, если не посчитан.
-RSI_AS_OF_DEFAULT = 50.0
-
-# ret_* / vol могут отсутствовать при короткой истории; close_as_of обязателен.
+# Все поля ниже должны быть посчитаны из OHLC; без заглушек (см. build_features_before).
 QUOTE_FEATURE_KEYS_REQUIRED = (
     "ret_1d_log",
     "ret_5d_log",
-    "close_as_of",
-)
-QUOTE_FEATURE_KEYS_OPTIONAL = (
     "ret_20d_log",
     "vol_10d_log_ret_std",
     "rsi_as_of",
+    "close_as_of",
 )
 
 
 def event_reaction_numeric_feature_keys(feature_builder_version: str) -> Tuple[str, ...]:
-    """All numeric keys for CatBoost (required + optional quote + regime)."""
-    quote = QUOTE_FEATURE_KEYS_REQUIRED + QUOTE_FEATURE_KEYS_OPTIONAL
+    """All numeric keys for CatBoost (quote + regime)."""
+    quote = QUOTE_FEATURE_KEYS_REQUIRED
     if feature_builder_version == FEATURE_BUILDER_VERSION_REGIME:
         regime = (
             "market_regime_present",
@@ -100,12 +95,30 @@ def event_reaction_required_quote_keys() -> Tuple[str, ...]:
     return QUOTE_FEATURE_KEYS_REQUIRED
 
 
-def event_reaction_optional_quote_defaults() -> Dict[str, float]:
-    return {
-        "ret_20d_log": 0.0,
-        "vol_10d_log_ret_std": 0.0,
-        "rsi_as_of": RSI_AS_OF_DEFAULT,
-    }
+def missing_quote_feature_keys(feats: Dict[str, Any]) -> Optional[str]:
+    """Пустая строка если ок; иначе причина пропуска (первая недостающая колонка)."""
+    for k in QUOTE_FEATURE_KEYS_REQUIRED:
+        if k not in feats:
+            return f"missing:{k}"
+        try:
+            v = float(feats[k])
+        except (TypeError, ValueError):
+            return f"invalid:{k}"
+        if not math.isfinite(v):
+            return f"non_finite:{k}"
+    return None
+
+
+def _rsi_as_of_from_closes(closes: np.ndarray, as_of_idx: int) -> Optional[float]:
+    from services.rsi_calculator import RSI_PERIOD, compute_rsi_from_closes
+
+    if as_of_idx < RSI_PERIOD:
+        return None
+    segment = closes[: as_of_idx + 1]
+    closes_list = [float(c) for c in segment if np.isfinite(c) and c > 0]
+    if len(closes_list) < RSI_PERIOD + 1:
+        return None
+    return compute_rsi_from_closes(closes_list, period=RSI_PERIOD)
 
 
 try:
@@ -306,11 +319,9 @@ def build_features_before(
         lr_series = np.diff(np.log(window[np.isfinite(window) & (window > 0)]))
         if lr_series.size >= 3:
             out["vol_10d_log_ret_std"] = round(float(np.std(lr_series, ddof=0)), 6)
-    rsi_row = df.iloc[i].get("rsi")
-    if rsi_row is not None and np.isfinite(rsi_row):
-        out["rsi_as_of"] = round(float(rsi_row), 4)
-    else:
-        out["rsi_as_of"] = RSI_AS_OF_DEFAULT
+    rsi_val = _rsi_as_of_from_closes(closes, i)
+    if rsi_val is not None:
+        out["rsi_as_of"] = round(float(rsi_val), 4)
     out["close_as_of"] = round(float(closes[i]), 6)
 
     if fbv == FEATURE_BUILDER_VERSION_REGIME:
@@ -387,6 +398,9 @@ def compute_row_labeling(
 
     fbv = active_feature_builder_version()
     feats = build_features_before(df, as_of_idx=as_of_i, event_d=event_d, feature_builder_version=fbv)
+    miss = missing_quote_feature_keys(feats)
+    if miss:
+        return None, None, None, f"features:{miss}"
     if as_of_i + 5 >= len(dates):
         return feats, None, None, "insufficient_forward_for_5d"
 

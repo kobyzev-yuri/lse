@@ -37,8 +37,6 @@ from services.event_reaction_labeling import (  # noqa: E402
     FEATURE_BUILDER_VERSION_QUOTES,
     active_feature_builder_version,
     event_reaction_numeric_feature_keys,
-    event_reaction_optional_quote_defaults,
-    event_reaction_required_quote_keys,
 )
 
 
@@ -92,11 +90,8 @@ def load_training_frame(
     feature_builder_version: str,
 ) -> pd.DataFrame:
     numeric_keys = event_reaction_numeric_feature_keys(feature_builder_version)
-    quote_required = event_reaction_required_quote_keys()
-    quote_optional_defaults = event_reaction_optional_quote_defaults()
-    all_quote_keys = event_reaction_numeric_feature_keys(FEATURE_BUILDER_VERSION_QUOTES)
-    quote_optional = tuple(k for k in all_quote_keys if k not in quote_required)
-    regime_keys = tuple(k for k in numeric_keys if k not in all_quote_keys)
+    quote_keys = event_reaction_numeric_feature_keys(FEATURE_BUILDER_VERSION_QUOTES)
+    regime_keys = tuple(k for k in numeric_keys if k not in quote_keys)
     from sqlalchemy import text
 
     q = text(
@@ -132,7 +127,7 @@ def load_training_frame(
             "target_log_ret_5d": y,
         }
         skip = False
-        for k in quote_required:
+        for k in quote_keys:
             v = fb.get(k)
             try:
                 fv = float(v) if v is not None else float("nan")
@@ -144,15 +139,6 @@ def load_training_frame(
             rec[k] = fv
         if skip:
             continue
-        for k in quote_optional:
-            v = fb.get(k)
-            try:
-                fv = float(v) if v is not None else float("nan")
-            except (TypeError, ValueError):
-                fv = float("nan")
-            if not math.isfinite(fv):
-                fv = float(quote_optional_defaults.get(k, 0.0))
-            rec[k] = fv
         for k in regime_keys:
             v = fb.get(k)
             try:
