@@ -1618,6 +1618,38 @@ Sentiment анализ:
             return []
 
 
+def resolve_analyzer_llm_base_model() -> tuple[str, str]:
+    """
+    Маршрут chat.completions для анализатора (/api/analyzer?use_llm=1).
+
+    По умолчанию — те же base_url и model, что у get_llm_service() (OPENAI_MODEL или
+    ANTHROPIC_MODEL + нормализация ProxyAPI). Переопределение: ANALYZER_LLM_MODEL / ANALYZER_LLM_BASE_URL.
+    """
+    from config_loader import get_config_value
+
+    explicit_model = (get_config_value("ANALYZER_LLM_MODEL") or "").strip()
+    explicit_base = (get_config_value("ANALYZER_LLM_BASE_URL") or "").strip().rstrip("/")
+    if not explicit_model and not explicit_base:
+        svc = get_llm_service()
+        return (svc.base_url or PROXYAPI_OPENAI_BASE).rstrip("/"), (svc.model or "gpt-4o").strip()
+
+    model = (
+        explicit_model
+        or (get_config_value("OPENAI_MODEL") or get_config_value("ANTHROPIC_MODEL") or "gpt-4o")
+    ).strip()
+    if (get_config_value("ANTHROPIC_MODEL") or "").strip() and not explicit_model:
+        default_base = (
+            (get_config_value("ANTHROPIC_BASE_URL") or "").strip().rstrip("/")
+            or PROXYAPI_OPENAI_COMPAT_UNIFIED.rstrip("/")
+        )
+    else:
+        default_base = (
+            (get_config_value("OPENAI_BASE_URL") or PROXYAPI_OPENAI_BASE).strip().rstrip("/")
+        )
+    base = explicit_base or default_base
+    return normalize_openai_sdk_proxyapi_base_model(base, model)
+
+
 # Глобальный экземпляр сервиса
 _llm_service: Optional[LLMService] = None
 

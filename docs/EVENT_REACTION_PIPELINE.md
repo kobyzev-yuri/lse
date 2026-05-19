@@ -7,7 +7,9 @@
 
 **Universe датасета:** скелет из KB (`build_event_reaction_dataset.py`) **по умолчанию** вставляет только строки, где `kb.ticker` входит в тот же список (**FAST+MEDIUM+LONG**). Полный поток KB без фильтра: флаг **`--include-all-kb-tickers`**. Разметка и seed quotes по умолчанию тоже ограничены конфигом; снять ограничение: **`--include-all-symbols`** / **`--include-all-dataset-symbols`**.
 
-**Старт «эры проекта» (без глубокой истории):** ограничить события с даты старта LSE, чтобы не тянуть котировки на 10–15 лет назад. Скелет из KB: **`--kb-since 2026-02-01`** или **`EVENT_REACTION_KB_SINCE`** в `config.env` (фильтр `kb.ts >= дата`). Разметка только по этому хвосту: **`backfill_event_reaction_labeling.py --since 2026-02-01`** (по колонке `event_time_et`). Уже вставленные старые строки скрипты не удаляют — при необходимости один раз `DELETE FROM event_reaction_dataset WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01'` или новый **`dataset_version`** (например `v0_from_feb26`) без удаления.
+**Старт «эры проекта» (без глубокой истории):** ограничить события с даты старта LSE, чтобы не тянуть котировки на 10–15 лет назад. Скелет из KB: **`--kb-since 2026-02-01`** или **`EVENT_REACTION_KB_SINCE`** в `config.env` (фильтр `kb.ts >= дата`). Разметка только по этому хвосту: **`backfill_event_reaction_labeling.py --since 2026-02-01`** (по колонке `event_time_et`). Уже вставленные старые строки скрипты не удаляют — при необходимости один раз `DELETE … event_time_et < '2026-02-01'` или новый **`dataset_version`**.
+
+**Лишние тикеры в таблице** (после старого `--include-all-kb-tickers`): один раз **`build_event_reaction_dataset.py --prune-non-config --dataset-version v0`** (оставляет только FAST+MEDIUM+LONG). Сначала **`--dry-run`**.
 
 Вспомогательные таблицы (`market_regime_daily`, `peer_graph_edge`, …) по-прежнему опциональны; их можно подключать в следующих версиях `feature_builder_version` внутри JSON.
 

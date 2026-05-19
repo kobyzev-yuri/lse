@@ -11,6 +11,8 @@
   python scripts/build_event_reaction_dataset.py --from-kb-earnings --include-all-kb-tickers   # все тикеры из KB (старое поведение)
   python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --limit 500
   python scripts/build_event_reaction_dataset.py --stats
+  python scripts/build_event_reaction_dataset.py --prune-non-config --dataset-version v0
+  python scripts/build_event_reaction_dataset.py --prune-non-config --dataset-version v0 --dry-run
 
 См. docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md §4.2
 """
@@ -132,9 +134,71 @@ def _backfill_from_kb(
     return 0
 
 
+def _prune_non_config_symbols(
+    engine,
+    *,
+    dataset_version: str,
+    dry_run: bool,
+) -> int:
+    """Удалить строки event_reaction_dataset с symbol вне TICKERS_FAST/MEDIUM/LONG."""
+    from sqlalchemy import bindparam, text
+
+    from services.ticker_groups import get_config_ticker_symbols_upper_unique
+
+    symbols = get_config_ticker_symbols_upper_unique()
+    if not symbols:
+        logger.error("Пустой список тикеров из конфига (TICKERS_FAST/MEDIUM/LONG).")
+        return 1
+    dv = (dataset_version or "v0").strip()
+    params: dict = {"dv": dv, "sym": symbols}
+    count_sql = """
+        SELECT COUNT(*) FROM event_reaction_dataset
+        WHERE dataset_version = :dv
+          AND UPPER(TRIM(symbol)) NOT IN :sym
+    """
+    delete_sql = """
+        DELETE FROM event_reaction_dataset
+        WHERE dataset_version = :dv
+          AND UPPER(TRIM(symbol)) NOT IN :sym
+    """
+    count_stmt = text(count_sql).bindparams(bindparam("sym", expanding=True))
+    delete_stmt = text(delete_sql).bindparams(bindparam("sym", expanding=True))
+    with engine.connect() as conn:
+        n = int(conn.execute(count_stmt, params).scalar() or 0)
+    if n == 0:
+        logger.info("prune: лишних строк нет (dataset_version=%s, конфиг-тикеров=%s)", dv, len(symbols))
+        return 0
+    if dry_run:
+        logger.info(
+            "dry-run prune: удалило бы %s строк (dataset_version=%s, останется только %s конфиг-тикеров)",
+            n,
+            dv,
+            len(symbols),
+        )
+        return 0
+    with engine.begin() as conn:
+        r = conn.execute(delete_stmt, params)
+        try:
+            deleted = int(r.rowcount or 0)
+        except Exception:
+            deleted = n
+    logger.info(
+        "prune: удалено %s строк (dataset_version=%s); universe = конфиг (%s тикеров)",
+        deleted,
+        dv,
+        len(symbols),
+    )
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="event_reaction_dataset: skeleton / stats")
     ap.add_argument("--stats", action="store_true", help="Только COUNT(*) в event_reaction_dataset")
+    ap.add_argument(
+        "--prune-non-config",
+        action="store_true",
+        help="Удалить строки с symbol вне TICKERS_FAST/MEDIUM/LONG (см. --dataset-version)",
+    )
     ap.add_argument("--from-kb-earnings", action="store_true", help="Вставить skeleton-строки из KB (EARNINGS*)")
     ap.add_argument(
         "--include-all-kb-tickers",
@@ -167,6 +231,12 @@ def main() -> int:
     if args.stats:
         print(_stats(engine))
         return 0
+    if args.prune_non_config:
+        return _prune_non_config_symbols(
+            engine,
+            dataset_version=args.dataset_version.strip() or "v0",
+            dry_run=bool(args.dry_run),
+        )
     if args.from_kb_earnings:
         return _backfill_from_kb(
             engine,
@@ -175,7 +245,7 @@ def main() -> int:
             config_tickers_only=not bool(args.include_all_kb_tickers),
             kb_since=kb_since_dt,
         )
-    logger.error("Укажите --stats или --from-kb-earnings")
+    logger.error("Укажите --stats, --prune-non-config или --from-kb-earnings")
     return 1
 
 

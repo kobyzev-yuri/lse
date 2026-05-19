@@ -3266,16 +3266,10 @@ def _analyzer_llm_generate(
     max_tokens: int,
     http_timeout_sec: float,
 ) -> Dict[str, Any]:
-    """Отдельная модель/эндпоинт для анализатора (по умолчанию OpenAI GPT на ProxyAPI, не Anthropic)."""
-    from services.llm_service import normalize_openai_sdk_proxyapi_base_model
+    """Та же маршрутизация, что у основного LLM (OPENAI_MODEL), если ANALYZER_LLM_* не заданы."""
+    from services.llm_service import resolve_analyzer_llm_base_model
 
-    model = (get_config_value("ANALYZER_LLM_MODEL") or get_config_value("OPENAI_MODEL") or "gpt-4o-mini").strip()
-    base = (
-        (get_config_value("ANALYZER_LLM_BASE_URL") or get_config_value("OPENAI_BASE_URL") or "https://api.proxyapi.ru/openai/v1")
-        .strip()
-        .rstrip("/")
-    )
-    base, model = normalize_openai_sdk_proxyapi_base_model(base, model)
+    base, model = resolve_analyzer_llm_base_model()
     out = llm.generate_response_with_model(
         base,
         model,
