@@ -60,16 +60,25 @@ def active_feature_builder_version() -> str:
     return FEATURE_BUILDER_VERSION_REGIME
 
 
+# Train/inference: RSI часто NULL в quotes — нейтральное значение, если не посчитан.
+RSI_AS_OF_DEFAULT = 50.0
+
+# ret_* / vol могут отсутствовать при короткой истории; close_as_of обязателен.
+QUOTE_FEATURE_KEYS_REQUIRED = (
+    "ret_1d_log",
+    "ret_5d_log",
+    "close_as_of",
+)
+QUOTE_FEATURE_KEYS_OPTIONAL = (
+    "ret_20d_log",
+    "vol_10d_log_ret_std",
+    "rsi_as_of",
+)
+
+
 def event_reaction_numeric_feature_keys(feature_builder_version: str) -> Tuple[str, ...]:
-    """Quote keys (required) + optional regime keys for CatBoost train/inference."""
-    quote = (
-        "ret_1d_log",
-        "ret_5d_log",
-        "ret_20d_log",
-        "vol_10d_log_ret_std",
-        "rsi_as_of",
-        "close_as_of",
-    )
+    """All numeric keys for CatBoost (required + optional quote + regime)."""
+    quote = QUOTE_FEATURE_KEYS_REQUIRED + QUOTE_FEATURE_KEYS_OPTIONAL
     if feature_builder_version == FEATURE_BUILDER_VERSION_REGIME:
         regime = (
             "market_regime_present",
@@ -85,6 +94,19 @@ def event_reaction_numeric_feature_keys(feature_builder_version: str) -> Tuple[s
         )
         return quote + regime
     return quote
+
+
+def event_reaction_required_quote_keys() -> Tuple[str, ...]:
+    return QUOTE_FEATURE_KEYS_REQUIRED
+
+
+def event_reaction_optional_quote_defaults() -> Dict[str, float]:
+    return {
+        "ret_20d_log": 0.0,
+        "vol_10d_log_ret_std": 0.0,
+        "rsi_as_of": RSI_AS_OF_DEFAULT,
+    }
+
 
 try:
     from zoneinfo import ZoneInfo
@@ -287,6 +309,8 @@ def build_features_before(
     rsi_row = df.iloc[i].get("rsi")
     if rsi_row is not None and np.isfinite(rsi_row):
         out["rsi_as_of"] = round(float(rsi_row), 4)
+    else:
+        out["rsi_as_of"] = RSI_AS_OF_DEFAULT
     out["close_as_of"] = round(float(closes[i]), 6)
 
     if fbv == FEATURE_BUILDER_VERSION_REGIME:

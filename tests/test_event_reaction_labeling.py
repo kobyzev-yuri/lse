@@ -6,8 +6,11 @@ from datetime import date
 
 from services.event_reaction_labeling import (
     FEATURE_BUILDER_VERSION_REGIME,
+    RSI_AS_OF_DEFAULT,
     enrich_features_with_market_regime,
     event_reaction_numeric_feature_keys,
+    event_reaction_optional_quote_defaults,
+    event_reaction_required_quote_keys,
 )
 
 
@@ -44,6 +47,11 @@ def test_enrich_features_missing_regime():
     out = enrich_features_with_market_regime(base, None)
     assert out["market_regime_present"] == 0
     assert out["mkt_vix_regime_ord"] == -1.0
+
+
+def test_optional_quote_defaults_include_rsi():
+    assert event_reaction_optional_quote_defaults()["rsi_as_of"] == RSI_AS_OF_DEFAULT
+    assert "ret_1d_log" in event_reaction_required_quote_keys()
 
 
 def test_numeric_feature_keys_regime():
