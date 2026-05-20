@@ -1317,6 +1317,7 @@ def _game_5m_stale_reversal_exit_params(ticker: Optional[str] = None) -> dict[st
 
     ticker_u = str(ticker or "").strip().upper()
     min_age = _int_param("GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES", 390, 15)
+    max_pnl = _float_param("GAME_5M_STALE_REVERSAL_MAX_PNL_PCT", -1.5)
     if ticker_u:
         raw_t = (get_config_value(f"GAME_5M_STALE_REVERSAL_MIN_AGE_MINUTES_{ticker_u}", "") or "").strip()
         if raw_t:
@@ -1324,10 +1325,16 @@ def _game_5m_stale_reversal_exit_params(ticker: Optional[str] = None) -> dict[st
                 min_age = max(15, int(raw_t))
             except (ValueError, TypeError):
                 pass
+        raw_pnl = (get_config_value(f"GAME_5M_STALE_REVERSAL_MAX_PNL_PCT_{ticker_u}", "") or "").strip()
+        if raw_pnl:
+            try:
+                max_pnl = float(raw_pnl.replace(",", "."))
+            except (ValueError, TypeError):
+                pass
     return {
         "enabled": enabled,
         "min_age_minutes": min_age,
-        "max_pnl_pct": _float_param("GAME_5M_STALE_REVERSAL_MAX_PNL_PCT", -1.5),
+        "max_pnl_pct": max_pnl,
         "momentum_below": _float_param("GAME_5M_STALE_REVERSAL_MOMENTUM_BELOW", 0.0),
     }
 
@@ -1717,7 +1724,9 @@ def should_close_position(
             and weak_mom
             and weak_decision
         ):
-            logger.info(
+            # Реплей (diagnose_hanger / replay_game5m_on_bars) задаёт simulation_time — не путать с живым кроном.
+            _stale_log = logger.info if simulation_time is None else logger.debug
+            _stale_log(
                 "GAME_5M %s: stale/reversal exit — age=%s мин, PnL=%.2f%% <= %.2f%%, "
                 "mom2h=%s <= %.2f%%, decision=%s",
                 open_position.get("ticker", "?"),
