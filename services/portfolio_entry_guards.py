@@ -64,6 +64,7 @@ def merge_portfolio_buy_context(
     ticker: str,
     *,
     base_take_profit: Optional[float] = None,
+    strategy_decision: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     base = dict(context_json) if isinstance(context_json, dict) else {}
     ml = portfolio_ml_snapshot(ticker)
@@ -89,4 +90,15 @@ def merge_portfolio_buy_context(
                 base["portfolio_effective_take_note"] = note
         except Exception as e:
             logger.debug("entry effective take %s: %s", ticker, e)
+    if strategy_decision is not None:
+        try:
+            from services.decision_stack import finalize_portfolio_decision_stack
+
+            row = dict(strategy_decision)
+            finalize_portfolio_decision_stack(row, ticker=ticker, portfolio_ml=ml)
+            for k in ("decision_snapshot", "decision_effective", "decision_stack_version"):
+                if row.get(k) is not None:
+                    base[k] = row[k]
+        except Exception as e:
+            logger.debug("portfolio decision_stack %s: %s", ticker, e)
     return base

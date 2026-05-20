@@ -23,6 +23,7 @@
 | JSON сделки, `context_json` | [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md) |
 | CatBoost на входе, fusion, **метрики после каждого обучения** | [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md), [GAME_5M_CATBOOST_FUSION.md](GAME_5M_CATBOOST_FUSION.md) |
 | **Multiday ridge** (лог-доходность 1–3 торг. дня, калибровка, скрипт train) | [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md) |
+| **Decision stack** (единая точка решений, snapshot в context_json) | [DECISION_STACK_ROLLOUT_PLAN.md](DECISION_STACK_ROLLOUT_PLAN.md) |
 | Отчёт анализатора, LLM, снимки, автотюн | [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md) |
 | Регламент tuning + **replay proposals** (график, ledger, apply) | [GAME_5M_TUNING_REGLEMENT.md](GAME_5M_TUNING_REGLEMENT.md) |
 | Кроны, деплой | [CRONS_AND_TAKE_STOP.md](CRONS_AND_TAKE_STOP.md), [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md) |

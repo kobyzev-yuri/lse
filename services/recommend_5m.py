@@ -2645,6 +2645,13 @@ def get_decision_5m(
         out["entry_condition"] = None
         out["entry_intuition"] = None
 
+    try:
+        from services.decision_stack import finalize_game5m_decision_stack
+
+        finalize_game5m_decision_stack(out, ticker=ticker, kb_news=kb_news)
+    except Exception as e:
+        logger.warning("finalize_game5m_decision_stack(%s): %s", ticker, e)
+
     return out
 
 

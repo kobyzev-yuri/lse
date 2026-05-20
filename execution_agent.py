@@ -3,6 +3,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import floor
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -1023,8 +1024,16 @@ class ExecutionAgent:
                         if cluster_context is not None:
                             other_signals[ticker] = "HOLD"
                         continue
+                    strat_row: Dict[str, Any] = {"decision": decision, "selected_strategy": strategy_name}
+                    if isinstance(result, dict):
+                        for k in ("decision_fused", "llm_decision", "decision"):
+                            if result.get(k):
+                                strat_row[k] = result.get(k)
                     context_json = merge_portfolio_buy_context(
-                        context_json, ticker, base_take_profit=take_profit
+                        context_json,
+                        ticker,
+                        base_take_profit=take_profit,
+                        strategy_decision=strat_row,
                     )
                 except Exception as e:
                     logger.debug("portfolio_entry_guards %s: %s", ticker, e)
