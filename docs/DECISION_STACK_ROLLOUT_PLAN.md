@@ -1,6 +1,6 @@
 # Decision Stack: единая точка торговых решений
 
-**Статус:** имплементация фаз 0–2 (каркас + GAME_5M snapshot + портфель-заготовка).  
+**Статус:** фазы 0–3 в коде (snapshot, fusion, own_finalize, resolve); на проде `RESOLVE=false` — mirror + `projected_effective_if_resolve`.  
 **Связано:** [ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md](ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md), [ANALYZER_CONTOUR_ARCHITECTURE.md](ANALYZER_CONTOUR_ARCHITECTURE.md), [NEWS_SIGNAL_ARCHITECTURE.md](NEWS_SIGNAL_ARCHITECTURE.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md).
 
 ---
@@ -56,8 +56,8 @@
 |------|-------------|--------------|
 | **0** | `services/decision_stack/`, `analyzer_contours/schema.py`, план (этот файл) | нет |
 | **1** | `finalize_game5m_decision_stack()` в `get_decision_5m`, `decision_snapshot` в `context_json` | нет* |
-| **2** | `entry_fusion_metrics` в d5; news/macro в contributions; `DECISION_STACK_RESOLVE_ENABLED` | опционально |
-| **3** | Перенос CatBoost/multiday finalize в stack (один порядок veto) | да** |
+| **2** | `entry_fusion_metrics`, гейты news/macro/entry_advice, `projected_effective_if_resolve` | **сделано** (apply через env) |
+| **3** | `DECISION_STACK_OWN_FINALIZE` — CatBoost+multiday в stack | **сделано** (default true) |
 | **4** | `build_portfolio_decision_stack` в `execution_agent` | опционально |
 | **5** | `news_signal_batch` (этап A) → contribution | нет→да |
 | **6** | Cluster exposure cap (техника) + boss KB tag | caution |
@@ -99,12 +99,17 @@ DECISION_STACK_VERSION=1
 
 ---
 
-## 6. Критерии готовности фазы 1
+## 6. Критерии готовности
 
-- [ ] Каждый BUY в `trade_history` содержит `decision_snapshot` в `context_json`
-- [ ] `effective_decision` == `technical_decision_effective`
-- [ ] Тест `tests/test_decision_stack_game5m.py`
-- [ ] Анализатор может читать `contributions` (будущее поле в TE)
+**Фаза 1**
+- [x] `decision_snapshot` в `context_json`
+- [x] mirror: `effective_decision` == `technical_decision_effective`
+- [x] `tests/test_decision_stack_game5m.py`
+
+**Фаза 2–3 (staging)**
+- [ ] `resolve_divergence=false` при согласованных гейтах или осознанный diff
+- [ ] Включить `DECISION_STACK_RESOLVE_ENABLED=true` после 3–7 дней mirror
+- [ ] Опционально `ENTRY_ADVICE` / `NEWS_FUSION` gate `apply` по TE
 
 ---
 

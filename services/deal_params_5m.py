@@ -58,8 +58,10 @@ FULL_ENTRY_KEYS = (
     # Decision stack (единая точка сигналов, фаза 1 — mirror legacy effective)
     "decision_effective",
     "decision_stack_version",
+    "decision_stack_projected_effective",
     "decision_snapshot",
     "entry_fusion_metrics",
+    "decision_stack_downgraded",
     # Время бара решения (get_decision_5m) — для графика / бэктеста, не только ts INSERT в trade_history
     "exit_bar_close_ts",
     "exit_bar_start_et",

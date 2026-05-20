@@ -18,9 +18,11 @@ from services.decision_stack._types import (
     READINESS_TELEMETRY,
     SCHEMA_VERSION,
     _cfg_bool,
+    _cfg_float,
     _utc_now_iso,
     decision_strength_from_signal,
     default_readiness,
+    gate_mode,
     make_contribution,
     weight_for_readiness,
 )
@@ -47,7 +49,7 @@ def _collect_session_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]
             weight=1.0,
             action="telemetry",
             detail=f"session_phase={ph}",
-            metrics={"session_phase": ph},
+            metrics={"session_phase": ph, "gate_mode": "apply"},
         )
     strength = -0.3 if ph in ("PRE_MARKET", "AFTER_HOURS", "CLOSED") else 0.0
     return make_contribution(
@@ -58,7 +60,7 @@ def _collect_session_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]
         weight=1.0,
         action="veto" if ph not in ("REGULAR", "RTH", "OPEN") else "telemetry",
         detail=f"вне REGULAR: {ph}",
-        metrics={"session_phase": ph},
+        metrics={"session_phase": ph, "gate_mode": "apply"},
     )
 
 
@@ -100,8 +102,18 @@ def _collect_kb_news_contribution(d5: Dict[str, Any]) -> Dict[str, Any]:
 
 def _collect_entry_advice_contribution(d5: Dict[str, Any]) -> Dict[str, Any]:
     advice = (d5.get("entry_advice") or "ALLOW").strip().upper()
+    gm = gate_mode("DECISION_STACK_ENTRY_ADVICE_GATE_MODE", "log_only")
     strength = {"ALLOW": 0.15, "CAUTION": -0.25, "AVOID": -0.7}.get(advice, 0.0)
-    action = "veto" if advice == "AVOID" else ("downgrade" if advice == "CAUTION" else "telemetry")
+    would_veto = advice == "AVOID"
+    would_down = advice == "CAUTION"
+    action = "telemetry"
+    if gm == "apply":
+        if would_veto:
+            action = "veto"
+        elif would_down:
+            action = "downgrade"
+    elif gm != "none" and (would_veto or would_down):
+        action = "telemetry"
     return make_contribution(
         contour_id="entry_advice",
         role="policy_gate",
@@ -110,7 +122,7 @@ def _collect_entry_advice_contribution(d5: Dict[str, Any]) -> Dict[str, Any]:
         weight=1.0,
         action=action,
         detail=d5.get("entry_advice_reason") or advice,
-        metrics={"entry_advice": advice},
+        metrics={"entry_advice": advice, "gate_mode": gm, "would_veto": would_veto},
     )
 
 
@@ -126,18 +138,30 @@ def _collect_macro_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         strength = -0.25
     if str(level or "").upper() == "AVOID":
         strength = min(strength, -0.5)
+    gm = gate_mode("DECISION_STACK_MACRO_GATE_MODE", "log_only")
+    lvl = str(level or "").upper()
+    would_veto = lvl == "AVOID"
+    would_down = lvl == "CAUTION"
+    action = "telemetry"
+    if gm == "apply":
+        if would_veto:
+            action = "veto"
+        elif would_down:
+            action = "downgrade"
     return make_contribution(
         contour_id="macro_risk",
         role="policy_gate",
         readiness=READINESS_PRODUCTION,
         strength=strength,
         weight=1.0,
-        action="downgrade" if str(level or "").upper() in ("AVOID", "CAUTION") else "telemetry",
+        action=action,
         detail="; ".join(filter(None, [str(level), str(bias)])),
         metrics={
             "macro_risk_level": level,
             "macro_equity_gap_bias": bias,
             "macro_predicted_sector_gap_pct": d5.get("macro_predicted_sector_gap_pct"),
+            "gate_mode": gm,
+            "would_veto": would_veto,
         },
     )
 
@@ -167,16 +191,28 @@ def _collect_gap_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _collect_catboost_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    mode = (d5.get("catboost_fusion_mode") or "none").strip().lower()
-    if mode == "none" and d5.get("catboost_signal_status") not in ("ok",):
+    fusion_mode = (d5.get("catboost_fusion_mode") or "none").strip().lower()
+    if fusion_mode == "none" and d5.get("catboost_signal_status") not in ("ok",):
         return None
     core = d5.get("technical_decision_core")
     eff = d5.get("technical_decision_effective")
     p = d5.get("catboost_entry_proba_good")
     readiness = default_readiness("catboost_entry_5m")
+    stack_gm = gate_mode("DECISION_STACK_CATBOOST_GATE_MODE", "apply")
+    would_down = False
+    if fusion_mode == "hold_if_buy_below_p" and core in ("BUY", "STRONG_BUY") and p is not None:
+        try:
+            p_min = _cfg_float("GAME_5M_CATBOOST_HOLD_BELOW_P", 0.45)
+            would_down = float(p) < p_min
+        except (TypeError, ValueError):
+            would_down = False
+    if core in ("BUY", "STRONG_BUY") and eff == "HOLD" and fusion_mode != "none":
+        would_down = True
     action = "telemetry"
-    if core in ("BUY", "STRONG_BUY") and eff == "HOLD" and mode != "none":
+    if stack_gm == "apply" and would_down:
         action = "downgrade"
+    elif stack_gm != "none" and would_down:
+        action = "telemetry"
     return make_contribution(
         contour_id="catboost_entry_5m",
         role="policy_gate",
@@ -184,11 +220,13 @@ def _collect_catboost_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
         strength=(float(p) - 0.5) * 2 if p is not None else 0.0,
         weight=weight_for_readiness(readiness),
         action=action,
-        detail=d5.get("catboost_fusion_note") or f"P={p}, mode={mode}",
+        detail=d5.get("catboost_fusion_note") or f"P={p}, fusion={fusion_mode}",
         metrics={
             "catboost_entry_proba_good": p,
-            "catboost_fusion_mode": mode,
+            "catboost_fusion_mode": fusion_mode,
             "catboost_signal_status": d5.get("catboost_signal_status"),
+            "gate_mode": stack_gm,
+            "would_downgrade": would_down,
         },
     )
 
@@ -199,11 +237,12 @@ def _collect_multiday_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
     readiness = default_readiness("multiday_lr")
     would = bool(gate.get("would_hold"))
-    mode = gate.get("mode") or "none"
+    mode = gate.get("mode") or gate_mode("GAME_5M_MULTIDAY_ENTRY_GATE_MODE", "none")
+    stack_gm = gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply")
     action = "telemetry"
-    if would and mode == "apply":
+    if would and mode == "apply" and stack_gm == "apply":
         action = "downgrade"
-    elif would and mode == "log_only":
+    elif would and mode == "apply" and stack_gm == "log_only":
         action = "telemetry"
     h1 = d5.get("multiday_lr_horizon_1d_pct_vs_spot")
     strength = 0.0
@@ -224,6 +263,8 @@ def _collect_multiday_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
             "multiday_lr_entry_gate_mode": mode,
             "multiday_lr_entry_gate_would_hold": would,
             "horizons_pct": gate.get("horizons_pct"),
+            "stack_gate_mode": stack_gm,
+            "applied_legacy": bool(d5.get("multiday_lr_entry_gate_applied")),
         },
     )
 
@@ -237,15 +278,37 @@ def _collect_news_fusion_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, 
         fused = float(m["fused_bias_neg1"])
     except (TypeError, ValueError):
         return None
+    gm = gate_mode("DECISION_STACK_NEWS_FUSION_GATE_MODE", "log_only")
+    veto_below = _cfg_float("DECISION_STACK_NEWS_FUSION_VETO_BELOW", -0.35)
+    boost_above = _cfg_float("DECISION_STACK_NEWS_FUSION_BOOST_ABOVE", 0.25)
+    would_down = fused <= veto_below
+    would_veto = fused <= veto_below - 0.15
+    action = "telemetry"
+    if gm == "apply":
+        if would_veto:
+            action = "veto"
+        elif would_down:
+            action = "downgrade"
+    elif gm != "none" and would_down:
+        action = "telemetry"
+    metrics = dict(m)
+    metrics.update(
+        {
+            "gate_mode": gm,
+            "veto_below": veto_below,
+            "boost_above": boost_above,
+            "would_downgrade": would_down,
+        }
+    )
     return make_contribution(
         contour_id="news_fusion",
         role="policy_gate",
         readiness=readiness,
         strength=max(-1.0, min(1.0, fused)),
         weight=weight_for_readiness(readiness),
-        action="telemetry",
+        action=action,
         detail=f"fused_bias={fused:+.3f} tech={m.get('tech_bias_neg1')} news={m.get('news_bias_kb')}",
-        metrics=m,
+        metrics=metrics,
     )
 
 
@@ -282,28 +345,69 @@ def _detect_conflicts(contributions: List[Dict[str, Any]], core: str) -> List[st
     return conflicts
 
 
+def _apply_contribution_to_effective(effective: str, c: Dict[str, Any]) -> str:
+    if effective not in ("BUY", "STRONG_BUY"):
+        return effective
+    action = c.get("action")
+    if action == "veto":
+        return "HOLD"
+    if action == "downgrade":
+        return "HOLD"
+    return effective
+
+
 def resolve_game5m_technical(
     d5: Dict[str, Any],
     contributions: List[Dict[str, Any]],
 ) -> str:
     """
-    Фаза 3+: пересчёт effective из contributions.
-    Пока дублирует mirror — при resolve_enabled проверяем согласованность.
+    Фаза 2–3: пересчёт effective из contributions (только action=veto|downgrade при gate apply).
     """
     core = str(d5.get("technical_decision_core") or d5.get("decision") or "HOLD")
     effective = core
+    by_id = {c.get("contour_id"): c for c in contributions if c.get("contour_id")}
     for cid in GAME5M_VETO_ORDER:
-        for c in contributions:
-            if c.get("contour_id") != cid:
-                continue
-            if c.get("readiness") == READINESS_TELEMETRY:
-                continue
-            if c.get("action") == "veto" and effective in ("BUY", "STRONG_BUY"):
-                effective = "HOLD"
-            elif c.get("action") == "downgrade" and effective in ("BUY", "STRONG_BUY"):
-                if cid in ("catboost_entry_5m", "multiday_lr") or c.get("contour_id") == "entry_advice":
-                    effective = "HOLD"
+        c = by_id.get(cid)
+        if not c:
+            continue
+        metrics = c.get("metrics") if isinstance(c.get("metrics"), dict) else {}
+        gm = metrics.get("gate_mode") or metrics.get("stack_gate_mode")
+        if cid == "catboost_entry_5m" and not gm:
+            gm = gate_mode("DECISION_STACK_CATBOOST_GATE_MODE", "apply")
+        if cid == "multiday_lr" and not gm:
+            gm = gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply")
+        if cid == "session":
+            gm = "apply"
+        if gm in (None, "", "none", "log_only"):
+            continue
+        effective = _apply_contribution_to_effective(effective, c)
     return effective
+
+
+def apply_resolve_to_d5(d5: Dict[str, Any], effective: str, contributions: List[Dict[str, Any]]) -> None:
+    """Синхронизация полей d5 после resolve (вход крона смотрит effective/decision)."""
+    prev = d5.get("technical_decision_effective")
+    d5["technical_decision_effective"] = effective
+    d5["decision_effective"] = effective
+    core = d5.get("technical_decision_core") or d5.get("decision")
+    if effective != core and effective == "HOLD" and core in ("BUY", "STRONG_BUY"):
+        d5["decision_stack_downgraded"] = True
+    by_id = {c.get("contour_id"): c for c in contributions}
+    md = by_id.get("multiday_lr")
+    if (
+        md
+        and md.get("action") == "downgrade"
+        and isinstance(md.get("metrics"), dict)
+        and md["metrics"].get("multiday_lr_entry_gate_mode") == "apply"
+    ):
+        d5["multiday_lr_entry_gate_applied"] = True
+        gate = d5.get("multiday_lr_entry_gate")
+        if isinstance(gate, dict):
+            gate["applied"] = True
+    cb = by_id.get("catboost_entry_5m")
+    if cb and cb.get("action") == "downgrade" and prev in ("BUY", "STRONG_BUY") and effective == "HOLD":
+        if not d5.get("catboost_fusion_note"):
+            d5["catboost_fusion_note"] = "decision_stack resolve → HOLD"
 
 
 def build_game5m_decision_snapshot(
@@ -314,14 +418,16 @@ def build_game5m_decision_snapshot(
     contributions = collect_game5m_contributions(d5, ticker=ticker)
     core = str(d5.get("technical_decision_core") or d5.get("decision") or "HOLD")
     legacy_eff = str(d5.get("technical_decision_effective") or core)
+    projected = resolve_game5m_technical(d5, contributions)
     resolve_on = _cfg_bool("DECISION_STACK_RESOLVE_ENABLED", False)
     if resolve_on:
-        effective = resolve_game5m_technical(d5, contributions)
+        effective = projected
         mode = "resolve_technical"
         if effective != legacy_eff:
-            logger.warning(
-                "decision_stack %s: resolve=%s legacy_effective=%s (проверьте порядок veto)",
+            logger.info(
+                "decision_stack %s: resolve %s → %s (legacy was %s)",
                 ticker,
+                legacy_eff,
                 effective,
                 legacy_eff,
             )
@@ -329,6 +435,7 @@ def build_game5m_decision_snapshot(
         effective = legacy_eff
         mode = "mirror_legacy"
     conflicts = _detect_conflicts(contributions, core)
+    diverged = projected != legacy_eff
     return {
         "schema_version": SCHEMA_VERSION,
         "game": "GAME_5M",
@@ -336,9 +443,18 @@ def build_game5m_decision_snapshot(
         "ts_utc": _utc_now_iso(),
         "core_decision": core,
         "effective_decision": effective,
+        "projected_effective_if_resolve": projected,
         "resolve_mode": mode,
+        "resolve_divergence": diverged,
         "contributions": contributions,
         "conflicts": conflicts,
+        "gate_modes": {
+            "entry_advice": gate_mode("DECISION_STACK_ENTRY_ADVICE_GATE_MODE", "log_only"),
+            "macro": gate_mode("DECISION_STACK_MACRO_GATE_MODE", "log_only"),
+            "news_fusion": gate_mode("DECISION_STACK_NEWS_FUSION_GATE_MODE", "log_only"),
+            "catboost": gate_mode("DECISION_STACK_CATBOOST_GATE_MODE", "apply"),
+            "multiday": gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply"),
+        },
         "llm_eligible": [
             "news_fusion",
             "cluster_context",
@@ -382,18 +498,25 @@ def finalize_game5m_decision_stack(
     kb_news: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """
-    Вызывать в конце get_decision_5m после CatBoost/multiday finalize.
-    Пишет decision_snapshot; при mirror не меняет decision/effective.
+    Единая финализация: ML-гейты (фаза 3) → fusion (фаза 2) → snapshot → опционально resolve.
     """
     if not _cfg_bool("DECISION_STACK_ENABLED", True):
         return
     t = (ticker or d5.get("ticker") or "").strip().upper()
+    if t:
+        d5["ticker"] = t
+    from services.decision_stack.game5m_policy import apply_game5m_policy_gates, stack_own_finalize_enabled
+
+    if stack_own_finalize_enabled():
+        apply_game5m_policy_gates(d5, t)
     attach_entry_fusion_metrics(d5, ticker=t, kb_news=kb_news)
     snap = build_game5m_decision_snapshot(d5, ticker=t)
+    contributions = snap.get("contributions") or []
     d5["decision_snapshot"] = snap
     d5["decision_effective"] = snap.get("effective_decision")
     d5["decision_stack_version"] = SCHEMA_VERSION
+    d5["decision_stack_projected_effective"] = snap.get("projected_effective_if_resolve")
     if _cfg_bool("DECISION_STACK_RESOLVE_ENABLED", False):
-        d5["technical_decision_effective"] = snap.get("effective_decision")
-        if snap.get("effective_decision") != d5.get("decision"):
-            d5["decision"] = snap.get("effective_decision")
+        eff = snap.get("effective_decision") or "HOLD"
+        apply_resolve_to_d5(d5, str(eff), contributions)
+        d5["decision"] = d5.get("technical_decision_effective")

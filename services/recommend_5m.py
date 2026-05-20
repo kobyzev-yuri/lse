@@ -2592,42 +2592,51 @@ def get_decision_5m(
         except Exception as e:
             logger.debug("LLM новости перед решением %s: %s", ticker, e)
 
-    # CatBoost (ML) — опционально. По умолчанию выключен; пока делаем тюнинг правилами/параметрами,
-    # не тащим лишние импорты/лог-варнинги, если GAME_5M_CATBOOST_ENABLED=false.
+    # CatBoost + multiday: в decision_stack при DECISION_STACK_OWN_FINALIZE=true (фаза 3).
     try:
-        from config_loader import get_config_value
+        from services.decision_stack.game5m_policy import stack_own_finalize_enabled
 
-        cb_on = (get_config_value("GAME_5M_CATBOOST_ENABLED", "false") or "false").strip().lower() in ("1", "true", "yes")
+        own_stack = stack_own_finalize_enabled()
     except Exception:
-        cb_on = False
-    if cb_on:
+        own_stack = False
+    if not own_stack:
         try:
-            from services.catboost_5m_signal import attach_catboost_signal
+            from config_loader import get_config_value
 
-            attach_catboost_signal(out, ticker)
-        except Exception as e:
-            logger.warning("attach_catboost_signal(%s): %s", ticker, e)
-        try:
-            from services.catboost_5m_signal import finalize_technical_decision_with_catboost
+            cb_on = (get_config_value("GAME_5M_CATBOOST_ENABLED", "false") or "false").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+        except Exception:
+            cb_on = False
+        if cb_on:
+            try:
+                from services.catboost_5m_signal import attach_catboost_signal
 
-            finalize_technical_decision_with_catboost(out)
-        except Exception as e:
-            logger.warning("finalize_technical_decision_with_catboost(%s): %s", ticker, e)
+                attach_catboost_signal(out, ticker)
+            except Exception as e:
+                logger.warning("attach_catboost_signal(%s): %s", ticker, e)
+            try:
+                from services.catboost_5m_signal import finalize_technical_decision_with_catboost
+
+                finalize_technical_decision_with_catboost(out)
+            except Exception as e:
+                logger.warning("finalize_technical_decision_with_catboost(%s): %s", ticker, e)
+                out.setdefault("technical_decision_core", out.get("decision"))
+                out.setdefault("technical_decision_effective", out.get("decision"))
+                out.setdefault("catboost_fusion_mode", "none")
+        else:
             out.setdefault("technical_decision_core", out.get("decision"))
             out.setdefault("technical_decision_effective", out.get("decision"))
             out.setdefault("catboost_fusion_mode", "none")
-    else:
-        out.setdefault("technical_decision_core", out.get("decision"))
-        out.setdefault("technical_decision_effective", out.get("decision"))
-        out.setdefault("catboost_fusion_mode", "none")
 
-    # Multiday ridge: гейт входа (log_only / apply) после CatBoost fusion.
-    try:
-        from services.multiday_lr_gate import finalize_technical_decision_with_multiday
+        try:
+            from services.multiday_lr_gate import finalize_technical_decision_with_multiday
 
-        finalize_technical_decision_with_multiday(out)
-    except Exception as e:
-        logger.warning("finalize_technical_decision_with_multiday(%s): %s", ticker, e)
+            finalize_technical_decision_with_multiday(out)
+        except Exception as e:
+            logger.warning("finalize_technical_decision_with_multiday(%s): %s", ticker, e)
 
     dec_eff = out.get("decision")
     branch = out.get("technical_entry_branch")
