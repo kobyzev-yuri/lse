@@ -2,9 +2,30 @@
 
 {% block title %}Визуализация - LSE Trading System{% endblock %}
 
+{% block extra_css %}
+<style>
+    .viz-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.75rem 0 1rem; }
+    .viz-tabs button {
+        font-size: 0.88rem; padding: 0.45rem 0.75rem; border-radius: 8px;
+        border: 1px solid #334155; background: #1e293b; color: #94a3b8; cursor: pointer;
+    }
+    .viz-tabs button.active { background: #0f3460; color: #e2e8f0; border-color: #38bdf8; }
+    .viz-tab-panel { display: none; }
+    .viz-tab-panel.active { display: block; }
+    #premarketChartStatus { font-size: 0.85rem; margin: 0.35rem 0; min-height: 1.2em; }
+    #premarketChartStatus.err { color: #fca5a5; }
+</style>
+{% endblock %}
+
 {% block content %}
 <h1>Визуализация данных</h1>
 
+<nav class="viz-tabs" aria-label="Режим графика">
+    <button type="button" class="active" data-viz-tab="chart5m" id="vizTabBtn5m">5m — торговая сессия (9:30–16:00 ET)</button>
+    <button type="button" data-viz-tab="premarket" id="vizTabBtnPm">Премаркет 1m (до открытия)</button>
+</nav>
+
+<div id="vizPanelChart5m" class="viz-tab-panel active">
 <div class="card">
     <h2>График 5m (интрадей + пролонгация)</h2>
     <p class="muted" style="margin-bottom:0.5rem;">Тикеры игры 5m (как в карточках). Список <strong>Все</strong> — график по каждому; выберите тикер или откройте ссылку <code>/visualization?ticker=SNDK</code> с карточки. Ось времени — US Eastern (NYSE/NASDAQ).</p>
@@ -37,21 +58,41 @@
     </div>
     <div id="chart5mContainer"></div>
 </div>
+</div>
 
-<div class="card" style="margin-top:1.25rem;">
-    <h2>График премаркет 1m</h2>
-    <p class="muted" style="margin-bottom:0.5rem;">Как <code>/premarket</code> в Telegram: Yahoo 1m prepost, ось ET. Серый пунктир — вчерашний close; вертикаль — открытие 9:30. Таблица — все тикеры FAST + портфель; график — выбранный тикер (или из <code>?ticker=</code>).</p>
-    <label>Тикер (график)</label>
+<div id="vizPanelPremarket" class="viz-tab-panel">
+<div class="card">
+    <h2>Премаркет 1m</h2>
+    <p class="muted" style="margin-bottom:0.5rem;">Отдельно от 5m-сессии. В <strong>PRE_MARKET</strong> — live Yahoo; в <strong>RTH</strong> таблица из БД (<code>premarket_cron</code>), без опроса Yahoo. Торговля — вкладка 5m. <code>?tab=premarket&amp;ticker=SNDK</code></p>
+    <details class="muted" style="font-size:0.82rem; margin-bottom:0.65rem;">
+        <summary style="cursor:pointer; color:#7dd3fc;">Что значат колонки таблицы</summary>
+        <dl style="margin:0.5rem 0 0 0; line-height:1.45;">
+            <dt style="color:#e2e8f0;">Prev close</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;">Закрытие последнего торгового дня (из <code>quotes</code> или Yahoo daily) — база для гэпа.</dd>
+            <dt style="color:#e2e8f0;">Premarket</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;">Последняя цена 1m в ленте prepost (как в Telegram <code>/premarket</code>).</dd>
+            <dt style="color:#e2e8f0;">Gap %</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;"><code>(Premarket / Prev close − 1) × 100</code> — ожидаемый гэп к открытию RTH, не движение внутри премаркета.</dd>
+            <dt style="color:#e2e8f0;">Min to open</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;">Минуты до 9:30 ET (актуально в фазе PRE_MARKET; в RTH обычно 0).</dd>
+            <dt style="color:#e2e8f0;">Last (ET)</dt>
+            <dd style="margin:0 0 0 0.5rem;">Время последней минуты в ленте Yahoo.</dd>
+        </dl>
+    </details>
+    <p class="muted" style="font-size:0.82rem; margin-bottom:0.5rem;"><strong>Важно:</strong> тикер для графика выбирается в списке <em>ниже</em> (не в вкладке «5m»). По умолчанию «только таблица» — график пустой, пока не выберете тикер.</p>
+    <label>Тикер для графика 1m</label>
     <select id="tickerPremarketFilter" style="min-width:8rem; margin-right:0.5rem;">
-        <option value="">— только таблица —</option>
+        <option value="">— только таблица (без графика) —</option>
     </select>
     <label class="muted" style="margin-left:0.75rem; font-size:0.9rem;">
-        <input type="checkbox" id="autoPremarketRefresh" checked style="vertical-align:middle;">
-        Обновлять каждую 1 мин
+        <input type="checkbox" id="autoPremarketRefresh" style="vertical-align:middle;">
+        Обновлять каждые 5 мин (только эта вкладка видима)
     </label>
     <p id="premarketPhaseLine" class="muted" style="font-size:0.85rem; margin:0.5rem 0 0.35rem 0;"></p>
     <div id="premarketTableWrap" class="table-responsive" style="margin-bottom:0.75rem;"></div>
+    <p id="premarketChartStatus" class="muted" aria-live="polite"></p>
     <div id="chartPremarketContainer"></div>
+</div>
 </div>
 <script type="application/json" id="tickers5mList">{{ tickers_5m_json or "[]" }}</script>
 <script type="application/json" id="tickersPremarketList">{{ tickers_premarket_json or "[]" }}</script>
@@ -59,6 +100,50 @@
 
 {% block extra_js %}
 <script>
+function setVizTab(name) {
+    const tab = (name === 'premarket') ? 'premarket' : 'chart5m';
+    document.querySelectorAll('[data-viz-tab]').forEach(function(btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-viz-tab') === tab);
+    });
+    const p5 = document.getElementById('vizPanelChart5m');
+    const ppm = document.getElementById('vizPanelPremarket');
+    if (p5) p5.classList.toggle('active', tab === 'chart5m');
+    if (ppm) ppm.classList.toggle('active', tab === 'premarket');
+    try {
+        const u = new URL(window.location.href);
+        u.searchParams.set('tab', tab);
+        history.replaceState(null, '', u.pathname + u.search);
+    } catch (_) {}
+    if (tab === 'premarket') {
+        syncPremarketTickerFrom5mIfEmpty();
+        loadPremarketAll().then(function() { schedulePremarketAutoRefresh(); });
+    }
+}
+document.querySelectorAll('[data-viz-tab]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        setVizTab(btn.getAttribute('data-viz-tab'));
+    });
+});
+(function initVizTabFromUrl() {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t && String(t).toLowerCase() === 'premarket') setVizTab('premarket');
+})();
+
+function syncPremarketTickerFrom5mIfEmpty() {
+    const pm = document.getElementById('tickerPremarketFilter');
+    const m5 = document.getElementById('ticker5mFilter');
+    if (!pm || !m5 || pm.value) return;
+    const v = m5.value ? String(m5.value).trim() : '';
+    if (!v) return;
+    if (!Array.from(pm.options).some(function(o) { return o.value === v; })) {
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = v + ' (из 5m)';
+        pm.appendChild(o);
+    }
+    pm.value = v;
+}
+
 let chart5mInstances = {};
 const CHART_REFRESH_MS = 5 * 60 * 1000;
 let chartRefreshTimer = null;
@@ -792,7 +877,7 @@ loadChart5mAll().then(function() { scheduleChartAutoRefresh(); });
 
 /* ——— Премаркет 1m ——— */
 let chartPremarketInstance = null;
-const PREMARKET_REFRESH_MS = 60 * 1000;
+const PREMARKET_REFRESH_MS = 5 * 60 * 1000;
 let premarketRefreshTimer = null;
 
 function getPremarketTickerUniverse() {
@@ -959,12 +1044,24 @@ async function loadPremarketTable() {
         }
         if (phaseEl) {
             const ph = data.session_phase ? String(data.session_phase).replace(/_/g, ' ') : '';
-            phaseEl.textContent = ph ? ('Фаза рынка: ' + ph) : '';
+            let note = ph ? ('Фаза рынка: ' + ph) : '';
+            if (data.yahoo_live === false) {
+                note += (note ? ' · ' : '') + 'таблица из БД (Yahoo live выкл. вне премаркета)';
+            }
+            if (data.cached) note += (note ? ' · ' : '') + 'кэш';
+            phaseEl.textContent = note;
         }
         renderPremarketTable(data);
     } catch (e) {
         if (phaseEl) phaseEl.textContent = 'Ошибка: ' + (e.message || e);
     }
+}
+
+function setPremarketChartStatus(msg, isErr) {
+    const el = document.getElementById('premarketChartStatus');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('err', !!isErr);
 }
 
 async function loadPremarketChart() {
@@ -978,9 +1075,10 @@ async function loadPremarketChart() {
     }
     container.innerHTML = '';
     if (!ticker) {
-        container.innerHTML = '<p class="muted" style="padding:0.35rem 0;">Выберите тикер в списке выше для графика 1m.</p>';
+        setPremarketChartStatus('График: выберите тикер в списке «Тикер для графика 1m» (это не список на вкладке 5m).', false);
         return;
     }
+    setPremarketChartStatus('Загрузка ' + ticker + '…', false);
     const section = document.createElement('div');
     section.innerHTML = '<h3 style="font-size:1rem; margin-bottom:0.4rem;">' + ticker.replace(/</g, '&lt;') + '</h3><canvas height="260" style="max-height:260px;"></canvas><div class="muted chart-pm-legend" style="font-size:0.8rem; margin-top:0.35rem;"></div>';
     container.appendChild(section);
@@ -990,12 +1088,17 @@ async function loadPremarketChart() {
         const res = await fetch('/api/chart/premarket/' + encodeURIComponent(ticker));
         const data = await res.json().catch(function() { return {}; });
         if (!res.ok) {
-            if (legendEl) legendEl.textContent = data.detail || 'Нет данных';
+            const msg = data.detail || 'Нет данных 1m (Yahoo prepost). Чаще всего: вне премаркета, тикер без extended hours, или контейнер ещё без нового кода — проверьте deploy.';
+            setPremarketChartStatus('График ' + ticker + ': ' + msg, true);
+            if (legendEl) legendEl.textContent = msg;
             return;
         }
+        setPremarketChartStatus('', false);
         chartPremarketInstance = buildPremarketChartFromData(data, canvasEl, legendEl);
     } catch (err) {
-        if (legendEl) legendEl.textContent = 'Ошибка: ' + (err.message || err);
+        const msg = err.message || String(err);
+        setPremarketChartStatus('График ' + ticker + ': ' + msg, true);
+        if (legendEl) legendEl.textContent = msg;
     }
 }
 
@@ -1004,16 +1107,32 @@ async function loadPremarketAll() {
     await loadPremarketChart();
 }
 
+function isPremarketTabActive() {
+    const ppm = document.getElementById('vizPanelPremarket');
+    return ppm && ppm.classList.contains('active');
+}
+
 function schedulePremarketAutoRefresh() {
     if (premarketRefreshTimer) clearTimeout(premarketRefreshTimer);
     premarketRefreshTimer = null;
     const cb = document.getElementById('autoPremarketRefresh');
-    if (!cb || !cb.checked) return;
+    if (!cb || !cb.checked || !isPremarketTabActive()) return;
+    if (document.hidden) return;
     premarketRefreshTimer = setTimeout(async function() {
+        if (!isPremarketTabActive() || document.hidden) {
+            schedulePremarketAutoRefresh();
+            return;
+        }
         await loadPremarketAll();
         schedulePremarketAutoRefresh();
     }, PREMARKET_REFRESH_MS);
 }
+
+document.addEventListener('visibilitychange', function() {
+    if (!document.hidden && isPremarketTabActive()) {
+        schedulePremarketAutoRefresh();
+    }
+});
 
 initPremarketTickerFilter();
 const tickerPmSel = document.getElementById('tickerPremarketFilter');
@@ -1027,7 +1146,12 @@ const autoPmCb = document.getElementById('autoPremarketRefresh');
 if (autoPmCb) {
     autoPmCb.addEventListener('change', schedulePremarketAutoRefresh);
 }
-loadPremarketAll().then(function() { schedulePremarketAutoRefresh(); });
+(function() {
+    const ppm = document.getElementById('vizPanelPremarket');
+    if (ppm && ppm.classList.contains('active')) {
+        loadPremarketAll().then(function() { schedulePremarketAutoRefresh(); });
+    }
+})();
 
 </script>
 {% endblock %}
