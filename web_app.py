@@ -55,6 +55,11 @@ from services.game5m_tuning_policy import (
 )
 from services.ticker_groups import get_tickers_fast
 from news_importer import add_news, get_news_sources_stats
+from services.sql_console import (
+    DEFAULT_MAX_ROWS as SQL_CONSOLE_MAX_ROWS,
+    STATEMENT_TIMEOUT_MS,
+    run_readonly_sql,
+)
 from report_generator import (
     compute_closed_trade_pnls,
     compute_open_positions,
@@ -3165,6 +3170,56 @@ async def get_service_status():
         data = await loop.run_in_executor(None, _gather_service_status)
         return _to_jsonable(data)
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _sql_console_disabled_reason() -> Optional[str]:
+    if web_demo_mode():
+        return "SQL-консоль отключена в WEB_DEMO_MODE."
+    if not _config_flag("SQL_CONSOLE_ENABLED", True):
+        return "SQL-консоль отключена (SQL_CONSOLE_ENABLED=false)."
+    return None
+
+
+@app.get("/sql", response_class=HTMLResponse)
+async def sql_console_page(request: Request):
+    """Read-only SQL: SELECT для проверок на проде без psql."""
+    reason = _sql_console_disabled_reason()
+    return HTMLResponse(
+        render_template(
+            "sql_console.html",
+            {
+                "request": request,
+                "disabled_reason": reason,
+                "max_rows": SQL_CONSOLE_MAX_ROWS,
+                "timeout_sec": STATEMENT_TIMEOUT_MS // 1000,
+            },
+        )
+    )
+
+
+@app.post("/api/sql/run", response_class=JSONResponse)
+async def sql_console_run_api(request: Request):
+    if _sql_console_disabled_reason():
+        raise HTTPException(status_code=403, detail=_sql_console_disabled_reason())
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Ожидается JSON: {\"sql\": \"...\"}")
+    sql = (body or {}).get("sql") if isinstance(body, dict) else None
+    if not sql or not str(sql).strip():
+        raise HTTPException(status_code=400, detail="Поле sql обязательно")
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            functools.partial(run_readonly_sql, get_engine(), str(sql)),
+        )
+        return _to_jsonable(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("sql_console run failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 

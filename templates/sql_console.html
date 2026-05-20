@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}SQL — LSE{% endblock %}
+
+{% block extra_css %}
+<style>
+    .sql-textarea {
+        width: 100%;
+        min-height: 140px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.8rem;
+        background: #0f172a;
+        color: #e2e8f0;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 0.6rem 0.75rem;
+        resize: vertical;
+    }
+    .sql-presets { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
+    .sql-presets button {
+        font-size: 0.78rem;
+        padding: 0.25rem 0.5rem;
+        background: #1e293b;
+        color: #7dd3fc;
+        border: 1px solid #334155;
+        border-radius: 6px;
+        cursor: pointer;
+    }
+    .sql-presets button:hover { background: #334155; }
+    .sql-meta { font-size: 0.82rem; color: #94a3b8; margin-top: 0.5rem; }
+    .sql-error { color: #fca5a5; margin-top: 0.5rem; font-size: 0.85rem; }
+    .sql-table-wrap { overflow-x: auto; margin-top: 0.75rem; }
+    .sql-table-wrap table { font-size: 0.78rem; }
+    .sql-table-wrap td, .sql-table-wrap th {
+        max-width: 280px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .sql-table-wrap td:hover, .sql-table-wrap th:hover { white-space: normal; word-break: break-all; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>SQL (только SELECT)</h1>
+<p class="muted" style="font-size: 0.9rem; margin-bottom: 0.8rem;">
+    Выполняется на БД из <code>DATABASE_URL</code> (на проде — <code>lse_trading</code>).
+    Только чтение: один <code>SELECT</code> или <code>WITH … SELECT</code>, максимум {{ max_rows }} строк
+    (если нет <code>LIMIT</code> — добавится автоматически). Таймаут {{ timeout_sec }} с.
+</p>
+
+{% if disabled_reason %}
+<div class="card" style="border-left-color: #f59e0b;">
+    <p style="color: #fde047;">{{ disabled_reason }}</p>
+</div>
+{% else %}
+
+<div class="card">
+    <h2>Запрос</h2>
+    <div class="sql-presets" aria-label="Примеры">
+        <button type="button" data-preset="decision_snapshot">decision_snapshot (GAME_5M BUY)</button>
+        <button type="button" data-preset="trades_24h">сделки за 24 ч</button>
+        <button type="button" data-preset="quotes_last">последняя дата quotes</button>
+    </div>
+    <textarea id="sqlInput" class="sql-textarea" spellcheck="false" placeholder="SELECT …"></textarea>
+    <div style="margin-top: 0.6rem;">
+        <button type="button" class="btn" id="sqlRunBtn">Выполнить</button>
+        <button type="button" class="btn" id="sqlClearBtn" style="margin-left: 0.4rem; background: #334155;">Очистить</button>
+    </div>
+    <p id="sqlError" class="sql-error" style="display: none;"></p>
+    <p id="sqlMeta" class="sql-meta" style="display: none;"></p>
+    <div id="sqlResults" class="sql-table-wrap"></div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% if not disabled_reason %}
+<script>
+(function() {
+    const PRESETS = {
+        decision_snapshot: `SELECT id, ticker,
+       context_json->'decision_snapshot'->>'resolve_divergence' AS div,
+       context_json->'decision_snapshot'->>'effective_decision' AS eff,
+       context_json->'decision_snapshot'->>'projected_effective_if_resolve' AS proj,
+       created_at
+FROM trade_history
+WHERE strategy_name = 'GAME_5M' AND side = 'BUY'
+  AND context_json ? 'decision_snapshot'
+ORDER BY id DESC
+LIMIT 20`,
+        trades_24h: `SELECT id, ticker, side, strategy_name, created_at
+FROM trade_history
+WHERE created_at >= NOW() - INTERVAL '24 hours'
+ORDER BY id DESC
+LIMIT 50`,
+        quotes_last: `SELECT MAX(date) AS quotes_last_date FROM quotes`
+    };
+
+    const input = document.getElementById('sqlInput');
+    const runBtn = document.getElementById('sqlRunBtn');
+    const clearBtn = document.getElementById('sqlClearBtn');
+    const errEl = document.getElementById('sqlError');
+    const metaEl = document.getElementById('sqlMeta');
+    const resultsEl = document.getElementById('sqlResults');
+
+    const saved = localStorage.getItem('lse_sql_console_query');
+    if (saved) input.value = saved;
+
+    document.querySelectorAll('[data-preset]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            const key = btn.getAttribute('data-preset');
+            if (PRESETS[key]) input.value = PRESETS[key];
+        });
+    });
+
+    clearBtn.addEventListener('click', function() {
+        input.value = '';
+        localStorage.removeItem('lse_sql_console_query');
+        errEl.style.display = 'none';
+        metaEl.style.display = 'none';
+        resultsEl.innerHTML = '';
+    });
+
+    function escapeHtml(s) {
+        if (s == null) return '';
+        const div = document.createElement('div');
+        div.textContent = String(s);
+        return div.innerHTML;
+    }
+
+    function renderTable(columns, rows) {
+        if (!columns.length) {
+            resultsEl.innerHTML = '<p class="muted">Нет колонок в ответе.</p>';
+            return;
+        }
+        let html = '<table><thead><tr>';
+        columns.forEach(function(c) { html += '<th>' + escapeHtml(c) + '</th>'; });
+        html += '</tr></thead><tbody>';
+        if (!rows.length) {
+            html += '<tr><td colspan="' + columns.length + '" class="muted text-center">0 строк</td></tr>';
+        } else {
+            rows.forEach(function(row) {
+                html += '<tr>';
+                row.forEach(function(cell) {
+                    html += '<td title="' + escapeHtml(cell) + '">' + escapeHtml(cell) + '</td>';
+                });
+                html += '</tr>';
+            });
+        }
+        html += '</tbody></table>';
+        resultsEl.innerHTML = html;
+    }
+
+    async function runQuery() {
+        const sql = input.value.trim();
+        if (!sql) return;
+        localStorage.setItem('lse_sql_console_query', input.value);
+        runBtn.disabled = true;
+        errEl.style.display = 'none';
+        metaEl.style.display = 'none';
+        resultsEl.innerHTML = '<p class="muted">Выполняется…</p>';
+        try {
+            const res = await fetch('/api/sql/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sql: sql })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.detail || res.statusText);
+            }
+            metaEl.textContent = data.row_count + ' строк · ' + data.elapsed_ms + ' ms · LIMIT ≤ ' + data.max_rows;
+            metaEl.style.display = 'block';
+            if (data.sql && data.sql !== sql.replace(/;\s*$/, '')) {
+                metaEl.textContent += ' · выполнено: ' + data.sql;
+            }
+            renderTable(data.columns || [], data.rows || []);
+        } catch (e) {
+            resultsEl.innerHTML = '';
+            errEl.textContent = e.message || String(e);
+            errEl.style.display = 'block';
+        } finally {
+            runBtn.disabled = false;
+        }
+    }
+
+    runBtn.addEventListener('click', runQuery);
+    input.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            runQuery();
+        }
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}
