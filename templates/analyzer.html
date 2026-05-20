@@ -1632,7 +1632,16 @@ async function runAnalyzer() {
         if (data.llm) {
             const llm = data.llm;
             if (llm.status === 'error' || llm.status === 'disabled') {
-                llmBlock.textContent = JSON.stringify(llm, null, 2);
+                const reason = (llm.reason || '').trim();
+                if (reason.indexOf('402') >= 0 || reason.indexOf('баланс') >= 0 || reason.indexOf('Insufficient balance') >= 0) {
+                    llmBlock.innerHTML = '<p style="color:#fca5a5;margin:0 0 0.5rem 0;"><strong>LLM недоступен:</strong> ' +
+                        esc(reason) + '</p>' +
+                        '<p class="muted" style="margin:0;font-size:0.88rem;">Пополните баланс на <a href="https://proxyapi.ru" target="_blank" rel="noopener">proxyapi.ru</a> ' +
+                        'или в <code>config.env</code> задайте <code>ANALYZER_LLM_MODEL=gpt-4o-mini</code> и ' +
+                        '<code>ANALYZER_LLM_BASE_URL=https://api.proxyapi.ru/openai/v1</code> (только для анализатора).</p>';
+                } else {
+                    llmBlock.textContent = reason || JSON.stringify(llm, null, 2);
+                }
             } else if (llm.analysis && typeof llm.analysis === 'object') {
                 const pri = Array.isArray(llm.analysis.priorities) ? llm.analysis.priorities : [];
                 let t = 'LLM (' + (llm.model || llm.status || '?') + ')\n\nПриоритеты:\n' +

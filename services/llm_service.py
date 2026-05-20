@@ -1102,8 +1102,22 @@ Sentiment анализ:
                 "finish_reason": getattr(response.choices[0], "finish_reason", None),
             }
         except Exception as e:
-            logger.warning("Сравнение моделей: ошибка для %s: %s", model, e)
-            return None
+            err_s = str(e)
+            logger.warning("generate_response_with_model: ошибка для %s @ %s: %s", model, base_url, err_s)
+            hint = err_s
+            if "402" in err_s or "Insufficient balance" in err_s:
+                hint = (
+                    "ProxyAPI 402: недостаточный баланс для этой модели (часто Anthropic). "
+                    "Пополните ProxyAPI или задайте ANALYZER_LLM_MODEL на OpenAI-модель (gpt-4o-mini)."
+                )
+            return {
+                "response": "",
+                "model": model,
+                "usage": {},
+                "finish_reason": None,
+                "api_error": True,
+                "error": hint,
+            }
 
     def analyze_trading_situation(
         self,

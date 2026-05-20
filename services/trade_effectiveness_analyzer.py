@@ -3281,6 +3281,10 @@ def _analyzer_llm_generate(
     )
     if not out:
         raise RuntimeError(f"LLM empty response (model={model}, base={base})")
+    if out.get("api_error"):
+        raise RuntimeError(str(out.get("error") or "LLM API error"))
+    if not str(out.get("response") or "").strip():
+        raise RuntimeError(f"LLM empty response (model={model}, base={base})")
     out["model"] = model
     out["base_url"] = base
     return out
