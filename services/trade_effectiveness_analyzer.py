@@ -4256,19 +4256,37 @@ def _normalize_env_value(v: Any) -> str:
     return str(v).strip()
 
 
-def _game_5m_env_key_expects_bool(env_key: str) -> bool:
+def _config_env_key_expects_bool(env_key: str) -> bool:
     if "_ENABLED" in env_key:
         return True
     return env_key in (
         "GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY",
         "GAME_5M_EARLY_USE_PREMARKET_MOMENTUM",
         "GAME_5M_HANGER_TUNE_APPLY_TAKE",
+        "PORTFOLIO_EXIT_ONLY_TAKE",
     )
+
+
+def _game_5m_env_key_expects_bool(env_key: str) -> bool:
+    return _config_env_key_expects_bool(env_key)
+
+
+def _config_env_key_expects_number(env_key: str) -> bool:
+    """Числовые ключи GAME_5M / PORTFOLIO в config.env (не bool)."""
+    if _config_env_key_expects_bool(env_key):
+        return False
+    if env_key.startswith("PORTFOLIO_"):
+        return any(
+            m in env_key
+            for m in ("_PCT", "_FACTOR", "_SCORE", "_BPS", "_LEVEL", "_MIN", "_MAX")
+        )
+    if not env_key.startswith("GAME_5M_"):
+        return False
 
 
 def _game_5m_env_key_expects_number(env_key: str) -> bool:
     """Ключи GAME_5M с числовым значением в config.env (не bool)."""
-    if not env_key.startswith("GAME_5M_") or _game_5m_env_key_expects_bool(env_key):
+    if not env_key.startswith("GAME_5M_") or _config_env_key_expects_bool(env_key):
         return False
     if env_key == "GAME_5M_SIGNAL_CRON_MINUTES":
         return False
@@ -4294,12 +4312,12 @@ def _proposed_str_valid_for_env_key(env_key: str, proposed_str: str) -> tuple[bo
     if not proposed_str or not proposed_str.strip():
         return False, "пустое значение"
     s = proposed_str.strip().replace(",", ".").rstrip("%").strip()
-    if _game_5m_env_key_expects_bool(env_key):
+    if _config_env_key_expects_bool(env_key):
         low = s.lower()
         if low in ("true", "false", "1", "0", "yes", "no"):
             return True, ""
         return False, "ожидалось true/false"
-    if _game_5m_env_key_expects_number(env_key):
+    if _config_env_key_expects_number(env_key) or _game_5m_env_key_expects_number(env_key):
         if len(proposed_str) > 48:
             return False, "слишком длинная строка (похоже на текст, а не число)"
         if re.search(r"[\u0400-\u04FF]", proposed_str):
@@ -4387,7 +4405,11 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
         # Фильтрация "можно применять" всё равно ниже, отдельной проверкой is_editable_config_env_key(env_key).
         if not env_key and parameter.startswith("GAME_5M_"):
             env_key = parameter
+        if not env_key and parameter.startswith("PORTFOLIO_"):
+            env_key = parameter
         if not env_key and env_key_hint.startswith("GAME_5M_"):
+            env_key = env_key_hint
+        if not env_key and env_key_hint.startswith("PORTFOLIO_"):
             env_key = env_key_hint
         if not env_key:
             skipped.append(
@@ -4395,6 +4417,16 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                     "parameter": parameter,
                     "reason": "no_env_mapping",
                     "note": "Нужна доработка алгоритма/маппинга (ключ не найден).",
+                }
+            )
+            continue
+        if not _env_key_allowed_for_strategy(env_key, strategy):
+            skipped.append(
+                {
+                    "parameter": parameter,
+                    "env_key": env_key,
+                    "reason": "wrong_strategy",
+                    "note": f"Ключ не для strategy={strategy}.",
                 }
             )
             continue
@@ -4446,6 +4478,16 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                     "env_key": env_key,
                     "reason": "invalid_proposed",
                     "note": pv_note,
+                }
+            )
+            continue
+        if str(proposed_str).strip().lower() == str(current or "").strip().lower():
+            skipped.append(
+                {
+                    "parameter": parameter,
+                    "env_key": env_key,
+                    "reason": "no_change",
+                    "note": "Предложенное значение совпадает с текущим в config.env.",
                 }
             )
             continue
@@ -4551,6 +4593,8 @@ def _build_auto_config_override(report: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             env_key = PARAM_TO_ENV_KEY.get(parameter)
             if not env_key and parameter.startswith("GAME_5M_") and is_editable_config_env_key(parameter):
+                env_key = parameter
+            if not env_key and parameter.startswith("PORTFOLIO_") and is_editable_config_env_key(parameter):
                 env_key = parameter
             if not env_key or env_key in seen:
                 continue

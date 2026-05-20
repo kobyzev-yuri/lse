@@ -46,7 +46,13 @@ from config_loader import (
     is_editable_config_env_key,
 )
 from execution_agent import ExecutionAgent
-from services.game5m_tuning_policy import apply_game5m_update, current_config_value, validate_game5m_update
+from services.game5m_tuning_policy import (
+    apply_config_env_update,
+    apply_game5m_update,
+    current_config_value,
+    validate_config_env_update,
+    validate_game5m_update,
+)
 from services.ticker_groups import get_tickers_fast
 from news_importer import add_news, get_news_sources_stats
 from report_generator import (
@@ -912,11 +918,11 @@ async def apply_analyzer_config(request: Request):
         proposed = str(row.get("proposed") if row.get("proposed") is not None else "").strip()
         if not key:
             continue
-        validation = validate_game5m_update(key, proposed)
+        validation = validate_config_env_update(key, proposed)
         if not validation.ok:
             skipped.append({"env_key": key, "reason": validation.reason})
             continue
-        ok, record = apply_game5m_update(key, proposed, source="web_api_analyzer_apply_config")
+        ok, record = apply_config_env_update(key, proposed, source="web_api_analyzer_apply_config")
         if not ok:
             skipped.append({"env_key": key, "reason": record.get("status") or "write_failed"})
             continue
