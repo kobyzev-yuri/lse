@@ -276,6 +276,23 @@ def _build_portfolio_catboost_status() -> Dict[str, Any]:
             meta = None
         last = _load_last_jsonl_record(report_path)
         trust = _trust_level_portfolio_catboost(meta if isinstance(meta, dict) else None, last if isinstance(last, dict) else None)
+        readiness_gate: Dict[str, Any] = {}
+        try:
+            from services.ml_data_quality_report import collect_ml_train_readiness_tail
+
+            root = Path(__file__).resolve().parents[1]
+            tail = collect_ml_train_readiness_tail(root, max_lines=1)
+            recs = tail.get("last_records") or []
+            if recs:
+                row = recs[-1]
+                pf_blk = row.get("portfolio") if isinstance(row.get("portfolio"), dict) else {}
+                readiness_gate = {
+                    "ts_utc": row.get("ts_utc"),
+                    "gate": pf_blk.get("gate"),
+                    "dry_run": pf_blk.get("dry_run"),
+                }
+        except Exception:
+            readiness_gate = {}
         return {
             "enabled": bool(enabled),
             "model_path": model_path,
@@ -294,6 +311,7 @@ def _build_portfolio_catboost_status() -> Dict[str, Any]:
             if isinstance(meta, dict)
             else None,
             **trust,
+            "ml_readiness": readiness_gate,
             "train_command": "python scripts/train_portfolio_catboost.py --horizon-days 5 --min-rows 300",
         }
     except Exception as e:
@@ -5934,7 +5952,7 @@ def _attach_multiday_lr_and_ml_arbiter(
     payload["game5m_gap_forecast_arbiter"] = build_game5m_gap_forecast_arbiter(
         payload, strategy=strategy, engine=eng, days=win
     )
-    payload["ml_production_arbiter"] = build_ml_production_arbiter(payload)
+    payload["ml_production_arbiter"] = build_ml_production_arbiter(payload, strategy=strategy)
     payload["product_ideas_arbiter"] = build_product_ideas_arbiter(
         payload, effects=effects, closed_trades=closed_trades
     )

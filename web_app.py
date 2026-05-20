@@ -760,12 +760,12 @@ def _ml_runtime_snapshot_for_ui() -> Dict[str, Any]:
     }
 
 
-def _compute_ml_data_quality_bundle() -> Dict[str, Any]:
+def _compute_ml_data_quality_bundle(strategy: str = "GAME_5M") -> Dict[str, Any]:
     """
     Единый снимок для веба: как run_ml_data_quality_report без профилирования CSV (dataset_paths=[]).
     Плюс пути к last_game5m / last_portfolio / last_event_reaction metrics, если файлы есть.
     """
-    from services.ml_data_quality_report import build_ml_data_quality_report
+    from services.ml_data_quality_report import build_ml_data_quality_report, enrich_ml_data_quality_for_strategy
 
     root = Path(__file__).resolve().parent
     engine = get_engine()
@@ -804,15 +804,18 @@ def _compute_ml_data_quality_bundle() -> Dict[str, Any]:
         "api": "/api/ml/data-quality",
     }
     bundle["ml_runtime"] = _ml_runtime_snapshot_for_ui()
-    return bundle
+    return enrich_ml_data_quality_for_strategy(bundle, strategy)
 
 
 @app.get("/api/ml/data-quality", response_class=JSONResponse)
-async def api_ml_data_quality():
-    """ML: гейты readiness (JSONL), last_* train metrics, event_analytics, плюс ml_runtime (флаги *_CATBOOST_ENABLED из config)."""
+async def api_ml_data_quality(strategy: str = "GAME_5M"):
+    """ML: гейты readiness (JSONL), last_* train metrics; ?strategy=PORTFOLIO — срез под портфель."""
     try:
+        from functools import partial
+
+        strat = (strategy or "GAME_5M").strip().upper()
         loop = asyncio.get_event_loop()
-        bundle = await loop.run_in_executor(None, _compute_ml_data_quality_bundle)
+        bundle = await loop.run_in_executor(None, partial(_compute_ml_data_quality_bundle, strat))
         return _to_jsonable(bundle)
     except Exception as e:
         logger.exception("api_ml_data_quality failed")

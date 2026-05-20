@@ -84,7 +84,7 @@
 
 <div class="card" style="border: 1px solid rgba(196, 181, 253, 0.35);">
     <h2>ML: готовность и качество данных</h2>
-    <p class="muted" style="font-size:0.88rem;margin:0 0 0.5rem 0;">Снимок <code>GET /api/ml/data-quality</code> (без тяжёлого CSV). Ниже — раскрывающиеся пояснения; таблица гейтов по умолчанию открыта.</p>
+    <p class="muted" style="font-size:0.88rem;margin:0 0 0.5rem 0;">Снимок <code>GET /api/ml/data-quality</code> (без тяжёлого CSV). Срез гейтов и метрик — по <strong>стратегии из формы</strong> (PORTFOLIO не показывает GAME_5M/event-reaction в таблице).</p>
     <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
         <button type="button" id="mlDataQualityRefresh" class="btn" style="padding:0.45rem 0.85rem;">Обновить блок</button>
         <a id="mlDataQualityJsonUrl" href="/api/ml/data-quality" target="_blank" rel="noopener" class="muted" style="font-size:0.9rem;">Открыть JSON</a>
@@ -182,7 +182,7 @@
 
 <div class="card analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(167, 139, 250, 0.35);">
     <h2>Арбитр готовности ML <code>ml_production_arbiter</code></h2>
-    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Сводка для оператора: multiday OOS, CatBoost entry, портфельный CatBoost, recovery .cbm. Текст не меняет <code>config.env</code> — для финального заключения рядом с LLM.</p>
+    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">При <strong>PORTFOLIO</strong> — только портфельный CatBoost и гейт <code>ML_READINESS_PORTFOLIO_RMSE_MAX</code>; при <strong>GAME_5M</strong> — multiday, entry CatBoost, recovery. Не меняет <code>config.env</code>.</p>
     <div id="mlArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
 </div>
 
@@ -287,6 +287,10 @@ function updateAnalyzerJsonLinks() {
             '# С массивом trade_effects по каждой сделке:\n' +
             'curl -sS "' + base + pathFull + '" -o analyzer_report_full.json';
     }
+    const mlq = document.getElementById('mlDataQualityJsonUrl');
+    if (mlq) {
+        mlq.href = '/api/ml/data-quality?strategy=' + encodeURIComponent(strategy);
+    }
 }
 
 async function downloadAnalyzerJson(includeDetails) {
@@ -380,11 +384,30 @@ function fmtGateEventReaction(erBlock) {
     return line + '<br><code>RMSE=' + esc(g.rmse_valid) + ', n_train=' + esc(g.n_train) + '</code>';
 }
 
-function renderMlDataQuality(data) {
+function renderMlDataQuality(data, strategy) {
     const dbox = 'margin:0.45rem 0;border:1px solid rgba(148,163,184,0.22);border-radius:8px;padding:0.4rem 0.65rem;background:rgba(15,23,42,0.35);';
     const sumy = 'cursor:pointer;font-weight:600;color:#e2e8f0;user-select:none;';
+    const su = (strategy || data.strategy_focus || 'GAME_5M').toUpperCase();
+    const isPortfolio = su === 'PORTFOLIO';
+    const isGame5m = su === 'GAME_5M';
     let html = '';
-    html += '<p style="margin:0 0 0.5rem 0;font-size:0.9rem;color:#cbd5e1;">Снимок: <code>' + esc(data.generated_at_utc) + '</code> · <code>v' + esc(data.report_version) + '</code></p>';
+    html += '<p style="margin:0 0 0.5rem 0;font-size:0.9rem;color:#cbd5e1;">Снимок: <code>' + esc(data.generated_at_utc) + '</code> · <code>v' + esc(data.report_version) + '</code> · стратегия <strong>' + esc(su) + '</strong></p>';
+
+    const thr = data.readiness_thresholds || {};
+    const latest = data.readiness_latest || {};
+    const pfGate = (latest.portfolio && latest.portfolio.gate) || {};
+    if (isPortfolio && pfGate.ready !== undefined && pfGate.ready !== null) {
+        html += '<div style="margin:0 0 0.65rem 0;padding:0.55rem 0.7rem;border-radius:8px;border:1px solid rgba(52,211,153,0.45);background:rgba(6,78,59,0.25);font-size:0.88rem;line-height:1.5;">';
+        html += '<strong>Portfolio CatBoost · гейт readiness</strong> (последняя строка JSONL): ';
+        html += pfGate.ready ? '<span style="color:#86efac;">✓ пройден</span>' : '<span style="color:#fca5a5;">✗ не пройден</span>';
+        html += ' · RMSE valid <code>' + esc(pfGate.rmse_valid) + '</code> · порог ≤ <code>' + esc(thr.portfolio_rmse_max != null ? thr.portfolio_rmse_max : '0.08') + '</code>';
+        html += ' · n_train <code>' + esc(pfGate.n_train) + '</code>';
+        if ((pfGate.reasons || []).length) {
+            html += '<br><span class="muted">' + esc((pfGate.reasons || []).join(', ')) + '</span>';
+        }
+        html += '<p class="muted" style="margin:0.35rem 0 0 0;font-size:0.8rem;">Связка с блоком «Portfolio: CatBoost» в отчёте анализатора — те же RMSE/trust.</p>';
+        html += '</div>';
+    }
 
     const rt = data.ml_runtime || {};
     const g5on = rt.game5m_catboost_used_in_runtime ? 'да' : 'нет';
@@ -392,11 +415,19 @@ function renderMlDataQuality(data) {
     const erPath = rt.event_reaction_model_path_configured ? 'путь задан' : 'путь не задан';
     const erFile = rt.event_reaction_cbm_file_exists ? 'файл .cbm есть' : 'файла .cbm нет';
     html += '<div style="margin:0 0 0.65rem 0;padding:0.5rem 0.65rem;border-radius:8px;border:1px solid rgba(129,140,248,0.4);background:rgba(49,46,129,0.2);font-size:0.84rem;line-height:1.5;color:#e2e8f0;">';
-    html += '<strong>Сейчас в рантайме бота</strong> (из <code>config.env</code>): ';
-    html += 'GAME_5M CatBoost — <code>' + esc(g5on) + '</code> · ';
-    html += 'Portfolio CatBoost — <code>' + esc(pfon) + '</code> · ';
-    html += 'Event reaction — <code>не подключён к сделкам</code> (<code>' + esc(erPath) + '</code>, ' + esc(erFile) + '). ';
-    html += '<span class="muted" style="font-size:0.8rem;">' + esc(rt.readiness_kill_switch_note || '') + '</span>';
+    html += '<strong>Сейчас в рантайме</strong> (из <code>config.env</code>): ';
+    if (isPortfolio) {
+        html += 'Portfolio CatBoost — <code>' + esc(pfon) + '</code>';
+        html += ' <span class="muted">(GAME_5M CatBoost — <code>' + esc(g5on) + '</code>, к портфелю не относится)</span>';
+    } else if (isGame5m) {
+        html += 'GAME_5M CatBoost — <code>' + esc(g5on) + '</code> · Portfolio — <code>' + esc(pfon) + '</code> (advisory)';
+    } else {
+        html += 'GAME_5M — <code>' + esc(g5on) + '</code> · Portfolio — <code>' + esc(pfon) + '</code>';
+    }
+    if (!isPortfolio) {
+        html += ' · Event reaction — <code>' + esc(erPath) + '</code>, ' + esc(erFile);
+    }
+    html += '<br><span class="muted" style="font-size:0.8rem;">' + esc(rt.readiness_kill_switch_note || '') + '</span>';
     html += '</div>';
 
     html += '<details open style="' + dbox + '"><summary style="' + sumy + '">Cron, датасеты и чем «гейт» отличается от «в проде»</summary>';
@@ -406,6 +437,7 @@ function renderMlDataQuality(data) {
     html += '<p style="margin:0;"><strong>Прод.</strong> Реальное использование CatBoost в сигналах/карточках задаётся только флагами <code>GAME_5M_CATBOOST_ENABLED</code> и <code>PORTFOLIO_CATBOOST_ENABLED</code> (и путями к .cbm). Их нужно менять осознанно после обучения; гейт — ориентир, не предохранитель.</p>';
     html += '</div></details>';
 
+    if (!isPortfolio) {
     html += '<details style="' + dbox + '"><summary style="' + sumy + '">Event reaction: зачем ключи в config.env (если ещё не в проде)</summary>';
     html += '<div style="margin-top:0.55rem;font-size:0.84rem;color:#cbd5e1;line-height:1.55;">';
     html += '<ul style="margin:0;padding-left:1.15rem;">';
@@ -414,6 +446,7 @@ function renderMlDataQuality(data) {
     html += '<li><code>EVENT_REACTION_TRAIN_MIN_ROWS</code> — минимум строк для попытки train в скрипте (перекрывает дефолт <code>--min-rows</code>).</li>';
     html += '<li><code>ML_READINESS_SKIP_EVENT_REACTION</code>, <code>ML_READINESS_EVENT_REACTION_RMSE_MAX</code>, <code>ML_READINESS_EVENT_REACTION_MIN_TRAIN</code> — только для гейта в JSONL и анализатора, не для рантайма.</li>';
     html += '</ul></div></details>';
+    }
 
     const mr = data.ml_train_readiness_jsonl || {};
     html += '<details open style="' + dbox + ';margin-top:0.55rem;"><summary style="' + sumy + '">Таблица гейтов (<code>ml_train_readiness.jsonl</code>)</summary>';
@@ -425,20 +458,33 @@ function renderMlDataQuality(data) {
     } else {
         html += '<div style="overflow-x:auto;"><table style="width:100%;min-width:680px;border-collapse:collapse;font-size:0.86rem;">';
         html += '<thead><tr style="text-align:left;border-bottom:1px solid rgba(148,163,184,0.35);">';
-        html += '<th style="padding:6px 8px;">ts_utc / mode</th><th style="padding:6px 8px;">overall</th>';
-        html += '<th style="padding:6px 8px;">GAME_5M</th><th style="padding:6px 8px;">Portfolio</th>';
-        html += '<th style="padding:6px 8px;">Event reaction</th></tr></thead><tbody>';
+        html += '<th style="padding:6px 8px;">ts_utc / mode</th>';
+        if (!isPortfolio) {
+            html += '<th style="padding:6px 8px;">overall</th>';
+        }
+        if (!isPortfolio) {
+            html += '<th style="padding:6px 8px;">GAME_5M</th>';
+        }
+        html += '<th style="padding:6px 8px;">Portfolio CatBoost</th>';
+        if (!isPortfolio) {
+            html += '<th style="padding:6px 8px;">Event reaction</th>';
+        }
+        html += '</tr></thead><tbody>';
         recs.forEach(function (row) {
             const g5 = (row.game5m && row.game5m.gate) || {};
             const pf = (row.portfolio && row.portfolio.gate) || {};
             html += '<tr style="vertical-align:top;border-bottom:1px solid rgba(30,41,59,0.65);">';
             html += '<td style="padding:8px;"><code style="font-size:0.8rem;">' + esc(row.ts_utc || '—') + '</code><br><span class="muted">' + esc(row.train_mode || '') + '</span></td>';
-            html += '<td style="padding:8px;">' + (row.overall_production_ready
-                ? '<strong style="color:#86efac;">true</strong>'
-                : '<strong style="color:#fca5a5;">false</strong>') + '</td>';
-            html += '<td style="padding:8px;">' + fmtGateGame5m(g5) + '</td>';
+            if (!isPortfolio) {
+                html += '<td style="padding:8px;">' + (row.overall_production_ready
+                    ? '<strong style="color:#86efac;">true</strong>'
+                    : '<strong style="color:#fca5a5;">false</strong>') + '</td>';
+                html += '<td style="padding:8px;">' + fmtGateGame5m(g5) + '</td>';
+            }
             html += '<td style="padding:8px;">' + fmtGatePortfolio(pf) + '</td>';
-            html += '<td style="padding:8px;">' + fmtGateEventReaction(row.event_reaction) + '</td>';
+            if (!isPortfolio) {
+                html += '<td style="padding:8px;">' + fmtGateEventReaction(row.event_reaction) + '</td>';
+            }
             html += '</tr>';
         });
         html += '</tbody></table></div>';
@@ -456,7 +502,9 @@ function renderMlDataQuality(data) {
     }
     html += '</div></details>';
 
-    const ext = data.external_train_metrics || {};
+    const ext = (isPortfolio || isGame5m) && data.external_train_metrics_focus
+        ? data.external_train_metrics_focus
+        : (data.external_train_metrics || {});
     const extKeys = Object.keys(ext);
     html += '<details style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">Файлы метрик последнего dry-run train (<code>ml_data_quality/last_*</code>)</summary>';
     html += '<div style="margin-top:0.45rem;font-size:0.84rem;color:#cbd5e1;">';
@@ -494,6 +542,7 @@ function renderMlDataQuality(data) {
     html += '</div></details>';
 
     const ea = data.event_analytics || {};
+    if (!isPortfolio) {
     html += '<details style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">БД: event / earnings (<code>event_analytics</code>)</summary>';
     html += '<div style="margin-top:0.45rem;font-size:0.84rem;color:#cbd5e1;">';
     if (ea.error) {
@@ -542,6 +591,7 @@ function renderMlDataQuality(data) {
         }
     }
     html += '</div></details>';
+    }
 
     function tailLine(label, block) {
         const b = block || {};
@@ -554,15 +604,17 @@ function renderMlDataQuality(data) {
         }
         html += '<pre style="font-size:0.75rem;overflow:auto;max-height:120px;padding:0.45rem;background:rgba(15,23,42,0.85);border-radius:6px;border:1px solid rgba(148,163,184,0.2);">' + esc(JSON.stringify(lr, null, 2)) + '</pre>';
     }
-    html += '<details style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">Хвосты JSONL (GAME_5M / Portfolio daily)</summary>';
+    html += '<details style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">Хвосты JSONL (daily ML reports)</summary>';
     html += '<div style="margin-top:0.45rem;">';
-    tailLine('GAME_5M daily', data.game5m_daily_ml_report_jsonl);
-    const g5j = data.game5m_daily_ml_report_jsonl || {};
-    const g5last = (g5j.last_records || [])[g5j.last_records.length - 1];
-    if (g5last && g5last.ts_utc) {
-        const t = Date.parse(g5last.ts_utc);
-        if (!isNaN(t) && (Date.now() - t) > 48 * 3600 * 1000) {
-            html += '<p style="font-size:0.82rem;margin:-0.2rem 0 0.5rem 0;color:#fcd34d;">Последняя строка GAME_5M daily старше ~2 суток — проверьте cron.</p>';
+    if (!isPortfolio) {
+        tailLine('GAME_5M daily', data.game5m_daily_ml_report_jsonl);
+        const g5j = data.game5m_daily_ml_report_jsonl || {};
+        const g5last = (g5j.last_records || [])[g5j.last_records.length - 1];
+        if (g5last && g5last.ts_utc) {
+            const t = Date.parse(g5last.ts_utc);
+            if (!isNaN(t) && (Date.now() - t) > 48 * 3600 * 1000) {
+                html += '<p style="font-size:0.82rem;margin:-0.2rem 0 0.5rem 0;color:#fcd34d;">Последняя строка GAME_5M daily старше ~2 суток — проверьте cron.</p>';
+            }
         }
     }
     tailLine('Portfolio daily', data.portfolio_ml_report_jsonl);
@@ -574,9 +626,13 @@ function renderMlDataQuality(data) {
     html += '<div style="margin-top:0.45rem;font-size:0.88rem;color:#cbd5e1;">';
     const kbLine = kb.error != null && kb.error !== '' ? kb.error : ('rows_total=' + (kb.rows_total != null ? kb.rows_total : '—'));
     const g5s = (th.strategies && th.strategies['GAME_5M']) || {};
+    const pfs = (th.strategies && th.strategies['PORTFOLIO']) || {};
     let thLine = '—';
     if (th.error != null && th.error !== '') {
         thLine = String(th.error);
+    } else if (isPortfolio && pfs.buy_rows != null) {
+        const pct = pfs.context_json_fill_rate != null ? (Number(pfs.context_json_fill_rate) * 100).toFixed(1) + '%' : '—';
+        thLine = 'PORTFOLIO BUY ' + pfs.buy_rows + ', context_json fill ' + pct;
     } else if (g5s.buy_rows != null) {
         const pct = g5s.context_json_fill_rate != null ? (Number(g5s.context_json_fill_rate) * 100).toFixed(1) + '%' : '—';
         thLine = 'GAME_5M BUY ' + g5s.buy_rows + ', context_json fill ' + pct;
@@ -601,16 +657,17 @@ async function loadMlDataQuality() {
     if (!statusEl || !inner) {
         return;
     }
-    statusEl.textContent = 'Загрузка /api/ml/data-quality…';
+    const strat = (document.getElementById('strategy') && document.getElementById('strategy').value) || 'GAME_5M';
+    statusEl.textContent = 'Загрузка /api/ml/data-quality?strategy=' + strat + '…';
     inner.innerHTML = '…';
     try {
-        const r = await fetch('/api/ml/data-quality');
+        const r = await fetch('/api/ml/data-quality?strategy=' + encodeURIComponent(strat));
         const data = await r.json();
         if (!r.ok) {
             throw new Error((data && data.detail) || r.statusText || 'ошибка API');
         }
-        inner.innerHTML = renderMlDataQuality(data);
-        statusEl.textContent = 'Обновлено: ' + new Date().toLocaleString();
+        inner.innerHTML = renderMlDataQuality(data, strat);
+        statusEl.textContent = 'Обновлено (' + strat + '): ' + new Date().toLocaleString();
     } catch (e) {
         inner.innerHTML = '—';
         statusEl.innerHTML = '<span class="text-danger">' + esc(e.message || e) + '</span>';
@@ -1352,6 +1409,20 @@ function renderPortfolioCatboostStatusBlock(data) {
         html += '<p style="margin:0.35rem 0;">RMSE valid=<strong>' + esc(met.rmse_valid != null ? met.rmse_valid : pf.rmse_valid) +
             '</strong>, n_valid=<strong>' + esc(ms.n_valid) + '</strong>, horizon_days=<strong>' + esc(ms.horizon_days) + '</strong></p>';
     }
+    const mr = pf.ml_readiness || {};
+    const gate = (mr.gate && typeof mr.gate === 'object') ? mr.gate : null;
+    if (gate && gate.ready != null) {
+        html += '<p style="margin:0.35rem 0;">Гейт readiness (<code>ml_train_readiness.jsonl</code>): ' +
+            (gate.ready ? '<strong style="color:#86efac;">✓</strong>' : '<strong style="color:#fca5a5;">✗</strong>') +
+            ' · RMSE <code>' + esc(gate.rmse_valid) + '</code> · n_train <code>' + esc(gate.n_train) + '</code>';
+        if (mr.ts_utc) {
+            html += ' · <span class="muted">' + esc(mr.ts_utc) + '</span>';
+        }
+        html += '</p>';
+        if ((gate.reasons || []).length) {
+            html += '<p class="muted" style="font-size:0.82rem;margin:0.2rem 0;">' + esc((gate.reasons || []).join(', ')) + '</p>';
+        }
+    }
     if (pf.train_command) {
         html += '<p class="muted" style="font-size:0.85rem;margin:0.35rem 0;">Обучение: <code>' + esc(pf.train_command) + '</code></p>';
     }
@@ -1708,6 +1779,7 @@ document.getElementById('days').addEventListener('change', updateAnalyzerJsonLin
 document.getElementById('strategy').addEventListener('change', function () {
     updateAnalyzerJsonLinks();
     applyAnalyzerStrategyVisibility();
+    loadMlDataQuality();
 });
 document.getElementById('useLlm').addEventListener('change', updateAnalyzerJsonLinks);
 ['optSectionCatboost', 'optSectionAdvanced', 'optSectionRecovery', 'optSectionGame5mExtra'].forEach(function (id) {

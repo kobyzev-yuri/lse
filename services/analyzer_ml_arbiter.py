@@ -1113,13 +1113,58 @@ def build_game5m_gap_forecast_arbiter(
     }
 
 
-def build_ml_production_arbiter(report: Dict[str, Any]) -> Dict[str, Any]:
+def build_ml_production_arbiter(report: Dict[str, Any], *, strategy: str = "GAME_5M") -> Dict[str, Any]:
     """
     Сводная рекомендация по ML в прод: multiday ridge, CatBoost entry, портфельный CatBoost, recovery (файлы/мета).
     Текст — ориентир для оператора; не меняет config.
     """
+    su = (strategy or "GAME_5M").strip().upper()
     lines: List[str] = []
     verdicts: Dict[str, str] = {}
+
+    if su == "PORTFOLIO":
+        pf = report.get("portfolio_catboost_status") or {}
+        if isinstance(pf, dict) and pf.get("enabled") and not pf.get("error"):
+            gate = (pf.get("ml_readiness") or {}).get("gate") if isinstance(pf.get("ml_readiness"), dict) else {}
+            g = gate if isinstance(gate, dict) else {}
+            rm = pf.get("rmse_valid")
+            if g.get("ready") is True:
+                verdicts["portfolio_catboost"] = "ready"
+                lines.append(
+                    f"• Portfolio CatBoost: **ready** (гейт readiness) — RMSE valid {rm}, "
+                    f"n_train={g.get('n_train', '—')}."
+                )
+            elif g.get("ready") is False:
+                verdicts["portfolio_catboost"] = "caution"
+                rs = ", ".join(str(x) for x in (g.get("reasons") or []))
+                lines.append(f"• Portfolio CatBoost: **caution** — гейт не пройден ({rs}); RMSE valid {rm}.")
+            elif rm is not None and float(rm) < 0.09:
+                verdicts["portfolio_catboost"] = "ready"
+                lines.append(f"• Portfolio CatBoost: **ready** — valid RMSE {rm} (meta).")
+            else:
+                verdicts["portfolio_catboost"] = "caution"
+                lines.append("• Portfolio CatBoost: **caution** — смотрите meta/RMSE и объём train.")
+        else:
+            verdicts["portfolio_catboost"] = "off_or_unknown"
+            lines.append("• Portfolio CatBoost: выключен или нет метаданных.")
+        lines.append(
+            "• GAME_5M / event-reaction / multiday ridge: не для strategy=PORTFOLIO "
+            "(см. ML readiness при фильтре GAME_5M)."
+        )
+        overall = verdicts.get("portfolio_catboost", "not_ready")
+        rationale = (
+            "Итог арбитра (PORTFOLIO): **" + overall + "**. Смотрите portfolio_catboost_status и гейт "
+            "ML_READINESS_PORTFOLIO_RMSE_MAX; включение PORTFOLIO_CATBOOST_ENABLED — вручную."
+        )
+        lines.append("")
+        lines.append(rationale)
+        return {
+            "overall_verdict": overall,
+            "verdicts": verdicts,
+            "summary_lines_ru": lines,
+            "conclusion_ru": "\n".join(lines),
+            "strategy_focus": su,
+        }
 
     mlr = report.get("multiday_lr_reality_check") or {}
     if mlr.get("mode") == "ok":

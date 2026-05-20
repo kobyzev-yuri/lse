@@ -414,3 +414,47 @@ def build_ml_data_quality_report(
                 ext[name] = {"path": str(pp), "data": None, "note": "missing_or_invalid"}
         bundle["external_train_metrics"] = ext
     return bundle
+
+
+def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -> Dict[str, Any]:
+    """Срез readiness/метрик под выбранную стратегию в анализаторе (GAME_5M | PORTFOLIO | ALL)."""
+    from config_loader import get_config_value
+
+    su = (strategy or "GAME_5M").strip().upper()
+    bundle["strategy_focus"] = su
+    try:
+        bundle["readiness_thresholds"] = {
+            "portfolio_rmse_max": float((get_config_value("ML_READINESS_PORTFOLIO_RMSE_MAX", "0.08") or "0.08").strip()),
+            "game5m_auc_min": float((get_config_value("ML_READINESS_GAME5M_AUC_MIN", "0.52") or "0.52").strip()),
+            "event_reaction_rmse_max": float(
+                (get_config_value("ML_READINESS_EVENT_REACTION_RMSE_MAX", "0.12") or "0.12").strip()
+            ),
+        }
+    except (ValueError, TypeError):
+        bundle["readiness_thresholds"] = {
+            "portfolio_rmse_max": 0.08,
+            "game5m_auc_min": 0.52,
+            "event_reaction_rmse_max": 0.12,
+        }
+    recs = (bundle.get("ml_train_readiness_jsonl") or {}).get("last_records") or []
+    latest = recs[-1] if recs else {}
+    bundle["readiness_latest"] = {
+        "ts_utc": latest.get("ts_utc"),
+        "train_mode": latest.get("train_mode"),
+        "overall_production_ready": latest.get("overall_production_ready"),
+        "portfolio": latest.get("portfolio"),
+        "game5m": latest.get("game5m"),
+        "event_reaction": latest.get("event_reaction"),
+    }
+    ext = bundle.get("external_train_metrics") if isinstance(bundle.get("external_train_metrics"), dict) else {}
+    if su == "PORTFOLIO":
+        bundle["external_train_metrics_focus"] = {
+            k: v for k, v in ext.items() if "portfolio" in k.lower()
+        }
+    elif su == "GAME_5M":
+        bundle["external_train_metrics_focus"] = {
+            k: v for k, v in ext.items() if "game5m" in k.lower() or "game5m" in k
+        }
+    else:
+        bundle["external_train_metrics_focus"] = dict(ext)
+    return bundle
