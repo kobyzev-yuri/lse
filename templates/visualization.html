@@ -37,7 +37,24 @@
     </div>
     <div id="chart5mContainer"></div>
 </div>
+
+<div class="card" style="margin-top:1.25rem;">
+    <h2>График премаркет 1m</h2>
+    <p class="muted" style="margin-bottom:0.5rem;">Как <code>/premarket</code> в Telegram: Yahoo 1m prepost, ось ET. Серый пунктир — вчерашний close; вертикаль — открытие 9:30. Таблица — все тикеры FAST + портфель; график — выбранный тикер (или из <code>?ticker=</code>).</p>
+    <label>Тикер (график)</label>
+    <select id="tickerPremarketFilter" style="min-width:8rem; margin-right:0.5rem;">
+        <option value="">— только таблица —</option>
+    </select>
+    <label class="muted" style="margin-left:0.75rem; font-size:0.9rem;">
+        <input type="checkbox" id="autoPremarketRefresh" checked style="vertical-align:middle;">
+        Обновлять каждую 1 мин
+    </label>
+    <p id="premarketPhaseLine" class="muted" style="font-size:0.85rem; margin:0.5rem 0 0.35rem 0;"></p>
+    <div id="premarketTableWrap" class="table-responsive" style="margin-bottom:0.75rem;"></div>
+    <div id="chartPremarketContainer"></div>
+</div>
 <script type="application/json" id="tickers5mList">{{ tickers_5m_json or "[]" }}</script>
+<script type="application/json" id="tickersPremarketList">{{ tickers_premarket_json or "[]" }}</script>
 {% endblock %}
 
 {% block extra_js %}
@@ -772,6 +789,245 @@ if (chart5mCandlesEl) {
 init5mTickerFilterFromUrl();
 syncChart5mControls();
 loadChart5mAll().then(function() { scheduleChartAutoRefresh(); });
+
+/* ——— Премаркет 1m ——— */
+let chartPremarketInstance = null;
+const PREMARKET_REFRESH_MS = 60 * 1000;
+let premarketRefreshTimer = null;
+
+function getPremarketTickerUniverse() {
+    const listEl = document.getElementById('tickersPremarketList');
+    return listEl ? (JSON.parse(listEl.textContent || '[]') || []) : [];
+}
+
+function initPremarketTickerFilter() {
+    const sel = document.getElementById('tickerPremarketFilter');
+    if (!sel) return;
+    const universe = getPremarketTickerUniverse();
+    const urlT = new URLSearchParams(window.location.search).get('ticker');
+    const urlTicker = urlT ? String(urlT).trim().toUpperCase() : '';
+    while (sel.options.length > 1) sel.remove(1);
+    const seen = new Set(['']);
+    universe.forEach(function(t) {
+        if (!t || seen.has(t)) return;
+        seen.add(t);
+        const o = document.createElement('option');
+        o.value = t;
+        o.textContent = t;
+        sel.appendChild(o);
+    });
+    if (urlTicker && !seen.has(urlTicker)) {
+        const o = document.createElement('option');
+        o.value = urlTicker;
+        o.textContent = urlTicker + ' (из ссылки)';
+        sel.appendChild(o);
+    }
+    if (urlTicker) sel.value = urlTicker;
+}
+
+function formatPremarketTickET(labels, idx) {
+    return formatChart5mTickET(labels, idx);
+}
+
+function buildPremarketChartFromData(data, canvasEl, legendEl) {
+    const labels = data.times || [];
+    const close = data.close || [];
+    if (!labels.length || !close.length) {
+        if (legendEl) legendEl.textContent = data.error || 'Нет точек на графике';
+        return null;
+    }
+    const datasets = [{
+        label: 'Close 1m',
+        data: close,
+        borderColor: '#38bdf8',
+        backgroundColor: 'rgba(56, 189, 248, 0.12)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.15,
+        fill: true,
+    }];
+    const prev = parseFloat(data.prev_close);
+    if (Number.isFinite(prev) && prev > 0) {
+        datasets.push({
+            label: 'Prev close ' + prev.toFixed(2),
+            data: labels.map(function() { return prev; }),
+            borderColor: '#94a3b8',
+            borderDash: [6, 4],
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: false,
+        });
+    }
+    const openIdx = data.open_boundary_index;
+    const ctx = canvasEl.getContext('2d');
+    const ch = new Chart(ctx, {
+        type: 'line',
+        data: { labels: labels, datasets: datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Время (ET)' },
+                    ticks: { maxTicksLimit: 14, callback: function(v, i) { return formatPremarketTickET(labels, i); } }
+                },
+                y: { title: { display: true, text: 'Цена' } }
+            },
+            plugins: {
+                legend: { position: 'top' },
+                premarketOpenLine: { index: openIdx },
+                tooltip: {
+                    callbacks: {
+                        title: function(items) {
+                            const i = items && items[0] ? items[0].dataIndex : 0;
+                            return formatChart5mTimeET(labels[i]);
+                        }
+                    }
+                }
+            }
+        },
+        plugins: [{
+            id: 'premarketOpenLine',
+            afterDraw: function(chart) {
+                const idx = chart.options.plugins?.premarketOpenLine?.index;
+                if (idx == null || idx < 0) return;
+                const xScale = chart.scales.x, yScale = chart.scales.y;
+                if (!xScale || !yScale || !labels.length || idx >= labels.length) return;
+                const x = xScale.getPixelForValue(labels[idx]);
+                if (!Number.isFinite(x)) return;
+                const c = chart.ctx;
+                c.save();
+                c.strokeStyle = 'rgba(250, 204, 21, 0.85)';
+                c.lineWidth = 1.5;
+                c.setLineDash([4, 3]);
+                c.beginPath();
+                c.moveTo(x, yScale.top);
+                c.lineTo(x, yScale.bottom);
+                c.stroke();
+                c.restore();
+            }
+        }]
+    });
+    if (legendEl) {
+        let leg = (data.points_count || labels.length) + ' точек · ET';
+        const gap = data.premarket_gap_pct;
+        if (gap != null && Number.isFinite(parseFloat(gap))) {
+            leg += ' · гэп ' + (parseFloat(gap) >= 0 ? '+' : '') + parseFloat(gap).toFixed(2) + '%';
+        }
+        const mins = data.minutes_until_open;
+        if (mins != null && data.session_phase === 'PRE_MARKET') {
+            leg += ' · до открытия ' + mins + ' мин';
+        }
+        if (openIdx != null && openIdx >= 0) {
+            leg += ' · 9:30 ET на баре #' + openIdx;
+        }
+        legendEl.textContent = leg;
+    }
+    return ch;
+}
+
+function renderPremarketTable(payload) {
+    const wrap = document.getElementById('premarketTableWrap');
+    if (!wrap) return;
+    const rows = (payload && payload.rows) ? payload.rows : [];
+    if (!rows.length) {
+        wrap.innerHTML = '<p class="muted">Нет данных премаркета по тикерам (вне PRE_MARKET или Yahoo пустой).</p>';
+        return;
+    }
+    let html = '<table><thead><tr><th>Ticker</th><th>Prev close</th><th>Premarket</th><th>Gap %</th><th>Min to open</th><th>Last (ET)</th></tr></thead><tbody>';
+    rows.forEach(function(r) {
+        const pc = r.prev_close != null ? Number(r.prev_close).toFixed(2) : '—';
+        const pl = r.premarket_last != null ? Number(r.premarket_last).toFixed(2) : '—';
+        const g = r.premarket_gap_pct != null ? ((r.premarket_gap_pct >= 0 ? '+' : '') + Number(r.premarket_gap_pct).toFixed(2) + '%') : '—';
+        const m = r.minutes_until_open != null ? String(r.minutes_until_open) : '—';
+        const te = r.premarket_last_time_et ? String(r.premarket_last_time_et).slice(0, 16) : '—';
+        html += '<tr><td>' + r.ticker + '</td><td>' + pc + '</td><td>' + pl + '</td><td>' + g + '</td><td>' + m + '</td><td>' + te + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+}
+
+async function loadPremarketTable() {
+    const phaseEl = document.getElementById('premarketPhaseLine');
+    try {
+        const res = await fetch('/api/premarket/table');
+        const data = await res.json().catch(function() { return {}; });
+        if (!res.ok) {
+            if (phaseEl) phaseEl.textContent = data.detail || 'Ошибка таблицы';
+            return;
+        }
+        if (phaseEl) {
+            const ph = data.session_phase ? String(data.session_phase).replace(/_/g, ' ') : '';
+            phaseEl.textContent = ph ? ('Фаза рынка: ' + ph) : '';
+        }
+        renderPremarketTable(data);
+    } catch (e) {
+        if (phaseEl) phaseEl.textContent = 'Ошибка: ' + (e.message || e);
+    }
+}
+
+async function loadPremarketChart() {
+    const sel = document.getElementById('tickerPremarketFilter');
+    const ticker = sel && sel.value ? String(sel.value).trim() : '';
+    const container = document.getElementById('chartPremarketContainer');
+    if (!container) return;
+    if (chartPremarketInstance) {
+        try { chartPremarketInstance.destroy(); } catch (_) {}
+        chartPremarketInstance = null;
+    }
+    container.innerHTML = '';
+    if (!ticker) {
+        container.innerHTML = '<p class="muted" style="padding:0.35rem 0;">Выберите тикер в списке выше для графика 1m.</p>';
+        return;
+    }
+    const section = document.createElement('div');
+    section.innerHTML = '<h3 style="font-size:1rem; margin-bottom:0.4rem;">' + ticker.replace(/</g, '&lt;') + '</h3><canvas height="260" style="max-height:260px;"></canvas><div class="muted chart-pm-legend" style="font-size:0.8rem; margin-top:0.35rem;"></div>';
+    container.appendChild(section);
+    const canvasEl = section.querySelector('canvas');
+    const legendEl = section.querySelector('.chart-pm-legend');
+    try {
+        const res = await fetch('/api/chart/premarket/' + encodeURIComponent(ticker));
+        const data = await res.json().catch(function() { return {}; });
+        if (!res.ok) {
+            if (legendEl) legendEl.textContent = data.detail || 'Нет данных';
+            return;
+        }
+        chartPremarketInstance = buildPremarketChartFromData(data, canvasEl, legendEl);
+    } catch (err) {
+        if (legendEl) legendEl.textContent = 'Ошибка: ' + (err.message || err);
+    }
+}
+
+async function loadPremarketAll() {
+    await loadPremarketTable();
+    await loadPremarketChart();
+}
+
+function schedulePremarketAutoRefresh() {
+    if (premarketRefreshTimer) clearTimeout(premarketRefreshTimer);
+    premarketRefreshTimer = null;
+    const cb = document.getElementById('autoPremarketRefresh');
+    if (!cb || !cb.checked) return;
+    premarketRefreshTimer = setTimeout(async function() {
+        await loadPremarketAll();
+        schedulePremarketAutoRefresh();
+    }, PREMARKET_REFRESH_MS);
+}
+
+initPremarketTickerFilter();
+const tickerPmSel = document.getElementById('tickerPremarketFilter');
+if (tickerPmSel) {
+    tickerPmSel.addEventListener('change', async function() {
+        await loadPremarketChart();
+        schedulePremarketAutoRefresh();
+    });
+}
+const autoPmCb = document.getElementById('autoPremarketRefresh');
+if (autoPmCb) {
+    autoPmCb.addEventListener('change', schedulePremarketAutoRefresh);
+}
+loadPremarketAll().then(function() { schedulePremarketAutoRefresh(); });
 
 </script>
 {% endblock %}

@@ -1876,6 +1876,70 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
     }
 
 
+def _premarket_ticker_universe() -> List[str]:
+    """Тикеры для премаркет-таблицы/графика: FAST + портфель (как /premarket в Telegram)."""
+    seen = set()
+    out: List[str] = []
+    try:
+        from services.ticker_groups import get_tickers_fast, get_tickers_for_portfolio_game
+
+        for t in list(get_tickers_fast() or []) + list(get_tickers_for_portfolio_game() or []):
+            sym = (t or "").strip().upper()
+            if sym and sym not in seen:
+                seen.add(sym)
+                out.append(sym)
+    except Exception:
+        pass
+    if not out:
+        out = list(get_tickers_fast() or []) or ["SNDK"]
+    return out
+
+
+@app.get("/api/premarket/table", response_class=JSONResponse)
+async def get_premarket_table_api():
+    """Сводка премаркета по тикерам (read-only, Yahoo)."""
+    try:
+        from services.market_session import get_market_session_context
+        from services.premarket_chart import build_premarket_table_rows
+
+        loop = asyncio.get_running_loop()
+        tickers = _premarket_ticker_universe()
+        rows = await loop.run_in_executor(
+            None, functools.partial(build_premarket_table_rows, tickers)
+        )
+        sess = get_market_session_context() or {}
+        return _to_jsonable({
+            "session_phase": sess.get("session_phase"),
+            "rows": rows,
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/chart/premarket/{ticker}", response_class=JSONResponse)
+async def get_chart_premarket(ticker: str):
+    """API: 1m премаркет для графика (как /premarket <ticker> в Telegram)."""
+    try:
+        from services.premarket_chart import build_premarket_chart_data
+
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(
+            None, functools.partial(build_premarket_chart_data, ticker)
+        )
+        body = _to_jsonable(data)
+        if data.get("no_data"):
+            return JSONResponse(
+                status_code=404,
+                content={"detail": data.get("error") or "Нет данных премаркета"},
+            )
+        return JSONResponse(content=body)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Ошибка загрузки премаркета: {type(e).__name__}: {e!s}"},
+        )
+
+
 @app.get("/api/chart5m/{ticker}")
 async def get_chart5m(ticker: str, days: int = 1, source: str = "live"):
     """API: Данные для графика 5m с зоной пролонгации (EMA, тренд при ≥5 свечах)."""
@@ -1924,10 +1988,12 @@ async def visualization_page(request: Request):
         tickers_5m = list(get_tickers_fast() or [])
     if not tickers_5m:
         tickers_5m = ["SNDK"]
+    tickers_pm = _premarket_ticker_universe()
     return HTMLResponse(render_template("visualization.html", {
         "tickers": tickers,
         "tickers_5m": tickers_5m,
         "tickers_5m_json": json.dumps(tickers_5m),
+        "tickers_premarket_json": json.dumps(tickers_pm),
     }))
 
 
