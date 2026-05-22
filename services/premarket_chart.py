@@ -69,15 +69,9 @@ def _filter_premarket_bars(df: pd.DataFrame, dt_col: str) -> pd.DataFrame:
         sub = out.loc[mask_pm].copy()
         if len(sub) >= 2:
             return sub.reset_index(drop=True)
-        mask_today = et.dt.date == today
-        sub2 = out.loc[mask_today].copy()
-        if len(sub2) >= 2:
-            return sub2.reset_index(drop=True)
-        if len(out) >= 2:
-            return out.reset_index(drop=True)
     except Exception:
         pass
-    return out.reset_index(drop=True)
+    return out.iloc[0:0].copy().reset_index(drop=True)
 
 
 def _minutes_until_open_global() -> Optional[int]:

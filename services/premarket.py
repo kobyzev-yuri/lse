@@ -42,6 +42,27 @@ def _minutes_until_open(et_now: Optional[datetime]) -> Optional[int]:
     return int(delta.total_seconds() / 60)
 
 
+def _series_to_et(df: pd.DataFrame, dt_col: str) -> pd.Series:
+    dts = pd.to_datetime(df[dt_col], errors="coerce")
+    if hasattr(dts.dt, "tz") and dts.dt.tz is not None:
+        return dts.dt.tz_convert("America/New_York")
+    try:
+        return dts.dt.tz_localize("America/New_York", ambiguous=True)
+    except Exception:
+        return dts.dt.tz_localize("UTC", ambiguous=True).dt.tz_convert("America/New_York")
+
+
+def _true_premarket_slice(df: pd.DataFrame, dt_col: str, *, et_now: Optional[datetime] = None) -> pd.DataFrame:
+    if df is None or df.empty or dt_col not in df.columns:
+        return df.iloc[0:0].copy() if df is not None else pd.DataFrame()
+    dts_et = _series_to_et(df, dt_col)
+    trade_date = et_now.date() if et_now is not None else dts_et.max().date()
+    mask = (dts_et.dt.date == trade_date) & (dts_et.dt.time < NYSE_OPEN_TIME)
+    if et_now is not None:
+        mask = mask & (dts_et <= et_now)
+    return df.loc[mask].copy().sort_values(dt_col).reset_index(drop=True)
+
+
 def get_prev_close_from_db(ticker: str) -> Optional[float]:
     """Последний close из quotes (предыдущий торговый день)."""
     try:
@@ -119,10 +140,14 @@ def get_premarket_context(ticker: str, dt_utc: Optional[datetime] = None) -> Dic
         dt_col = "Datetime" if "Datetime" in df.columns else "Date"
         if dt_col in df.columns:
             df = df.sort_values(dt_col).reset_index(drop=True)
-        # Берём последнюю цену (последняя минута премаркета по времени)
-        last_ts = df[dt_col].iloc[-1] if dt_col in df.columns else None
-        premarket_last = float(df["Close"].iloc[-1])
-        premarket_vol = int(df["Volume"].iloc[-1]) if "Volume" in df.columns and len(df) else None
+        pm = _true_premarket_slice(df, dt_col, et_now=et)
+        if pm.empty:
+            out["error"] = "нет строк до 09:30 ET"
+            return out
+        # Берём последнюю цену именно до открытия RTH.
+        last_ts = pm[dt_col].iloc[-1] if dt_col in pm.columns else None
+        premarket_last = float(pm["Close"].iloc[-1])
+        premarket_vol = int(pm["Volume"].sum()) if "Volume" in pm.columns and len(pm) else None
         out["premarket_last"] = premarket_last
         out["premarket_volume"] = premarket_vol
         # В ET для сравнения с Yahoo (приводим к ET если есть tz)
