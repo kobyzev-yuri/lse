@@ -71,8 +71,14 @@
             <dd style="margin:0 0 0.4rem 0.5rem;">Закрытие последнего торгового дня (из <code>quotes</code> или Yahoo daily) — база для гэпа.</dd>
             <dt style="color:#e2e8f0;">Premarket</dt>
             <dd style="margin:0 0 0.4rem 0.5rem;">Последняя цена 1m в ленте prepost (как в Telegram <code>/premarket</code>).</dd>
-            <dt style="color:#e2e8f0;">Gap %</dt>
-            <dd style="margin:0 0 0.4rem 0.5rem;"><code>(Premarket / Prev close − 1) × 100</code> — ожидаемый гэп к открытию RTH, не движение внутри премаркета.</dd>
+            <dt style="color:#e2e8f0;">Premarket gap</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;"><code>(Premarket / Prev close − 1) × 100</code> — фактический текущий гэп по последней цене премаркета, не ML.</dd>
+            <dt style="color:#e2e8f0;">ML gap forecast</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;"><code>pred_ticker_gap_pct</code> из <code>game5m_gap_forecast_daily</code> — наш прогноз гэпа к open; появляется после premarket_cron/модели.</dd>
+            <dt style="color:#e2e8f0;">RTH open gap</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;"><code>(RTH open / Prev close − 1) × 100</code> — фактический гэп на открытии после 9:30 ET; до начала сессии пусто.</dd>
+            <dt style="color:#e2e8f0;">ML error</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;"><code>open_gap_pct − pred_ticker_gap_pct</code> — ошибка прогноза против факта открытия; появляется вместе с фактическим open gap.</dd>
             <dt style="color:#e2e8f0;">Min to open</dt>
             <dd style="margin:0 0 0.4rem 0.5rem;">Минуты до 9:30 ET (актуально в фазе PRE_MARKET; в RTH обычно 0).</dd>
             <dt style="color:#e2e8f0;">Last (ET)</dt>
@@ -998,7 +1004,19 @@ function buildPremarketChartFromData(data, canvasEl, legendEl) {
         let leg = (data.points_count || labels.length) + ' точек · ET';
         const gap = data.premarket_gap_pct;
         if (gap != null && Number.isFinite(parseFloat(gap))) {
-            leg += ' · гэп ' + (parseFloat(gap) >= 0 ? '+' : '') + parseFloat(gap).toFixed(2) + '%';
+            leg += ' · premarket gap ' + (parseFloat(gap) >= 0 ? '+' : '') + parseFloat(gap).toFixed(2) + '%';
+        }
+        const predGap = data.pred_ticker_gap_pct;
+        if (predGap != null && Number.isFinite(parseFloat(predGap))) {
+            leg += ' · ML gap ' + (parseFloat(predGap) >= 0 ? '+' : '') + parseFloat(predGap).toFixed(2) + '%';
+        }
+        const openGap = data.open_gap_pct;
+        if (openGap != null && Number.isFinite(parseFloat(openGap))) {
+            leg += ' · RTH open gap ' + (parseFloat(openGap) >= 0 ? '+' : '') + parseFloat(openGap).toFixed(2) + '%';
+        }
+        const predErr = data.error_pred_ticker_vs_open_pct;
+        if (predErr != null && Number.isFinite(parseFloat(predErr))) {
+            leg += ' · ML error ' + (parseFloat(predErr) >= 0 ? '+' : '') + parseFloat(predErr).toFixed(2) + ' п.п.';
         }
         const mins = data.minutes_until_open;
         if (mins != null && data.session_phase === 'PRE_MARKET') {
@@ -1020,14 +1038,17 @@ function renderPremarketTable(payload) {
         wrap.innerHTML = '<p class="muted">Нет данных премаркета по тикерам (вне PRE_MARKET или Yahoo пустой).</p>';
         return;
     }
-    let html = '<table><thead><tr><th>Ticker</th><th>Prev close</th><th>Premarket</th><th>Gap %</th><th>Min to open</th><th>Last (ET)</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Ticker</th><th>Prev close</th><th>Premarket</th><th>Premarket gap</th><th>ML gap forecast</th><th>RTH open gap</th><th>ML error</th><th>Min to open</th><th>Last (ET)</th></tr></thead><tbody>';
     rows.forEach(function(r) {
         const pc = r.prev_close != null ? Number(r.prev_close).toFixed(2) : '—';
         const pl = r.premarket_last != null ? Number(r.premarket_last).toFixed(2) : '—';
         const g = r.premarket_gap_pct != null ? ((r.premarket_gap_pct >= 0 ? '+' : '') + Number(r.premarket_gap_pct).toFixed(2) + '%') : '—';
+        const pg = r.pred_ticker_gap_pct != null ? ((r.pred_ticker_gap_pct >= 0 ? '+' : '') + Number(r.pred_ticker_gap_pct).toFixed(2) + '%') : '—';
+        const og = r.open_gap_pct != null ? ((r.open_gap_pct >= 0 ? '+' : '') + Number(r.open_gap_pct).toFixed(2) + '%') : '—';
+        const pe = r.error_pred_ticker_vs_open_pct != null ? ((r.error_pred_ticker_vs_open_pct >= 0 ? '+' : '') + Number(r.error_pred_ticker_vs_open_pct).toFixed(2) + ' п.п.') : '—';
         const m = r.minutes_until_open != null ? String(r.minutes_until_open) : '—';
         const te = r.premarket_last_time_et ? String(r.premarket_last_time_et).slice(0, 16) : '—';
-        html += '<tr><td>' + r.ticker + '</td><td>' + pc + '</td><td>' + pl + '</td><td>' + g + '</td><td>' + m + '</td><td>' + te + '</td></tr>';
+        html += '<tr><td>' + r.ticker + '</td><td>' + pc + '</td><td>' + pl + '</td><td>' + g + '</td><td>' + pg + '</td><td>' + og + '</td><td>' + pe + '</td><td>' + m + '</td><td>' + te + '</td></tr>';
     });
     html += '</tbody></table>';
     wrap.innerHTML = html;

@@ -105,6 +105,10 @@ def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
         stmt = text(
             """
             SELECT symbol, prev_close, premarket_last, premarket_gap_pct,
+                   pred_sector_gap_pct, pred_ticker_gap_pct,
+                   pred_ticker_source, pred_ticker_model_version,
+                   rth_open_price, open_gap_pct, source_open,
+                   error_pred_ticker_vs_open_pct,
                    snapshot_ts_premarket
             FROM game5m_gap_forecast_daily
             WHERE trade_date = :td AND symbol IN :syms
@@ -128,6 +132,18 @@ def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
             "prev_close": float(r["prev_close"]) if pd.notna(r.get("prev_close")) else None,
             "premarket_last": float(r["premarket_last"]) if pd.notna(r.get("premarket_last")) else None,
             "premarket_gap_pct": float(r["premarket_gap_pct"]) if pd.notna(r.get("premarket_gap_pct")) else None,
+            "pred_sector_gap_pct": float(r["pred_sector_gap_pct"]) if pd.notna(r.get("pred_sector_gap_pct")) else None,
+            "pred_ticker_gap_pct": float(r["pred_ticker_gap_pct"]) if pd.notna(r.get("pred_ticker_gap_pct")) else None,
+            "pred_ticker_source": str(r.get("pred_ticker_source") or "") or None,
+            "pred_ticker_model_version": str(r.get("pred_ticker_model_version") or "") or None,
+            "rth_open_price": float(r["rth_open_price"]) if pd.notna(r.get("rth_open_price")) else None,
+            "open_gap_pct": float(r["open_gap_pct"]) if pd.notna(r.get("open_gap_pct")) else None,
+            "source_open": str(r.get("source_open") or "") or None,
+            "error_pred_ticker_vs_open_pct": (
+                float(r["error_pred_ticker_vs_open_pct"])
+                if pd.notna(r.get("error_pred_ticker_vs_open_pct"))
+                else None
+            ),
             "premarket_last_time_et": str(ts) if ts is not None and pd.notna(ts) else None,
             "source": "db",
         }
@@ -143,6 +159,14 @@ def _yahoo_context_row(ticker: str) -> Optional[Dict[str, Any]]:
         "prev_close": pm.get("prev_close"),
         "premarket_last": pm.get("premarket_last"),
         "premarket_gap_pct": pm.get("premarket_gap_pct"),
+        "pred_sector_gap_pct": None,
+        "pred_ticker_gap_pct": None,
+        "pred_ticker_source": None,
+        "pred_ticker_model_version": None,
+        "rth_open_price": None,
+        "open_gap_pct": None,
+        "source_open": None,
+        "error_pred_ticker_vs_open_pct": None,
         "minutes_until_open": pm.get("minutes_until_open"),
         "premarket_last_time_et": pm.get("premarket_last_time_et"),
         "source": "yahoo",
@@ -230,6 +254,14 @@ def build_premarket_chart_data(ticker: str) -> Dict[str, Any]:
         "prev_close": None,
         "premarket_last": None,
         "premarket_gap_pct": None,
+        "pred_sector_gap_pct": None,
+        "pred_ticker_gap_pct": None,
+        "pred_ticker_source": None,
+        "pred_ticker_model_version": None,
+        "rth_open_price": None,
+        "open_gap_pct": None,
+        "source_open": None,
+        "error_pred_ticker_vs_open_pct": None,
         "premarket_last_time_et": None,
         "minutes_until_open": None,
         "session_phase": None,
@@ -255,6 +287,14 @@ def build_premarket_chart_data(ticker: str) -> Dict[str, Any]:
         out["prev_close"] = db_one.get("prev_close")
         out["premarket_last"] = db_one.get("premarket_last")
         out["premarket_gap_pct"] = db_one.get("premarket_gap_pct")
+        out["pred_sector_gap_pct"] = db_one.get("pred_sector_gap_pct")
+        out["pred_ticker_gap_pct"] = db_one.get("pred_ticker_gap_pct")
+        out["pred_ticker_source"] = db_one.get("pred_ticker_source")
+        out["pred_ticker_model_version"] = db_one.get("pred_ticker_model_version")
+        out["rth_open_price"] = db_one.get("rth_open_price")
+        out["open_gap_pct"] = db_one.get("open_gap_pct")
+        out["source_open"] = db_one.get("source_open")
+        out["error_pred_ticker_vs_open_pct"] = db_one.get("error_pred_ticker_vs_open_pct")
         out["premarket_last_time_et"] = db_one.get("premarket_last_time_et")
         out["minutes_until_open"] = _minutes_until_open_global()
     else:
@@ -264,6 +304,14 @@ def build_premarket_chart_data(ticker: str) -> Dict[str, Any]:
         out["prev_close"] = pm_ctx.get("prev_close")
         out["premarket_last"] = pm_ctx.get("premarket_last")
         out["premarket_gap_pct"] = pm_ctx.get("premarket_gap_pct")
+        out["pred_sector_gap_pct"] = None
+        out["pred_ticker_gap_pct"] = None
+        out["pred_ticker_source"] = None
+        out["pred_ticker_model_version"] = None
+        out["rth_open_price"] = None
+        out["open_gap_pct"] = None
+        out["source_open"] = None
+        out["error_pred_ticker_vs_open_pct"] = None
         out["premarket_last_time_et"] = pm_ctx.get("premarket_last_time_et")
         out["minutes_until_open"] = pm_ctx.get("minutes_until_open")
 
