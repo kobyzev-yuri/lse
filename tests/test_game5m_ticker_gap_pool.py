@@ -4,9 +4,13 @@ from __future__ import annotations
 import unittest
 
 from services.game5m_gap_forecast import pool_gap_forecast_metrics
+from services.game5m_gap_forecast import UPSERT_PREMARKET_SQL
 
 
 class TestTickerGapPool(unittest.TestCase):
+    def test_premarket_upsert_does_not_overwrite_after_open(self):
+        self.assertIn("WHERE game5m_gap_forecast_daily.open_gap_pct IS NULL", UPSERT_PREMARKET_SQL)
+
     def test_ticker_v2_vs_sector_baseline(self):
         rows = [
             {

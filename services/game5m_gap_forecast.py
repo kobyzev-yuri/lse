@@ -52,6 +52,7 @@ ON CONFLICT (trade_date, symbol) DO UPDATE SET
   pred_ticker_source = COALESCE(EXCLUDED.pred_ticker_source, game5m_gap_forecast_daily.pred_ticker_source),
   pred_ticker_model_version = COALESCE(EXCLUDED.pred_ticker_model_version, game5m_gap_forecast_daily.pred_ticker_model_version),
   updated_at = NOW()
+WHERE game5m_gap_forecast_daily.open_gap_pct IS NULL
 """
 
 UPDATE_OPEN_SQL = """

@@ -30,7 +30,11 @@ def main() -> None:
         default="all",
         help="premarket=snapshot; open=fill RTH open; all=both",
     )
-    parser.add_argument("--force", action="store_true", help="Перезаписать open при --phase open")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Перезаписать open при --phase open. Premarket snapshot не перезаписывает строки с уже заполненным open_gap.",
+    )
     parser.add_argument(
         "--trade-date",
         type=str,
