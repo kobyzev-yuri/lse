@@ -73,7 +73,7 @@ def validate_readonly_sql(sql: str, *, max_rows: int = DEFAULT_MAX_ROWS) -> str:
 
     lowered = cleaned.lower()
     if not (lowered.startswith("select") or lowered.startswith("with")):
-        raise ValueError("Разрешены только SELECT или WITH ... SELECT")
+        raise ValueError("запрещены SQL-операторы кроме SELECT или WITH ... SELECT")
 
     if _SELECT_INTO.search(cleaned):
         raise ValueError("SELECT INTO запрещён")

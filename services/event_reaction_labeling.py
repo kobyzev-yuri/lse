@@ -231,8 +231,12 @@ def load_market_regime_row(trade_date: date) -> Optional[Dict[str, Any]]:
         WHERE trade_date = :d
         """
     )
-    with get_engine().connect() as conn:
-        row = conn.execute(q, {"d": trade_date}).fetchone()
+    try:
+        with get_engine().connect() as conn:
+            row = conn.execute(q, {"d": trade_date}).fetchone()
+    except Exception as e:
+        logger.debug("market_regime_daily unavailable for %s: %s", trade_date, e)
+        return None
     if not row:
         return None
     return {
