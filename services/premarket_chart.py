@@ -137,16 +137,12 @@ def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
             continue
         ts = r.get("snapshot_ts_premarket")
         snapshot_valid = _snapshot_is_preopen(ts)
-        pred_ticker = (
-            float(r["pred_ticker_gap_pct"])
-            if snapshot_valid and pd.notna(r.get("pred_ticker_gap_pct"))
-            else None
-        )
+        pred_ticker = float(r["pred_ticker_gap_pct"]) if pd.notna(r.get("pred_ticker_gap_pct")) else None
         open_gap = float(r["open_gap_pct"]) if pd.notna(r.get("open_gap_pct")) else None
         pred_err = None
         if pred_ticker is not None and open_gap is not None:
             pred_err = round(open_gap - pred_ticker, 6)
-        elif snapshot_valid and pd.notna(r.get("error_pred_ticker_vs_open_pct")):
+        elif pd.notna(r.get("error_pred_ticker_vs_open_pct")):
             pred_err = float(r["error_pred_ticker_vs_open_pct"])
         out[sym] = {
             "ticker": sym,
@@ -161,10 +157,8 @@ def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
                 float(r["pred_sector_gap_pct"]) if snapshot_valid and pd.notna(r.get("pred_sector_gap_pct")) else None
             ),
             "pred_ticker_gap_pct": pred_ticker,
-            "pred_ticker_source": (str(r.get("pred_ticker_source") or "") or None) if snapshot_valid else None,
-            "pred_ticker_model_version": (
-                (str(r.get("pred_ticker_model_version") or "") or None) if snapshot_valid else None
-            ),
+            "pred_ticker_source": str(r.get("pred_ticker_source") or "") or None,
+            "pred_ticker_model_version": str(r.get("pred_ticker_model_version") or "") or None,
             "rth_open_price": float(r["rth_open_price"]) if pd.notna(r.get("rth_open_price")) else None,
             "open_gap_pct": open_gap,
             "source_open": str(r.get("source_open") or "") or None,
@@ -223,7 +217,7 @@ def build_premarket_table_rows(
     missing: List[str] = []
 
     for t in ordered:
-        if t in db_map and db_map[t].get("premarket_last") is not None:
+        if t in db_map:
             row = dict(db_map[t])
             row["minutes_until_open"] = mins_global
             rows.append(row)

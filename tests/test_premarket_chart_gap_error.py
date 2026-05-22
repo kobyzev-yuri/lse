@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
-from services.premarket_chart import _rows_from_gap_forecast_db
+from services.premarket_chart import _rows_from_gap_forecast_db, build_premarket_table_rows
 
 
 class TestPremarketChartGapError(unittest.TestCase):
@@ -66,9 +66,32 @@ class TestPremarketChartGapError(unittest.TestCase):
         rows = self._db_rows(df)
         self.assertFalse(rows["ASML"]["premarket_snapshot_valid"])
         self.assertIsNone(rows["ASML"]["premarket_gap_pct"])
-        self.assertIsNone(rows["ASML"]["pred_ticker_gap_pct"])
-        self.assertIsNone(rows["ASML"]["error_pred_ticker_vs_open_pct"])
+        self.assertAlmostEqual(rows["ASML"]["pred_ticker_gap_pct"], 0.48)
+        self.assertAlmostEqual(rows["ASML"]["error_pred_ticker_vs_open_pct"], 3.18)
         self.assertAlmostEqual(rows["ASML"]["open_gap_pct"], 3.66)
+
+    def test_table_keeps_db_ml_row_without_premarket_last(self):
+        db_row = {
+            "ASML": {
+                "ticker": "ASML",
+                "prev_close": 100.0,
+                "premarket_last": None,
+                "premarket_gap_pct": None,
+                "pred_ticker_gap_pct": 0.48,
+                "open_gap_pct": 3.66,
+                "error_pred_ticker_vs_open_pct": 3.18,
+                "premarket_snapshot_valid": False,
+                "source": "db",
+            }
+        }
+        with patch("services.premarket_chart._rows_from_gap_forecast_db", return_value=db_row), patch(
+            "services.premarket_chart._minutes_until_open_global", return_value=0
+        ), patch("services.premarket_chart._yahoo_context_row") as yahoo:
+            rows = build_premarket_table_rows(["ASML"], yahoo_fallback=True)
+        yahoo.assert_not_called()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "db")
+        self.assertAlmostEqual(rows[0]["pred_ticker_gap_pct"], 0.48)
 
 
 if __name__ == "__main__":
