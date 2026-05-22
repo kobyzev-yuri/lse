@@ -219,15 +219,21 @@ def _collect_forecast_layer_contribution(d5: Dict[str, Any]) -> Optional[Dict[st
     would_down = regime in ("aligned_bearish", "gap_fade_risk") or (
         gap_pred is not None and gap_pred >= chase_gap and bearish_md
     )
+    opp = fl.get("gap_up_opportunity") if isinstance(fl.get("gap_up_opportunity"), dict) else {}
+    would_boost = bool(opp.get("should_boost_entry"))
     action = "telemetry"
     if gm == "apply" and would_down:
         action = "downgrade"
+    elif would_boost:
+        action = "boost" if gm == "apply" else "telemetry"
     strength_raw = md_avg if md_avg is not None else gap_pred
     strength = 0.0
     if strength_raw is not None:
         strength = max(-1.0, min(1.0, float(strength_raw) / 2.0))
     if would_down and strength > -0.1:
         strength = -0.35
+    if would_boost and not would_down and strength < 0.25:
+        strength = 0.35
     return make_contribution(
         contour_id="forecast_layer",
         role="policy_gate",
@@ -240,6 +246,8 @@ def _collect_forecast_layer_contribution(d5: Dict[str, Any]) -> Optional[Dict[st
             "gate_mode": gm,
             "regime": regime,
             "would_downgrade": would_down,
+            "would_boost_entry": would_boost,
+            "gap_up_opportunity": opp,
             "forecast_open_gap_pct": gap_pred,
             "multiday_avg_pct": round(md_avg, 4) if md_avg is not None else None,
             "confidence": og.get("confidence") if isinstance(og, dict) else None,

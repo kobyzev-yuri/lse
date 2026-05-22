@@ -35,6 +35,8 @@ FULL_ENTRY_KEYS = (
     "forecast_layer", "forecast_open_gap_pct", "forecast_open_gap_fact_pct",
     "forecast_open_gap_confidence", "forecast_open_gap_source", "forecast_open_gap_uncertainty_p80_pp",
     "forecast_horizons_pct", "forecast_regime", "forecast_ready",
+    "forecast_gap_up_opportunity", "forecast_gap_up_should_boost_entry",
+    "forecast_gap_up_opportunity_reason", "forecast_gap_up_opportunity_source",
     "llm_insight", "llm_sentiment",
     "atr_5m_pct", "volume_5m_last", "volume_vs_avg_pct",
     "decision_rule_version", "decision_rule_params",

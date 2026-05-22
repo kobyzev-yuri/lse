@@ -32,6 +32,7 @@ def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
     gap = _f(d5.get("ticker_open_gap_predicted_pct"))
     gap_fact = _f(d5.get("ticker_open_gap_fact_pct"))
     pm_gap = _f(d5.get("premarket_gap_pct"))
+    sector_gap = _f(d5.get("macro_predicted_sector_gap_pct"))
     h1 = _f(d5.get("multiday_lr_horizon_1d_pct_vs_spot"))
     h2 = _f(d5.get("multiday_lr_horizon_2d_pct_vs_spot"))
     h3 = _f(d5.get("multiday_lr_horizon_3d_pct_vs_spot"))
@@ -53,6 +54,31 @@ def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
     else:
         regime = "neutral_or_unavailable"
 
+    gap_up_source = None
+    gap_up_value = None
+    for label, value in (
+        ("premarket_gap", pm_gap),
+        ("predicted_open_gap", gap),
+        ("actual_open_gap", gap_fact),
+    ):
+        if value is not None and value >= 1.0 and (gap_up_value is None or value > gap_up_value):
+            gap_up_source = label
+            gap_up_value = value
+    macro_bias = str(d5.get("macro_equity_gap_bias") or "").upper()
+    sector_confirmed = bool((sector_gap is not None and sector_gap >= 0.3) or macro_bias == "UP")
+    multiday_confirmed = md_avg is not None and md_avg >= 0.15
+    fade_risk = bool(regime == "gap_fade_risk" or (md_avg is not None and md_avg <= -0.15))
+    candidate = gap_up_value is not None
+    should_boost = bool(candidate and not fade_risk and (sector_confirmed or multiday_confirmed))
+    if should_boost:
+        opportunity_reason = "gap_up_confirmed"
+    elif candidate and fade_risk:
+        opportunity_reason = "gap_up_fade_risk"
+    elif candidate:
+        opportunity_reason = "gap_up_unconfirmed"
+    else:
+        opportunity_reason = "no_gap_up"
+
     ready = bool(gap is not None or md_vals)
     envelope = {
         "version": 1,
@@ -60,6 +86,7 @@ def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
             "predicted_pct": gap,
             "fact_pct": gap_fact,
             "premarket_gap_pct": pm_gap,
+            "sector_predicted_pct": sector_gap,
             "source": d5.get("ticker_open_gap_predicted_source"),
             "model_version": d5.get("ticker_open_gap_model_version"),
             "confidence": confidence,
@@ -74,6 +101,16 @@ def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
             "bias": d5.get("multiday_lr_bias"),
             "method": d5.get("multiday_lr_method"),
             "daily_close_source": d5.get("multiday_lr_daily_close_source"),
+        },
+        "gap_up_opportunity": {
+            "candidate": candidate,
+            "source": gap_up_source,
+            "gap_pct": gap_up_value,
+            "sector_confirmed": sector_confirmed,
+            "multiday_confirmed": multiday_confirmed,
+            "fade_risk": fade_risk,
+            "should_boost_entry": should_boost,
+            "reason": opportunity_reason,
         },
         "regime": regime,
         "ready": ready,
@@ -93,3 +130,8 @@ def attach_game5m_forecast_layer(d5: Dict[str, Any]) -> None:
     d5["forecast_horizons_pct"] = envelope.get("horizons_pct")
     d5["forecast_regime"] = envelope.get("regime")
     d5["forecast_ready"] = bool(envelope.get("ready"))
+    opp = envelope.get("gap_up_opportunity") if isinstance(envelope.get("gap_up_opportunity"), dict) else {}
+    d5["forecast_gap_up_opportunity"] = bool(opp.get("candidate"))
+    d5["forecast_gap_up_should_boost_entry"] = bool(opp.get("should_boost_entry"))
+    d5["forecast_gap_up_opportunity_reason"] = opp.get("reason")
+    d5["forecast_gap_up_opportunity_source"] = opp.get("source")

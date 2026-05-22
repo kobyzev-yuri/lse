@@ -1221,6 +1221,8 @@ TECHNICAL_SIGNAL_KEYS = (
     "forecast_layer", "forecast_open_gap_pct", "forecast_open_gap_fact_pct",
     "forecast_open_gap_confidence", "forecast_open_gap_source", "forecast_open_gap_uncertainty_p80_pp",
     "forecast_horizons_pct", "forecast_regime", "forecast_ready",
+    "forecast_gap_up_opportunity", "forecast_gap_up_should_boost_entry",
+    "forecast_gap_up_opportunity_reason", "forecast_gap_up_opportunity_source",
     "is_preliminary",
     # CatBoost (опционально); итог для входа/LLM — technical_decision_effective
     "catboost_entry_proba_good", "catboost_signal_status", "catboost_signal_note",
