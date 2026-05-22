@@ -35,6 +35,14 @@ def portfolio_catboost_blocks_buy(ticker: str) -> Tuple[bool, str]:
     if not _truthy(get_config_value("PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK", "true")):
         return False, ""
     try:
+        from services.decision_stack._types import READINESS_PRODUCTION, stack_readiness
+
+        readiness = stack_readiness("portfolio_catboost")
+        if readiness != READINESS_PRODUCTION:
+            return False, f"CatBoost readiness={readiness}: runtime block disabled until production gate"
+    except Exception:
+        pass
+    try:
         min_score = float((get_config_value("PORTFOLIO_CATBOOST_HOLD_BELOW_SCORE", "48") or "48").strip())
     except (ValueError, TypeError):
         min_score = 48.0
@@ -65,16 +73,19 @@ def merge_portfolio_buy_context(
     *,
     base_take_profit: Optional[float] = None,
     strategy_decision: Optional[Dict[str, Any]] = None,
+    portfolio_ml: Optional[Dict[str, Any]] = None,
+    event_reaction: Optional[Dict[str, Any]] = None,
+    cluster_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     base = dict(context_json) if isinstance(context_json, dict) else {}
-    ml = portfolio_ml_snapshot(ticker)
+    ml = dict(portfolio_ml) if isinstance(portfolio_ml, dict) else portfolio_ml_snapshot(ticker)
     for k, v in ml.items():
         if k.startswith("portfolio_ml_"):
             base[k] = v
     try:
         from services.event_reaction_entry_guards import event_reaction_ml_snapshot
 
-        er = event_reaction_ml_snapshot(ticker)
+        er = dict(event_reaction) if isinstance(event_reaction, dict) else event_reaction_ml_snapshot(ticker)
         for k, v in er.items():
             if k.startswith("event_reaction_ml_"):
                 base[k] = v
@@ -95,8 +106,20 @@ def merge_portfolio_buy_context(
             from services.decision_stack import finalize_portfolio_decision_stack
 
             row = dict(strategy_decision)
-            finalize_portfolio_decision_stack(row, ticker=ticker, portfolio_ml=ml)
-            for k in ("decision_snapshot", "decision_effective", "decision_stack_version"):
+            finalize_portfolio_decision_stack(
+                row,
+                ticker=ticker,
+                portfolio_ml=ml,
+                event_reaction=er if "er" in locals() else None,
+                cluster_context=cluster_context,
+            )
+            for k in (
+                "decision_snapshot",
+                "decision_effective",
+                "decision_stack_projected_effective",
+                "decision_stack_version",
+                "decision_verdict",
+            ):
                 if row.get(k) is not None:
                     base[k] = row[k]
         except Exception as e:

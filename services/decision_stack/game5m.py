@@ -21,9 +21,9 @@ from services.decision_stack._types import (
     _cfg_float,
     _utc_now_iso,
     decision_strength_from_signal,
-    default_readiness,
     gate_mode,
     make_contribution,
+    stack_readiness,
     weight_for_readiness,
 )
 
@@ -174,7 +174,7 @@ def _collect_gap_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         p = float(pred)
     except (TypeError, ValueError):
         return None
-    readiness = default_readiness("gap_forecast")
+    readiness = stack_readiness("gap_forecast")
     return make_contribution(
         contour_id="gap_forecast",
         role="model_eval",
@@ -197,7 +197,7 @@ def _collect_catboost_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
     core = d5.get("technical_decision_core")
     eff = d5.get("technical_decision_effective")
     p = d5.get("catboost_entry_proba_good")
-    readiness = default_readiness("catboost_entry_5m")
+    readiness = stack_readiness("catboost_entry_5m")
     stack_gm = gate_mode("DECISION_STACK_CATBOOST_GATE_MODE", "apply")
     would_down = False
     if fusion_mode == "hold_if_buy_below_p" and core in ("BUY", "STRONG_BUY") and p is not None:
@@ -235,7 +235,7 @@ def _collect_multiday_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
     gate = d5.get("multiday_lr_entry_gate")
     if not isinstance(gate, dict):
         return None
-    readiness = default_readiness("multiday_lr")
+    readiness = stack_readiness("multiday_lr")
     would = bool(gate.get("would_hold"))
     mode = gate.get("mode") or gate_mode("GAME_5M_MULTIDAY_ENTRY_GATE_MODE", "none")
     stack_gm = gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply")
@@ -273,7 +273,7 @@ def _collect_news_fusion_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, 
     m = d5.get("entry_fusion_metrics")
     if not isinstance(m, dict) or m.get("fused_bias_neg1") is None:
         return None
-    readiness = default_readiness("news_fusion")
+    readiness = stack_readiness("news_fusion")
     try:
         fused = float(m["fused_bias_neg1"])
     except (TypeError, ValueError):
@@ -370,6 +370,9 @@ def resolve_game5m_technical(
         c = by_id.get(cid)
         if not c:
             continue
+        if cid in ("news_fusion", "gap_forecast", "catboost_entry_5m", "multiday_lr"):
+            if c.get("readiness") != READINESS_PRODUCTION:
+                continue
         metrics = c.get("metrics") if isinstance(c.get("metrics"), dict) else {}
         gm = metrics.get("gate_mode") or metrics.get("stack_gate_mode")
         if cid == "catboost_entry_5m" and not gm:

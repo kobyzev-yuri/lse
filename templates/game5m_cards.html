@@ -77,6 +77,9 @@
         .row .value.negative { color: #fca5a5; }
         .block-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin: 0.5rem 0 0.25rem; }
         .reasoning { font-size: 0.8rem; color: #cbd5e1; margin-top: 0.5rem; line-height: 1.4; }
+        .verdict-block { margin: 0.55rem 0; padding: 0.55rem 0.65rem; background: #0f172a; border: 1px solid #334155; border-radius: 8px; font-size: 0.8rem; line-height: 1.35; }
+        .verdict-label { font-weight: 700; color: #e2e8f0; }
+        .verdict-reason { color: #94a3b8; margin-top: 0.25rem; }
         .llm-btn { margin-top: 0.6rem; width: 100%; font-size: 0.8rem; }
         .llm-block { margin-top: 0.5rem; padding: 0.6rem; background: #0f172a; border-radius: 6px; font-size: 0.8rem; color: #cbd5e1; white-space: pre-wrap; display: none; }
         .llm-block.open { display: block; }
@@ -275,6 +278,29 @@
             }
             return '';
         }
+        function renderDecisionVerdict(c) {
+            var v = c.decision_verdict;
+            if (!v || typeof v !== 'object') return '';
+            var reasons = Array.isArray(v.primary_reasons) ? v.primary_reasons.slice(0, 3) : [];
+            var label = v.label || 'Hold';
+            var eff = v.effective_decision || c.technical_decision_effective || c.decision || '—';
+            var projected = v.projected_effective_if_resolve || c.decision_stack_projected_effective;
+            var html = '<div class="verdict-block">';
+            html += '<div><span class="muted">Unified verdict</span> <span class="verdict-label">' + escapeHtml(label) + '</span>';
+            html += ' · effective <code>' + escapeHtml(eff) + '</code>';
+            if (projected && projected !== eff) {
+                html += ' · shadow <code>' + escapeHtml(projected) + '</code>';
+            }
+            if (v.resolve_divergence) {
+                html += ' <span class="negative">diff</span>';
+            }
+            html += '</div>';
+            if (reasons.length) {
+                html += '<div class="verdict-reason">' + reasons.map(escapeHtml).join('<br>') + '</div>';
+            }
+            html += '</div>';
+            return html;
+        }
         function renderCard(c) {
             const isNoData = c.decision === 'NO_DATA';
             const upside = c.estimated_upside_pct_day != null ? c.estimated_upside_pct_day : c.take_profit_pct;
@@ -288,6 +314,7 @@
                 html += '<p class="no-data">' + escapeHtml(c.reasoning || 'Нет данных') + '</p></div>';
                 return html;
             }
+            html += renderDecisionVerdict(c);
             if (c.catboost_signal_status) {
                 html += '<div class="block-title">CatBoost (осторожный фильтр входа)</div>';
                 html += '<div class="row"><span class="label">Статус / режим</span><span class="value">' +

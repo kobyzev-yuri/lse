@@ -35,6 +35,14 @@ def event_reaction_blocks_buy(ticker: str) -> Tuple[bool, str]:
     if not _truthy(get_config_value("EVENT_REACTION_BLOCK_BUY_ON_WEAK", "false")):
         return False, ""
     try:
+        from services.decision_stack._types import READINESS_PRODUCTION, stack_readiness
+
+        readiness = stack_readiness("event_reaction")
+        if readiness != READINESS_PRODUCTION:
+            return False, f"Event-reaction readiness={readiness}: runtime block disabled until production gate"
+    except Exception:
+        pass
+    try:
         min_score = float((get_config_value("EVENT_REACTION_HOLD_BELOW_SCORE", "48") or "48").strip())
     except (ValueError, TypeError):
         min_score = 48.0

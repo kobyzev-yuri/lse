@@ -176,6 +176,10 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Срез по закрытым portfolio-сделкам (entry_strategy ≠ GAME_5M): снимок portfolio_ml_* и effective_take из BUY context_json, "
         "калибровка entry_score vs win, контрфакт PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK."
     ),
+    "decision_stack_shadow_diff": (
+        "Последние закрытые сделки, где сохранённый decision_snapshot имел projected_effective_if_resolve, "
+        "отличающийся от legacy effective. Это shadow/report-only контроль перед включением resolve/apply."
+    ),
     "portfolio_exit_policy_review": (
         "Разбор выходов портфельной игры: take_profit на BUY, portfolio_effective_take_pct_at_entry, сигналы TAKE_PROFIT / trailing; "
         "сводка по exit_signal и ранние тейки с крупным missed_upside (5m-окно)."
@@ -658,6 +662,87 @@ def _attach_portfolio_analyzer_blocks(
         payload["portfolio_ml_entry_review"] = {"mode": "skipped", "note": skip}
         payload["portfolio_exit_policy_review"] = {"mode": "skipped", "note": skip}
         payload["portfolio_config_grid"] = {"mode": "skipped", "note": skip}
+
+
+def _build_decision_stack_shadow_diff(
+    strategy: str,
+    closed: List[Any],
+    effects: List[TradeEffect],
+    *,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    su = (strategy or "GAME_5M").strip().upper()
+    by_effect: Dict[int, TradeEffect] = {}
+    for e in effects:
+        try:
+            by_effect[int(e.trade_id)] = e
+        except Exception:
+            continue
+    rows: List[Dict[str, Any]] = []
+    with_snapshot = 0
+    divergences = 0
+    by_game: Dict[str, int] = {}
+    for t in closed:
+        es = (getattr(t, "entry_strategy", None) or "").strip().upper()
+        if su == "GAME_5M" and es != "GAME_5M":
+            continue
+        if su == "PORTFOLIO" and es == "GAME_5M":
+            continue
+        try:
+            tid = int(getattr(t, "trade_id", 0) or 0)
+        except Exception:
+            tid = 0
+        ctx = normalize_entry_context(getattr(t, "context_json", None))
+        snap = ctx.get("decision_snapshot")
+        if not isinstance(snap, dict):
+            continue
+        with_snapshot += 1
+        game = str(snap.get("game") or es or "UNKNOWN")
+        by_game[game] = by_game.get(game, 0) + 1
+        legacy = (
+            (snap.get("legacy") or {}).get("technical_decision_effective")
+            if isinstance(snap.get("legacy"), dict)
+            else None
+        ) or snap.get("effective_decision")
+        projected = snap.get("projected_effective_if_resolve")
+        diverged = bool(snap.get("resolve_divergence")) or (
+            projected is not None and legacy is not None and str(projected) != str(legacy)
+        )
+        if not diverged:
+            continue
+        divergences += 1
+        contrib = snap.get("contributions") if isinstance(snap.get("contributions"), list) else []
+        blockers = [c for c in contrib if c.get("action") in ("veto", "downgrade")]
+        top = blockers or sorted(contrib, key=lambda c: -abs(float(c.get("strength") or 0.0)))
+        eff = by_effect.get(tid)
+        rows.append(
+            {
+                "trade_id": tid or None,
+                "ticker": getattr(t, "ticker", None),
+                "game": game,
+                "entry_strategy": es or None,
+                "legacy_effective": legacy,
+                "projected_effective_if_resolve": projected,
+                "actual_effective": snap.get("effective_decision"),
+                "resolve_mode": snap.get("resolve_mode"),
+                "realized_pct": round(float(eff.realized_pct), 4) if eff else None,
+                "primary_reasons": [
+                    f"{c.get('contour_id')}: {c.get('detail')}"
+                    for c in top[:3]
+                    if c.get("detail")
+                ],
+            }
+        )
+    rows = sorted(rows, key=lambda r: int(r.get("trade_id") or 0), reverse=True)[: max(1, int(limit))]
+    return {
+        "mode": "decision_snapshot_context",
+        "description": "Shadow diff по сохранённым BUY context_json.decision_snapshot; не меняет исполнение.",
+        "strategy": su,
+        "trades_with_snapshot": with_snapshot,
+        "divergence_count": divergences,
+        "by_game": by_game,
+        "recent_divergences": rows,
+    }
 
 
 def _trust_level_game5m_catboost(meta: Optional[Dict[str, Any]], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3347,6 +3432,7 @@ def _compact_report_for_llm(payload: Dict[str, Any]) -> Dict[str, Any]:
         "critical_case_analysis": payload.get("critical_case_analysis"),
         "game_5m_config_hints": (payload.get("game_5m_config_hints") or [])[:10],
         "entry_underperformance_review": payload.get("entry_underperformance_review"),
+        "decision_stack_shadow_diff": payload.get("decision_stack_shadow_diff"),
         "time_exit_early_review": te_slim or None,
         "time_exit_early_action_summary": payload.get("time_exit_early_action_summary"),
         "game5m_catboost_status": payload.get("game5m_catboost_status"),
@@ -5986,6 +6072,7 @@ def analyze_trade_effectiveness(
             "summary": {"total": 0},
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
             "game5m_catboost_fusion_entry_review": _build_game5m_catboost_fusion_entry_review(strategy, [], []),
+            "decision_stack_shadow_diff": _build_decision_stack_shadow_diff(strategy, [], []),
         }
         _attach_portfolio_analyzer_blocks(empty_payload, strategy=strategy, closed=[], effects=[])
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
@@ -6142,6 +6229,7 @@ def analyze_trade_effectiveness(
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_catboost_fusion_entry_review": catboost_fusion_entry_review,
         "game5m_catboost_status": game5m_catboost_status,
+        "decision_stack_shadow_diff": _build_decision_stack_shadow_diff(strategy, closed, effects),
         "game5m_recovery_model_status": game5m_recovery_model_status,
         "recovery_scenario_backtest": recovery_scenario,
         "time_exit_early_review": te_review,

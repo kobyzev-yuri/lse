@@ -59,6 +59,9 @@
         .no-data { color: #64748b; font-style: italic; }
         .positive { color: #86efac; }
         .negative { color: #fca5a5; }
+        .verdict-block { margin: 0.55rem 0; padding: 0.55rem 0.65rem; background: #0f172a; border: 1px solid #334155; border-radius: 8px; font-size: 0.78rem; line-height: 1.35; }
+        .verdict-label { font-weight: 700; color: #e2e8f0; }
+        .verdict-reason { color: #94a3b8; margin-top: 0.25rem; }
         .goals-block {
             margin: 0.55rem 0 0.65rem;
             padding: 0.65rem 0.75rem;
@@ -129,6 +132,29 @@
             if (dec === 'SELL') return 'decision-sell';
             return 'decision-hold';
         }
+        function renderDecisionVerdict(c) {
+            var v = c.decision_verdict;
+            if (!v || typeof v !== 'object') return '';
+            var reasons = Array.isArray(v.primary_reasons) ? v.primary_reasons.slice(0, 3) : [];
+            var label = v.label || 'Hold';
+            var eff = v.effective_decision || c.decision_effective || c.decision || '—';
+            var projected = v.projected_effective_if_resolve || c.decision_stack_projected_effective;
+            var html = '<div class="verdict-block">';
+            html += '<div><span class="muted">Unified verdict</span> <span class="verdict-label">' + escapeHtml(label) + '</span>';
+            html += ' · effective <code>' + escapeHtml(eff) + '</code>';
+            if (projected && projected !== eff) {
+                html += ' · shadow <code>' + escapeHtml(projected) + '</code>';
+            }
+            if (v.resolve_divergence) {
+                html += ' <span class="negative">diff</span>';
+            }
+            html += '</div>';
+            if (reasons.length) {
+                html += '<div class="verdict-reason">' + reasons.map(escapeHtml).join('<br>') + '</div>';
+            }
+            html += '</div>';
+            return html;
+        }
         function renderCard(c) {
             if (c.decision === 'NO_DATA' || c.decision === 'ERROR') {
                 return '<div class="card-pf" data-ticker="' + escapeHtml(c.ticker) + '">' +
@@ -138,6 +164,7 @@
             var d = c.decision || '—';
             var html = '<div class="card-pf ' + decisionClass(d) + '" data-ticker="' + escapeHtml(c.ticker) + '">';
             html += '<div class="card-head"><span class="ticker">' + escapeHtml(c.ticker) + '</span><span class="decision ' + escapeHtml(d) + '">' + escapeHtml(d) + '</span></div>';
+            html += renderDecisionVerdict(c);
             html += '<div class="row"><span class="label">Техника (базовый сигнал)</span><span class="value">' + escapeHtml(c.technical_signal || '—') + '</span></div>';
             html += '<div class="row"><span class="label">Итог стратегии</span><span class="value">' + escapeHtml(c.selected_strategy || '—') + '</span></div>';
             html += '<div class="row"><span class="label">Close (daily)</span><span class="value">' + fmt(c.close, 2) + '</span></div>';

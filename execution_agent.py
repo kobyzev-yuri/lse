@@ -1009,8 +1009,43 @@ class ExecutionAgent:
                     from services.portfolio_entry_guards import (
                         merge_portfolio_buy_context,
                         portfolio_catboost_blocks_buy,
+                        portfolio_ml_snapshot,
                     )
-                    from services.event_reaction_entry_guards import event_reaction_blocks_buy
+                    from services.event_reaction_entry_guards import (
+                        event_reaction_blocks_buy,
+                        event_reaction_ml_snapshot,
+                    )
+                    from services.decision_stack import finalize_portfolio_decision_stack
+
+                    strat_row: Dict[str, Any] = {"decision": decision, "selected_strategy": strategy_name}
+                    if isinstance(result, dict):
+                        for k in ("decision_fused", "llm_decision", "decision"):
+                            if result.get(k):
+                                strat_row[k] = result.get(k)
+                    if context_json and isinstance(context_json.get("cluster"), dict):
+                        strat_row["cluster"] = context_json.get("cluster")
+
+                    ml_snap = portfolio_ml_snapshot(ticker)
+                    er_snap = event_reaction_ml_snapshot(ticker)
+                    finalize_portfolio_decision_stack(
+                        strat_row,
+                        ticker=ticker,
+                        portfolio_ml=ml_snap,
+                        event_reaction=er_snap,
+                        cluster_context=context_json.get("cluster") if isinstance(context_json, dict) else None,
+                    )
+                    stack_effective = str(strat_row.get("decision_effective") or decision).upper()
+                    if stack_effective not in ("BUY", "STRONG_BUY"):
+                        logger.info(
+                            "⏭️ %s: portfolio BUY переведён decision_stack в %s (legacy=%s, projected=%s)",
+                            ticker,
+                            stack_effective,
+                            decision,
+                            strat_row.get("decision_stack_projected_effective"),
+                        )
+                        if cluster_context is not None:
+                            other_signals[ticker] = stack_effective
+                        continue
 
                     blocked, block_reason = event_reaction_blocks_buy(ticker)
                     if blocked:
@@ -1024,16 +1059,14 @@ class ExecutionAgent:
                         if cluster_context is not None:
                             other_signals[ticker] = "HOLD"
                         continue
-                    strat_row: Dict[str, Any] = {"decision": decision, "selected_strategy": strategy_name}
-                    if isinstance(result, dict):
-                        for k in ("decision_fused", "llm_decision", "decision"):
-                            if result.get(k):
-                                strat_row[k] = result.get(k)
                     context_json = merge_portfolio_buy_context(
                         context_json,
                         ticker,
                         base_take_profit=take_profit,
                         strategy_decision=strat_row,
+                        portfolio_ml=ml_snap,
+                        event_reaction=er_snap,
+                        cluster_context=context_json.get("cluster") if isinstance(context_json, dict) else None,
                     )
                 except Exception as e:
                     logger.debug("portfolio_entry_guards %s: %s", ticker, e)

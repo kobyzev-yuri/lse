@@ -2305,8 +2305,36 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
                 })
             else:
                 card = portfolio_card_payload(t, r, fallback_take_pct=take_fb)
-                card.update(ml_by_ticker.get(t, {}))
-                card.update(er_by_ticker.get(t, {}))
+                ml = ml_by_ticker.get(t, {})
+                er = er_by_ticker.get(t, {})
+                card.update(ml)
+                card.update(er)
+                try:
+                    from services.decision_stack import finalize_portfolio_decision_stack
+
+                    row = {
+                        "decision": card.get("decision"),
+                        "selected_strategy": card.get("selected_strategy"),
+                        "decision_fused": r.get("decision_fused"),
+                        "llm_decision": r.get("llm_decision"),
+                    }
+                    finalize_portfolio_decision_stack(
+                        row,
+                        ticker=t,
+                        portfolio_ml=ml,
+                        event_reaction=er,
+                    )
+                    for k in (
+                        "decision_snapshot",
+                        "decision_effective",
+                        "decision_stack_projected_effective",
+                        "decision_stack_version",
+                        "decision_verdict",
+                    ):
+                        if row.get(k) is not None:
+                            card[k] = row[k]
+                except Exception as e:
+                    logger.debug("portfolio card decision_stack %s: %s", t, e)
                 cards.append(card)
         except Exception as e:
             cards.append({"ticker": t, "decision": "ERROR", "horizon": "daily", "error": str(e)})
@@ -2350,6 +2378,32 @@ def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int) -> Dict[str, A
         base.update(predict_event_reaction_for_ticker(ticker))
     except Exception as e:
         logger.debug("event-reaction ML single skipped for %s: %s", ticker, e)
+    try:
+        from services.decision_stack import finalize_portfolio_decision_stack
+
+        row = {
+            "decision": base.get("decision"),
+            "selected_strategy": base.get("selected_strategy"),
+            "decision_fused": r.get("decision_fused"),
+            "llm_decision": r.get("llm_decision"),
+        }
+        finalize_portfolio_decision_stack(
+            row,
+            ticker=ticker,
+            portfolio_ml={k: v for k, v in base.items() if k.startswith("portfolio_ml_")},
+            event_reaction={k: v for k, v in base.items() if k.startswith("event_reaction_ml_")},
+        )
+        for k in (
+            "decision_snapshot",
+            "decision_effective",
+            "decision_stack_projected_effective",
+            "decision_stack_version",
+            "decision_verdict",
+        ):
+            if row.get(k) is not None:
+                base[k] = row[k]
+    except Exception as e:
+        logger.debug("portfolio card decision_stack single %s: %s", ticker, e)
     merged = {
         **base,
         "llm_analysis": _make_json_safe(r.get("llm_analysis")),

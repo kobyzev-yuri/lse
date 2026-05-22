@@ -1236,7 +1236,45 @@ TECHNICAL_SIGNAL_KEYS = (
     "multiday_lr_entry_gate_would_hold",
     "multiday_lr_entry_gate_applied",
     "multiday_lr_entry_gate_note",
+    # Unified decision stack / product verdict
+    "decision_effective",
+    "decision_stack_version",
+    "decision_stack_projected_effective",
+    "decision_snapshot",
+    "decision_verdict",
 )
+
+
+def _decision_verdict_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    eff = str(snapshot.get("effective_decision") or snapshot.get("core_decision") or "HOLD").upper()
+    projected = str(snapshot.get("projected_effective_if_resolve") or eff).upper()
+    contributions = snapshot.get("contributions") if isinstance(snapshot.get("contributions"), list) else []
+    blockers = [c for c in contributions if c.get("action") in ("veto", "downgrade")]
+    cautions = [c for c in contributions if float(c.get("strength") or 0.0) < -0.2]
+    positives = [c for c in contributions if float(c.get("strength") or 0.0) > 0.2]
+    if eff in ("BUY", "STRONG_BUY"):
+        label = "Trade"
+    elif eff in ("SELL", "STRONG_SELL"):
+        label = "Exit"
+    elif projected == "HOLD" and blockers:
+        label = "Avoid"
+    elif cautions:
+        label = "Wait"
+    else:
+        label = "Hold"
+
+    reasons = []
+    for c in (blockers or cautions or positives or contributions)[:3]:
+        detail = str(c.get("detail") or "").strip()
+        if detail:
+            reasons.append(f"{c.get('contour_id')}: {detail}")
+    return {
+        "label": label,
+        "effective_decision": eff,
+        "projected_effective_if_resolve": projected,
+        "resolve_divergence": bool(snapshot.get("resolve_divergence")),
+        "primary_reasons": reasons,
+    }
 
 
 def get_5m_card_payload(d5: Dict[str, Any], ticker: str) -> Dict[str, Any]:
@@ -1251,6 +1289,9 @@ def get_5m_card_payload(d5: Dict[str, Any], ticker: str) -> Dict[str, Any]:
     for k in TECHNICAL_SIGNAL_KEYS:
         if k in d5:
             out[k] = d5[k]
+    snap = d5.get("decision_snapshot")
+    if isinstance(snap, dict) and "decision_verdict" not in out:
+        out["decision_verdict"] = _decision_verdict_from_snapshot(snap)
     # Параметры чек-листа Квена (5 параметров решения): риск/ревард и мат. ожидание — выводятся в карточке отдельно
     upside = d5.get("estimated_upside_pct_day")
     downside = d5.get("estimated_downside_pct_day")

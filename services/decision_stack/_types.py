@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+from functools import lru_cache
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +23,13 @@ GAME5M_VETO_ORDER = (
     "gap_forecast",
     "catboost_entry_5m",
     "multiday_lr",
+)
+
+PORTFOLIO_VETO_ORDER = (
+    "session",
+    "cluster_context",
+    "portfolio_catboost",
+    "event_reaction",
 )
 
 
@@ -107,6 +117,8 @@ def default_readiness(contour_id: str) -> str:
         "catboost_entry_5m",
         "multiday_lr",
         "portfolio_catboost",
+        "event_reaction",
+        "recovery_ml",
         "cluster_context",
     }
     if contour_id in prod:
@@ -114,6 +126,72 @@ def default_readiness(contour_id: str) -> str:
     if contour_id in caution:
         return READINESS_CAUTION
     return READINESS_TELEMETRY
+
+
+@lru_cache(maxsize=1)
+def _latest_ml_train_readiness() -> Dict[str, Any]:
+    """Best-effort tail of ml_train_readiness.jsonl; hot-path safe if the file is absent."""
+    paths = (
+        Path("/app/logs/ml/logs/ml_train_readiness.jsonl"),
+        Path(__file__).resolve().parents[2] / "local" / "logs" / "ml_train_readiness.jsonl",
+    )
+    for p in paths:
+        try:
+            if not p.is_file():
+                continue
+            last = ""
+            with p.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if s:
+                        last = s
+            if last:
+                row = json.loads(last)
+                if isinstance(row, dict):
+                    row["_source_path"] = str(p)
+                    return row
+        except Exception:
+            continue
+    return {}
+
+
+def readiness_from_latest_report(contour_id: str) -> Optional[str]:
+    """Map nightly readiness gates to stack readiness without changing config flags."""
+    row = _latest_ml_train_readiness()
+    if not row:
+        return None
+    aliases = {
+        "portfolio_catboost": ("portfolio",),
+        "catboost_entry_5m": ("game5m", "entry_catboost", "catboost_entry"),
+        "multiday_lr": ("multiday_lr", "game5m_multiday"),
+        "recovery_ml": ("recovery", "game5m_recovery"),
+        "event_reaction": ("event_reaction",),
+    }
+    for key in aliases.get(contour_id, (contour_id,)):
+        block = row.get(key)
+        if not isinstance(block, dict):
+            continue
+        gate = block.get("gate") if isinstance(block.get("gate"), dict) else block
+        ready = gate.get("ready") if isinstance(gate, dict) else None
+        if ready is True:
+            return READINESS_PRODUCTION
+        if ready is False:
+            return READINESS_CAUTION
+    return None
+
+
+def stack_readiness(contour_id: str) -> str:
+    """Readiness used by decision stack: nightly gate if present, otherwise static default."""
+    try:
+        from config_loader import get_config_value
+
+        key = f"DECISION_STACK_READINESS_{contour_id.upper()}".replace("-", "_")
+        override = (get_config_value(key, "") or "").strip().lower()
+        if override in (READINESS_TELEMETRY, READINESS_CAUTION, READINESS_PRODUCTION):
+            return override
+    except Exception:
+        pass
+    return readiness_from_latest_report(contour_id) or default_readiness(contour_id)
 
 
 def weight_for_readiness(readiness: str) -> float:

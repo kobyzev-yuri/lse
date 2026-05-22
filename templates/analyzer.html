@@ -135,6 +135,12 @@
     <div id="summary" class="dashboard-text">Нажмите «Запустить анализ».</div>
 </div>
 
+<div class="card" style="border: 1px solid rgba(125, 211, 252, 0.35);">
+    <h2>Decision stack shadow diff <code>decision_stack_shadow_diff</code></h2>
+    <p class="muted" style="font-size:0.9rem;">Последние расхождения legacy effective vs projected resolve по сохранённым <code>context_json.decision_snapshot</code>. Это отчётный слой, не auto-apply.</p>
+    <div id="decisionStackShadowBlock" class="dashboard-text">—</div>
+</div>
+
 <div class="card analyzer-portfolio-only" style="display:none; border: 1px solid rgba(244, 114, 182, 0.4);">
     <h2>Portfolio: CatBoost, вход и выходы</h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">
@@ -1541,6 +1547,36 @@ function renderPortfolioBlocks(data) {
     renderPortfolioConfigGridBlock(data);
 }
 
+function renderDecisionStackShadowBlock(data) {
+    const el = document.getElementById('decisionStackShadowBlock');
+    if (!el) return;
+    const d = data.decision_stack_shadow_diff || {};
+    if (d.mode !== 'decision_snapshot_context') {
+        el.innerHTML = '<span class="muted">Нет данных shadow diff.</span>';
+        return;
+    }
+    let html = '<p style="margin:0 0 0.45rem 0;">Снимков: <strong>' + esc(d.trades_with_snapshot || 0) +
+        '</strong> · расхождений: <strong>' + esc(d.divergence_count || 0) + '</strong></p>';
+    const rows = Array.isArray(d.recent_divergences) ? d.recent_divergences : [];
+    if (!rows.length) {
+        html += '<p class="muted" style="margin:0;">Расхождений пока нет или новые сделки ещё не содержат decision_snapshot.</p>';
+        el.innerHTML = html;
+        return;
+    }
+    html += '<table class="forecast-table" role="table"><thead><tr><th>Trade</th><th>Game</th><th>Legacy</th><th>Projected</th><th>PnL</th><th>Причина</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+        const reasons = Array.isArray(r.primary_reasons) ? r.primary_reasons.join(' · ') : '';
+        html += '<tr><td><code>#' + esc(r.trade_id || '—') + '</code> ' + esc(r.ticker || '') + '</td>' +
+            '<td>' + esc(r.game || '—') + '</td>' +
+            '<td><code>' + esc(r.legacy_effective || '—') + '</code></td>' +
+            '<td><code>' + esc(r.projected_effective_if_resolve || '—') + '</code></td>' +
+            '<td class="num">' + esc(r.realized_pct != null ? r.realized_pct : '—') + '</td>' +
+            '<td class="muted" style="font-size:0.82rem;">' + esc(reasons || '—') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}
+
 async function fetchAnalyzerApi(useLlm, timeoutMs) {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
@@ -1614,6 +1650,7 @@ async function runAnalyzer() {
     const hangerTuneJsonBlock = document.getElementById('hangerTuneJsonBlock');
     const continuationGateBlock = document.getElementById('continuationGateBlock');
     const recoveryMlD4aBlock = document.getElementById('recoveryMlD4aBlock');
+    const decisionStackShadowBlock = document.getElementById('decisionStackShadowBlock');
     const catboostFusionBlock = document.getElementById('catboostFusionBlock');
     const multidayLrBlock = document.getElementById('multidayLrBlock');
     const mlArbiterBlock = document.getElementById('mlArbiterBlock');
@@ -1630,6 +1667,9 @@ async function runAnalyzer() {
     continuationGateBlock.innerHTML = '—';
     if (recoveryMlD4aBlock) {
         recoveryMlD4aBlock.innerHTML = '—';
+    }
+    if (decisionStackShadowBlock) {
+        decisionStackShadowBlock.innerHTML = '—';
     }
     if (catboostFusionBlock) {
         catboostFusionBlock.innerHTML = '—';
@@ -1662,6 +1702,7 @@ async function runAnalyzer() {
                 ', portfolio=' + esc(meta.scope_breakdown.portfolio_closed) + '</span>')
             : '';
         renderPortfolioBlocks(data);
+        renderDecisionStackShadowBlock(data);
         renderCatboostFusionBlock(data);
         renderCatboostBlock(data);
         renderMultidayLrBlock(data);

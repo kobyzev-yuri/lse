@@ -211,6 +211,13 @@ def process_ticker(
             )
         except Exception:
             log_only = True
+        try:
+            from services.decision_stack._types import READINESS_PRODUCTION, stack_readiness
+
+            recovery_readiness = stack_readiness("recovery_ml")
+        except Exception:
+            recovery_readiness = "telemetry"
+        recovery_apply_allowed = (not log_only) and recovery_readiness == READINESS_PRODUCTION
 
         try:
             tau_hold = float((get_config_value("GAME_5M_RECOVERY_LIVE_TAU_HOLD", "0.65") or "0.65").strip())
@@ -377,6 +384,8 @@ def process_ticker(
         return {
             "enabled": True,
             "log_only": log_only,
+            "readiness": recovery_readiness,
+            "apply_allowed": recovery_apply_allowed,
             "status": pr.get("status") if isinstance(pr, dict) else "error",
             "exit_detail": exit_detail or "",
             "recovery_proba": None if proba is None else round(float(proba), 4),
@@ -385,6 +394,9 @@ def process_ticker(
             "would_defer_exit": bool(would_defer),
             "would_defer_by_model": bool(would_defer_by_model),
             "deny_reasons": deny_reasons,
+            "apply_blocked_reason": None
+            if recovery_apply_allowed
+            else ("log_only" if log_only else f"readiness:{recovery_readiness}"),
             "guards": {
                 "pnl_pct": None if pnl_pct is None else round(float(pnl_pct), 4),
                 "hard_stop_loss_pct": float(hard_stop_loss_pct),
@@ -671,16 +683,33 @@ def process_ticker(
                     if rec_gate is not None:
                         close_ctx_enriched["recovery_ml_time_exit_early"] = rec_gate
                         logger.info(
-                            "[5m] RECOVERY_ML_GATE %s: enabled=%s log_only=%s status=%s P=%s tau=%s would_defer=%s deny=%s",
+                            "[5m] RECOVERY_ML_GATE %s: enabled=%s log_only=%s readiness=%s apply_allowed=%s status=%s P=%s tau=%s would_defer=%s deny=%s",
                             ticker,
                             rec_gate.get("enabled"),
                             rec_gate.get("log_only"),
+                            rec_gate.get("readiness"),
+                            rec_gate.get("apply_allowed"),
                             rec_gate.get("status"),
                             rec_gate.get("recovery_proba"),
                             rec_gate.get("tau_hold"),
                             rec_gate.get("would_defer_exit"),
                             ",".join(rec_gate.get("deny_reasons") or []),
                         )
+                        if (
+                            rec_gate.get("status") == "ok"
+                            and rec_gate.get("would_defer_exit")
+                            and rec_gate.get("apply_allowed")
+                        ):
+                            rec_gate["applied"] = True
+                            logger.info(
+                                "[5m] %s: RECOVERY_ML applied — defer TIME_EXIT_EARLY (%s), P=%s >= tau=%s",
+                                ticker,
+                                exit_detail or "",
+                                rec_gate.get("recovery_proba"),
+                                rec_gate.get("tau_hold"),
+                            )
+                            outcome_lines.append("recovery_ml_defer_time_exit_early")
+                            return False
                     try:
                         from services.multiday_lr_gate import evaluate_multiday_hold_gate
 
