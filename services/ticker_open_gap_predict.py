@@ -250,14 +250,56 @@ def predict_ticker_open_gap_pct(
     macro_risk: Optional[Dict[str, Any]] = None,
     premarket_gap_pct: Optional[float] = None,
 ) -> Tuple[Optional[float], str]:
+    detail = predict_ticker_open_gap_detail(
+        ticker,
+        macro_risk=macro_risk,
+        premarket_gap_pct=premarket_gap_pct,
+    )
+    return detail.get("predicted_pct"), str(detail.get("source") or "unavailable")
+
+
+def predict_ticker_open_gap_detail(
+    ticker: str,
+    *,
+    macro_risk: Optional[Dict[str, Any]] = None,
+    premarket_gap_pct: Optional[float] = None,
+) -> Dict[str, Any]:
     """
-    Returns (predicted_pct, source).
+    Returns normalized prediction details.
     source: ticker_ols_v2 | ticker_ols_v2_premarket_blend | sector_proxy | unavailable
     """
     if not _cfg_bool("GAME_5M_TICKER_OPEN_GAP_PREDICT_ENABLED", True):
-        return None, "disabled"
+        return {"predicted_pct": None, "source": "disabled"}
     t = (ticker or "").strip().upper()
     gaps = _macro_gaps_for_predict(macro_risk)
+    pred_sector = None
+    if isinstance(macro_risk, dict) and macro_risk.get("macro_predicted_sector_gap_pct") is not None:
+        try:
+            pred_sector = float(macro_risk["macro_predicted_sector_gap_pct"])
+        except (TypeError, ValueError):
+            pred_sector = None
+    pooled_enabled = _cfg_bool("GAME_5M_PREMARKET_GAP_POOLED_ENABLED", True)
+    if pooled_enabled:
+        try:
+            from services.premarket_gap_model import load_pooled_gap_artifact, predict_from_artifact
+
+            pooled_pred, pooled_meta = predict_from_artifact(
+                load_pooled_gap_artifact() or {},
+                symbol=t,
+                premarket_gap_pct=premarket_gap_pct,
+                pred_sector_gap_pct=pred_sector,
+            )
+            if pooled_pred is not None:
+                return {
+                    "predicted_pct": pooled_pred,
+                    "source": "pooled_ridge_v1",
+                    "model_version": pooled_meta.get("model_version"),
+                    "confidence": pooled_meta.get("confidence"),
+                    "uncertainty_p80_pp": pooled_meta.get("uncertainty_p80_pp"),
+                    "n_train": pooled_meta.get("n_train"),
+                }
+        except Exception as e:
+            logger.debug("pooled premarket gap %s: %s", t, e)
     coefs = _fit_ticker_ols_coefs(t)
     if coefs and gaps:
         try:
@@ -265,16 +307,16 @@ def predict_ticker_open_gap_pct(
             if raw is not None:
                 blended, did_blend = _blend_premarket(float(raw), premarket_gap_pct)
                 if did_blend:
-                    return blended, "ticker_ols_v2_premarket_blend"
-                return round(float(raw), 3), "ticker_ols_v2"
+                    return {"predicted_pct": blended, "source": "ticker_ols_v2_premarket_blend"}
+                return {"predicted_pct": round(float(raw), 3), "source": "ticker_ols_v2"}
         except Exception as e:
             logger.debug("ticker_open_gap_predict %s: %s", t, e)
-    if isinstance(macro_risk, dict) and macro_risk.get("macro_predicted_sector_gap_pct") is not None:
+    if pred_sector is not None:
         try:
-            return round(float(macro_risk["macro_predicted_sector_gap_pct"]), 3), "sector_proxy"
+            return {"predicted_pct": round(float(pred_sector), 3), "source": "sector_proxy"}
         except (TypeError, ValueError):
             pass
-    return None, "unavailable"
+    return {"predicted_pct": None, "source": "unavailable"}
 
 
 def get_ticker_gap_model_version() -> str:
@@ -306,16 +348,24 @@ def attach_ticker_open_gap_fields(
 ) -> None:
     """Заполняет ticker_open_gap_* на карточке / в get_decision_5m."""
     pm = out.get("premarket_gap_pct")
-    pred, pred_src = predict_ticker_open_gap_pct(
+    pred_detail = predict_ticker_open_gap_detail(
         ticker,
         macro_risk=macro_risk,
         premarket_gap_pct=float(pm) if pm is not None else None,
     )
+    pred = pred_detail.get("predicted_pct")
+    pred_src = pred_detail.get("source")
     fact, fact_basis = resolve_ticker_open_gap_fact(out)
     if pred is not None:
         out["ticker_open_gap_predicted_pct"] = pred
     out["ticker_open_gap_predicted_source"] = pred_src
-    out["ticker_open_gap_model_version"] = get_ticker_gap_model_version()
+    out["ticker_open_gap_model_version"] = pred_detail.get("model_version") or get_ticker_gap_model_version()
+    if pred_detail.get("confidence") is not None:
+        out["ticker_open_gap_confidence"] = pred_detail.get("confidence")
+    if pred_detail.get("uncertainty_p80_pp") is not None:
+        out["ticker_open_gap_uncertainty_p80_pp"] = pred_detail.get("uncertainty_p80_pp")
+    if pred_detail.get("n_train") is not None:
+        out["ticker_open_gap_model_n_train"] = pred_detail.get("n_train")
     if fact is not None:
         out["ticker_open_gap_fact_pct"] = fact
         out["ticker_open_gap_fact_basis"] = fact_basis

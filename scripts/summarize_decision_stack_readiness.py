@@ -52,6 +52,7 @@ def summarize(path: Path) -> None:
     llm_analysis = _d(llm, "analysis")
     recovery = _d(data, "recovery_ml_d4a_live_review")
     multiday = _d(data, "multiday_lr_gates_arbiter")
+    gap = _d(data, "game5m_gap_forecast_arbiter")
     portfolio = _d(data, "portfolio_catboost_status")
     catboost = _d(data, "game5m_catboost_status")
     auto = _d(data, "auto_config_override")
@@ -79,6 +80,29 @@ def summarize(path: Path) -> None:
             f"recovery CatBoost: {verdicts.get('recovery_catboost', 'n/a')} "
             f"(live gates={recovery.get('trades_gate_ok_with_proba', 'n/a')})",
             f"gap forecast: {verdicts.get('gap_forecast', 'n/a')}",
+        ],
+    )
+    pooled_gap_eval = _d(gap, "pooled_model_eval")
+    pooled_gap_metrics = _d(pooled_gap_eval, "eval")
+    gap_pool = _d(gap, "pooled")
+    pm_baseline = _d(gap_pool, "premarket_baseline")
+    _print_block(
+        "Forecast Layer / Gap",
+        [
+            f"gap overall: {gap.get('overall_verdict', 'n/a')} ticker={gap.get('ticker_verdict', 'n/a')}",
+            (
+                "pooled ridge shadow: "
+                f"mode={pooled_gap_eval.get('mode', 'n/a')} "
+                f"n_eval={pooled_gap_eval.get('n_eval', 'n/a')} "
+                f"MAE={pooled_gap_metrics.get('mae_pp', 'n/a')} "
+                f"sign={pooled_gap_metrics.get('sign_agreement_rate', 'n/a')}"
+            ),
+            (
+                "premarket naive baseline: "
+                f"n={pm_baseline.get('n_complete', 'n/a')} "
+                f"MAE={pm_baseline.get('mean_abs_error_pred_pp', 'n/a')} "
+                f"sign={pm_baseline.get('sign_agreement_rate', 'n/a')}"
+            ),
         ],
     )
 

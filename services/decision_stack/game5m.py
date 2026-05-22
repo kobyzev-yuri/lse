@@ -190,6 +190,63 @@ def _collect_gap_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
 
 
+def _collect_forecast_layer_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    fl = d5.get("forecast_layer")
+    if not isinstance(fl, dict) or not fl.get("ready"):
+        return None
+    readiness = stack_readiness("forecast_layer")
+    gm = gate_mode("DECISION_STACK_FORECAST_GATE_MODE", "log_only")
+    regime = str(fl.get("regime") or "neutral_or_unavailable")
+    og = fl.get("open_gap") if isinstance(fl.get("open_gap"), dict) else {}
+    horizons = fl.get("horizons_pct") if isinstance(fl.get("horizons_pct"), dict) else {}
+    h_vals: List[float] = []
+    for key in ("1d", "2d", "3d"):
+        v = horizons.get(key) if isinstance(horizons, dict) else None
+        try:
+            if v is not None:
+                h_vals.append(float(v))
+        except (TypeError, ValueError):
+            pass
+    md_avg = sum(h_vals) / len(h_vals) if h_vals else None
+    gap_pred = None
+    try:
+        if og.get("predicted_pct") is not None:
+            gap_pred = float(og.get("predicted_pct"))
+    except (TypeError, ValueError):
+        gap_pred = None
+    chase_gap = _cfg_float("DECISION_STACK_FORECAST_CHASE_GAP_MIN_PCT", 1.0)
+    bearish_md = md_avg is not None and md_avg < -_cfg_float("DECISION_STACK_FORECAST_BEARISH_MULTIDAY_PCT", 0.15)
+    would_down = regime in ("aligned_bearish", "gap_fade_risk") or (
+        gap_pred is not None and gap_pred >= chase_gap and bearish_md
+    )
+    action = "telemetry"
+    if gm == "apply" and would_down:
+        action = "downgrade"
+    strength_raw = md_avg if md_avg is not None else gap_pred
+    strength = 0.0
+    if strength_raw is not None:
+        strength = max(-1.0, min(1.0, float(strength_raw) / 2.0))
+    if would_down and strength > -0.1:
+        strength = -0.35
+    return make_contribution(
+        contour_id="forecast_layer",
+        role="policy_gate",
+        readiness=readiness,
+        strength=strength,
+        weight=weight_for_readiness(readiness),
+        action=action,
+        detail=f"regime={regime}, gap={gap_pred}, md_avg={md_avg}",
+        metrics={
+            "gate_mode": gm,
+            "regime": regime,
+            "would_downgrade": would_down,
+            "forecast_open_gap_pct": gap_pred,
+            "multiday_avg_pct": round(md_avg, 4) if md_avg is not None else None,
+            "confidence": og.get("confidence") if isinstance(og, dict) else None,
+        },
+    )
+
+
 def _collect_catboost_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     fusion_mode = (d5.get("catboost_fusion_mode") or "none").strip().lower()
     if fusion_mode == "none" and d5.get("catboost_signal_status") not in ("ok",):
@@ -321,6 +378,7 @@ def collect_game5m_contributions(d5: Dict[str, Any], *, ticker: str = "") -> Lis
         _collect_kb_news_contribution,
         _collect_entry_advice_contribution,
         _collect_macro_contribution,
+        _collect_forecast_layer_contribution,
         _collect_gap_contribution,
         _collect_news_fusion_contribution,
         _collect_catboost_contribution,
@@ -370,7 +428,7 @@ def resolve_game5m_technical(
         c = by_id.get(cid)
         if not c:
             continue
-        if cid in ("news_fusion", "gap_forecast", "catboost_entry_5m", "multiday_lr"):
+        if cid in ("news_fusion", "forecast_layer", "gap_forecast", "catboost_entry_5m", "multiday_lr"):
             if c.get("readiness") != READINESS_PRODUCTION:
                 continue
         metrics = c.get("metrics") if isinstance(c.get("metrics"), dict) else {}
@@ -379,6 +437,8 @@ def resolve_game5m_technical(
             gm = gate_mode("DECISION_STACK_CATBOOST_GATE_MODE", "apply")
         if cid == "multiday_lr" and not gm:
             gm = gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply")
+        if cid == "forecast_layer" and not gm:
+            gm = gate_mode("DECISION_STACK_FORECAST_GATE_MODE", "log_only")
         if cid == "session":
             gm = "apply"
         if gm in (None, "", "none", "log_only"):
@@ -455,6 +515,7 @@ def build_game5m_decision_snapshot(
             "entry_advice": gate_mode("DECISION_STACK_ENTRY_ADVICE_GATE_MODE", "log_only"),
             "macro": gate_mode("DECISION_STACK_MACRO_GATE_MODE", "log_only"),
             "news_fusion": gate_mode("DECISION_STACK_NEWS_FUSION_GATE_MODE", "log_only"),
+            "forecast": gate_mode("DECISION_STACK_FORECAST_GATE_MODE", "log_only"),
             "catboost": gate_mode("DECISION_STACK_CATBOOST_GATE_MODE", "apply"),
             "multiday": gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply"),
         },

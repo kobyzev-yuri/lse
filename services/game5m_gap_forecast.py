@@ -460,6 +460,12 @@ def pool_gap_forecast_metrics(rows: Sequence[Dict[str, Any]], *, sector_proxy: s
         pred_key="pred_ticker_gap_pct",
         err_key="error_pred_ticker_vs_open_pct",
     )
+    premarket_baseline = _pack(
+        [r for r in rows if r.get("open_gap_pct") is not None and r.get("premarket_gap_pct") is not None],
+        "Naive: premarket gap vs open",
+        pred_key="premarket_gap_pct",
+        err_key="error_premarket_vs_open_pct",
+    )
     sector_on_game = _pack(
         complete_game_sector_baseline,
         f"Legacy: sector pred на тикерах ({proxy})",
@@ -473,6 +479,7 @@ def pool_gap_forecast_metrics(rows: Sequence[Dict[str, Any]], *, sector_proxy: s
         "sector": _pack(complete_sector, f"Sector OLS pred vs open ({proxy})"),
         "ticker_v2": ticker_block,
         "game_tickers_pooled": ticker_block,
+        "premarket_baseline": premarket_baseline,
         "game_sector_baseline": sector_on_game,
         "ticker_vs_sector_mae_delta_pp": (
             round(

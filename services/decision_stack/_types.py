@@ -20,6 +20,7 @@ GAME5M_VETO_ORDER = (
     "entry_advice",
     "kb_news",
     "news_fusion",
+    "forecast_layer",
     "gap_forecast",
     "catboost_entry_5m",
     "multiday_lr",
@@ -113,6 +114,7 @@ def default_readiness(contour_id: str) -> str:
     }
     caution = {
         "news_fusion",
+        "forecast_layer",
         "gap_forecast",
         "catboost_entry_5m",
         "multiday_lr",

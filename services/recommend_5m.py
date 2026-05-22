@@ -1217,6 +1217,10 @@ TECHNICAL_SIGNAL_KEYS = (
     "rth_open_gap_pct", "rth_open_price",
     "ticker_open_gap_predicted_pct", "ticker_open_gap_predicted_source",
     "ticker_open_gap_fact_pct", "ticker_open_gap_fact_basis", "ticker_open_gap_model_version",
+    "ticker_open_gap_confidence", "ticker_open_gap_uncertainty_p80_pp", "ticker_open_gap_model_n_train",
+    "forecast_layer", "forecast_open_gap_pct", "forecast_open_gap_fact_pct",
+    "forecast_open_gap_confidence", "forecast_open_gap_source", "forecast_open_gap_uncertainty_p80_pp",
+    "forecast_horizons_pct", "forecast_regime", "forecast_ready",
     "is_preliminary",
     # CatBoost (опционально); итог для входа/LLM — technical_decision_effective
     "catboost_entry_proba_good", "catboost_signal_status", "catboost_signal_note",
@@ -2539,6 +2543,12 @@ def get_decision_5m(
         attach_ticker_open_gap_fields(out, ticker=ticker, macro_risk=macro_risk or None)
     except Exception as e_tog:
         logger.debug("ticker_open_gap_predict для %s: %s", ticker, e_tog)
+    try:
+        from services.game5m_forecast_layer import attach_game5m_forecast_layer
+
+        attach_game5m_forecast_layer(out)
+    except Exception as e_fl:
+        logger.debug("game5m_forecast_layer для %s: %s", ticker, e_fl)
     # Рекомендованный вход и ожидаемая прибыль при достижении цели (если цель/цена доступны).
     try:
         p_now = out.get("price") or price

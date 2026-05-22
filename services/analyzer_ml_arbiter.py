@@ -947,6 +947,13 @@ def build_game5m_gap_forecast_arbiter(
     sec = pooled.get("sector") or {}
     ticker = pooled.get("ticker_v2") or pooled.get("game_tickers_pooled") or {}
     sec_on_game = pooled.get("game_sector_baseline") or {}
+    pm_baseline = pooled.get("premarket_baseline") or {}
+    try:
+        from services.premarket_gap_model import evaluate_pooled_gap_model_from_rows
+
+        pooled_model_eval = evaluate_pooled_gap_model_from_rows(rows, min_train_rows=20)
+    except Exception as e:
+        pooled_model_eval = {"mode": "error", "error": str(e)[:240]}
 
     min_complete = 12
     min_ready = 20
@@ -1063,6 +1070,17 @@ def build_game5m_gap_forecast_arbiter(
             f"  Baseline (sector pred на тикерах): MAE={sec_on_game.get('mean_abs_error_pred_pp')} п.п., "
             f"n={sec_on_game.get('n_complete')}."
         )
+    if pm_baseline.get("n_complete"):
+        lines.append(
+            f"  Baseline (premarket gap): MAE={pm_baseline.get('mean_abs_error_pred_pp')} п.п., "
+            f"sign={pm_baseline.get('sign_agreement_rate')}, n={pm_baseline.get('n_complete')}."
+        )
+    if pooled_model_eval.get("mode") == "ok":
+        ev = pooled_model_eval.get("eval") or {}
+        lines.append(
+            f"  Pooled ridge shadow eval: MAE={ev.get('mae_pp')} п.п., "
+            f"sign={ev.get('sign_agreement_rate')}, n_eval={pooled_model_eval.get('n_eval')}."
+        )
     lines.extend(
         [
             f"  Строк в логе: {pooled.get('n_rows')}, только премаркет (без open): {n_pm_only}",
@@ -1084,6 +1102,7 @@ def build_game5m_gap_forecast_arbiter(
         "sector_proxy": proxy,
         "ticker_model_version": model_ver,
         "pooled": pooled,
+        "pooled_model_eval": pooled_model_eval,
         "sector_verdict": sec_v,
         "ticker_verdict": ticker_v,
         "game_verdict": ticker_v,
