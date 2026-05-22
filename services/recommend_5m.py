@@ -317,13 +317,6 @@ def _compute_rth_open_gap_pct(
 
         from services.premarket import get_prev_close_from_db
 
-        if trade_date is not None:
-            prev_close = _prev_close_before_trade_date(ticker, trade_date)
-        else:
-            prev_close = get_prev_close_from_db(ticker)
-        if prev_close is None or float(prev_close) <= 0:
-            return None, None, None
-        prev_close = float(prev_close)
         dts_et = pd.to_datetime(df["datetime"])
         if dts_et.dt.tz is None:
             try:
@@ -337,6 +330,18 @@ def _compute_rth_open_gap_pct(
             target_date = pd.Timestamp(target_date).date()
         t_start = dt_time(*US_SESSION_START)
         t_end = dt_time(*US_SESSION_END)
+        if trade_date is not None:
+            prev_close = _prev_close_before_trade_date(ticker, trade_date)
+        else:
+            prev_close = get_prev_close_from_db(ticker)
+        if prev_close is None or float(prev_close) <= 0:
+            prev_mask = (dts_et.dt.date < target_date) & (dts_et.dt.time >= t_start) & (dts_et.dt.time <= t_end)
+            prev_df = df.loc[prev_mask].sort_values("datetime")
+            if not prev_df.empty:
+                prev_close = float(prev_df["Close"].iloc[-1])
+        if prev_close is None or float(prev_close) <= 0:
+            return None, None, None
+        prev_close = float(prev_close)
         rth_mask = (dts_et.dt.date == target_date) & (dts_et.dt.time >= t_start) & (dts_et.dt.time <= t_end)
         df_td = df.loc[rth_mask].sort_values("datetime")
         if df_td.empty:
