@@ -295,7 +295,7 @@ def build_premarket_chart_data(ticker: str) -> Dict[str, Any]:
             }
         open_idx: Optional[int] = None
         for i, ts in enumerate(df["_et"]):
-            if ts.time >= NYSE_OPEN_TIME:
+            if ts.time() >= NYSE_OPEN_TIME:
                 open_idx = i
                 break
         out.update({
