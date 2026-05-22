@@ -12,13 +12,14 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
 DDL_PATH = "db/knowledge_pg/sql/026_game5m_gap_forecast_daily.sql"
 DDL_MIGRATION_TICKER = "db/knowledge_pg/sql/027_game5m_gap_forecast_ticker_pred.sql"
+NYSE_OPEN_TIME = time(9, 30)
 
 UPSERT_PREMARKET_SQL = """
 INSERT INTO game5m_gap_forecast_daily (
@@ -85,6 +86,22 @@ def _et_trade_date() -> date:
         return datetime.now(ZoneInfo("America/New_York")).date()
     except ImportError:
         return datetime.now(timezone.utc).date()
+
+
+def _snapshot_is_preopen(row: Dict[str, Any]) -> bool:
+    ts = row.get("snapshot_ts_premarket")
+    if ts is None:
+        return True
+    try:
+        from zoneinfo import ZoneInfo
+
+        dt = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        et = dt.astimezone(ZoneInfo("America/New_York"))
+        return et.time() < NYSE_OPEN_TIME
+    except Exception:
+        return True
 
 
 def _get_engine():
@@ -401,9 +418,13 @@ def pool_gap_forecast_metrics(rows: Sequence[Dict[str, Any]], *, sector_proxy: s
     complete_sector: List[Dict[str, Any]] = []
     complete_ticker: List[Dict[str, Any]] = []
     complete_game_sector_baseline: List[Dict[str, Any]] = []
+    invalid_post_open_snapshots = 0
     for r in rows:
         og = r.get("open_gap_pct")
         if og is None:
+            continue
+        if not _snapshot_is_preopen(r):
+            invalid_post_open_snapshots += 1
             continue
         sym = str(r.get("symbol") or "").upper()
         if sym == proxy and r.get("pred_sector_gap_pct") is not None:
@@ -476,6 +497,7 @@ def pool_gap_forecast_metrics(rows: Sequence[Dict[str, Any]], *, sector_proxy: s
     return {
         "n_rows": len(rows),
         "n_premarket_only": premarket_only,
+        "n_invalid_post_open_snapshots": invalid_post_open_snapshots,
         "sector_proxy": proxy,
         "sector": _pack(complete_sector, f"Sector OLS pred vs open ({proxy})"),
         "ticker_v2": ticker_block,

@@ -965,6 +965,7 @@ def build_game5m_gap_forecast_arbiter(
     n_sec = int(sec.get("n_complete") or 0)
     n_ticker = int(ticker.get("n_complete") or 0)
     n_pm_only = int(pooled.get("n_premarket_only") or 0)
+    n_invalid_snapshots = int(pooled.get("n_invalid_post_open_snapshots") or 0)
     mae_delta = pooled.get("ticker_vs_sector_mae_delta_pp")
 
     def _verdict(block: Dict[str, Any]) -> Tuple[str, str, List[str]]:
@@ -1084,6 +1085,7 @@ def build_game5m_gap_forecast_arbiter(
     lines.extend(
         [
             f"  Строк в логе: {pooled.get('n_rows')}, только премаркет (без open): {n_pm_only}",
+            f"  Исключено post-open snapshots из readiness: {n_invalid_snapshots}",
             "",
             "**Следующие шаги:**",
         ]
