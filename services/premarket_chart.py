@@ -89,6 +89,21 @@ def _minutes_until_open_global() -> Optional[int]:
         return None
 
 
+def _snapshot_is_preopen(ts: Any) -> bool:
+    if ts is None or pd.isna(ts):
+        return True
+    try:
+        dt = pd.Timestamp(ts)
+        if dt.tzinfo is None:
+            dt = dt.tz_localize("UTC")
+        else:
+            dt = dt.tz_convert("UTC")
+        et = dt.tz_convert("America/New_York")
+        return et.time() < NYSE_OPEN_TIME
+    except Exception:
+        return True
+
+
 def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
     """Снимок premarket_cron из game5m_gap_forecast_daily (без Yahoo)."""
     syms = sorted({(t or "").strip().upper() for t in tickers if (t or "").strip()})
@@ -127,27 +142,41 @@ def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
         if not sym:
             continue
         ts = r.get("snapshot_ts_premarket")
-        pred_ticker = float(r["pred_ticker_gap_pct"]) if pd.notna(r.get("pred_ticker_gap_pct")) else None
+        snapshot_valid = _snapshot_is_preopen(ts)
+        pred_ticker = (
+            float(r["pred_ticker_gap_pct"])
+            if snapshot_valid and pd.notna(r.get("pred_ticker_gap_pct"))
+            else None
+        )
         open_gap = float(r["open_gap_pct"]) if pd.notna(r.get("open_gap_pct")) else None
         pred_err = None
         if pred_ticker is not None and open_gap is not None:
             pred_err = round(open_gap - pred_ticker, 6)
-        elif pd.notna(r.get("error_pred_ticker_vs_open_pct")):
+        elif snapshot_valid and pd.notna(r.get("error_pred_ticker_vs_open_pct")):
             pred_err = float(r["error_pred_ticker_vs_open_pct"])
         out[sym] = {
             "ticker": sym,
             "prev_close": float(r["prev_close"]) if pd.notna(r.get("prev_close")) else None,
-            "premarket_last": float(r["premarket_last"]) if pd.notna(r.get("premarket_last")) else None,
-            "premarket_gap_pct": float(r["premarket_gap_pct"]) if pd.notna(r.get("premarket_gap_pct")) else None,
-            "pred_sector_gap_pct": float(r["pred_sector_gap_pct"]) if pd.notna(r.get("pred_sector_gap_pct")) else None,
+            "premarket_last": (
+                float(r["premarket_last"]) if snapshot_valid and pd.notna(r.get("premarket_last")) else None
+            ),
+            "premarket_gap_pct": (
+                float(r["premarket_gap_pct"]) if snapshot_valid and pd.notna(r.get("premarket_gap_pct")) else None
+            ),
+            "pred_sector_gap_pct": (
+                float(r["pred_sector_gap_pct"]) if snapshot_valid and pd.notna(r.get("pred_sector_gap_pct")) else None
+            ),
             "pred_ticker_gap_pct": pred_ticker,
-            "pred_ticker_source": str(r.get("pred_ticker_source") or "") or None,
-            "pred_ticker_model_version": str(r.get("pred_ticker_model_version") or "") or None,
+            "pred_ticker_source": (str(r.get("pred_ticker_source") or "") or None) if snapshot_valid else None,
+            "pred_ticker_model_version": (
+                (str(r.get("pred_ticker_model_version") or "") or None) if snapshot_valid else None
+            ),
             "rth_open_price": float(r["rth_open_price"]) if pd.notna(r.get("rth_open_price")) else None,
             "open_gap_pct": open_gap,
             "source_open": str(r.get("source_open") or "") or None,
             "error_pred_ticker_vs_open_pct": pred_err,
-            "premarket_last_time_et": str(ts) if ts is not None and pd.notna(ts) else None,
+            "premarket_last_time_et": str(ts) if snapshot_valid and ts is not None and pd.notna(ts) else None,
+            "premarket_snapshot_valid": snapshot_valid,
             "source": "db",
         }
     return out
