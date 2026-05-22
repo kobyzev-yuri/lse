@@ -113,9 +113,20 @@ def ensure_gap_forecast_table(engine=None) -> None:
 
 def _symbols_for_log() -> List[str]:
     from services.macro_premarket_risk import evaluate_macro_premarket_risk
-    from services.ticker_groups import get_tickers_game_5m
+    from services.ticker_groups import (
+        get_tickers_fast,
+        get_tickers_for_5m_correlation,
+        get_tickers_for_portfolio_game,
+        get_tickers_game_5m,
+    )
 
-    game = [str(t).strip().upper() for t in (get_tickers_game_5m() or []) if str(t).strip()]
+    tickers = (
+        list(get_tickers_game_5m() or [])
+        + list(get_tickers_fast() or [])
+        + list(get_tickers_for_portfolio_game() or [])
+        + list(get_tickers_for_5m_correlation() or [])
+    )
+    game = [str(t).strip().upper() for t in tickers if str(t).strip()]
     macro = evaluate_macro_premarket_risk()
     proxy = (macro.get("macro_sector_proxy") or "SMH").strip().upper()
     out: List[str] = []

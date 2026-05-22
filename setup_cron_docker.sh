@@ -48,6 +48,9 @@ cat >> "$CRON_FILE" << EOF
 0 4 * * * docker exec $CONTAINER_NAME python scripts/analyze_event_outcomes_cron.py >> "$PROJECT_DIR/logs/analyze_event_outcomes.log" 2>&1
 30 4 * * * docker exec $CONTAINER_NAME python scripts/cleanup_calendar_noise.py --execute >> "$PROJECT_DIR/logs/cleanup_calendar_noise.log" 2>&1
 45 * * * * docker exec $CONTAINER_NAME python scripts/cron_watchdog.py --execute >> "$PROJECT_DIR/logs/cron_watchdog.log" 2>&1
+# Gap forecast daily log: snapshot before RTH open, then fill actual 09:30 ET open gap for error tracking.
+20 15 * * 1-5 flock -n /tmp/lse_gap_forecast_premarket.lock docker exec $CONTAINER_NAME python scripts/ingest_game5m_gap_forecast.py --ensure-table --phase premarket >> "$PROJECT_DIR/logs/game5m_gap_forecast.log" 2>&1
+40 16 * * 1-5 flock -n /tmp/lse_gap_forecast_open.lock docker exec $CONTAINER_NAME python scripts/ingest_game5m_gap_forecast.py --ensure-table --phase open >> "$PROJECT_DIR/logs/game5m_gap_forecast.log" 2>&1
 # 5m/30m в Postgres для бэктеста (Yahoo, UPSERT). Ежедневно 23:25 по системному TZ сервера (ожидается MSK).
 25 23 * * * flock -n /tmp/lse_market_bars_intraday.lock docker exec $CONTAINER_NAME python scripts/ingest_market_bars_intraday.py >> "$PROJECT_DIR/logs/cron_market_bars_intraday.log" 2>&1
 32 23 * * 1-5 flock -n /tmp/lse_market_regime.lock docker exec $CONTAINER_NAME python scripts/ingest_market_regime_daily.py >> "$PROJECT_DIR/logs/event_regime.log" 2>&1
