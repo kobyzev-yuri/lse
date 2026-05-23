@@ -31,7 +31,8 @@ def _env_flag_true(key: str, default: str = "false") -> bool:
     return (get_config_value(key, default) or default).strip().lower() in ("1", "true", "yes")
 
 
-# Наборы для walk-forward сравнения (OOS). v3c = macro+symbol вместе; v3mac/v3sym — по отдельности.
+# Наборы для walk-forward сравнения (OOS).
+# v3nm = news+macro без symbol; v3c = macro+symbol без news; v3mac/v3sym — по отдельности.
 MULTIDAY_FEATURE_SET_SPECS: Dict[str, Dict[str, Any]] = {
     "v2": {
         "label_ru": "цена + премаркет (текущий прод по умолчанию)",
@@ -68,6 +69,13 @@ MULTIDAY_FEATURE_SET_SPECS: Dict[str, Dict[str, Any]] = {
         "use_macro_calendar_db": True,
         "use_symbol_calendar_db": True,
     },
+    "v3nm": {
+        "label_ru": "v2 + news + macro (без symbol)",
+        "use_premarket_db": True,
+        "use_news_db": True,
+        "use_macro_calendar_db": True,
+        "use_symbol_calendar_db": False,
+    },
     "v3": {
         "label_ru": "полный v3 (news + macro + symbol)",
         "use_premarket_db": True,
@@ -98,6 +106,8 @@ def _live_feature_set_key() -> str:
         return "v3sym"
     if not news and macro and sym:
         return "v3c"
+    if news and macro and not sym:
+        return "v3nm"
     return "v2"
 
 

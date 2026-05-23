@@ -80,6 +80,53 @@ def clear_cooldown(ticker: str) -> None:
         logger.warning("Не удалось сбросить cooldown для %s: %s", ticker, e)
 
 
+def _maybe_defer_take_profit_by_continuation_gate(
+    gate: dict | None,
+    *,
+    take_pct: float | None,
+    pnl_from_high_pct: float | None,
+    pullback_from_high_pct: float | None,
+) -> bool:
+    """
+    Apply continuation gate to a pending TAKE_PROFIT.
+
+    The gate is intentionally conservative: it only defers a take when the gate
+    is explicitly non-log-only, all checks pass, the extended target is not hit,
+    and a pullback metric is available and still within the trailing threshold.
+    """
+    if not isinstance(gate, dict) or not gate.get("enabled"):
+        return False
+    params = gate.get("params") if isinstance(gate.get("params"), dict) else {}
+    gate["applied"] = False
+    gate["defer_close"] = False
+    if gate.get("log_only") or not gate.get("would_extend_take"):
+        gate["apply_skip_reason"] = "log_only_or_not_candidate"
+        return False
+    try:
+        base_take = float(take_pct)
+        pnl_high = float(pnl_from_high_pct)
+        pullback = float(pullback_from_high_pct)
+        add_pct = float(params.get("extend_take_add_pct", 1.0))
+        trail_pct = float(params.get("trail_pullback_pct", 0.7))
+    except (TypeError, ValueError):
+        gate["apply_skip_reason"] = "missing_take_pnl_or_pullback"
+        return False
+    extended_take = base_take + max(0.0, add_pct)
+    gate["extended_take_pct"] = round(extended_take, 4)
+    gate["pnl_from_high_pct"] = round(pnl_high, 4)
+    gate["pullback_from_high_pct"] = round(pullback, 4)
+    if pnl_high >= extended_take - 0.05:
+        gate["apply_skip_reason"] = "extended_take_reached"
+        return False
+    if pullback > trail_pct:
+        gate["apply_skip_reason"] = "trail_pullback_exceeded"
+        return False
+    gate["applied"] = True
+    gate["defer_close"] = True
+    gate["apply_reason"] = "extend_take_until_target_or_trailing_pullback"
+    return True
+
+
 def get_signal_mentions() -> str:
     raw = get_config_value("TELEGRAM_SIGNAL_MENTIONS", "").strip()
     if not raw:
@@ -629,6 +676,22 @@ def process_ticker(
                             continuation_gate.get("momentum_2h_pct"),
                             continuation_gate.get("rsi_5m"),
                         )
+                    if _maybe_defer_take_profit_by_continuation_gate(
+                        continuation_gate,
+                        take_pct=take_pct_e,
+                        pnl_from_high_pct=pnl_to_take_pct,
+                        pullback_from_high_pct=d5.get("pullback_from_high_pct"),
+                    ):
+                        logger.info(
+                            "[5m] CONTINUATION_GATE %s: TAKE_PROFIT отложен — pnl_high=%s < extended_take=%s, pullback=%s <= trail=%s",
+                            ticker,
+                            continuation_gate.get("pnl_from_high_pct"),
+                            continuation_gate.get("extended_take_pct"),
+                            continuation_gate.get("pullback_from_high_pct"),
+                            (continuation_gate.get("params") or {}).get("trail_pullback_pct"),
+                        )
+                        outcome_lines.append("тейк отложен continuation_gate")
+                        return False
                 logger.info(
                     "[5m] %s закрытие: тип=%s, exit_bar_close=%s exit_bar_close_ts=%s exit_bar_et=[%s..%s), "
                     "price_5m=%.2f, bar_high=%s bar_high_recent_max=%s bar_high_session_lifted=%s, "
@@ -1240,6 +1303,26 @@ def main():
                                 rsi_5m=close_ctx_ah.get("rsi_5m"),
                                 volume_vs_avg_pct=d5.get("volume_vs_avg_pct"),
                             )
+                            pnl_high_ah = (
+                                ((bar_high / float(entry_price_ah)) - 1.0) * 100.0
+                                if entry_price_ah and bar_high and float(entry_price_ah) > 0 and float(bar_high) > 0
+                                else pnl_ah
+                            )
+                            if _maybe_defer_take_profit_by_continuation_gate(
+                                continuation_gate_ah,
+                                take_pct=take_ah,
+                                pnl_from_high_pct=pnl_high_ah,
+                                pullback_from_high_pct=d5.get("pullback_from_high_pct"),
+                            ):
+                                logger.info(
+                                    "[5m][AH] CONTINUATION_GATE %s: TAKE_PROFIT отложен — pnl_high=%s < extended_take=%s, pullback=%s <= trail=%s",
+                                    ticker,
+                                    continuation_gate_ah.get("pnl_from_high_pct"),
+                                    continuation_gate_ah.get("extended_take_pct"),
+                                    continuation_gate_ah.get("pullback_from_high_pct"),
+                                    (continuation_gate_ah.get("params") or {}).get("trail_pullback_pct"),
+                                )
+                                continue
                         close_ctx_ah_merged = merge_close_context_with_trade_narrative(
                             close_ctx_ah,
                             d5=d5,
