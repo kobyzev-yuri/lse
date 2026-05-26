@@ -233,6 +233,7 @@ def _collect_premarket_gap_baseline_contribution(d5: Dict[str, Any]) -> Optional
             "baseline_action": baseline_action,
             "should_boost_entry": bool(pm.get("should_boost_entry")),
             "should_caution_entry": bool(pm.get("should_caution_entry")),
+            "should_take_watch": bool(pm.get("should_take_watch")),
             "blocked_by_context": bool(pm.get("blocked_by_context")),
             "thresholds": pm.get("thresholds"),
         },

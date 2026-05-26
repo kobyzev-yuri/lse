@@ -31,7 +31,11 @@ def evaluate_premarket_gap_baseline(
     macro_equity_gap_bias: Optional[str] = None,
     multiday_horizon_1d_pct: Any = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return a conservative, observable baseline signal from premarket gap."""
+    """Return an observable baseline signal from premarket gap.
+
+    Strong gap-up is not bearish by itself: it is a prepare-for-open / TAKE-watch
+    signal. It only downgrades a new long when other context points to fade risk.
+    """
     gap = _f(premarket_gap_pct)
     if gap is None:
         return None
@@ -57,6 +61,7 @@ def evaluate_premarket_gap_baseline(
     reason = "premarket gap baseline neutral"
     should_boost = False
     should_caution = False
+    should_take_watch = False
 
     if gap <= neg_caution:
         signal = "bearish_gap"
@@ -65,11 +70,15 @@ def evaluate_premarket_gap_baseline(
         should_caution = True
         reason = f"premarket gap {gap:+.2f}% <= {neg_caution:+.2f}%"
     elif gap >= chase_min:
-        signal = "chase_risk"
-        action = "downgrade"
+        signal = "strong_gap_up_fade_risk" if blocked_by_context else "strong_gap_up"
+        action = "downgrade" if blocked_by_context else "telemetry"
         entry_advice = "CAUTION"
         should_caution = True
-        reason = f"premarket gap {gap:+.2f}% >= chase risk {chase_min:+.2f}%"
+        should_take_watch = True
+        if blocked_by_context:
+            reason = f"premarket gap {gap:+.2f}% strong, but context indicates fade risk"
+        else:
+            reason = f"premarket gap {gap:+.2f}% strong: prepare for TAKE-watch / confirmed open entry"
     elif gap >= pos_min:
         signal = "bullish_gap"
         if blocked_by_context:
@@ -92,6 +101,7 @@ def evaluate_premarket_gap_baseline(
         "reason": reason,
         "should_boost_entry": should_boost,
         "should_caution_entry": should_caution,
+        "should_take_watch": should_take_watch,
         "blocked_by_context": blocked_by_context,
         "thresholds": {
             "bullish_min_pct": pos_min,

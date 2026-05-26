@@ -152,6 +152,37 @@ class TestDecisionStackGame5m(unittest.TestCase):
         self.assertTrue(sig["should_boost_entry"])
         self.assertEqual(sig["action"], "boost")
 
+    def test_strong_gap_up_is_take_watch_not_downgrade_without_fade_risk(self):
+        env = {
+            "DECISION_STACK_PREMARKET_GAP_BASELINE_GATE_MODE": "apply",
+            "DECISION_STACK_ENTRY_ADVICE_GATE_MODE": "none",
+            "DECISION_STACK_MACRO_GATE_MODE": "none",
+            "DECISION_STACK_NEWS_FUSION_GATE_MODE": "none",
+            "DECISION_STACK_CATBOOST_GATE_MODE": "none",
+            "DECISION_STACK_MULTIDAY_GATE_MODE": "none",
+        }
+        d5 = {
+            "technical_decision_core": "BUY",
+            "premarket_gap_pct": 4.6,
+            "entry_advice": "ALLOW",
+            "kb_news_impact": "нейтрально",
+        }
+        with patch("config_loader.get_config_value", side_effect=lambda k, d=None: env.get(k, d)):
+            contribs = collect_game5m_contributions(d5, ticker="MU")
+            eff = resolve_game5m_technical(d5, contribs)
+        self.assertEqual(eff, "BUY")
+        pm = next(c for c in contribs if c["contour_id"] == "premarket_gap_baseline")
+        self.assertEqual(pm["action"], "telemetry")
+        self.assertEqual(pm["metrics"]["signal"], "strong_gap_up")
+        self.assertTrue(pm["metrics"]["should_take_watch"])
+
+    def test_strong_gap_up_with_fade_risk_downgrades(self):
+        sig = evaluate_premarket_gap_baseline(4.6, macro_equity_gap_bias="DOWN")
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig["signal"], "strong_gap_up_fade_risk")
+        self.assertEqual(sig["action"], "downgrade")
+        self.assertTrue(sig["should_take_watch"])
+
 
 if __name__ == "__main__":
     unittest.main()

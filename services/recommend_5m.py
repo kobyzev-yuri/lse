@@ -2559,6 +2559,7 @@ def get_decision_5m(
         out["premarket_gap_baseline_signal"] = premarket_gap_baseline.get("signal")
         out["premarket_gap_baseline_action"] = premarket_gap_baseline.get("action")
         out["premarket_gap_baseline_reason"] = premarket_gap_baseline.get("reason")
+        out["premarket_gap_take_watch"] = bool(premarket_gap_baseline.get("should_take_watch"))
     if macro_risk.get("enabled"):
         out["macro_risk_level"] = macro_risk.get("risk_level")
         out["macro_equity_gap_bias"] = macro_risk.get("equity_gap_bias")
