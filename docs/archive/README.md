@@ -49,3 +49,5 @@
 | `SANDBOX_TRADE_EXAMPLE_2026-04-27.md` | Старый демонстрационный сценарий сделок; актуально: DATABASE_SCHEMA.md и PORTFOLIO_GAME.md |
 | `GAME_5M_FALSE_TAKE_PROFIT_SESSION_HIGH_2026-04-29.md` | Разбор ложного TAKE_PROFIT из-за `session_high`; исправлено в коде, для обучения такие строки исключаются |
 | `GAME_5M_INCORRECT_0925_CLOSES_2026-05-05.md` | Разбор некорректных SELL на границе открытия (09:25–09:30 ET); исторический инцидент + фиксы/рекомендации |
+| `GAME_5M_BUY_DECISION_AND_LLM.md` | Логически архивный документ в корне docs: старое подробное описание BUY/LLM. Канон: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
+| `GAME_5M_FEATURES_REUSE_AND_DECISION_SOURCE.md` | Логически архивный документ в корне docs: справочник по признакам и старым вариантам источника решения. Канон: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
