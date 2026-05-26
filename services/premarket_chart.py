@@ -98,6 +98,36 @@ def _snapshot_is_preopen(ts: Any) -> bool:
         return True
 
 
+def _snapshot_to_et(ts: Any) -> Optional[pd.Timestamp]:
+    if ts is None or pd.isna(ts):
+        return None
+    try:
+        dt = pd.Timestamp(ts)
+        if dt.tzinfo is None:
+            dt = dt.tz_localize("UTC")
+        return dt.tz_convert("America/New_York")
+    except Exception:
+        return None
+
+
+def _snapshot_time_et_str(ts: Any) -> Optional[str]:
+    et = _snapshot_to_et(ts)
+    if et is None:
+        return None
+    return et.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _minutes_until_open_at_snapshot(ts: Any) -> Optional[int]:
+    et = _snapshot_to_et(ts)
+    if et is None:
+        return None
+    try:
+        open_et = pd.Timestamp.combine(et.date(), NYSE_OPEN_TIME).tz_localize(et.tz)
+        return max(0, int((open_et - et).total_seconds() // 60))
+    except Exception:
+        return None
+
+
 def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
     """Снимок premarket_cron из game5m_gap_forecast_daily (без Yahoo)."""
     syms = sorted({(t or "").strip().upper() for t in tickers if (t or "").strip()})
@@ -144,6 +174,7 @@ def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
             pred_err = round(open_gap - pred_ticker, 6)
         elif pd.notna(r.get("error_pred_ticker_vs_open_pct")):
             pred_err = float(r["error_pred_ticker_vs_open_pct"])
+        snapshot_time_et = _snapshot_time_et_str(ts) if snapshot_valid else None
         out[sym] = {
             "ticker": sym,
             "prev_close": float(r["prev_close"]) if pd.notna(r.get("prev_close")) else None,
@@ -163,7 +194,8 @@ def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
             "open_gap_pct": open_gap,
             "source_open": str(r.get("source_open") or "") or None,
             "error_pred_ticker_vs_open_pct": pred_err,
-            "premarket_last_time_et": str(ts) if snapshot_valid and ts is not None and pd.notna(ts) else None,
+            "minutes_until_open": _minutes_until_open_at_snapshot(ts),
+            "premarket_last_time_et": snapshot_time_et,
             "premarket_snapshot_valid": snapshot_valid,
             "source": "db",
         }
@@ -219,7 +251,8 @@ def build_premarket_table_rows(
     for t in ordered:
         if t in db_map:
             row = dict(db_map[t])
-            row["minutes_until_open"] = mins_global
+            if row.get("minutes_until_open") is None:
+                row["minutes_until_open"] = mins_global
             rows.append(row)
         elif yahoo_fallback:
             missing.append(t)
