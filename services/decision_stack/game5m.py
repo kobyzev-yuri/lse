@@ -190,6 +190,55 @@ def _collect_gap_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
 
 
+def _collect_premarket_gap_baseline_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    pm = d5.get("premarket_gap_baseline")
+    if not isinstance(pm, dict):
+        try:
+            from services.premarket_gap_baseline import evaluate_premarket_gap_baseline
+
+            pm = evaluate_premarket_gap_baseline(
+                d5.get("premarket_gap_pct"),
+                very_negative_news=bool(d5.get("very_negative_news")),
+                macro_risk_level=d5.get("macro_risk_level"),
+                macro_equity_gap_bias=d5.get("macro_equity_gap_bias"),
+                multiday_horizon_1d_pct=d5.get("multiday_lr_horizon_1d_pct_vs_spot"),
+            )
+        except Exception as e:
+            logger.debug("premarket_gap_baseline contribution: %s", e)
+            pm = None
+    if not isinstance(pm, dict):
+        return None
+    gap = pm.get("premarket_gap_pct")
+    try:
+        gap_f = float(gap)
+    except (TypeError, ValueError):
+        return None
+    gm = gate_mode("DECISION_STACK_PREMARKET_GAP_BASELINE_GATE_MODE", "apply")
+    baseline_action = str(pm.get("action") or "telemetry")
+    action = "telemetry"
+    if gm == "apply" and baseline_action in ("downgrade", "boost"):
+        action = baseline_action
+    return make_contribution(
+        contour_id="premarket_gap_baseline",
+        role="observable_baseline",
+        readiness=READINESS_PRODUCTION,
+        strength=max(-1.0, min(1.0, gap_f / 4.0)),
+        weight=1.0,
+        action=action,
+        detail=pm.get("reason") or f"premarket_gap={gap_f:+.2f}%",
+        metrics={
+            "gate_mode": gm,
+            "premarket_gap_pct": gap_f,
+            "signal": pm.get("signal"),
+            "baseline_action": baseline_action,
+            "should_boost_entry": bool(pm.get("should_boost_entry")),
+            "should_caution_entry": bool(pm.get("should_caution_entry")),
+            "blocked_by_context": bool(pm.get("blocked_by_context")),
+            "thresholds": pm.get("thresholds"),
+        },
+    )
+
+
 def _collect_forecast_layer_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     fl = d5.get("forecast_layer")
     if not isinstance(fl, dict) or not fl.get("ready"):
@@ -386,6 +435,7 @@ def collect_game5m_contributions(d5: Dict[str, Any], *, ticker: str = "") -> Lis
         _collect_kb_news_contribution,
         _collect_entry_advice_contribution,
         _collect_macro_contribution,
+        _collect_premarket_gap_baseline_contribution,
         _collect_forecast_layer_contribution,
         _collect_gap_contribution,
         _collect_news_fusion_contribution,
@@ -522,6 +572,7 @@ def build_game5m_decision_snapshot(
         "gate_modes": {
             "entry_advice": gate_mode("DECISION_STACK_ENTRY_ADVICE_GATE_MODE", "log_only"),
             "macro": gate_mode("DECISION_STACK_MACRO_GATE_MODE", "log_only"),
+            "premarket_gap_baseline": gate_mode("DECISION_STACK_PREMARKET_GAP_BASELINE_GATE_MODE", "apply"),
             "news_fusion": gate_mode("DECISION_STACK_NEWS_FUSION_GATE_MODE", "log_only"),
             "forecast": gate_mode("DECISION_STACK_FORECAST_GATE_MODE", "log_only"),
             "catboost": gate_mode("DECISION_STACK_CATBOOST_GATE_MODE", "apply"),

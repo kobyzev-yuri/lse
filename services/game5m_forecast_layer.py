@@ -79,13 +79,14 @@ def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
     else:
         opportunity_reason = "no_gap_up"
 
-    ready = bool(gap is not None or md_vals)
+    ready = bool(gap is not None or pm_gap is not None or md_vals)
     envelope = {
         "version": 1,
         "open_gap": {
             "predicted_pct": gap,
             "fact_pct": gap_fact,
             "premarket_gap_pct": pm_gap,
+            "observable_baseline_pct": pm_gap,
             "sector_predicted_pct": sector_gap,
             "source": d5.get("ticker_open_gap_predicted_source"),
             "model_version": d5.get("ticker_open_gap_model_version"),

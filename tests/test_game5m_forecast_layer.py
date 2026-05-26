@@ -25,6 +25,12 @@ class TestGame5mForecastLayer(unittest.TestCase):
         self.assertFalse(env["ready"])
         self.assertEqual(env["regime"], "neutral_or_unavailable")
 
+    def test_premarket_gap_only_makes_layer_ready(self):
+        env = build_game5m_forecast_envelope({"premarket_gap_pct": 1.6})
+        self.assertTrue(env["ready"])
+        self.assertEqual(env["open_gap"]["observable_baseline_pct"], 1.6)
+        self.assertEqual(env["gap_up_opportunity"]["source"], "premarket_gap")
+
     def test_gap_up_opportunity_confirmed_by_multiday(self):
         env = build_game5m_forecast_envelope(
             {

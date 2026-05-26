@@ -20,6 +20,7 @@ GAME5M_VETO_ORDER = (
     "entry_advice",
     "kb_news",
     "news_fusion",
+    "premarket_gap_baseline",
     "forecast_layer",
     "gap_forecast",
     "catboost_entry_5m",
@@ -111,6 +112,7 @@ def default_readiness(contour_id: str) -> str:
         "entry_advice",
         "macro_risk",
         "strategy_rules",
+        "premarket_gap_baseline",
     }
     caution = {
         "news_fusion",

@@ -2524,11 +2524,41 @@ def get_decision_5m(
         )
     except Exception as e:
         logger.debug("macro_premarket_risk для %s: %s", ticker, e)
+    premarket_gap_baseline = None
+    try:
+        if premarket_context and premarket_context.get("premarket_gap_pct") is not None:
+            from services.premarket_gap_baseline import evaluate_premarket_gap_baseline
+
+            premarket_gap_baseline = evaluate_premarket_gap_baseline(
+                premarket_context.get("premarket_gap_pct"),
+                very_negative_news=bool(very_negative and not relax_very_neg),
+                macro_risk_level=macro_risk.get("risk_level"),
+                macro_equity_gap_bias=macro_risk.get("equity_gap_bias"),
+                multiday_horizon_1d_pct=out.get("multiday_lr_horizon_1d_pct_vs_spot"),
+            )
+            if premarket_gap_baseline:
+                pm_reason = str(premarket_gap_baseline.get("reason") or "")
+                if premarket_gap_baseline.get("should_caution_entry") and entry_advice == "ALLOW":
+                    entry_advice = "CAUTION"
+                    entry_advice_reason = f"Premarket baseline: {pm_reason}"
+                elif (
+                    premarket_gap_baseline.get("should_boost_entry")
+                    and entry_advice == "ALLOW"
+                    and not entry_advice_reason
+                ):
+                    entry_advice_reason = f"Premarket baseline supports entry: {pm_reason}"
+    except Exception as e:
+        logger.debug("premarket_gap_baseline для %s: %s", ticker, e)
     if not entry_advice_reason and entry_advice == "ALLOW":
         entry_advice_reason = "Нет явных ограничений на вход"
     out["entry_advice"] = entry_advice
     out["entry_advice_reason"] = entry_advice_reason
     out["entry_advice_reason_local"] = entry_advice_reason_local
+    if premarket_gap_baseline:
+        out["premarket_gap_baseline"] = premarket_gap_baseline
+        out["premarket_gap_baseline_signal"] = premarket_gap_baseline.get("signal")
+        out["premarket_gap_baseline_action"] = premarket_gap_baseline.get("action")
+        out["premarket_gap_baseline_reason"] = premarket_gap_baseline.get("reason")
     if macro_risk.get("enabled"):
         out["macro_risk_level"] = macro_risk.get("risk_level")
         out["macro_equity_gap_bias"] = macro_risk.get("equity_gap_bias")

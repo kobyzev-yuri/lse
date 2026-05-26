@@ -14,6 +14,7 @@ from services.decision_stack.game5m import (
     resolve_game5m_technical,
 )
 from services.decision_stack.game5m_policy import apply_game5m_policy_gates
+from services.premarket_gap_baseline import evaluate_premarket_gap_baseline
 
 
 class TestDecisionStackGame5m(unittest.TestCase):
@@ -35,7 +36,9 @@ class TestDecisionStackGame5m(unittest.TestCase):
                 "horizons_pct": {"1d": -0.5},
             },
         }
-        snap = build_game5m_decision_snapshot(d5, ticker="NVDA")
+        env = {"DECISION_STACK_READINESS_CATBOOST_ENTRY_5M": "production"}
+        with patch("config_loader.get_config_value", side_effect=lambda k, d=None: env.get(k, d)):
+            snap = build_game5m_decision_snapshot(d5, ticker="NVDA")
         self.assertEqual(snap["effective_decision"], "HOLD")
         self.assertEqual(snap["resolve_mode"], "mirror_legacy")
         self.assertEqual(snap["projected_effective_if_resolve"], "HOLD")
@@ -83,6 +86,7 @@ class TestDecisionStackGame5m(unittest.TestCase):
         env = {
             "DECISION_STACK_NEWS_FUSION_GATE_MODE": "apply",
             "DECISION_STACK_NEWS_FUSION_VETO_BELOW": "-0.35",
+            "DECISION_STACK_READINESS_NEWS_FUSION": "production",
             "DECISION_STACK_ENTRY_ADVICE_GATE_MODE": "none",
             "DECISION_STACK_CATBOOST_GATE_MODE": "none",
             "DECISION_STACK_MULTIDAY_GATE_MODE": "none",
@@ -117,6 +121,36 @@ class TestDecisionStackGame5m(unittest.TestCase):
         self.assertTrue(snap["resolve_divergence"])
         self.assertEqual(snap["projected_effective_if_resolve"], "HOLD")
         self.assertEqual(snap["effective_decision"], "BUY")
+
+    def test_premarket_gap_baseline_downgrades_negative_gap(self):
+        env = {
+            "DECISION_STACK_PREMARKET_GAP_BASELINE_GATE_MODE": "apply",
+            "DECISION_STACK_ENTRY_ADVICE_GATE_MODE": "none",
+            "DECISION_STACK_MACRO_GATE_MODE": "none",
+            "DECISION_STACK_NEWS_FUSION_GATE_MODE": "none",
+            "DECISION_STACK_CATBOOST_GATE_MODE": "none",
+            "DECISION_STACK_MULTIDAY_GATE_MODE": "none",
+        }
+        d5 = {
+            "technical_decision_core": "BUY",
+            "premarket_gap_pct": -2.4,
+            "entry_advice": "ALLOW",
+            "kb_news_impact": "нейтрально",
+        }
+        with patch("config_loader.get_config_value", side_effect=lambda k, d=None: env.get(k, d)):
+            contribs = collect_game5m_contributions(d5, ticker="MU")
+            eff = resolve_game5m_technical(d5, contribs)
+        self.assertEqual(eff, "HOLD")
+        pm = next(c for c in contribs if c["contour_id"] == "premarket_gap_baseline")
+        self.assertEqual(pm["action"], "downgrade")
+        self.assertEqual(pm["metrics"]["signal"], "bearish_gap")
+
+    def test_premarket_gap_baseline_marks_bullish_gap_as_boost(self):
+        sig = evaluate_premarket_gap_baseline(1.6, macro_equity_gap_bias="UP")
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig["signal"], "bullish_gap")
+        self.assertTrue(sig["should_boost_entry"])
+        self.assertEqual(sig["action"], "boost")
 
 
 if __name__ == "__main__":
