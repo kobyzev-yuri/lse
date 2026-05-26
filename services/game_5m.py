@@ -1133,6 +1133,14 @@ def get_recent_results(ticker: str, limit: int = 20) -> list[dict[str, Any]]:
 _HANGER_TUNE_CACHE: dict[str, Any] = {"path": "", "mtime": 0.0, "per_ticker": {}}
 
 
+def _game5m_cfg_float(key: str, default: float) -> float:
+    raw = (get_config_value(key, str(default)) or str(default)).strip().replace(",", ".")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _hanger_tune_min_cap_pct(ticker_upper: str, *, apply_hanger_json: Optional[bool] = None) -> Optional[float]:
     """
     Минимальный proposed_cap_pct по тикеру из ``hanger_hypotheses`` (где есть remediation_take_cap).
@@ -1505,6 +1513,8 @@ def evaluate_game5m_continuation_gate(
         "extend_take_add_pct": _cfg_float("GAME_5M_CONTINUATION_EXTEND_TAKE_ADD_PCT", 1.0),
         "max_extra_minutes": _cfg_float("GAME_5M_CONTINUATION_MAX_EXTRA_MINUTES", 120.0),
         "trail_pullback_pct": _cfg_float("GAME_5M_CONTINUATION_TRAIL_PULLBACK_PCT", 0.7),
+        "trail_momentum_scale_above_pct": _cfg_float("GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE_ABOVE_PCT", 3.0),
+        "trail_momentum_scale": _cfg_float("GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE", 1.5),
     }
     out: Dict[str, Any] = {
         "enabled": enabled,
@@ -1614,10 +1624,25 @@ def should_close_position(
         pnl_take_pct = (price_for_take - entry_price) / entry_price * 100.0
         pnl_stop_pct = (price_for_stop - entry_price) / entry_price * 100.0
         ticker = open_position.get("ticker", "?")
+        hanger_cap_overridden = False
+        base_take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=tkr, apply_hanger_json=False)
+        if base_take_pct > take_pct:
+            override_margin = max(0.0, _game5m_cfg_float("GAME_5M_HANGER_CAP_OVERRIDE_MARGIN_PCT", 2.0))
+            if pnl_take_pct >= take_pct + override_margin:
+                logger.warning(
+                    "GAME_5M %s: hanger cap ignored — pnl=%.2f%% already exceeds hanger take %.2f%% by >= %.2f п.п.; base take=%.2f%%",
+                    ticker,
+                    pnl_take_pct,
+                    take_pct,
+                    override_margin,
+                    base_take_pct,
+                )
+                take_pct = base_take_pct
+                hanger_cap_overridden = True
         # Допуск 0.05%: в pending может показываться 2.7%, а в кроне (5m/quotes) получается 2.67% — чтобы тейк сработал
         take_threshold = take_pct - 0.05
         if pnl_take_pct >= take_threshold:
-            exit_sig = "TAKE_PROFIT_SUSPEND" if apply_hanger_json is True else "TAKE_PROFIT"
+            exit_sig = "TAKE_PROFIT_SUSPEND" if apply_hanger_json is True and not hanger_cap_overridden else "TAKE_PROFIT"
             return True, exit_sig, ""
         exit_only_take = _game_5m_exit_only_take()
         # DEBUG: всегда пишем pnl vs порог; INFO — только когда до тейка осталось ≤0.5%

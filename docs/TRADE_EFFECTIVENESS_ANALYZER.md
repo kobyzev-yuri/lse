@@ -59,6 +59,15 @@ Analyzer отдаёт два блока:
 - `game5m_hanger_v2_review`: state counts, stale/reversal exits, recoverable hanger cases, top cases и кандидаты параметров `GAME_5M_STALE_REVERSAL_*` / `GAME_5M_HANGER_V2_*`;
 - `continuation_gate_review`: сколько сделок gate хотел бы продлить, какой был `missed_upside`, и какие `GAME_5M_CONTINUATION_*` / take-параметры стоит проверять.
 
+С 2026-05-26 в `continuation_gate_review` дополнительно выводятся:
+
+- `apply_skip_reason` в `top_cases`, чтобы видеть, почему live gate не был применён;
+- `effective_trail_pullback_pct` и `pullback_from_high_pct`, если крон сохранил эти поля;
+- `continuation_gate_blocked_count` — сколько `extend_take_candidate` заблокировано `trail_pullback_exceeded`;
+- `continuation_gate_blocked_missed_upside_ge_1pct_count` и `avg_missed_upside_blocked_by_trail` — сколько недобора связано именно с этим блоком.
+
+Эти метрики нужны, чтобы отличать проблему “gate не хотел продлевать” от “gate хотел, но trailing pullback уже был больше допустимого”. Для второго случая проверяются `GAME_5M_CONTINUATION_TRAIL_PULLBACK_PCT`, `GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE_ABOVE_PCT` и `GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE`.
+
 Live-лог во время сессии:
 
 ```bash
@@ -217,7 +226,7 @@ ANALYZER_AUTOTUNE_APPLY=1 python3 scripts/analyzer_autotune.py --days 5 --url ht
 | `entry_underperformance_review` | Входы с плохим исходом или долгим удержанием | Ужесточение веток STRONG_BUY/BUY, `ENTRY_QUALITY_*`, лимиты дней/минут. |
 | `catboost_entry_backtest` | Согласованность скора входа с фактом (`realized_pct`) | Убедиться: `GAME_5M_CATBOOST_ENABLED`, путь к `.cbm` на хосте веба, достаточно строк без `disabled`; после nightly ML сравнить калибровку P(win) vs loss. См. `docs/ML_GAME5M_CATBOOST.md`. |
 | `game5m_hanger_v2_review` | `position_state_v2` vs PnL (stale / recoverable / normal) | Подкрутка `GAME_5M_STALE_REVERSAL_*`, `GAME_5M_HANGER_V2_*`, `GAME_5M_MAX_POSITION_*`, `EARLY_DERISK_*`; план фаз — `docs/GAME_5M_HANGER_AND_STALE_EXIT_PLAN.md`. |
-| `continuation_gate_review` | Log-only gate vs фактический `missed_upside` после тейка | Сначала накопить статистику при `GAME_5M_CONTINUATION_GATE_LOG_ONLY=true`; затем точечно ослаблять тейк только при `extend_take_candidate` (риск большей просадки). |
+| `continuation_gate_review` | Gate vs фактический `missed_upside` после тейка; отдельно считает блокировки `trail_pullback_exceeded` | Сначала накопить статистику при `GAME_5M_CONTINUATION_GATE_LOG_ONLY=true`; если `blocked_count` и missed upside растут — проверять adaptive trailing pullback; затем точечно ослаблять тейк только при `extend_take_candidate` (риск большей просадки). |
 | `auto_config_override` | Готовые пары ключ→значение из эвристик анализатора | Применять только разрешённые ключи; согласовать с `analyzer_tune_apply` / веб-кнопкой «Применить». |
 | `llm` (`use_llm=1`) | Структурированный JSON приоритетов и `in_algorithm_parameter_changes` | Валидация на данных отчёта; лимит ответа: `ANALYZER_LLM_MAX_COMPLETION_TOKENS` (читается из merged `config.env` через `get_config_value`). Не подменяет бэктест. |
 

@@ -200,6 +200,28 @@ GAME_5M_TAKE_PROFIT_MIN_PCT=2.5
 
 Мягкий шаг между `3.0` и replay-кандидатом `2.0`: проверить, уменьшит ли более ранняя фиксация просадки и пропуски выхода, не убивая сильные движения.
 
+## 9.1 Пример эксперимента (2026-05-26)
+
+После server run `~/run_analyzer_docker.sh` за 2 дня анализатор показал:
+
+- `win_rate_pct=80%`, но `sum_missed_upside_pct=21.24`;
+- основные недоборы в прибыльных `MU`/`SNDK` после `TAKE_PROFIT_SUSPEND`;
+- единственный минус `NBIS` был при `volatility_5m_pct≈0.85%`;
+- continuation gate хотел `extend_take_candidate`, но часть кейсов упиралась в `trail_pullback_exceeded`.
+
+Применён один связанный набор, потому что все изменения относятся к одной гипотезе: “сильные движения закрываются слишком рано, а высоковолатильный вход надо отсечь”.
+
+```env
+GAME_5M_MAX_ATR_5M_PCT=0.8
+GAME_5M_TAKE_MOMENTUM_FACTOR=1.55
+GAME_5M_TAKE_PROFIT_PCT=7.5
+GAME_5M_HANGER_CAP_OVERRIDE_MARGIN_PCT=2.0
+GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE_ABOVE_PCT=3.0
+GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE=1.5
+```
+
+Ожидаемая проверка: следующий `/analyzer?strategy=GAME_5M&days=2..5` должен показать снижение `missed_upside` по `TAKE_PROFIT_SUSPEND` без роста убыточных удержаний. Для continuation отдельно смотреть `continuation_gate_blocked_count` и `avg_missed_upside_blocked_by_trail`.
+
 ## 10. Рекомендуемый график (операционно)
 
 | Частота | Действие |

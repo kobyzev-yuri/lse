@@ -2859,6 +2859,9 @@ def _build_continuation_gate_review(effects: List[TradeEffect], *, limit: int = 
             "pnl_pct": cg.get("pnl_pct"),
             "momentum_2h_pct": cg.get("momentum_2h_pct"),
             "rsi_5m": cg.get("rsi_5m"),
+            "apply_skip_reason": cg.get("apply_skip_reason"),
+            "effective_trail_pullback_pct": cg.get("effective_trail_pullback_pct"),
+            "pullback_from_high_pct": cg.get("pullback_from_high_pct"),
             "score": cg.get("score"),
             "components": cg.get("components") if isinstance(cg.get("components"), dict) else {},
         }
@@ -2868,6 +2871,8 @@ def _build_continuation_gate_review(effects: List[TradeEffect], *, limit: int = 
     close_now = [r for r in rows if str(r.get("decision") or "") == "close_now"]
     extend_missed = [r for r in extend if float(r.get("missed_upside_pct") or 0.0) >= 1.0]
     close_now_missed = [r for r in close_now if float(r.get("missed_upside_pct") or 0.0) >= 1.0]
+    blocked_by_trail = [r for r in extend if str(r.get("apply_skip_reason") or "") == "trail_pullback_exceeded"]
+    blocked_by_trail_missed = [r for r in blocked_by_trail if float(r.get("missed_upside_pct") or 0.0) >= 1.0]
 
     parameter_candidates: List[Dict[str, Any]] = []
     if extend_missed:
@@ -2905,6 +2910,13 @@ def _build_continuation_gate_review(effects: List[TradeEffect], *, limit: int = 
         "would_extend_take_count": len(extend),
         "extend_candidates_with_missed_upside_ge_1pct": len(extend_missed),
         "close_now_with_missed_upside_ge_1pct": len(close_now_missed),
+        "continuation_gate_blocked_count": len(blocked_by_trail),
+        "continuation_gate_blocked_missed_upside_ge_1pct_count": len(blocked_by_trail_missed),
+        "avg_missed_upside_blocked_by_trail": (
+            None
+            if not blocked_by_trail
+            else round(float(np.mean([float(r.get("missed_upside_pct") or 0.0) for r in blocked_by_trail])), 3)
+        ),
         "avg_missed_upside_extend_candidates": None if avg_missed_extend is None else round(avg_missed_extend, 3),
         "avg_missed_upside_close_now": None if avg_missed_close is None else round(avg_missed_close, 3),
         "top_cases": top_cases,

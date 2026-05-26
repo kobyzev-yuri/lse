@@ -111,6 +111,19 @@ def _maybe_defer_take_profit_by_continuation_gate(
     except (TypeError, ValueError):
         gate["apply_skip_reason"] = "missing_take_pnl_or_pullback"
         return False
+    try:
+        momentum_2h = float(gate.get("momentum_2h_pct"))
+        scale_above = float(params.get("trail_momentum_scale_above_pct", 3.0))
+        scale = float(params.get("trail_momentum_scale", 1.5))
+    except (TypeError, ValueError):
+        momentum_2h = None
+        scale_above = 3.0
+        scale = 1.0
+    if momentum_2h is not None and momentum_2h >= scale_above and scale > 1.0:
+        trail_pct = trail_pct * min(3.0, scale)
+        gate["trail_pullback_scaled"] = True
+        gate["trail_pullback_scale_reason"] = "momentum_2h"
+    gate["effective_trail_pullback_pct"] = round(trail_pct, 4)
     extended_take = base_take + max(0.0, add_pct)
     gate["extended_take_pct"] = round(extended_take, 4)
     gate["pnl_from_high_pct"] = round(pnl_high, 4)

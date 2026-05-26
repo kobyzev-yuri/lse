@@ -232,7 +232,22 @@ DECISION_STACK_NEWS_FUSION_GATE_MODE=none|log_only|apply
 
 ---
 
-## 8. Как это влияет на реальные решения
+## 8. Exit Gates And Take Caps
+
+Входной `decision_effective` и выход из открытой GAME_5M позиции разделены. Закрытие позиции делает `should_close_position()` в `services/game_5m.py`; ML-effective entry signal не должен ломать технический exit core.
+
+Ключевые exit-контуры:
+
+- базовый тейк по 2h momentum: `min(momentum_2h_pct × GAME_5M_TAKE_MOMENTUM_FACTOR, GAME_5M_TAKE_PROFIT_PCT[_TICKER])`;
+- hanger JSON может сузить cap, если включён `GAME_5M_HANGER_TUNE_APPLY_TAKE`;
+- `GAME_5M_HANGER_CAP_OVERRIDE_MARGIN_PCT` защищает от устаревшего hanger cap: если live PnL уже сильно выше суженного cap, закрытие проверяется по базовому cap;
+- continuation gate может отложить `TAKE_PROFIT`, если позиция остаётся сильной; для сильного momentum допускается масштабировать trailing pullback через `GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE_*`.
+
+Analyzer-контроль для этой части: `summary.by_exit_signal`, `top_profitable_missed_upside`, `game5m_hanger_v2_review`, `continuation_gate_review.continuation_gate_blocked_count` и `avg_missed_upside_blocked_by_trail`.
+
+---
+
+## 9. Как это влияет на реальные решения
 
 ### Пример A: умеренный bullish premarket
 
@@ -298,7 +313,7 @@ DECISION_STACK_NEWS_FUSION_GATE_MODE=none|log_only|apply
 
 ---
 
-## 9. Open / Near-Open Behavior
+## 10. Open / Near-Open Behavior
 
 В PRE_MARKET вход не открывается. После 09:30 ET:
 
@@ -319,7 +334,7 @@ GAME_5M_NEAR_OPEN_BUY_ON_WIDE_BAR=none|hold
 
 ---
 
-## 10. Что сохраняется
+## 11. Что сохраняется
 
 В `d5` и `context_json` должны быть видны:
 
@@ -342,7 +357,7 @@ GAME_5M_NEAR_OPEN_BUY_ON_WIDE_BAR=none|hold
 
 ---
 
-## 11. Правило развития
+## 12. Правило развития
 
 Новые контуры не должны напрямую переписывать `decision` в разных местах. Правильный путь:
 
@@ -357,7 +372,7 @@ GAME_5M_NEAR_OPEN_BUY_ON_WIDE_BAR=none|hold
 
 ---
 
-## 12. Связанные документы
+## 13. Связанные документы
 
 - [DECISION_STACK_ROLLOUT_PLAN.md](DECISION_STACK_ROLLOUT_PLAN.md) — rollout mechanics.
 - [GAME_5M_PREMARKET_AND_IMPULSE.md](GAME_5M_PREMARKET_AND_IMPULSE.md) — детали premаркет-цены и импульса.

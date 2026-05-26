@@ -107,9 +107,20 @@
 
 Поэтому при импульсе 6% тейк срабатывает на **6%**, а не на 7%: потолок 7% только ограничивает сверху; фактический тейк берётся от импульса. Потолок по тикеру: **GAME_5M_TAKE_PROFIT_PCT_SNDK=8** — для SNDK макс. тейк 8%; для остальных — GAME_5M_TAKE_PROFIT_PCT.
 
+Если включён `GAME_5M_HANGER_TUNE_APPLY_TAKE=true`, hanger JSON может сузить потолок тейка до `remediation_take_cap`. Начиная с 2026-05-26 это сужение не применяется, если live PnL уже выше hanger cap минимум на `GAME_5M_HANGER_CAP_OVERRIDE_MARGIN_PCT` п.п. В таком случае крон пишет warning и проверяет базовый тейк без hanger JSON, чтобы устаревший cap не закрывал сильное движение задним числом.
+
+Continuation gate для `TAKE_PROFIT` может отложить закрытие до расширенной цели. Базовый лимит отката от high задаёт `GAME_5M_CONTINUATION_TRAIL_PULLBACK_PCT`; для сильного импульса 2h лимит масштабируется:
+
+```text
+if momentum_2h_pct >= GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE_ABOVE_PCT:
+    effective_trail_pullback_pct = trail_pullback_pct * GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE
+```
+
+Поля `effective_trail_pullback_pct`, `trail_pullback_scaled` и `apply_skip_reason` сохраняются в `continuation_gate` SELL context для последующего анализа.
+
 ### 5.2 Параметры
 
-- **5m:** тикеры — **GAME_5M_TICKERS** или TICKERS_FAST; тейк/стоп — **GAME_5M_TAKE_PROFIT_PCT** (потолок), **GAME_5M_TAKE_PROFIT_MIN_PCT** (с какого импульса считать тейк от импульса), **GAME_5M_TAKE_MOMENTUM_FACTOR** (ниже 1 — консервативнее, выше 1 — агрессивнее до потолка; в коде clamp примерно 0.3–2.0), **GAME_5M_TAKE_PROFIT_PCT_SNDK** и т.д. (потолок по тикеру); **GAME_5M_STOP_LOSS_PCT**, **GAME_5M_STOP_LOSS_ENABLED** и др.
+- **5m:** тикеры — **GAME_5M_TICKERS** или TICKERS_FAST; тейк/стоп — **GAME_5M_TAKE_PROFIT_PCT** (потолок), **GAME_5M_TAKE_PROFIT_MIN_PCT** (с какого импульса считать тейк от импульса), **GAME_5M_TAKE_MOMENTUM_FACTOR** (ниже 1 — консервативнее, выше 1 — агрессивнее до потолка; в коде clamp примерно 0.3–2.0), **GAME_5M_TAKE_PROFIT_PCT_SNDK** и т.д. (потолок по тикеру), **GAME_5M_HANGER_CAP_OVERRIDE_MARGIN_PCT**, **GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE_ABOVE_PCT**, **GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE**; **GAME_5M_STOP_LOSS_PCT**, **GAME_5M_STOP_LOSS_ENABLED** и др.
 - **Портфель:** тикеры — **TRADING_CYCLE_TICKERS** или MEDIUM+LONG; стратегические тейки — **PORTFOLIO_*_TAKE_PROFIT_PCT** (Momentum 10, Gap 15, …); fallback — **PORTFOLIO_TAKE_PROFIT_PCT=8**; ML-снимок — **PORTFOLIO_ML_TAKE_***; trailing — **PORTFOLIO_TRAILING_TAKE_***; вход CatBoost — **PORTFOLIO_CATBOOST_BLOCK_BUY_ON_WEAK** / **HOLD_BELOW_SCORE**. Полный список: `docs/PORTFOLIO_GAME.md` §17. Автосетки replay **нет** (в отличие от GAME_5M).
 
 См. также: [TICKER_GROUPS.md](TICKER_GROUPS.md), [RUN_GAME_SERVICES.md](RUN_GAME_SERVICES.md).
