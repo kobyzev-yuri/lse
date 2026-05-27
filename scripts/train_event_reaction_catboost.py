@@ -156,7 +156,12 @@ def load_training_frame(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train event_reaction CatBoost (forward 5d log-ret)")
-    parser.add_argument("--dataset-version", type=str, default="v0")
+    parser.add_argument(
+        "--dataset-version",
+        type=str,
+        default="",
+        help="event_reaction_dataset.dataset_version (default: EVENT_REACTION_DATASET_VERSION or v0)",
+    )
     parser.add_argument(
         "--feature-builder-version",
         type=str,
@@ -194,6 +199,7 @@ def main() -> int:
     from report_generator import get_engine
     from services.event_reaction_labeling import event_reaction_label_threshold_log
 
+    ds_version = (args.dataset_version or "").strip() or (get_config_value("EVENT_REACTION_DATASET_VERSION", "") or "").strip() or "v0"
     fbv = (args.feature_builder_version or "").strip() or active_feature_builder_version()
     numeric_keys = event_reaction_numeric_feature_keys(fbv)
     cfg_mr = (get_config_value("EVENT_REACTION_TRAIN_MIN_ROWS", "") or "").strip()
@@ -205,7 +211,7 @@ def main() -> int:
     min_required = max(8, int(min_rows_eff))
 
     engine = get_engine()
-    df = load_training_frame(engine, dataset_version=args.dataset_version.strip() or "v0", feature_builder_version=fbv)
+    df = load_training_frame(engine, dataset_version=ds_version, feature_builder_version=fbv)
     if df.empty:
         logger.error("Нет строк для обучения (проверьте разметку outcomes_after.forward_log_ret_5d и features_before).")
         _write_metrics_json(
@@ -312,7 +318,7 @@ def main() -> int:
         "n_train": int(n_train),
         "n_valid": int(n_valid),
         "n_total": int(n_total),
-        "dataset_version": args.dataset_version,
+        "dataset_version": ds_version,
         "feature_builder_version": fbv,
         "min_rows_config": int(min_rows_eff),
         "min_rows_required": int(min_required),
@@ -345,7 +351,7 @@ def main() -> int:
         "n_valid": n_valid,
         "n_total": n_total,
         "target": "forward_log_ret_5d",
-        "dataset_version": args.dataset_version,
+        "dataset_version": ds_version,
         "feature_builder_version": fbv,
         "threshold_log_return": thr,
         "metrics": {k: (round(v, 6) if isinstance(v, float) and math.isfinite(v) else v) for k, v in metrics.items()},

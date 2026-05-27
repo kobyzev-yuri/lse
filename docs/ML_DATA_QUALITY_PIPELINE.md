@@ -109,25 +109,32 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 | `ML_READINESS_GAME5M_MIN_TRAIN` | Мин. `n_train` (default `40`) |
 | `ML_READINESS_PORTFOLIO_RMSE_MAX` | Макс. RMSE valid (default `0.08`) |
 | `ML_READINESS_PORTFOLIO_MIN_TRAIN` | Мин. `n_train` (default `80`) |
+| `EVENT_REACTION_DATASET_VERSION` | Dataset для event-reaction train/readiness; product advisory: `v0_expanded_baseline` |
+| `EVENT_REACTION_FEATURE_BUILDER_VERSION` | Feature version для event-reaction train/readiness; product advisory: `quotes_regime_v1` |
 
 В Docker контейнер `lse-bot` получает `config.env` как **файл** `/app/config.env` (volume), без `env_file` в compose — переменные `ML_READINESS_*` в `docker exec … env` могут быть пустыми; скрипт `run_ml_train_readiness_cron.py` читает пороги через `config_loader` (env процесса **или** файл).
 
 В веб-интерфейсе на странице **`/analyzer`** блок «ML: готовность…» и JSON **`GET /api/ml/data-quality`** (тот же сборщик, что `run_ml_data_quality_report`, без профилирования `local/datasets/*.csv` для скорости).
 
-### 5.2 Включить инференс в проде (после зелёного readiness)
+### 5.2 Event-reaction в product: advisory rollout
 
-Гейты проверяют **dry-run** метрики; в рантайме модели по умолчанию **выключены** (`GAME_5M_CATBOOST_ENABLED` / `PORTFOLIO_CATBOOST_ENABLED`).
+Event-reaction ML можно включать в product как **advisory/shadow** сигнал в карточках/API. Автоматическое блокирование BUY пока не включать: tail holdout ещё выше строгого RMSE-гейта, а торговый PnL/backtest по сигналу не завершён.
 
-1. **Обновить артефакты** (если нужны свежие `.cbm` под текущие данные):  
-   `ML_READINESS_TRAIN_MODE=full python scripts/run_ml_train_readiness_cron.py`  
-   (осторожно: перезапишет модели по путям из `train_*` скриптов, обычно `/app/logs/ml/models/*.cbm`).
+1. **Обновить event-reaction artifact**:
+   ```bash
+   EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline \
+   EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 \
+   python scripts/train_event_reaction_catboost.py
+   ```
 2. В **`config.env`** на хосте (монтируется в контейнер):  
-   - `GAME_5M_CATBOOST_ENABLED=true`  
-   - `PORTFOLIO_CATBOOST_ENABLED=true`  
-   Пути к файлам уже задаются в примере: `GAME_5M_CATBOOST_MODEL_PATH`, `PORTFOLIO_CATBOOST_MODEL_PATH`.
-3. **GAME_5M fusion** (опционально): по умолчанию `GAME_5M_CATBOOST_FUSION=none` — только вероятность в ответе, **правила входа не меняются**. Для осторожного влияния на вход: `hold_if_buy_below_p` + `GAME_5M_CATBOOST_HOLD_BELOW_P` — см. `docs/GAME_5M_CATBOOST_FUSION.md`.
-4. Портфельная модель — **только advisory** (карточки / API), исполнение сделок ею не подменяется.
-5. `docker compose restart lse` (или деплой), затем в логах/карточках проверить `catboost_signal_status` / `portfolio_ml_status`.
+   - `EVENT_REACTION_CATBOOST_ENABLED=true`
+   - `EVENT_REACTION_BLOCK_BUY_ON_WEAK=false`
+   - `EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline`
+   - `EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1`
+   - `EVENT_REACTION_CATBOOST_MODEL_PATH=/app/logs/ml/models/event_reaction_forward5d_catboost.cbm`
+3. `docker compose restart lse` (или deploy), затем в логах/карточках проверить `event_reaction_ml_status=ok`, `event_reaction_ml_expected_return_5d_pct`, `event_reaction_ml_entry_score`.
+
+Hard-block режим (`EVENT_REACTION_BLOCK_BUY_ON_WEAK=true`) допустим только после отдельного trading backtest с transaction costs и live shadow контроля по созревшим событиям.
 
 Шаблон строк см. **`config.env.example`** (блок «Включение ML в проде»).
 

@@ -13,6 +13,8 @@
 
 Вспомогательные таблицы (`market_regime_daily`, `peer_graph_edge`, …) по-прежнему опциональны; их можно подключать в следующих версиях `feature_builder_version` внутри JSON.
 
+**Product advisory dataset (с 2026-05-27):** для event-reaction CatBoost в карточках используется расширенная история **`v0_expanded_baseline`** с `feature_builder_version=quotes_regime_v1`. Она собрана из yfinance earnings history по 14 equity-тикерам FAST+MEDIUM+LONG: **498** событий, **451** trainable rows, 47,966 daily quote rows backfill. EPS/timing слой (`quotes_regime_earnings_v1`) хранится и исследуется, но пока не выбран для product-модели, потому что на расширенной выборке он нейтрален/слегка хуже baseline.
+
 Дизайн-источник: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §4.2.1.  
 Официальные IR и страницы квартальной отчётности по тикерам (под будущий ingest и ручную работу): [earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md](earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md).
 
@@ -122,14 +124,20 @@ WHERE id = 12345;
 
 1. **Полнота данных:** `GET /api/ml/data-quality` → `event_analytics` (доли `with_features_before`, `with_outcomes_after`, `labeled`).
 2. **Единый отчёт:** `python scripts/run_ml_data_quality_report.py` (см. [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md)).
-3. **Обучение CatBoost:** `scripts/train_event_reaction_catboost.py` (регрессия на `forward_log_ret_5d`, `--json-metrics-out`, гейты в `run_ml_train_readiness_cron.py`). Прод-инференс — после `.cbm` и явного включения в сервисе (как GAME_5M / портфель).
-4. **Прод-инференс** — только после появления `.cbm`, гейтов в `ml_train_readiness.jsonl` и явного включения в конфиге/сервисе (как GAME_5M / портфель); до этого слой остаётся офлайн-аналитикой.
+3. **Обучение CatBoost:** `scripts/train_event_reaction_catboost.py` (регрессия на `forward_log_ret_5d`, `--json-metrics-out`, гейты в `run_ml_train_readiness_cron.py`). Для product advisory использовать `EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline` и `EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1`.
+4. **Прод-инференс** — текущий безопасный режим: **advisory/shadow only**. Включить `EVENT_REACTION_CATBOOST_ENABLED=true`, но оставить `EVENT_REACTION_BLOCK_BUY_ON_WEAK=false`, пока нет отдельного trading backtest / live shadow статистики.
 
 ---
 
 ## Регулярность и cron
 
-**Эталон в репозитории:** `crontab/lse-docker.crontab` (ручная установка на хост) и **`setup_cron_docker.sh`** (генерация crontab из корня проекта). Будни ~23:33–23:36 MSK: `build_event_reaction_dataset.py` → `backfill_event_reaction_labeling.py`; **23:50** — `run_ml_train_readiness_cron.py` с `docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0` (dry-run train, `last_event_reaction_train_metrics.json`, гейт в `ml_train_readiness.jsonl` для анализатора). Уберите `-e …=0` в строке readiness, если train event-reaction должен читаться только из `config.env`.
+**Эталон в репозитории:** `crontab/lse-docker.crontab` (ручная установка на хост) и **`setup_cron_docker.sh`** (генерация crontab из корня проекта). Будни:
+
+- **23:33** — build skeleton в `v0_expanded_baseline`.
+- **23:36** — backfill features/outcomes с `quotes_regime_v1`.
+- **23:50** — readiness dry-run с `EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline`.
+- **23:51** — full train только event-reaction (GAME_5M/portfolio skipped) для обновления advisory `.cbm`.
+- **23:52** — `run_ml_data_quality_report.py --no-default-datasets`.
 
 Порядок зависимостей: **котировки** (`quotes`, в т.ч. `update_prices_cron`) → (опционально) seed → **build** → **backfill** (одним проходом заполняются пустые `features_before` и/или `outcomes_after`; при больших объёмах можно разнести `--only-features` / `--only-outcomes`).
 
@@ -171,9 +179,10 @@ WHERE id = 12345;
 
 ## Дальнейшее развитие (по желанию)
 
-1. ~~`scripts/ingest_market_regime_daily.py`~~ — в репо; далее: `backfill_event_reaction_labeling.py --force-features` для пересборки `features_before` под `quotes_regime_v1`.  
-2. Расширить `features_before`: peer-граф, `earnings_event_detail`, новая `feature_builder_version`.  
-3. Отдельный `scripts/train_event_reaction_catboost.py` + гейты в `run_ml_train_readiness_cron.py` (см. `crontab/lse-docker.crontab`: nightly train при `-e ML_READINESS_SKIP_EVENT_REACTION=0`).  
-4. `collect_event_analytics_stats`: опционально DISTINCT `feature_builder_version` из JSONB.
+1. **Revenue/guidance features**: следующий layer после EPS/timing, потому что EPS-only не улучшил expanded sample.
+2. **Peer reactions**: SMH/SOXX/QQQ + peers по `peer_graph_edge`, чтобы ловить кросс-эффект отчётов.
+3. **Trading metric gate**: PnL/top-k после transaction costs, sign accuracy, hit-rate по кварталам; RMSE не должен быть единственным критерием.
+4. **Scenario labels**: перейти от UP/DOWN/FLAT к сценариям `gap_up_follow_through`, `fade`, `cross_earnings_contagion`.
+5. **Live shadow report**: сравнивать предсказания карточек с фактическим `forward_log_ret_5d` после созревания.
 
 После стабильной авторазметки блок **Event / earnings** в анализаторе отражает реальный прогресс; ручные правки учитывайте через `label_source` и при необходимости отдельный `dataset_version`.

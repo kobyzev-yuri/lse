@@ -208,6 +208,12 @@ def main() -> int:
     er_inv: Dict[str, Any] = {}
     if not skip_er:
         cmd_er = [py, str(root / "scripts" / "train_event_reaction_catboost.py")]
+        er_dataset_version = (get_config_value("EVENT_REACTION_DATASET_VERSION") or "").strip()
+        if er_dataset_version:
+            cmd_er += ["--dataset-version", er_dataset_version]
+        er_feature_builder_version = (get_config_value("EVENT_REACTION_FEATURE_BUILDER_VERSION") or "").strip()
+        if er_feature_builder_version:
+            cmd_er += ["--feature-builder-version", er_feature_builder_version]
         if not full_train:
             cmd_er.append("--dry-run")
         cmd_er += ["--json-metrics-out", str(er_path)]

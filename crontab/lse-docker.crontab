@@ -35,13 +35,16 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 25 23 * * * flock -n /tmp/lse_market_bars_intraday.lock docker exec lse-bot python scripts/ingest_market_bars_intraday.py >> /home/ai8049520/lse/logs/cron_market_bars_intraday.log 2>&1
 # market_regime_daily (SPY/QQQ/DIA/VIX from quotes) — before event-reaction build
 32 23 * * 1-5 flock -n /tmp/lse_market_regime.lock docker exec lse-bot python scripts/ingest_market_regime_daily.py >> /home/ai8049520/lse/logs/event_regime.log 2>&1
-# Event / earnings reaction dataset: скелет из KB → разметка из daily quotes (до GAME_5M ML). Даты: EVENT_REACTION_KB_SINCE в config.env; --since ниже — фильтр event_time_et при backfill.
-33 23 * * 1-5 flock -n /tmp/lse_erd_build.lock docker exec lse-bot python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0 >> /home/ai8049520/lse/logs/event_reaction_build.log 2>&1
-36 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --since 2026-02-01 --limit 8000 >> /home/ai8049520/lse/logs/event_reaction_labeling.log 2>&1
+# Event / earnings reaction dataset: скелет из KB → разметка из daily quotes (до GAME_5M ML).
+# Product advisory model uses expanded history: v0_expanded_baseline + quotes_regime_v1.
+33 23 * * 1-5 flock -n /tmp/lse_erd_build.lock docker exec lse-bot python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0_expanded_baseline >> /home/ai8049520/lse/logs/event_reaction_build.log 2>&1
+36 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --limit 8000 >> /home/ai8049520/lse/logs/event_reaction_labeling.log 2>&1
 # GAME_5M ML: stuck + continuation CSV, CatBoost entry, JSONL-отчёт (после ingest_market_bars и analyzer_autotune).
 40 23 * * 1-5 flock -n /tmp/lse_game5m_daily_ml.lock docker exec lse-bot python scripts/run_daily_game5m_ml_pipeline.py >> /home/ai8049520/lse/logs/game5m_daily_ml_pipeline.log 2>&1
 # ML train readiness (dry-run): GAME_5M + portfolio + event_reaction (метрики/гейт как у остальных). -e ниже включает train event-reaction независимо от ML_READINESS_SKIP_EVENT_REACTION=1 в config.env. Уберите -e …=0 если нужен только build/backfill без гейта event в overall.
-50 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
+50 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
+# Event-reaction model refresh for advisory product cards only; skips GAME_5M/portfolio so it does not overwrite unrelated models.
+51 23 * * 1-5 flock -n /tmp/lse_event_reaction_full_train.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e ML_READINESS_SKIP_GAME5M=1 -e ML_READINESS_SKIP_PORTFOLIO=1 -e ML_READINESS_SKIP_EVENT_REACTION=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/event_reaction_full_train.log 2>&1
 # Отчёт качества данных без LLM и без профилирования local/datasets/*.csv.
 52 23 * * 1-5 flock -n /tmp/lse_ml_data_quality_report.lock docker exec lse-bot python scripts/run_ml_data_quality_report.py --no-default-datasets --json-out /app/logs/ml/ml_data_quality/report_daily.json >> /home/ai8049520/lse/logs/ml_data_quality_report_cron.log 2>&1
 # Recovery D4a: накопление сводки τ×K по TIME_EXIT_EARLY (JSONL для go/no-go перед D4b).

@@ -3,7 +3,8 @@
 **Статус:** рабочий документ; детализирует практические шаги поверх [EARNINGS_EVENT_AGENT_DESIGN.md](EARNINGS_EVENT_AGENT_DESIGN.md).  
 **Принципы проекта:** log-returns, издержки в симуляциях, данные в PostgreSQL — см. корневые правила репозитория.
 
-**Фазы 1–5 (MVP ценового контура):** зафиксировано выполнение **2026-05-11 — 2026-05-12** (деплой на GCP, crontab, правки анализатора и readiness). Ниже — чеклист, сводка по **стратегическим целям §2 дизайн-дока** и **где копить факты** для следующих слоёв.
+**Фазы 1–5 (MVP ценового контура):** зафиксировано выполнение **2026-05-11 — 2026-05-12** (деплой на GCP, crontab, правки анализатора и readiness).  
+**Product advisory ML:** зафиксировано **2026-05-27** — исторический earnings dataset расширен до `v0_expanded_baseline`; event-reaction CatBoost можно показывать в карточках/API как advisory/shadow сигнал, без hard-block сделок.
 
 ---
 
@@ -17,7 +18,18 @@
 | **4. Cron** | Эталон — **`crontab/lse-docker.crontab`** (будни, MSK после US): **23:33** build из KB, **23:36** backfill, **23:40** `run_daily_game5m_ml_pipeline.py`, **23:50** `run_ml_train_readiness_cron.py` (в т.ч. portfolio + при `-e ML_READINESS_SKIP_EVENT_REACTION=0` — event), **23:52** `run_ml_data_quality_report.py`, **23:53** `run_recovery_d4a_stats_cron.py`. При расхождении с текстом ниже — верить crontab в репо. |
 | **5. Обучение + readiness** | `train_event_reaction_catboost.py` (регрессия `forward_log_ret_5d`, пороги строк/гейта см. коммиты 2026-05-12); запись `last_event_reaction_train_metrics.json`; гейт `event_reaction` в `ml_train_readiness.jsonl`. **Инференс event в сделках не подключён** — только пайплайн данных и мониторинг. |
 
-Ограничение этапа: признаки **`quotes_mvp_1`** (дневные `quotes` до якоря); таблицы **`earnings_event_detail`**, **`peer_graph_edge`**, **`market_regime_daily`** на проде **пустые** — расширенные фичи и сценарии из §6 дизайна **впереди**.
+Текущий product-слой: `v0_expanded_baseline` + `quotes_regime_v1` (**498** событий, **451** trainable rows, walk-forward RMSE ≈ **0.1056**). `earnings_event_detail` заполнен EPS/timing по yfinance, но `quotes_regime_earnings_v1` пока не выбран для product-модели: на expanded sample он нейтрален/слегка хуже baseline. `peer_graph_edge` и revenue/guidance features — следующий этап.
+
+### Product advisory snapshot (2026-05-27)
+
+| Область | Решение |
+|---------|---------|
+| Dataset | `v0_expanded_baseline` |
+| Feature builder | `quotes_regime_v1` |
+| Model artifact | `/app/logs/ml/models/event_reaction_forward5d_catboost.cbm` |
+| Runtime mode | `EVENT_REACTION_CATBOOST_ENABLED=true` допустимо для карточек/API |
+| Trade blocking | `EVENT_REACTION_BLOCK_BUY_ON_WEAK=false` до отдельного trading backtest |
+| Retraining | nightly full train только event-reaction, GAME_5M/portfolio skipped |
 
 ---
 
@@ -28,7 +40,7 @@
 | # | Цель (кратко) | Статус на 2026-05-12 | Что можно сделать дальше | Где копить факты |
 |---|----------------|----------------------|---------------------------|------------------|
 | 1 | **Классификация сценария** (pullback, follow-through, fade, …) | Частично: rule-based **UP/DOWN/FLAT** по \|5d log-ret\| vs порог; нет таксономии сценариев. | Пилот разметки сценария (человек/LLM) → поле в JSON или `final_label` + версия; позже отдельная голова модели. | `event_reaction_dataset.final_label` / `outcome_json` в KB; чеклисты шефа по окнам после отчёта. |
-| 2 | **Кросс-отчёты** (A → группа B) | Не автоматизировано; дневная **corr** по `quotes` (`/corr`, `cluster_recommend`) ≠ корреляция «по событиям». | `peer_graph_edge` + event-study / признаки peer в новом `feature_builder_version`. | Рёбра графа (конфиг → БД); история **одновременных** forward-окон вокруг события лидера; не смешивать с дневной матрицей без переопределения. |
+| 2 | **Кросс-отчёты** (A → группа B) | Не автоматизировано; дневная **corr** по `quotes` (`/corr`, `cluster_recommend`) ≠ корреляция «по событиям». | `peer_graph_edge` + event-study / признаки peer в новом `feature_builder_version`; приоритет для следующего улучшения ML. | Рёбра графа (конфиг → БД); история **одновременных** forward-окон вокруг события лидера; не смешивать с дневной матрицей без переопределения. |
 | 3 | **Циклы и фазы** (групповой цикл, AI-chips и т.д.) | Не в `features_before` MVP. | Подключить `ticker_price_regime` / агрегаты по группе в builder v2. | `quotes` + правила из дизайна §4.5; при необходимости ручные метки фазы группы. |
 | 4 | **Синхронность / ротация** (лидер vs laggard) | Не в event-ML; есть контекст корреляций для GAME_5M. | Явные признаки «лидер события» и отклик follower в `features_before`. | `knowledge_base` (тип события, кластер темы); цены peer’ов; время событий ET. |
 | 5 | **Режим индекса** (NDX/SPY/VIX, veto) | Таблица `market_regime_daily` пуста; скрипт ingest в репо **ещё не добавлен** (см. [EVENT_REACTION_PIPELINE.md](../EVENT_REACTION_PIPELINE.md)). | Реализовать `ingest_market_regime_daily.py` + cron; затем ключи режима в фичах. | Дневные ряды индексов/VIX (тот же принцип, что `quotes`); breadth — если появится источник. |
@@ -43,7 +55,7 @@
 |-----------|------------|--------|
 | **`knowledge_base`** | EARNINGS-события, текст, `embedding`, при пилоте — структурированный `outcome_json` / ссылка на транскрипт | Ingest уже кормит `build_event_reaction_dataset`; дальше — RAG и поля для LLM. |
 | **`event_reaction_dataset`** | Уже: строки событий, `features_before` (`quotes_mvp_1`), `outcomes_after` (1d/5d/20d log-ret), `final_label` | Единый материализованный датасет для CatBoost и контроля качества. |
-| **`earnings_event_detail`** | EPS/revenue actual vs estimate, guidance, ссылка на KB | Сюрприз отчёта как признак; пока таблица пустая — нужен отдельный ingest/API. |
+| **`earnings_event_detail`** | EPS actual/estimate, surprise, timing; дальше revenue/guidance | EPS/timing уже загружены, но не улучшают expanded baseline; следующий практичный слой — revenue/guidance и peer reactions. |
 | **`peer_graph_edge`** | `(source, target, relation_type, weight)` из конфига или корреляций **с явной постановкой под события** | Кросс-эффекты и «лидер → кластер». |
 | **`market_regime_daily`** | Снимок режима по `trade_date` (индексы, VIX, флаги) | Veto / множитель риска по §2.5 дизайна. |
 | **Вне БД (временно)** | Таблицы шефа по окнам, скриншоты сценариев, список «META capex → инфра» | Для проектирования полей и пилота разметки до автоматизации. |
@@ -61,7 +73,7 @@
 | Авторазметка ценами (MVP) | `services/event_reaction_labeling.py`, `scripts/backfill_event_reaction_labeling.py` |
 | Котировки под датасет | `scripts/seed_quotes_for_event_reaction_dataset.py` (`--all-symbols`, `--min-quote-span-days`) |
 | Качество / аналитика | `GET /api/ml/data-quality`, `scripts/run_ml_data_quality_report.py`, [EVENT_REACTION_PIPELINE.md](../EVENT_REACTION_PIPELINE.md), [ML_DATA_QUALITY_PIPELINE.md](../ML_DATA_QUALITY_PIPELINE.md) |
-| Обучение CatBoost (MVP) | `scripts/train_event_reaction_catboost.py` |
+| Обучение CatBoost (MVP) | `scripts/train_event_reaction_catboost.py` (`EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline` для product advisory) |
 | Готовность к прод (опционально) | `scripts/run_ml_train_readiness_cron.py` (`ML_READINESS_SKIP_EVENT_REACTION`, метрики в `last_event_reaction_train_metrics.json`) |
 
 ---
@@ -126,9 +138,11 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 
 ## Следующий слой (после стабилизации 1–5)
 
-1. Пилот **одного earnings call**: шаблон LLM → поля в `earnings_event_detail` / фрагмент в KB.  
-2. **`affected_tickers` / peer_graph** под кейс «META capex → инфра/чипы».  
-3. Подписка/поставщик как замена ручного сбора транскриптов.
+1. **Revenue/guidance ingestion**: минимум revenue estimate/actual/surprise + guidance raised/lowered/inline.  
+2. **Peer reactions**: `peer_graph_edge`, sector ETF context (SMH/SOXX/QQQ), признаки реакции peers на соседние отчёты.  
+3. **Trading metric gate**: top-k/PnL после transaction costs, sign accuracy по кварталам, live shadow сравнение предсказаний с созревшим `forward_log_ret_5d`.  
+4. **Scenario labels**: перейти от UP/DOWN/FLAT к `gap_up_follow_through`, `gap_up_fade`, `cross_earnings_contagion`.  
+5. Подписка/поставщик или IR/SEC extractor как замена ручного сбора транскриптов.
 
 ---
 
@@ -140,3 +154,4 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 | 0.2 | 2026-05-12 | Добавлены `train_event_reaction_catboost.py`, readiness `event_reaction`, закомментированный cron в `setup_cron_docker.sh` |
 | 0.3 | 2026-05-12 | Cron в `crontab/lse-docker.crontab` и `setup_cron_docker.sh`: build + backfill + readiness с train event_reaction (`-e ML_READINESS_SKIP_EVENT_REACTION=0`) |
 | 0.4 | 2026-05-12 | Зафиксировано выполнение фаз 1–5 (11–12.05); сводка по целям §2 дизайна; таблица накопления фактов для БД/моделей |
+| 0.5 | 2026-05-27 | Расширенный dataset `v0_expanded_baseline`, advisory product rollout, nightly event-reaction model refresh, roadmap revenue/guidance + peer features |
