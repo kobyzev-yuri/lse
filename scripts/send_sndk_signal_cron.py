@@ -516,7 +516,8 @@ def process_ticker(
         open_pos = resolve_open_position_for_game5m_close(ticker)
         has_pos = open_pos is not None
         price_ok = price is not None and price > 0
-        strategy_label = (" [%s]" % open_pos.get("strategy_name")) if (has_pos and open_pos.get("strategy_name")) else ""
+        pos_strategy = (open_pos.get("strategy_name") or "") if has_pos else ""
+        strategy_label = (" [%s]" % pos_strategy) if (has_pos and pos_strategy) else ""
         _dec_log = decision_exit
         if decision_entry != decision_exit:
             _dec_log = "%s (вход=%s)" % (decision_exit, decision_entry)
@@ -524,6 +525,13 @@ def process_ticker(
             "[5m] %s: открытая_позиция=%s%s, цена_5m=%s, решение=%s",
             ticker, "да" if has_pos else "нет", strategy_label, "%.2f" % price if price_ok else "нет", _dec_log,
         )
+        if has_pos and (pos_strategy or "").strip().upper() != "GAME_5M":
+            logger.warning(
+                "[5m] %s: найдена позиция другой стратегии (%s), GAME_5M не управляет её выходом и не открывает второй лот",
+                ticker,
+                (pos_strategy or "—").strip() or "—",
+            )
+            return False
 
         if has_pos and price_ok:
             engine = None
