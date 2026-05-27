@@ -135,6 +135,8 @@ def collect_portfolio_contributions(
                 detail=er.get("event_reaction_ml_note") or f"event_score={er_score}, status={er_status}",
                 metrics={
                     "event_reaction_ml_entry_score": er_score,
+                    "event_reaction_ml_direction": er.get("event_reaction_ml_direction"),
+                    "event_reaction_ml_forward_log_ret_5d_pred": er.get("event_reaction_ml_forward_log_ret_5d_pred"),
                     "event_reaction_ml_expected_return_5d_pct": er.get("event_reaction_ml_expected_return_5d_pct"),
                     "event_reaction_ml_event_time_et": er.get("event_reaction_ml_event_time_et"),
                     "event_reaction_ml_status": er_status,

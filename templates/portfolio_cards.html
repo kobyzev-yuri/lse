@@ -46,6 +46,11 @@
         .card-head .decision.BUY, .card-head .decision.STRONG_BUY { background: #14532d; color: #86efac; }
         .card-head .decision.SELL { background: #7f1d1d; color: #fca5a5; }
         .card-head .decision.HOLD { background: #422006; color: #fde047; }
+        .pill { display: inline-block; padding: 0.12rem 0.38rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
+        .pill-up { background: #14532d; color: #86efac; }
+        .pill-down { background: #7f1d1d; color: #fca5a5; }
+        .pill-flat { background: #334155; color: #cbd5e1; }
+        .pill-warn { background: #422006; color: #fde047; }
         .row { display: flex; justify-content: space-between; margin: 0.3rem 0; font-size: 0.82rem; }
         .row .label { color: #94a3b8; max-width: 58%; }
         .block-title { font-size: 0.72rem; color: #64748b; text-transform: uppercase; margin: 0.45rem 0 0.2rem; }
@@ -155,6 +160,31 @@
             html += '</div>';
             return html;
         }
+        function renderEventReactionMl(c) {
+            var status = c.event_reaction_ml_status;
+            if (!status) return '';
+            var html = '<div class="goals-block">';
+            html += '<div class="goals-title">Event reaction ML (earnings · advisory)</div>';
+            if (status === 'ok') {
+                var direction = String(c.event_reaction_ml_direction || 'FLAT').toUpperCase();
+                var pillClass = direction === 'UP' ? 'pill-up' : (direction === 'DOWN' ? 'pill-down' : 'pill-flat');
+                var signClass = c.event_reaction_ml_expected_return_5d_pct >= 0 ? 'positive' : 'negative';
+                html += '<div class="row"><span class="label">Класс реакции</span><span class="value"><span class="pill ' + pillClass + '">' + escapeHtml(direction) + '</span> <span class="muted">' + escapeHtml(c.event_reaction_ml_direction_source || 'temporary') + '</span></span></div>';
+                html += '<div class="row"><span class="label">forward_log_ret_5d (ML)</span><span class="value ' + signClass + '">' + fmt(c.event_reaction_ml_forward_log_ret_5d_pred != null ? c.event_reaction_ml_forward_log_ret_5d_pred : c.event_reaction_ml_expected_log_return_5d, 4) + '</span></div>';
+                html += '<div class="row"><span class="label">Ожидаемый 5d эффект</span><span class="value ' + signClass + '">' + fmt(c.event_reaction_ml_expected_return_5d_pct, 2) + '%</span></div>';
+                html += '<div class="row"><span class="label">Entry score / RMSE</span><span class="value">' + fmt(c.event_reaction_ml_entry_score, 1) + '/100 · ' + fmt(c.event_reaction_ml_rmse_valid, 4) + '</span></div>';
+                html += '<div class="row"><span class="label">Event window</span><span class="value">' + escapeHtml(c.event_reaction_ml_event_time_et || '—') + '</span></div>';
+                if (c.event_reaction_ml_effect) {
+                    html += '<div class="exec-line">' + escapeHtml(c.event_reaction_ml_effect) + '</div>';
+                }
+                html += '<div class="exec-line"><span class="pill pill-warn">' + escapeHtml(c.event_reaction_ml_product_readiness || 'advisory') + '</span> ' + escapeHtml(c.event_reaction_ml_product_note || 'Hard-block disabled.') + '</div>';
+            } else {
+                html += '<div class="row"><span class="label">Status</span><span class="value"><span class="pill pill-flat">' + escapeHtml(status) + '</span></span></div>';
+                html += '<div class="exec-line">' + escapeHtml(c.event_reaction_ml_note || 'Нет активного earnings-события в окне.') + '</div>';
+            }
+            html += '</div>';
+            return html;
+        }
         function renderCard(c) {
             if (c.decision === 'NO_DATA' || c.decision === 'ERROR') {
                 return '<div class="card-pf" data-ticker="' + escapeHtml(c.ticker) + '">' +
@@ -183,6 +213,7 @@
                 html += '<div class="row"><span class="label">Entry score</span><span class="value">' + fmt(c.portfolio_ml_entry_score, 1) + '/100 · порог +' + fmt(c.portfolio_ml_threshold_pct, 2) + '%</span></div>';
                 html += '</div>';
             }
+            html += renderEventReactionMl(c);
             html += '<div class="goals-block">';
             html += '<div class="goals-title">Цели (тейк/стоп)</div>';
             if (c.effective_take_profit_pct != null) {

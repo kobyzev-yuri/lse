@@ -89,6 +89,32 @@ def _score_from_expected_log_return(value: Optional[float], threshold_log: float
     return round(max(0.0, min(100.0, score)), 1)
 
 
+def _provisional_direction_from_log_return(value: float, threshold_log: float) -> str:
+    """Temporary UP/DOWN/FLAT label until scenario classifier is trained."""
+    if value > threshold_log:
+        return "UP"
+    if value < -threshold_log:
+        return "DOWN"
+    return "FLAT"
+
+
+def _effect_text(direction: str, pred_pct: float, score: Optional[float], threshold_pct: float) -> str:
+    if direction == "UP":
+        return (
+            f"ML ожидает позитивную 5d реакцию около {pred_pct:.2f}% "
+            f"(entry_score={score if score is not None else '—'}, порог ±{threshold_pct:.2f}%)."
+        )
+    if direction == "DOWN":
+        return (
+            f"ML ожидает негативную 5d реакцию около {pred_pct:.2f}% "
+            f"(entry_score={score if score is not None else '—'}, порог ±{threshold_pct:.2f}%)."
+        )
+    return (
+        f"ML ожидает нейтральную 5d реакцию около {pred_pct:.2f}% "
+        f"(внутри порога ±{threshold_pct:.2f}%)."
+    )
+
+
 def _features_to_model_row(
     symbol: str,
     features_before: Dict[str, Any],
@@ -178,6 +204,11 @@ def predict_event_reaction_from_features(
 
     thr = float(meta.get("threshold_log_return") or event_reaction_label_threshold_log())
     pred_pct = (math.exp(pred_log) - 1.0) * 100.0
+    threshold_pct = round((math.exp(thr) - 1.0) * 100.0, 2)
+    entry_score = _score_from_expected_log_return(pred_log, thr)
+    provisional_direction = _provisional_direction_from_log_return(pred_log, thr)
+    metrics = meta.get("metrics") or {}
+    rmse_valid = metrics.get("rmse_valid")
     return {
         **base,
         "event_reaction_ml_status": "ok",
@@ -186,10 +217,19 @@ def predict_event_reaction_from_features(
         "event_reaction_ml_event_time_et": str(event_time_et) if event_time_et is not None else None,
         "event_reaction_ml_feature_builder_version": fbv_meta,
         "event_reaction_ml_expected_log_return_5d": round(pred_log, 6),
+        "event_reaction_ml_forward_log_ret_5d_pred": round(pred_log, 6),
         "event_reaction_ml_expected_return_5d_pct": round(pred_pct, 2),
-        "event_reaction_ml_entry_score": _score_from_expected_log_return(pred_log, thr),
-        "event_reaction_ml_threshold_pct": round((math.exp(thr) - 1.0) * 100.0, 2),
-        "event_reaction_ml_rmse_valid": (meta.get("metrics") or {}).get("rmse_valid"),
+        "event_reaction_ml_entry_score": entry_score,
+        "event_reaction_ml_threshold_pct": threshold_pct,
+        "event_reaction_ml_direction": provisional_direction,
+        "event_reaction_ml_direction_source": "regression_threshold_v0",
+        "event_reaction_ml_classifier_status": "temporary_from_regression",
+        "event_reaction_ml_effect": _effect_text(provisional_direction, pred_pct, entry_score, threshold_pct),
+        "event_reaction_ml_product_readiness": "advisory_ready",
+        "event_reaction_ml_product_note": (
+            "Готово для карточек/API как advisory; hard-block BUY отключён до trading backtest/live shadow."
+        ),
+        "event_reaction_ml_rmse_valid": rmse_valid,
     }
 
 
