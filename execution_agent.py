@@ -169,6 +169,11 @@ class ExecutionAgent:
 
             want = _canonical_ticker_for_positions(ticker)
             trades = load_trade_history(self.engine)
+            if not trades.empty and "strategy_name" in trades.columns:
+                # Portfolio game and GAME_5M are independent ledgers for entry blocking.
+                # A fast-game lot on the same ticker must not prevent a portfolio entry.
+                strategies = trades["strategy_name"].fillna("").astype(str).str.strip().str.upper()
+                trades = trades[strategies != "GAME_5M"]
             for p in compute_open_positions(trades):
                 if _canonical_ticker_for_positions(p.ticker) == want:
                     return float(p.quantity)
@@ -1111,6 +1116,9 @@ class ExecutionAgent:
         try:
             from report_generator import load_trade_history, compute_open_positions
             trades = load_trade_history(self.engine)
+            if not trades.empty and "strategy_name" in trades.columns:
+                strategies = trades["strategy_name"].fillna("").astype(str).str.strip().str.upper()
+                trades = trades[strategies != "GAME_5M"]
             open_from_history = {p.ticker: p for p in compute_open_positions(trades)}
         except Exception as e:
             logger.debug("Не удалось загрузить открытые позиции из trade_history: %s", e)

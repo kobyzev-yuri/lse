@@ -216,7 +216,7 @@ def process_ticker(
         merge_close_context_with_trade_narrative,
     )
     from services.game_5m import (
-        resolve_open_position_for_game5m_close,
+        get_open_position_game5m_vwap,
         close_position,
         should_close_position,
         record_entry,
@@ -512,8 +512,9 @@ def process_ticker(
     continuation_gate = None
 
     try:
-        # Нетто GAME_5M (VWAP по всем лотам) — согласовано с hanger_tune; иначе any / последний BUY.
-        open_pos = resolve_open_position_for_game5m_close(ticker)
+        # GAME_5M и Portfolio независимы: 5m cron управляет только своими лотами.
+        # Portfolio fallback не должен ни закрываться 5m-тейком, ни блокировать новый 5m-вход.
+        open_pos = get_open_position_game5m_vwap(ticker)
         has_pos = open_pos is not None
         price_ok = price is not None and price > 0
         pos_strategy = (open_pos.get("strategy_name") or "") if has_pos else ""
@@ -525,13 +526,6 @@ def process_ticker(
             "[5m] %s: открытая_позиция=%s%s, цена_5m=%s, решение=%s",
             ticker, "да" if has_pos else "нет", strategy_label, "%.2f" % price if price_ok else "нет", _dec_log,
         )
-        if has_pos and (pos_strategy or "").strip().upper() != "GAME_5M":
-            logger.warning(
-                "[5m] %s: найдена позиция другой стратегии (%s), GAME_5M не управляет её выходом и не открывает второй лот",
-                ticker,
-                (pos_strategy or "—").strip() or "—",
-            )
-            return False
 
         if has_pos and price_ok:
             engine = None
@@ -917,7 +911,7 @@ def process_ticker(
         "yes",
     )
     if not closed_this_run and decision_entry in ("BUY", "STRONG_BUY") and not allow_pyramid:
-        pos_for_entry = resolve_open_position_for_game5m_close(ticker)
+        pos_for_entry = get_open_position_game5m_vwap(ticker)
         if pos_for_entry:
             if (
                 allow_pyramid_if_not_hanger
@@ -976,7 +970,7 @@ def process_ticker(
     if block_macro_avoid:
         advice = (d5.get("entry_advice") or "").strip().upper()
         if advice == "AVOID":
-            pos_new_entry = resolve_open_position_for_game5m_close(ticker)
+            pos_new_entry = get_open_position_game5m_vwap(ticker)
             if pos_new_entry is None:
                 logger.info(
                     "%s: пропуск нового входа — entry_advice=AVOID (GAME_5M_MACRO_BLOCK_NEW_BUY_ON_AVOID=true); открытой позиции нет",
