@@ -537,7 +537,7 @@ def compute_row_labeling(
         as_of_idx=as_of_i,
         event_d=event_d,
         feature_builder_version=fbv,
-        symbol=sym,
+        symbol=symbol,
         knowledge_base_id=knowledge_base_id,
     )
     miss = missing_quote_feature_keys(feats)
