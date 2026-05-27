@@ -317,7 +317,12 @@ def _earnings_timing_from_hour(hour: Optional[int]) -> str:
     return "AFTER_CLOSE"
 
 
-def load_earnings_detail_for_event(symbol: str, event_d: date) -> Optional[Dict[str, Any]]:
+def load_earnings_detail_for_event(
+    symbol: str,
+    event_d: date,
+    *,
+    knowledge_base_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Load known earnings metadata for the symbol/event date.
 
@@ -325,6 +330,29 @@ def load_earnings_detail_for_event(symbol: str, event_d: date) -> Optional[Dict[
     values such as reported EPS and surprise stay in guidance_summary for
     analysis/post-event models to avoid leakage in pre-event forecasts.
     """
+    if knowledge_base_id:
+        q_by_kb = text(
+            """
+            SELECT eps_estimate, eps_actual, guidance_summary
+            FROM earnings_event_detail
+            WHERE knowledge_base_id = :kb_id
+            LIMIT 1
+            """
+        )
+        try:
+            with get_engine().connect() as conn:
+                row = conn.execute(q_by_kb, {"kb_id": int(knowledge_base_id)}).fetchone()
+        except Exception as e:
+            logger.debug("earnings_event_detail unavailable for kb=%s: %s", knowledge_base_id, e)
+            row = None
+        if row:
+            guidance = _parse_json_field(row[2])
+            return {
+                "eps_estimate": row[0],
+                "eps_actual": row[1],
+                "guidance_summary": guidance,
+            }
+
     q = text(
         """
         SELECT ed.eps_estimate, ed.eps_actual, ed.guidance_summary
@@ -388,6 +416,8 @@ def build_features_before(
     as_of_idx: int,
     event_d: date,
     feature_builder_version: Optional[str] = None,
+    symbol: str = "",
+    knowledge_base_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     closes = df["close"].to_numpy(dtype=float)
     dates = list(df["d"])
@@ -425,7 +455,11 @@ def build_features_before(
         regime = load_market_regime_row(as_of_d)
         out = enrich_features_with_market_regime(out, regime)
     if fbv == FEATURE_BUILDER_VERSION_EARNINGS:
-        detail = load_earnings_detail_for_event(str(df.attrs.get("symbol") or ""), event_d)
+        detail = load_earnings_detail_for_event(
+            symbol or str(df.attrs.get("symbol") or ""),
+            event_d,
+            knowledge_base_id=knowledge_base_id,
+        )
         out = enrich_features_with_earnings_detail(out, detail)
     return out
 
@@ -469,6 +503,7 @@ def compute_row_labeling(
     symbol: str,
     event_time_et: Any,
     *,
+    knowledge_base_id: Optional[int] = None,
     horizons: Tuple[int, ...] = (1, 5, 20),
     min_past_bars: int = 20,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[str], str]:
@@ -497,7 +532,14 @@ def compute_row_labeling(
         return None, None, None, "insufficient_past_bars"
 
     fbv = active_feature_builder_version()
-    feats = build_features_before(df, as_of_idx=as_of_i, event_d=event_d, feature_builder_version=fbv)
+    feats = build_features_before(
+        df,
+        as_of_idx=as_of_i,
+        event_d=event_d,
+        feature_builder_version=fbv,
+        symbol=sym,
+        knowledge_base_id=knowledge_base_id,
+    )
     miss = missing_quote_feature_keys(feats)
     if miss:
         return None, None, None, f"features:{miss}"
@@ -537,7 +579,17 @@ def labeling_updates_for_row(
     if not sym:
         return {}, "skip_no_symbol"
 
-    feats, outs, label, reason = compute_row_labeling(sym, row.get("event_time_et"), horizons=horizons)
+    kb_id_raw = row.get("knowledge_base_id")
+    try:
+        kb_id = int(kb_id_raw) if kb_id_raw is not None else None
+    except (TypeError, ValueError):
+        kb_id = None
+    feats, outs, label, reason = compute_row_labeling(
+        sym,
+        row.get("event_time_et"),
+        knowledge_base_id=kb_id,
+        horizons=horizons,
+    )
     out: Dict[str, Any] = {}
     notes: List[str] = []
 

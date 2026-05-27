@@ -60,6 +60,7 @@ def _row_from_db(r: Any) -> Dict[str, Any]:
         "event_time_et": r[2],
         "features_before": r[3],
         "outcomes_after": r[4],
+        "knowledge_base_id": r[5],
     }
 
 
@@ -165,7 +166,7 @@ def main() -> int:
         params["sym"] = symbols
 
     sql = f"""
-        SELECT id, symbol, event_time_et, features_before, outcomes_after
+        SELECT id, symbol, event_time_et, features_before, outcomes_after, knowledge_base_id
         FROM event_reaction_dataset
         WHERE dataset_version = :dv
           {cfg_filter}
