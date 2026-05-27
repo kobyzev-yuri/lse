@@ -6,6 +6,7 @@ This intentionally stores reported EPS / surprise in earnings_event_detail but
 the pre-event feature builder only uses leakage-safe fields (estimate + timing).
 
 Examples:
+  python scripts/ingest_earnings_event_details_yfinance.py --from-config-equities --ensure-kb-events --earnings-limit 40
   python scripts/ingest_earnings_event_details_yfinance.py --tickers TER,AMD,MU,ASML,MSFT,META,AMZN,INTC,ORCL,ALAB
   python scripts/ingest_earnings_event_details_yfinance.py --dry-run
 """
@@ -16,7 +17,7 @@ import json
 import logging
 import math
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -28,6 +29,7 @@ sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
 from services.ticker_groups import get_config_ticker_symbols_upper_unique  # noqa: E402
+from services.yfinance_earnings_fetcher import YFINANCE_EARNINGS_SOURCE  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,6 +45,11 @@ def _float_or_none(v: Any) -> Optional[float]:
     if not math.isfinite(x):
         return None
     return x
+
+
+def _is_equity_symbol(ticker: str) -> bool:
+    t = str(ticker or "").strip().upper()
+    return bool(t) and not t.startswith("^") and "=" not in t and t not in ("MACRO", "US_MACRO")
 
 
 def _event_date_et(index_value: Any) -> tuple[date, str, int | None, str]:
@@ -94,13 +101,85 @@ def _load_existing_event_rows(engine, *, dataset_version: str, tickers: Iterable
     return out
 
 
-def _fetch_yfinance_earnings_dates(ticker: str) -> pd.DataFrame:
+def _fetch_yfinance_earnings_dates(ticker: str, *, limit: int) -> pd.DataFrame:
     import yfinance as yf
 
-    df = yf.Ticker(ticker).earnings_dates
+    yt = yf.Ticker(ticker)
+    df = None
+    try:
+        if hasattr(yt, "get_earnings_dates"):
+            df = yt.get_earnings_dates(limit=max(1, int(limit)))
+    except Exception as e:
+        logger.debug("%s: get_earnings_dates error: %s", ticker, e)
+        df = None
+    if df is None:
+        df = yt.earnings_dates
     if df is None or df.empty:
         return pd.DataFrame()
+    try:
+        if len(df) > int(limit):
+            df = df.iloc[: int(limit)]
+    except Exception:
+        pass
     return df
+
+
+def _kb_report_datetime(event_d: date) -> datetime:
+    return datetime(int(event_d.year), int(event_d.month), int(event_d.day))
+
+
+def _find_kb_earnings_row(engine, ticker: str, event_d: date) -> Optional[int]:
+    q = text(
+        """
+        SELECT id
+        FROM knowledge_base
+        WHERE UPPER(TRIM(ticker)) = :ticker
+          AND UPPER(COALESCE(event_type, '')) LIKE '%EARNING%'
+          AND ts::date = :event_d
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(q, {"ticker": ticker.strip().upper(), "event_d": event_d}).fetchone()
+    return int(row[0]) if row else None
+
+
+def _ensure_kb_earnings_row(
+    engine,
+    *,
+    ticker: str,
+    event_d: date,
+    eps_estimate: Optional[float],
+    dry_run: bool,
+) -> Optional[int]:
+    existing = _find_kb_earnings_row(engine, ticker, event_d)
+    if existing:
+        return existing
+    content = f"Earnings date (Yahoo/yfinance) for {ticker}"
+    if eps_estimate is not None:
+        content += f"\nEPS estimate: {eps_estimate} USD"
+    if dry_run:
+        logger.info("dry-run insert KB earnings %s %s", ticker, event_d)
+        return None
+    q = text(
+        """
+        INSERT INTO knowledge_base (ts, ticker, source, content, event_type, importance)
+        VALUES (:ts, :ticker, :source, :content, 'EARNINGS', 'HIGH')
+        RETURNING id
+        """
+    )
+    with engine.begin() as conn:
+        row = conn.execute(
+            q,
+            {
+                "ts": _kb_report_datetime(event_d),
+                "ticker": ticker.strip().upper(),
+                "source": YFINANCE_EARNINGS_SOURCE,
+                "content": content,
+            },
+        ).fetchone()
+    return int(row[0]) if row else None
 
 
 def _upsert_detail(
@@ -166,27 +245,35 @@ def _upsert_detail(
 def main() -> int:
     ap = argparse.ArgumentParser(description="Backfill earnings_event_detail from yfinance earnings_dates")
     ap.add_argument("--tickers", default=",".join(DEFAULT_TICKERS), help="Comma-separated ticker list")
+    ap.add_argument("--from-config-equities", action="store_true", help="Use FAST+MEDIUM+LONG equity symbols from config")
+    ap.add_argument("--ensure-kb-events", action="store_true", help="Insert missing knowledge_base EARNINGS rows before detail upsert")
     ap.add_argument("--dataset-version", default="v0")
+    ap.add_argument("--earnings-limit", type=int, default=25, help="Max yfinance earnings dates per ticker")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=0, help="Max upserts, 0 = no limit")
     args = ap.parse_args()
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
     allowed = set(get_config_ticker_symbols_upper_unique())
+    if args.from_config_equities:
+        tickers = [t for t in sorted(allowed) if _is_equity_symbol(t)]
+    else:
+        tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
     tickers = [t for t in tickers if t in allowed]
     if not tickers:
         logger.error("No tickers left after config-universe filter")
         return 1
 
     engine = get_engine()
-    existing = _load_existing_event_rows(engine, dataset_version=args.dataset_version.strip() or "v0", tickers=tickers)
+    existing = {} if args.ensure_kb_events else _load_existing_event_rows(engine, dataset_version=args.dataset_version.strip() or "v0", tickers=tickers)
     logger.info("Loaded %d event_reaction_dataset date keys for %d tickers", len(existing), len(tickers))
     upserts = 0
     misses = 0
     errors = 0
+    kb_inserted_or_found = 0
+    yf_rows = 0
     for ticker in tickers:
         try:
-            df = _fetch_yfinance_earnings_dates(ticker)
+            df = _fetch_yfinance_earnings_dates(ticker, limit=max(1, min(int(args.earnings_limit), 100)))
         except Exception as e:
             errors += 1
             logger.warning("%s: yfinance earnings_dates error: %s", ticker, e)
@@ -194,15 +281,25 @@ def main() -> int:
         if df.empty:
             logger.info("%s: no earnings_dates", ticker)
             continue
+        yf_rows += len(df)
+        logger.info("%s: yfinance rows=%s", ticker, len(df))
         for idx, row in df.iterrows():
             event_d, earnings_date_et, report_hour_et, report_timing = _event_date_et(idx)
-            matches = existing.get((ticker, event_d)) or []
-            if not matches:
-                misses += 1
-                continue
             eps_est = _float_or_none(row.get("EPS Estimate"))
             eps_rep = _float_or_none(row.get("Reported EPS"))
             eps_sur = _float_or_none(row.get("Surprise(%)"))
+            if args.ensure_kb_events:
+                kb_id = _ensure_kb_earnings_row(engine, ticker=ticker, event_d=event_d, eps_estimate=eps_est, dry_run=bool(args.dry_run))
+                if kb_id is None:
+                    misses += 1
+                    continue
+                matches = [{"knowledge_base_id": kb_id}]
+                kb_inserted_or_found += 1
+            else:
+                matches = existing.get((ticker, event_d)) or []
+                if not matches:
+                    misses += 1
+                    continue
             for match in matches[:1]:
                 _upsert_detail(
                     engine,
@@ -220,9 +317,15 @@ def main() -> int:
                 upserts += 1
                 if args.limit and upserts >= args.limit:
                     logger.info("Limit reached: %d", args.limit)
-                    logger.info("Done: upserts=%d misses=%d errors=%d dry_run=%s", upserts, misses, errors, args.dry_run)
+                    logger.info(
+                        "Done: yfinance_rows=%d kb_found_or_inserted=%d upserts=%d misses=%d errors=%d dry_run=%s",
+                        yf_rows, kb_inserted_or_found, upserts, misses, errors, args.dry_run,
+                    )
                     return 0
-    logger.info("Done: upserts=%d misses=%d errors=%d dry_run=%s", upserts, misses, errors, args.dry_run)
+    logger.info(
+        "Done: yfinance_rows=%d kb_found_or_inserted=%d upserts=%d misses=%d errors=%d dry_run=%s",
+        yf_rows, kb_inserted_or_found, upserts, misses, errors, args.dry_run,
+    )
     return 0 if errors == 0 else 2
 
 
