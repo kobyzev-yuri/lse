@@ -406,7 +406,11 @@ def format_multiday_forecast_one_line(fc: Optional[Dict[str, Any]]) -> str:
         if p is None:
             continue
         try:
-            parts.append(f"{key}д:{float(p):+.2f}%")
+            pred_log = h.get("predicted_log_ret")
+            log_tail = ""
+            if pred_log is not None:
+                log_tail = f"/log {float(pred_log):+.4f}"
+            parts.append(f"{key}д:{float(p):+.2f}%{log_tail}")
         except (TypeError, ValueError):
             continue
     if not parts:

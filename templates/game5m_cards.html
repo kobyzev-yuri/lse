@@ -105,6 +105,22 @@
         .forecast-table tbody tr:last-child td { border-bottom: none; }
         .forecast-table .num { font-variant-numeric: tabular-nums; }
         .forecast-fallback { font-size: 0.78rem; color: #cbd5e1; line-height: 1.35; margin-top: 0.35rem; }
+        .explain-details {
+            margin-top: 0.35rem;
+            padding: 0.45rem 0.55rem;
+            border: 1px solid #334155;
+            border-radius: 7px;
+            background: #0f172a;
+            font-size: 0.76rem;
+            color: #cbd5e1;
+            line-height: 1.35;
+        }
+        .explain-details summary {
+            cursor: pointer;
+            color: #93c5fd;
+            font-weight: 600;
+        }
+        .explain-details p { margin: 0.35rem 0 0; }
         @media (min-width: 900px) {
             #cardsContainer {
                 display: grid;
@@ -167,6 +183,9 @@
             if (typeof v === 'number' && decimals != null) return v.toFixed(decimals);
             return String(v);
         }
+        function renderDetails(summary, bodyHtml) {
+            return '<details class="explain-details"><summary>' + escapeHtml(summary) + '</summary>' + bodyHtml + '</details>';
+        }
         function decisionClass(d) {
             if (!d) return '';
             if (d === 'BUY' || d === 'STRONG_BUY') return 'decision-buy';
@@ -190,7 +209,8 @@
                 }).join('');
                 return '<table class="forecast-table" role="table"><thead><tr>' +
                     '<th>Горизонт</th><th>p10</th><th>p50</th><th>p90</th><th>P(&gt;spot)</th></tr></thead><tbody>' +
-                    rows + '</tbody></table>';
+                    rows + '</tbody></table>' +
+                    renderDetails('Как читать 30/60/120м прогноз', '<p><strong>p50</strong> — центральный прогноз к текущему spot; <strong>p10/p90</strong> — нижний/верхний сценарий распределения. <strong>P(&gt;spot)</strong> — вероятность, что цена на горизонте будет выше текущей. Это прогноз диапазона, а не готовый тейк.</p>');
             }
             if (c.price_forecast_5m_summary) {
                 return '<div class="forecast-fallback">' + escapeHtml(c.price_forecast_5m_summary) + '</div>';
@@ -239,6 +259,7 @@
                 html += '<div class="row"><span class="label">' + escapeHtml(factLbl) + '</span><span class="value ' + fCls + '">' +
                     (f >= 0 ? '+' : '') + fmt(f, 2) + '%</span></div>';
             }
+            html += renderDetails('Что значит гэп на open', '<p>Это отдельный прогноз разрыва между предыдущим close и open 9:30 ET. Он полезен как контекст старта сессии и не равен дневному ridge-прогнозу 1–3 торговых дня.</p>');
             return html;
         }
         function renderMultidayLrTable(c) {
@@ -250,14 +271,18 @@
                     var h = fc.horizons[keys[i]];
                     if (!h || typeof h !== 'object') continue;
                     var pct = h.predicted_pct_vs_spot;
-                    var rmse = h.train_rmse_log;
+                    var predLog = h.predicted_log_ret;
                     var pctStr = '—';
                     if (pct != null && pct !== undefined && Number.isFinite(Number(pct))) {
                         var p = Number(pct);
                         pctStr = (p >= 0 ? '+' : '') + p.toFixed(2) + '%';
                     }
-                    var rmseStr = (rmse != null && rmse !== undefined && Number.isFinite(Number(rmse))) ? Number(rmse).toFixed(4) : '—';
-                    rows.push('<tr><td>' + escapeHtml(keys[i] + ' торг. дн.') + '</td><td class="num">' + escapeHtml(pctStr) + '</td><td class="num" title="Насколько хорошо ряд описывается на истории (RMSE в log; не OOS)">' + escapeHtml(rmseStr) + '</td></tr>');
+                    var logStr = '—';
+                    if (predLog != null && predLog !== undefined && Number.isFinite(Number(predLog))) {
+                        var l = Number(predLog);
+                        logStr = (l >= 0 ? '+' : '') + l.toFixed(4);
+                    }
+                    rows.push('<tr><td>' + escapeHtml(keys[i] + ' торг. дн.') + '</td><td class="num">' + escapeHtml(pctStr) + '</td><td class="num" title="Прогноз суммарной log-return на этот горизонт">' + escapeHtml(logStr) + '</td></tr>');
                 }
                 if (rows.length) {
                     var meta = [];
@@ -271,10 +296,11 @@
                     if (fc.symbol_calendar_db_used) meta.push('earnings-календарь');
                     if (fc.n_features != null && fc.n_features !== undefined) meta.push('фичей: ' + escapeHtml(String(fc.n_features)));
                     var sub = meta.length ? '<div class="forecast-fallback" style="margin-top:0.2rem;">' + meta.join(' · ') + '</div>' : '';
-                    return '<p class="forecast-fallback muted" style="margin:0 0 0.35rem 0;font-size:0.78rem;">Ожидаемое изменение к <strong>текущей цене</strong> по горизонту в торговых днях; последний столбец — справочная подгонка на истории (не walk-forward).</p>' +
+                    return '<p class="forecast-fallback muted" style="margin:0 0 0.35rem 0;font-size:0.78rem;">Прогноз одной ridge-модели к <strong>текущей цене</strong>: простой % и та же величина в log-return. Календарь/news/premarket ниже — входные фичи этой регрессии.</p>' +
                         '<table class="forecast-table" role="table"><thead><tr>' +
-                        '<th>Горизонт</th><th>Ожидаемо к spot</th><th title="RMSE в log на обучающем окне; для оператора — грубая «плотность» описания ряда">На истории</th></tr></thead><tbody>' +
-                        rows.join('') + '</tbody></table>' + sub;
+                        '<th>Горизонт</th><th>Ожидаемо к spot</th><th title="Прогноз суммарной log-return на горизонт">Прогноз log-ret</th></tr></thead><tbody>' +
+                        rows.join('') + '</tbody></table>' + sub +
+                        renderDetails('Как читать дневку и календарь', '<p><strong>Ожидаемо к spot</strong> — прогноз простого изменения цены на 1/2/3 торговых дня. <strong>Прогноз log-ret</strong> — та же доходность в log-пространстве, на котором обучается модель.</p><p><strong>Макро-календарь</strong>, <strong>earnings-календарь</strong>, <strong>news</strong> и <strong>premarket</strong> — входные признаки этой модели. У них нет отдельной собственной доходности в карточке; их вклад имеет смысл показывать отдельным сравнением “без фичи / с фичей”.</p>');
                 }
             }
             if (c.log_return_multiday_forecast_summary) {
@@ -357,6 +383,7 @@
             }
             if (downsideRisk != null) html += '<div class="row"><span class="label" title="Оценка возможной просадки вниз; больше по модулю (например 2.5% vs 1.3%) — больший риск. Знак «−» — направление, не «счёт осторожности».">Downside риск</span><span class="value negative">−' + fmt(downsideRisk, 1) + '%</span></div>';
             if (c.prob_up != null && c.prob_down != null) html += '<div class="row"><span class="label">P(up/down)</span><span class="value">' + fmt(c.prob_up, 2) + '/' + fmt(c.prob_down, 2) + '</span></div>';
+            html += renderDetails('Тех. величины перед прогнозами', '<p><strong>RSI(5m)</strong>, <strong>импульс</strong>, <strong>откат от хая</strong> и <strong>волатильность 5m</strong> описывают текущий intraday-режим. <strong>Upside день</strong> — рабочая цель/тейк после правил игры, а <strong>по прогнозу до пола</strong> показывает сырой forecast до минимального тейка. <strong>Downside риск</strong> — оценка просадки, не вероятность.</p>');
             var fcBlock = renderForecastTable(c);
             if (fcBlock) {
                 html += '<div class="block-title">Прогноз цены к spot (30/60/120 м, %)</div>';
