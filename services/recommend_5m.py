@@ -1239,6 +1239,8 @@ TECHNICAL_SIGNAL_KEYS = (
     "multiday_lr_horizon_1d_pct_vs_spot", "multiday_lr_horizon_2d_pct_vs_spot", "multiday_lr_horizon_3d_pct_vs_spot",
     "multiday_lr_horizon_1d_train_rmse_log", "multiday_lr_horizon_2d_train_rmse_log", "multiday_lr_horizon_3d_train_rmse_log",
     "multiday_lr_bias", "multiday_lr_daily_last_date", "multiday_lr_method", "multiday_lr_premarket_db_used",
+    "multiday_lr_news_db_used", "multiday_lr_macro_calendar_db_used", "multiday_lr_symbol_calendar_db_used",
+    "multiday_lr_n_features",
     "multiday_lr_daily_close_source",
     "multiday_lr_forecast_unavailable",
     "multiday_lr_forecast_error",
@@ -2438,6 +2440,14 @@ def get_decision_5m(
                     out["multiday_lr_method"] = mlr_fc.get("method")
                 if "premarket_db_used" in mlr_fc:
                     out["multiday_lr_premarket_db_used"] = bool(mlr_fc.get("premarket_db_used"))
+                if "news_db_used" in mlr_fc:
+                    out["multiday_lr_news_db_used"] = bool(mlr_fc.get("news_db_used"))
+                if "macro_calendar_db_used" in mlr_fc:
+                    out["multiday_lr_macro_calendar_db_used"] = bool(mlr_fc.get("macro_calendar_db_used"))
+                if "symbol_calendar_db_used" in mlr_fc:
+                    out["multiday_lr_symbol_calendar_db_used"] = bool(mlr_fc.get("symbol_calendar_db_used"))
+                if "n_features" in mlr_fc:
+                    out["multiday_lr_n_features"] = mlr_fc.get("n_features")
                 dcs = mlr_fc.get("daily_close_source")
                 if dcs:
                     out["multiday_lr_daily_close_source"] = str(dcs)

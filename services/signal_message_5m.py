@@ -34,6 +34,39 @@ def _kb_news_items_ticker_only(kb_news: list, ticker: str) -> list:
     return [n for n in (kb_news or []) if (n.get("ticker") or "").strip().upper() == tu]
 
 
+def _multiday_lr_feature_line(payload: Dict[str, Any]) -> str:
+    fc = payload.get("log_return_multiday_forecast")
+    if not isinstance(fc, dict):
+        fc = {}
+
+    def _flag(name: str, flat_name: str = "") -> bool:
+        if name in fc:
+            return bool(fc.get(name))
+        if flat_name:
+            return bool(payload.get(flat_name))
+        return False
+
+    parts = []
+    src = payload.get("multiday_lr_daily_close_source") or fc.get("daily_close_source")
+    if src:
+        parts.append(f"дневка={src}")
+    last_d = payload.get("multiday_lr_daily_last_date") or fc.get("daily_last_date")
+    if last_d:
+        parts.append(f"посл.день={last_d}")
+    if _flag("premarket_db_used", "multiday_lr_premarket_db_used"):
+        parts.append("premarket")
+    if _flag("news_db_used", "multiday_lr_news_db_used"):
+        parts.append("news")
+    if _flag("macro_calendar_db_used", "multiday_lr_macro_calendar_db_used"):
+        parts.append("macro-calendar")
+    if _flag("symbol_calendar_db_used", "multiday_lr_symbol_calendar_db_used"):
+        parts.append("earnings-calendar")
+    n_features = payload.get("multiday_lr_n_features") or fc.get("n_features")
+    if n_features is not None:
+        parts.append(f"фичей={n_features}")
+    return " · ".join(str(p) for p in parts if p)
+
+
 def build_5m_technical_short_text(tech: Dict[str, Any], ticker: str) -> str:
     """
     Короткий технический сигнал 5m (одна карточка в чат).
@@ -73,6 +106,9 @@ def build_5m_technical_short_text(tech: Dict[str, Any], ticker: str) -> str:
     mlr = tech.get("log_return_multiday_forecast_summary")
     if mlr:
         lines.append(f"Мультидн. log-ret (ridge): {mlr}")
+        mlr_features = _multiday_lr_feature_line(tech)
+        if mlr_features:
+            lines.append(f"Календарь/фичи ridge: {mlr_features}")
     return "\n".join(s for s in lines if s)
 
 
@@ -153,6 +189,9 @@ def build_5m_entry_signal_text(
     mlr_s = d5.get("log_return_multiday_forecast_summary")
     if mlr_s:
         lines.append(f"📅 Мультидневный ridge (1–3 торг. дня vs spot): {mlr_s}")
+        mlr_features = _multiday_lr_feature_line(d5)
+        if mlr_features:
+            lines.append(f"📅 Календарь/фичи ridge: {mlr_features}")
     entry_advice = d5.get("entry_advice")
     if entry_advice == "ALLOW":
         entry_rec = d5.get("entry_price_recommended")

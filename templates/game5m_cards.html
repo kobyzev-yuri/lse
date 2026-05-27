@@ -266,6 +266,10 @@
                     }
                     if (fc.daily_last_date) meta.push('посл. день: ' + escapeHtml(String(fc.daily_last_date)));
                     if (fc.premarket_db_used) meta.push('премаркет БД');
+                    if (fc.news_db_used) meta.push('news БД');
+                    if (fc.macro_calendar_db_used) meta.push('макро-календарь');
+                    if (fc.symbol_calendar_db_used) meta.push('earnings-календарь');
+                    if (fc.n_features != null && fc.n_features !== undefined) meta.push('фичей: ' + escapeHtml(String(fc.n_features)));
                     var sub = meta.length ? '<div class="forecast-fallback" style="margin-top:0.2rem;">' + meta.join(' · ') + '</div>' : '';
                     return '<p class="forecast-fallback muted" style="margin:0 0 0.35rem 0;font-size:0.78rem;">Ожидаемое изменение к <strong>текущей цене</strong> по горизонту в торговых днях; последний столбец — справочная подгонка на истории (не walk-forward).</p>' +
                         '<table class="forecast-table" role="table"><thead><tr>' +
