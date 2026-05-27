@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 FEATURE_BUILDER_VERSION_QUOTES = "quotes_mvp_1"
 FEATURE_BUILDER_VERSION_REGIME = "quotes_regime_v1"
+FEATURE_BUILDER_VERSION_EARNINGS = "quotes_regime_earnings_v1"
 # Back-compat alias
 FEATURE_BUILDER_VERSION = FEATURE_BUILDER_VERSION_QUOTES
 OUTCOME_BUILDER_VERSION = "quotes_fwd_1"
@@ -55,7 +56,7 @@ _REGIME_LOG_RET_KEYS = (
 
 def active_feature_builder_version() -> str:
     raw = (get_config_value("EVENT_REACTION_FEATURE_BUILDER_VERSION", "") or "").strip()
-    if raw in (FEATURE_BUILDER_VERSION_QUOTES, FEATURE_BUILDER_VERSION_REGIME):
+    if raw in (FEATURE_BUILDER_VERSION_QUOTES, FEATURE_BUILDER_VERSION_REGIME, FEATURE_BUILDER_VERSION_EARNINGS):
         return raw
     return FEATURE_BUILDER_VERSION_REGIME
 
@@ -74,7 +75,7 @@ QUOTE_FEATURE_KEYS_REQUIRED = (
 def event_reaction_numeric_feature_keys(feature_builder_version: str) -> Tuple[str, ...]:
     """All numeric keys for CatBoost (quote + regime)."""
     quote = QUOTE_FEATURE_KEYS_REQUIRED
-    if feature_builder_version == FEATURE_BUILDER_VERSION_REGIME:
+    if feature_builder_version in (FEATURE_BUILDER_VERSION_REGIME, FEATURE_BUILDER_VERSION_EARNINGS):
         regime = (
             "market_regime_present",
             "mkt_spy_close",
@@ -87,6 +88,14 @@ def event_reaction_numeric_feature_keys(feature_builder_version: str) -> Tuple[s
             "mkt_vix_regime_ord",
             "mkt_spy_stress_1d",
         )
+        if feature_builder_version == FEATURE_BUILDER_VERSION_EARNINGS:
+            earnings = (
+                "earnings_detail_present",
+                "earnings_eps_estimate",
+                "earnings_eps_estimate_abs",
+                "earnings_report_timing_ord",
+            )
+            return quote + regime + earnings
         return quote + regime
     return quote
 
@@ -290,6 +299,89 @@ def enrich_features_with_market_regime(
     return out
 
 
+_EARNINGS_TIMING_ORD: Dict[str, float] = {
+    "UNKNOWN": 0.0,
+    "BEFORE_OPEN": 1.0,
+    "DURING_SESSION": 2.0,
+    "AFTER_CLOSE": 3.0,
+}
+
+
+def _earnings_timing_from_hour(hour: Optional[int]) -> str:
+    if hour is None:
+        return "UNKNOWN"
+    if hour < 9:
+        return "BEFORE_OPEN"
+    if hour < 16:
+        return "DURING_SESSION"
+    return "AFTER_CLOSE"
+
+
+def load_earnings_detail_for_event(symbol: str, event_d: date) -> Optional[Dict[str, Any]]:
+    """
+    Load known earnings metadata for the symbol/event date.
+
+    Only pre-event-safe fields are used as model features here. Post-release
+    values such as reported EPS and surprise stay in guidance_summary for
+    analysis/post-event models to avoid leakage in pre-event forecasts.
+    """
+    q = text(
+        """
+        SELECT ed.eps_estimate, ed.eps_actual, ed.guidance_summary
+        FROM earnings_event_detail ed
+        JOIN knowledge_base kb ON kb.id = ed.knowledge_base_id
+        WHERE UPPER(TRIM(kb.ticker)) = :symbol
+          AND (
+            kb.ts::date = :event_d
+            OR (kb.ts AT TIME ZONE 'America/New_York')::date = :event_d
+          )
+        ORDER BY ed.updated_at DESC
+        LIMIT 1
+        """
+    )
+    try:
+        with get_engine().connect() as conn:
+            row = conn.execute(q, {"symbol": str(symbol or "").strip().upper(), "event_d": event_d}).fetchone()
+    except Exception as e:
+        logger.debug("earnings_event_detail unavailable for %s %s: %s", symbol, event_d, e)
+        return None
+    if not row:
+        return None
+    guidance = _parse_json_field(row[2])
+    return {
+        "eps_estimate": row[0],
+        "eps_actual": row[1],
+        "guidance_summary": guidance,
+    }
+
+
+def enrich_features_with_earnings_detail(
+    base: Dict[str, Any],
+    detail: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    out = dict(base)
+    out["feature_builder_version"] = FEATURE_BUILDER_VERSION_EARNINGS
+    if not detail:
+        out["earnings_detail_present"] = 0.0
+        out["earnings_eps_estimate"] = 0.0
+        out["earnings_eps_estimate_abs"] = 0.0
+        out["earnings_report_timing_ord"] = _EARNINGS_TIMING_ORD["UNKNOWN"]
+        return out
+    out["earnings_detail_present"] = 1.0
+    try:
+        est = float(detail.get("eps_estimate")) if detail.get("eps_estimate") is not None else 0.0
+    except (TypeError, ValueError):
+        est = 0.0
+    out["earnings_eps_estimate"] = round(est, 6)
+    out["earnings_eps_estimate_abs"] = round(abs(est), 6)
+    guidance = detail.get("guidance_summary") if isinstance(detail.get("guidance_summary"), dict) else {}
+    timing = str(guidance.get("report_timing") or "UNKNOWN").strip().upper()
+    if timing not in _EARNINGS_TIMING_ORD:
+        timing = _earnings_timing_from_hour(guidance.get("report_hour_et"))
+    out["earnings_report_timing_ord"] = _EARNINGS_TIMING_ORD.get(timing, _EARNINGS_TIMING_ORD["UNKNOWN"])
+    return out
+
+
 def build_features_before(
     df: pd.DataFrame,
     *,
@@ -328,10 +420,13 @@ def build_features_before(
         out["rsi_as_of"] = round(float(rsi_val), 4)
     out["close_as_of"] = round(float(closes[i]), 6)
 
-    if fbv == FEATURE_BUILDER_VERSION_REGIME:
+    if fbv in (FEATURE_BUILDER_VERSION_REGIME, FEATURE_BUILDER_VERSION_EARNINGS):
         as_of_d = dates[i]
         regime = load_market_regime_row(as_of_d)
         out = enrich_features_with_market_regime(out, regime)
+    if fbv == FEATURE_BUILDER_VERSION_EARNINGS:
+        detail = load_earnings_detail_for_event(str(df.attrs.get("symbol") or ""), event_d)
+        out = enrich_features_with_earnings_detail(out, detail)
     return out
 
 
@@ -391,6 +486,7 @@ def compute_row_labeling(
     df = load_quotes_window(symbol, date_min=d_min, date_max=d_max)
     if df.empty:
         return None, None, None, "no_quotes"
+    df.attrs["symbol"] = str(symbol or "").strip().upper()
 
     dates = list(df["d"])
     as_of_i = _find_as_of_index(dates, event_d)
