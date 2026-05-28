@@ -429,9 +429,20 @@ def get_ml_layers_status(
 
     total = int(row.get("total") or 0)
     named_scenario = int(row.get("named_scenario") or 0)
-    min_classifier_rows = 80
 
     layers = [
+        {
+            "id": "quotes_regime_earnings_v1",
+            "title": "Feature builder quotes_regime_earnings_v1",
+            "status": "active",
+            "target": "features_before JSON",
+            "script": "scripts/run_earnings_ml_refresh.py",
+            "description": (
+                "Quotes + market_regime + earnings tone/timing + peer_graph (out-degree, weight sum) "
+                "+ peer_momentum (mean/max 5d log-ret пиров на as_of). "
+                "Backfill: EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1."
+            ),
+        },
         {
             "id": "catboost_regression",
             "title": "CatBoost регрессия (prod)",
@@ -466,14 +477,16 @@ def get_ml_layers_status(
         {
             "id": "scenario_classifier",
             "title": "CatBoost классификатор сценариев",
-            "status": "planned",
-            "blocked_by": [
-                f"≥{min_classifier_rows} строк с named scenario labels (сейчас ~{named_scenario})",
-                "feature_builder quotes_regime_earnings_v1 + peer spillover features в train",
-            ],
+            "status": "pilot" if named_scenario >= 8 else "planned",
+            "script": "scripts/train_event_reaction_scenario_classifier.py",
+            "blocked_by": (
+                []
+                if named_scenario >= 8
+                else [f"≥8 LLM scenario labels (сейчас ~{named_scenario})", "backfill quotes_regime_earnings_v1"]
+            ),
             "description": (
-                "Отдельная модель multi-class по сценариям v0 (не замена регрессии). "
-                "Оценка: после накопления LLM labels на universe + peer features в dataset."
+                "Multi-class по final_label (llm_scenario_v0): gap_up_follow_through, "
+                "capex_positive_for_infra_peers и др. Запуск: run_earnings_ml_refresh.py."
             ),
         },
     ]

@@ -73,7 +73,8 @@
         <li><strong>UP/DOWN/FLAT:</strong> не классификатор, а правило по порогу на фактической 5d log-return (backfill из quotes).</li>
         <li><strong>Scenario hints (LLM):</strong> из transcript/8-K — <code>capex_positive_for_infra_peers</code>, <code>gap_up_follow_through</code> и др. Скрипт <code>apply_earnings_scenario_labels.py</code> может записать их в <code>final_label</code>.</li>
         <li><strong>Peer graph:</strong> directed edges «лидер → пир» с весом. Spillover = forward returns пиров от <em>даты отчёта лидера</em> (event-study), не скользящая корреляция.</li>
-        <li><strong>Классификатор сценариев (planned):</strong> CatBoost multi-class после накопления LLM labels + peer features в <code>quotes_regime_earnings_v1</code>. См. вкладку «ML слои».</li>
+        <li><strong>quotes_regime_earnings_v1:</strong> backfill с peer graph + tone — <code>run_earnings_ml_refresh.py</code>.</li>
+        <li><strong>Классификатор сценариев (pilot):</strong> <code>train_event_reaction_scenario_classifier.py</code> после <code>apply_earnings_scenario_labels --universe</code>.</li>
         <li><strong>Telegram:</strong> <code>/earnings</code> — список; <code>/earnings META 2026-04-29</code> — краткий Brief.</li>
     </ul>
 </details>

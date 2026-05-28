@@ -94,6 +94,14 @@ def event_reaction_numeric_feature_keys(feature_builder_version: str) -> Tuple[s
                 "earnings_eps_estimate",
                 "earnings_eps_estimate_abs",
                 "earnings_report_timing_ord",
+                "earnings_tone_ord",
+                "earnings_scenario_hints_n",
+                "peer_graph_present",
+                "peer_graph_out_degree",
+                "peer_graph_weight_sum",
+                "peer_momentum_n",
+                "peer_momentum_mean_5d_log",
+                "peer_momentum_max_5d_log",
             )
             return quote + regime + earnings
         return quote + regime
@@ -306,6 +314,15 @@ _EARNINGS_TIMING_ORD: Dict[str, float] = {
     "AFTER_CLOSE": 3.0,
 }
 
+_EARNINGS_TONE_ORD: Dict[str, float] = {
+    "bearish": 0.0,
+    "defensive": 0.5,
+    "cautious": 1.0,
+    "not_clear": 1.5,
+    "mixed": 2.0,
+    "bullish": 3.0,
+}
+
 
 def _earnings_timing_from_hour(hour: Optional[int]) -> str:
     if hour is None:
@@ -407,6 +424,81 @@ def enrich_features_with_earnings_detail(
     if timing not in _EARNINGS_TIMING_ORD:
         timing = _earnings_timing_from_hour(guidance.get("report_hour_et"))
     out["earnings_report_timing_ord"] = _EARNINGS_TIMING_ORD.get(timing, _EARNINGS_TIMING_ORD["UNKNOWN"])
+    tone = str(guidance.get("management_tone") or "not_clear").strip().lower()
+    out["earnings_tone_ord"] = _EARNINGS_TONE_ORD.get(tone, 1.5)
+    hints = guidance.get("scenario_hints")
+    out["earnings_scenario_hints_n"] = float(len(hints)) if isinstance(hints, list) else 0.0
+    return out
+
+
+def load_peer_graph_targets(source_symbol: str, *, limit: int = 12) -> list[tuple[str, float]]:
+    sym = str(source_symbol or "").strip().upper()
+    if not sym:
+        return []
+    q = text(
+        """
+        SELECT UPPER(TRIM(target_ticker)) AS target, weight
+        FROM peer_graph_edge
+        WHERE UPPER(TRIM(source_ticker)) = :source
+        ORDER BY weight DESC, target_ticker
+        LIMIT :limit
+        """
+    )
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(q, {"source": sym, "limit": int(limit)}).all()
+    except Exception as e:
+        logger.debug("peer_graph_edge unavailable for %s: %s", sym, e)
+        return []
+    out: list[tuple[str, float]] = []
+    for target, weight in rows:
+        try:
+            w = float(weight) if weight is not None else 0.0
+        except (TypeError, ValueError):
+            w = 0.0
+        out.append((str(target).upper(), w))
+    return out
+
+
+def enrich_features_with_peer_graph(base: Dict[str, Any], *, source_symbol: str) -> Dict[str, Any]:
+    out = dict(base)
+    edges = load_peer_graph_targets(source_symbol)
+    if not edges:
+        out["peer_graph_present"] = 0.0
+        out["peer_graph_out_degree"] = 0.0
+        out["peer_graph_weight_sum"] = 0.0
+        return out
+    out["peer_graph_present"] = 1.0
+    out["peer_graph_out_degree"] = float(len(edges))
+    out["peer_graph_weight_sum"] = round(sum(w for _, w in edges), 6)
+    return out
+
+
+def enrich_features_with_peer_momentum(
+    base: Dict[str, Any],
+    *,
+    as_of_d: date,
+    peer_targets: list[tuple[str, float]],
+    max_peers: int = 8,
+) -> Dict[str, Any]:
+    out = dict(base)
+    rets: list[float] = []
+    d_min = as_of_d - timedelta(days=400)
+    for sym, _w in peer_targets[: max(1, int(max_peers))]:
+        df = load_quotes_window(sym, date_min=d_min, date_max=as_of_d)
+        if df.empty:
+            continue
+        dates = list(df["d"])
+        as_of_i = _find_as_of_index(dates, as_of_d)
+        if as_of_i is None or as_of_i < 5:
+            continue
+        closes = df["close"].to_numpy(dtype=float)
+        lr = _log_ret_ratio(closes, as_of_i - 5, as_of_i)
+        if lr is not None and math.isfinite(lr):
+            rets.append(float(lr))
+    out["peer_momentum_n"] = float(len(rets))
+    out["peer_momentum_mean_5d_log"] = round(float(np.mean(rets)), 6) if rets else 0.0
+    out["peer_momentum_max_5d_log"] = round(float(max(rets)), 6) if rets else 0.0
     return out
 
 
@@ -455,12 +547,20 @@ def build_features_before(
         regime = load_market_regime_row(as_of_d)
         out = enrich_features_with_market_regime(out, regime)
     if fbv == FEATURE_BUILDER_VERSION_EARNINGS:
+        sym_u = str(symbol or df.attrs.get("symbol") or "").strip().upper()
         detail = load_earnings_detail_for_event(
-            symbol or str(df.attrs.get("symbol") or ""),
+            sym_u,
             event_d,
             knowledge_base_id=knowledge_base_id,
         )
         out = enrich_features_with_earnings_detail(out, detail)
+        peer_edges = load_peer_graph_targets(sym_u)
+        out = enrich_features_with_peer_graph(out, source_symbol=sym_u)
+        out = enrich_features_with_peer_momentum(
+            out,
+            as_of_d=dates[i],
+            peer_targets=peer_edges,
+        )
     return out
 
 

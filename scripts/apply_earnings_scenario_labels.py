@@ -23,6 +23,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
+from services.earnings_intelligence_universe import get_earnings_intelligence_universe  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -75,12 +76,19 @@ def _load_rows(engine, *, symbols: set[str] | None, dataset_version: str) -> lis
 def main() -> int:
     ap = argparse.ArgumentParser(description="Apply LLM scenario hints to event_reaction_dataset")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--symbols", default="", help="Comma-separated tickers")
+    ap.add_argument("--symbols", default="", help="Comma-separated tickers; default = earnings intelligence universe")
+    ap.add_argument("--universe", action="store_true", default=True)
+    ap.add_argument("--no-universe", action="store_false", dest="universe")
     ap.add_argument("--dataset-version", default="v0_expanded_baseline")
     ap.add_argument("--force", action="store_true", help="Overwrite non-manual labels")
     args = ap.parse_args()
 
-    symbols = {s.strip().upper() for s in args.symbols.split(",") if s.strip()} or None
+    symbols: set[str] | None = None
+    if args.symbols.strip():
+        symbols = {s.strip().upper() for s in args.symbols.split(",") if s.strip()}
+    elif args.universe:
+        symbols = set(get_earnings_intelligence_universe())
+        logger.info("Universe symbols: %s", len(symbols))
     engine = get_engine()
     rows = _load_rows(engine, symbols=symbols, dataset_version=args.dataset_version.strip())
     if not rows:
