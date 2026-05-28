@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+import math
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+
+from services.event_reaction_labeling import (
+    _find_as_of_index,
+    _log_ret_ratio,
+    build_outcomes_after,
+    load_quotes_window,
+)
 
 
 def _parse_json(val: Any) -> dict | list | None:
@@ -114,6 +122,72 @@ def load_peer_edges(engine: Engine, *, source_ticker: str) -> list[dict[str, Any
     return out
 
 
+def _peer_tickers_for_brief(
+    *,
+    peers: list[dict[str, Any]],
+    affected: list[Any],
+    max_peers: int = 12,
+) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for p in peers:
+        t = str(p.get("target_ticker") or "").strip().upper()
+        if t and t not in seen:
+            seen.add(t)
+            ordered.append(t)
+    for item in affected:
+        if isinstance(item, str):
+            t = item.strip().upper()
+        elif isinstance(item, dict):
+            t = str(item.get("ticker") or item.get("symbol") or "").strip().upper()
+        else:
+            continue
+        if t and t not in seen:
+            seen.add(t)
+            ordered.append(t)
+    return ordered[:max_peers]
+
+
+def load_peer_spillover_outcomes(
+    *,
+    source_event_date: date,
+    peer_tickers: list[str],
+    horizons: tuple[int, ...] = (1, 2, 5),
+) -> list[dict[str, Any]]:
+    """Forward log-returns for peer tickers anchored at source earnings event date."""
+    d_min = source_event_date - timedelta(days=10)
+    d_max = source_event_date + timedelta(days=60)
+    out: list[dict[str, Any]] = []
+    for sym in peer_tickers:
+        sym_u = sym.strip().upper()
+        if not sym_u:
+            continue
+        df = load_quotes_window(sym_u, date_min=d_min, date_max=d_max)
+        if df.empty:
+            out.append({"ticker": sym_u, "status": "no_quotes"})
+            continue
+        dates = list(df["d"])
+        as_of_i = _find_as_of_index(dates, source_event_date)
+        if as_of_i is None:
+            out.append({"ticker": sym_u, "status": "no_as_of_before_event"})
+            continue
+        outcomes, _ = build_outcomes_after(df, as_of_idx=as_of_i, horizons=horizons)
+        row: dict[str, Any] = {
+            "ticker": sym_u,
+            "status": "ok",
+            "anchor_date": str(dates[as_of_i]),
+        }
+        for h in horizons:
+            key = f"forward_log_ret_{h}d"
+            val = outcomes.get(key)
+            if val is not None and math.isfinite(float(val)):
+                row[key] = float(val)
+        if len(row) <= 3:
+            row["status"] = "insufficient_forward"
+        out.append(row)
+    return out
+
+
 def build_event_brief(
     engine: Engine,
     *,
@@ -140,6 +214,11 @@ def build_event_brief(
     features = features if isinstance(features, dict) else {}
 
     peers = load_peer_edges(engine, source_ticker=symbol)
+    peer_targets = _peer_tickers_for_brief(peers=peers, affected=affected)
+    peer_outcomes = load_peer_spillover_outcomes(
+        source_event_date=event_date,
+        peer_tickers=peer_targets,
+    )
     scenario = _top_scenario(guidance)
 
     evidence = guidance.get("evidence_quotes") or []
@@ -164,6 +243,7 @@ def build_event_brief(
         "capex_notes": guidance.get("capex_notes"),
         "affected_tickers": affected,
         "peer_graph": peers,
+        "peer_spillover_outcomes": peer_outcomes,
         "evidence_quotes": evidence[:5],
         "source_outcomes": {
             "forward_log_ret_1d": outcomes.get("forward_log_ret_1d"),

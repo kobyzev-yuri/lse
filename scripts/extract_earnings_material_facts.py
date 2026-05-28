@@ -24,6 +24,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
+from services.earnings_intelligence_universe import get_earnings_intelligence_universe  # noqa: E402
 from services.earnings_material_extractor import (  # noqa: E402
     extract_event_facts_with_llm,
     map_extraction_to_event_detail,
@@ -172,7 +173,9 @@ def _group_events(rows: list[dict[str, Any]]) -> dict[tuple[str, date | None], l
 def main() -> int:
     ap = argparse.ArgumentParser(description="Extract structured earnings facts via LLM")
     ap.add_argument("--dry-run", action="store_true", help="Token plan only, no LLM/DB writes")
-    ap.add_argument("--symbols", default="", help="Comma-separated tickers, e.g. META,NVDA")
+    ap.add_argument("--symbols", default="", help="Comma-separated tickers; default = earnings intelligence universe")
+    ap.add_argument("--universe", action="store_true", default=True)
+    ap.add_argument("--no-universe", action="store_false", dest="universe")
     ap.add_argument("--symbol", default="", help="Single ticker alias")
     ap.add_argument("--event-date", default="", help="YYYY-MM-DD")
     ap.add_argument("--since", default="2026-01-01", help="Only events on/after date")
@@ -185,6 +188,9 @@ def main() -> int:
     sym_blob = args.symbols.strip() or args.symbol.strip()
     if sym_blob:
         symbols = {s.strip().upper() for s in sym_blob.split(",") if s.strip()}
+    elif args.universe:
+        symbols = set(get_earnings_intelligence_universe())
+        logger.info("Universe symbols for extract: %s", len(symbols))
 
     engine = get_engine()
     rows = _load_materials(

@@ -49,6 +49,58 @@ PEER_GRAPH_EDGES: tuple[PeerGraphEdge, ...] = (
     # SNDK memory demand
     PeerGraphEdge("SNDK", "MU", "ai_infra_peer", 0.80),
     PeerGraphEdge("SNDK", "NVDA", "ai_infra_customer", 0.65),
+    PeerGraphEdge("SNDK", "LITE", "ai_infra_supply", 0.60),
+    PeerGraphEdge("SNDK", "NBIS", "ai_infra_peer", 0.55),
+    # MSFT hyperscaler capex / cloud AI
+    PeerGraphEdge("MSFT", "NVDA", "ai_infra_customer", 0.85),
+    PeerGraphEdge("MSFT", "AMD", "ai_infra_peer", 0.70),
+    PeerGraphEdge("MSFT", "MU", "ai_infra_supply", 0.75),
+    PeerGraphEdge("MSFT", "LITE", "ai_infra_supply", 0.60),
+    PeerGraphEdge("MSFT", "ORCL", "enterprise_peer", 0.55),
+    PeerGraphEdge("MSFT", "META", "megacap_peer", 0.65),
+    PeerGraphEdge("MSFT", "AMZN", "cloud_peer", 0.70),
+    # AMZN AWS / capex
+    PeerGraphEdge("AMZN", "NVDA", "ai_infra_customer", 0.80),
+    PeerGraphEdge("AMZN", "AMD", "ai_infra_peer", 0.65),
+    PeerGraphEdge("AMZN", "MU", "ai_infra_supply", 0.70),
+    PeerGraphEdge("AMZN", "MSFT", "cloud_peer", 0.70),
+    PeerGraphEdge("AMZN", "ORCL", "enterprise_peer", 0.50),
+    # AMD compute vs NVDA
+    PeerGraphEdge("AMD", "NVDA", "ai_infra_peer", 0.90),
+    PeerGraphEdge("AMD", "MU", "ai_infra_supply", 0.80),
+    PeerGraphEdge("AMD", "ASML", "ai_infra_supply", 0.65),
+    PeerGraphEdge("AMD", "LITE", "ai_infra_supply", 0.55),
+    PeerGraphEdge("AMD", "TER", "semi_equipment", 0.50),
+    PeerGraphEdge("AMD", "INTC", "cpu_peer", 0.75),
+    # MU memory cycle
+    PeerGraphEdge("MU", "NVDA", "ai_infra_customer", 0.85),
+    PeerGraphEdge("MU", "SNDK", "memory_peer", 0.80),
+    PeerGraphEdge("MU", "AMD", "ai_infra_customer", 0.70),
+    PeerGraphEdge("MU", "LITE", "ai_infra_supply", 0.55),
+    # TER semi test / equipment
+    PeerGraphEdge("TER", "NVDA", "semi_equipment", 0.60),
+    PeerGraphEdge("TER", "AMD", "semi_equipment", 0.55),
+    PeerGraphEdge("TER", "INTC", "semi_equipment", 0.50),
+    PeerGraphEdge("TER", "ASML", "semi_equipment", 0.65),
+    # ALAB connectivity / AI networking
+    PeerGraphEdge("ALAB", "NVDA", "ai_infra_supply", 0.70),
+    PeerGraphEdge("ALAB", "AMD", "ai_infra_supply", 0.65),
+    PeerGraphEdge("ALAB", "META", "ai_infra_customer", 0.55),
+    # LITE / CIEN networking
+    PeerGraphEdge("LITE", "NVDA", "ai_infra_supply", 0.60),
+    PeerGraphEdge("LITE", "META", "ai_infra_customer", 0.55),
+    PeerGraphEdge("CIEN", "LITE", "networking_peer", 0.65),
+    PeerGraphEdge("CIEN", "META", "ai_infra_customer", 0.50),
+    # INTC turnaround / foundry
+    PeerGraphEdge("INTC", "AMD", "cpu_peer", 0.75),
+    PeerGraphEdge("INTC", "NVDA", "ai_infra_peer", 0.55),
+    PeerGraphEdge("INTC", "TER", "semi_equipment", 0.50),
+    # ORCL enterprise cloud
+    PeerGraphEdge("ORCL", "MSFT", "enterprise_peer", 0.55),
+    PeerGraphEdge("ORCL", "NVDA", "ai_infra_customer", 0.60),
+    # NBIS AI infra
+    PeerGraphEdge("NBIS", "NVDA", "ai_infra_peer", 0.70),
+    PeerGraphEdge("NBIS", "SNDK", "ai_infra_peer", 0.60),
 )
 
 

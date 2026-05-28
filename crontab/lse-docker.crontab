@@ -21,11 +21,10 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 9,13,17 * * 1-5 docker exec lse-bot python scripts/trading_cycle_cron.py >> /home/ai8049520/lse/logs/cron_trading_cycle.log 2>&1
 */5 * * * 1-5 docker exec lse-bot python scripts/send_sndk_signal_cron.py >> /home/ai8049520/lse/logs/cron_sndk_signal.log 2>&1
 30 12,15 * * 1-5 docker exec lse-bot python scripts/premarket_cron.py >> /home/ai8049520/lse/logs/premarket_cron.log 2>&1
-# Earnings materials: sync registry after KB earnings ingest, then fetch/parse new rows.
-18 */2 * * * flock -n /tmp/lse_earnings_materials_sync.lock docker exec lse-bot python scripts/sync_earnings_material_registry.py --since 2026-01-01 --limit 500 >> /home/ai8049520/lse/logs/earnings_materials_sync.log 2>&1
-20 */2 * * * flock -n /tmp/lse_earnings_materials_ingest.lock docker exec lse-bot python scripts/ingest_earnings_materials.py --status registered,failed,downloaded --limit 30 >> /home/ai8049520/lse/logs/earnings_materials_ingest.log 2>&1
-# LLM extraction (priority tickers only; dry-run token plan can be run manually with --dry-run).
-25 */6 * * * flock -n /tmp/lse_earnings_materials_extract.lock docker exec lse-bot python scripts/extract_earnings_material_facts.py --symbols META,NVDA,ASML,ARM,SNDK --since 2026-01-01 --limit 5 >> /home/ai8049520/lse/logs/earnings_materials_extract.log 2>&1
+# Earnings materials: sync registry (universe + SEC auto) → ingest → LLM extract.
+18 */2 * * * flock -n /tmp/lse_earnings_materials_sync.lock docker exec lse-bot python scripts/sync_earnings_material_registry.py --since 2026-01-01 --limit 500 --discover-links --no-auto-fool >> /home/ai8049520/lse/logs/earnings_materials_sync.log 2>&1
+20 */2 * * * flock -n /tmp/lse_earnings_materials_ingest.lock docker exec lse-bot python scripts/ingest_earnings_materials.py --status registered,failed,downloaded --limit 40 >> /home/ai8049520/lse/logs/earnings_materials_ingest.log 2>&1
+25 */6 * * * flock -n /tmp/lse_earnings_materials_extract.lock docker exec lse-bot python scripts/extract_earnings_material_facts.py --since 2026-01-01 --limit 8 >> /home/ai8049520/lse/logs/earnings_materials_extract.log 2>&1
 10 */2 * * * flock -n /tmp/lse_news_newsapi.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode newsapi >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 0 */2 * * * flock -n /tmp/lse_news_investing.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode investing >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 10 * * * * docker exec lse-bot python scripts/sync_vector_kb_cron.py >> /home/ai8049520/lse/logs/sync_vector_kb.log 2>&1

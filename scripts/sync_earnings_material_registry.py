@@ -31,6 +31,8 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
+from services.earnings_intelligence_universe import get_earnings_intelligence_universe  # noqa: E402
+from services.earnings_material_auto_sources import auto_materials_for_event  # noqa: E402
 from services.earnings_material_catalog import (  # noqa: E402
     CatalogMaterial,
     catalog_for_event,
@@ -273,6 +275,8 @@ def build_sync_rows(
     include_priority_catalog: bool,
     discover_links: bool,
     ensure_kb_catalog: bool,
+    auto_sec: bool,
+    auto_fool: bool,
     dry_run: bool,
 ) -> list[SyncRow]:
     rows: list[SyncRow] = []
@@ -298,8 +302,20 @@ def build_sync_rows(
         ev_date = ev.get("event_date")
         if not isinstance(ev_date, date):
             continue
-        for cm in catalog_for_event(sym, ev_date):
+        catalog_rows = catalog_for_event(sym, ev_date)
+        for cm in catalog_rows:
             add(_catalog_row(cm, kb_id=kb_id, sync_source="kb+catalog"))
+        if auto_sec or auto_fool:
+            known_urls = {cm.source_url for cm in catalog_rows}
+            for cm in auto_materials_for_event(
+                sym,
+                ev_date,
+                include_sec=auto_sec,
+                include_fool=auto_fool,
+            ):
+                if cm.source_url in known_urls:
+                    continue
+                add(_catalog_row(cm, kb_id=kb_id, sync_source="auto_sources"))
 
     if include_priority_catalog:
         for cm in priority_catalog():
@@ -381,7 +397,18 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--since", default="2026-01-01")
     ap.add_argument("--until", default="")
-    ap.add_argument("--symbols", default="", help="Comma-separated; default all from KB/catalog")
+    ap.add_argument("--symbols", default="", help="Comma-separated; default = earnings intelligence universe")
+    ap.add_argument(
+        "--universe",
+        action="store_true",
+        default=True,
+        help="Restrict to GAME_5M + portfolio + correlation equities (default on)",
+    )
+    ap.add_argument("--no-universe", action="store_false", dest="universe")
+    ap.add_argument("--auto-sec", action="store_true", default=True, help="Attach SEC 8-K near KB event date")
+    ap.add_argument("--no-auto-sec", action="store_false", dest="auto_sec")
+    ap.add_argument("--auto-fool", action="store_true", default=True, help="Probe Motley Fool transcript URLs")
+    ap.add_argument("--no-auto-fool", action="store_false", dest="auto_fool")
     ap.add_argument("--limit", type=int, default=500)
     ap.add_argument("--priority-catalog", action="store_true", default=True)
     ap.add_argument("--no-priority-catalog", action="store_false", dest="priority_catalog")
@@ -390,9 +417,12 @@ def main() -> int:
     ap.add_argument("--no-ensure-kb-catalog", action="store_false", dest="ensure_kb_catalog")
     args = ap.parse_args()
 
-    symbols = None
+    symbols: set[str] | None = None
     if args.symbols.strip():
         symbols = {s.strip().upper() for s in args.symbols.split(",") if s.strip()}
+    elif args.universe:
+        symbols = set(get_earnings_intelligence_universe())
+        logger.info("Universe symbols: %s", len(symbols))
 
     engine = get_engine()
     if args.ensure_table:
@@ -407,6 +437,8 @@ def main() -> int:
         include_priority_catalog=args.priority_catalog,
         discover_links=args.discover_links,
         ensure_kb_catalog=args.ensure_kb_catalog,
+        auto_sec=args.auto_sec,
+        auto_fool=args.auto_fool,
         dry_run=args.dry_run,
     )
     n = upsert_rows(engine, rows, dry_run=args.dry_run)

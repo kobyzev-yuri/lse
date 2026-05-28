@@ -17,8 +17,25 @@ class CatalogMaterial:
     meta: dict | None = None
 
 
-# Priority tickers for earnings intelligence MVP.
-PRIORITY_SYMBOLS: tuple[str, ...] = ("META", "NVDA", "ASML", "ARM", "SNDK", "MSFT", "MU", "AMD")
+# Priority tickers for manual catalog URLs (auto SEC/Fool covers the rest of universe).
+PRIORITY_SYMBOLS: tuple[str, ...] = (
+    "META",
+    "NVDA",
+    "ASML",
+    "ARM",
+    "SNDK",
+    "MSFT",
+    "MU",
+    "AMD",
+    "AMZN",
+    "LITE",
+    "CIEN",
+    "TER",
+    "INTC",
+    "ORCL",
+    "ALAB",
+    "NBIS",
+)
 
 CATALOG_MATERIALS: tuple[CatalogMaterial, ...] = (
     # META Q1 2026 — IR pages are JS shells; use PR/transcript mirrors.
