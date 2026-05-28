@@ -982,6 +982,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("game5m", self._handle_game5m))
         self.application.add_handler(CommandHandler("gameparams", self._handle_gameparams))
         self.application.add_handler(CommandHandler("dashboard", self._handle_dashboard))
+        self.application.add_handler(CommandHandler("earnings", self._handle_earnings))
         self.application.add_handler(CommandHandler("analyser", self._handle_analyser))
         self.application.add_handler(CommandHandler("premarket", self._handle_premarket))
         self.application.add_handler(CommandHandler("corr", self._handle_corr))
@@ -1124,6 +1125,7 @@ class LSETelegramBot:
 /game5m [ticker|platform] — мониторинг 5m по тикеру; mode platform/sync/all: отправить массив GAME_5M в Kerim /game и вернуть 3 HTML (notOpened/opened/closed)
 /gameparams — все существенные параметры игр (5m и портфель): тикеры, тейк/стоп, cooldown
 /dashboard [5m|daily|all] — дашборд по тикерам: решения, 5m, новости (проактивный мониторинг)
+/earnings [ticker] [date] — earnings intelligence: список universe или Event Brief (peer spillover)
 /analyser [days] [GAME_5M|ALL|Portfolio] [llm] — анализ эффективности закрытых сделок (единый код с web /analyzer)
 /ask <вопрос> — вопрос (работает в группах!)
 /tickers — список инструментов
@@ -2759,6 +2761,76 @@ class LSETelegramBot:
                 await update.message.reply_text(p)
         else:
             await update.message.reply_text(text)
+
+    async def _handle_earnings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Earnings Event Brief: /earnings [ticker] [YYYY-MM-DD] или список universe."""
+        if not self._check_access(update.effective_user.id):
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        from datetime import date as date_cls
+        from report_generator import get_engine
+        from services.earnings_intelligence_api import (
+            format_brief_telegram,
+            get_event_brief_payload,
+            list_intelligence_events,
+        )
+
+        args = context.args or []
+        loop = asyncio.get_event_loop()
+        if not args:
+            await update.message.reply_text("📥 Earnings intelligence (universe)…")
+            try:
+                data = await loop.run_in_executor(
+                    None,
+                    lambda: list_intelligence_events(get_engine(), since=date_cls(2026, 1, 1), limit=40),
+                )
+            except Exception as e:
+                logger.exception("earnings list")
+                await update.message.reply_text(f"❌ {e}")
+                return
+            s = data.get("summary") or {}
+            lines = [
+                "📊 *Earnings Intelligence*",
+                f"Universe: {s.get('universe_size', 0)} · materials: {s.get('symbols_with_materials', 0)} · LLM: {s.get('with_llm', 0)}",
+                "",
+                "Recent (materials / LLM):",
+            ]
+            for ev in (data.get("events") or [])[:15]:
+                flag = "✅" if ev.get("has_llm") else ("📄" if ev.get("has_materials") else "⏳")
+                lines.append(
+                    f"{flag} `{ev.get('symbol')}` {ev.get('event_date')} "
+                    f"{ev.get('management_tone') or '—'} · {ev.get('top_scenario') or '—'}"
+                )
+            miss = s.get("symbols_without_materials") or []
+            if miss:
+                lines.append("")
+                lines.append(f"Без материалов: {', '.join(miss[:8])}{'…' if len(miss) > 8 else ''}")
+            lines.append("")
+            lines.append("Web: /earnings · Brief: `/earnings META 2026-04-29`")
+            text = "\n".join(lines)
+            await update.message.reply_text(text[:4000], parse_mode="Markdown")
+            return
+
+        sym = _normalize_ticker(args[0].upper())
+        ev_d = None
+        if len(args) >= 2:
+            try:
+                ev_d = date_cls.fromisoformat(args[1].strip()[:10])
+            except ValueError:
+                await update.message.reply_text("❌ Дата: YYYY-MM-DD\nПример: `/earnings NVDA 2026-05-20`", parse_mode="Markdown")
+                return
+        await update.message.reply_text(f"📥 Event Brief {sym}…")
+        try:
+            brief = await loop.run_in_executor(
+                None,
+                lambda: get_event_brief_payload(get_engine(), symbol=sym, event_date=ev_d),
+            )
+            text = format_brief_telegram(brief)
+        except Exception as e:
+            logger.exception("earnings brief")
+            await update.message.reply_text(f"❌ {e}")
+            return
+        await update.message.reply_text(text[:4000], parse_mode="Markdown")
 
     async def _handle_analyser(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Анализатор эффективности закрытых сделок (единый код с web /analyzer)."""

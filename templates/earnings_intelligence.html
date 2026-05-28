@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Earnings Intelligence</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --content-pad-x: clamp(0.5rem, 2.5vw, 1.5rem);
+            --content-max: min(100% - 1rem, 1200px);
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eaeaea;
+            padding: 0 var(--content-pad-x) 2rem;
+            max-width: var(--content-max);
+            margin: 0 auto;
+            min-height: 100vh;
+        }
+        .header {
+            background: #16213e;
+            padding: 0.75rem 0.8rem;
+            border-bottom: 1px solid #0f3460;
+            margin-bottom: 0.75rem;
+        }
+        .header h1 { font-size: 1.1rem; font-weight: 600; }
+        .sub { font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem; }
+        .toolbar {
+            display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        .btn {
+            background: #0f3460; color: #e2e8f0; border: none;
+            padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer;
+        }
+        .btn.active { background: #1d4ed8; }
+        .summary {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 0.5rem; margin-bottom: 1rem;
+        }
+        .stat {
+            background: #16213e; border-radius: 8px; padding: 0.6rem 0.75rem;
+            border: 1px solid #334155;
+        }
+        .stat .n { font-size: 1.25rem; font-weight: 700; color: #7dd3fc; }
+        .stat .l { font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; }
+        table {
+            width: 100%; border-collapse: collapse; font-size: 0.82rem;
+            background: #16213e; border-radius: 8px; overflow: hidden;
+        }
+        th, td { padding: 0.45rem 0.5rem; text-align: left; border-bottom: 1px solid #334155; }
+        th { color: #94a3b8; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
+        tr:hover td { background: #1e293b; }
+        .badge {
+            display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px;
+            font-size: 0.7rem; font-weight: 600;
+        }
+        .badge.ok { background: #14532d; color: #86efac; }
+        .badge.partial { background: #422006; color: #fde047; }
+        .badge.no { background: #334155; color: #94a3b8; }
+        .badge.game { background: #1e3a5f; color: #93c5fd; }
+        .badge.pf { background: #312e81; color: #c4b5fd; }
+        .link-btn { color: #7dd3fc; cursor: pointer; text-decoration: underline; background: none; border: none; font: inherit; }
+        .detail-panel {
+            display: none; margin-top: 1rem; padding: 1rem;
+            background: #0f172a; border: 1px solid #334155; border-radius: 10px;
+        }
+        .detail-panel.open { display: block; }
+        .detail-panel h2 { font-size: 1rem; margin-bottom: 0.5rem; }
+        .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+        @media (max-width: 700px) { .detail-grid { grid-template-columns: 1fr; } }
+        .block { background: #16213e; border-radius: 8px; padding: 0.65rem; font-size: 0.82rem; }
+        .block h3 { font-size: 0.72rem; color: #64748b; text-transform: uppercase; margin-bottom: 0.35rem; }
+        .peer-table { width: 100%; font-size: 0.78rem; margin-top: 0.35rem; }
+        .peer-table td, .peer-table th { padding: 0.25rem 0.35rem; border-bottom: 1px solid #334155; }
+        .pos { color: #86efac; }
+        .neg { color: #fca5a5; }
+        .muted { color: #94a3b8; }
+        .quote { font-style: italic; color: #cbd5e1; margin-top: 0.35rem; line-height: 1.4; }
+        .err { color: #fca5a5; padding: 0.5rem; }
+        #missingList { font-size: 0.78rem; color: #94a3b8; margin-top: 0.5rem; }
+    </style>
+</head>
+<body>
+{% include "partials/site_nav_standalone.html" %}
+<div class="header">
+    <h1>Earnings Intelligence</h1>
+    <div class="sub">Universe: GAME_5M + portfolio + spillover context · Event Brief + peer graph</div>
+</div>
+
+<div class="toolbar">
+    <button class="btn active" data-filter="all">Все</button>
+    <button class="btn" data-filter="GAME_5M">GAME_5M</button>
+    <button class="btn" data-filter="portfolio">Portfolio</button>
+    <button class="btn" id="refreshBtn">Обновить</button>
+    <span class="muted" id="updatedAt">—</span>
+</div>
+
+<div class="summary" id="summaryBox"></div>
+<div id="missingList"></div>
+
+<table>
+    <thead>
+        <tr>
+            <th>Ticker</th>
+            <th>Date</th>
+            <th>Group</th>
+            <th>Materials</th>
+            <th>LLM</th>
+            <th>Tone</th>
+            <th>Scenario</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody id="eventsBody"></tbody>
+</table>
+
+<div class="detail-panel" id="detailPanel">
+    <h2 id="detailTitle">Event Brief</h2>
+    <div id="detailContent" class="muted">Выберите событие…</div>
+</div>
+
+<script>
+const fmtPct = (logRet) => {
+    if (logRet == null || !Number.isFinite(Number(logRet))) return '—';
+    const simple = (Math.exp(Number(logRet)) - 1) * 100;
+    const cls = simple >= 0 ? 'pos' : 'neg';
+    return `<span class="${cls}">${simple >= 0 ? '+' : ''}${simple.toFixed(2)}%</span>`;
+};
+
+const badgeMat = (ev) => {
+    if (ev.materials_useful > 0) return `<span class="badge ok">${ev.materials_useful}</span>`;
+    return '<span class="badge no">0</span>';
+};
+const badgeLlm = (ev) => ev.has_llm
+    ? '<span class="badge ok">yes</span>'
+    : '<span class="badge no">—</span>';
+
+let allEvents = [];
+let currentFilter = 'all';
+
+function groupBadges(group) {
+    const parts = (group || '').split('+');
+    return parts.map(p => {
+        if (p === 'GAME_5M') return '<span class="badge game">5m</span>';
+        if (p === 'portfolio') return '<span class="badge pf">pf</span>';
+        return `<span class="badge no">${p}</span>`;
+    }).join(' ');
+}
+
+function renderTable(events) {
+    const tbody = document.getElementById('eventsBody');
+    tbody.innerHTML = events.map(ev => `
+        <tr>
+            <td><strong>${ev.symbol}</strong></td>
+            <td>${ev.event_date || '—'}</td>
+            <td>${groupBadges(ev.group)}</td>
+            <td>${badgeMat(ev)}</td>
+            <td>${badgeLlm(ev)}</td>
+            <td>${ev.management_tone || '—'}</td>
+            <td><code>${ev.top_scenario || '—'}</code></td>
+            <td><button class="link-btn" data-sym="${ev.symbol}" data-date="${ev.event_date || ''}">Brief</button></td>
+        </tr>
+    `).join('');
+    tbody.querySelectorAll('.link-btn').forEach(btn => {
+        btn.addEventListener('click', () => loadBrief(btn.dataset.sym, btn.dataset.date));
+    });
+}
+
+function renderSummary(summary) {
+    document.getElementById('summaryBox').innerHTML = `
+        <div class="stat"><div class="n">${summary.universe_size}</div><div class="l">Universe</div></div>
+        <div class="stat"><div class="n">${summary.symbols_with_materials}</div><div class="l">With materials</div></div>
+        <div class="stat"><div class="n">${summary.with_llm}</div><div class="l">LLM extracted</div></div>
+        <div class="stat"><div class="n">${summary.events_listed}</div><div class="l">Events listed</div></div>
+    `;
+    const miss = summary.symbols_without_materials || [];
+    document.getElementById('missingList').textContent = miss.length
+        ? `Без материалов: ${miss.join(', ')} (future KB / ждут 8-K)`
+        : '';
+}
+
+async function loadList() {
+    const res = await fetch('/api/earnings/intelligence?since=2026-01-01');
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    allEvents = data.events || [];
+    renderSummary(data.summary || {});
+    applyFilter();
+    document.getElementById('updatedAt').textContent = new Date().toLocaleTimeString();
+}
+
+function applyFilter() {
+    let ev = allEvents;
+    if (currentFilter === 'GAME_5M') {
+        ev = ev.filter(e => (e.group || '').includes('GAME_5M'));
+    } else if (currentFilter === 'portfolio') {
+        ev = ev.filter(e => (e.group || '').includes('portfolio'));
+    }
+    renderTable(ev);
+}
+
+async function loadBrief(symbol, eventDate) {
+    const panel = document.getElementById('detailPanel');
+    const content = document.getElementById('detailContent');
+    panel.classList.add('open');
+    document.getElementById('detailTitle').textContent = `${symbol} · ${eventDate || 'latest'}`;
+    content.innerHTML = '<span class="muted">Загрузка…</span>';
+    const url = `/api/earnings/brief/${encodeURIComponent(symbol)}?event_date=${encodeURIComponent(eventDate)}`;
+    try {
+        const res = await fetch(url);
+        const b = await res.json();
+        if (!res.ok) throw new Error(b.detail || JSON.stringify(b));
+        const scen = b.scenario || {};
+        const src = b.source_outcomes || {};
+        const peers = (b.peer_spillover_outcomes || []).filter(p => p.status === 'ok');
+        const quotes = b.evidence_quotes || [];
+        content.innerHTML = `
+            <p><strong>${b.headline || '—'}</strong></p>
+            <p class="muted">Tone: ${b.management_tone || '—'} · Scenario: <code>${scen.id || '—'}</code> ${scen.confidence ? '('+scen.confidence+')' : ''}</p>
+            ${scen.rationale ? `<p class="quote">${scen.rationale}</p>` : ''}
+            <div class="detail-grid">
+                <div class="block">
+                    <h3>Source outcomes</h3>
+                    <div>1d ${fmtPct(src.forward_log_ret_1d)} · 5d ${fmtPct(src.forward_log_ret_5d)} · 20d ${fmtPct(src.forward_log_ret_20d)}</div>
+                    <div class="muted">Label: ${src.final_label_auto || '—'}</div>
+                </div>
+                <div class="block">
+                    <h3>Guidance / capex</h3>
+                    <div>${JSON.stringify(b.guidance || b.capex_notes || '—').slice(0, 400)}</div>
+                </div>
+            </div>
+            <div class="block" style="margin-top:0.75rem">
+                <h3>Peer spillover (${peers.length})</h3>
+                <table class="peer-table"><thead><tr><th>Ticker</th><th>1d</th><th>5d</th></tr></thead>
+                <tbody>${peers.map(p => `<tr><td>${p.ticker}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(p.forward_log_ret_5d)}</td></tr>`).join('')}</tbody></table>
+            </div>
+            ${quotes.length ? `<div class="block" style="margin-top:0.75rem"><h3>Evidence</h3><p class="quote">${typeof quotes[0]==='object' ? (quotes[0].quote||quotes[0].text||'') : quotes[0]}</p></div>` : ''}
+        `;
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (e) {
+        content.innerHTML = `<div class="err">${e.message}</div>`;
+    }
+}
+
+document.querySelectorAll('[data-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        applyFilter();
+    });
+});
+document.getElementById('refreshBtn').addEventListener('click', () => loadList().catch(e => alert(e.message)));
+
+loadList().catch(e => {
+    document.getElementById('eventsBody').innerHTML = `<tr><td colspan="8" class="err">${e.message}</td></tr>`;
+});
+</script>
+</body>
+</html>

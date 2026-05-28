@@ -846,6 +846,69 @@ async def api_ml_event_reaction(ticker: str):
         raise HTTPException(status_code=500, detail=f"event-reaction inference: {e!s}")
 
 
+@app.get("/api/earnings/intelligence", response_class=JSONResponse)
+async def api_earnings_intelligence(since: str = "2026-01-01", limit: int = 80):
+    """Список KB earnings по universe с флагами materials / LLM / brief."""
+    from datetime import date as date_cls
+    from services.earnings_intelligence_api import list_intelligence_events
+
+    since_d = None
+    if since.strip():
+        try:
+            since_d = date_cls.fromisoformat(since.strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+
+    def _run():
+        return list_intelligence_events(get_engine(), since=since_d, limit=min(max(1, limit), 200))
+
+    try:
+        return _to_jsonable(await asyncio.to_thread(_run))
+    except Exception as e:
+        logger.exception("api_earnings_intelligence failed")
+        raise HTTPException(status_code=500, detail=f"earnings intelligence: {e!s}")
+
+
+@app.get("/api/earnings/brief/{symbol}", response_class=JSONResponse)
+async def api_earnings_brief(symbol: str, event_date: str = ""):
+    """Event Brief JSON для symbol (+ optional event_date=YYYY-MM-DD)."""
+    from datetime import date as date_cls
+    from services.earnings_intelligence_api import get_event_brief_payload
+
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol required")
+    ev_d = None
+    if event_date.strip():
+        try:
+            ev_d = date_cls.fromisoformat(event_date.strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="event_date must be YYYY-MM-DD")
+
+    def _run():
+        return get_event_brief_payload(get_engine(), symbol=sym, event_date=ev_d)
+
+    try:
+        payload = await asyncio.to_thread(_run)
+        if payload.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail=payload.get("reason", "not found"))
+        return _to_jsonable(payload)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("api_earnings_brief failed for %s", sym)
+        raise HTTPException(status_code=500, detail=f"earnings brief: {e!s}")
+
+
+@app.get("/earnings", response_class=HTMLResponse)
+async def earnings_intelligence_page(request: Request):
+    """Earnings intelligence: universe coverage + Event Brief viewer."""
+    return HTMLResponse(
+        render_template("earnings_intelligence.html", {"request": request}),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
 def _parse_csv_str(s: str) -> List[str]:
     s = (s or "").strip()
     if not s:
