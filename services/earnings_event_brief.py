@@ -83,7 +83,14 @@ def load_event_brief_inputs(
             q,
             {"symbol": sym, "event_date": event_date, "dataset_version": dataset_version},
         ).mappings().first()
-    return dict(row) if row else None
+    if not row:
+        return None
+    item = dict(row)
+    for key in ("revenue_actual", "revenue_estimate", "eps_actual", "eps_estimate"):
+        val = item.get(key)
+        if val is not None:
+            item[key] = float(val)
+    return item
 
 
 def load_peer_edges(engine: Engine, *, source_ticker: str) -> list[dict[str, Any]]:
@@ -97,7 +104,14 @@ def load_peer_edges(engine: Engine, *, source_ticker: str) -> list[dict[str, Any
     )
     with engine.connect() as conn:
         rows = conn.execute(q, {"source": source_ticker.strip().upper()}).mappings().all()
-    return [dict(r) for r in rows]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        item = dict(r)
+        w = item.get("weight")
+        if w is not None:
+            item["weight"] = float(w)
+        out.append(item)
+    return out
 
 
 def build_event_brief(
