@@ -782,12 +782,15 @@ def _compute_ml_data_quality_bundle(strategy: str = "GAME_5M") -> Dict[str, Any]
     g5 = q_dir / "last_game5m_train_metrics.json"
     pf = q_dir / "last_portfolio_train_metrics.json"
     er = q_dir / "last_event_reaction_train_metrics.json"
+    ei_scenario = q_dir / "last_event_reaction_scenario_train_metrics.json"
     if g5.is_file():
         tpaths["game5m_entry_last"] = g5
     if pf.is_file():
         tpaths["portfolio_last"] = pf
     if er.is_file():
         tpaths["event_reaction_last"] = er
+    if ei_scenario.is_file():
+        tpaths["event_reaction_scenario_last"] = ei_scenario
     tickers: Optional[List[str]] = None
     try:
         tf = get_tickers_fast()

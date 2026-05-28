@@ -183,7 +183,13 @@ def main() -> int:
 
     if args.dry_run:
         logger.info("dry-run: would train classifier on %s rows, valid=%s", n_train, n_valid)
-        print(json.dumps({"status": "dry_run", **metrics}, ensure_ascii=False, indent=2))
+        blob = {"status": "dry_run", "script": "train_event_reaction_scenario_classifier", **metrics}
+        if args.json_metrics_out.strip():
+            Path(args.json_metrics_out.strip()).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.json_metrics_out.strip()).write_text(
+                json.dumps(blob, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        print(json.dumps(blob, ensure_ascii=False, indent=2))
         return 0
 
     from catboost import CatBoostClassifier, Pool

@@ -258,6 +258,41 @@ def _table_exists(conn, table_name: str) -> bool:
     return r is not None
 
 
+def _collect_earnings_intelligence_readiness_bundle(engine, project_root: Path) -> Dict[str, Any]:
+    """Snapshot + gates for earnings ML grid (analyzer / readiness cron)."""
+    from services.earnings_intelligence_readiness import (
+        build_earnings_intelligence_gates,
+        collect_earnings_intelligence_readiness,
+        default_readiness_metrics_path,
+        default_scenario_train_metrics_path,
+    )
+
+    out: Dict[str, Any] = {"error": None, "file": None, "snapshot": None, "gates": None}
+    try:
+        file_path = default_readiness_metrics_path(project_root)
+        if file_path.is_file():
+            data = _json_load(file_path)
+            if data:
+                out["file"] = {"path": str(file_path), "data": data}
+                out["snapshot"] = data.get("snapshot")
+                out["gates"] = data.get("gates")
+                return out
+        snap = collect_earnings_intelligence_readiness(engine)
+        scen = _json_load(default_scenario_train_metrics_path(project_root))
+        reg_path = (
+            Path("/app/logs/ml/ml_data_quality/last_event_reaction_train_metrics.json")
+            if Path("/app/logs").exists()
+            else project_root / "local" / "logs" / "ml_data_quality" / "last_event_reaction_train_metrics.json"
+        )
+        reg = _json_load(reg_path)
+        out["snapshot"] = snap
+        out["gates"] = build_earnings_intelligence_gates(snap, scenario_metrics=scen, regression_metrics=reg)
+    except Exception as e:
+        out["error"] = str(e)
+        logger.warning("earnings intelligence readiness bundle: %s", e)
+    return out
+
+
 def collect_event_analytics_stats(engine) -> Dict[str, Any]:
     """
     Таблицы миграции migrate_ml_event_analytics + статистика event_reaction_dataset.
@@ -416,6 +451,7 @@ def build_ml_data_quality_report(
         "game5m_daily_ml_report_jsonl": collect_game5m_daily_ml_tail(project_root),
         "ml_train_readiness_jsonl": collect_ml_train_readiness_tail(project_root),
         "event_analytics": collect_event_analytics_stats(engine),
+        "earnings_intelligence_readiness": _collect_earnings_intelligence_readiness_bundle(engine, project_root),
         "external_train_metrics": {},
     }
     if train_metrics_paths:
@@ -462,6 +498,14 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
         "portfolio": latest.get("portfolio"),
         "game5m": latest.get("game5m"),
         "event_reaction": latest.get("event_reaction"),
+        "earnings_intelligence": latest.get("earnings_intelligence"),
+    }
+    ei = bundle.get("earnings_intelligence_readiness") if isinstance(bundle.get("earnings_intelligence_readiness"), dict) else {}
+    bundle["earnings_grid_readiness"] = {
+        "overall_grid_ready": (ei.get("gates") or {}).get("overall_grid_ready"),
+        "gates": ei.get("gates"),
+        "snapshot": ei.get("snapshot"),
+        "file_path": (ei.get("file") or {}).get("path"),
     }
     ext = bundle.get("external_train_metrics") if isinstance(bundle.get("external_train_metrics"), dict) else {}
     if su == "PORTFOLIO":

@@ -390,6 +390,25 @@ function fmtGateEventReaction(erBlock) {
     return line + '<br><code>RMSE=' + esc(g.rmse_valid) + ', n_train=' + esc(g.n_train) + '</code>';
 }
 
+function fmtGateEarningsIntelligence(eiBlock) {
+    if (eiBlock === undefined || eiBlock === null) {
+        return '<span class="muted" style="font-size:0.82rem;">нет поля <code>earnings_intelligence</code></span>';
+    }
+    const g = (eiBlock.gate != null && typeof eiBlock.gate === 'object') ? eiBlock.gate : {};
+    if (g.ready === null || g.ready === undefined) {
+        const rs = (g.reasons || []).map(String);
+        if (rs.indexOf('skipped') >= 0) {
+            return '<span class="muted">пропущено</span><br><code style="font-size:0.78rem;">ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=1</code>';
+        }
+        return '<span class="muted">нет readiness</span>';
+    }
+    const ok = g.ready;
+    const r = (g.reasons || []).filter(Boolean).slice(0, 3).join(', ');
+    const line = (ok ? '<span style="color:#86efac;">✓</span> ' : '<span style="color:#fca5a5;">✗</span> ') +
+        (r ? '<span class="muted">' + esc(r) + '</span>' : '');
+    return line + '<br><code style="font-size:0.78rem;">grid</code>';
+}
+
 function renderMlDataQuality(data, strategy) {
     const dbox = 'margin:0.45rem 0;border:1px solid rgba(148,163,184,0.22);border-radius:8px;padding:0.4rem 0.65rem;background:rgba(15,23,42,0.35);';
     const sumy = 'cursor:pointer;font-weight:600;color:#e2e8f0;user-select:none;';
@@ -474,6 +493,7 @@ function renderMlDataQuality(data, strategy) {
         html += '<th style="padding:6px 8px;">Portfolio CatBoost</th>';
         if (!isPortfolio) {
             html += '<th style="padding:6px 8px;">Event reaction</th>';
+            html += '<th style="padding:6px 8px;">Earnings grid</th>';
         }
         html += '</tr></thead><tbody>';
         recs.forEach(function (row) {
@@ -490,6 +510,7 @@ function renderMlDataQuality(data, strategy) {
             html += '<td style="padding:8px;">' + fmtGatePortfolio(pf) + '</td>';
             if (!isPortfolio) {
                 html += '<td style="padding:8px;">' + fmtGateEventReaction(row.event_reaction) + '</td>';
+                html += '<td style="padding:8px;">' + fmtGateEarningsIntelligence(row.earnings_intelligence) + '</td>';
             }
             html += '</tr>';
         });
@@ -528,13 +549,16 @@ function renderMlDataQuality(data, strategy) {
             }
             if (k.indexOf('game5m') >= 0) {
                 html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · AUC valid <code>' + esc(d.auc_valid) + '</code> · n_train <code>' + esc(d.n_train) + '</code> · n_valid <code>' + esc(d.n_valid) + '</code></p>';
-            } else if (k.indexOf('event_reaction') >= 0) {
+            } else if (k.indexOf('event_reaction') >= 0 && k.indexOf('scenario') < 0) {
                 const m = d.metrics || {};
                 html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · RMSE valid <code>' + esc(m.rmse_valid) + '</code> · n_train <code>' + esc(d.n_train) + '</code> · n_valid <code>' + esc(d.n_valid) + '</code>';
                 if (d.feature_builder_version != null) {
                     html += ' · <code>feature_builder=' + esc(d.feature_builder_version) + '</code>';
                 }
                 html += '</p>';
+            } else if (k.indexOf('scenario') >= 0) {
+                const m = d.metrics || {};
+                html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · acc valid <code>' + esc(m.valid_accuracy != null ? m.valid_accuracy : '—') + '</code> · n_train <code>' + esc(m.n_train != null ? m.n_train : d.n_train) + '</code> · classes <code>' + esc((m.classes || []).length) + '</code></p>';
             } else {
                 const m = d.metrics || {};
                 html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · RMSE valid <code>' + esc(m.rmse_valid) + '</code> · n_train <code>' + esc(d.n_train) + '</code></p>';
@@ -596,6 +620,61 @@ function renderMlDataQuality(data, strategy) {
             html += '</p>';
         }
     }
+    html += '</div></details>';
+    }
+
+    const egr = data.earnings_grid_readiness || {};
+    const eiSnap = egr.snapshot || {};
+    const eiGates = egr.gates || {};
+    const eiSrc = eiSnap.sources || {};
+    const eiLf = eiSnap.labels_and_features || {};
+    if (!isPortfolio) {
+    html += '<details open style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">Earnings intelligence grid (<code>quotes_regime_earnings_v1</code> + scenario classifier)</summary>';
+    html += '<div style="margin-top:0.45rem;font-size:0.84rem;color:#cbd5e1;">';
+    if (egr.overall_grid_ready === true) {
+        html += '<p style="margin:0 0 0.45rem 0;color:#86efac;"><strong>✓ overall_grid_ready</strong></p>';
+    } else if (egr.overall_grid_ready === false) {
+        html += '<p style="margin:0 0 0.45rem 0;color:#fca5a5;"><strong>✗ overall_grid_ready</strong></p>';
+    } else {
+        html += '<p class="muted" style="margin:0 0 0.45rem 0;">Нет файла readiness — запустите <code>run_earnings_ml_refresh.py</code>.</p>';
+    }
+    if (egr.file_path) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Файл: <code>' + esc(egr.file_path) + '</code></p>';
+    }
+    html += '<table style="font-size:0.86rem;border-collapse:collapse;margin:0.25rem 0 0.5rem 0;">';
+    [
+        ['universe_size', eiSnap.universe_size],
+        ['symbols_with_materials', eiSrc.symbols_with_materials],
+        ['materials_symbol_coverage_rate', eiSrc.materials_symbol_coverage_rate],
+        ['events_with_llm_tone', eiSrc.events_with_llm_tone],
+        ['events_llm_rate', eiSrc.events_llm_rate],
+        ['peer_graph_edge_rows', eiSrc.peer_graph_edge_rows],
+        ['llm_scenario_labels', eiLf.llm_scenario_labels],
+        ['earnings_v1_feature_rows', eiLf.earnings_v1_feature_rows],
+    ].forEach(function (pair) {
+        if (pair[1] === undefined || pair[1] === null) {
+            return;
+        }
+        html += '<tr><td style="padding:2px 8px 2px 0;color:#94a3b8;">' + esc(pair[0]) + '</td><td><code>' + esc(pair[1]) + '</code></td></tr>';
+    });
+    html += '</table>';
+    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier', 'regression'];
+    html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.85rem;"><strong>Гейты:</strong></p><ul style="margin:0 0 0.5rem 1rem;padding:0;font-size:0.84rem;">';
+    gateNames.forEach(function (gn) {
+        const g = eiGates[gn] || {};
+        const ok = g.ready;
+        html += '<li>' + esc(gn) + ': ' + (ok ? '<span style="color:#86efac;">✓</span>' : '<span style="color:#fca5a5;">✗</span>');
+        if ((g.reasons || []).length) {
+            html += ' <span class="muted">' + esc((g.reasons || []).join(', ')) + '</span>';
+        }
+        html += '</li>';
+    });
+    html += '</ul>';
+    const missing = eiSrc.symbols_without_materials || [];
+    if (missing.length) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0;">Без материалов: <code>' + esc(missing.slice(0, 12).join(', ')) + (missing.length > 12 ? '…' : '') + '</code></p>';
+    }
+    html += '<p class="muted" style="font-size:0.8rem;margin:0.45rem 0 0 0;">Cron: <code>run_earnings_ml_refresh.py</code> · пороги: <code>ML_READINESS_EARNINGS_*</code> · включить в readiness: <code>ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0</code></p>';
     html += '</div></details>';
     }
 

@@ -23,6 +23,8 @@
   ML_READINESS_GAME5M_AUC_MIN — порог AUC valid (default 0.52)
   ML_READINESS_GAME5M_MIN_TRAIN — мин. n_train (default 40)
   ML_READINESS_PORTFOLIO_RMSE_MAX — макс. RMSE valid в log-пространстве (default 0.08)
+  ML_READINESS_SKIP_EARNINGS_INTELLIGENCE — 1 — не вызывать run_earnings_ml_refresh / гейт сетки
+  ML_READINESS_EARNINGS_MIN_SCENARIO_LABELS — мин. llm_scenario labels для гейта (default 8)
 
 См. docs/ML_DATA_QUALITY_PIPELINE.md
 """
@@ -152,6 +154,24 @@ def _gate_portfolio(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {"ready": len(reasons) == 0, "reasons": reasons, "rmse_valid": rmse, "n_train": nt}
 
 
+def _gate_earnings_intelligence(
+    readiness_bundle: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not readiness_bundle:
+        return {"ready": False, "reasons": ["no_readiness_file"], "overall_grid_ready": False}
+    gates = readiness_bundle.get("gates") if isinstance(readiness_bundle.get("gates"), dict) else {}
+    overall = bool(gates.get("overall_grid_ready"))
+    reasons: list[str] = []
+    if not overall:
+        for name, g in gates.items():
+            if name == "overall_grid_ready" or not isinstance(g, dict):
+                continue
+            if not g.get("ready"):
+                for r in g.get("reasons") or []:
+                    reasons.append(f"{name}:{r}")
+    return {"ready": overall, "reasons": reasons, "overall_grid_ready": overall, "gates": gates}
+
+
 def main() -> int:
     root = project_root
     py = sys.executable
@@ -171,6 +191,7 @@ def main() -> int:
     g5_path = q_dir / "last_game5m_train_metrics.json"
     pf_path = q_dir / "last_portfolio_train_metrics.json"
     er_path = q_dir / "last_event_reaction_train_metrics.json"
+    ei_readiness_path = q_dir / "last_earnings_intelligence_readiness.json"
 
     skip_g5 = _readiness_bool("ML_READINESS_SKIP_GAME5M", False)
     skip_pf = _readiness_bool("ML_READINESS_SKIP_PORTFOLIO", False)
@@ -180,6 +201,7 @@ def main() -> int:
         "no",
         "off",
     )
+    skip_ei = _readiness_bool("ML_READINESS_SKIP_EARNINGS_INTELLIGENCE", True)
 
     g5_inv: Dict[str, Any] = {}
     if not skip_g5:
@@ -223,12 +245,25 @@ def main() -> int:
     else:
         er_inv = {"skipped": True}
 
+    ei_inv: Dict[str, Any] = {}
+    if not skip_ei:
+        cmd_ei = [py, str(root / "scripts" / "run_earnings_ml_refresh.py")]
+        if not full_train:
+            cmd_ei.append("--dry-run")
+        logger.info("Earnings intelligence ML refresh: %s", " ".join(cmd_ei))
+        p4 = subprocess.run(cmd_ei, cwd=str(root))
+        ei_inv = {"cmd": cmd_ei, "returncode": p4.returncode}
+    else:
+        ei_inv = {"skipped": True}
+
     g5_data = _load_json(g5_path)
     pf_data = _load_json(pf_path)
     er_data = _load_json(er_path)
     g5_gate = _gate_game5m(g5_data) if not skip_g5 else {"ready": None, "reasons": ["skipped"]}
     pf_gate = _gate_portfolio(pf_data) if not skip_pf else {"ready": None, "reasons": ["skipped"]}
     er_gate = _gate_event_reaction(er_data) if not skip_er else {"ready": None, "reasons": ["skipped"]}
+    ei_data = _load_json(ei_readiness_path)
+    ei_gate = _gate_earnings_intelligence(ei_data) if not skip_ei else {"ready": None, "reasons": ["skipped"]}
 
     overall = True
     if not skip_g5:
@@ -246,7 +281,14 @@ def main() -> int:
         "game5m": {"invocation": g5_inv, "metrics_path": str(g5_path), "gate": g5_gate, "metrics": g5_data},
         "portfolio": {"invocation": pf_inv, "metrics_path": str(pf_path), "gate": pf_gate, "metrics": pf_data},
         "event_reaction": {"invocation": er_inv, "metrics_path": str(er_path), "gate": er_gate, "metrics": er_data},
+        "earnings_intelligence": {
+            "invocation": ei_inv,
+            "readiness_path": str(ei_readiness_path),
+            "gate": ei_gate,
+            "readiness": ei_data,
+        },
         "overall_production_ready": overall,
+        "overall_earnings_grid_ready": bool(ei_gate.get("ready")) if not skip_ei else None,
     }
     with jsonl.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
