@@ -13,7 +13,7 @@ from services.earnings_material_token_estimator import estimate_tokens, extracti
 logger = logging.getLogger(__name__)
 
 MAX_COMBINED_MATERIAL_CHARS = int(os.environ.get("EARNINGS_EXTRACT_MAX_CHARS", "90000"))
-DEFAULT_OUTPUT_TOKENS = int(os.environ.get("EARNINGS_EXTRACT_OUTPUT_TOKENS", "2500"))
+DEFAULT_OUTPUT_TOKENS = int(os.environ.get("EARNINGS_EXTRACT_OUTPUT_TOKENS", "3500"))
 
 MATERIAL_TYPE_PRIORITY: dict[str, int] = {
     "transcript": 0,
