@@ -96,9 +96,18 @@ def list_intelligence_events(
     )
     with engine.connect() as conn:
         rows = conn.execute(q, params).mappings().all()
+        mat_q = text(
+            """
+            SELECT DISTINCT UPPER(TRIM(symbol)) AS symbol
+            FROM earnings_material
+            WHERE parse_status IN ('parsed', 'extracted')
+              AND UPPER(TRIM(symbol)) = ANY(:symbols)
+            """
+        )
+        covered_rows = conn.execute(mat_q, {"symbols": sym_set}).all()
 
+    covered_symbols = {str(r[0]).upper() for r in covered_rows}
     events: list[dict[str, Any]] = []
-    covered_symbols: set[str] = set()
     llm_count = 0
     materials_count = 0
     for r in rows:
@@ -108,7 +117,6 @@ def list_intelligence_events(
         has_llm = bool(r.get("management_tone"))
         if has_materials:
             materials_count += 1
-            covered_symbols.add(sym)
         if has_llm:
             llm_count += 1
         events.append(
