@@ -1,12 +1,12 @@
 """
 Fetch and parse earnings report / call source pages into plain text.
 
-Hybrid ingest v0: requests + BeautifulSoup HTML extraction.
-PDF is saved when downloaded but text extraction is deferred (parse_error note).
+Hybrid ingest v0: requests + BeautifulSoup HTML extraction + pypdf for PDF text.
 """
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import os
 import re
@@ -185,20 +185,41 @@ def extract_text_from_html(content: bytes, *, base_url: str) -> tuple[str, tuple
     return best_text, tuple(links)
 
 
+def extract_text_from_pdf(content: bytes) -> tuple[str, str | None]:
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return "", "pdf_extract_error:pypdf_not_installed"
+
+    try:
+        reader = PdfReader(io.BytesIO(content))
+        parts: list[str] = []
+        for page in reader.pages:
+            parts.append(page.extract_text() or "")
+        text = normalize_text("\n\n".join(parts))
+    except Exception as exc:
+        return "", f"pdf_extract_error:{exc.__class__.__name__}"
+
+    if len(text) < MIN_PARSED_TEXT_CHARS:
+        return text, f"short_text:{len(text)}"
+    return text, None
+
+
 def parse_fetched_content(fetch: FetchResult) -> ParseResult:
     digest = sha256_hex(fetch.content)
     ext = _guess_ext(fetch.content_type, fetch.final_url)
 
     if "pdf" in fetch.content_type or ext == "pdf":
+        text, parse_error = extract_text_from_pdf(fetch.content)
         return ParseResult(
-            text="",
-            method="pdf_saved_only_v0",
+            text=text,
+            method="pdf_pypdf",
             discovered_links=(),
             content_type=fetch.content_type,
             final_url=fetch.final_url,
             content_sha256=digest,
             raw_ext=ext,
-            parse_error="pdf_text_extraction_not_supported_v0",
+            parse_error=parse_error,
         )
 
     if "html" in fetch.content_type or ext == "html":

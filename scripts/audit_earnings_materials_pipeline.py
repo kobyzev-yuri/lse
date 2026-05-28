@@ -37,12 +37,19 @@ from services.earnings_material_token_estimator import (  # noqa: E402
     estimate_tokens,
     extraction_cycle_tokens,
 )
+from services.earnings_material_extractor import (  # noqa: E402
+    EXTRACTION_SYSTEM_PROMPT,
+    plan_event_extraction_tokens,
+    select_materials_for_event,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 MIN_USEFUL_TEXT_CHARS = 400
-SYSTEM_PROMPT_TOKENS = 1800
+SYSTEM_PROMPT_TOKENS = estimate_tokens(EXTRACTION_SYSTEM_PROMPT).get("tokens_exact") or estimate_tokens(
+    EXTRACTION_SYSTEM_PROMPT
+)["tokens_est_primary"]
 OUTPUT_TOKENS = 1200
 
 
@@ -78,9 +85,14 @@ def _ingest(*, limit: int, symbol: str, force: bool) -> None:
         raise RuntimeError("ingest_earnings_materials failed")
 
 
-def _load_materials(engine) -> list[dict[str, Any]]:
+def _load_materials(engine, *, symbols: set[str] | None = None) -> list[dict[str, Any]]:
+    where = ["1=1"]
+    params: dict[str, Any] = {}
+    if symbols:
+        where.append("UPPER(TRIM(symbol)) = ANY(:symbols)")
+        params["symbols"] = sorted(symbols)
     q = text(
-        """
+        f"""
         SELECT
           id, symbol, event_date, fiscal_period, material_type,
           source_name, source_url, title, parse_status, parse_error,
@@ -89,11 +101,12 @@ def _load_materials(engine) -> list[dict[str, Any]]:
           content_text,
           meta
         FROM earnings_material
+        WHERE {' AND '.join(where)}
         ORDER BY symbol, event_date DESC NULLS LAST, id ASC
         """
     )
     with engine.connect() as conn:
-        rows = conn.execute(q).mappings().all()
+        rows = conn.execute(q, params).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -196,11 +209,12 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "output_tokens_est": OUTPUT_TOKENS,
             "min_useful_text_chars": MIN_USEFUL_TEXT_CHARS,
             "material_token_basis": "tiktoken_cl100k_base if available else chars/3.7",
+            "extraction_mode": "one LLM call per (symbol, event_date) with prioritized materials",
         },
         "llm_cost_planning": {
             "materials_with_text": len(token_rows),
-            "sum_input_tokens_est": total_input,
-            "sum_total_tokens_est_per_extraction_pass": total_cycle,
+            "sum_input_tokens_est_per_material_pass": total_input,
+            "sum_total_tokens_est_per_material_pass": total_cycle,
             "avg_material_tokens_est": round(
                 sum((r["tokens"].get("tokens_exact") or r["tokens"]["tokens_est_primary"]) for r in token_rows)
                 / max(1, len(token_rows)),
@@ -211,16 +225,69 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _event_extraction_plans(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from collections import defaultdict
+    from datetime import date as date_cls
+
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        sym = str(r.get("symbol") or "").upper()
+        ev = str(r.get("event_date") or "")
+        groups[(sym, ev)].append(
+            {
+                "id": r.get("id"),
+                "material_type": r.get("material_type"),
+                "parse_status": r.get("parse_status"),
+                "content_text": r.get("content_text") or "",
+                "fiscal_period": r.get("fiscal_period"),
+            }
+        )
+
+    plans: list[dict[str, Any]] = []
+    for (sym, ev_s), materials in sorted(groups.items()):
+        if not select_materials_for_event(materials):
+            continue
+        ev_date = None
+        if ev_s:
+            try:
+                ev_date = date_cls.fromisoformat(ev_s[:10])
+            except ValueError:
+                ev_date = None
+        fiscal_period = next((m.get("fiscal_period") for m in materials if m.get("fiscal_period")), None)
+        plan = plan_event_extraction_tokens(
+            symbol=sym,
+            event_date=ev_date,
+            fiscal_period=fiscal_period,
+            materials=materials,
+            output_tokens=OUTPUT_TOKENS,
+        )
+        plans.append(plan)
+    return plans
+
+
 def _print_table(rows: list[dict[str, Any]], summary: dict[str, Any]) -> None:
     print("\n=== Earnings materials pipeline audit ===")
     print(f"rows={summary['rows_total']} useful_for_llm={summary['useful_for_llm']} coverage={summary['coverage_rate']:.1%}")
     print(f"by_status={summary['by_parse_status']}")
     plan = summary["llm_cost_planning"]
     print(
-        "LLM token planning (one extraction pass per material): "
+        "LLM token planning (legacy per-material pass): "
         f"avg_material≈{plan['avg_material_tokens_est']} tok, "
-        f"sum_total≈{plan['sum_total_tokens_est_per_extraction_pass']} tok"
+        f"sum_total≈{plan['sum_total_tokens_est_per_material_pass']} tok"
     )
+    event_plans = summary.get("event_extraction_plans") or []
+    if event_plans:
+        sum_event = sum(int(p.get("total_tokens_est") or 0) for p in event_plans)
+        print(
+            f"Event-level extraction ({len(event_plans)} events): "
+            f"system≈{SYSTEM_PROMPT_TOKENS} tok, sum_total≈{sum_event} tok"
+        )
+        for p in event_plans:
+            print(
+                f"  {p['symbol']} {p.get('event_date')}: "
+                f"included={p.get('materials_included')}/{p.get('materials_available')} "
+                f"input≈{p.get('input_tokens_est')} total≈{p.get('total_tokens_est')}"
+            )
     print("\n| symbol | date | type | status | chars | tok(est) | useful | discovered |")
     print("|---|---|---|---|---:|---:|---|---:|")
     for r in rows:
@@ -239,6 +306,7 @@ def main() -> int:
     ap.add_argument("--force-ingest", action="store_true")
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--symbol", default="")
+    ap.add_argument("--symbols", default="", help="Comma-separated tickers filter, e.g. META,NVDA")
     ap.add_argument("--probe-url", default="", help="Fetch+parse one URL without DB")
     ap.add_argument("--timeout-sec", type=int, default=60)
     ap.add_argument("--json-out", default="")
@@ -268,12 +336,21 @@ def main() -> int:
         _ingest(limit=max(1, args.limit), symbol=args.symbol.strip(), force=args.force_ingest)
         report["steps_run"].append("ingest")
 
+    sym_blob = args.symbols.strip() or args.symbol.strip()
+    symbols = {s.strip().upper() for s in sym_blob.split(",") if s.strip()} or None
+
     engine = get_engine()
-    raw_rows = _load_materials(engine)
+    raw_rows = _load_materials(engine, symbols=symbols)
     audited = [_row_audit(r) for r in raw_rows]
     summary = _summarize(audited)
+    event_plans = _event_extraction_plans(raw_rows)
+    summary["event_extraction_plans"] = event_plans
+    summary["llm_cost_planning"]["sum_total_tokens_est_event_pass"] = sum(
+        int(p.get("total_tokens_est") or 0) for p in event_plans
+    )
     report["materials"] = audited
     report["summary"] = summary
+    report["event_extraction_plans"] = event_plans
 
     if audited:
         _print_table(audited, summary)
