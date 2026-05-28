@@ -201,6 +201,26 @@ CATALOG_MATERIALS: tuple[CatalogMaterial, ...] = (
         title="SanDisk Q3 2026 earnings transcript",
         meta={"mvp_case": "SNDK demand-dominant follow-through reference case"},
     ),
+    # ALAB Q1 2026 — reported 2026-05-05
+    CatalogMaterial(
+        symbol="ALAB",
+        event_date=date(2026, 5, 5),
+        fiscal_period="Q1 2026",
+        material_type="press_release",
+        source_name="GlobeNewswire",
+        source_url="https://www.globenewswire.com/news-release/2026/05/05/3288259/0/en/Astera-Labs-Reports-First-Quarter-2026-Financial-Results.html",
+        title="Astera Labs Q1 2026 press release",
+        meta={"primary_source": True},
+    ),
+    CatalogMaterial(
+        symbol="ALAB",
+        event_date=date(2026, 5, 5),
+        fiscal_period="Q1 2026",
+        material_type="third_party_transcript",
+        source_name="The Motley Fool",
+        source_url="https://www.fool.com/earnings/call-transcripts/2026/05/05/astera-labs-alab-q1-2026-earnings-transcript/",
+        title="Astera Labs Q1 2026 earnings call transcript",
+    ),
 )
 
 
