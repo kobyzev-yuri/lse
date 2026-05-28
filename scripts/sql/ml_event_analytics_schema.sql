@@ -16,6 +16,54 @@ CREATE TABLE IF NOT EXISTS earnings_event_detail (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Реестр первичных материалов отчёта/call.
+-- Сюда кладём ссылки и статус скачивания/парсинга до LLM extraction.
+CREATE TABLE IF NOT EXISTS earnings_material (
+    id BIGSERIAL PRIMARY KEY,
+    knowledge_base_id INTEGER REFERENCES knowledge_base (id) ON DELETE SET NULL,
+    symbol VARCHAR(16) NOT NULL,
+    event_date DATE,
+    fiscal_period VARCHAR(32),
+    material_type VARCHAR(32) NOT NULL,
+    source_name VARCHAR(80),
+    source_url TEXT NOT NULL,
+    title TEXT,
+    published_at TIMESTAMPTZ,
+    local_path TEXT,
+    content_sha256 VARCHAR(64),
+    content_text TEXT,
+    parse_status VARCHAR(24) NOT NULL DEFAULT 'registered',
+    parse_error TEXT,
+    meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (material_type IN (
+        'ir_event_page',
+        'press_release',
+        'presentation',
+        'transcript',
+        'follow_up_transcript',
+        'sec_filing',
+        'third_party_transcript',
+        'other'
+    )),
+    CHECK (parse_status IN (
+        'registered',
+        'downloaded',
+        'parsed',
+        'extracted',
+        'failed',
+        'skipped'
+    ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_earnings_material_symbol_event_type_url
+    ON earnings_material (symbol, COALESCE(event_date, DATE '1900-01-01'), material_type, source_url);
+CREATE INDEX IF NOT EXISTS idx_earnings_material_symbol_date ON earnings_material (symbol, event_date);
+CREATE INDEX IF NOT EXISTS idx_earnings_material_kb ON earnings_material (knowledge_base_id);
+CREATE INDEX IF NOT EXISTS idx_earnings_material_type ON earnings_material (material_type);
+CREATE INDEX IF NOT EXISTS idx_earnings_material_parse_status ON earnings_material (parse_status);
+
 -- Рёбра графа аналогов / тематических связей
 CREATE TABLE IF NOT EXISTS peer_graph_edge (
     id BIGSERIAL PRIMARY KEY,

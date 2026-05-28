@@ -163,6 +163,24 @@ DDL: `db/knowledge_pg/sql/022_premarket_daily_features.sql`.
 | affected_tickers | JSONB | Аналоги / цепочка с весами |
 | created_at, updated_at | TIMESTAMPTZ | Служебные |
 
+### Таблица `earnings_material`
+
+Реестр исходных материалов earnings/call перед скачиванием, парсингом и LLM extraction.
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
+| id | BIGSERIAL | PK |
+| knowledge_base_id | INTEGER FK → knowledge_base | Связь с KB-событием, если уже найдено |
+| symbol, event_date, fiscal_period | VARCHAR / DATE | Привязка к тикеру и кварталу |
+| material_type | VARCHAR(32) | `ir_event_page`, `press_release`, `presentation`, `transcript`, `follow_up_transcript`, `sec_filing`, `third_party_transcript`, `other` |
+| source_name, source_url, title | TEXT / VARCHAR | Источник и ссылка на материал |
+| published_at, local_path, content_sha256 | TIMESTAMPTZ / TEXT / VARCHAR | Метаданные скачивания |
+| content_text | TEXT | Извлечённый текст, если материал уже распарсен |
+| parse_status, parse_error | VARCHAR / TEXT | `registered`, `downloaded`, `parsed`, `extracted`, `failed`, `skipped` |
+| meta | JSONB | MVP-кейс, теги источника, ручные пометки |
+
+Уникальность: `(symbol, event_date, material_type, source_url)` с sentinel-date для неизвестной даты.
+
 ### Таблица `peer_graph_edge`
 
 Рёбра графа влияния между тикерами.

@@ -4,7 +4,7 @@ overview: "Добавить поверх текущего event-reaction ML сл
 todos:
   - id: materials-schema
     content: "Спроектировать таблицу или JSON-структуру для earnings materials: press release, presentation, transcript, follow-up, source URLs."
-    status: pending
+    status: completed
   - id: extraction-schema
     content: "Зафиксировать LLM extraction JSON для call/report: guidance, capex, tone, Q&A concerns, affected tickers, scenario hints."
     status: pending
@@ -51,7 +51,7 @@ flowchart TD
 ```
 
 ## Минимальный Следующий Инкремент
-- `Earnings materials registry`: добавить место/структуру для ссылок и скачанных материалов по `knowledge_base_id` или отдельной `earnings_material` таблице.
+- `Earnings materials registry`: добавлена таблица `earnings_material` в `scripts/sql/ml_event_analytics_schema.sql` и starter seed `scripts/seed_earnings_material_registry.py` для ссылок/статусов скачивания материалов.
 - `LLM extraction schema`: фиксированный JSON: revenue/EPS surprise, guidance up/down/inline, capex, AI demand, margin pressure, inventory, management tone, Q&A concerns, affected tickers.
 - `Peer graph v0`: вручную задать связи для AI infra/chips: META/NVDA/ASML/ARM -> MU/SNDK/AMD/LITE/INTC/QCOM и веса/тип связи.
 - `Scenario labels v0`: начать с 6 классов из дизайна: `beat_selloff_pullback`, `beat_revaluation_down`, `miss_or_guide_breakdown`, `gap_up_follow_through`, `gap_up_fade`, `cross_earnings_contagion`.
@@ -69,7 +69,8 @@ flowchart TD
 
 ## Порядок Реализации
 1. **Материалы:** зафиксировать, где храним ссылки/файлы earnings: press release, presentation, transcript, follow-up transcript, SEC/IR.
-2. **Hybrid ingest:** сначала локальный downloader/parser (`requests`/HTML/PDF parsing) + наш LLM через ProxyAPI; ScrapeGraphAI использовать как fallback для сложных IR-страниц/JS при наличии отдельного `SGAI_API_KEY`.
+   Реализация: `earnings_material` хранит `source_url`, `material_type`, `parse_status`, `local_path`, `content_sha256`, `content_text` и связь с `knowledge_base_id`, если событие уже есть в KB.
+2. **Hybrid ingest:** сначала локальный downloader/parser (`scripts/ingest_earnings_materials.py`, HTML v0) + наш LLM через ProxyAPI; ScrapeGraphAI использовать как fallback для сложных IR-страниц/JS при наличии отдельного `SGAI_API_KEY`.
 3. **Extractor:** сделать фиксированный JSON, который LLM заполняет из материалов: факты отчёта, guidance, capex, tone, Q&A concerns, affected tickers.
 4. **Peer graph:** руками задать первые связи для AI infra/chips, чтобы кейс META -> MU/SNDK/AMD/LITE был машинно читаемым.
 5. **Outcomes:** для source ticker и affected tickers считать log-returns 1d/2d/5d/20d, drawdown/rebound и сохранять как исходы события.

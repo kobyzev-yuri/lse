@@ -54,6 +54,7 @@
 | Хранилище | Что копить | Зачем |
 |-----------|------------|--------|
 | **`knowledge_base`** | EARNINGS-события, текст, `embedding`, при пилоте — структурированный `outcome_json` / ссылка на транскрипт | Ingest уже кормит `build_event_reaction_dataset`; дальше — RAG и поля для LLM. |
+| **`earnings_material`** | Реестр первичных материалов отчёта/call: IR event page, press release, presentation, transcript, SEC/third-party URL, статус скачивания/парсинга | Вход для downloader/parser и LLM extractor; не смешиваем список источников с готовыми признаками модели. |
 | **`event_reaction_dataset`** | Уже: строки событий, `features_before` (`quotes_mvp_1`), `outcomes_after` (1d/5d/20d log-ret), `final_label` | Единый материализованный датасет для CatBoost и контроля качества. |
 | **`earnings_event_detail`** | EPS actual/estimate, surprise, timing; дальше revenue/guidance | EPS/timing уже загружены, но не улучшают expanded baseline; следующий практичный слой — revenue/guidance и peer reactions. |
 | **`peer_graph_edge`** | `(source, target, relation_type, weight)` из конфига или корреляций **с явной постановкой под события** | Кросс-эффекты и «лидер → кластер». |
@@ -68,7 +69,9 @@
 |---------|------------|
 | Дизайн-концепция | [EARNINGS_EVENT_AGENT_DESIGN.md](EARNINGS_EVENT_AGENT_DESIGN.md) |
 | **IR и квартальные материалы по тикерам** (хабы, примеры кварталов; заготовка под ingest) | [PUBLIC_IR_EARNINGS_SOURCES.md](PUBLIC_IR_EARNINGS_SOURCES.md) |
-| DDL `event_reaction_dataset`, `earnings_event_detail`, … | `scripts/sql/ml_event_analytics_schema.sql`, `scripts/migrate_ml_event_analytics.py` |
+| DDL `event_reaction_dataset`, `earnings_event_detail`, `earnings_material`, … | `scripts/sql/ml_event_analytics_schema.sql`, `scripts/migrate_ml_event_analytics.py` |
+| Starter registry отчётных материалов | `scripts/seed_earnings_material_registry.py` |
+| Fetch/parse earnings materials (HTML v0) | `scripts/ingest_earnings_materials.py`, `services/earnings_material_parser.py` |
 | Скелет из KB, фильтр конфига, «эра» по `kb.ts` | `scripts/build_event_reaction_dataset.py` (`--kb-since` / `EVENT_REACTION_KB_SINCE`) |
 | Авторазметка ценами (MVP) | `services/event_reaction_labeling.py`, `scripts/backfill_event_reaction_labeling.py` |
 | Котировки под датасет | `scripts/seed_quotes_for_event_reaction_dataset.py` (`--all-symbols`, `--min-quote-span-days`) |
@@ -138,11 +141,12 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 
 ## Следующий слой (после стабилизации 1–5)
 
-1. **Revenue/guidance ingestion**: минимум revenue estimate/actual/surprise + guidance raised/lowered/inline.  
-2. **Peer reactions**: `peer_graph_edge`, sector ETF context (SMH/SOXX/QQQ), признаки реакции peers на соседние отчёты.  
-3. **Trading metric gate**: top-k/PnL после transaction costs, sign accuracy по кварталам, live shadow сравнение предсказаний с созревшим `forward_log_ret_5d`.  
-4. **Scenario labels**: перейти от UP/DOWN/FLAT к `gap_up_follow_through`, `gap_up_fade`, `cross_earnings_contagion`.  
-5. Подписка/поставщик или IR/SEC extractor как замена ручного сбора транскриптов.
+1. **Materials registry + ingest**: `earnings_material` хранит URL/статус материалов; `scripts/seed_earnings_material_registry.py` создаёт стартовые work items для META/ASML/ARM/SNDK/NVDA без скачивания.
+2. **Revenue/guidance ingestion**: минимум revenue estimate/actual/surprise + guidance raised/lowered/inline.
+3. **Peer reactions**: `peer_graph_edge`, sector ETF context (SMH/SOXX/QQQ), признаки реакции peers на соседние отчёты.
+4. **Trading metric gate**: top-k/PnL после transaction costs, sign accuracy по кварталам, live shadow сравнение предсказаний с созревшим `forward_log_ret_5d`.
+5. **Scenario labels**: перейти от UP/DOWN/FLAT к `gap_up_follow_through`, `gap_up_fade`, `cross_earnings_contagion`.
+6. Подписка/поставщик или IR/SEC extractor как замена ручного сбора транскриптов.
 
 ---
 
@@ -155,3 +159,4 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 | 0.3 | 2026-05-12 | Cron в `crontab/lse-docker.crontab` и `setup_cron_docker.sh`: build + backfill + readiness с train event_reaction (`-e ML_READINESS_SKIP_EVENT_REACTION=0`) |
 | 0.4 | 2026-05-12 | Зафиксировано выполнение фаз 1–5 (11–12.05); сводка по целям §2 дизайна; таблица накопления фактов для БД/моделей |
 | 0.5 | 2026-05-27 | Расширенный dataset `v0_expanded_baseline`, advisory product rollout, nightly event-reaction model refresh, roadmap revenue/guidance + peer features |
+| 0.6 | 2026-05-28 | Добавлен `earnings_material` registry и starter seed для материалов earnings intelligence |

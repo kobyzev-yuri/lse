@@ -51,7 +51,7 @@ def main() -> int:
             if not stmt:
                 continue
             conn.execute(text(stmt + ";"))
-    print("✅ ml_event_analytics_schema: OK (earnings_event_detail, peer_graph_edge, market_regime_daily, event_reaction_dataset)")
+    print("✅ ml_event_analytics_schema: OK (earnings_event_detail, earnings_material, peer_graph_edge, market_regime_daily, event_reaction_dataset)")
     return 0
 
 

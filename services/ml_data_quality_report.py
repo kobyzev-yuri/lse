@@ -265,6 +265,7 @@ def collect_event_analytics_stats(engine) -> Dict[str, Any]:
     out: Dict[str, Any] = {"error": None, "tables": {}, "event_reaction_dataset": None}
     expected = (
         "earnings_event_detail",
+        "earnings_material",
         "peer_graph_edge",
         "market_regime_daily",
         "event_reaction_dataset",
@@ -323,6 +324,22 @@ def collect_event_analytics_stats(engine) -> Dict[str, Any]:
             if present.get("earnings_event_detail"):
                 ed = conn.execute(text("SELECT COUNT(*) FROM earnings_event_detail")).scalar()
                 out["earnings_event_detail_rows"] = int(ed or 0)
+            if present.get("earnings_material"):
+                em = conn.execute(text("SELECT COUNT(*) FROM earnings_material")).scalar()
+                em_status = conn.execute(
+                    text(
+                        """
+                        SELECT parse_status, COUNT(*) AS c
+                        FROM earnings_material
+                        GROUP BY parse_status
+                        ORDER BY c DESC
+                        """
+                    )
+                ).mappings().all()
+                out["earnings_material_rows"] = int(em or 0)
+                out["earnings_material_by_parse_status"] = {
+                    str(x["parse_status"]): int(x["c"]) for x in em_status
+                }
             if present.get("peer_graph_edge"):
                 pe = conn.execute(text("SELECT COUNT(*) FROM peer_graph_edge")).scalar()
                 out["peer_graph_edge_rows"] = int(pe or 0)

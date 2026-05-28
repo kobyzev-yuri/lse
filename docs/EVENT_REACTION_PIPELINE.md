@@ -57,6 +57,12 @@
 - **Реализация:** отдельный импорт из **поставщика** (yfinance, FMP, и т.д.) по `(ticker, fiscal_period)` или по `kb.id`; не смешивать с «скелетом» `event_reaction_dataset`.
 - **Регулярность:** после отчётов (раз в квартал на тикер) + ручной догон для истории.
 
+### `earnings_material`
+
+- **Назначение:** реестр первичных материалов отчёта/call: IR event page, press release, presentation, transcript, follow-up, SEC/сторонний transcript URL.
+- **Реализация:** `scripts/seed_earnings_material_registry.py` создаёт стартовые registry-строки для MVP-кейсов META/ASML/ARM/SNDK/NVDA; `scripts/ingest_earnings_materials.py` + `services/earnings_material_parser.py` скачивают HTML/PDF, сохраняют raw в `logs/earnings_materials/`, извлекают `content_text` (HTML v0), пишут `discovered_links` в `meta`.
+- **Регулярность:** после появления/обновления отчётных материалов; registry можно наполнять вручную, из IR-хабов или из будущего extractor/fetcher.
+
 ---
 
 ## Авторазметка (MVP): `features_before`, `outcomes_after`, `final_label`
