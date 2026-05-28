@@ -2,6 +2,9 @@
 """
 Prod evaluation: materials → labels → ML refresh → shadow → readiness summary.
 
+Default ticker scope: full earnings intelligence universe (GAME_5M + portfolio + spillover),
+not a hardcoded subset. Use --symbols only for targeted debug runs.
+
 Examples:
   python scripts/run_earnings_intelligence_prod_eval.py --dry-run
   python scripts/run_earnings_intelligence_prod_eval.py --symbols DELL --skip-materials
@@ -31,21 +34,28 @@ def _run(cmd: list[str]) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Earnings intelligence prod eval (5 steps)")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--symbols", default="", help="Comma tickers for materials/extract (default universe subset)")
+    ap.add_argument(
+        "--symbols",
+        default="",
+        help="Override universe with comma-separated tickers (default: earnings intelligence universe)",
+    )
     ap.add_argument("--since", default="2026-01-01")
+    ap.add_argument("--ingest-limit", type=int, default=40)
+    ap.add_argument("--extract-limit", type=int, default=50)
     ap.add_argument("--skip-materials", action="store_true")
     ap.add_argument("--skip-ml-refresh", action="store_true")
     ap.add_argument("--skip-shadow", action="store_true")
     args = ap.parse_args()
 
     from config_loader import get_config_value
+    from services.earnings_intelligence_universe import universe_symbols_csv
 
     py = sys.executable
     mode = (get_config_value("ML_READINESS_TRAIN_MODE") or "dry_run").strip().lower()
     full = mode in ("full", "train", "write", "prod") and not args.dry_run
-    sym_arg = args.symbols.strip()
-    if not sym_arg:
-        sym_arg = "DELL,ANET,AVGO,GOOGL,PLTR"
+    sym_arg = args.symbols.strip() or universe_symbols_csv()
+    sym_set = {s.strip().upper() for s in sym_arg.split(",") if s.strip()}
+    logger.info("Prod eval universe: %s tickers (%s)", len(sym_set), sorted(sym_set))
 
     steps: list[tuple[str, int]] = []
 
@@ -67,7 +77,13 @@ def main() -> int:
         if rc != 0 and not args.dry_run:
             return rc
 
-        ingest_cmd = [py, "scripts/ingest_earnings_materials.py", "--ensure-table", "--limit", "30"]
+        ingest_cmd = [
+            py,
+            "scripts/ingest_earnings_materials.py",
+            "--ensure-table",
+            "--limit",
+            str(max(1, args.ingest_limit)),
+        ]
         if args.dry_run:
             ingest_cmd.append("--dry-run")
         rc = _run(ingest_cmd)
@@ -79,7 +95,7 @@ def main() -> int:
             "--symbols",
             sym_arg,
             "--limit",
-            "20",
+            str(max(1, args.extract_limit)),
         ]
         if args.dry_run:
             extract_cmd.append("--dry-run")
@@ -109,6 +125,8 @@ def main() -> int:
     summary = {
         "eval_version": "earnings_intelligence_prod_eval_v1",
         "dry_run": args.dry_run or not full,
+        "universe_size": len(sym_set),
+        "universe": sorted(sym_set),
         "steps": {name: rc for name, rc in steps},
         "overall_grid_ready": (readiness.get("gates") or {}).get("overall_grid_ready"),
         "trading_shadow_ready": (readiness.get("gates") or {}).get("trading_shadow", {}).get("ready"),
