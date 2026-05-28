@@ -1004,6 +1004,31 @@ async def earnings_intelligence_page(request: Request):
     )
 
 
+@app.get("/earnings/guide", response_class=HTMLResponse)
+async def earnings_ui_guide_page():
+    """Human-readable guide for /earnings tabs (from docs/EARNINGS_UI_GUIDE.md)."""
+    import html as html_mod
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent / "docs/earnings-event-agent-lse/EARNINGS_UI_GUIDE.md"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="EARNINGS_UI_GUIDE.md not found")
+    body = html_mod.escape(path.read_text(encoding="utf-8"))
+    page = f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Earnings UI Guide</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#1a1a2e; color:#eaeaea;
+  max-width:900px; margin:0 auto; padding:1rem 1.25rem 2rem; line-height:1.55; font-size:0.9rem; }}
+a {{ color:#7dd3fc; }} pre {{ white-space:pre-wrap; word-break:break-word; font-family:inherit; margin:0; }}
+.top {{ margin-bottom:1rem; font-size:0.85rem; color:#94a3b8; }}
+</style></head><body>
+<p class="top"><a href="/earnings">← Earnings Intelligence</a></p>
+<pre>{body}</pre>
+</body></html>"""
+    return HTMLResponse(page, headers={"Cache-Control": "no-store, max-age=0"})
+
+
 def _parse_csv_str(s: str) -> List[str]:
     s = (s or "").strip()
     if not s:

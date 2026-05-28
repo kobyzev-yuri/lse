@@ -67,7 +67,8 @@
 </div>
 
 <details class="help-panel" open>
-    <summary>Как читать этот экран (регрессия · граф · классификатор)</summary>
+    <summary>Как читать этот экран — кратко · <a href="/earnings/guide" style="color:#93c5fd">полное руководство (RU)</a></summary>
+    <p class="muted" style="margin:0.35rem 0">Вкладки: <strong>События</strong> (календарь + Brief) · <strong>Peer graph</strong> (кто чей пир) · <strong>Spillover</strong> (факт 5d по пирам после отчёта) · <strong>Shadow</strong> (качество classifier, advisory) · <strong>Fusion</strong> (регрессия + scenario) · <strong>ML слои</strong> (статус пайплайна).</p>
     <ul>
         <li><strong>Регрессия (сейчас в prod):</strong> CatBoost предсказывает <code>forward_log_ret_5d</code> — log-доходность на 5 торговых дней после отчёта. API: <code>/api/ml/event-reaction/{ticker}</code>. Признаки из daily quotes + market regime; тексты earnings пока не в product feature_builder.</li>
         <li><strong>UP/DOWN/FLAT:</strong> не классификатор, а правило по порогу на фактической 5d log-return (backfill из quotes).</li>
