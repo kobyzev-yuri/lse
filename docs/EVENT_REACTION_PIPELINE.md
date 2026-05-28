@@ -60,7 +60,7 @@
 ### `earnings_material`
 
 - **Назначение:** реестр первичных материалов отчёта/call: IR event page, press release, presentation, transcript, follow-up, SEC/сторонний transcript URL.
-- **Реализация:** `scripts/seed_earnings_material_registry.py` создаёт стартовые registry-строки для MVP-кейсов META/ASML/ARM/SNDK/NVDA; `scripts/ingest_earnings_materials.py` + `services/earnings_material_parser.py` скачивают HTML/PDF, сохраняют raw в `logs/earnings_materials/`, извлекают `content_text` (HTML v0), пишут `discovered_links` в `meta`.
+- **Реализация:** `scripts/sync_earnings_material_registry.py` (KB EARNINGS + catalog URLs), `scripts/seed_earnings_material_registry.py` (legacy seed), `scripts/ingest_earnings_materials.py` + `services/earnings_material_parser.py`.
 - **Регулярность:** после появления/обновления отчётных материалов; registry можно наполнять вручную, из IR-хабов или из будущего extractor/fetcher.
 
 ---

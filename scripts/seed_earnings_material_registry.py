@@ -2,8 +2,8 @@
 """
 Seed the earnings_material registry with starter IR/report source URLs.
 
-This does not download or parse remote pages. It only creates idempotent registry
-rows so the next downloader/parser step has explicit work items.
+Deprecated for ongoing ops: prefer scripts/sync_earnings_material_registry.py.
+This script now loads the shared priority catalog.
 
 Examples:
   python scripts/seed_earnings_material_registry.py --ensure-table --dry-run
@@ -15,8 +15,6 @@ import argparse
 import json
 import logging
 import sys
-from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 from typing import Iterable
 
@@ -26,75 +24,12 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
+from services.earnings_material_catalog import CatalogMaterial, priority_catalog  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True)
-class MaterialSeed:
-    symbol: str
-    material_type: str
-    source_url: str
-    source_name: str
-    title: str
-    event_date: date | None = None
-    fiscal_period: str | None = None
-    meta: dict | None = None
-
-
-STARTER_MATERIALS: tuple[MaterialSeed, ...] = (
-    MaterialSeed(
-        symbol="META",
-        event_date=date(2026, 4, 29),
-        fiscal_period="Q1 2026",
-        material_type="ir_event_page",
-        source_name="Meta Investor Relations",
-        source_url="https://investor.atmeta.com/investor-events/event-details/2026/Q1-2026-Earnings-Call/default.aspx",
-        title="Meta Q1 2026 earnings call event page",
-        meta={"mvp_case": "META capex -> AI infrastructure peers"},
-    ),
-    MaterialSeed(
-        symbol="ASML",
-        event_date=date(2026, 4, 15),
-        fiscal_period="Q1 2026",
-        material_type="ir_event_page",
-        source_name="ASML Investor Relations",
-        source_url="https://www.asml.com/en/investors/financial-results/q1-2026",
-        title="ASML Q1 2026 financial results",
-        meta={"mvp_case": "ASML pullback/rebound reference case"},
-    ),
-    MaterialSeed(
-        symbol="ARM",
-        event_date=date(2026, 5, 6),
-        fiscal_period=None,
-        material_type="ir_event_page",
-        source_name="Arm Investor Relations",
-        source_url="https://investors.arm.com/financials/quarterly-annual-results",
-        title="Arm quarterly and annual results page",
-        meta={"mvp_case": "ARM cross-earnings into AI/chip peers"},
-    ),
-    MaterialSeed(
-        symbol="SNDK",
-        event_date=date(2026, 4, 30),
-        fiscal_period="Q3 2026",
-        material_type="third_party_transcript",
-        source_name="The Motley Fool",
-        source_url="https://www.fool.com/earnings/call-transcripts/2026/04/30/sandisk-sndk-q3-2026-earnings-transcript/",
-        title="SanDisk Q3 2026 earnings transcript",
-        meta={"mvp_case": "SNDK demand-dominant follow-through reference case"},
-    ),
-    MaterialSeed(
-        symbol="NVDA",
-        event_date=date(2026, 5, 20),
-        fiscal_period=None,
-        material_type="ir_event_page",
-        source_name="NVIDIA Investor Relations",
-        source_url="https://investor.nvidia.com/",
-        title="NVIDIA investor relations financial results hub",
-        meta={"mvp_case": "NVDA earnings -> AI basket"},
-    ),
-)
+STARTER_MATERIALS: tuple[CatalogMaterial, ...] = priority_catalog()
 
 
 def _ensure_table(engine) -> None:
@@ -113,7 +48,7 @@ def _ensure_table(engine) -> None:
                     conn.execute(text(stmt))
 
 
-def _find_kb_id(conn, seed: MaterialSeed) -> int | None:
+def _find_kb_id(conn, seed: CatalogMaterial) -> int | None:
     if seed.event_date is None:
         return None
     row = conn.execute(
@@ -133,7 +68,7 @@ def _find_kb_id(conn, seed: MaterialSeed) -> int | None:
     return int(row[0]) if row else None
 
 
-def _upsert_materials(engine, seeds: Iterable[MaterialSeed], *, dry_run: bool) -> int:
+def _upsert_materials(engine, seeds: Iterable[CatalogMaterial], *, dry_run: bool) -> int:
     if dry_run:
         n = 0
         for seed in seeds:

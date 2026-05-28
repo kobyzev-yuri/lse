@@ -39,7 +39,11 @@
 | Что | URL |
 |-----|-----|
 | Хаб событий / отчётности | https://investor.atmeta.com/ |
-| Пример: Q1 2026 earnings (29.04.2026) — press release, presentation, earnings call transcript, follow-up call transcript | https://investor.atmeta.com/investor-events/event-details/2026/Q1-2026-Earnings-Call/default.aspx |
+| Q1 2026 earnings event page (JS shell; для парсера v0 мало текста) | https://investor.atmeta.com/investor-events/event-details/2026/Q1-2026-Earnings-Call/default.aspx |
+| Q1 2026 press release (рабочий HTML mirror) | https://www.prnewswire.com/news-releases/meta-reports-first-quarter-2026-results-302757852.html |
+| Q1 2026 earnings call transcript (Fool) | https://www.fool.com/earnings/call-transcripts/2026/04/29/meta-meta-q1-2026-earnings-call-transcript/ |
+| Q1 2026 earnings call transcript (PDF, официальный CDN) | https://s21.q4cdn.com/399680738/files/doc_financials/2026/q1/META-Q1-2026-Earnings-Call-Transcript.pdf |
+| Q1 2026 earnings presentation (PDF) | https://s21.q4cdn.com/399680738/files/doc_financials/2026/q1/META-Q1-2026-Earnings-Call-Presentation.pdf |
 
 ## ASML — пример страницы квартала
 
@@ -66,8 +70,9 @@
 | Что | URL |
 |-----|-----|
 | Investor relations | https://investor.nvidia.com/ |
-
-Конкретную страницу квартала подставляйте из раздела financial results / events на момент выхода (например, обсуждавшаяся дата **20.05.2026**).
+| Q1 FY2027 press release (2026-05-20; рабочий HTML) | https://nvidianews.nvidia.com/news/nvidia-announces-financial-results-for-first-quarter-fiscal-2027 |
+| Q1 FY2027 press release (IR page, JS shell) | https://investor.nvidia.com/news/press-release-details/2026/NVIDIA-Announces-Financial-Results-for-First-Quarter-Fiscal-2027/default.aspx |
+| Q1 FY2027 earnings call transcript (Fool) | https://www.fool.com/earnings/call-transcripts/2026/05/20/nvidia-nvda-q1-2027-earnings-transcript/ |
 
 ## Связь с документацией проекта
 
