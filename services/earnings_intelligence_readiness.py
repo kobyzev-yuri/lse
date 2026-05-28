@@ -288,17 +288,15 @@ def build_earnings_intelligence_gates(
     g_labels = gate_scenario_labels(snapshot)
     g_scenario = gate_scenario_classifier(scenario_metrics)
     g_regression = gate_earnings_regression(regression_metrics)
-    overall = all(
-        g.get("ready")
-        for g in (g_sources, g_features, g_labels, g_scenario, g_regression)
-    )
+    grid_core = all(g.get("ready") for g in (g_sources, g_features, g_labels, g_scenario))
     return {
         "sources": g_sources,
         "features": g_features,
         "scenario_labels": g_labels,
         "scenario_classifier": g_scenario,
         "regression": g_regression,
-        "overall_grid_ready": overall,
+        "overall_grid_ready": grid_core,
+        "overall_with_regression": grid_core and bool(g_regression.get("ready")),
     }
 
 

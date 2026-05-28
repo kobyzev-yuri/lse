@@ -632,11 +632,15 @@ function renderMlDataQuality(data, strategy) {
     html += '<details open style="' + dbox + ';margin-top:0.45rem;"><summary style="' + sumy + '">Earnings intelligence grid (<code>quotes_regime_earnings_v1</code> + scenario classifier)</summary>';
     html += '<div style="margin-top:0.45rem;font-size:0.84rem;color:#cbd5e1;">';
     if (egr.overall_grid_ready === true) {
-        html += '<p style="margin:0 0 0.45rem 0;color:#86efac;"><strong>✓ overall_grid_ready</strong></p>';
+        html += '<p style="margin:0 0 0.45rem 0;color:#86efac;"><strong>✓ overall_grid_ready</strong> (sources + features + labels + classifier)</p>';
     } else if (egr.overall_grid_ready === false) {
         html += '<p style="margin:0 0 0.45rem 0;color:#fca5a5;"><strong>✗ overall_grid_ready</strong></p>';
     } else {
         html += '<p class="muted" style="margin:0 0 0.45rem 0;">Нет файла readiness — запустите <code>run_earnings_ml_refresh.py</code>.</p>';
+    }
+    const owr = eiGates.overall_with_regression;
+    if (owr === false && egr.overall_grid_ready === true) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Advisory regression gate отдельно: <code>overall_with_regression=false</code> (RMSE event_reaction).</p>';
     }
     if (egr.file_path) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Файл: <code>' + esc(egr.file_path) + '</code></p>';

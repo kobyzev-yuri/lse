@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -426,15 +427,50 @@ def get_ml_layers_status(
             ).scalar()
             or 0
         )
+        earnings_v1_rows = int(
+            conn.execute(
+                text(
+                    """
+                    SELECT count(*) FROM event_reaction_dataset
+                    WHERE dataset_version = :dv
+                      AND features_before IS NOT NULL
+                      AND features_before <> '{}'::jsonb
+                      AND (features_before->>'feature_builder_version') = 'quotes_regime_earnings_v1'
+                    """
+                ),
+                {"dv": dataset_version},
+            ).scalar()
+            or 0
+        )
 
     total = int(row.get("total") or 0)
     named_scenario = int(row.get("named_scenario") or 0)
+    llm_scenario_applied = int(row.get("llm_scenario") or 0)
+
+    scenario_metrics: dict[str, Any] = {}
+    scenario_model_path = Path("/app/logs/ml/models/event_reaction_scenario_catboost.cbm")
+    metrics_path = Path("/app/logs/ml/ml_data_quality/last_event_reaction_scenario_train_metrics.json")
+    if not scenario_model_path.is_file():
+        root = Path(__file__).resolve().parents[1]
+        scenario_model_path = root / "local/models/event_reaction_scenario_catboost.cbm"
+        metrics_path = root / "local/logs/ml_data_quality/last_event_reaction_scenario_train_metrics.json"
+    if metrics_path.is_file():
+        try:
+            import json
+
+            scenario_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            scenario_metrics = {}
+    clf_mets = scenario_metrics.get("metrics") if isinstance(scenario_metrics.get("metrics"), dict) else {}
+    clf_status = str(scenario_metrics.get("status") or "")
+    clf_ready = clf_status == "ok" and scenario_model_path.is_file() and llm_scenario_applied >= 8
 
     layers = [
         {
             "id": "quotes_regime_earnings_v1",
             "title": "Feature builder quotes_regime_earnings_v1",
-            "status": "active",
+            "status": "active" if earnings_v1_rows >= 8 else "pilot",
+            "count": earnings_v1_rows,
             "target": "features_before JSON",
             "script": "scripts/run_earnings_ml_refresh.py",
             "description": (
@@ -466,8 +502,9 @@ def get_ml_layers_status(
         {
             "id": "llm_scenario_hints",
             "title": "LLM scenario hints",
-            "status": "pilot" if llm_extracted else "pending",
+            "status": "active" if llm_scenario_applied >= 8 else ("pilot" if llm_extracted else "pending"),
             "count": llm_extracted,
+            "applied_labels": llm_scenario_applied,
             "script": "scripts/apply_earnings_scenario_labels.py",
             "description": (
                 "Из earnings materials: capex_positive_for_infra_peers, gap_up_follow_through и др. "
@@ -477,12 +514,23 @@ def get_ml_layers_status(
         {
             "id": "scenario_classifier",
             "title": "CatBoost классификатор сценариев",
-            "status": "pilot" if named_scenario >= 8 else "planned",
+            "status": "active" if clf_ready else ("pilot" if named_scenario >= 8 else "planned"),
             "script": "scripts/train_event_reaction_scenario_classifier.py",
+            "model_path": str(scenario_model_path) if scenario_model_path.is_file() else None,
+            "metrics": {
+                "valid_accuracy": clf_mets.get("valid_accuracy"),
+                "n_train": clf_mets.get("n_train"),
+                "n_valid": clf_mets.get("n_valid"),
+                "classes": clf_mets.get("classes"),
+            },
             "blocked_by": (
                 []
-                if named_scenario >= 8
-                else [f"≥8 LLM scenario labels (сейчас ~{named_scenario})", "backfill quotes_regime_earnings_v1"]
+                if clf_ready
+                else (
+                    []
+                    if named_scenario >= 8
+                    else [f"≥8 LLM scenario labels (сейчас ~{named_scenario})", "backfill quotes_regime_earnings_v1"]
+                )
             ),
             "description": (
                 "Multi-class по final_label (llm_scenario_v0): gap_up_follow_through, "
@@ -495,7 +543,9 @@ def get_ml_layers_status(
         "dataset_version": dataset_version,
         "dataset_rows": total,
         "rows_with_outcomes": int(row.get("with_outcomes") or 0),
-        "llm_scenario_labels_applied": int(row.get("llm_scenario") or 0),
+        "llm_scenario_labels_applied": llm_scenario_applied,
+        "earnings_v1_feature_rows": earnings_v1_rows,
+        "scenario_classifier_ready": clf_ready,
         "named_scenario_labels": named_scenario,
         "layers": layers,
         "daily_corr_note": (
