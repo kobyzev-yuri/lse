@@ -13,7 +13,7 @@ from services.earnings_material_token_estimator import estimate_tokens, extracti
 logger = logging.getLogger(__name__)
 
 MAX_COMBINED_MATERIAL_CHARS = int(os.environ.get("EARNINGS_EXTRACT_MAX_CHARS", "90000"))
-DEFAULT_OUTPUT_TOKENS = 1200
+DEFAULT_OUTPUT_TOKENS = int(os.environ.get("EARNINGS_EXTRACT_OUTPUT_TOKENS", "2500"))
 
 MATERIAL_TYPE_PRIORITY: dict[str, int] = {
     "transcript": 0,
@@ -111,7 +111,15 @@ def select_materials_for_event(rows: list[dict[str, Any]]) -> list[dict[str, Any
         if str(r.get("parse_status") or "") == "parsed"
         and len(str(r.get("content_text") or "")) >= 400
     ]
-    return sorted(useful, key=_material_sort_key)
+    sorted_rows = sorted(useful, key=_material_sort_key)
+    has_official_transcript = any(r.get("material_type") == "transcript" for r in sorted_rows)
+    filtered: list[dict[str, Any]] = []
+    for row in sorted_rows:
+        mtype = str(row.get("material_type") or "")
+        if has_official_transcript and mtype == "third_party_transcript":
+            continue
+        filtered.append(row)
+    return filtered
 
 
 def build_event_prompt(
@@ -133,6 +141,12 @@ def build_event_prompt(
     for row in materials:
         body = str(row.get("content_text") or "").strip()
         if not body:
+            continue
+        mtype = str(row.get("material_type") or "material")
+        # Keep one long transcript; add compact factual sources (press/SEC/CFO).
+        if mtype in ("transcript", "third_party_transcript") and any(
+            str(r.get("material_type") or "") in ("transcript", "third_party_transcript") for r in included
+        ):
             continue
         header = (
             f"=== {row.get('material_type', 'material').upper()} "

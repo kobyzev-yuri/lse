@@ -38,6 +38,7 @@ from services.earnings_material_token_estimator import (  # noqa: E402
     extraction_cycle_tokens,
 )
 from services.earnings_material_extractor import (  # noqa: E402
+    DEFAULT_OUTPUT_TOKENS,
     EXTRACTION_SYSTEM_PROMPT,
     plan_event_extraction_tokens,
     select_materials_for_event,
@@ -50,7 +51,7 @@ MIN_USEFUL_TEXT_CHARS = 400
 SYSTEM_PROMPT_TOKENS = estimate_tokens(EXTRACTION_SYSTEM_PROMPT).get("tokens_exact") or estimate_tokens(
     EXTRACTION_SYSTEM_PROMPT
 )["tokens_est_primary"]
-OUTPUT_TOKENS = 1200
+OUTPUT_TOKENS = DEFAULT_OUTPUT_TOKENS
 
 
 def _ensure_table() -> None:
