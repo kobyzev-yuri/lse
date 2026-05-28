@@ -124,7 +124,9 @@ def predict_scenario_from_features(
         base["scenario_classifier_note"] = note
         return base
 
-    rec = features_record_from_json(sym, features_before, feature_builder_version=feature_builder_version)
+    rec = features_record_from_json(
+        features_before, symbol=sym, feature_builder_version=feature_builder_version
+    )
     if not rec:
         base["scenario_classifier_status"] = "no_features"
         base["scenario_classifier_note"] = f"missing or wrong feature_builder ({feature_builder_version})"

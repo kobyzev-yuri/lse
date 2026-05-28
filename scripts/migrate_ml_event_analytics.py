@@ -51,6 +51,14 @@ def main() -> int:
             if not stmt:
                 continue
             conn.execute(text(stmt + ";"))
+        for alter in (
+            "ALTER TABLE earnings_event_detail ALTER COLUMN fiscal_period TYPE VARCHAR(128)",
+            "ALTER TABLE earnings_material ALTER COLUMN fiscal_period TYPE VARCHAR(128)",
+        ):
+            try:
+                conn.execute(text(alter))
+            except Exception as e:
+                print(f"⚠️  {alter}: {e}")
     print("✅ ml_event_analytics_schema: OK (earnings_event_detail, earnings_material, peer_graph_edge, market_regime_daily, event_reaction_dataset)")
     return 0
 

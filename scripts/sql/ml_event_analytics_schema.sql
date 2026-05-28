@@ -5,7 +5,7 @@
 -- Детализация earnings поверх строки knowledge_base (1:1 по kb id)
 CREATE TABLE IF NOT EXISTS earnings_event_detail (
     knowledge_base_id INTEGER PRIMARY KEY REFERENCES knowledge_base (id) ON DELETE CASCADE,
-    fiscal_period VARCHAR(32),
+    fiscal_period VARCHAR(128),
     eps_actual NUMERIC(20, 6),
     eps_estimate NUMERIC(20, 6),
     revenue_actual NUMERIC(22, 4),
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS earnings_material (
     knowledge_base_id INTEGER REFERENCES knowledge_base (id) ON DELETE SET NULL,
     symbol VARCHAR(16) NOT NULL,
     event_date DATE,
-    fiscal_period VARCHAR(32),
+    fiscal_period VARCHAR(128),
     material_type VARCHAR(32) NOT NULL,
     source_name VARCHAR(80),
     source_url TEXT NOT NULL,
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS event_reaction_dataset (
     symbol VARCHAR(16) NOT NULL,
     event_time_et TIMESTAMPTZ NOT NULL,
     event_type VARCHAR(48) NOT NULL DEFAULT 'EARNINGS',
-    fiscal_period VARCHAR(32),
+    fiscal_period VARCHAR(128),
     features_before JSONB NOT NULL DEFAULT '{}'::jsonb,
     outcomes_after JSONB NOT NULL DEFAULT '{}'::jsonb,
     final_label VARCHAR(72),

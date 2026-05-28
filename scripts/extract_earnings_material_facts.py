@@ -131,7 +131,7 @@ def _upsert_event_detail(engine, *, kb_id: int, payload: dict[str, Any], extract
             q,
             {
                 "kb_id": kb_id,
-                "fiscal_period": payload.get("fiscal_period"),
+                "fiscal_period": (str(payload.get("fiscal_period") or "")[:128] or None),
                 "revenue_actual": payload.get("revenue_actual"),
                 "revenue_estimate": payload.get("revenue_estimate"),
                 "eps_actual": payload.get("eps_actual"),
