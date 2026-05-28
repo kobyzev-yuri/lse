@@ -54,6 +54,7 @@ isProject: false
 | Event Brief + peer spillover | ✅ | `services/earnings_event_brief.py` — forward log-ret peers 1d/5d |
 | Web UI | ✅ | `/earnings`, API `/api/earnings/*`, tabs Peer graph / Spillover / Shadow / Fusion / ML |
 | **UI guide (RU)** | ✅ | [EARNINGS_UI_GUIDE.md](./EARNINGS_UI_GUIDE.md), web: `/earnings/guide` |
+| **План сессии** | 📋 | [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md) |
 | Telegram | ✅ | `/earnings` в `services/telegram_bot.py` |
 | Pipeline orchestrator | ✅ | `scripts/run_earnings_intelligence_pipeline.py` |
 

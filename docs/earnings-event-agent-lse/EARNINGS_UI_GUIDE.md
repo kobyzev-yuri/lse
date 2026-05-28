@@ -289,3 +289,5 @@ Prod snapshot: ~498 rows dataset, ~267 earnings_v1 features, ~15 LLM scenario la
 | 23:52 пн–пт | full earnings grid train |
 
 Полный eval: `ML_READINESS_TRAIN_MODE=full python3 scripts/run_earnings_intelligence_prod_eval.py`
+
+**План ближайшей сессии:** [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md)
