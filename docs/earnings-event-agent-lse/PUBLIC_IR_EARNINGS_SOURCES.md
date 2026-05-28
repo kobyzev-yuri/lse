@@ -43,7 +43,7 @@
 | Q1 2026 press release (рабочий HTML mirror) | https://www.prnewswire.com/news-releases/meta-reports-first-quarter-2026-results-302757852.html |
 | Q1 2026 earnings call transcript (Fool) | https://www.fool.com/earnings/call-transcripts/2026/04/29/meta-meta-q1-2026-earnings-call-transcript/ |
 | Q1 2026 earnings call transcript (PDF, официальный CDN) | https://s21.q4cdn.com/399680738/files/doc_financials/2026/q1/META-Q1-2026-Earnings-Call-Transcript.pdf |
-| Q1 2026 earnings presentation (PDF) | https://s21.q4cdn.com/399680738/files/doc_financials/2026/q1/META-Q1-2026-Earnings-Call-Presentation.pdf |
+| Q1 2026 earnings presentation (PDF) | https://s21.q4cdn.com/399680738/files/doc_financials/2026/q1/Earnings-Presentation-Q1-2026.pdf |
 
 ## ASML — пример страницы квартала
 
@@ -73,6 +73,10 @@
 | Q1 FY2027 press release (2026-05-20; рабочий HTML) | https://nvidianews.nvidia.com/news/nvidia-announces-financial-results-for-first-quarter-fiscal-2027 |
 | Q1 FY2027 press release (IR page, JS shell) | https://investor.nvidia.com/news/press-release-details/2026/NVIDIA-Announces-Financial-Results-for-First-Quarter-Fiscal-2027/default.aspx |
 | Q1 FY2027 earnings call transcript (Fool) | https://www.fool.com/earnings/call-transcripts/2026/05/20/nvidia-nvda-q1-2027-earnings-transcript/ |
+| Q1 FY2027 earnings call transcript (PDF, официальный CDN) | https://s201.q4cdn.com/141608511/files/doc_financials/2027/q1/NVDA-Q1-2027-Earnings-Call-20-May-2026-5_00-PM-ET.pdf |
+| Q1 FY2027 investor presentation (PDF) | https://s201.q4cdn.com/141608511/files/doc_financials/2027/Q127/NVDA-F1Q27-Quarterly-Presentation-FINAL.pdf |
+| Q1 FY2027 CFO commentary (PDF) | https://s201.q4cdn.com/141608511/files/doc_financials/2027/Q127/Q1FY27-CFO-Commentary.pdf |
+| Q1 FY2027 earnings press release (SEC 8-K HTML) | https://www.sec.gov/Archives/edgar/data/1045810/000104581026000051/q1fy27pr.htm |
 
 ## Связь с документацией проекта
 

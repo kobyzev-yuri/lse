@@ -14,13 +14,11 @@ alwaysApply: true
 
 ## Deploy / “why my new file isn’t in the container”
 
-- `lse-bot` runs from the Docker image filesystem (`/app/...`). **New repo files are not visible inside the container** until you **rebuild/redeploy the image** (typical: `git pull` on the VM + `docker compose build ... && docker compose up -d ...` in the VM’s compose directory).
-- **Preferred workflow (GitHub → VM deploy script)**:
-  - **Local (developer machine)**: `git push origin main`
-  - **GCP VM**: `ssh ai8049520@104.154.205.58 "cd /home/ai8049520/lse && ./scripts/deploy_from_github.sh"`
-  - Reason: local has GitHub auth; VM pulls and rebuilds/restarts the runtime consistently.
-- For a **one-off script** (debug/ops), you can copy into the running container without rebuilding:
-  - copy to VM: `scp ./path/script.py ai8049520@104.154.205.58:/tmp/script.py`
-  - copy into container: `ssh ai8049520@104.154.205.58 "docker cp /tmp/script.py lse-bot:/app/scripts/script.py"`
-  - run: `ssh ai8049520@104.154.205.58 "docker exec lse-bot bash -lc 'cd /app && python3 scripts/script.py ...'"`
+- `lse-bot` runs from the Docker image filesystem (`/app/...`). **New repo files are not visible inside the container** until you **rebuild/redeploy the image**.
+- **Default deploy path — always GitHub push, never `scp` for code changes**:
+  1. **Local**: commit + `git push origin main`
+  2. **GCP VM**: `ssh ai8049520@104.154.205.58 "cd /home/ai8049520/lse && ./scripts/deploy_from_github.sh"`
+  - Reason: VM pulls from GitHub and rebuilds/restarts the runtime consistently; local has GitHub auth.
+  - **Do not** deploy updated services/scripts to prod via `scp` + `docker cp` — that bypasses git, drifts from the image, and is lost on the next rebuild.
+- **`scp` / `docker cp` only for one-off ops** (uncommitted debug probe, emergency hotfix probe) — not for shipping feature work. After a probe, still push + `deploy_from_github.sh` so prod matches git.
 - Avoid fragile remote quoting by **base64-wrapping** ad-hoc Python probes, or by running `docker exec -i ... python3 - <<'PY' ... PY` from a local heredoc you control end-to-end.

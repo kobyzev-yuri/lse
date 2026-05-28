@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (compatible; LSE-EarningsMaterialBot/1.0; +https://github.com/kobyzev-yuri/lse)"
+)
+SEC_USER_AGENT = os.environ.get(
+    "EARNINGS_SEC_USER_AGENT",
+    "LSE EarningsMaterialBot ai8049520@104.154.205.58",
 )
 MIN_PARSED_TEXT_CHARS = 400
 LINK_KEYWORDS = (
@@ -75,13 +80,18 @@ def normalize_text(text: str) -> str:
 
 def fetch_url(url: str, *, timeout_sec: int = 45) -> FetchResult:
     sess = outbound_session("EARNINGS_MATERIAL_USE_SYSTEM_PROXY")
+    host = urlparse(url).netloc.lower()
+    headers = {
+        "User-Agent": SEC_USER_AGENT if "sec.gov" in host else DEFAULT_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8",
+    }
+    if "sec.gov" in host:
+        headers["Accept-Encoding"] = "gzip, deflate"
+        headers["Host"] = "www.sec.gov"
     resp = sess.get(
         url,
         timeout=timeout_sec,
-        headers={
-            "User-Agent": DEFAULT_USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8",
-        },
+        headers=headers,
         allow_redirects=True,
     )
     resp.raise_for_status()
