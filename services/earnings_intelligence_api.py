@@ -553,3 +553,73 @@ def get_ml_layers_status(
             "Peer graph + spillover — event-study от даты отчёта лидера."
         ),
     }
+
+
+def get_scenario_shadow_report(
+    engine: Engine,
+    *,
+    dataset_version: str = "v0_expanded_baseline",
+    since: str = "2026-01-01",
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Return cached shadow JSON or recompute when refresh=True."""
+    from pathlib import Path
+    import json
+
+    from services.earnings_scenario_shadow import (
+        default_shadow_report_path,
+        evaluate_earnings_scenario_shadow,
+        write_earnings_scenario_shadow_report,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    path = default_shadow_report_path(root)
+    if refresh:
+        return write_earnings_scenario_shadow_report(
+            engine, project_root=root, dataset_version=dataset_version, since=since
+        )
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data["loaded_from"] = str(path)
+                return data
+        except Exception:
+            pass
+    return evaluate_earnings_scenario_shadow(
+        engine, dataset_version=dataset_version, since=since
+    )
+
+
+def get_fusion_advisory_payload(
+    engine: Engine,
+    *,
+    symbol: str,
+    event_date: date | None = None,
+    dataset_version: str = "v0_expanded_baseline",
+) -> dict[str, Any]:
+    from services.earnings_intelligence_fusion import build_earnings_fusion_advisory
+
+    sym = symbol.strip().upper()
+    ev_d = event_date
+    if ev_d is None:
+        q = text(
+            """
+            SELECT kb.ts::date AS event_date
+            FROM knowledge_base kb
+            WHERE UPPER(TRIM(kb.ticker)) = :sym
+              AND UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'
+            ORDER BY kb.ts DESC
+            LIMIT 1
+            """
+        )
+        with engine.connect() as conn:
+            row = conn.execute(q, {"sym": sym}).mappings().first()
+        if not row:
+            return {"status": "not_found", "symbol": sym, "reason": "no earnings KB row"}
+        ev_d = _parse_date(row.get("event_date"))
+    if ev_d is None:
+        return {"status": "not_found", "symbol": sym, "reason": "invalid event_date"}
+    return build_earnings_fusion_advisory(
+        engine, symbol=sym, event_date=ev_d, dataset_version=dataset_version
+    )

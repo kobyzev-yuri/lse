@@ -948,6 +948,53 @@ async def api_earnings_ml_layers(dataset_version: str = "v0_expanded_baseline"):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/earnings/shadow-report", response_class=JSONResponse)
+async def api_earnings_shadow_report(since: str = "2026-01-01", refresh: bool = False):
+    from services.earnings_intelligence_api import get_scenario_shadow_report
+
+    try:
+        return _to_jsonable(
+            await asyncio.to_thread(
+                get_scenario_shadow_report,
+                get_engine(),
+                since=since.strip() or "2026-01-01",
+                refresh=refresh,
+            )
+        )
+    except Exception as e:
+        logger.exception("api_earnings_shadow_report failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/earnings/fusion/{symbol}", response_class=JSONResponse)
+async def api_earnings_fusion(symbol: str, event_date: str = ""):
+    from datetime import date as date_cls
+    from services.earnings_intelligence_api import get_fusion_advisory_payload
+
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol required")
+    ev_d = None
+    if event_date.strip():
+        try:
+            ev_d = date_cls.fromisoformat(event_date.strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="event_date must be YYYY-MM-DD")
+
+    try:
+        payload = await asyncio.to_thread(
+            get_fusion_advisory_payload, get_engine(), symbol=sym, event_date=ev_d
+        )
+        if payload.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail=payload.get("reason", "not found"))
+        return _to_jsonable(payload)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("api_earnings_fusion failed for %s", sym)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/earnings", response_class=HTMLResponse)
 async def earnings_intelligence_page(request: Request):
     """Earnings intelligence: universe coverage + Event Brief viewer."""

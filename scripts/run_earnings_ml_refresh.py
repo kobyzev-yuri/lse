@@ -118,6 +118,19 @@ def main() -> int:
             scenario_metrics_path=scenario_metrics_path,
         )
 
+    if not args.skip_readiness and not dry_run:
+        shadow_cmd = [py, "scripts/run_earnings_scenario_shadow_report.py"]
+        rc = _run(shadow_cmd)
+        if rc == 0:
+            from report_generator import get_engine
+            from services.earnings_intelligence_readiness import write_earnings_intelligence_readiness
+
+            write_earnings_intelligence_readiness(
+                get_engine(),
+                project_root=project_root,
+                scenario_metrics_path=scenario_metrics_path,
+            )
+
     logger.info("Earnings ML refresh completed (dry_run=%s)", dry_run)
     return 0
 

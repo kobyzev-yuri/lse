@@ -13,16 +13,110 @@ todos:
     status: completed
   - id: scenario-labels-v0
     content: Добавить пилотную разметку сценариев для 5-10 исторических earnings событий и их peer reactions.
-    status: in_progress
+    status: completed
   - id: event-brief-output
     content: "Сделать формат Event Brief для веба/бота: scenario, evidence, affected tickers, horizons, expected log-return."
+    status: completed
+  - id: earnings-v1-features
+    content: "Feature builder quotes_regime_earnings_v1: tone + peer graph + peer momentum; backfill через run_earnings_ml_refresh."
     status: in_progress
+  - id: scenario-classifier-pilot
+    content: CatBoost multi-class по llm_scenario_v0 labels; train через run_earnings_ml_refresh + readiness gates.
+    status: in_progress
+  - id: analyzer-readiness
+    content: "Гейты earnings grid в анализаторе: materials coverage, LLM rate, feature rows, scenario labels, train metrics."
+    status: completed
+  - id: earnings-ui
+    content: "Web /earnings + API + Telegram /earnings: events, brief, peer graph, spillover, ML layers."
+    status: completed
 isProject: false
 ---
 
 # Earnings Intelligence Plan
 
-## Промежуточные итоги (2026-05-28)
+## Промежуточные итоги (2026-05-28, вечер)
+
+### Этап 1 — materials → extract → universe (prod)
+
+| Шаг | Статус | Артефакты / prod |
+|-----|--------|------------------|
+| Universe (21 equity) | ✅ | `services/earnings_intelligence_universe.py` — GAME_5M + portfolio + NVDA/GOOGL/… |
+| Materials registry + SEC auto | ✅ | `sync_earnings_material_registry.py`, `services/earnings_material_auto_sources.py` |
+| Hybrid ingest | ✅ | HTML + pypdf, cron каждые 2 ч |
+| LLM extractor | ✅ | 16+ tickers с `management_tone`, 22 events с `scenario_hints` (prod) |
+| Peer graph | ✅ | **96 рёбер** (`peer_graph_catalog.py`, `seed_peer_graph_edges.py`) |
+| Cron materials | ✅ | sync :18, ingest :20, extract :25 (каждые 2–6 ч) |
+
+### Этап 2 — Event Brief + UI (prod)
+
+| Шаг | Статус | Артефакты |
+|-----|--------|-----------|
+| Event Brief + peer spillover | ✅ | `services/earnings_event_brief.py` — forward log-ret peers 1d/5d |
+| Web UI | ✅ | `/earnings`, API `/api/earnings/*`, tabs Peer graph / Spillover / ML layers |
+| Telegram | ✅ | `/earnings` в `services/telegram_bot.py` |
+| Pipeline orchestrator | ✅ | `scripts/run_earnings_intelligence_pipeline.py` |
+
+### Этап 3 — ML grid (deploy 681f8ef, full train in progress)
+
+Два слоя ML **не смешиваются**:
+
+| Слой | Target | Feature builder | Train script | Роль |
+|------|--------|-----------------|--------------|------|
+| **Регрессия (prod advisory)** | `forward_log_ret_5d` | `quotes_regime_v1` | `train_event_reaction_catboost.py` | Карточки/API, nightly cron 23:51 |
+| **Earnings grid (pilot)** | `final_label` (LLM scenario) | `quotes_regime_earnings_v1` | `train_event_reaction_scenario_classifier.py` | Сценарный классификатор, дообучаемая сетка |
+
+**Новые скрипты (2026-05-28):**
+
+| Скрипт | Назначение |
+|--------|------------|
+| `apply_earnings_scenario_labels.py` | LLM `scenario_hints` → `final_label`, `label_source=llm_scenario_v0` |
+| `backfill_event_reaction_labeling.py` | При `EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1` — tone, peer graph, peer momentum |
+| `run_earnings_ml_refresh.py` | Оркестратор: labels → earnings_v1 backfill → scenario classifier → readiness JSON |
+| `train_event_reaction_scenario_classifier.py` | CatBoostClassifier multi-class (min 8 rows) |
+| `services/earnings_intelligence_readiness.py` | Гейты: sources, features, scenario_labels, classifier, regression |
+
+**Prod snapshot (2026-05-28, во время full train):**
+
+| Метрика | Значение |
+|---------|----------|
+| Universe | 21 equity |
+| Events с LLM tone (since 2026-01-01) | ~73% events |
+| `scenario_hints` в `earnings_event_detail` | 22 |
+| `llm_scenario_v0` labels | **15** (14 applied в full run) |
+| `quotes_regime_earnings_v1` features | **~267 ожидается** (dry-run: 267/300 ok, 33 `no_quotes`; full backfill ~20 мин) |
+| Peer graph edges | 96 |
+| Scenario classifier | train после backfill (≥8 labels ✓) |
+
+**Dry-run `run_earnings_ml_refresh` (prod, exit 0):** backfill проверил 267/300 строк; readiness `overall_grid_ready=false` (ожидаемо без записи в БД).
+
+### Этап 4 — Analyzer readiness (prod)
+
+| Компонент | Статус |
+|-----------|--------|
+| `last_earnings_intelligence_readiness.json` | Пишется после каждого `run_earnings_ml_refresh` |
+| Блок в `/analyzer` | «Earnings intelligence grid» — coverage, гейты, missing materials |
+| `ml_train_readiness.jsonl` | Поле `earnings_intelligence` + `overall_earnings_grid_ready` |
+| Пороги | `ML_READINESS_EARNINGS_*` в `config.env` |
+
+**Cron (новое в `crontab/lse-docker.crontab`):**
+
+| Время | Скрипт | Режим |
+|-------|--------|-------|
+| `:30 */6 * * *` | `run_earnings_ml_refresh.py` | dry-run (default `ML_READINESS_TRAIN_MODE`) |
+| `23:50 пн–пт` | `run_ml_train_readiness_cron.py` | + `ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0` |
+| `23:52 пн–пт` | `run_earnings_ml_refresh.py` | full train (scenario `.cbm`) |
+
+### Известные gaps (актуально)
+
+- **Материалы:** DELL (earnings day), ANET/AVGO/GOOGL/PLTR — только KB/future; часть universe без parsed materials.
+- **Backfill:** ~11% строк (`features:no_quotes`) — нужен seed quotes для редких тикеров.
+- **Регрессия vs grid:** product CatBoost остаётся на `quotes_regime_v1`; earnings grid — отдельный classifier, не подменяет advisory RMSE-гейт.
+- **Trading gate:** scenario classifier — advisory/shadow; hard-block сделок не включён.
+- **`run_earnings_intelligence_pipeline.py`** — не в cron (ручной оркестратор sync→extract→brief).
+
+---
+
+## Промежуточные итоги (2026-05-28, утро — pilot META/NVDA)
 
 Этап **materials → ingest → LLM extract → peer graph** выполнен на prod для pilot META/NVDA.
 
@@ -50,7 +144,14 @@ isProject: false
 - `discover-links` для ARM шумный (много PDF без текста) — фильтр в backlog.
 - Старый failed URL META presentation (404) — можно пометить `skipped`.
 
-**Следующий этап:** scenario labels v0 → Event Brief JSON → peer outcomes в brief → UI/бот.
+**Следующий этап (план):**
+
+1. **Дождаться завершения** первого prod full `run_earnings_ml_refresh` → проверить `overall_grid_ready`, classifier `.cbm`, analyzer.
+2. **Materials coverage** — догнать DELL/ANET/AVGO/GOOGL/PLTR; фильтр ARM discover-links noise.
+3. **Peer outcomes в train** — использовать spillover history как feature или validation set для classifier.
+4. **Live shadow** — сравнивать scenario prediction vs фактический 5d log-ret / peer spillover после созревания.
+5. **Trading metric gate** — PnL/top-k после transaction costs для решения о fusion с GAME_5M (не RMSE alone).
+6. **Event fusion** — склеить earnings grid signal с portfolio/GAME_5M только после shadow-статистики.
 
 ---
 
@@ -106,9 +207,10 @@ flowchart TD
 3. **Extractor:** `services/earnings_material_extractor.py`, `scripts/extract_earnings_material_facts.py` — JSON в `earnings_event_detail.guidance_summary` / `affected_tickers`.
 4. **Peer graph:** `services/peer_graph_catalog.py`, `scripts/seed_peer_graph_edges.py`.
 5. **Outcomes:** для source ticker и affected tickers считать log-returns 1d/2d/5d/20d — **следующий шаг** (brief + peer spillover).
-6. **Scenario labels:** `scripts/apply_earnings_scenario_labels.py` — LLM `scenario_hints` → `event_reaction_dataset.final_label`.
-7. **Event Brief:** `services/earnings_event_brief.py`, `scripts/build_earnings_event_brief.py` — JSON для UI/бота.
-8. **Analyzer readiness:** качество сценариев, покрытие материалов, OOS/PnL после transaction costs держать в анализаторе, не в карточке.
+6. **Scenario labels:** `scripts/apply_earnings_scenario_labels.py` — LLM `scenario_hints` → `event_reaction_dataset.final_label` (`llm_scenario_v0`). ✅ 15 labels на prod.
+7. **Event Brief:** `services/earnings_event_brief.py`, `scripts/build_earnings_event_brief.py` — JSON для UI/бота. ✅ + peer spillover.
+8. **Earnings ML grid:** `quotes_regime_earnings_v1` + `run_earnings_ml_refresh.py` + scenario classifier. 🔄 первый full train на prod.
+9. **Analyzer readiness:** `services/earnings_intelligence_readiness.py`, блок в `/analyzer`, cron. ✅
 
 ## Результат Для Пользователя
 - В карточке/боте будет не просто “макро-календарь · фичей: 25”, а отдельный блок:

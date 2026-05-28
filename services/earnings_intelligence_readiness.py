@@ -51,6 +51,13 @@ def default_readiness_metrics_path(project_root: Path | None = None) -> Path:
     return root / "local" / "logs" / "ml_data_quality" / "last_earnings_intelligence_readiness.json"
 
 
+def default_shadow_report_path(project_root: Path | None = None) -> Path:
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml/ml_data_quality/last_earnings_scenario_shadow.json")
+    root = project_root or Path(__file__).resolve().parents[1]
+    return root / "local" / "logs" / "ml_data_quality" / "last_earnings_scenario_shadow.json"
+
+
 def default_scenario_train_metrics_path(project_root: Path | None = None) -> Path:
     if Path("/app/logs").exists():
         return Path("/app/logs/ml/ml_data_quality/last_event_reaction_scenario_train_metrics.json")
@@ -277,17 +284,49 @@ def gate_earnings_regression(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any
     return {"ready": len(reasons) == 0, "reasons": reasons, "rmse_valid": rmse, "n_train": nt}
 
 
+def gate_trading_shadow(shadow_report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    reasons: list[str] = []
+    if not shadow_report:
+        return {"ready": False, "reasons": ["no_shadow_report_file"], "sign_accuracy": None, "n_sign_scored": 0}
+    gate = shadow_report.get("trading_gate") if isinstance(shadow_report.get("trading_gate"), dict) else {}
+    if gate:
+        return {
+            "ready": bool(gate.get("ready")),
+            "reasons": list(gate.get("reasons") or []),
+            "sign_accuracy": (shadow_report.get("aggregate") or {}).get("sign_accuracy"),
+            "n_sign_scored": (shadow_report.get("aggregate") or {}).get("n_sign_scored"),
+            "mean_pseudo_pnl_log": (shadow_report.get("aggregate") or {}).get("mean_pseudo_pnl_log"),
+            "advisory_only": True,
+        }
+    agg = shadow_report.get("aggregate") if isinstance(shadow_report.get("aggregate"), dict) else {}
+    from services.earnings_scenario_shadow import compute_trading_metric_gate
+
+    computed = compute_trading_metric_gate(agg)
+    if not computed.get("ready"):
+        reasons = list(computed.get("reasons") or [])
+    return {
+        "ready": bool(computed.get("ready")),
+        "reasons": reasons or list(computed.get("reasons") or []),
+        "sign_accuracy": agg.get("sign_accuracy"),
+        "n_sign_scored": agg.get("n_sign_scored"),
+        "mean_pseudo_pnl_log": agg.get("mean_pseudo_pnl_log"),
+        "advisory_only": True,
+    }
+
+
 def build_earnings_intelligence_gates(
     snapshot: Dict[str, Any],
     *,
     scenario_metrics: Optional[Dict[str, Any]] = None,
     regression_metrics: Optional[Dict[str, Any]] = None,
+    shadow_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     g_sources = gate_sources(snapshot)
     g_features = gate_features(snapshot)
     g_labels = gate_scenario_labels(snapshot)
     g_scenario = gate_scenario_classifier(scenario_metrics)
     g_regression = gate_earnings_regression(regression_metrics)
+    g_shadow = gate_trading_shadow(shadow_report)
     grid_core = all(g.get("ready") for g in (g_sources, g_features, g_labels, g_scenario))
     return {
         "sources": g_sources,
@@ -295,8 +334,10 @@ def build_earnings_intelligence_gates(
         "scenario_labels": g_labels,
         "scenario_classifier": g_scenario,
         "regression": g_regression,
+        "trading_shadow": g_shadow,
         "overall_grid_ready": grid_core,
         "overall_with_regression": grid_core and bool(g_regression.get("ready")),
+        "overall_trading_shadow_ready": grid_core and bool(g_shadow.get("ready")),
     }
 
 
@@ -323,7 +364,13 @@ def write_earnings_intelligence_readiness(
     )
     scen_data = _json_load(scen_path)
     reg_data = _json_load(reg_path)
-    gates = build_earnings_intelligence_gates(snap, scenario_metrics=scen_data, regression_metrics=reg_data)
+    shadow_data = _json_load(default_shadow_report_path(root))
+    gates = build_earnings_intelligence_gates(
+        snap,
+        scenario_metrics=scen_data,
+        regression_metrics=reg_data,
+        shadow_report=shadow_data,
+    )
     bundle = {
         "readiness_version": "earnings_intelligence_v1",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -332,6 +379,7 @@ def write_earnings_intelligence_readiness(
         "metrics_paths": {
             "scenario_classifier": str(scen_path),
             "regression": str(reg_path),
+            "scenario_shadow": str(default_shadow_report_path(root)),
         },
     }
     out_path = default_readiness_metrics_path(root)

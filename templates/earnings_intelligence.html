@@ -83,6 +83,8 @@
     <button class="btn active" data-tab="events">События</button>
     <button class="btn" data-tab="graph">Peer graph</button>
     <button class="btn" data-tab="spillover">Spillover</button>
+    <button class="btn" data-tab="shadow">Shadow</button>
+    <button class="btn" data-tab="fusion">Fusion</button>
     <button class="btn" data-tab="ml">ML слои</button>
 </div>
 
@@ -124,6 +126,23 @@
     <div id="spilloverContent"></div>
 </div>
 
+<div id="panel-shadow" class="panel">
+    <div class="toolbar">
+        <button class="btn" id="loadShadowBtn">Загрузить shadow report</button>
+        <button class="btn" id="refreshShadowBtn">Пересчитать (refresh)</button>
+    </div>
+    <div id="shadowContent" class="muted">Live shadow: predicted scenario vs созревший forward_log_ret_5d + peer spillover. Advisory only.</div>
+</div>
+
+<div id="panel-fusion" class="panel">
+    <div class="toolbar">
+        <label class="muted">Ticker:</label>
+        <select id="fusionSymbol"></select>
+        <button class="btn" id="loadFusionBtn">Fusion advisory</button>
+    </div>
+    <div id="fusionContent" class="muted">Регрессия + scenario classifier + brief (без исполнения сделок).</div>
+</div>
+
 <div id="panel-ml" class="panel">
     <div id="mlLayersContent" class="muted">Загрузка…</div>
 </div>
@@ -152,6 +171,7 @@ function showTab(name) {
     document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
     if (name === 'graph' && !graphData) loadGraph();
     if (name === 'ml') loadMlLayers();
+    if (name === 'shadow') loadShadow(false);
 }
 
 async function loadList() {
@@ -171,6 +191,8 @@ async function loadList() {
     const sel = document.getElementById('spilloverSource');
     const syms = [...new Set(allEvents.map(e => e.symbol))].sort();
     sel.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
+    const fus = document.getElementById('fusionSymbol');
+    if (fus) fus.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
 }
 
 function applyFilter() {
@@ -182,12 +204,20 @@ function applyFilter() {
         <td>${badgeMat(ev)}</td><td>${badgeLlm(ev)}</td><td>${ev.management_tone||'—'}</td>
         <td><code>${ev.top_scenario||'—'}</code></td>
         <td><button class="link-btn" data-sym="${ev.symbol}" data-date="${ev.event_date||''}">Brief</button>
+        <button class="link-btn" data-fusion="${ev.symbol}" data-fdate="${ev.event_date||''}">Fusion</button>
         <button class="link-btn" data-spill="${ev.symbol}">Spillover</button></td></tr>`).join('');
     document.getElementById('eventsBody').querySelectorAll('[data-sym]').forEach(btn => {
         btn.addEventListener('click', () => loadBrief(btn.dataset.sym, btn.dataset.date));
     });
     document.getElementById('eventsBody').querySelectorAll('[data-spill]').forEach(btn => {
         btn.addEventListener('click', () => { document.getElementById('spilloverSource').value = btn.dataset.spill; showTab('spillover'); loadSpillover(); });
+    });
+    document.getElementById('eventsBody').querySelectorAll('[data-fusion]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.getElementById('fusionSymbol').value = btn.dataset.fusion;
+            showTab('fusion');
+            loadFusion(btn.dataset.fdate || '');
+        });
     });
 }
 
@@ -261,6 +291,63 @@ async function loadSpillover() {
     }).join('');
 }
 
+async function loadShadow(refresh) {
+    const el = document.getElementById('shadowContent');
+    el.innerHTML = '<span class="muted">Загрузка…</span>';
+    const url = `/api/earnings/shadow-report?since=2026-01-01${refresh ? '&refresh=true' : ''}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) { el.innerHTML = `<span class="err">${data.detail || JSON.stringify(data)}</span>`; return; }
+    const a = data.aggregate || {}, g = data.trading_gate || {};
+    const gateCls = g.ready ? 'ok' : 'no';
+    el.innerHTML = `
+        <div class="summary">
+            <div class="stat"><div class="n">${a.n_matured ?? '—'}</div><div class="l">Matured</div></div>
+            <div class="stat"><div class="n">${a.sign_accuracy != null ? (a.sign_accuracy*100).toFixed(0)+'%' : '—'}</div><div class="l">Sign acc</div></div>
+            <div class="stat"><div class="n">${a.class_accuracy != null ? (a.class_accuracy*100).toFixed(0)+'%' : '—'}</div><div class="l">Class acc</div></div>
+            <div class="stat"><div class="n">${a.mean_pseudo_pnl_log != null ? a.mean_pseudo_pnl_log.toFixed(4) : '—'}</div><div class="l">Mean pseudo PnL (log)</div></div>
+            <div class="stat"><div class="n"><span class="badge ${gateCls}">${g.ready ? 'ready' : 'blocked'}</span></div><div class="l">Trading gate</div></div>
+        </div>
+        <p class="muted">Round-trip cost log ${a.round_trip_cost_log ?? '—'} · peer sign acc ${a.peer_sign_accuracy != null ? (a.peer_sign_accuracy*100).toFixed(0)+'%' : '—'}</p>
+        ${g.reasons && g.reasons.length ? `<p class="muted">Gate: ${g.reasons.join('; ')}</p>` : ''}
+        <table><thead><tr><th>Ticker</th><th>Date</th><th>Pred scenario</th><th>Actual 5d</th><th>Sign</th><th>Class</th><th>Peer 5d</th></tr></thead>
+        <tbody>${(data.rows||[]).map(r => `<tr>
+            <td>${r.symbol}</td><td>${r.event_date||'—'}</td>
+            <td><code>${r.predicted_scenario||'—'}</code></td>
+            <td>${fmtPct(r.actual_forward_log_ret_5d)}</td>
+            <td>${r.sign_match == null ? '—' : (r.sign_match ? '✓' : '✗')}</td>
+            <td>${r.class_match == null ? '—' : (r.class_match ? '✓' : '✗')}</td>
+            <td>${fmtPct(r.peer_spillover?.mean_forward_log_ret_5d)}</td>
+        </tr>`).join('')}</tbody></table>`;
+}
+
+async function loadFusion(eventDate) {
+    const sym = document.getElementById('fusionSymbol').value;
+    const el = document.getElementById('fusionContent');
+    el.innerHTML = '<span class="muted">Загрузка…</span>';
+    let url = `/api/earnings/fusion/${encodeURIComponent(sym)}`;
+    if (eventDate) url += `?event_date=${encodeURIComponent(eventDate)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) { el.innerHTML = `<span class="err">${data.detail || JSON.stringify(data)}</span>`; return; }
+    const adv = data.advisory || {}, reg = data.regression_ml || {}, scen = data.scenario_ml || {};
+    el.innerHTML = `
+        <div class="block"><h3>Advisory</h3>
+            <p><strong>${adv.summary||'—'}</strong></p>
+            <p class="muted">Alignment ${adv.alignment||'—'} · Conviction ${adv.conviction||'—'} · execution blocked</p>
+            ${(adv.notes||[]).map(n => `<p class="muted">${n}</p>`).join('')}
+        </div>
+        <div class="detail-grid">
+            <div class="block"><h3>Regression ML</h3>
+                status ${reg.status||'—'} · pred ${reg.forward_log_ret_5d_pred != null ? reg.forward_log_ret_5d_pred.toFixed(4) : '—'}
+            </div>
+            <div class="block"><h3>Scenario ML</h3>
+                ${scen.predicted_scenario||'—'} (${scen.scenario_classifier_status||'—'})
+                · proba ${scen.predicted_scenario_proba ?? '—'}
+            </div>
+        </div>`;
+}
+
 async function loadMlLayers() {
     const res = await fetch('/api/earnings/ml-layers');
     const data = await res.json();
@@ -283,6 +370,9 @@ document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('
 }));
 document.getElementById('refreshBtn').addEventListener('click', () => loadList().catch(e => alert(e.message)));
 document.getElementById('loadSpilloverBtn').addEventListener('click', () => loadSpillover());
+document.getElementById('loadShadowBtn').addEventListener('click', () => loadShadow(false));
+document.getElementById('refreshShadowBtn').addEventListener('click', () => loadShadow(true));
+document.getElementById('loadFusionBtn').addEventListener('click', () => loadFusion(''));
 
 loadList().catch(e => { document.getElementById('eventsBody').innerHTML = `<tr><td colspan="8" class="err">${e.message}</td></tr>`; });
 </script>

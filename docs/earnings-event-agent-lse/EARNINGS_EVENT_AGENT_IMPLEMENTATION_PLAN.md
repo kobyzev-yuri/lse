@@ -39,8 +39,8 @@
 
 | # | Цель (кратко) | Статус на 2026-05-12 | Что можно сделать дальше | Где копить факты |
 |---|----------------|----------------------|---------------------------|------------------|
-| 1 | **Классификация сценария** (pullback, follow-through, fade, …) | Частично: rule-based **UP/DOWN/FLAT** по \|5d log-ret\| vs порог; нет таксономии сценариев. | Пилот разметки сценария (человек/LLM) → поле в JSON или `final_label` + версия; позже отдельная голова модели. | `event_reaction_dataset.final_label` / `outcome_json` в KB; чеклисты шефа по окнам после отчёта. |
-| 2 | **Кросс-отчёты** (A → группа B) | Не автоматизировано; дневная **corr** по `quotes` (`/corr`, `cluster_recommend`) ≠ корреляция «по событиям». | `peer_graph_edge` + event-study / признаки peer в новом `feature_builder_version`; приоритет для следующего улучшения ML. | Рёбра графа (конфиг → БД); история **одновременных** forward-окон вокруг события лидера; не смешивать с дневной матрицей без переопределения. |
+| 1 | **Классификация сценария** (pullback, follow-through, fade, …) | **Пилот 2026-05-28:** LLM hints → `llm_scenario_v0` (15 labels); CatBoostClassifier `event_reaction_scenario_v0` на `quotes_regime_earnings_v1`. Rule UP/DOWN/FLAT сохранён для регрессии. | Дождаться первого prod train classifier; live shadow vs 5d outcomes; расширить labels по мере extract. | `apply_earnings_scenario_labels.py`, `train_event_reaction_scenario_classifier.py`, `run_earnings_ml_refresh.py` |
+| 2 | **Кросс-отчёты** (A → группа B) | **Частично:** `peer_graph_edge` 96 рёбер; spillover 1d/5d log-ret в Event Brief и UI; peer momentum в `quotes_regime_earnings_v1`. | Peer reactions как validation / доп. features; event-study таблица в analyzer. | `earnings_event_brief.py`, `event_reaction_labeling.enrich_features_with_peer_*` |
 | 3 | **Циклы и фазы** (групповой цикл, AI-chips и т.д.) | Не в `features_before` MVP. | Подключить `ticker_price_regime` / агрегаты по группе в builder v2. | `quotes` + правила из дизайна §4.5; при необходимости ручные метки фазы группы. |
 | 4 | **Синхронность / ротация** (лидер vs laggard) | Не в event-ML; есть контекст корреляций для GAME_5M. | Явные признаки «лидер события» и отклик follower в `features_before`. | `knowledge_base` (тип события, кластер темы); цены peer’ов; время событий ET. |
 | 5 | **Режим индекса** (NDX/SPY/VIX, veto) | Таблица `market_regime_daily` пуста; скрипт ingest в репо **ещё не добавлен** (см. [EVENT_REACTION_PIPELINE.md](../EVENT_REACTION_PIPELINE.md)). | Реализовать `ingest_market_regime_daily.py` + cron; затем ключи режима в фичах. | Дневные ряды индексов/VIX (тот же принцип, что `quotes`); breadth — если появится источник. |
@@ -77,6 +77,10 @@
 | Peer graph seed | `services/peer_graph_catalog.py`, `scripts/seed_peer_graph_edges.py` |
 | Token / coverage audit | `scripts/audit_earnings_materials_pipeline.py` |
 | Scenario labels from LLM hints | `scripts/apply_earnings_scenario_labels.py` |
+| Earnings ML grid refresh | `scripts/run_earnings_ml_refresh.py` |
+| Scenario classifier (pilot) | `scripts/train_event_reaction_scenario_classifier.py` |
+| Earnings readiness gates | `services/earnings_intelligence_readiness.py` |
+| Earnings intelligence UI/API | `services/earnings_intelligence_api.py`, `/earnings`, `/api/earnings/*` |
 | Event Brief JSON | `services/earnings_event_brief.py`, `scripts/build_earnings_event_brief.py` |
 | Скелет из KB, фильтр конфига, «эра» по `kb.ts` | `scripts/build_event_reaction_dataset.py` (`--kb-since` / `EVENT_REACTION_KB_SINCE`) |
 | Авторазметка ценами (MVP) | `services/event_reaction_labeling.py`, `scripts/backfill_event_reaction_labeling.py` |
@@ -147,17 +151,29 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 
 ## Следующий слой (после стабилизации 1–5)
 
-**Выполнено 2026-05-28:** materials registry + ingest (HTML/PDF), catalog sync, LLM extraction pilot (META/NVDA), peer_graph v0 (27 edges), cron sync/ingest/extract, token audit (~27k tok/event).
+**Выполнено 2026-05-28 (universe + UI + ML grid pilot):**
 
-**В работе:** scenario labels v0, Event Brief JSON, peer forward outcomes в brief, auto-ensure KB для catalog events.
+- Universe 21 equity, SEC auto-sources, materials cron, LLM extract на большинстве tickers.
+- Web `/earnings`, Telegram `/earnings`, Event Brief + peer spillover, peer graph UI.
+- `quotes_regime_earnings_v1` (tone + peer graph + peer momentum).
+- `apply_earnings_scenario_labels` → 15 `llm_scenario_v0` labels на prod.
+- `run_earnings_ml_refresh` + scenario classifier + analyzer readiness gates.
+- Cron: `:30 */6` dry-run grid, `23:52` full train grid.
 
-1. ~~**Materials registry + ingest**~~ — см. `earnings_material`, `sync_earnings_material_registry.py`, `ingest_earnings_materials.py`.
-2. **Revenue/guidance ingestion:** LLM extractor пишет в `earnings_event_detail`; yfinance EPS — отдельно.
-3. **Peer reactions:** `peer_graph_edge` seeded; peer log-returns в Event Brief — следующий шаг.
-4. **Trading metric gate:** top-k/PnL после transaction costs (без изменений).
-5. **Scenario labels:** `apply_earnings_scenario_labels.py` — LLM hints → `final_label`.
-6. **Event Brief:** JSON для UI/бота (`build_earnings_event_brief.py`).
-7. Подписка/IR/SEC extractor как замена ручного сбора транскриптов.
+**В работе (2026-05-28):** первый prod full backfill `quotes_regime_earnings_v1` + train scenario classifier.
+
+**Дальше:**
+
+1. **Materials coverage** — DELL, ANET, AVGO, GOOGL, PLTR; auto-ensure KB в sync.
+2. **Classifier quality** — OOS accuracy по walk-forward; не путать с RMSE регрессии.
+3. **Live shadow** — predicted scenario vs realized 5d log-ret / peer spillover.
+4. **Trading metric gate** — PnL после transaction costs перед fusion с GAME_5M.
+5. **Revenue/guidance** — уже в LLM extractor; явные numeric features в builder v2 при необходимости.
+6. **Подписка/IR/SEC** — замена ручного сбора для tickers без materials.
+
+~~1. Materials registry + ingest~~ — ✅  
+~~5. Scenario labels~~ — ✅ pilot  
+~~6. Event Brief~~ — ✅ + UI
 
 ---
 
@@ -172,3 +188,4 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 | 0.5 | 2026-05-27 | Расширенный dataset `v0_expanded_baseline`, advisory product rollout, nightly event-reaction model refresh, roadmap revenue/guidance + peer features |
 | 0.6 | 2026-05-28 | Добавлен `earnings_material` registry и starter seed для материалов earnings intelligence |
 | 0.7 | 2026-05-28 | PDF ingest (pypdf), LLM extractor, peer_graph v0, cron materials pipeline; pilot META/NVDA extraction (~27k tok/event) |
+| 0.8 | 2026-05-28 | Full universe, `/earnings` UI, `quotes_regime_earnings_v1`, scenario classifier pilot, `run_earnings_ml_refresh`, analyzer earnings grid readiness, cron grid refresh |

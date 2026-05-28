@@ -91,12 +91,39 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 | **`scripts/train_game5m_multiday_lr.py`** | Multiday ridge (дневка 1–3 торг. дня); `--dry-run`, **`--json-metrics-out`**, `--tickers-source` — см. [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md) |
 | `scripts/run_daily_game5m_ml_pipeline.py` | Stuck + continuation CSV + CatBoost + `game5m_daily_ml_report.jsonl` |
 | **`scripts/run_ml_train_readiness_cron.py`** | Регулярный dry-run/full train + **гейты** + append **`ml_train_readiness.jsonl`** (multiday в гейты **пока не входит**) |
+| **`scripts/run_earnings_ml_refresh.py`** | Earnings grid: labels → `quotes_regime_earnings_v1` → scenario classifier + readiness JSON |
 
 См. также [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md), [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md).
 
 ### 5.1 Готовность к продакшену (гейты)
 
-`run_ml_train_readiness_cron.py` пишет строку с `game5m.gate`, `portfolio.gate`, `event_reaction.gate` (если не отключён), `overall_production_ready`.
+`run_ml_train_readiness_cron.py` пишет строку с `game5m.gate`, `portfolio.gate`, `event_reaction.gate` (если не отключён), **`earnings_intelligence.gate`** (если `ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0`), `overall_production_ready`, **`overall_earnings_grid_ready`**.
+
+### 5.1.1 Earnings intelligence grid (readiness)
+
+Отдельный контур от product-регрессии `quotes_regime_v1`:
+
+| Артефакт | Путь |
+|----------|------|
+| Readiness snapshot | `/app/logs/ml/ml_data_quality/last_earnings_intelligence_readiness.json` |
+| Scenario train metrics | `last_event_reaction_scenario_train_metrics.json` |
+| Classifier model | `/app/logs/ml/models/event_reaction_scenario_catboost.cbm` |
+
+**Гейты** (`services/earnings_intelligence_readiness.py`):
+
+| Gate | Проверка |
+|------|----------|
+| `sources` | materials symbol coverage, events LLM rate, peer graph rows |
+| `features` | `earnings_v1_feature_rows` ≥ порог |
+| `scenario_labels` | `llm_scenario_v0` count ≥ порог |
+| `scenario_classifier` | status ok/dry_run, `n_train`, optional `valid_accuracy` |
+| `regression` | те же пороги, что `event_reaction` RMSE (baseline advisory) |
+
+Переменные: `ML_READINESS_EARNINGS_MIN_SYMBOL_MATERIALS_RATE`, `ML_READINESS_EARNINGS_MIN_EVENTS_LLM_RATE`, `ML_READINESS_EARNINGS_MIN_PEER_GRAPH_ROWS`, `ML_READINESS_EARNINGS_MIN_FEATURE_ROWS`, `ML_READINESS_EARNINGS_MIN_SCENARIO_LABELS`, `ML_READINESS_EARNINGS_SCENARIO_MIN_TRAIN`, `ML_READINESS_SKIP_EARNINGS_INTELLIGENCE` (default `1` в cron без `-e`).
+
+В **`/analyzer`**: блок «Earnings intelligence grid»; в JSON API — `earnings_grid_readiness`, `earnings_intelligence_readiness`.
+
+См. [EARNINGS_INTELLIGENCE_PLAN.md](earnings-event-agent-lse/EARNINGS_INTELLIGENCE_PLAN.md), [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md).
 
 Переменные окружения (основные):
 
@@ -152,8 +179,8 @@ docker compose exec -T lse python3 scripts/run_ml_train_readiness_cron.py >> /ap
 
 ## 7. Связь с event / earnings
 
-План сценариев: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md). Отчёт качества добавляет **`event_analytics`**: строки датасета, разметка, версии `dataset_version`.
+План сценариев: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md). Отчёт качества добавляет **`event_analytics`**: строки датасета, разметка, версии `dataset_version`, плюс **`earnings_intelligence_readiness`** / **`earnings_grid_readiness`** для сетки scenario classifier.
 
 ## 8. Версионирование
 
-Поле `report_version` в корне JSON (`services/ml_data_quality_report.REPORT_VERSION`). Текущее: **1.1** (event_analytics + хвосты readiness / game5m daily).
+Поле `report_version` в корне JSON (`services/ml_data_quality_report.REPORT_VERSION`). Текущее: **1.1** (event_analytics + earnings grid readiness + хвосты readiness / game5m daily).

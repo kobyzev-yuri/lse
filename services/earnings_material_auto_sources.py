@@ -54,6 +54,10 @@ FOOL_SLUG_HINTS: dict[str, tuple[str, ...]] = {
     "ALAB": ("astera-labs-alab",),
     "ORCL": ("oracle-orcl",),
     "GOOGL": ("alphabet-googl", "alphabet-goog"),
+    "DELL": ("dell-dell", "dell-technologies-dell"),
+    "AVGO": ("broadcom-avgo", "broadcom-inc-avgo"),
+    "PLTR": ("palantir-pltr", "palantir-technologies-pltr"),
+    "ANET": ("arista-networks-anet", "arista-anet"),
 }
 
 

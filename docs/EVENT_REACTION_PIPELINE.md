@@ -13,7 +13,9 @@
 
 Вспомогательные таблицы (`market_regime_daily`, `peer_graph_edge`, …) по-прежнему опциональны; их можно подключать в следующих версиях `feature_builder_version` внутри JSON.
 
-**Product advisory dataset (с 2026-05-27):** для event-reaction CatBoost в карточках используется расширенная история **`v0_expanded_baseline`** с `feature_builder_version=quotes_regime_v1`. Она собрана из yfinance earnings history по 14 equity-тикерам FAST+MEDIUM+LONG: **498** событий, **451** trainable rows, 47,966 daily quote rows backfill. EPS/timing слой (`quotes_regime_earnings_v1`) хранится и исследуется, но пока не выбран для product-модели, потому что на расширенной выборке он нейтрален/слегка хуже baseline.
+**Product advisory dataset (с 2026-05-27):** для event-reaction CatBoost в карточках используется расширенная история **`v0_expanded_baseline`** с `feature_builder_version=quotes_regime_v1`. Она собрана из yfinance earnings history по 14 equity-тикерам FAST+MEDIUM+LONG: **498** событий, **451** trainable rows, 47,966 daily quote rows backfill.
+
+**Earnings intelligence grid (с 2026-05-28):** отдельный контур для **сценарного классификатора** — `feature_builder_version=quotes_regime_earnings_v1` (quotes + regime + earnings tone/timing + peer graph topology + peer momentum). Оркестратор: **`scripts/run_earnings_ml_refresh.py`**. Метки: `label_source=llm_scenario_v0` из LLM `scenario_hints` (`apply_earnings_scenario_labels.py`). Train: **`train_event_reaction_scenario_classifier.py`**. Product-регрессия на `quotes_regime_v1` **не заменяется** этим слоем.
 
 Дизайн-источник: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §4.2.1.  
 Официальные IR и страницы квартальной отчётности по тикерам (под будущий ingest и ручную работу): [earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md](earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md).
@@ -79,7 +81,33 @@
 
 **CLI (важные флаги):** `--dataset-version`, `--limit`, `--dry-run`, `--only-features`, `--only-outcomes`, `--force-features`, `--force-outcomes`, `--horizons 1,5,20`, `--id-from` / `--id-to`, `--since` / `--until` (ISO time, сравнение с `event_time_et`).
 
-**Ограничения MVP:** нет peer/regime фич; для исходов нужно ≥5 торговых дней вперёд от якоря (иначе `outcomes_after` не пишется); для полноты признаков желательно ≥20 баров истории до якоря.
+**Ограничения MVP:** для `quotes_regime_v1` — peer/regime через `market_regime_daily`; для **`quotes_regime_earnings_v1`** — добавлены tone, peer graph, peer momentum (см. `services/event_reaction_labeling.py`). Для исходов нужно ≥5 торговых дней вперёд от якоря; для полноты признаков желательно ≥20 баров истории до якоря. ~11% строк backfill могут дать `features:no_quotes` (seed quotes).
+
+### `quotes_regime_earnings_v1` (earnings grid)
+
+| Компонент | Назначение |
+|-----------|------------|
+| `enrich_features_with_peer_graph` | out-degree, sum weight по `peer_graph_edge` |
+| `enrich_features_with_peer_momentum` | mean/max 5d log-ret пиров на `as_of` |
+| tone / scenario hint counts | из `earnings_event_detail.guidance_summary` |
+| `apply_earnings_scenario_labels.py` | top LLM scenario → `final_label`, `label_source=llm_scenario_v0` |
+| `run_earnings_ml_refresh.py` | labels → backfill earnings_v1 → scenario classifier → readiness JSON |
+| `train_event_reaction_scenario_classifier.py` | CatBoostClassifier multi-class, min 8 rows, artifact `event_reaction_scenario_catboost.cbm` |
+
+Backfill earnings_v1 (без dry-run):
+
+```bash
+EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 \
+python scripts/backfill_event_reaction_labeling.py \
+  --dataset-version v0_expanded_baseline --only-features --force-features \
+  --include-all-symbols --limit 300
+```
+
+Полный цикл grid:
+
+```bash
+ML_READINESS_TRAIN_MODE=full python scripts/run_earnings_ml_refresh.py --backfill-limit 300
+```
 
 ---
 
@@ -132,19 +160,30 @@ WHERE id = 12345;
 1. **Полнота данных:** `GET /api/ml/data-quality` → `event_analytics` (доли `with_features_before`, `with_outcomes_after`, `labeled`).
 2. **Единый отчёт:** `python scripts/run_ml_data_quality_report.py` (см. [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md)).
 3. **Обучение CatBoost:** `scripts/train_event_reaction_catboost.py` (регрессия на `forward_log_ret_5d`, `--json-metrics-out`, гейты в `run_ml_train_readiness_cron.py`). Для product advisory использовать `EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline` и `EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1`.
-4. **Прод-инференс** — текущий безопасный режим: **advisory/shadow only**. Включить `EVENT_REACTION_CATBOOST_ENABLED=true`, но оставить `EVENT_REACTION_BLOCK_BUY_ON_WEAK=false`, пока нет отдельного trading backtest / live shadow статистики.
+4. **Earnings grid (pilot):** `scripts/run_earnings_ml_refresh.py` → scenario classifier; readiness в `last_earnings_intelligence_readiness.json`; гейты в `/analyzer`.
+5. **Прод-инференс** — текущий безопасный режим: **advisory/shadow only**. Включить `EVENT_REACTION_CATBOOST_ENABLED=true`, но оставить `EVENT_REACTION_BLOCK_BUY_ON_WEAK=false`, пока нет отдельного trading backtest / live shadow статистики. Scenario classifier **не** подключён к блокировке сделок.
 
 ---
 
 ## Регулярность и cron
 
-**Эталон в репозитории:** `crontab/lse-docker.crontab` (ручная установка на хост) и **`setup_cron_docker.sh`** (генерация crontab из корня проекта). Будни:
+**Эталон в репозитории:** `crontab/lse-docker.crontab` (ручная установка на хост) и **`setup_cron_docker.sh`** (генерация crontab из корня проекта).
+
+**Materials + LLM (earnings intelligence):**
+
+- **:18 */2** — `sync_earnings_material_registry.py`
+- **:20 */2** — `ingest_earnings_materials.py`
+- **:25 */6** — `extract_earnings_material_facts.py`
+- **:30 */6** — `run_earnings_ml_refresh.py` (dry-run grid + readiness JSON)
+
+**Event-reaction dataset (будни):**
 
 - **23:33** — build skeleton в `v0_expanded_baseline`.
 - **23:36** — backfill features/outcomes с `quotes_regime_v1`.
-- **23:50** — readiness dry-run с `EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline`.
-- **23:51** — full train только event-reaction (GAME_5M/portfolio skipped) для обновления advisory `.cbm`.
-- **23:52** — `run_ml_data_quality_report.py --no-default-datasets`.
+- **23:50** — readiness dry-run (GAME_5M + portfolio + event_reaction + **earnings grid** при `ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0`).
+- **23:51** — full train только event-reaction regression (GAME_5M/portfolio skipped).
+- **23:52** — full train **earnings grid** (`run_earnings_ml_refresh.py`, `ML_READINESS_TRAIN_MODE=full`).
+- **23:53** — `run_ml_data_quality_report.py --no-default-datasets`.
 
 Порядок зависимостей: **котировки** (`quotes`, в т.ч. `update_prices_cron`) → (опционально) seed → **build** → **backfill** (одним проходом заполняются пустые `features_before` и/или `outcomes_after`; при больших объёмах можно разнести `--only-features` / `--only-outcomes`).
 
@@ -186,10 +225,11 @@ WHERE id = 12345;
 
 ## Дальнейшее развитие (по желанию)
 
-1. **Revenue/guidance features**: следующий layer после EPS/timing, потому что EPS-only не улучшил expanded sample.
-2. **Peer reactions**: SMH/SOXX/QQQ + peers по `peer_graph_edge`, чтобы ловить кросс-эффект отчётов.
-3. **Trading metric gate**: PnL/top-k после transaction costs, sign accuracy, hit-rate по кварталам; RMSE не должен быть единственным критерием.
-4. **Scenario labels**: перейти от UP/DOWN/FLAT к сценариям `gap_up_follow_through`, `fade`, `cross_earnings_contagion`.
-5. **Live shadow report**: сравнивать предсказания карточек с фактическим `forward_log_ret_5d` после созревания.
+1. ~~**Peer reactions**~~ — частично в `quotes_regime_earnings_v1` + Event Brief spillover; дальше — validation / train features.
+2. ~~**Scenario labels**~~ — pilot `llm_scenario_v0` + classifier; расширять по мере LLM extract.
+3. **Live shadow report:** predicted scenario vs `forward_log_ret_5d` и peer spillover после созревания.
+4. **Trading metric gate:** PnL/top-k после transaction costs; RMSE регрессии не единственный критерий.
+5. **Materials coverage:** universe tickers без parsed materials (DELL, ANET, …).
+6. **Event fusion:** склеить earnings grid с GAME_5M/portfolio после shadow-статистики.
 
 После стабильной авторазметки блок **Event / earnings** в анализаторе отражает реальный прогресс; ручные правки учитывайте через `label_source` и при необходимости отдельный `dataset_version`.
