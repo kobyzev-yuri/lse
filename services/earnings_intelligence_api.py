@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from services.earnings_event_brief import build_event_brief
+from services.earnings_event_brief import build_event_brief, load_peer_edges, load_peer_spillover_outcomes
 from services.earnings_intelligence_universe import get_earnings_intelligence_universe
 from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_game_5m
 
@@ -253,3 +253,240 @@ def format_brief_telegram(brief: dict[str, Any], *, max_peers: int = 6) -> str:
     lines.append("")
     lines.append(f"Web: /earnings → {sym}")
     return "\n".join(lines)
+
+
+def get_peer_graph_ui(engine: Engine, *, universe_only: bool = True) -> dict[str, Any]:
+    """Peer graph nodes/edges for UI (spillover topology, not daily /corr)."""
+    universe = {s.upper() for s in get_earnings_intelligence_universe()}
+    q = text(
+        """
+        SELECT source_ticker, target_ticker, relation_type, weight, meta
+        FROM peer_graph_edge
+        ORDER BY weight DESC, source_ticker, target_ticker
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(q).mappings().all()
+
+    edges: list[dict[str, Any]] = []
+    nodes: set[str] = set()
+    for r in rows:
+        src = str(r["source_ticker"]).upper()
+        tgt = str(r["target_ticker"]).upper()
+        if universe_only and (src not in universe or tgt not in universe):
+            continue
+        w = float(r["weight"]) if r.get("weight") is not None else 0.0
+        edges.append(
+            {
+                "source": src,
+                "target": tgt,
+                "relation_type": r.get("relation_type"),
+                "weight": round(w, 4),
+                "meta": r.get("meta") or {},
+            }
+        )
+        nodes.add(src)
+        nodes.add(tgt)
+
+    out_degree: dict[str, int] = {}
+    in_degree: dict[str, int] = {}
+    for e in edges:
+        out_degree[e["source"]] = out_degree.get(e["source"], 0) + 1
+        in_degree[e["target"]] = in_degree.get(e["target"], 0) + 1
+
+    node_list = sorted(
+        nodes,
+        key=lambda n: (-max(out_degree.get(n, 0), in_degree.get(n, 0)), n),
+    )
+    return {
+        "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+        "nodes": [
+            {
+                "id": n,
+                "group": _group_label(n),
+                "out_degree": out_degree.get(n, 0),
+                "in_degree": in_degree.get(n, 0),
+            }
+            for n in node_list
+        ],
+        "edges": edges,
+        "summary": {
+            "node_count": len(node_list),
+            "edge_count": len(edges),
+            "sources_with_edges": len(out_degree),
+        },
+        "note": (
+            "Граф spillover: directed edges source→target с весом влияния. "
+            "Это не дневная матрица /corr — здесь якорь = дата earnings source-тикера."
+        ),
+    }
+
+
+def get_spillover_history(
+    engine: Engine,
+    *,
+    source_symbol: str,
+    since: date | None = None,
+    limit: int = 10,
+    dataset_version: str = "v0_expanded_baseline",
+) -> dict[str, Any]:
+    """Historical cross-impact: when source reported, forward returns of graph peers."""
+    sym = source_symbol.strip().upper()
+    where = [
+        "UPPER(TRIM(kb.ticker)) = :symbol",
+        "UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'",
+        "kb.ts::date <= CURRENT_DATE",
+    ]
+    params: dict[str, Any] = {"symbol": sym, "limit": max(1, int(limit))}
+    if since:
+        where.append("kb.ts::date >= :since")
+        params["since"] = since
+    q = text(
+        f"""
+        SELECT kb.id AS knowledge_base_id, kb.ts::date AS event_date,
+               ed.guidance_summary->>'management_tone' AS management_tone,
+               ed.guidance_summary->'scenario_hints'->0->>'scenario' AS top_scenario
+        FROM knowledge_base kb
+        LEFT JOIN earnings_event_detail ed ON ed.knowledge_base_id = kb.id
+        WHERE {' AND '.join(where)}
+        ORDER BY kb.ts DESC
+        LIMIT :limit
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(q, params).mappings().all()
+
+    static_peers = load_peer_edges(engine, source_ticker=sym)
+    peer_targets = [str(p["target_ticker"]).upper() for p in static_peers]
+
+    events_out: list[dict[str, Any]] = []
+    for r in rows:
+        ev_d = _parse_date(r.get("event_date"))
+        if ev_d is None:
+            continue
+        brief = build_event_brief(
+            engine,
+            symbol=sym,
+            event_date=ev_d,
+            dataset_version=dataset_version,
+        )
+        src_out = brief.get("source_outcomes") or {}
+        peer_rows = brief.get("peer_spillover_outcomes") or []
+        events_out.append(
+            {
+                "event_date": ev_d.isoformat(),
+                "management_tone": r.get("management_tone"),
+                "top_scenario": r.get("top_scenario"),
+                "source_forward_log_ret_1d": src_out.get("forward_log_ret_1d"),
+                "source_forward_log_ret_5d": src_out.get("forward_log_ret_5d"),
+                "peer_outcomes": peer_rows,
+            }
+        )
+
+    return {
+        "source_symbol": sym,
+        "peer_graph_edges": static_peers,
+        "peer_targets": peer_targets,
+        "events": events_out,
+        "note": (
+            "Spillover matrix: forward log-returns пиров от даты отчёта source-тикера. "
+            "Отличается от /corr (скользящая дневная корреляция котировок)."
+        ),
+    }
+
+
+def get_ml_layers_status(
+    engine: Engine,
+    *,
+    dataset_version: str = "v0_expanded_baseline",
+) -> dict[str, Any]:
+    """Explain regression vs rule labels vs scenario labels vs planned classifier."""
+    q = text(
+        """
+        SELECT
+          count(*) AS total,
+          count(*) FILTER (WHERE outcomes_after ? 'forward_log_ret_5d') AS with_outcomes,
+          count(*) FILTER (WHERE final_label IN ('UP','DOWN','FLAT')) AS rule_direction,
+          count(*) FILTER (WHERE label_source = 'llm_scenario_v0') AS llm_scenario,
+          count(*) FILTER (WHERE final_label NOT IN ('UP','DOWN','FLAT') AND final_label IS NOT NULL) AS named_scenario
+        FROM event_reaction_dataset
+        WHERE dataset_version = :dv
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(q, {"dv": dataset_version}).mappings().first() or {}
+        llm_extracted = int(
+            conn.execute(
+                text(
+                    """
+                    SELECT count(*) FROM earnings_event_detail ed
+                    WHERE ed.guidance_summary->>'management_tone' IS NOT NULL
+                    """
+                )
+            ).scalar()
+            or 0
+        )
+
+    total = int(row.get("total") or 0)
+    named_scenario = int(row.get("named_scenario") or 0)
+    min_classifier_rows = 80
+
+    layers = [
+        {
+            "id": "catboost_regression",
+            "title": "CatBoost регрессия (prod)",
+            "status": "active",
+            "target": "outcomes_after.forward_log_ret_5d",
+            "api": "/api/ml/event-reaction/{ticker}",
+            "description": (
+                "Предсказывает log-доходность на 5 торговых дней после earnings. "
+                "Признаки: quotes + market_regime (quotes_regime_v1). "
+                "Материалы/transcript пока не в feature_builder product-модели."
+            ),
+        },
+        {
+            "id": "rule_direction",
+            "title": "Правило UP/DOWN/FLAT",
+            "status": "active",
+            "target": "final_label по порогу forward_log_ret_5d",
+            "count": int(row.get("rule_direction") or 0),
+            "description": "Backfill из daily quotes — baseline метка направления, не ML-классификатор.",
+        },
+        {
+            "id": "llm_scenario_hints",
+            "title": "LLM scenario hints",
+            "status": "pilot" if llm_extracted else "pending",
+            "count": llm_extracted,
+            "script": "scripts/apply_earnings_scenario_labels.py",
+            "description": (
+                "Из earnings materials: capex_positive_for_infra_peers, gap_up_follow_through и др. "
+                "Пишется в earnings_event_detail, опционально в final_label."
+            ),
+        },
+        {
+            "id": "scenario_classifier",
+            "title": "CatBoost классификатор сценариев",
+            "status": "planned",
+            "blocked_by": [
+                f"≥{min_classifier_rows} строк с named scenario labels (сейчас ~{named_scenario})",
+                "feature_builder quotes_regime_earnings_v1 + peer spillover features в train",
+            ],
+            "description": (
+                "Отдельная модель multi-class по сценариям v0 (не замена регрессии). "
+                "Оценка: после накопления LLM labels на universe + peer features в dataset."
+            ),
+        },
+    ]
+
+    return {
+        "dataset_version": dataset_version,
+        "dataset_rows": total,
+        "rows_with_outcomes": int(row.get("with_outcomes") or 0),
+        "llm_scenario_labels_applied": int(row.get("llm_scenario") or 0),
+        "named_scenario_labels": named_scenario,
+        "layers": layers,
+        "daily_corr_note": (
+            "Дневная корреляция (/corr, portfolio cards) — фоновая связь котировок. "
+            "Peer graph + spillover — event-study от даты отчёта лидера."
+        ),
+    }

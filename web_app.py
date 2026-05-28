@@ -900,6 +900,51 @@ async def api_earnings_brief(symbol: str, event_date: str = ""):
         raise HTTPException(status_code=500, detail=f"earnings brief: {e!s}")
 
 
+@app.get("/api/earnings/peer-graph", response_class=JSONResponse)
+async def api_earnings_peer_graph(universe_only: bool = True):
+    from services.earnings_intelligence_api import get_peer_graph_ui
+
+    try:
+        return _to_jsonable(await asyncio.to_thread(get_peer_graph_ui, get_engine(), universe_only=universe_only))
+    except Exception as e:
+        logger.exception("api_earnings_peer_graph failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/earnings/spillover/{symbol}", response_class=JSONResponse)
+async def api_earnings_spillover(symbol: str, since: str = "2026-01-01", limit: int = 10):
+    from datetime import date as date_cls
+    from services.earnings_intelligence_api import get_spillover_history
+
+    sym = symbol.strip().upper()
+    since_d = date_cls.fromisoformat(since[:10]) if since.strip() else None
+    try:
+        payload = await asyncio.to_thread(
+            get_spillover_history,
+            get_engine(),
+            source_symbol=sym,
+            since=since_d,
+            limit=min(max(1, limit), 20),
+        )
+        return _to_jsonable(payload)
+    except Exception as e:
+        logger.exception("api_earnings_spillover failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/earnings/ml-layers", response_class=JSONResponse)
+async def api_earnings_ml_layers(dataset_version: str = "v0_expanded_baseline"):
+    from services.earnings_intelligence_api import get_ml_layers_status
+
+    try:
+        return _to_jsonable(
+            await asyncio.to_thread(get_ml_layers_status, get_engine(), dataset_version=dataset_version.strip())
+        )
+    except Exception as e:
+        logger.exception("api_earnings_ml_layers failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/earnings", response_class=HTMLResponse)
 async def earnings_intelligence_page(request: Request):
     """Earnings intelligence: universe coverage + Event Brief viewer."""
