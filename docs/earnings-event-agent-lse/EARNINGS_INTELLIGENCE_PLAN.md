@@ -7,20 +7,52 @@ todos:
     status: completed
   - id: extraction-schema
     content: "Зафиксировать LLM extraction JSON для call/report: guidance, capex, tone, Q&A concerns, affected tickers, scenario hints."
-    status: pending
+    status: completed
   - id: peer-graph-v0
     content: Задать peer_graph_edge v0 для AI/chips/infrastructure связей и META/NVDA/ASML/ARM/SNDK кейсов.
-    status: pending
+    status: completed
   - id: scenario-labels-v0
     content: Добавить пилотную разметку сценариев для 5-10 исторических earnings событий и их peer reactions.
-    status: pending
+    status: in_progress
   - id: event-brief-output
     content: "Сделать формат Event Brief для веба/бота: scenario, evidence, affected tickers, horizons, expected log-return."
-    status: pending
+    status: in_progress
 isProject: false
 ---
 
 # Earnings Intelligence Plan
+
+## Промежуточные итоги (2026-05-28)
+
+Этап **materials → ingest → LLM extract → peer graph** выполнен на prod для pilot META/NVDA.
+
+| Шаг | Статус | Артефакты / prod |
+|-----|--------|------------------|
+| 1. Materials registry | ✅ | `earnings_material`, `services/earnings_material_catalog.py`, `scripts/sync_earnings_material_registry.py` |
+| 2. Hybrid ingest | ✅ | HTML + **pypdf** (`services/earnings_material_parser.py`), `scripts/ingest_earnings_materials.py` |
+| 3. LLM extractor | ✅ pilot | `services/earnings_material_extractor.py`, `scripts/extract_earnings_material_facts.py` → `earnings_event_detail` |
+| 4. Peer graph v0 | ✅ | `services/peer_graph_catalog.py`, `scripts/seed_peer_graph_edges.py` — **27 рёбер** в prod |
+| 5. Cron | ✅ | `crontab/lse-docker.crontab`: sync / ingest / extract каждые 2–6 ч |
+| 6. Token audit | ✅ | `scripts/audit_earnings_materials_pipeline.py --symbols META,NVDA` — event-level ~**27k tok/событие** |
+
+**Pilot extraction (prod):**
+
+| Ticker | Date | tone | scenario (LLM) | affected |
+|--------|------|------|----------------|----------|
+| META | 2026-04-29 | bullish | capex_positive_for_infra_peers | 9 |
+| NVDA | 2026-05-20 | bullish | gap_up_follow_through | 13 |
+
+**LLM cost (claude-sonnet-4-6, ProxyAPI):** ~25k input + ~2.5k output ≈ **~27k tok/event** (transcript PDF + press/SEC; без дубля Fool). Legacy «1 pass на материал» ≈ 120k tok на META+NVDA.
+
+**Известные gaps:**
+
+- KB calendar может отставать от IR (NVDA 2026-05-20 пришлось добавить вручную) — нужен auto-ensure KB в sync.
+- `discover-links` для ARM шумный (много PDF без текста) — фильтр в backlog.
+- Старый failed URL META presentation (404) — можно пометить `skipped`.
+
+**Следующий этап:** scenario labels v0 → Event Brief JSON → peer outcomes в brief → UI/бот.
+
+---
 
 ## Что Уже Есть
 - В `[docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](/media/cnn/home/cnn/lse/docs/earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md)` уже зафиксирован MVP: `event_reaction_dataset`, `features_before`, `outcomes_after`, CatBoost-регрессия `forward_log_ret_5d`.
@@ -70,12 +102,12 @@ flowchart TD
 ## Порядок Реализации
 1. **Материалы:** зафиксировать, где храним ссылки/файлы earnings: press release, presentation, transcript, follow-up transcript, SEC/IR.
    Реализация: `earnings_material` хранит `source_url`, `material_type`, `parse_status`, `local_path`, `content_sha256`, `content_text` и связь с `knowledge_base_id`, если событие уже есть в KB.
-2. **Hybrid ingest:** сначала локальный downloader/parser (`scripts/ingest_earnings_materials.py`, HTML v0) + наш LLM через ProxyAPI; ScrapeGraphAI использовать как fallback для сложных IR-страниц/JS при наличии отдельного `SGAI_API_KEY`.
-3. **Extractor:** сделать фиксированный JSON, который LLM заполняет из материалов: факты отчёта, guidance, capex, tone, Q&A concerns, affected tickers.
-4. **Peer graph:** руками задать первые связи для AI infra/chips, чтобы кейс META -> MU/SNDK/AMD/LITE был машинно читаемым.
-5. **Outcomes:** для source ticker и affected tickers считать log-returns 1d/2d/5d/20d, drawdown/rebound и сохранять как исходы события.
-6. **Scenario labels:** разметить 5-10 кейсов сценариями из словаря ниже, сначала вручную/LLM-assisted.
-7. **Event Brief:** вывести в карточку/бот только прогноз и факты: scenario, affected tickers, expected log-return, evidence, invalidation.
+2. **Hybrid ingest:** `scripts/ingest_earnings_materials.py` + `services/earnings_material_parser.py` (HTML + pypdf PDF). Audit: `scripts/audit_earnings_materials_pipeline.py`.
+3. **Extractor:** `services/earnings_material_extractor.py`, `scripts/extract_earnings_material_facts.py` — JSON в `earnings_event_detail.guidance_summary` / `affected_tickers`.
+4. **Peer graph:** `services/peer_graph_catalog.py`, `scripts/seed_peer_graph_edges.py`.
+5. **Outcomes:** для source ticker и affected tickers считать log-returns 1d/2d/5d/20d — **следующий шаг** (brief + peer spillover).
+6. **Scenario labels:** `scripts/apply_earnings_scenario_labels.py` — LLM `scenario_hints` → `event_reaction_dataset.final_label`.
+7. **Event Brief:** `services/earnings_event_brief.py`, `scripts/build_earnings_event_brief.py` — JSON для UI/бота.
 8. **Analyzer readiness:** качество сценариев, покрытие материалов, OOS/PnL после transaction costs держать в анализаторе, не в карточке.
 
 ## Результат Для Пользователя

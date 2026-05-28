@@ -60,8 +60,9 @@
 ### `earnings_material`
 
 - **Назначение:** реестр первичных материалов отчёта/call: IR event page, press release, presentation, transcript, follow-up, SEC/сторонний transcript URL.
-- **Реализация:** `scripts/sync_earnings_material_registry.py` (KB EARNINGS + catalog URLs), `scripts/seed_earnings_material_registry.py` (legacy seed), `scripts/ingest_earnings_materials.py` + `services/earnings_material_parser.py`.
-- **Регулярность:** после появления/обновления отчётных материалов; registry можно наполнять вручную, из IR-хабов или из будущего extractor/fetcher.
+- **Реализация:** `scripts/sync_earnings_material_registry.py` (KB EARNINGS + catalog URLs), `scripts/seed_earnings_material_registry.py` (legacy seed), `scripts/ingest_earnings_materials.py` + `services/earnings_material_parser.py` (HTML + pypdf).
+- **LLM extraction:** `scripts/extract_earnings_material_facts.py` → `earnings_event_detail`; token audit: `scripts/audit_earnings_materials_pipeline.py --symbols META,NVDA`.
+- **Регулярность:** cron — sync/ingest каждые 2 ч, extract каждые 6 ч (`crontab/lse-docker.crontab`).
 
 ---
 

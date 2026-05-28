@@ -174,6 +174,56 @@ def _load_discovered_links(engine) -> list[dict]:
     return out
 
 
+def _find_kb_id(engine, symbol: str, event_date: date) -> int | None:
+    q = text(
+        """
+        SELECT id FROM knowledge_base
+        WHERE UPPER(TRIM(ticker)) = :symbol
+          AND ts::date = :event_date
+          AND UPPER(COALESCE(event_type, '')) LIKE '%EARNING%'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(q, {"symbol": symbol.upper(), "event_date": event_date}).first()
+    return int(row[0]) if row else None
+
+
+def _ensure_kb_for_catalog(engine, cm: CatalogMaterial, *, dry_run: bool) -> int | None:
+    if cm.event_date is None:
+        return None
+    existing = _find_kb_id(engine, cm.symbol, cm.event_date)
+    if existing:
+        return existing
+    if dry_run:
+        logger.info("dry-run ensure KB %s %s", cm.symbol, cm.event_date)
+        return None
+    q = text(
+        """
+        INSERT INTO knowledge_base (ts, ticker, source, content, event_type, importance)
+        VALUES (:ts, :ticker, :source, :content, 'EARNINGS', 'HIGH')
+        RETURNING id
+        """
+    )
+    ts = datetime.combine(cm.event_date, datetime.min.time()).replace(hour=21)
+    content = f"Earnings catalog event {cm.symbol} {cm.event_date}"
+    if cm.fiscal_period:
+        content += f" ({cm.fiscal_period})"
+    with engine.begin() as conn:
+        kb_id = conn.execute(
+            q,
+            {
+                "ts": ts,
+                "ticker": cm.symbol.upper(),
+                "source": "earnings_material_catalog",
+                "content": content,
+            },
+        ).scalar()
+    logger.info("Ensured KB id=%s for %s %s", kb_id, cm.symbol, cm.event_date)
+    return int(kb_id) if kb_id else None
+
+
 def _catalog_row(cm: CatalogMaterial, *, kb_id: int | None, sync_source: str) -> SyncRow:
     meta = dict(cm.meta or {})
     meta["sync_source"] = sync_source
@@ -222,6 +272,8 @@ def build_sync_rows(
     limit: int,
     include_priority_catalog: bool,
     discover_links: bool,
+    ensure_kb_catalog: bool,
+    dry_run: bool,
 ) -> list[SyncRow]:
     rows: list[SyncRow] = []
     seen: set[tuple[str, str | None, str, str]] = set()
@@ -253,7 +305,10 @@ def build_sync_rows(
         for cm in priority_catalog():
             if symbols and cm.symbol not in symbols:
                 continue
-            add(_catalog_row(cm, kb_id=None, sync_source="priority_catalog"))
+            kb_id = None
+            if ensure_kb_catalog:
+                kb_id = _ensure_kb_for_catalog(engine, cm, dry_run=dry_run)
+            add(_catalog_row(cm, kb_id=kb_id, sync_source="priority_catalog"))
 
     if discover_links:
         for item in _load_discovered_links(engine):
@@ -331,6 +386,8 @@ def main() -> int:
     ap.add_argument("--priority-catalog", action="store_true", default=True)
     ap.add_argument("--no-priority-catalog", action="store_false", dest="priority_catalog")
     ap.add_argument("--discover-links", action="store_true", help="Add discovered_links from parsed IR pages")
+    ap.add_argument("--ensure-kb-catalog", action="store_true", default=True, help="Create missing KB EARNINGS rows for catalog events")
+    ap.add_argument("--no-ensure-kb-catalog", action="store_false", dest="ensure_kb_catalog")
     args = ap.parse_args()
 
     symbols = None
@@ -349,6 +406,8 @@ def main() -> int:
         limit=max(1, args.limit),
         include_priority_catalog=args.priority_catalog,
         discover_links=args.discover_links,
+        ensure_kb_catalog=args.ensure_kb_catalog,
+        dry_run=args.dry_run,
     )
     n = upsert_rows(engine, rows, dry_run=args.dry_run)
     logger.info("%s %s earnings_material sync rows", "Checked" if args.dry_run else "Upserted", n)

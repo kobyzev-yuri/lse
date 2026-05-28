@@ -72,6 +72,12 @@
 | DDL `event_reaction_dataset`, `earnings_event_detail`, `earnings_material`, … | `scripts/sql/ml_event_analytics_schema.sql`, `scripts/migrate_ml_event_analytics.py` |
 | Starter registry отчётных материалов | `scripts/seed_earnings_material_registry.py` |
 | Fetch/parse earnings materials (HTML v0) | `scripts/ingest_earnings_materials.py`, `services/earnings_material_parser.py` |
+| Catalog + KB sync materials | `services/earnings_material_catalog.py`, `scripts/sync_earnings_material_registry.py` |
+| LLM extraction → earnings_event_detail | `services/earnings_material_extractor.py`, `scripts/extract_earnings_material_facts.py` |
+| Peer graph seed | `services/peer_graph_catalog.py`, `scripts/seed_peer_graph_edges.py` |
+| Token / coverage audit | `scripts/audit_earnings_materials_pipeline.py` |
+| Scenario labels from LLM hints | `scripts/apply_earnings_scenario_labels.py` |
+| Event Brief JSON | `services/earnings_event_brief.py`, `scripts/build_earnings_event_brief.py` |
 | Скелет из KB, фильтр конфига, «эра» по `kb.ts` | `scripts/build_event_reaction_dataset.py` (`--kb-since` / `EVENT_REACTION_KB_SINCE`) |
 | Авторазметка ценами (MVP) | `services/event_reaction_labeling.py`, `scripts/backfill_event_reaction_labeling.py` |
 | Котировки под датасет | `scripts/seed_quotes_for_event_reaction_dataset.py` (`--all-symbols`, `--min-quote-span-days`) |
@@ -141,12 +147,17 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 
 ## Следующий слой (после стабилизации 1–5)
 
-1. **Materials registry + ingest**: `earnings_material` хранит URL/статус материалов; `scripts/seed_earnings_material_registry.py` создаёт стартовые work items для META/ASML/ARM/SNDK/NVDA без скачивания.
-2. **Revenue/guidance ingestion**: минимум revenue estimate/actual/surprise + guidance raised/lowered/inline.
-3. **Peer reactions**: `peer_graph_edge`, sector ETF context (SMH/SOXX/QQQ), признаки реакции peers на соседние отчёты.
-4. **Trading metric gate**: top-k/PnL после transaction costs, sign accuracy по кварталам, live shadow сравнение предсказаний с созревшим `forward_log_ret_5d`.
-5. **Scenario labels**: перейти от UP/DOWN/FLAT к `gap_up_follow_through`, `gap_up_fade`, `cross_earnings_contagion`.
-6. Подписка/поставщик или IR/SEC extractor как замена ручного сбора транскриптов.
+**Выполнено 2026-05-28:** materials registry + ingest (HTML/PDF), catalog sync, LLM extraction pilot (META/NVDA), peer_graph v0 (27 edges), cron sync/ingest/extract, token audit (~27k tok/event).
+
+**В работе:** scenario labels v0, Event Brief JSON, peer forward outcomes в brief, auto-ensure KB для catalog events.
+
+1. ~~**Materials registry + ingest**~~ — см. `earnings_material`, `sync_earnings_material_registry.py`, `ingest_earnings_materials.py`.
+2. **Revenue/guidance ingestion:** LLM extractor пишет в `earnings_event_detail`; yfinance EPS — отдельно.
+3. **Peer reactions:** `peer_graph_edge` seeded; peer log-returns в Event Brief — следующий шаг.
+4. **Trading metric gate:** top-k/PnL после transaction costs (без изменений).
+5. **Scenario labels:** `apply_earnings_scenario_labels.py` — LLM hints → `final_label`.
+6. **Event Brief:** JSON для UI/бота (`build_earnings_event_brief.py`).
+7. Подписка/IR/SEC extractor как замена ручного сбора транскриптов.
 
 ---
 
@@ -160,3 +171,4 @@ WHERE dataset_version = 'v0' AND event_time_et < '2026-02-01';
 | 0.4 | 2026-05-12 | Зафиксировано выполнение фаз 1–5 (11–12.05); сводка по целям §2 дизайна; таблица накопления фактов для БД/моделей |
 | 0.5 | 2026-05-27 | Расширенный dataset `v0_expanded_baseline`, advisory product rollout, nightly event-reaction model refresh, roadmap revenue/guidance + peer features |
 | 0.6 | 2026-05-28 | Добавлен `earnings_material` registry и starter seed для материалов earnings intelligence |
+| 0.7 | 2026-05-28 | PDF ingest (pypdf), LLM extractor, peer_graph v0, cron materials pipeline; pilot META/NVDA extraction (~27k tok/event) |
