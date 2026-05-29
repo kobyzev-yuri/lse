@@ -110,7 +110,7 @@ isProject: false
 | Док: ridge vs event regression vs classifier | ✅ | [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §4–§7 |
 | P1: ML layers Shadow/Fusion/readiness paths | ✅ | `0525849`, API 8 layers incl. shadow/fusion/readiness |
 | P1: materials prod eval (--skip-ml-refresh) | ✅ | shadow n_matured=27, grid_ready=true |
-| P1: DELL brief gap | ✅ | orphan KB link + extract; brief status=ok |
+| P1: ANET/AVGO/GOOGL/PLTR coverage | ✅ | yfinance KB seed; readiness 100% |
 
 План сессии: [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md).
 
@@ -124,7 +124,8 @@ isProject: false
 
 ### Известные gaps (актуально)
 
-- **Материалы:** DELL (earnings day), ANET/AVGO/GOOGL/PLTR — только KB/future; часть universe без parsed materials.
+- **ERD skeleton:** тикеры earnings universe вне slim `config.env` (ANET/GOOGL/…) не попадали в `event_reaction_dataset` — cron/build с `--include-earnings-universe` (конфиг ∪ universe).
+- **Материалы:** DELL (earnings day) — SEC после отчёта; Fool 429 / ARM junk — backlog #8.
 - **Backfill:** ~11% строк (`features:no_quotes`) — нужен seed quotes для редких тикеров.
 - **Регрессия vs grid:** product CatBoost остаётся на `quotes_regime_v1`; earnings grid — отдельный classifier, не подменяет advisory RMSE-гейт.
 - **Trading gate:** scenario classifier — advisory/shadow; hard-block сделок не включён.

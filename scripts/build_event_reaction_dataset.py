@@ -9,6 +9,7 @@
   python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0
   python scripts/build_event_reaction_dataset.py --from-kb-earnings --kb-since 2026-02-01   # только события KB с этой даты (эра проекта)
   python scripts/build_event_reaction_dataset.py --from-kb-earnings --include-all-kb-tickers   # все тикеры из KB (старое поведение)
+  python scripts/build_event_reaction_dataset.py --from-kb-earnings --include-earnings-universe   # конфиг ∪ earnings intelligence
   python scripts/backfill_event_reaction_labeling.py --dataset-version v0 --limit 500
   python scripts/build_event_reaction_dataset.py --stats
   python scripts/build_event_reaction_dataset.py --prune-non-config --dataset-version v0
@@ -59,12 +60,10 @@ def _backfill_from_kb(
     *,
     dataset_version: str,
     dry_run: bool,
-    config_tickers_only: bool,
+    symbol_allowlist: list[str] | None,
     kb_since: Any | None,
 ) -> int:
     from sqlalchemy import bindparam, text
-
-    from services.ticker_groups import get_config_ticker_symbols_upper_unique
 
     base_where = """
         UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'
@@ -74,16 +73,15 @@ def _backfill_from_kb(
     """
     sym_filter = ""
     params: dict = {"dv": dataset_version}
-    if config_tickers_only:
-        symbols = get_config_ticker_symbols_upper_unique()
-        if not symbols:
-            logger.error("Пустой список тикеров из конфига (TICKERS_FAST/MEDIUM/LONG).")
+    if symbol_allowlist is not None:
+        if not symbol_allowlist:
+            logger.error("Пустой symbol allowlist для --from-kb-earnings.")
             return 1
         sym_filter = "AND UPPER(TRIM(kb.ticker)) IN :sym"
-        params["sym"] = symbols
-        logger.info("Фильтр: только тикеры из конфига (%s шт.)", len(symbols))
+        params["sym"] = symbol_allowlist
+        logger.info("Фильтр: allowlist (%s шт.)", len(symbol_allowlist))
     else:
-        logger.info("Фильтр по конфигу выключен (--include-all-kb-tickers): все подходящие тикеры KB")
+        logger.info("Фильтр по тикерам выключен (--include-all-kb-tickers): все подходящие тикеры KB")
 
     since_filter = ""
     if kb_since is not None:
@@ -112,13 +110,13 @@ def _backfill_from_kb(
         ON CONFLICT (symbol, event_time_et, event_type, dataset_version) DO NOTHING
     """
     stmt = text(insert_sql)
-    if config_tickers_only:
+    if symbol_allowlist is not None:
         stmt = stmt.bindparams(bindparam("sym", expanding=True))
 
     if dry_run:
         count_q = f"SELECT COUNT(*) FROM knowledge_base kb WHERE {base_where} {sym_filter} {since_filter}"
         count_stmt = text(count_q)
-        if config_tickers_only:
+        if symbol_allowlist is not None:
             count_stmt = count_stmt.bindparams(bindparam("sym", expanding=True))
         with engine.connect() as conn:
             c = conn.execute(count_stmt, params).scalar()
@@ -139,15 +137,21 @@ def _prune_non_config_symbols(
     *,
     dataset_version: str,
     dry_run: bool,
+    include_earnings_universe: bool,
 ) -> int:
-    """Удалить строки event_reaction_dataset с symbol вне TICKERS_FAST/MEDIUM/LONG."""
+    """Удалить строки event_reaction_dataset с symbol вне allowlist (конфиг или конфиг+earnings)."""
     from sqlalchemy import bindparam, text
 
+    from services.earnings_intelligence_universe import get_event_reaction_symbol_allowlist
     from services.ticker_groups import get_config_ticker_symbols_upper_unique
 
-    symbols = get_config_ticker_symbols_upper_unique()
+    symbols = (
+        get_event_reaction_symbol_allowlist()
+        if include_earnings_universe
+        else get_config_ticker_symbols_upper_unique()
+    )
     if not symbols:
-        logger.error("Пустой список тикеров из конфига (TICKERS_FAST/MEDIUM/LONG).")
+        logger.error("Пустой symbol allowlist для prune.")
         return 1
     dv = (dataset_version or "v0").strip()
     params: dict = {"dv": dv, "sym": symbols}
@@ -205,6 +209,11 @@ def main() -> int:
         action="store_true",
         help="Не фильтровать по конфигу: все earnings-тикеры из KB (старое поведение)",
     )
+    ap.add_argument(
+        "--include-earnings-universe",
+        action="store_true",
+        help="Allowlist = TICKERS_FAST/MEDIUM/LONG ∪ earnings intelligence equities (ANET, GOOGL, …)",
+    )
     ap.add_argument("--dataset-version", type=str, default="v0", help="dataset_version для вставок")
     ap.add_argument("--dry-run", action="store_true", help="Не писать в БД (только лог для --from-kb-earnings)")
     ap.add_argument(
@@ -236,13 +245,28 @@ def main() -> int:
             engine,
             dataset_version=args.dataset_version.strip() or "v0",
             dry_run=bool(args.dry_run),
+            include_earnings_universe=bool(args.include_earnings_universe),
         )
     if args.from_kb_earnings:
+        if args.include_all_kb_tickers and args.include_earnings_universe:
+            logger.error("Укажите только один из --include-all-kb-tickers / --include-earnings-universe")
+            return 1
+        allowlist: list[str] | None
+        if args.include_all_kb_tickers:
+            allowlist = None
+        elif args.include_earnings_universe:
+            from services.earnings_intelligence_universe import get_event_reaction_symbol_allowlist
+
+            allowlist = get_event_reaction_symbol_allowlist()
+        else:
+            from services.ticker_groups import get_config_ticker_symbols_upper_unique
+
+            allowlist = get_config_ticker_symbols_upper_unique()
         return _backfill_from_kb(
             engine,
             dataset_version=args.dataset_version.strip() or "v0",
             dry_run=bool(args.dry_run),
-            config_tickers_only=not bool(args.include_all_kb_tickers),
+            symbol_allowlist=allowlist,
             kb_since=kb_since_dt,
         )
     logger.error("Укажите --stats, --prune-non-config или --from-kb-earnings")

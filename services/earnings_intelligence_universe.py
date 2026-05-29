@@ -87,3 +87,23 @@ def get_earnings_intelligence_universe(*, include_correlation_context: bool = Tr
 
 def universe_symbols_csv(*, include_correlation_context: bool = True) -> str:
     return ",".join(get_earnings_intelligence_universe(include_correlation_context=include_correlation_context))
+
+
+def get_event_reaction_symbol_allowlist() -> list[str]:
+    """
+    Symbols for event_reaction_dataset skeleton / config-scoped backfill.
+
+    Union of TICKERS_FAST+MEDIUM+LONG and earnings intelligence equities so spillover
+    names (ANET, GOOGL, …) stay in ERD even when omitted from a slim config.env.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in list(get_config_ticker_symbols_upper_unique()) + list(
+        get_earnings_intelligence_universe(include_correlation_context=False)
+    ):
+        sym = str(raw).strip().upper()
+        if not sym or sym in seen or not is_equity_symbol(sym):
+            continue
+        seen.add(sym)
+        out.append(sym)
+    return sorted(out)

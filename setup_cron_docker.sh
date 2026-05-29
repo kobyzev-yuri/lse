@@ -55,8 +55,8 @@ cat >> "$CRON_FILE" << EOF
 25 23 * * * flock -n /tmp/lse_market_bars_intraday.lock docker exec $CONTAINER_NAME python scripts/ingest_market_bars_intraday.py >> "$PROJECT_DIR/logs/cron_market_bars_intraday.log" 2>&1
 32 23 * * 1-5 flock -n /tmp/lse_market_regime.lock docker exec $CONTAINER_NAME python scripts/ingest_market_regime_daily.py >> "$PROJECT_DIR/logs/event_regime.log" 2>&1
 # Event / earnings: expanded dataset for advisory product model.
-33 23 * * 1-5 flock -n /tmp/lse_erd_build.lock docker exec $CONTAINER_NAME python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0_expanded_baseline >> "$PROJECT_DIR/logs/event_reaction_build.log" 2>&1
-36 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 $CONTAINER_NAME python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --limit 8000 >> "$PROJECT_DIR/logs/event_reaction_labeling.log" 2>&1
+33 23 * * 1-5 flock -n /tmp/lse_erd_build.lock docker exec $CONTAINER_NAME python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0_expanded_baseline --include-earnings-universe >> "$PROJECT_DIR/logs/event_reaction_build.log" 2>&1
+36 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 $CONTAINER_NAME python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --include-all-symbols --limit 8000 >> "$PROJECT_DIR/logs/event_reaction_labeling.log" 2>&1
 # Recovery ML (анализатор + train): будни после US сессии (ожидается MSK). Без параллельных запусков.
 40 23 * * 1-5 flock -n /tmp/lse_daily_recovery_pipeline.lock docker exec $CONTAINER_NAME python scripts/run_daily_game5m_recovery_pipeline.py >> "$PROJECT_DIR/logs/game5m_daily_recovery_pipeline.log" 2>&1
 # ML train readiness (dry-run): гейты GAME_5M + portfolio + event_reaction → ml_train_readiness.jsonl.

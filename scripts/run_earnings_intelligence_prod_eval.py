@@ -45,6 +45,11 @@ def main() -> int:
     ap.add_argument("--skip-materials", action="store_true")
     ap.add_argument("--skip-ml-refresh", action="store_true")
     ap.add_argument("--skip-shadow", action="store_true")
+    ap.add_argument(
+        "--skip-erd-build",
+        action="store_true",
+        help="Skip ERD skeleton from KB (config ∪ earnings universe)",
+    )
     args = ap.parse_args()
 
     from config_loader import get_config_value
@@ -117,6 +122,32 @@ def main() -> int:
             extract_cmd.append("--dry-run")
         rc = _run(extract_cmd)
         steps.append(("materials_extract", rc))
+
+    if not args.skip_erd_build and not args.dry_run:
+        build_cmd = [
+            py,
+            "scripts/build_event_reaction_dataset.py",
+            "--from-kb-earnings",
+            "--dataset-version",
+            "v0_expanded_baseline",
+            "--include-earnings-universe",
+        ]
+        rc = _run(build_cmd)
+        steps.append(("erd_skeleton", rc))
+        if rc != 0:
+            return rc
+        rc = _run(
+            [
+                py,
+                "scripts/backfill_event_reaction_labeling.py",
+                "--dataset-version",
+                "v0_expanded_baseline",
+                "--include-all-symbols",
+                "--limit",
+                "120",
+            ]
+        )
+        steps.append(("erd_quotes_label", rc))
 
     if not args.skip_ml_refresh:
         refresh_cmd = [py, "scripts/run_earnings_ml_refresh.py"]
