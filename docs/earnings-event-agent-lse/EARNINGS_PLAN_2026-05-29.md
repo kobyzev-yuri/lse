@@ -1,85 +1,69 @@
 # Earnings Intelligence — план на 2026-05-29
 
-Зафиксировано после prod eval (`4534589`–`ce6c037`): grid advisory ready, shadow gate passed на 27 matured, UI guide на `/earnings/guide`.
+**Deploy:** `git push origin main` → VM `./scripts/deploy_from_github.sh`.
 
-**Deploy только через:** `git push origin main` → на VM `./scripts/deploy_from_github.sh`.
+**ML-слои (термины):** [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §7 · UI: `/earnings/guide`
 
 ---
 
 ## Цель дня
 
-Довести вкладку `/earnings` до **честного prod UX** (P0): пользователь видит полный Brief, regression привязан к дате события, shadow gate не вводит в заблуждение. Параллельно — один прогон materials/extract для свежих earnings (DELL и др.).
+1. **P0 ✅** — честный prod UX на `/earnings` (Brief, shadow labels, spillover sources).
+2. **P1** — ML layers tab + materials/extract; обновлять этот файл по факту тестов.
 
 ---
 
-## Утро — проверка prod (15 мин)
+## Глоссарий (кратко)
 
-```bash
-ssh ai8049520@104.154.205.58 "docker exec lse-bot bash -lc '
-  cat /app/logs/ml/ml_data_quality/last_earnings_intelligence_prod_eval.json
-  cat /app/logs/ml/ml_data_quality/last_earnings_scenario_shadow.json | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get(\\\"aggregate\\\"), d.get(\\\"trading_gate\\\"))\"
-'"
-```
-
-- `/earnings` — все 6 вкладок открываются без 503
-- `/earnings/guide` — 200
-- META Brief / NVDA Fusion — непустые данные
-
----
-
-## P0 — код (приоритет, ~4–6 ч)
-
-| # | Задача | Файлы | Критерий готовности |
-|---|--------|-------|---------------------|
-| 1 | **Brief: regression по event_date** | `earnings_intelligence.html`, `event_reaction_catboost_signal.py`, API | ✅ `?event_date=` + явное «нет features» |
-| 2 | **Brief: полный Event Brief в UI** | `earnings_intelligence.html` | ✅ evidence, guidance, capex, partial |
-| 3 | **Shadow: переименовать gate** | `earnings_intelligence.html`, `EARNINGS_UI_GUIDE.md` | ✅ «Shadow quality · advisory only» |
-| 4 | **Peer graph: «40 из N»** | `earnings_intelligence.html` | ✅ |
-| 5 | **Spillover: sources из graph ∪ events** | `earnings_intelligence.html` | ✅ |
-
-**Коммит после P0:** один PR/commit «Earnings UI P0: brief regression by date + full brief panel».
+| Термин | Что это | ML? |
+|--------|---------|-----|
+| **Event regression** | Pred **5d log-ret source** после earnings | ✅ CatBoost |
+| **Scenario classifier** | Pred **тип сценария** (fade, contagion, capex peers…) | ✅ CatBoost |
+| **Multiday ridge** | Drift **1–3d** на **любой** день (GAME_5M) | ✅ ridge, другой контур |
+| **Spillover** | **Факт** 1d/5d peers от даты отчёта source | ❌ quotes history |
+| **Shadow** | Качество classifier vs созревший 5d | ❌ offline report |
+| **Fusion** | Regression + classifier + brief; `execution_blocked` | advisory bundle |
+| **Peer graph weight** | Структурная гипотеза source→peer (0–1) | ❌ каталог v0 |
 
 ---
 
-## P1 — данные (после P0 или параллельно ops, ~1–2 ч)
+## Статус задач
 
-| # | Задача | Команда на VM |
-|---|--------|---------------|
-| 6 | Materials + extract universe | `ML_READINESS_TRAIN_MODE=full python3 scripts/run_earnings_intelligence_prod_eval.py --skip-ml-refresh` |
-| 7 | Проверить DELL / свежие KB | SQL: `earnings_material`, `earnings_event_detail` для event_date = сегодня−1…+0 |
-| 8 | Fool 429 | Зафиксировать в backlog: backoff в `ingest_earnings_materials.py`, фильтр junk URL (ARM) |
+### P0 — UI ✅ (deploy `fe26776` + `2b0664d`)
 
-**Критерий:** `symbols_without_materials` в readiness ↓, новые LLM tone на свежих событиях.
+| # | Задача | Статус |
+|---|--------|--------|
+| 1–5 | Brief, shadow, graph, spillover | ✅ prod tested |
 
----
+### P1 — код
 
-## P1 — ML layers tab (30–60 мин)
+| # | Задача | Статус |
+|---|--------|--------|
+| 9 | ML layers: Shadow + Fusion + readiness JSON | 🔄 в работе |
+| 10 | Docs: TRADE_ML §7 ridge vs regression vs classifier | ✅ `77cf513` |
 
-| # | Задача | Файлы |
-|---|--------|-------|
-| 9 | Добавить слои Shadow + Fusion + readiness path | `earnings_intelligence_api.py` → `get_ml_layers_status`, UI tab ML |
+### P1 — данные (ops)
 
----
-
-## Не делать завтра (явный scope cut)
-
-- Подключение fusion/shadow к GAME_5M или portfolio execution
-- Retrain classifier с новыми классами (ждём ≥30 labels)
-- Portfolio cards performance (отдельная задача)
+| # | Задача | Статус |
+|---|--------|--------|
+| 6 | `run_earnings_intelligence_prod_eval.py --skip-ml-refresh` | ⏳ после deploy |
+| 7 | DELL / свежие KB (materials + LLM) | ⏳ |
+| 8 | Fool 429 → backlog | 📋 |
 
 ---
 
-## Вечер — acceptance
+## Acceptance
 
-- [x] P0 пункты 1–5 в коде (deploy на prod — отдельно)
-- [ ] `/earnings/guide` обновлён если менялось поведение UI
-- [ ] `last_earnings_scenario_shadow.json` — n_matured не упал
-- [ ] Краткая запись в `EARNINGS_INTELLIGENCE_PLAN.md` (секция «2026-05-29») при существенных изменениях
+- [x] P0 на prod
+- [x] TRADE_ML_DATASETS обновлён (§4–§7)
+- [ ] ML layers tab: shadow/fusion/readiness paths на prod
+- [ ] `n_matured` shadow не упал после materials run
+- [ ] Запись в `EARNINGS_INTELLIGENCE_PLAN.md` §2026-05-29
 
 ---
 
 ## Ссылки
 
-- [EARNINGS_UI_GUIDE.md](./EARNINGS_UI_GUIDE.md) — вкладки, примеры, полный audit
-- [EARNINGS_INTELLIGENCE_PLAN.md](./EARNINGS_INTELLIGENCE_PLAN.md) — roadmap
-- Prod JSON: `/app/logs/ml/ml_data_quality/last_earnings_intelligence_readiness.json`
+- [EARNINGS_UI_GUIDE.md](./EARNINGS_UI_GUIDE.md)
+- [EARNINGS_INTELLIGENCE_PLAN.md](./EARNINGS_INTELLIGENCE_PLAN.md)
+- Prod: `/app/logs/ml/ml_data_quality/last_earnings_intelligence_readiness.json`

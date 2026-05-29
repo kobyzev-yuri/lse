@@ -465,6 +465,38 @@ def get_ml_layers_status(
     clf_status = str(scenario_metrics.get("status") or "")
     clf_ready = clf_status == "ok" and scenario_model_path.is_file() and llm_scenario_applied >= 8
 
+    root = Path(__file__).resolve().parents[1]
+    from services.earnings_intelligence_readiness import (
+        default_readiness_metrics_path,
+        default_shadow_report_path,
+        gate_trading_shadow,
+    )
+
+    shadow_path = default_shadow_report_path(root)
+    readiness_path = default_readiness_metrics_path(root)
+    shadow_data: dict[str, Any] = {}
+    readiness_data: dict[str, Any] = {}
+    if shadow_path.is_file():
+        try:
+            import json
+
+            raw = json.loads(shadow_path.read_text(encoding="utf-8"))
+            shadow_data = raw if isinstance(raw, dict) else {}
+        except Exception:
+            shadow_data = {}
+    if readiness_path.is_file():
+        try:
+            import json
+
+            raw = json.loads(readiness_path.read_text(encoding="utf-8"))
+            readiness_data = raw if isinstance(raw, dict) else {}
+        except Exception:
+            readiness_data = {}
+
+    shadow_agg = shadow_data.get("aggregate") if isinstance(shadow_data.get("aggregate"), dict) else {}
+    shadow_gate = gate_trading_shadow(shadow_data if shadow_data else None)
+    readiness_gates = readiness_data.get("gates") if isinstance(readiness_data.get("gates"), dict) else {}
+
     layers = [
         {
             "id": "quotes_regime_earnings_v1",
@@ -537,6 +569,53 @@ def get_ml_layers_status(
                 "capex_positive_for_infra_peers и др. Запуск: run_earnings_ml_refresh.py."
             ),
         },
+        {
+            "id": "live_shadow",
+            "title": "Live shadow (quality gate)",
+            "status": "active" if shadow_data and shadow_agg.get("n_matured") else ("pilot" if shadow_data else "pending"),
+            "target": "pred scenario vs matured forward_log_ret_5d",
+            "api": "/api/earnings/shadow-report",
+            "json_path": str(shadow_path) if shadow_path.is_file() else None,
+            "metrics": {
+                "n_matured": shadow_agg.get("n_matured"),
+                "sign_accuracy": shadow_agg.get("sign_accuracy"),
+                "class_accuracy": shadow_agg.get("class_accuracy"),
+                "mean_pseudo_pnl_log": shadow_agg.get("mean_pseudo_pnl_log"),
+                "shadow_quality_gate_ready": shadow_gate.get("ready"),
+            },
+            "description": (
+                "Offline-оценка classifier на созревших событиях. "
+                "Shadow quality gate — качество ML, **не** разрешение на сделки (advisory only)."
+            ),
+        },
+        {
+            "id": "fusion_advisory",
+            "title": "Fusion advisory",
+            "status": "active",
+            "target": "regression + scenario + brief bundle",
+            "api": "/api/earnings/fusion/{symbol}",
+            "description": (
+                "Склеивает event regression, scenario classifier и Event Brief. "
+                "execution_blocked=true всегда — не подключено к GAME_5M bot."
+            ),
+        },
+        {
+            "id": "readiness_gates",
+            "title": "Readiness gates (prod JSON)",
+            "status": "active" if readiness_gates.get("overall_grid_ready") else "pilot",
+            "json_path": str(readiness_path) if readiness_path.is_file() else None,
+            "script": "scripts/run_earnings_ml_refresh.py",
+            "metrics": {
+                "overall_grid_ready": readiness_gates.get("overall_grid_ready"),
+                "overall_trading_shadow_ready": readiness_gates.get("overall_trading_shadow_ready"),
+                "sources_ready": (readiness_gates.get("sources") or {}).get("ready"),
+                "classifier_ready": (readiness_gates.get("scenario_classifier") or {}).get("ready"),
+            },
+            "description": (
+                "Сводка гейтов materials / features / labels / classifier / shadow. "
+                "Пишется в last_earnings_intelligence_readiness.json; дублируется в /analyzer."
+            ),
+        },
     ]
 
     return {
@@ -548,6 +627,12 @@ def get_ml_layers_status(
         "scenario_classifier_ready": clf_ready,
         "named_scenario_labels": named_scenario,
         "layers": layers,
+        "readiness_paths": {
+            "shadow_report": str(shadow_path) if shadow_path.is_file() else None,
+            "readiness": str(readiness_path) if readiness_path.is_file() else None,
+            "scenario_train_metrics": str(metrics_path) if metrics_path.is_file() else None,
+        },
+        "ml_stack_doc": "/earnings/guide (UI) · docs/TRADE_ML_DATASETS_AND_TARGETS_RU.md §7",
         "daily_corr_note": (
             "Дневная корреляция (/corr, portfolio cards) — фоновая связь котировок. "
             "Peer graph + spillover — event-study от даты отчёта лидера."

@@ -401,15 +401,23 @@ async function loadFusion(eventDate) {
 async function loadMlLayers() {
     const res = await fetch('/api/earnings/ml-layers');
     const data = await res.json();
+    const fmtMet = (m) => {
+        if (!m || typeof m !== 'object') return '';
+        return Object.entries(m).filter(([,v]) => v != null).map(([k,v]) => `${k}: ${typeof v === 'number' && k.includes('accuracy') ? (v*100).toFixed(0)+'%' : v}`).join(' · ');
+    };
     document.getElementById('mlLayersContent').innerHTML = `
         <p class="muted">Dataset ${data.dataset_version}: ${data.dataset_rows} rows · outcomes ${data.rows_with_outcomes} · named scenarios ${data.named_scenario_labels}</p>
         <p class="muted">${data.daily_corr_note}</p>
+        <p class="muted">Стек ML (ridge vs regression vs classifier): <a href="/earnings/guide" style="color:#93c5fd">guide</a> · см. TRADE_ML_DATASETS §7 в repo.</p>
         ${(data.layers||[]).map(l => `<div class="layer-card ${l.status==='active'?'active':l.status==='planned'?'planned':''}">
-            <strong>${l.title}</strong> <span class="badge ${l.status==='planned'?'planned':'ok'}">${l.status}</span>
+            <strong>${l.title}</strong> <span class="badge ${l.status==='planned'?'planned':l.status==='pending'?'no':'ok'}">${l.status}</span>
             <div class="muted">${l.description}</div>
             ${l.target ? `<div>target: <code>${l.target}</code></div>` : ''}
             ${l.api ? `<div>API: <code>${l.api}</code></div>` : ''}
-            ${l.blocked_by ? `<div class="muted">Нужно: ${l.blocked_by.join('; ')}</div>` : ''}
+            ${l.json_path ? `<div class="muted">JSON: <code>${l.json_path}</code></div>` : ''}
+            ${l.script ? `<div class="muted">script: <code>${l.script}</code></div>` : ''}
+            ${fmtMet(l.metrics) ? `<div>${fmtMet(l.metrics)}</div>` : ''}
+            ${l.blocked_by && l.blocked_by.length ? `<div class="muted">Нужно: ${l.blocked_by.join('; ')}</div>` : ''}
         </div>`).join('')}`;
 }
 
