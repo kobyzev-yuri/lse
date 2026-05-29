@@ -100,7 +100,25 @@ def _resolve_kb_id(engine, *, symbol: str, event_date: date | None, fallback: in
     return int(row[0]) if row else None
 
 
-def _upsert_event_detail(engine, *, kb_id: int, payload: dict[str, Any], extraction_meta: dict[str, Any]) -> None:
+def _detail_has_llm_extraction(engine, kb_id: int) -> bool:
+    q = text(
+        """
+        SELECT guidance_summary
+        FROM earnings_event_detail
+        WHERE knowledge_base_id = :kb_id
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(q, {"kb_id": kb_id}).first()
+    if not row or not row[0]:
+        return False
+    gs = row[0]
+    if isinstance(gs, str):
+        try:
+            gs = json.loads(gs)
+        except Exception:
+            return False
+    return bool(isinstance(gs, dict) and gs.get("extraction_meta"))
     guidance = dict(payload.get("guidance_summary") or {})
     guidance["extraction_meta"] = extraction_meta
     q = text(
@@ -212,6 +230,26 @@ def main() -> int:
         fiscal_period = next((m.get("fiscal_period") for m in materials if m.get("fiscal_period")), None)
         selected = select_materials_for_event(materials)
         if not selected:
+            continue
+
+        kb_id_precheck = _resolve_kb_id(
+            engine,
+            symbol=symbol,
+            event_date=event_date,
+            fallback=next((m.get("knowledge_base_id") for m in materials if m.get("knowledge_base_id")), None),
+        )
+        if kb_id_precheck and _detail_has_llm_extraction(engine, kb_id_precheck):
+            logger.info("%s %s skip: LLM extraction already in earnings_event_detail", symbol, event_date)
+            results.append(
+                {
+                    "symbol": symbol,
+                    "event_date": event_date.isoformat() if event_date else None,
+                    "status": "skipped",
+                    "reason": "llm_extraction_exists",
+                    "knowledge_base_id": kb_id_precheck,
+                }
+            )
+            processed += 1
             continue
 
         if args.dry_run:

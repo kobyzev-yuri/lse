@@ -108,7 +108,7 @@ def select_materials_for_event(rows: list[dict[str, Any]]) -> list[dict[str, Any
     useful = [
         r
         for r in rows
-        if str(r.get("parse_status") or "") == "parsed"
+        if str(r.get("parse_status") or "") in ("parsed", "extracted")
         and len(str(r.get("content_text") or "")) >= 400
     ]
     sorted_rows = sorted(useful, key=_material_sort_key)
