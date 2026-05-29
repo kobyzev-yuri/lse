@@ -44,6 +44,11 @@
         .block h3 { font-size: 0.72rem; color: #64748b; text-transform: uppercase; margin-bottom: 0.35rem; }
         .peer-table { width: 100%; font-size: 0.78rem; }
         .peer-table td, .peer-table th { padding: 0.25rem 0.35rem; border-bottom: 1px solid #334155; }
+        .peer-table th { color: #94a3b8; font-weight: 600; font-size: 0.72rem; }
+        .pill { display: inline-block; padding: 0.1rem 0.38rem; border-radius: 999px; font-size: 0.68rem; font-weight: 700; text-transform: none; letter-spacing: 0.02em; }
+        .pill-spillover { background: #1e3a5f; color: #93c5fd; }
+        .block h3 .horizon-pills { display: inline-flex; gap: 0.25rem; margin-left: 0.35rem; vertical-align: middle; }
+        .block h3 .peer-count { color: #64748b; font-weight: 500; }
         .pos { color: #86efac; } .neg { color: #fca5a5; }
         .muted { color: #94a3b8; }
         .quote { font-style: italic; color: #cbd5e1; margin-top: 0.35rem; line-height: 1.4; }
@@ -177,6 +182,16 @@ const fmtGuidance = (g) => {
 };
 const badgeMat = (ev) => ev.materials_useful > 0 ? `<span class="badge ok">${ev.materials_useful}</span>` : '<span class="badge no">0</span>';
 const badgeLlm = (ev) => ev.has_llm ? '<span class="badge ok">yes</span>' : '<span class="badge no">—</span>';
+const horizonPills = () =>
+    '<span class="horizon-pills"><span class="pill pill-spillover" title="forward log-return, 1 торг. день после отчёта">1d</span>'
+    + '<span class="pill pill-spillover" title="forward log-return, 5 торг. дней после отчёта">5d</span></span>';
+const peerSpilloverTable = (peers, escTicker = true) => {
+    const body = peers.map(p => {
+        const t = escTicker ? esc(p.ticker) : p.ticker;
+        return `<tr><td>${t}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(p.forward_log_ret_5d)}</td></tr>`;
+    }).join('');
+    return `<table class="peer-table"><thead><tr><th>Peer</th><th><span class="pill pill-spillover">1d</span></th><th><span class="pill pill-spillover">5d</span></th></tr></thead><tbody>${body}</tbody></table>`;
+};
 let allEvents = [], currentFilter = 'all', graphData = null;
 
 function eventDatesForSymbol(sym) {
@@ -367,8 +382,8 @@ async function loadBrief(symbol, eventDate) {
         <div class="detail-grid">
             <div class="block"><h3>Source outcomes (quotes)</h3>
                 1d ${fmtPct(src.forward_log_ret_1d)} · 5d ${fmtPct(src.forward_log_ret_5d)} · label ${esc(src.final_label_auto||'—')}</div>
-            <div class="block"><h3>Peer spillover</h3>
-                <table class="peer-table"><tbody>${peers.map(p=>`<tr><td>${esc(p.ticker)}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(p.forward_log_ret_5d)}</td></tr>`).join('')}</tbody></table></div>
+            <div class="block"><h3>Peer spillover <span class="peer-count">(${peers.length})</span>${horizonPills()}</h3>
+                ${peerSpilloverTable(peers, true)}</div>
         </div>`;
     } catch (err) {
         content.innerHTML = `<span class="err">${esc(err.message || String(err))}</span>`;
@@ -410,10 +425,9 @@ async function loadSpillover() {
     if (!(data.events||[]).length) { box.innerHTML = '<div class="err">Нет past events с spillover</div>'; return; }
     box.innerHTML = data.events.map(ev => {
         const peers = (ev.peer_outcomes||[]).filter(p => p.status==='ok');
-        return `<div class="block"><h3>${sym} · ${ev.event_date}</h3>
+        return `<div class="block"><h3>${sym} · ${ev.event_date} · spillover${horizonPills()}</h3>
             <div class="muted">tone ${ev.management_tone||'—'} · scenario ${ev.top_scenario||'—'} · source 5d ${fmtPct(ev.source_forward_log_ret_5d)}</div>
-            <table class="peer-table"><thead><tr><th>Peer</th><th>1d</th><th>5d</th></tr></thead>
-            <tbody>${peers.map(p=>`<tr><td>${p.ticker}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(p.forward_log_ret_5d)}</td></tr>`).join('')}</tbody></table></div>`;
+            ${peerSpilloverTable(peers, false)}</div>`;
     }).join('');
 }
 
