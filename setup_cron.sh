@@ -1,9 +1,28 @@
 #!/bin/bash
 # Скрипт для настройки cron задач для LSE Trading System
 # Запуск: ./setup_cron.sh (из корня проекта)
-# Используется conda env py11; пути подставляются автоматически.
+#
+# Docker (GCP VM, lse-bot): ставит crontab/lse-docker.crontab (полный эталон, docker exec).
+# Локально без Docker: conda py11, heredoc ниже.
+
+set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONTAINER_NAME="${LSE_CONTAINER_NAME:-lse-bot}"
+
+if [[ -f "$PROJECT_DIR/docker-compose.yml" ]] && docker ps -a -q -f "name=^${CONTAINER_NAME}$" 2>/dev/null | grep -q .; then
+    CRON_SRC="$PROJECT_DIR/crontab/lse-docker.crontab"
+    if [[ ! -f "$CRON_SRC" ]]; then
+        echo "❌ Нет $CRON_SRC" >&2
+        exit 1
+    fi
+    mkdir -p "$PROJECT_DIR/logs"
+    sed "s|/home/ai8049520/lse|${PROJECT_DIR}|g" "$CRON_SRC" | crontab -
+    echo "✅ Cron (Docker) из crontab/lse-docker.crontab"
+    echo "   Проект: $PROJECT_DIR · контейнер: $CONTAINER_NAME"
+    echo "   ERD: crontab -l | grep -E 'build_event_reaction|backfill_event_reaction'"
+    exit 0
+fi
 
 # Явно используем conda env py11 (проект переведён с py310 на py11)
 if PY11_PATH=$(conda run -n py11 which python 2>/dev/null); then
