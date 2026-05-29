@@ -211,7 +211,6 @@ def main() -> int:
 
     cat_idx = [feature_names.index("symbol")]
     train_pool = Pool(X_train, y_train, cat_features=cat_idx, feature_names=feature_names)
-    valid_pool = Pool(X_valid, y_valid, cat_features=cat_idx, feature_names=feature_names)
 
     model = CatBoostClassifier(
         iterations=300,
@@ -223,6 +222,7 @@ def main() -> int:
         early_stopping_rounds=40,
     )
     if n_valid > 0:
+        valid_pool = Pool(X_valid, y_valid, cat_features=cat_idx, feature_names=feature_names)
         model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
         pred = model.predict(valid_pool)
         acc = float(np.mean(pred.reshape(-1) == y_valid.to_numpy()))
