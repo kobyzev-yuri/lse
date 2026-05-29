@@ -168,6 +168,8 @@ def main() -> int:
 
     train_df = frame.iloc[:n_train]
     valid_df = frame.iloc[n_train:]
+    holdout_skipped = False
+    unseen_valid_classes: list[str] = []
     unseen_valid = set(valid_df["target_scenario"].unique()) - set(train_df["target_scenario"].unique())
     if unseen_valid:
         logger.warning(
@@ -177,8 +179,8 @@ def main() -> int:
         train_df = frame
         valid_df = frame.iloc[0:0]
         n_train, n_valid = int(n_total), 0
-        metrics["holdout_skipped"] = True
-        metrics["unseen_valid_classes"] = sorted(unseen_valid)
+        holdout_skipped = True
+        unseen_valid_classes = sorted(unseen_valid)
     X_train = train_df[feature_names]
     y_train = train_df["target_scenario"]
     X_valid = valid_df[feature_names]
@@ -190,6 +192,8 @@ def main() -> int:
         "n_total": int(n_total),
         "classes": classes,
         "feature_builder_version": fbv,
+        "holdout_skipped": holdout_skipped,
+        "unseen_valid_classes": unseen_valid_classes,
     }
 
     if args.dry_run:
