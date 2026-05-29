@@ -64,6 +64,13 @@
         .layer-card { border-left: 3px solid #475569; padding-left: 0.5rem; margin-bottom: 0.65rem; }
         .layer-card.active { border-left-color: #22c55e; }
         .layer-card.planned { border-left-color: #eab308; }
+        .tab-intro { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 0.6rem 0.75rem; margin-bottom: 0.75rem; font-size: 0.82rem; line-height: 1.5; color: #cbd5e1; }
+        .tab-intro strong { color: #e2e8f0; }
+        .tab-intro ul { margin: 0.45rem 0 0 1.1rem; }
+        .tab-intro li { margin: 0.25rem 0; }
+        .shadow-legend { font-size: 0.78rem; margin-bottom: 0.65rem; }
+        .shadow-legend dt { color: #94a3b8; font-weight: 600; margin-top: 0.35rem; }
+        .shadow-legend dd { margin: 0.15rem 0 0 0; color: #cbd5e1; }
     </style>
 </head>
 <body>
@@ -73,7 +80,7 @@
     <div class="sub">Календарь earnings → материалы → LLM facts → peer spillover. Отдельно от дневной <code>/corr</code>.</div>
 </div>
 
-<details class="help-panel" open>
+<details class="help-panel">
     <summary>Как читать этот экран — кратко · <a href="/earnings/guide" style="color:#93c5fd">полное руководство (RU)</a></summary>
     <p class="muted" style="margin:0.35rem 0">Вкладки: <strong>События</strong> (календарь) · <strong>Brief</strong> · <strong>Spillover</strong> · <strong>Fusion</strong> — одинаковый экран с тулбаром; из таблицы кнопки Brief/Fusion/Spillover переключают вкладку. Тикер — поле ввода (не длинный список).</p>
     <ul>
@@ -99,6 +106,14 @@
 </div>
 
 <div id="panel-events" class="panel active">
+    <div class="tab-intro">
+        <strong>События</strong> — календарь отчётов universe (GAME_5M + portfolio + context).
+        <ul>
+            <li><strong>Date</strong> — дата earnings в <code>knowledge_base</code>.</li>
+            <li><strong>Materials / LLM</strong> — есть ли parsed materials и извлечённые факты (tone, scenario).</li>
+            <li><strong>Brief / Fusion / Spillover</strong> в строке — переход на соответствующую вкладку с этим тикером (и датой для Brief/Fusion).</li>
+        </ul>
+    </div>
     <div class="toolbar">
         <button class="btn active" data-filter="all">Все</button>
         <button class="btn" data-filter="GAME_5M">GAME_5M</button>
@@ -112,10 +127,17 @@
         <thead><tr><th>Ticker</th><th>Date</th><th>Group</th><th>Materials</th><th>LLM</th><th>Tone</th><th>Scenario</th><th></th></tr></thead>
         <tbody id="eventsBody"></tbody>
     </table>
-    <p class="muted" style="margin-top:0.65rem;font-size:0.78rem">Brief / Fusion / Spillover — отдельные вкладки; клик по строке переключает вкладку с выбранным тикером.</p>
 </div>
 
 <div id="panel-brief" class="panel">
+    <div class="tab-intro">
+        <strong>Event Brief</strong> — один отчёт: LLM-факты, guidance/capex, цитаты, фактические 1d/5d по source и таблица spillover по пирам.
+        <ul>
+            <li>Тикер + <strong>дата отчёта</strong> (как в колонке Date на «Событиях»).</li>
+            <li>CatBoost 5d — advisory регрессия; при несовпадении версии features возможен пересчёт.</li>
+            <li>Не путать с <code>/corr</code> — здесь event-study от даты отчёта, не скользящая корреляция.</li>
+        </ul>
+    </div>
     <div class="toolbar">
         <label class="muted">Ticker:</label>
         <input id="briefSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="META">
@@ -128,14 +150,42 @@
 </div>
 
 <div id="panel-graph" class="panel">
-    <p class="muted" style="margin-bottom:0.5rem">Рёбра <code>peer_graph_edge</code>: source → target, weight 0–1. Клик по source — spillover history.</p>
+    <div class="tab-intro">
+        <strong>Peer graph</strong> — статическая карта «кто на кого влияет после earnings», из таблицы <code>peer_graph_edge</code>.
+        <ul>
+            <li><strong>Ребро (edge):</strong> <code>source → target</code> — после отчёта <em>source</em> (лидер, например META) ожидаем влияние на <em>target</em> (пир: NVDA, MU, …).</li>
+            <li><strong>weight 0–1</strong> — сила связи (чем длиннее синяя полоска в списке Edges, тем выше вес).</li>
+            <li><strong>relation_type</strong> — тип связи (supplier, peer, sector и т.д., см. в списке Edges).</li>
+            <li>Это <em>не</em> дневная матрица <code>/corr</code>: граф задаёт <strong>кого смотреть</strong>, а фактические % — на вкладке <strong>Spillover</strong> / в Brief.</li>
+        </ul>
+    </div>
     <div class="graph-wrap">
-        <div class="block"><h3>Sources (out-degree)</h3><div id="graphSources"></div></div>
-        <div class="block"><h3>Edges</h3><div id="graphEdges"></div></div>
+        <div class="block">
+            <h3>Sources (out-degree)</h3>
+            <p class="muted" style="margin-bottom:0.4rem;font-size:0.76rem;text-transform:none;font-weight:400;color:#94a3b8">
+                Тикеры-лидеры с исходящими рёбрами: сколько пиров в графе «слушают» этот source. Клик по тикеру → вкладка <strong>Spillover</strong> (история отчётов и 1d/5d пиров).
+            </p>
+            <div id="graphSources"></div>
+        </div>
+        <div class="block">
+            <h3>Edges</h3>
+            <p class="muted" style="margin-bottom:0.4rem;font-size:0.76rem;text-transform:none;font-weight:400;color:#94a3b8">
+                Список рёбер <code>source → target</code> (первые 40 из полного графа). Для полной истории движений после даты отчёта используйте Spillover или Brief.
+            </p>
+            <div id="graphEdges"></div>
+        </div>
     </div>
 </div>
 
 <div id="panel-spillover" class="panel">
+    <div class="tab-intro">
+        <strong>Spillover</strong> — event-study: как пиры из графа реально сходили/росли на 1d и 5d <em>после каждой прошлой даты отчёта</em> выбранного source.
+        <ul>
+            <li><strong>Source</strong> — тикер, который отчитался (лидер); пиры берутся из <code>peer_graph_edge</code> где source = этот тикер.</li>
+            <li>Для каждой даты: tone/scenario source, его 5d, таблица пиров с pill <strong>1d</strong> / <strong>5d</strong>.</li>
+            <li>Из таблицы «События» кнопка Spillover подставляет source и открывает эту вкладку.</li>
+        </ul>
+    </div>
     <div class="toolbar">
         <label class="muted">Source:</label>
         <input id="spilloverSource" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="META">
@@ -146,14 +196,30 @@
 </div>
 
 <div id="panel-shadow" class="panel">
+    <div class="tab-intro">
+        <strong>Shadow</strong> — offline-качество классификатора сценариев на уже созревших отчётах (есть фактический 5d). <span class="badge planned">Advisory only</span> — не разрешение на сделки.
+        <ul>
+            <li><strong>Sign</strong> — совпал ли знак 5d у <em>source</em> с эвристикой сценария (capex → source часто вниз, gap_up → вверх).</li>
+            <li><strong>Class</strong> — pred scenario = LLM-метка <code>llm_scenario_v0</code>; «—» если метки нет или только UP/DOWN/FLAT.</li>
+            <li><strong>Peer 5d</strong> — среднее 5d по пирам; peer sign acc в шапке — доля угадываний знака пиров.</li>
+            <li><strong>Pseudo PnL</strong> — условная доходность «торговли знаком сценария» на source минус round-trip cost.</li>
+        </ul>
+    </div>
     <div class="toolbar">
         <button class="btn" id="loadShadowBtn">Загрузить shadow report</button>
         <button class="btn" id="refreshShadowBtn">Пересчитать (refresh)</button>
     </div>
-    <div id="shadowContent" class="muted">Live shadow: predicted scenario vs созревший forward_log_ret_5d + peer spillover. Advisory only.</div>
+    <div id="shadowContent" class="muted">Нажмите «Загрузить shadow report».</div>
 </div>
 
 <div id="panel-fusion" class="panel">
+    <div class="tab-intro">
+        <strong>Fusion</strong> — сводка ML + Brief для одной даты: регрессия 5d, классификатор сценария, текстовый advisory (alignment / conviction).
+        <ul>
+            <li><strong>execution blocked</strong> — всегда; не подключено к GAME_5M / portfolio bot.</li>
+            <li>Тикер и дата — как на Brief; из таблицы кнопка Fusion подставляет их автоматически.</li>
+        </ul>
+    </div>
     <div class="toolbar">
         <label class="muted">Ticker:</label>
         <input id="fusionSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="META">
@@ -165,6 +231,13 @@
 </div>
 
 <div id="panel-ml" class="panel">
+    <div class="tab-intro">
+        <strong>ML слои</strong> — статус пайплайна earnings grid: features, регрессия, LLM-метки, classifier, shadow, fusion, readiness JSON.
+        <ul>
+            <li>Слои <span class="badge ok">active</span> / <span class="badge planned">pilot</span> / planned — что уже в prod.</li>
+            <li>Подробнее: <a href="/earnings/guide" style="color:#93c5fd">руководство</a>, <code>docs/TRADE_ML_DATASETS_AND_TARGETS_RU.md</code> §7.</li>
+        </ul>
+    </div>
     <div id="mlLayersContent" class="muted">Загрузка…</div>
 </div>
 
@@ -449,8 +522,14 @@ async function loadShadow(refresh) {
     const a = data.aggregate || {}, g = data.trading_gate || {};
     const gateCls = g.ready ? 'ok' : 'no';
     const gateLabel = g.ready ? 'quality ok' : 'below threshold';
+    const scored = `sign ${a.n_sign_scored ?? '—'} · class ${a.n_class_scored ?? '—'} · peer sign ${a.n_peer_sign_scored ?? '—'}`;
     el.innerHTML = `
-        <p class="muted"><span class="badge planned">Shadow quality · advisory only</span> — не разрешение на сделки.</p>
+        <p class="muted"><span class="badge planned">Shadow quality · advisory only</span> — не разрешение на сделки. Оценено строк: ${scored} из ${a.n_matured ?? '—'} matured.</p>
+        <dl class="shadow-legend">
+            <dt>Sign ✓ / ✗</dt><dd>Знак фактического 5d source vs ожидание сценария (capex → source обычно −, gap_up → +).</dd>
+            <dt>Class ✓ / ✗ / —</dt><dd>Совпадение pred с <code>final_label</code> только при <code>label_source=llm_scenario_v0</code>; иначе «—».</dd>
+            <dt>Peer 5d</dt><dd>Среднее log-return пиров из графа после даты отчёта source (как в Brief spillover).</dd>
+        </dl>
         <div class="summary">
             <div class="stat"><div class="n">${a.n_matured ?? '—'}</div><div class="l">Matured</div></div>
             <div class="stat"><div class="n">${a.sign_accuracy != null ? (a.sign_accuracy*100).toFixed(0)+'%' : '—'}</div><div class="l">Sign acc</div></div>
@@ -460,7 +539,7 @@ async function loadShadow(refresh) {
         </div>
         <p class="muted">Round-trip cost log ${a.round_trip_cost_log ?? '—'} · peer sign acc ${a.peer_sign_accuracy != null ? (a.peer_sign_accuracy*100).toFixed(0)+'%' : '—'}</p>
         ${g.reasons && g.reasons.length ? `<p class="muted">Gate: ${g.reasons.join('; ')}</p>` : ''}
-        <table><thead><tr><th>Ticker</th><th>Date</th><th>Pred scenario</th><th>Actual 5d</th><th>Sign</th><th>Class</th><th>Peer 5d</th></tr></thead>
+        <table><thead><tr><th>Ticker</th><th>Date</th><th>Pred scenario</th><th>Actual 5d (source)</th><th>Sign</th><th>Class</th><th>Peer 5d (mean)</th></tr></thead>
         <tbody>${(data.rows||[]).map(r => `<tr>
             <td>${r.symbol}</td><td>${r.event_date||'—'}</td>
             <td><code>${r.predicted_scenario||'—'}</code></td>
