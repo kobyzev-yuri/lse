@@ -108,6 +108,11 @@ def main() -> int:
         action="store_true",
         help="Не фильтровать по конфигу: обрабатывать все symbol в датасете (старое поведение)",
     )
+    ap.add_argument(
+        "--include-earnings-universe",
+        action="store_true",
+        help="Только тикеры earnings intelligence universe (для quotes_regime_earnings_v1 backfill)",
+    )
     args = ap.parse_args()
 
     if args.only_features and args.only_outcomes:
@@ -157,7 +162,16 @@ def main() -> int:
         "until_ts": until_ts,
         "lim": max(1, int(args.limit)),
     }
-    if not args.include_all_symbols:
+    if args.include_earnings_universe:
+        from services.earnings_intelligence_universe import get_earnings_intelligence_universe
+
+        symbols = get_earnings_intelligence_universe()
+        if not symbols:
+            logger.error("Пустой earnings intelligence universe.")
+            return 1
+        cfg_filter = "AND UPPER(TRIM(symbol)) IN :sym"
+        params["sym"] = symbols
+    elif not args.include_all_symbols:
         symbols = get_config_ticker_symbols_upper_unique()
         if not symbols:
             logger.error("Пустой список тикеров из конфига (TICKERS_FAST/MEDIUM/LONG).")

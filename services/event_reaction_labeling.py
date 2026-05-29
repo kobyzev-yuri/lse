@@ -604,6 +604,7 @@ def compute_row_labeling(
     event_time_et: Any,
     *,
     knowledge_base_id: Optional[int] = None,
+    feature_builder_version: Optional[str] = None,
     horizons: Tuple[int, ...] = (1, 5, 20),
     min_past_bars: int = 20,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[str], str]:
@@ -631,7 +632,7 @@ def compute_row_labeling(
     if as_of_i < min_past_bars:
         return None, None, None, "insufficient_past_bars"
 
-    fbv = active_feature_builder_version()
+    fbv = (feature_builder_version or active_feature_builder_version()).strip()
     feats = build_features_before(
         df,
         as_of_idx=as_of_i,

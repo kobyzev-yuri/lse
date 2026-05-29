@@ -8,8 +8,11 @@ from sqlalchemy.engine import Engine
 
 from services.earnings_event_brief import build_event_brief, load_event_brief_inputs
 from services.earnings_scenario_signal import predict_scenario_from_features
-from services.event_reaction_catboost_signal import predict_event_reaction_from_features
-from services.event_reaction_labeling import FEATURE_BUILDER_VERSION_EARNINGS
+from services.event_reaction_catboost_signal import predict_event_reaction_for_ticker
+from services.event_reaction_labeling import (
+    FEATURE_BUILDER_VERSION_EARNINGS,
+    compute_row_labeling,
+)
 
 
 def _advisory_stance(
@@ -95,24 +98,31 @@ def build_earnings_fusion_advisory(
 
     brief = build_event_brief(engine, symbol=sym, event_date=event_date, dataset_version=dataset_version)
     features = row.get("features_before")
-    fb = ""
-    if isinstance(features, dict):
-        fb = str(features.get("feature_builder_version") or "")
-    elif isinstance(features, str):
+    if isinstance(features, str):
         import json
 
         try:
-            fb = str((json.loads(features) or {}).get("feature_builder_version") or "")
+            features = json.loads(features)
         except Exception:
-            fb = ""
+            features = None
+    fb = ""
+    if isinstance(features, dict):
+        fb = str(features.get("feature_builder_version") or "")
 
-    reg_out: Dict[str, Any] = {}
-    if features:
-        reg_out = predict_event_reaction_from_features(sym, features, event_time_et=event_date)
+    reg_out = predict_event_reaction_for_ticker(sym, event_date=event_date)
 
+    scen_feats = features if fb == FEATURE_BUILDER_VERSION_EARNINGS else None
+    if scen_feats is None:
+        rebuilt, _, _, _ = compute_row_labeling(
+            sym,
+            event_date,
+            knowledge_base_id=row.get("knowledge_base_id"),
+            feature_builder_version=FEATURE_BUILDER_VERSION_EARNINGS,
+        )
+        scen_feats = rebuilt
     scen_out = predict_scenario_from_features(
         sym,
-        features if fb == FEATURE_BUILDER_VERSION_EARNINGS else None,
+        scen_feats,
         feature_builder_version=FEATURE_BUILDER_VERSION_EARNINGS,
     )
 

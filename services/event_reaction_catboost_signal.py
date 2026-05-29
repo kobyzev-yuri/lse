@@ -52,6 +52,16 @@ def _default_model_path() -> str:
     return str(root / "local" / "models" / "event_reaction_forward5d_catboost.cbm")
 
 
+def model_feature_builder_version() -> str | None:
+    """Feature builder version stored in the loaded CatBoost .meta.json."""
+    status, _, _, bundle = _runtime_guards()
+    if status != "ready" or bundle is None:
+        return None
+    _, meta = bundle
+    fbv = str(meta.get("feature_builder_version") or "").strip()
+    return fbv or None
+
+
 def _runtime_guards() -> Tuple[str, str, Optional[str], Optional[Tuple[Any, Dict[str, Any]]]]:
     raw = (get_config_value("EVENT_REACTION_CATBOOST_ENABLED", "false") or "false").strip().lower()
     if raw not in ("1", "true", "yes"):
@@ -284,14 +294,14 @@ def _load_dataset_row_by_date(
             ev_d = date_cls.fromisoformat(str(event_date).strip()[:10])
         except ValueError:
             return None
-    preferred_fbv = (preferred_feature_builder_version or active_feature_builder_version()).strip()
+    preferred_fbv = (preferred_feature_builder_version or "").strip()
     try:
         engine = get_engine()
         with engine.connect() as conn:
             row = conn.execute(
                 text(
                     """
-                    SELECT id, symbol, event_time_et, features_before
+                    SELECT id, symbol, event_time_et, features_before, knowledge_base_id
                     FROM event_reaction_dataset
                     WHERE UPPER(symbol) = :sym
                       AND features_before IS NOT NULL
@@ -300,7 +310,8 @@ def _load_dataset_row_by_date(
                       AND event_time_et::date = :ev_d
                     ORDER BY
                       CASE
-                        WHEN features_before->>'feature_builder_version' = :preferred_fbv THEN 0
+                        WHEN :preferred_fbv <> ''
+                         AND features_before->>'feature_builder_version' = :preferred_fbv THEN 0
                         ELSE 1
                       END,
                       id DESC
@@ -367,15 +378,35 @@ def predict_event_reaction_for_ticker(symbol: str, *, event_date: Any = None) ->
     If event_date is set, load that KB row; else nearest row ±window around today.
     """
     sym = str(symbol or "").strip().upper()
-    row = _load_dataset_row_by_date(sym, event_date) if event_date is not None else None
+    model_fbv = model_feature_builder_version()
+    row = (
+        _load_dataset_row_by_date(sym, event_date, preferred_feature_builder_version=model_fbv)
+        if event_date is not None
+        else None
+    )
     if row is None and event_date is None:
         row = _load_nearest_dataset_row(sym)
     if row:
         feats = _json_obj(row.get("features_before"))
         if feats:
-            return predict_event_reaction_from_features(
+            out = predict_event_reaction_from_features(
                 sym, feats, event_time_et=row.get("event_time_et")
             )
+            if out.get("event_reaction_ml_status") == "feature_version_mismatch" and model_fbv:
+                rebuilt, _, _, reason = compute_row_labeling(
+                    sym,
+                    row.get("event_time_et"),
+                    knowledge_base_id=row.get("knowledge_base_id"),
+                    feature_builder_version=model_fbv,
+                )
+                if rebuilt:
+                    return predict_event_reaction_from_features(
+                        sym, rebuilt, event_time_et=row.get("event_time_et")
+                    )
+                out["event_reaction_ml_note"] = (
+                    f"{out.get('event_reaction_ml_note', '')}; rebuild: {reason or 'failed'}"
+                ).strip("; ")
+            return out
         evt = row.get("event_time_et")
         if evt is not None:
             return predict_event_reaction_live(sym, evt)
