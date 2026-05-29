@@ -260,7 +260,12 @@ def _entry_window_days() -> int:
         return 14
 
 
-def _load_dataset_row_by_date(symbol: str, event_date: Any) -> Optional[Dict[str, Any]]:
+def _load_dataset_row_by_date(
+    symbol: str,
+    event_date: Any,
+    *,
+    preferred_feature_builder_version: str | None = None,
+) -> Optional[Dict[str, Any]]:
     """Load event_reaction_dataset row for symbol on a specific calendar date (ET)."""
     from datetime import date as date_cls, datetime
 
@@ -279,6 +284,7 @@ def _load_dataset_row_by_date(symbol: str, event_date: Any) -> Optional[Dict[str
             ev_d = date_cls.fromisoformat(str(event_date).strip()[:10])
         except ValueError:
             return None
+    preferred_fbv = (preferred_feature_builder_version or active_feature_builder_version()).strip()
     try:
         engine = get_engine()
         with engine.connect() as conn:
@@ -292,11 +298,16 @@ def _load_dataset_row_by_date(symbol: str, event_date: Any) -> Optional[Dict[str
                       AND features_before <> '{}'::jsonb
                       AND event_time_et IS NOT NULL
                       AND event_time_et::date = :ev_d
-                    ORDER BY id DESC
+                    ORDER BY
+                      CASE
+                        WHEN features_before->>'feature_builder_version' = :preferred_fbv THEN 0
+                        ELSE 1
+                      END,
+                      id DESC
                     LIMIT 1
                     """
                 ),
-                {"sym": sym, "ev_d": ev_d},
+                {"sym": sym, "ev_d": ev_d, "preferred_fbv": preferred_fbv},
             ).mappings().first()
         return dict(row) if row else None
     except Exception as e:
