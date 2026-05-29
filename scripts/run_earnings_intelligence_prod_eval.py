@@ -60,6 +60,22 @@ def main() -> int:
     steps: list[tuple[str, int]] = []
 
     if not args.skip_materials:
+        yf_cmd = [
+            py,
+            "scripts/ingest_earnings_event_details_yfinance.py",
+            "--tickers",
+            sym_arg,
+            "--ensure-kb-events",
+            "--earnings-limit",
+            "6",
+        ]
+        if args.dry_run:
+            yf_cmd.append("--dry-run")
+        rc = _run(yf_cmd)
+        steps.append(("kb_yfinance_seed", rc))
+        if rc != 0 and not args.dry_run:
+            return rc
+
         sync_cmd = [
             py,
             "scripts/sync_earnings_material_registry.py",

@@ -28,6 +28,7 @@ project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
+from services.earnings_intelligence_universe import get_earnings_intelligence_universe  # noqa: E402
 from services.ticker_groups import get_config_ticker_symbols_upper_unique  # noqa: E402
 from services.yfinance_earnings_fetcher import YFINANCE_EARNINGS_SOURCE  # noqa: E402
 
@@ -253,7 +254,7 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="Max upserts, 0 = no limit")
     args = ap.parse_args()
 
-    allowed = set(get_config_ticker_symbols_upper_unique())
+    allowed = set(get_config_ticker_symbols_upper_unique()) | set(get_earnings_intelligence_universe())
     if args.from_config_equities:
         tickers = [t for t in sorted(allowed) if _is_equity_symbol(t)]
     else:
