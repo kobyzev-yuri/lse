@@ -222,30 +222,40 @@ function applyFilter() {
         <tr><td><strong>${ev.symbol}</strong></td><td>${ev.event_date||'—'}</td><td>${groupBadges(ev.group)}</td>
         <td>${badgeMat(ev)}</td><td>${badgeLlm(ev)}</td><td>${ev.management_tone||'—'}</td>
         <td><code>${ev.top_scenario||'—'}</code></td>
-        <td><button class="link-btn" data-sym="${ev.symbol}" data-date="${ev.event_date||''}">Brief</button>
-        <button class="link-btn" data-fusion="${ev.symbol}" data-fdate="${ev.event_date||''}">Fusion</button>
-        <button class="link-btn" data-spill="${ev.symbol}">Spillover</button></td></tr>`).join('');
-    document.getElementById('eventsBody').querySelectorAll('[data-sym]').forEach(btn => {
-        btn.addEventListener('click', () => loadBrief(btn.dataset.sym, btn.dataset.date));
-    });
-    document.getElementById('eventsBody').querySelectorAll('[data-spill]').forEach(btn => {
-        btn.addEventListener('click', () => { document.getElementById('spilloverSource').value = btn.dataset.spill; showTab('spillover'); loadSpillover(); });
-    });
-    document.getElementById('eventsBody').querySelectorAll('[data-fusion]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.getElementById('fusionSymbol').value = btn.dataset.fusion;
-            showTab('fusion');
-            loadFusion(btn.dataset.fdate || '');
-        });
-    });
+        <td><button type="button" class="link-btn" data-sym="${ev.symbol}" data-event-date="${ev.event_date||''}">Brief</button>
+        <button type="button" class="link-btn" data-fusion="${ev.symbol}" data-fusion-date="${ev.event_date||''}">Fusion</button>
+        <button type="button" class="link-btn" data-spill="${ev.symbol}">Spillover</button></td></tr>`).join('');
+}
+
+function handleEventsTableClick(e) {
+    const btn = e.target.closest('button.link-btn');
+    if (!btn || !btn.closest('#eventsBody')) return;
+    if (btn.dataset.sym) {
+        showTab('events');
+        loadBrief(btn.dataset.sym, btn.dataset.eventDate || '');
+        return;
+    }
+    if (btn.dataset.fusion) {
+        const sel = document.getElementById('fusionSymbol');
+        if (sel) sel.value = btn.dataset.fusion;
+        showTab('fusion');
+        loadFusion(btn.dataset.fusionDate || '');
+        return;
+    }
+    if (btn.dataset.spill) {
+        document.getElementById('spilloverSource').value = btn.dataset.spill;
+        showTab('spillover');
+        loadSpillover();
+    }
 }
 
 async function loadBrief(symbol, eventDate) {
     const panel = document.getElementById('detailPanel');
-    panel.style.display = 'block';
-    document.getElementById('detailTitle').textContent = `${symbol} · ${eventDate}`;
     const content = document.getElementById('detailContent');
+    panel.style.display = 'block';
+    document.getElementById('detailTitle').textContent = `${symbol} · ${eventDate || '—'}`;
     content.innerHTML = '<span class="muted">Загрузка…</span>';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     let mlHtml = '';
     try {
         let mlUrl = `/api/ml/event-reaction/${encodeURIComponent(symbol)}`;
@@ -264,7 +274,10 @@ async function loadBrief(symbol, eventDate) {
             }
         }
     } catch (_) {}
-    const res = await fetch(`/api/earnings/brief/${encodeURIComponent(symbol)}?event_date=${encodeURIComponent(eventDate)}`);
+    try {
+    const briefUrl = `/api/earnings/brief/${encodeURIComponent(symbol)}`
+        + (eventDate ? `?event_date=${encodeURIComponent(eventDate)}` : '');
+    const res = await fetch(briefUrl);
     const b = await res.json();
     if (!res.ok) throw new Error(b.detail || JSON.stringify(b));
     const scen = b.scenario || {}, src = b.source_outcomes || {};
@@ -295,6 +308,9 @@ async function loadBrief(symbol, eventDate) {
             <div class="block"><h3>Peer spillover</h3>
                 <table class="peer-table"><tbody>${peers.map(p=>`<tr><td>${esc(p.ticker)}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(p.forward_log_ret_5d)}</td></tr>`).join('')}</tbody></table></div>
         </div>`;
+    } catch (err) {
+        content.innerHTML = `<span class="err">${esc(err.message || String(err))}</span>`;
+    }
 }
 
 async function loadGraph() {
@@ -421,6 +437,7 @@ async function loadMlLayers() {
         </div>`).join('')}`;
 }
 
+document.getElementById('eventsBody').addEventListener('click', handleEventsTableClick);
 document.querySelectorAll('[data-tab]').forEach(btn => btn.addEventListener('click', () => showTab(btn.dataset.tab)));
 document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => {
     document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));

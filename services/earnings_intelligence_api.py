@@ -1,6 +1,7 @@
 """API helpers for earnings intelligence UI (list events + Event Brief)."""
 from __future__ import annotations
 
+import json
 import math
 from datetime import date, datetime
 from pathlib import Path
@@ -9,7 +10,12 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from services.earnings_event_brief import build_event_brief, load_peer_edges, load_peer_spillover_outcomes
+from services.earnings_event_brief import (
+    _top_scenario,
+    build_event_brief,
+    load_peer_edges,
+    load_peer_spillover_outcomes,
+)
 from services.earnings_intelligence_universe import get_earnings_intelligence_universe
 from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_game_5m
 
@@ -76,7 +82,7 @@ def list_intelligence_events(
           kb.ts::date AS event_date,
           ed.fiscal_period,
           ed.guidance_summary->>'management_tone' AS management_tone,
-          ed.guidance_summary->'scenario_hints'->0->>'scenario' AS top_scenario,
+          ed.guidance_summary AS guidance_summary,
           erd.final_label,
           (SELECT count(*) FROM earnings_material em
              WHERE UPPER(em.symbol) = UPPER(TRIM(kb.ticker))
@@ -116,6 +122,14 @@ def list_intelligence_events(
         ev_d = _parse_date(r.get("event_date"))
         has_materials = int(r.get("materials_useful") or 0) > 0
         has_llm = bool(r.get("management_tone"))
+        gs = r.get("guidance_summary")
+        if isinstance(gs, str):
+            try:
+                gs = json.loads(gs)
+            except json.JSONDecodeError:
+                gs = None
+        scen = _top_scenario(gs if isinstance(gs, dict) else None)
+        top_scenario = (scen or {}).get("scenario") if scen else r.get("final_label")
         if has_materials:
             materials_count += 1
         if has_llm:
@@ -132,7 +146,7 @@ def list_intelligence_events(
                 "has_materials": has_materials,
                 "has_llm": has_llm,
                 "management_tone": r.get("management_tone"),
-                "top_scenario": r.get("top_scenario") or r.get("final_label"),
+                "top_scenario": top_scenario,
                 "brief_ready": has_llm,
                 "brief_url": f"/api/earnings/brief/{sym}"
                 + (f"?event_date={ev_d.isoformat()}" if ev_d else ""),
@@ -346,7 +360,7 @@ def get_spillover_history(
         f"""
         SELECT kb.id AS knowledge_base_id, kb.ts::date AS event_date,
                ed.guidance_summary->>'management_tone' AS management_tone,
-               ed.guidance_summary->'scenario_hints'->0->>'scenario' AS top_scenario
+               ed.guidance_summary AS guidance_summary
         FROM knowledge_base kb
         LEFT JOIN earnings_event_detail ed ON ed.knowledge_base_id = kb.id
         WHERE {' AND '.join(where)}
@@ -373,11 +387,19 @@ def get_spillover_history(
         )
         src_out = brief.get("source_outcomes") or {}
         peer_rows = brief.get("peer_spillover_outcomes") or []
+        gs = r.get("guidance_summary")
+        if isinstance(gs, str):
+            try:
+                gs = json.loads(gs)
+            except json.JSONDecodeError:
+                gs = None
+        scen = _top_scenario(gs if isinstance(gs, dict) else None)
+        top_scenario = (scen or {}).get("scenario") if scen else None
         events_out.append(
             {
                 "event_date": ev_d.isoformat(),
                 "management_tone": r.get("management_tone"),
-                "top_scenario": r.get("top_scenario"),
+                "top_scenario": top_scenario,
                 "source_forward_log_ret_1d": src_out.get("forward_log_ret_1d"),
                 "source_forward_log_ret_5d": src_out.get("forward_log_ret_5d"),
                 "peer_outcomes": peer_rows,
