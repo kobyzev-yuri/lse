@@ -97,7 +97,7 @@ def list_intelligence_events(
           ON erd.knowledge_base_id = kb.id
          AND erd.dataset_version = 'v0_expanded_baseline'
         WHERE {' AND '.join(where)}
-        ORDER BY kb.ts DESC, kb.id DESC
+        ORDER BY kb.ts::date DESC, kb.id DESC
         LIMIT :limit
         """
     )
@@ -185,7 +185,7 @@ def get_event_brief_payload(
             WHERE UPPER(TRIM(kb.ticker)) = :symbol
               AND UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'
               AND kb.ts::date <= CURRENT_DATE
-            ORDER BY kb.ts DESC
+            ORDER BY kb.ts::date DESC, kb.id DESC
             LIMIT 1
             """
         )
@@ -370,7 +370,7 @@ def get_spillover_history(
         FROM knowledge_base kb
         LEFT JOIN earnings_event_detail ed ON ed.knowledge_base_id = kb.id
         WHERE {' AND '.join(where)}
-        ORDER BY kb.ts DESC
+        ORDER BY kb.ts::date DESC, kb.id DESC
         LIMIT :limit
         """
     )
@@ -722,7 +722,8 @@ def get_fusion_advisory_payload(
             FROM knowledge_base kb
             WHERE UPPER(TRIM(kb.ticker)) = :sym
               AND UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'
-            ORDER BY kb.ts DESC
+              AND kb.ts::date <= CURRENT_DATE
+            ORDER BY kb.ts::date DESC, kb.id DESC
             LIMIT 1
             """
         )

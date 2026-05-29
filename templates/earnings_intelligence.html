@@ -76,7 +76,7 @@
         <li><strong>Peer graph:</strong> directed edges «лидер → пир» с весом. Spillover = forward returns пиров от <em>даты отчёта лидера</em> (event-study), не скользящая корреляция.</li>
         <li><strong>quotes_regime_earnings_v1:</strong> backfill с peer graph + tone — <code>run_earnings_ml_refresh.py</code>.</li>
         <li><strong>Классификатор сценариев (pilot):</strong> <code>train_event_reaction_scenario_classifier.py</code> после <code>apply_earnings_scenario_labels --universe</code>.</li>
-        <li><strong>Telegram:</strong> <code>/earnings</code> — список; <code>/earnings META 2026-04-29</code> — краткий Brief.</li>
+        <li><strong>Дата отчёта:</strong> в таблице «События» — колонка Date; кнопки Brief/Fusion берут дату этой строки. Иначе выберите тикер + дату в селектах над Brief или на вкладке Fusion. Telegram: <code>/earnings META 2026-04-29</code>.</li>
     </ul>
 </details>
 
@@ -104,8 +104,14 @@
         <tbody id="eventsBody"></tbody>
     </table>
     <div class="detail-panel" id="detailPanel" style="display:none">
+        <div class="toolbar" style="margin-bottom:0.5rem">
+            <label class="muted">Brief:</label>
+            <select id="briefSymbol"></select>
+            <select id="briefEventDate"></select>
+            <button type="button" class="btn" id="loadBriefBtn">Загрузить Brief</button>
+        </div>
         <h2 id="detailTitle">Event Brief</h2>
-        <div id="detailContent" class="muted">Выберите событие…</div>
+        <div id="detailContent" class="muted">Выберите строку в таблице или тикер + дату отчёта выше.</div>
     </div>
 </div>
 
@@ -139,6 +145,8 @@
     <div class="toolbar">
         <label class="muted">Ticker:</label>
         <select id="fusionSymbol"></select>
+        <label class="muted">Дата отчёта:</label>
+        <select id="fusionEventDate"></select>
         <button class="btn" id="loadFusionBtn">Fusion advisory</button>
     </div>
     <div id="fusionContent" class="muted">Регрессия + scenario classifier + brief (без исполнения сделок).</div>
@@ -171,6 +179,24 @@ const badgeMat = (ev) => ev.materials_useful > 0 ? `<span class="badge ok">${ev.
 const badgeLlm = (ev) => ev.has_llm ? '<span class="badge ok">yes</span>' : '<span class="badge no">—</span>';
 let allEvents = [], currentFilter = 'all', graphData = null;
 
+function eventDatesForSymbol(sym) {
+    return [...new Set(
+        allEvents.filter(e => e.symbol === sym && e.event_date).map(e => e.event_date)
+    )].sort().reverse();
+}
+
+function fillDateSelect(sel, sym, preferred) {
+    if (!sel) return;
+    const dates = eventDatesForSymbol(sym);
+    if (!dates.length) {
+        sel.innerHTML = '<option value="">— нет в списке —</option>';
+        return;
+    }
+    sel.innerHTML = dates.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (preferred && dates.includes(preferred)) sel.value = preferred;
+    else sel.value = dates[0];
+}
+
 function refreshSpilloverSources() {
     const fromEvents = allEvents.map(e => e.symbol).filter(Boolean);
     const fromGraph = graphData ? [...new Set((graphData.edges || []).map(e => e.source))] : [];
@@ -180,7 +206,28 @@ function refreshSpilloverSources() {
     sel.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
     if (prev && syms.includes(prev)) sel.value = prev;
     const fus = document.getElementById('fusionSymbol');
-    if (fus) fus.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
+    const briefSym = document.getElementById('briefSymbol');
+    if (fus) {
+        const prevFus = fus.value;
+        fus.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
+        if (prevFus && syms.includes(prevFus)) fus.value = prevFus;
+        else if (syms.length) fus.value = syms[0];
+        fillDateSelect(document.getElementById('fusionEventDate'), fus.value, null);
+    }
+    if (briefSym) {
+        const prevB = briefSym.value;
+        briefSym.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
+        if (prevB && syms.includes(prevB)) briefSym.value = prevB;
+        else if (syms.length) briefSym.value = syms[0];
+        fillDateSelect(document.getElementById('briefEventDate'), briefSym.value, null);
+    }
+}
+
+function setBriefSelectors(sym, eventDate) {
+    const s = document.getElementById('briefSymbol');
+    const d = document.getElementById('briefEventDate');
+    if (s && sym) s.value = sym;
+    fillDateSelect(d, sym || s?.value, eventDate || null);
 }
 
 function groupBadges(group) {
@@ -238,14 +285,17 @@ function handleEventsTableClick(e) {
     if (!btn || !btn.closest('#eventsBody')) return;
     if (btn.dataset.sym) {
         showTab('events');
+        setBriefSelectors(btn.dataset.sym, btn.dataset.eventDate || '');
         loadBrief(btn.dataset.sym, btn.dataset.eventDate || '');
         return;
     }
     if (btn.dataset.fusion) {
         const sel = document.getElementById('fusionSymbol');
+        const dsel = document.getElementById('fusionEventDate');
         if (sel) sel.value = btn.dataset.fusion;
+        fillDateSelect(dsel, btn.dataset.fusion, btn.dataset.fusionDate || null);
         showTab('fusion');
-        loadFusion(btn.dataset.fusionDate || '');
+        loadFusion(btn.dataset.fusionDate || dsel?.value || '');
         return;
     }
     if (btn.dataset.spill) {
@@ -459,9 +509,33 @@ document.getElementById('refreshBtn').addEventListener('click', () => loadList()
 document.getElementById('loadSpilloverBtn').addEventListener('click', () => loadSpillover());
 document.getElementById('loadShadowBtn').addEventListener('click', () => loadShadow(false));
 document.getElementById('refreshShadowBtn').addEventListener('click', () => loadShadow(true));
-document.getElementById('loadFusionBtn').addEventListener('click', () => loadFusion(''));
+document.getElementById('loadFusionBtn').addEventListener('click', () => {
+    const d = document.getElementById('fusionEventDate')?.value || '';
+    loadFusion(d);
+});
+document.getElementById('fusionSymbol')?.addEventListener('change', () => {
+    fillDateSelect(document.getElementById('fusionEventDate'), document.getElementById('fusionSymbol').value, null);
+});
+document.getElementById('briefSymbol')?.addEventListener('change', () => {
+    fillDateSelect(document.getElementById('briefEventDate'), document.getElementById('briefSymbol').value, null);
+});
+document.getElementById('loadBriefBtn')?.addEventListener('click', () => {
+    const sym = document.getElementById('briefSymbol')?.value;
+    const d = document.getElementById('briefEventDate')?.value || '';
+    if (!sym) return;
+    loadBrief(sym, d);
+});
 
-loadList().catch(e => { document.getElementById('eventsBody').innerHTML = `<tr><td colspan="8" class="err">${e.message}</td></tr>`; });
+loadList().then(() => {
+    const p = new URLSearchParams(location.search);
+    const sym = (p.get('symbol') || '').toUpperCase();
+    const evd = p.get('event_date') || '';
+    if (sym) {
+        showTab('events');
+        setBriefSelectors(sym, evd);
+        loadBrief(sym, evd);
+    }
+}).catch(e => { document.getElementById('eventsBody').innerHTML = `<tr><td colspan="8" class="err">${e.message}</td></tr>`; });
 </script>
 </body>
 </html>
