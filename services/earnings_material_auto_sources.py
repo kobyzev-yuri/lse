@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date, timedelta
+import time
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
+from pathlib import Path
 from typing import Iterable
 
+from config_loader import get_config_value
 from services.earnings_material_catalog import CatalogMaterial
 from services.earnings_material_parser import SEC_USER_AGENT
 from services.http_outbound import outbound_session
@@ -168,15 +171,52 @@ def _fool_url_candidates(symbol: str, event_date: date) -> list[str]:
     return out
 
 
-def _url_exists(url: str) -> bool:
+def _fool_cooldown_file() -> Path:
+    root = Path(__file__).resolve().parents[1]
+    if Path("/app/logs").exists():
+        return Path("/app/logs") / ".fool_transcript_cooldown_until"
+    return root / "logs" / ".fool_transcript_cooldown_until"
+
+
+def fool_rate_limit_active() -> bool:
+    p = _fool_cooldown_file()
+    if not p.is_file():
+        return False
+    try:
+        until = datetime.fromisoformat(p.read_text(encoding="utf-8").strip())
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) < until
+    except Exception:
+        return False
+
+
+def _set_fool_rate_limit_cooldown() -> None:
+    try:
+        hours = float((get_config_value("FOOL_TRANSCRIPT_COOLDOWN_AFTER_429_HOURS", "6") or "6").strip())
+    except (TypeError, ValueError):
+        hours = 6.0
+    until = datetime.now(timezone.utc) + timedelta(hours=hours)
+    path = _fool_cooldown_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(until.isoformat(), encoding="utf-8")
+    logger.warning("Motley Fool: 429 — cooldown until %s UTC (%s h)", until.strftime("%Y-%m-%d %H:%M"), hours)
+
+
+def _probe_fool_url(url: str) -> tuple[bool, bool]:
+    """Return (exists, rate_limited)."""
     try:
         sess = outbound_session("EARNINGS_FOOL_USE_SYSTEM_PROXY")
         resp = sess.head(url, allow_redirects=True, timeout=15)
+        if resp.status_code == 429:
+            return False, True
         if resp.status_code == 405:
             resp = sess.get(url, allow_redirects=True, timeout=15, stream=True)
-        return 200 <= resp.status_code < 400
+            if resp.status_code == 429:
+                return False, True
+        return 200 <= resp.status_code < 400, False
     except Exception:
-        return False
+        return False, False
 
 
 def fool_transcript_near_date(
@@ -185,8 +225,16 @@ def fool_transcript_near_date(
     *,
     max_probe: int = 6,
 ) -> CatalogMaterial | None:
+    if fool_rate_limit_active():
+        return None
+    pause_s = 0.35
     for url in _fool_url_candidates(symbol, event_date)[: max(1, max_probe)]:
-        if not _url_exists(url):
+        ok, limited = _probe_fool_url(url)
+        if limited:
+            _set_fool_rate_limit_cooldown()
+            return None
+        if not ok:
+            time.sleep(pause_s)
             continue
         sym = symbol.strip().upper()
         return CatalogMaterial(

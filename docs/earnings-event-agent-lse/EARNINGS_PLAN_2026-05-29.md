@@ -48,7 +48,7 @@
 |---|--------|--------|
 | 6 | `run_earnings_intelligence_prod_eval.py --skip-ml-refresh` | ✅ 2026-05-29 15:22 UTC |
 | 7 | DELL / свежие KB (materials + LLM) | ✅ prod brief ok |
-| 8 | Fool 429 + ARM junk discover-links | 📋 отложено |
+| 8 | Fool 429 + ARM junk discover-links | ✅ `FOOL` cooldown + PDF filter |
 | 11 | ANET/AVGO/GOOGL/PLTR coverage | ✅ ERD + materials + earnings_v1 backfill |
 | 12 | ERD cron allowlist + backfill `--include-all-symbols` | ✅ `99e2715`, `339d17f` |
 | 13 | **Train:** scenario classifier + regression refresh | ✅ deploy `838e9fa` 2026-05-29 |
@@ -59,7 +59,7 @@
 
 **P1 #7 fix (код):** `ensure_kb_and_link_orphan_materials` в sync — материалы с `event_date` без KB (DELL SEC `auto_sources`) получают anchor `knowledge_base` EARNINGS → extract → brief.
 
-**P1 #8 backlog:** Fool 429 backoff в cron; фильтр bare PDF без transcript в ARM discover-links.
+**P1 #8:** cron уже `--no-auto-fool`; код: cooldown файл при 429, пауза между probe, `_should_register_discovered_url` (bare PDF без transcript/earnings в path).
 
 ---
 

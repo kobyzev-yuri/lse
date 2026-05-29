@@ -90,6 +90,7 @@ def main() -> int:
             "--symbols",
             sym_arg,
             "--discover-links",
+            "--no-auto-fool",
         ]
         if args.dry_run:
             sync_cmd.append("--dry-run")

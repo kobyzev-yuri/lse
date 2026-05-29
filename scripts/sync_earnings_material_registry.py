@@ -67,6 +67,30 @@ class SyncRow:
     meta: dict
 
 
+def _should_register_discovered_url(url: str) -> bool:
+    """Skip bare PDF links from IR discover (ARM noise: investor PDFs without transcript text)."""
+    u = (url or "").strip().lower()
+    if not u:
+        return False
+    if not u.endswith(".pdf") and ".pdf?" not in u:
+        return True
+    markers = (
+        "transcript",
+        "earnings",
+        "press",
+        "presentation",
+        "slide",
+        "8-k",
+        "8k",
+        "filing",
+        "call",
+        "results",
+        "quarter",
+        "financial",
+    )
+    return any(m in u for m in markers)
+
+
 def _guess_material_type(url: str, title: str = "") -> str:
     u = (url or "").lower()
     t = (title or "").lower()
@@ -164,6 +188,9 @@ def _load_discovered_links(engine) -> list[dict]:
             except Exception:
                 meta = {}
         for link in meta.get("discovered_links") or []:
+            url = str(link or "").strip()
+            if not _should_register_discovered_url(url):
+                continue
             out.append(
                 {
                     "parent_material_id": r["id"],
@@ -171,7 +198,7 @@ def _load_discovered_links(engine) -> list[dict]:
                     "event_date": r.get("event_date"),
                     "fiscal_period": r.get("fiscal_period"),
                     "knowledge_base_id": r.get("knowledge_base_id"),
-                    "source_url": link,
+                    "source_url": url,
                 }
             )
     return out
