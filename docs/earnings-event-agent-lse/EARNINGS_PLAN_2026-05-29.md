@@ -47,12 +47,14 @@
 | # | Задача | Статус |
 |---|--------|--------|
 | 6 | `run_earnings_intelligence_prod_eval.py --skip-ml-refresh` | ✅ 2026-05-29 15:22 UTC |
-| 7 | DELL / свежие KB (materials + LLM) | ⚠️ gap (см. ниже) |
-| 8 | Fool 429 → backlog | 📋 |
+| 7 | DELL / свежие KB (materials + LLM) | 🔄 orphan KB link fix |
+| 8 | Fool 429 + ARM junk discover-links | 📋 backlog |
 
 **P1 #6 итог:** sync 81 rows, ingest 0, extract 1 (ARM), shadow `n_matured=27` (не упал), readiness `overall_grid_ready=true`.
 
-**P1 #7 DELL:** `earnings_material` 2026-05-28 SEC filing `extracted`, но `knowledge_base_id=NULL` и **нет** строки `knowledge_base` с `event_type=EARNINGS` → `/api/earnings/brief/DELL` → `no past KB earnings`. Нужен `--ensure-kb-events` (yfinance/KB seed) перед extract; не блокер для grid (DELL не в `symbols_without_materials`).
+**P1 #7 fix (код):** `ensure_kb_and_link_orphan_materials` в sync — материалы с `event_date` без KB (DELL SEC `auto_sources`) получают anchor `knowledge_base` EARNINGS → extract → brief.
+
+**P1 #8 backlog:** Fool 429 backoff в cron; фильтр bare PDF без transcript в ARM discover-links.
 
 ---
 
@@ -63,7 +65,7 @@
 - [x] ML layers tab: `live_shadow`, `fusion_advisory`, `readiness_gates` + json_path/metrics
 - [x] `n_matured=27` shadow не упал после materials run
 - [x] Prod eval JSON → `last_earnings_intelligence_prod_eval.json`
-- [ ] DELL: KB EARNINGS row + LLM extract → brief
+- [ ] DELL: KB EARNINGS row + LLM extract → brief (после deploy orphan-link fix)
 - [x] Запись в `EARNINGS_INTELLIGENCE_PLAN.md` §2026-05-29
 
 ---

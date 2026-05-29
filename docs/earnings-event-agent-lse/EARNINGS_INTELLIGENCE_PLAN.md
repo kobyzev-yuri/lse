@@ -110,7 +110,7 @@ isProject: false
 | Док: ridge vs event regression vs classifier | ✅ | [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §4–§7 |
 | P1: ML layers Shadow/Fusion/readiness paths | ✅ | `0525849`, API 8 layers incl. shadow/fusion/readiness |
 | P1: materials prod eval (--skip-ml-refresh) | ✅ | shadow n_matured=27, grid_ready=true |
-| P1: DELL brief gap | ⚠️ | material extracted, KB EARNINGS row missing |
+| P1: DELL brief gap | 🔄 | orphan KB link in sync (deploy + extract pending) |
 
 План сессии: [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md).
 

@@ -5,8 +5,9 @@ Sync earnings_material registry from knowledge_base EARNINGS calendar + catalog 
 Flow:
   1. Read KB EARNINGS events (yfinance / Alpha Vantage / manual).
   2. Attach catalog materials for matching (symbol, event_date).
-  3. Optionally expand discovered_links from already parsed ir_event_page rows.
-  4. Upsert idempotent rows into earnings_material.
+  3. Auto SEC/Fool for orphan materials (event_date without KB calendar row).
+  4. Optionally expand discovered_links from already parsed ir_event_page rows.
+  5. Upsert idempotent rows; link orphan materials → KB EARNINGS anchor.
 
 Examples:
   python scripts/sync_earnings_material_registry.py --dry-run
@@ -192,14 +193,20 @@ def _find_kb_id(engine, symbol: str, event_date: date) -> int | None:
     return int(row[0]) if row else None
 
 
-def _ensure_kb_for_catalog(engine, cm: CatalogMaterial, *, dry_run: bool) -> int | None:
-    if cm.event_date is None:
-        return None
-    existing = _find_kb_id(engine, cm.symbol, cm.event_date)
+def _ensure_kb_for_event(
+    engine,
+    symbol: str,
+    event_date: date,
+    *,
+    source: str,
+    content: str,
+    dry_run: bool,
+) -> int | None:
+    existing = _find_kb_id(engine, symbol, event_date)
     if existing:
         return existing
     if dry_run:
-        logger.info("dry-run ensure KB %s %s", cm.symbol, cm.event_date)
+        logger.info("dry-run ensure KB %s %s", symbol, event_date)
         return None
     q = text(
         """
@@ -208,22 +215,102 @@ def _ensure_kb_for_catalog(engine, cm: CatalogMaterial, *, dry_run: bool) -> int
         RETURNING id
         """
     )
-    ts = datetime.combine(cm.event_date, datetime.min.time()).replace(hour=21)
-    content = f"Earnings catalog event {cm.symbol} {cm.event_date}"
-    if cm.fiscal_period:
-        content += f" ({cm.fiscal_period})"
+    ts = datetime.combine(event_date, datetime.min.time()).replace(hour=21)
     with engine.begin() as conn:
         kb_id = conn.execute(
             q,
             {
                 "ts": ts,
-                "ticker": cm.symbol.upper(),
-                "source": "earnings_material_catalog",
+                "ticker": symbol.strip().upper(),
+                "source": source,
                 "content": content,
             },
         ).scalar()
-    logger.info("Ensured KB id=%s for %s %s", kb_id, cm.symbol, cm.event_date)
+    logger.info("Ensured KB id=%s for %s %s", kb_id, symbol, event_date)
     return int(kb_id) if kb_id else None
+
+
+def _ensure_kb_for_catalog(engine, cm: CatalogMaterial, *, dry_run: bool) -> int | None:
+    if cm.event_date is None:
+        return None
+    content = f"Earnings catalog event {cm.symbol} {cm.event_date}"
+    if cm.fiscal_period:
+        content += f" ({cm.fiscal_period})"
+    return _ensure_kb_for_event(
+        engine,
+        cm.symbol,
+        cm.event_date,
+        source="earnings_material_catalog",
+        content=content,
+        dry_run=dry_run,
+    )
+
+
+def _load_orphan_material_events(engine, symbols: set[str] | None) -> list[tuple[str, date]]:
+    where = [
+        "knowledge_base_id IS NULL",
+        "event_date IS NOT NULL",
+    ]
+    params: dict = {}
+    if symbols:
+        where.append("UPPER(TRIM(symbol)) = ANY(:symbols)")
+        params["symbols"] = sorted(symbols)
+    q = text(
+        f"""
+        SELECT DISTINCT UPPER(TRIM(symbol)) AS symbol, event_date
+        FROM earnings_material
+        WHERE {' AND '.join(where)}
+        ORDER BY event_date DESC, symbol
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(q, params).all()
+    out: list[tuple[str, date]] = []
+    for sym, ev_date in rows:
+        if isinstance(ev_date, date):
+            out.append((str(sym).upper(), ev_date))
+    return out
+
+
+def ensure_kb_and_link_orphan_materials(
+    engine,
+    *,
+    symbols: set[str] | None,
+    dry_run: bool,
+) -> int:
+    """Create missing KB EARNINGS rows for materials synced without calendar anchor."""
+    linked = 0
+    for sym, ev_date in _load_orphan_material_events(engine, symbols):
+        kb_id = _ensure_kb_for_event(
+            engine,
+            sym,
+            ev_date,
+            source="earnings_material_orphan_link",
+            content=f"Earnings material anchor {sym} {ev_date}",
+            dry_run=dry_run,
+        )
+        if not kb_id:
+            continue
+        if dry_run:
+            logger.info("dry-run link orphan materials %s %s → kb=%s", sym, ev_date, kb_id)
+            linked += 1
+            continue
+        q = text(
+            """
+            UPDATE earnings_material
+            SET knowledge_base_id = :kb_id, updated_at = NOW()
+            WHERE UPPER(TRIM(symbol)) = :symbol
+              AND event_date = :event_date
+              AND knowledge_base_id IS NULL
+            """
+        )
+        with engine.begin() as conn:
+            res = conn.execute(q, {"kb_id": kb_id, "symbol": sym, "event_date": ev_date})
+            n = int(res.rowcount or 0)
+        if n:
+            logger.info("Linked %s orphan material row(s) for %s %s → kb=%s", n, sym, ev_date, kb_id)
+            linked += n
+    return linked
 
 
 def _catalog_row(cm: CatalogMaterial, *, kb_id: int | None, sync_source: str) -> SyncRow:
@@ -296,6 +383,11 @@ def build_sync_rows(
 
     kb_events = _load_kb_events(engine, since=since, until=until, symbols=symbols, limit=limit)
     logger.info("KB earnings events loaded: %s", len(kb_events))
+    kb_event_keys = {
+        (str(ev["symbol"]).upper(), ev.get("event_date"))
+        for ev in kb_events
+        if isinstance(ev.get("event_date"), date)
+    }
     for ev in kb_events:
         kb_id = int(ev["id"])
         sym = str(ev["symbol"]).upper()
@@ -315,6 +407,37 @@ def build_sync_rows(
             ):
                 if cm.source_url in known_urls:
                     continue
+                add(_catalog_row(cm, kb_id=kb_id, sync_source="auto_sources"))
+
+    if auto_sec or auto_fool:
+        for sym, ev_date in _load_orphan_material_events(engine, symbols):
+            if (sym, ev_date) in kb_event_keys:
+                continue
+            kb_id = None
+            if ensure_kb_catalog:
+                kb_id = _ensure_kb_for_event(
+                    engine,
+                    sym,
+                    ev_date,
+                    source="earnings_material_orphan_link",
+                    content=f"Earnings material anchor {sym} {ev_date}",
+                    dry_run=dry_run,
+                )
+            else:
+                kb_id = _find_kb_id(engine, sym, ev_date)
+            if not kb_id:
+                continue
+            kb_event_keys.add((sym, ev_date))
+            known_urls: set[str] = set()
+            for cm in auto_materials_for_event(
+                sym,
+                ev_date,
+                include_sec=auto_sec,
+                include_fool=auto_fool,
+            ):
+                if cm.source_url in known_urls:
+                    continue
+                known_urls.add(cm.source_url)
                 add(_catalog_row(cm, kb_id=kb_id, sync_source="auto_sources"))
 
     if include_priority_catalog:
@@ -443,6 +566,13 @@ def main() -> int:
     )
     n = upsert_rows(engine, rows, dry_run=args.dry_run)
     logger.info("%s %s earnings_material sync rows", "Checked" if args.dry_run else "Upserted", n)
+    linked = ensure_kb_and_link_orphan_materials(
+        engine,
+        symbols=symbols,
+        dry_run=args.dry_run,
+    )
+    if linked:
+        logger.info("%s orphan material KB link(s)", linked)
     return 0
 
 
