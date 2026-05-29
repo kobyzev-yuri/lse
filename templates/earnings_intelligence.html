@@ -71,6 +71,16 @@
         .shadow-legend { font-size: 0.78rem; margin-bottom: 0.65rem; }
         .shadow-legend dt { color: #94a3b8; font-weight: 600; margin-top: 0.35rem; }
         .shadow-legend dd { margin: 0.15rem 0 0 0; color: #cbd5e1; }
+        .ei-context-bar {
+            position: sticky; top: 0; z-index: 15;
+            background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+            padding: 0.5rem 0.65rem; margin-bottom: 0.75rem;
+            display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+        }
+        .ei-context-bar .ctx-label { font-size: 0.78rem; color: #94a3b8; font-weight: 600; }
+        .ei-context-hint { font-size: 0.78rem; color: #7dd3fc; margin-left: auto; }
+        tr.ctx-row td { background: #1e3a5f !important; }
     </style>
 </head>
 <body>
@@ -105,13 +115,29 @@
     <button class="btn" data-tab="ml">ML слои</button>
 </div>
 
+<div id="eiContextBar" class="ei-context-bar" aria-label="Выбранный тикер и дата отчёта">
+    <span class="ctx-label">Контекст</span>
+    <label class="muted">Ticker</label>
+    <input id="ctxSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="MSFT">
+    <label class="muted">Дата</label>
+    <select id="ctxEventDate" title="Даты отчётов для выбранного тикера"></select>
+    <button type="button" class="btn" data-ctx-go="brief">Brief</button>
+    <button type="button" class="btn" data-ctx-go="fusion">Fusion</button>
+    <button type="button" class="btn" data-ctx-go="spillover">Spillover</button>
+    <label class="muted" style="display:flex;align-items:center;gap:0.25rem;font-size:0.78rem">
+        <input type="checkbox" id="ctxFilterEvents" /> только этот тикер в таблице
+    </label>
+    <span id="ctxHint" class="ei-context-hint">—</span>
+</div>
+
 <div id="panel-events" class="panel active">
     <div class="tab-intro">
         <strong>События</strong> — календарь отчётов universe (GAME_5M + portfolio + context).
         <ul>
             <li><strong>Date</strong> — дата earnings в <code>knowledge_base</code>.</li>
             <li><strong>Materials / LLM</strong> — есть ли parsed materials и извлечённые факты (tone, scenario).</li>
-            <li><strong>Brief / Fusion / Spillover</strong> в строке — переход на соответствующую вкладку с этим тикером (и датой для Brief/Fusion).</li>
+            <li><strong>Контекст</strong> (панель под вкладками) — тикер + дата сохраняются при переключении вкладок и в sessionStorage.</li>
+            <li><strong>Brief / Fusion / Spillover</strong> в строке — подставляют контекст и открывают вкладку.</li>
         </ul>
     </div>
     <div class="toolbar">
@@ -138,13 +164,7 @@
             <li>Не путать с <code>/corr</code> — здесь event-study от даты отчёта, не скользящая корреляция.</li>
         </ul>
     </div>
-    <div class="toolbar">
-        <label class="muted">Ticker:</label>
-        <input id="briefSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="META">
-        <label class="muted">Дата отчёта:</label>
-        <select id="briefEventDate"></select>
-        <button type="button" class="btn" id="loadBriefBtn">Загрузить Brief</button>
-    </div>
+    <p class="muted" style="font-size:0.78rem;margin-bottom:0.5rem">Тикер и дата — в панели <strong>Контекст</strong> выше (сохраняются при смене вкладок).</p>
     <h2 id="detailTitle" class="view-title">Event Brief</h2>
     <div id="briefContent" class="muted">Выберите строку в «Событиях» или введите тикер и дату.</div>
 </div>
@@ -186,11 +206,7 @@
             <li>Из таблицы «События» кнопка Spillover подставляет source и открывает эту вкладку.</li>
         </ul>
     </div>
-    <div class="toolbar">
-        <label class="muted">Source:</label>
-        <input id="spilloverSource" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="META">
-        <button class="btn" id="loadSpilloverBtn">Загрузить историю</button>
-    </div>
+    <p class="muted" style="font-size:0.78rem;margin-bottom:0.5rem">Source = тикер из <strong>Контекст</strong>. <button type="button" class="btn" id="loadSpilloverBtn">Обновить историю</button></p>
     <p class="muted" id="spilloverNote"></p>
     <div id="spilloverContent"></div>
 </div>
@@ -220,13 +236,7 @@
             <li>Тикер и дата — как на Brief; из таблицы кнопка Fusion подставляет их автоматически.</li>
         </ul>
     </div>
-    <div class="toolbar">
-        <label class="muted">Ticker:</label>
-        <input id="fusionSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="META">
-        <label class="muted">Дата отчёта:</label>
-        <select id="fusionEventDate"></select>
-        <button class="btn" id="loadFusionBtn">Fusion advisory</button>
-    </div>
+    <p class="muted" style="font-size:0.78rem;margin-bottom:0.5rem">Тикер и дата — в <strong>Контекст</strong>. <button type="button" class="btn" id="loadFusionBtn">Fusion advisory</button></p>
     <div id="fusionContent" class="muted">Регрессия + scenario classifier + brief (без исполнения сделок).</div>
 </div>
 
@@ -273,6 +283,71 @@ const peerSpilloverTable = (peers, escTicker = true) => {
     return `<table class="peer-table"><thead><tr><th>Peer</th><th><span class="pill pill-spillover">1d</span></th><th><span class="pill pill-spillover">5d</span></th></tr></thead><tbody>${body}</tbody></table>`;
 };
 let allEvents = [], currentFilter = 'all', graphData = null;
+const EI_CTX_KEY = 'earnings_intelligence_ctx_v1';
+let eiContext = { symbol: '', eventDate: '', filterEventsOnly: false };
+
+function loadEiContextFromStorage() {
+    try {
+        const raw = sessionStorage.getItem(EI_CTX_KEY);
+        if (!raw) return;
+        const o = JSON.parse(raw);
+        if (o && typeof o === 'object') {
+            eiContext.symbol = String(o.symbol || '').toUpperCase();
+            eiContext.eventDate = String(o.eventDate || '');
+            eiContext.filterEventsOnly = !!o.filterEventsOnly;
+        }
+    } catch (_) {}
+}
+
+function saveEiContext() {
+    try {
+        sessionStorage.setItem(EI_CTX_KEY, JSON.stringify(eiContext));
+    } catch (_) {}
+}
+
+function updateCtxHint() {
+    const el = document.getElementById('ctxHint');
+    if (!el) return;
+    const s = eiContext.symbol || '—';
+    const d = eiContext.eventDate || '—';
+    el.textContent = s !== '—' ? `${s} · ${d}` : 'выберите тикер';
+}
+
+function readContextFromBar() {
+    const sym = getTickerInput('ctxSymbol');
+    const d = document.getElementById('ctxEventDate')?.value || '';
+    eiContext.symbol = sym;
+    eiContext.eventDate = d;
+    eiContext.filterEventsOnly = !!document.getElementById('ctxFilterEvents')?.checked;
+    saveEiContext();
+    updateCtxHint();
+}
+
+function setEiContext(sym, eventDate, opts = {}) {
+    const s = String(sym || '').trim().toUpperCase();
+    if (s) eiContext.symbol = s;
+    if (eventDate !== undefined && eventDate !== null && String(eventDate).trim()) {
+        eiContext.eventDate = String(eventDate).trim().slice(0, 10);
+    }
+    if (opts.filterEventsOnly != null) eiContext.filterEventsOnly = !!opts.filterEventsOnly;
+    const ctxSym = document.getElementById('ctxSymbol');
+    const ctxDate = document.getElementById('ctxEventDate');
+    if (ctxSym && s) ctxSym.value = s;
+    if (ctxDate && s) fillDateSelect(ctxDate, s, eiContext.eventDate || null);
+    if (ctxDate && eiContext.eventDate) ctxDate.value = eiContext.eventDate;
+    const filt = document.getElementById('ctxFilterEvents');
+    if (filt) filt.checked = eiContext.filterEventsOnly;
+    saveEiContext();
+    updateCtxHint();
+    if (opts.refreshTable !== false && document.getElementById('panel-events')?.classList.contains('active')) {
+        applyFilter();
+    }
+}
+
+function getEiContext() {
+    readContextFromBar();
+    return { symbol: eiContext.symbol, eventDate: eiContext.eventDate };
+}
 
 function eventDatesForSymbol(sym) {
     return [...new Set(
@@ -313,16 +388,10 @@ function refreshTickerList() {
     if (list) list.innerHTML = syms.map(s => `<option value="${s}"></option>`).join('');
 }
 
-function setEventPickers(which, sym, eventDate) {
-    const tickerId = which === 'brief' ? 'briefSymbol' : 'fusionSymbol';
-    const dateId = which === 'brief' ? 'briefEventDate' : 'fusionEventDate';
-    setTickerInput(tickerId, sym);
-    fillDateSelect(document.getElementById(dateId), sym, eventDate || null);
-}
-
-function onTickerInputChange(tickerId, dateId) {
-    const sym = getTickerInput(tickerId);
-    fillDateSelect(document.getElementById(dateId), sym, null);
+function onCtxSymbolChange() {
+    const sym = getTickerInput('ctxSymbol');
+    fillDateSelect(document.getElementById('ctxEventDate'), sym, null);
+    readContextFromBar();
 }
 
 function groupBadges(group) {
@@ -334,11 +403,25 @@ function groupBadges(group) {
 }
 
 function showTab(name) {
+    readContextFromBar();
     document.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
     document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+    updateCtxHint();
     if (name === 'graph' && !graphData) loadGraph();
     if (name === 'ml') loadMlLayers();
     if (name === 'shadow') loadShadow(false);
+}
+
+function goContextTab(tab) {
+    const { symbol, eventDate } = getEiContext();
+    if (!symbol) {
+        alert('Укажите тикер в панели Контекст');
+        return;
+    }
+    showTab(tab);
+    if (tab === 'brief') loadBrief(symbol, eventDate);
+    else if (tab === 'fusion') loadFusion(eventDate);
+    else if (tab === 'spillover') loadSpillover();
 }
 
 async function loadList() {
@@ -366,42 +449,50 @@ function applyFilter() {
     let ev = allEvents;
     if (currentFilter === 'GAME_5M') ev = ev.filter(e => (e.group || '').includes('GAME_5M'));
     else if (currentFilter === 'portfolio') ev = ev.filter(e => (e.group || '').includes('portfolio'));
-    document.getElementById('eventsBody').innerHTML = ev.map(ev => `
-        <tr><td><strong>${ev.symbol}</strong></td><td>${ev.event_date||'—'}</td><td>${groupBadges(ev.group)}</td>
+    if (eiContext.filterEventsOnly && eiContext.symbol) {
+        ev = ev.filter(e => e.symbol === eiContext.symbol);
+    }
+    const ctxSym = eiContext.symbol;
+    const ctxDate = eiContext.eventDate;
+    document.getElementById('eventsBody').innerHTML = ev.map(ev => {
+        const rowCls = (ctxSym && ev.symbol === ctxSym && (!ctxDate || ev.event_date === ctxDate)) ? ' class="ctx-row"' : '';
+        return `
+        <tr${rowCls}><td><strong>${ev.symbol}</strong></td><td>${ev.event_date||'—'}</td><td>${groupBadges(ev.group)}</td>
         <td>${badgeMat(ev)}</td><td>${badgeLlm(ev)}</td><td>${ev.management_tone||'—'}</td>
         <td><code>${ev.top_scenario||'—'}</code></td>
         <td><button type="button" class="link-btn" data-sym="${ev.symbol}" data-event-date="${ev.event_date||''}">Brief</button>
         <button type="button" class="link-btn" data-fusion="${ev.symbol}" data-fusion-date="${ev.event_date||''}">Fusion</button>
-        <button type="button" class="link-btn" data-spill="${ev.symbol}">Spillover</button></td></tr>`).join('');
+        <button type="button" class="link-btn" data-spill="${ev.symbol}">Spillover</button></td></tr>`;
+    }).join('');
 }
 
 function handleEventsTableClick(e) {
     const btn = e.target.closest('button.link-btn');
     if (!btn || !btn.closest('#eventsBody')) return;
     if (btn.dataset.sym) {
-        setEventPickers('brief', btn.dataset.sym, btn.dataset.eventDate || '');
-        showTab('brief');
-        loadBrief(btn.dataset.sym, btn.dataset.eventDate || '');
+        setEiContext(btn.dataset.sym, btn.dataset.eventDate || '');
+        goContextTab('brief');
         return;
     }
     if (btn.dataset.fusion) {
-        setEventPickers('fusion', btn.dataset.fusion, btn.dataset.fusionDate || '');
-        showTab('fusion');
-        loadFusion(btn.dataset.fusionDate || document.getElementById('fusionEventDate')?.value || '');
+        setEiContext(btn.dataset.fusion, btn.dataset.fusionDate || '');
+        goContextTab('fusion');
         return;
     }
     if (btn.dataset.spill) {
-        setTickerInput('spilloverSource', btn.dataset.spill);
-        showTab('spillover');
-        loadSpillover();
+        setEiContext(btn.dataset.spill, '', { filterEventsOnly: false });
+        goContextTab('spillover');
     }
 }
 
 async function loadBrief(symbol, eventDate) {
     const content = document.getElementById('briefContent');
-    const sym = (symbol || getTickerInput('briefSymbol')).trim().toUpperCase();
-    const evd = eventDate || document.getElementById('briefEventDate')?.value || '';
-    setEventPickers('brief', sym, evd);
+    if (symbol) setEiContext(symbol, eventDate || '', { refreshTable: false });
+    const { symbol: sym, eventDate: evd } = getEiContext();
+    if (!sym) {
+        content.innerHTML = '<span class="err">Укажите тикер в панели Контекст</span>';
+        return;
+    }
     document.getElementById('detailTitle').textContent = `${sym} · ${evd || '—'}`;
     content.innerHTML = '<span class="muted">Загрузка…</span>';
     let mlHtml = '';
@@ -480,7 +571,7 @@ async function loadGraph() {
         return `<div class="edge-row"><button class="link-btn" data-src="${s}">${s}</button> → ${n} peers</div>`;
     }).join('') || '<span class="muted">нет рёбер</span>';
     document.getElementById('graphSources').querySelectorAll('[data-src]').forEach(btn => {
-        btn.addEventListener('click', () => { document.getElementById('spilloverSource').value = btn.dataset.src; showTab('spillover'); loadSpillover(); });
+        btn.addEventListener('click', () => { setEiContext(btn.dataset.src, ''); goContextTab('spillover'); });
     });
     const edges = graphData.edges || [];
     const shown = edges.slice(0, 40);
@@ -493,9 +584,9 @@ async function loadGraph() {
 }
 
 async function loadSpillover() {
-    const sym = getTickerInput('spilloverSource');
+    const { symbol: sym } = getEiContext();
     if (!sym) {
-        document.getElementById('spilloverContent').innerHTML = '<span class="err">Укажите тикер source</span>';
+        document.getElementById('spilloverContent').innerHTML = '<span class="err">Укажите тикер в панели Контекст</span>';
         return;
     }
     const box = document.getElementById('spilloverContent');
@@ -551,15 +642,16 @@ async function loadShadow(refresh) {
 }
 
 async function loadFusion(eventDate) {
-    const sym = getTickerInput('fusionSymbol');
+    if (eventDate) setEiContext(eiContext.symbol, eventDate, { refreshTable: false });
+    const { symbol: sym, eventDate: evd } = getEiContext();
     if (!sym) {
-        document.getElementById('fusionContent').innerHTML = '<span class="err">Укажите тикер</span>';
+        document.getElementById('fusionContent').innerHTML = '<span class="err">Укажите тикер в панели Контекст</span>';
         return;
     }
     const el = document.getElementById('fusionContent');
     el.innerHTML = '<span class="muted">Загрузка…</span>';
     let url = `/api/earnings/fusion/${encodeURIComponent(sym)}`;
-    if (eventDate) url += `?event_date=${encodeURIComponent(eventDate)}`;
+    if (evd) url += `?event_date=${encodeURIComponent(evd)}`;
     const res = await fetch(url);
     const data = await res.json();
     if (!res.ok) { el.innerHTML = `<span class="err">${data.detail || JSON.stringify(data)}</span>`; return; }
@@ -611,37 +703,38 @@ document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('
     btn.classList.add('active'); currentFilter = btn.dataset.filter; applyFilter();
 }));
 document.getElementById('refreshBtn').addEventListener('click', () => loadList().catch(e => alert(e.message)));
-document.getElementById('loadSpilloverBtn').addEventListener('click', () => loadSpillover());
+document.getElementById('loadSpilloverBtn').addEventListener('click', () => { readContextFromBar(); loadSpillover(); });
 document.getElementById('loadShadowBtn').addEventListener('click', () => loadShadow(false));
 document.getElementById('refreshShadowBtn').addEventListener('click', () => loadShadow(true));
-document.getElementById('loadFusionBtn').addEventListener('click', () => {
-    const d = document.getElementById('fusionEventDate')?.value || '';
-    loadFusion(d);
+document.getElementById('loadFusionBtn').addEventListener('click', () => goContextTab('fusion'));
+
+document.getElementById('ctxSymbol')?.addEventListener('change', onCtxSymbolChange);
+document.getElementById('ctxSymbol')?.addEventListener('blur', onCtxSymbolChange);
+document.getElementById('ctxEventDate')?.addEventListener('change', () => {
+    readContextFromBar();
+    applyFilter();
 });
-['briefSymbol', 'fusionSymbol'].forEach(id => {
-    const dateId = id === 'briefSymbol' ? 'briefEventDate' : 'fusionEventDate';
-    document.getElementById(id)?.addEventListener('change', () => onTickerInputChange(id, dateId));
-    document.getElementById(id)?.addEventListener('blur', () => onTickerInputChange(id, dateId));
+document.getElementById('ctxFilterEvents')?.addEventListener('change', () => {
+    readContextFromBar();
+    applyFilter();
 });
-document.getElementById('loadBriefBtn')?.addEventListener('click', () => {
-    loadBrief(getTickerInput('briefSymbol'), document.getElementById('briefEventDate')?.value || '');
+document.querySelectorAll('[data-ctx-go]').forEach(btn => {
+    btn.addEventListener('click', () => goContextTab(btn.dataset.ctxGo));
 });
 
+loadEiContextFromStorage();
+
 loadList().then(() => {
+    if (eiContext.symbol) {
+        setEiContext(eiContext.symbol, eiContext.eventDate, { refreshTable: true });
+    }
     const p = new URLSearchParams(location.search);
     const sym = (p.get('symbol') || '').toUpperCase();
     const evd = p.get('event_date') || '';
     const tab = (p.get('tab') || 'brief').toLowerCase();
     if (sym) {
-        if (tab === 'fusion') {
-            setEventPickers('fusion', sym, evd);
-            showTab('fusion');
-            loadFusion(evd);
-        } else {
-            setEventPickers('brief', sym, evd);
-            showTab('brief');
-            loadBrief(sym, evd);
-        }
+        setEiContext(sym, evd);
+        goContextTab(tab === 'fusion' ? 'fusion' : (tab === 'spillover' ? 'spillover' : 'brief'));
     }
 }).catch(e => { document.getElementById('eventsBody').innerHTML = `<tr><td colspan="8" class="err">${e.message}</td></tr>`; });
 </script>
