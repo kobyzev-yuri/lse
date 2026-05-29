@@ -109,25 +109,33 @@ isProject: false
 | P0 UI: Brief + regression по event_date, shadow labels, spillover union | ✅ prod | `fe26776`, `2b0664d` |
 | Док: ridge vs event regression vs classifier | ✅ | [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §4–§7 |
 | P1: ML layers Shadow/Fusion/readiness paths | ✅ | `0525849`, API 8 layers incl. shadow/fusion/readiness |
-| P1: materials prod eval (--skip-ml-refresh) | ✅ | shadow n_matured=27, grid_ready=true |
-| P1: ANET/AVGO/GOOGL/PLTR coverage | ✅ | yfinance KB seed; readiness 100% |
+| P1: materials prod eval (--skip-ml-refresh) | ✅ | shadow n_matured=27→33, grid_ready=true |
+| P1: ANET/AVGO/GOOGL/PLTR + train | ✅ | ERD 527, earnings_v1 ~482, deploy `838e9fa` |
+| P1: UI actions, scenario column, quotes, event date | ✅ | `6b17e91`, `7f142b0`, `45f04d5` |
+| P1: CatBoost FBV mismatch + fusion predict path | ✅ | `ddbd5d3` |
+| P1: Brief tab, intros, context bar | ✅ | `15e3c96`…`4a144cf` |
+| P1: cron earnings_v1 nightly backfill | ✅ | `23:37` в `lse-docker.crontab` |
 
-План сессии: [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md).
+План сессии: [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md) · **30.05:** [EARNINGS_PLAN_2026-05-30.md](./EARNINGS_PLAN_2026-05-30.md).
 
-**Cron (новое в `crontab/lse-docker.crontab`):**
+**Cron (актуально в `crontab/lse-docker.crontab`):**
 
 | Время | Скрипт | Режим |
 |-------|--------|-------|
 | `:30 */6 * * *` | `run_earnings_ml_refresh.py` | dry-run (default `ML_READINESS_TRAIN_MODE`) |
+| `23:36 пн–пт` | `backfill_event_reaction_labeling.py` | `quotes_regime_v1` |
+| `23:37 пн–пт` | `backfill_event_reaction_labeling.py` | `quotes_regime_earnings_v1`, `--include-earnings-universe` |
 | `23:50 пн–пт` | `run_ml_train_readiness_cron.py` | + `ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0` |
 | `23:52 пн–пт` | `run_earnings_ml_refresh.py` | full train (scenario `.cbm`) |
 
 ### Известные gaps (актуально)
 
-- **ERD skeleton:** тикеры earnings universe вне slim `config.env` (ANET/GOOGL/…) не попадали в `event_reaction_dataset` — cron/build с `--include-earnings-universe` (конфиг ∪ universe).
-- **Материалы:** DELL (earnings day) — SEC после отчёта; Fool 429 / ARM junk — backlog #8.
-- **Backfill:** ~11% строк (`features:no_quotes`) — нужен seed quotes для редких тикеров.
-- **Регрессия vs grid:** product CatBoost остаётся на `quotes_regime_v1`; earnings grid — отдельный classifier, не подменяет advisory RMSE-гейт.
+- **Deploy:** последние UI-коммиты (`4a144cf`) — проверить prod после `deploy_from_github.sh` (см. план 30.05).
+- **ERD skeleton:** ✅ mitigated — `--include-earnings-universe` в build/backfill/cron.
+- **Материалы:** Fool 429 / ARM junk — периодический cleanup; DELL path ✅.
+- **Backfill:** ~11% строк (`features:no_quotes`) — seed quotes для редких тикеров.
+- **Регрессия vs grid:** product CatBoost на `quotes_regime_v1`; classifier на `quotes_regime_earnings_v1`; nightly regime backfill больше не ломает predict (FBV rebuild).
+- **Classifier train:** мало rows (~21), holdout `n_valid` может быть 0 — накапливать LLM labels.
 - **Trading gate:** scenario classifier — advisory/shadow; hard-block сделок не включён.
 - **`run_earnings_intelligence_pipeline.py`** — не в cron (ручной оркестратор sync→extract→brief).
 
