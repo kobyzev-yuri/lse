@@ -58,7 +58,9 @@
         @media (max-width: 900px) { .graph-wrap { grid-template-columns: 1fr; } }
         .edge-row { font-size: 0.8rem; padding: 0.35rem 0; border-bottom: 1px solid #334155; }
         .weight-bar { display: inline-block; height: 6px; background: #3b82f6; border-radius: 3px; vertical-align: middle; margin-left: 0.35rem; }
-        select { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 0.35rem 0.5rem; }
+        select, .ticker-input { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 0.35rem 0.5rem; font-size: 0.85rem; }
+        .ticker-input { width: 5.5rem; min-width: 4rem; text-transform: uppercase; }
+        .view-title { font-size: 1rem; margin: 0 0 0.65rem; color: #e2e8f0; font-weight: 600; }
         .layer-card { border-left: 3px solid #475569; padding-left: 0.5rem; margin-bottom: 0.65rem; }
         .layer-card.active { border-left-color: #22c55e; }
         .layer-card.planned { border-left-color: #eab308; }
@@ -73,7 +75,7 @@
 
 <details class="help-panel" open>
     <summary>Как читать этот экран — кратко · <a href="/earnings/guide" style="color:#93c5fd">полное руководство (RU)</a></summary>
-    <p class="muted" style="margin:0.35rem 0">Вкладки: <strong>События</strong> (календарь + Brief) · <strong>Peer graph</strong> (кто чей пир) · <strong>Spillover</strong> (факт 5d по пирам после отчёта) · <strong>Shadow</strong> (качество classifier, advisory) · <strong>Fusion</strong> (регрессия + scenario) · <strong>ML слои</strong> (статус пайплайна).</p>
+    <p class="muted" style="margin:0.35rem 0">Вкладки: <strong>События</strong> (календарь) · <strong>Brief</strong> · <strong>Spillover</strong> · <strong>Fusion</strong> — одинаковый экран с тулбаром; из таблицы кнопки Brief/Fusion/Spillover переключают вкладку. Тикер — поле ввода (не длинный список).</p>
     <ul>
         <li><strong>Регрессия (сейчас в prod):</strong> CatBoost предсказывает <code>forward_log_ret_5d</code> — log-доходность на 5 торговых дней после отчёта. API: <code>/api/ml/event-reaction/{ticker}</code>. Признаки из daily quotes + market regime; тексты earnings пока не в product feature_builder.</li>
         <li><strong>UP/DOWN/FLAT:</strong> не классификатор, а правило по порогу на фактической 5d log-return (backfill из quotes).</li>
@@ -81,12 +83,14 @@
         <li><strong>Peer graph:</strong> directed edges «лидер → пир» с весом. Spillover = forward returns пиров от <em>даты отчёта лидера</em> (event-study), не скользящая корреляция.</li>
         <li><strong>quotes_regime_earnings_v1:</strong> backfill с peer graph + tone — <code>run_earnings_ml_refresh.py</code>.</li>
         <li><strong>Классификатор сценариев (pilot):</strong> <code>train_event_reaction_scenario_classifier.py</code> после <code>apply_earnings_scenario_labels --universe</code>.</li>
-        <li><strong>Дата отчёта:</strong> в таблице «События» — колонка Date; кнопки Brief/Fusion берут дату этой строки. Иначе выберите тикер + дату в селектах над Brief или на вкладке Fusion. Telegram: <code>/earnings META 2026-04-29</code>.</li>
+        <li><strong>Дата отчёта:</strong> колонка Date в «Событиях»; кнопки Brief/Fusion подставляют тикер и дату на своей вкладке. Telegram: <code>/earnings META 2026-04-29</code>.</li>
     </ul>
 </details>
 
+<datalist id="eiTickerList"></datalist>
 <div class="tab-bar">
     <button class="btn active" data-tab="events">События</button>
+    <button class="btn" data-tab="brief">Brief</button>
     <button class="btn" data-tab="graph">Peer graph</button>
     <button class="btn" data-tab="spillover">Spillover</button>
     <button class="btn" data-tab="shadow">Shadow</button>
@@ -108,16 +112,19 @@
         <thead><tr><th>Ticker</th><th>Date</th><th>Group</th><th>Materials</th><th>LLM</th><th>Tone</th><th>Scenario</th><th></th></tr></thead>
         <tbody id="eventsBody"></tbody>
     </table>
-    <div class="detail-panel" id="detailPanel" style="display:none">
-        <div class="toolbar" style="margin-bottom:0.5rem">
-            <label class="muted">Brief:</label>
-            <select id="briefSymbol"></select>
-            <select id="briefEventDate"></select>
-            <button type="button" class="btn" id="loadBriefBtn">Загрузить Brief</button>
-        </div>
-        <h2 id="detailTitle">Event Brief</h2>
-        <div id="detailContent" class="muted">Выберите строку в таблице или тикер + дату отчёта выше.</div>
+    <p class="muted" style="margin-top:0.65rem;font-size:0.78rem">Brief / Fusion / Spillover — отдельные вкладки; клик по строке переключает вкладку с выбранным тикером.</p>
+</div>
+
+<div id="panel-brief" class="panel">
+    <div class="toolbar">
+        <label class="muted">Ticker:</label>
+        <input id="briefSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="META">
+        <label class="muted">Дата отчёта:</label>
+        <select id="briefEventDate"></select>
+        <button type="button" class="btn" id="loadBriefBtn">Загрузить Brief</button>
     </div>
+    <h2 id="detailTitle" class="view-title">Event Brief</h2>
+    <div id="briefContent" class="muted">Выберите строку в «Событиях» или введите тикер и дату.</div>
 </div>
 
 <div id="panel-graph" class="panel">
@@ -130,8 +137,8 @@
 
 <div id="panel-spillover" class="panel">
     <div class="toolbar">
-        <label class="muted">Source ticker:</label>
-        <select id="spilloverSource"></select>
+        <label class="muted">Source:</label>
+        <input id="spilloverSource" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="META">
         <button class="btn" id="loadSpilloverBtn">Загрузить историю</button>
     </div>
     <p class="muted" id="spilloverNote"></p>
@@ -149,7 +156,7 @@
 <div id="panel-fusion" class="panel">
     <div class="toolbar">
         <label class="muted">Ticker:</label>
-        <select id="fusionSymbol"></select>
+        <input id="fusionSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="META">
         <label class="muted">Дата отчёта:</label>
         <select id="fusionEventDate"></select>
         <button class="btn" id="loadFusionBtn">Fusion advisory</button>
@@ -212,37 +219,37 @@ function fillDateSelect(sel, sym, preferred) {
     else sel.value = dates[0];
 }
 
-function refreshSpilloverSources() {
+function eiTickers() {
     const fromEvents = allEvents.map(e => e.symbol).filter(Boolean);
     const fromGraph = graphData ? [...new Set((graphData.edges || []).map(e => e.source))] : [];
-    const syms = [...new Set([...fromEvents, ...fromGraph])].sort();
-    const sel = document.getElementById('spilloverSource');
-    const prev = sel.value;
-    sel.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
-    if (prev && syms.includes(prev)) sel.value = prev;
-    const fus = document.getElementById('fusionSymbol');
-    const briefSym = document.getElementById('briefSymbol');
-    if (fus) {
-        const prevFus = fus.value;
-        fus.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
-        if (prevFus && syms.includes(prevFus)) fus.value = prevFus;
-        else if (syms.length) fus.value = syms[0];
-        fillDateSelect(document.getElementById('fusionEventDate'), fus.value, null);
-    }
-    if (briefSym) {
-        const prevB = briefSym.value;
-        briefSym.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
-        if (prevB && syms.includes(prevB)) briefSym.value = prevB;
-        else if (syms.length) briefSym.value = syms[0];
-        fillDateSelect(document.getElementById('briefEventDate'), briefSym.value, null);
-    }
+    return [...new Set([...fromEvents, ...fromGraph])].sort();
 }
 
-function setBriefSelectors(sym, eventDate) {
-    const s = document.getElementById('briefSymbol');
-    const d = document.getElementById('briefEventDate');
-    if (s && sym) s.value = sym;
-    fillDateSelect(d, sym || s?.value, eventDate || null);
+function getTickerInput(id) {
+    return (document.getElementById(id)?.value || '').trim().toUpperCase();
+}
+
+function setTickerInput(id, sym) {
+    const el = document.getElementById(id);
+    if (el && sym) el.value = String(sym).trim().toUpperCase();
+}
+
+function refreshTickerList() {
+    const syms = eiTickers();
+    const list = document.getElementById('eiTickerList');
+    if (list) list.innerHTML = syms.map(s => `<option value="${s}"></option>`).join('');
+}
+
+function setEventPickers(which, sym, eventDate) {
+    const tickerId = which === 'brief' ? 'briefSymbol' : 'fusionSymbol';
+    const dateId = which === 'brief' ? 'briefEventDate' : 'fusionEventDate';
+    setTickerInput(tickerId, sym);
+    fillDateSelect(document.getElementById(dateId), sym, eventDate || null);
+}
+
+function onTickerInputChange(tickerId, dateId) {
+    const sym = getTickerInput(tickerId);
+    fillDateSelect(document.getElementById(dateId), sym, null);
 }
 
 function groupBadges(group) {
@@ -279,7 +286,7 @@ async function loadList() {
     document.getElementById('missingList').textContent = miss.length ? `Без материалов: ${miss.join(', ')}` : '';
     applyFilter();
     document.getElementById('updatedAt').textContent = new Date().toLocaleTimeString();
-    refreshSpilloverSources();
+    refreshTickerList();
 }
 
 function applyFilter() {
@@ -299,38 +306,35 @@ function handleEventsTableClick(e) {
     const btn = e.target.closest('button.link-btn');
     if (!btn || !btn.closest('#eventsBody')) return;
     if (btn.dataset.sym) {
-        showTab('events');
-        setBriefSelectors(btn.dataset.sym, btn.dataset.eventDate || '');
+        setEventPickers('brief', btn.dataset.sym, btn.dataset.eventDate || '');
+        showTab('brief');
         loadBrief(btn.dataset.sym, btn.dataset.eventDate || '');
         return;
     }
     if (btn.dataset.fusion) {
-        const sel = document.getElementById('fusionSymbol');
-        const dsel = document.getElementById('fusionEventDate');
-        if (sel) sel.value = btn.dataset.fusion;
-        fillDateSelect(dsel, btn.dataset.fusion, btn.dataset.fusionDate || null);
+        setEventPickers('fusion', btn.dataset.fusion, btn.dataset.fusionDate || '');
         showTab('fusion');
-        loadFusion(btn.dataset.fusionDate || dsel?.value || '');
+        loadFusion(btn.dataset.fusionDate || document.getElementById('fusionEventDate')?.value || '');
         return;
     }
     if (btn.dataset.spill) {
-        document.getElementById('spilloverSource').value = btn.dataset.spill;
+        setTickerInput('spilloverSource', btn.dataset.spill);
         showTab('spillover');
         loadSpillover();
     }
 }
 
 async function loadBrief(symbol, eventDate) {
-    const panel = document.getElementById('detailPanel');
-    const content = document.getElementById('detailContent');
-    panel.style.display = 'block';
-    document.getElementById('detailTitle').textContent = `${symbol} · ${eventDate || '—'}`;
+    const content = document.getElementById('briefContent');
+    const sym = (symbol || getTickerInput('briefSymbol')).trim().toUpperCase();
+    const evd = eventDate || document.getElementById('briefEventDate')?.value || '';
+    setEventPickers('brief', sym, evd);
+    document.getElementById('detailTitle').textContent = `${sym} · ${evd || '—'}`;
     content.innerHTML = '<span class="muted">Загрузка…</span>';
-    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     let mlHtml = '';
     try {
-        let mlUrl = `/api/ml/event-reaction/${encodeURIComponent(symbol)}`;
-        if (eventDate) mlUrl += `?event_date=${encodeURIComponent(eventDate)}`;
+        let mlUrl = `/api/ml/event-reaction/${encodeURIComponent(sym)}`;
+        if (evd) mlUrl += `?event_date=${encodeURIComponent(evd)}`;
         const mlRes = await fetch(mlUrl);
         if (mlRes.ok) {
             const ml = await mlRes.json();
@@ -346,8 +350,8 @@ async function loadBrief(symbol, eventDate) {
         }
     } catch (_) {}
     try {
-    const briefUrl = `/api/earnings/brief/${encodeURIComponent(symbol)}`
-        + (eventDate ? `?event_date=${encodeURIComponent(eventDate)}` : '');
+    const briefUrl = `/api/earnings/brief/${encodeURIComponent(sym)}`
+        + (evd ? `?event_date=${encodeURIComponent(evd)}` : '');
     const res = await fetch(briefUrl);
     const b = await res.json();
     if (!res.ok) throw new Error(b.detail || JSON.stringify(b));
@@ -394,7 +398,7 @@ async function loadGraph() {
     if (!graphData) {
         const res = await fetch('/api/earnings/peer-graph');
         graphData = await res.json();
-        refreshSpilloverSources();
+        refreshTickerList();
     }
     const bySource = {};
     (graphData.edges||[]).forEach(e => { (bySource[e.source] = bySource[e.source] || []).push(e); });
@@ -416,7 +420,11 @@ async function loadGraph() {
 }
 
 async function loadSpillover() {
-    const sym = document.getElementById('spilloverSource').value;
+    const sym = getTickerInput('spilloverSource');
+    if (!sym) {
+        document.getElementById('spilloverContent').innerHTML = '<span class="err">Укажите тикер source</span>';
+        return;
+    }
     const box = document.getElementById('spilloverContent');
     box.innerHTML = '<span class="muted">Загрузка…</span>';
     const res = await fetch(`/api/earnings/spillover/${encodeURIComponent(sym)}?since=2026-01-01&limit=8`);
@@ -464,7 +472,11 @@ async function loadShadow(refresh) {
 }
 
 async function loadFusion(eventDate) {
-    const sym = document.getElementById('fusionSymbol').value;
+    const sym = getTickerInput('fusionSymbol');
+    if (!sym) {
+        document.getElementById('fusionContent').innerHTML = '<span class="err">Укажите тикер</span>';
+        return;
+    }
     const el = document.getElementById('fusionContent');
     el.innerHTML = '<span class="muted">Загрузка…</span>';
     let url = `/api/earnings/fusion/${encodeURIComponent(sym)}`;
@@ -527,27 +539,30 @@ document.getElementById('loadFusionBtn').addEventListener('click', () => {
     const d = document.getElementById('fusionEventDate')?.value || '';
     loadFusion(d);
 });
-document.getElementById('fusionSymbol')?.addEventListener('change', () => {
-    fillDateSelect(document.getElementById('fusionEventDate'), document.getElementById('fusionSymbol').value, null);
-});
-document.getElementById('briefSymbol')?.addEventListener('change', () => {
-    fillDateSelect(document.getElementById('briefEventDate'), document.getElementById('briefSymbol').value, null);
+['briefSymbol', 'fusionSymbol'].forEach(id => {
+    const dateId = id === 'briefSymbol' ? 'briefEventDate' : 'fusionEventDate';
+    document.getElementById(id)?.addEventListener('change', () => onTickerInputChange(id, dateId));
+    document.getElementById(id)?.addEventListener('blur', () => onTickerInputChange(id, dateId));
 });
 document.getElementById('loadBriefBtn')?.addEventListener('click', () => {
-    const sym = document.getElementById('briefSymbol')?.value;
-    const d = document.getElementById('briefEventDate')?.value || '';
-    if (!sym) return;
-    loadBrief(sym, d);
+    loadBrief(getTickerInput('briefSymbol'), document.getElementById('briefEventDate')?.value || '');
 });
 
 loadList().then(() => {
     const p = new URLSearchParams(location.search);
     const sym = (p.get('symbol') || '').toUpperCase();
     const evd = p.get('event_date') || '';
+    const tab = (p.get('tab') || 'brief').toLowerCase();
     if (sym) {
-        showTab('events');
-        setBriefSelectors(sym, evd);
-        loadBrief(sym, evd);
+        if (tab === 'fusion') {
+            setEventPickers('fusion', sym, evd);
+            showTab('fusion');
+            loadFusion(evd);
+        } else {
+            setEventPickers('brief', sym, evd);
+            showTab('brief');
+            loadBrief(sym, evd);
+        }
     }
 }).catch(e => { document.getElementById('eventsBody').innerHTML = `<tr><td colspan="8" class="err">${e.message}</td></tr>`; });
 </script>
