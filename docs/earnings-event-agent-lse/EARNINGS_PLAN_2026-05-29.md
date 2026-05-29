@@ -39,16 +39,20 @@
 
 | # | Задача | Статус |
 |---|--------|--------|
-| 9 | ML layers: Shadow + Fusion + readiness JSON | 🔄 в работе |
+| 9 | ML layers: Shadow + Fusion + readiness JSON | ✅ `0525849` prod |
 | 10 | Docs: TRADE_ML §7 ridge vs regression vs classifier | ✅ `77cf513` |
 
 ### P1 — данные (ops)
 
 | # | Задача | Статус |
 |---|--------|--------|
-| 6 | `run_earnings_intelligence_prod_eval.py --skip-ml-refresh` | ⏳ после deploy |
-| 7 | DELL / свежие KB (materials + LLM) | ⏳ |
+| 6 | `run_earnings_intelligence_prod_eval.py --skip-ml-refresh` | ✅ 2026-05-29 15:22 UTC |
+| 7 | DELL / свежие KB (materials + LLM) | ⚠️ gap (см. ниже) |
 | 8 | Fool 429 → backlog | 📋 |
+
+**P1 #6 итог:** sync 81 rows, ingest 0, extract 1 (ARM), shadow `n_matured=27` (не упал), readiness `overall_grid_ready=true`.
+
+**P1 #7 DELL:** `earnings_material` 2026-05-28 SEC filing `extracted`, но `knowledge_base_id=NULL` и **нет** строки `knowledge_base` с `event_type=EARNINGS` → `/api/earnings/brief/DELL` → `no past KB earnings`. Нужен `--ensure-kb-events` (yfinance/KB seed) перед extract; не блокер для grid (DELL не в `symbols_without_materials`).
 
 ---
 
@@ -56,9 +60,11 @@
 
 - [x] P0 на prod
 - [x] TRADE_ML_DATASETS обновлён (§4–§7)
-- [ ] ML layers tab: shadow/fusion/readiness paths на prod
-- [ ] `n_matured` shadow не упал после materials run
-- [ ] Запись в `EARNINGS_INTELLIGENCE_PLAN.md` §2026-05-29
+- [x] ML layers tab: `live_shadow`, `fusion_advisory`, `readiness_gates` + json_path/metrics
+- [x] `n_matured=27` shadow не упал после materials run
+- [x] Prod eval JSON → `last_earnings_intelligence_prod_eval.json`
+- [ ] DELL: KB EARNINGS row + LLM extract → brief
+- [x] Запись в `EARNINGS_INTELLIGENCE_PLAN.md` §2026-05-29
 
 ---
 

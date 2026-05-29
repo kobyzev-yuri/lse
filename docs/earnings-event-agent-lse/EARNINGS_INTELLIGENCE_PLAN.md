@@ -108,8 +108,9 @@ isProject: false
 |-----|--------|-----------|
 | P0 UI: Brief + regression по event_date, shadow labels, spillover union | ✅ prod | `fe26776`, `2b0664d` |
 | Док: ridge vs event regression vs classifier | ✅ | [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §4–§7 |
-| P1: ML layers Shadow/Fusion/readiness paths | 🔄 | `get_ml_layers_status`, tab ML |
-| P1: materials prod eval (--skip-ml-refresh) | ⏳ | `run_earnings_intelligence_prod_eval.py` |
+| P1: ML layers Shadow/Fusion/readiness paths | ✅ | `0525849`, API 8 layers incl. shadow/fusion/readiness |
+| P1: materials prod eval (--skip-ml-refresh) | ✅ | shadow n_matured=27, grid_ready=true |
+| P1: DELL brief gap | ⚠️ | material extracted, KB EARNINGS row missing |
 
 План сессии: [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md).
 
