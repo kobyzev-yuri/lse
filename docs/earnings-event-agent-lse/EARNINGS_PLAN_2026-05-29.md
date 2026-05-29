@@ -47,7 +47,7 @@
 | # | Задача | Статус |
 |---|--------|--------|
 | 6 | `run_earnings_intelligence_prod_eval.py --skip-ml-refresh` | ✅ 2026-05-29 15:22 UTC |
-| 7 | DELL / свежие KB (materials + LLM) | 🔄 orphan KB link fix |
+| 7 | DELL / свежие KB (materials + LLM) | ✅ prod brief ok |
 | 8 | Fool 429 + ARM junk discover-links | 📋 backlog |
 
 **P1 #6 итог:** sync 81 rows, ingest 0, extract 1 (ARM), shadow `n_matured=27` (не упал), readiness `overall_grid_ready=true`.
@@ -65,7 +65,7 @@
 - [x] ML layers tab: `live_shadow`, `fusion_advisory`, `readiness_gates` + json_path/metrics
 - [x] `n_matured=27` shadow не упал после materials run
 - [x] Prod eval JSON → `last_earnings_intelligence_prod_eval.json`
-- [ ] DELL: KB EARNINGS row + LLM extract → brief (после deploy orphan-link fix)
+- [x] DELL: KB EARNINGS row + LLM extract → brief
 - [x] Запись в `EARNINGS_INTELLIGENCE_PLAN.md` §2026-05-29
 
 ---
