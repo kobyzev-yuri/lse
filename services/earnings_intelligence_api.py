@@ -470,6 +470,25 @@ def get_ml_layers_status(
             ).scalar()
             or 0
         )
+        regime_v1_rows = int(
+            conn.execute(
+                text(
+                    """
+                    SELECT count(*) FROM event_reaction_dataset
+                    WHERE dataset_version = :dv
+                      AND features_before IS NOT NULL
+                      AND features_before <> '{}'::jsonb
+                      AND (features_before->>'feature_builder_version') = 'quotes_regime_v1'
+                    """
+                ),
+                {"dv": dataset_version},
+            ).scalar()
+            or 0
+        )
+
+    from services.event_reaction_catboost_signal import model_feature_builder_version
+
+    regression_fbv = model_feature_builder_version() or "quotes_regime_v1"
 
     total = int(row.get("total") or 0)
     named_scenario = int(row.get("named_scenario") or 0)
@@ -545,10 +564,17 @@ def get_ml_layers_status(
             "status": "active",
             "target": "outcomes_after.forward_log_ret_5d",
             "api": "/api/ml/event-reaction/{ticker}",
+            "metrics": {
+                "model_feature_builder": regression_fbv,
+                "earnings_v1_rows": earnings_v1_rows,
+                "regime_v1_rows": regime_v1_rows,
+            },
             "description": (
                 "Предсказывает log-доходность на 5 торговых дней после earnings. "
-                "Признаки: quotes + market_regime (quotes_regime_v1). "
-                "Материалы/transcript пока не в feature_builder product-модели."
+                f"Артефакт .cbm обучен на {regression_fbv} "
+                f"(сейчас в DB: earnings_v1={earnings_v1_rows}, regime_v1={regime_v1_rows} строк). "
+                "Cron 23:36 backfill regime_v1 для всех символов; 23:37 — earnings_v1 для intelligence universe. "
+                "Brief при mismatch пересчитывает features on-the-fly. Тексты transcript не в product features."
             ),
         },
         {
@@ -652,6 +678,8 @@ def get_ml_layers_status(
         "rows_with_outcomes": int(row.get("with_outcomes") or 0),
         "llm_scenario_labels_applied": llm_scenario_applied,
         "earnings_v1_feature_rows": earnings_v1_rows,
+        "regime_v1_feature_rows": regime_v1_rows,
+        "regression_model_feature_builder": regression_fbv,
         "scenario_classifier_ready": clf_ready,
         "named_scenario_labels": named_scenario,
         "layers": layers,
