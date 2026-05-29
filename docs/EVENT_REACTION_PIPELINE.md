@@ -17,6 +17,8 @@
 
 **Earnings intelligence grid (с 2026-05-28):** отдельный контур для **сценарного классификатора** — `feature_builder_version=quotes_regime_earnings_v1` (quotes + regime + earnings tone/timing + peer graph topology + peer momentum). Оркестратор: **`scripts/run_earnings_ml_refresh.py`**. Метки: `label_source=llm_scenario_v0` из LLM `scenario_hints` (`apply_earnings_scenario_labels.py`). Train: **`train_event_reaction_scenario_classifier.py`**. Product-регрессия на `quotes_regime_v1` **не заменяется** этим слоем.
 
+**Вклад ridge / event regression / classifier в решения:** сводная таблица и §7 «Стек ML» — [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md).
+
 Дизайн-источник: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §4.2.1.  
 Официальные IR и страницы квартальной отчётности по тикерам (под будущий ingest и ручную работу): [earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md](earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md).
 

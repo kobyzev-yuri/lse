@@ -290,4 +290,6 @@ Prod snapshot: ~498 rows dataset, ~267 earnings_v1 features, ~15 LLM scenario la
 
 Полный eval: `ML_READINESS_TRAIN_MODE=full python3 scripts/run_earnings_intelligence_prod_eval.py`
 
+**ML-слои (ridge vs event regression vs classifier):** [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §4–§7.
+
 **План ближайшей сессии:** [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md)

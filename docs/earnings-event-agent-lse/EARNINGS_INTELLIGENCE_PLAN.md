@@ -67,6 +67,8 @@ isProject: false
 | **Регрессия (prod advisory)** | `forward_log_ret_5d` | `quotes_regime_v1` | `train_event_reaction_catboost.py` | Карточки/API, nightly cron 23:51 |
 | **Earnings grid (pilot)** | `final_label` (LLM scenario) | `quotes_regime_earnings_v1` | `train_event_reaction_scenario_classifier.py` | Сценарный классификатор, дообучаемая сетка |
 
+**Сравнение с ridge и роль каждого ML-слоя:** [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §4–§7.
+
 **Новые скрипты (2026-05-28):**
 
 | Скрипт | Назначение |
