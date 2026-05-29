@@ -31,11 +31,11 @@ ssh ai8049520@104.154.205.58 "docker exec lse-bot bash -lc '
 
 | # | Задача | Файлы | Критерий готовности |
 |---|--------|-------|---------------------|
-| 1 | **Brief: regression по event_date** | `earnings_intelligence.html`, опционально `event_reaction_catboost_signal.py` / API | На META 2026-04-29 виден pred 5d или явное «нет features для даты» |
-| 2 | **Brief: полный Event Brief в UI** | `earnings_intelligence.html` | evidence_quotes, guidance, capex_notes, status partial |
-| 3 | **Shadow: переименовать gate** | `earnings_intelligence.html`, `EARNINGS_UI_GUIDE.md` | Badge «Shadow quality · advisory only», не «Trading ready» |
-| 4 | **Peer graph: «40 из N»** | `earnings_intelligence.html` | Счётчик рёбер в UI |
-| 5 | **Spillover: sources из graph ∪ events** | `earnings_intelligence.html` или API | NVDA/META всегда в select |
+| 1 | **Brief: regression по event_date** | `earnings_intelligence.html`, `event_reaction_catboost_signal.py`, API | ✅ `?event_date=` + явное «нет features» |
+| 2 | **Brief: полный Event Brief в UI** | `earnings_intelligence.html` | ✅ evidence, guidance, capex, partial |
+| 3 | **Shadow: переименовать gate** | `earnings_intelligence.html`, `EARNINGS_UI_GUIDE.md` | ✅ «Shadow quality · advisory only» |
+| 4 | **Peer graph: «40 из N»** | `earnings_intelligence.html` | ✅ |
+| 5 | **Spillover: sources из graph ∪ events** | `earnings_intelligence.html` | ✅ |
 
 **Коммит после P0:** один PR/commit «Earnings UI P0: brief regression by date + full brief panel».
 
@@ -71,7 +71,7 @@ ssh ai8049520@104.154.205.58 "docker exec lse-bot bash -lc '
 
 ## Вечер — acceptance
 
-- [ ] P0 пункты 1–3 сделаны и на prod после deploy
+- [x] P0 пункты 1–5 в коде (deploy на prod — отдельно)
 - [ ] `/earnings/guide` обновлён если менялось поведение UI
 - [ ] `last_earnings_scenario_shadow.json` — n_matured не упал
 - [ ] Краткая запись в `EARNINGS_INTELLIGENCE_PLAN.md` (секция «2026-05-29») при существенных изменениях

@@ -155,9 +155,27 @@ const fmtPct = (logRet) => {
     const cls = simple >= 0 ? 'pos' : 'neg';
     return `<span class="${cls}">${simple >= 0 ? '+' : ''}${simple.toFixed(2)}%</span>`;
 };
+const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const fmtGuidance = (g) => {
+    if (g == null || g === '') return '—';
+    if (typeof g === 'object') return esc(JSON.stringify(g, null, 2));
+    return esc(String(g));
+};
 const badgeMat = (ev) => ev.materials_useful > 0 ? `<span class="badge ok">${ev.materials_useful}</span>` : '<span class="badge no">0</span>';
 const badgeLlm = (ev) => ev.has_llm ? '<span class="badge ok">yes</span>' : '<span class="badge no">—</span>';
 let allEvents = [], currentFilter = 'all', graphData = null;
+
+function refreshSpilloverSources() {
+    const fromEvents = allEvents.map(e => e.symbol).filter(Boolean);
+    const fromGraph = graphData ? [...new Set((graphData.edges || []).map(e => e.source))] : [];
+    const syms = [...new Set([...fromEvents, ...fromGraph])].sort();
+    const sel = document.getElementById('spilloverSource');
+    const prev = sel.value;
+    sel.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
+    if (prev && syms.includes(prev)) sel.value = prev;
+    const fus = document.getElementById('fusionSymbol');
+    if (fus) fus.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
+}
 
 function groupBadges(group) {
     return (group || '').split('+').map(p => {
@@ -176,8 +194,12 @@ function showTab(name) {
 }
 
 async function loadList() {
-    const res = await fetch('/api/earnings/intelligence?since=2026-01-01&limit=80');
+    const [res, gRes] = await Promise.all([
+        fetch('/api/earnings/intelligence?since=2026-01-01&limit=80'),
+        fetch('/api/earnings/peer-graph'),
+    ]);
     if (!res.ok) throw new Error(await res.text());
+    if (gRes.ok) graphData = await gRes.json();
     const data = await res.json();
     allEvents = data.events || [];
     document.getElementById('summaryBox').innerHTML = `
@@ -189,11 +211,7 @@ async function loadList() {
     document.getElementById('missingList').textContent = miss.length ? `Без материалов: ${miss.join(', ')}` : '';
     applyFilter();
     document.getElementById('updatedAt').textContent = new Date().toLocaleTimeString();
-    const sel = document.getElementById('spilloverSource');
-    const syms = [...new Set(allEvents.map(e => e.symbol))].sort();
-    sel.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
-    const fus = document.getElementById('fusionSymbol');
-    if (fus) fus.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
+    refreshSpilloverSources();
 }
 
 function applyFilter() {
@@ -230,13 +248,19 @@ async function loadBrief(symbol, eventDate) {
     content.innerHTML = '<span class="muted">Загрузка…</span>';
     let mlHtml = '';
     try {
-        const mlRes = await fetch(`/api/ml/event-reaction/${encodeURIComponent(symbol)}`);
+        let mlUrl = `/api/ml/event-reaction/${encodeURIComponent(symbol)}`;
+        if (eventDate) mlUrl += `?event_date=${encodeURIComponent(eventDate)}`;
+        const mlRes = await fetch(mlUrl);
         if (mlRes.ok) {
             const ml = await mlRes.json();
             if (ml.event_reaction_ml_status === 'ok') {
                 mlHtml = `<div class="block"><h3>CatBoost regression (5d)</h3>
                     pred log-ret ${Number(ml.event_reaction_ml_forward_log_ret_5d_pred).toFixed(4)} ≈ ${fmtPct(ml.event_reaction_ml_forward_log_ret_5d_pred)}
-                    · direction ${ml.event_reaction_ml_provisional_direction || '—'}</div>`;
+                    · direction ${ml.event_reaction_ml_provisional_direction || '—'}
+                    ${ml.event_reaction_ml_event_time_et ? `<div class="muted">event ${esc(ml.event_reaction_ml_event_time_et)}</div>` : ''}</div>`;
+            } else {
+                mlHtml = `<div class="block"><h3>CatBoost regression (5d)</h3>
+                    <span class="muted">${esc(ml.event_reaction_ml_status)}: ${esc(ml.event_reaction_ml_note || 'нет features для этой даты')}</span></div>`;
             }
         }
     } catch (_) {}
@@ -245,21 +269,40 @@ async function loadBrief(symbol, eventDate) {
     if (!res.ok) throw new Error(b.detail || JSON.stringify(b));
     const scen = b.scenario || {}, src = b.source_outcomes || {};
     const peers = (b.peer_spillover_outcomes || []).filter(p => p.status === 'ok');
+    const statusBadge = b.status === 'partial'
+        ? '<span class="badge planned">partial</span>'
+        : (b.status === 'ok' ? '<span class="badge ok">ok</span>' : `<span class="badge no">${esc(b.status||'—')}</span>`);
+    const evidence = (b.evidence_quotes || []).slice(0, 5).map(q => `<div class="quote">«${esc(q)}»</div>`).join('') || '<span class="muted">—</span>';
+    const affected = (b.affected_tickers || []).map(a => typeof a === 'object' ? (a.ticker || a.symbol || JSON.stringify(a)) : a).slice(0, 12);
     content.innerHTML = `
-        <p><strong>${b.headline||'—'}</strong></p>
-        <p class="muted">Tone: ${b.management_tone||'—'} · Scenario: <code>${scen.id||'—'}</code></p>
+        <p><strong>${esc(b.headline||'—')}</strong> ${statusBadge}</p>
+        ${b.reason ? `<p class="muted">${esc(b.reason)}</p>` : ''}
+        <p class="muted">Tone: ${esc(b.management_tone||'—')} · Scenario: <code>${esc(scen.id||'—')}</code>
+        ${scen.confidence != null ? ` · conf ${esc(scen.confidence)}` : ''}</p>
+        ${scen.rationale ? `<p class="muted">${esc(scen.rationale)}</p>` : ''}
         ${mlHtml}
         <div class="detail-grid">
+            <div class="block"><h3>Guidance &amp; capex</h3>
+                <div><strong>Guidance:</strong> ${fmtGuidance(b.guidance)}</div>
+                <div style="margin-top:0.35rem"><strong>Capex:</strong> ${fmtGuidance(b.capex_notes)}</div>
+                ${affected.length ? `<div style="margin-top:0.35rem"><strong>Affected:</strong> ${affected.map(esc).join(', ')}</div>` : ''}
+            </div>
+            <div class="block"><h3>Evidence quotes</h3>${evidence}</div>
+        </div>
+        <div class="detail-grid">
             <div class="block"><h3>Source outcomes (quotes)</h3>
-                1d ${fmtPct(src.forward_log_ret_1d)} · 5d ${fmtPct(src.forward_log_ret_5d)} · label ${src.final_label_auto||'—'}</div>
+                1d ${fmtPct(src.forward_log_ret_1d)} · 5d ${fmtPct(src.forward_log_ret_5d)} · label ${esc(src.final_label_auto||'—')}</div>
             <div class="block"><h3>Peer spillover</h3>
-                <table class="peer-table"><tbody>${peers.map(p=>`<tr><td>${p.ticker}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(p.forward_log_ret_5d)}</td></tr>`).join('')}</tbody></table></div>
+                <table class="peer-table"><tbody>${peers.map(p=>`<tr><td>${esc(p.ticker)}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(p.forward_log_ret_5d)}</td></tr>`).join('')}</tbody></table></div>
         </div>`;
 }
 
 async function loadGraph() {
-    const res = await fetch('/api/earnings/peer-graph');
-    graphData = await res.json();
+    if (!graphData) {
+        const res = await fetch('/api/earnings/peer-graph');
+        graphData = await res.json();
+        refreshSpilloverSources();
+    }
     const bySource = {};
     (graphData.edges||[]).forEach(e => { (bySource[e.source] = bySource[e.source] || []).push(e); });
     document.getElementById('graphSources').innerHTML = Object.keys(bySource).sort().map(s => {
@@ -269,10 +312,14 @@ async function loadGraph() {
     document.getElementById('graphSources').querySelectorAll('[data-src]').forEach(btn => {
         btn.addEventListener('click', () => { document.getElementById('spilloverSource').value = btn.dataset.src; showTab('spillover'); loadSpillover(); });
     });
-    document.getElementById('graphEdges').innerHTML = (graphData.edges||[]).slice(0, 40).map(e =>
+    const edges = graphData.edges || [];
+    const shown = edges.slice(0, 40);
+    document.getElementById('graphEdges').innerHTML =
+        `<p class="muted">Показано ${shown.length} из ${edges.length} рёбер</p>` +
+        shown.map(e =>
         `<div class="edge-row"><strong>${e.source}</strong> → ${e.target} <span class="muted">${e.relation_type}</span>
         <span class="weight-bar" style="width:${Math.round(e.weight*80)}px"></span> ${e.weight}</div>`
-    ).join('') + ((graphData.edges||[]).length > 40 ? '<div class="muted">…</div>' : '');
+    ).join('');
 }
 
 async function loadSpillover() {
@@ -301,13 +348,15 @@ async function loadShadow(refresh) {
     if (!res.ok) { el.innerHTML = `<span class="err">${data.detail || JSON.stringify(data)}</span>`; return; }
     const a = data.aggregate || {}, g = data.trading_gate || {};
     const gateCls = g.ready ? 'ok' : 'no';
+    const gateLabel = g.ready ? 'quality ok' : 'below threshold';
     el.innerHTML = `
+        <p class="muted"><span class="badge planned">Shadow quality · advisory only</span> — не разрешение на сделки.</p>
         <div class="summary">
             <div class="stat"><div class="n">${a.n_matured ?? '—'}</div><div class="l">Matured</div></div>
             <div class="stat"><div class="n">${a.sign_accuracy != null ? (a.sign_accuracy*100).toFixed(0)+'%' : '—'}</div><div class="l">Sign acc</div></div>
             <div class="stat"><div class="n">${a.class_accuracy != null ? (a.class_accuracy*100).toFixed(0)+'%' : '—'}</div><div class="l">Class acc</div></div>
             <div class="stat"><div class="n">${a.mean_pseudo_pnl_log != null ? a.mean_pseudo_pnl_log.toFixed(4) : '—'}</div><div class="l">Mean pseudo PnL (log)</div></div>
-            <div class="stat"><div class="n"><span class="badge ${gateCls}">${g.ready ? 'ready' : 'blocked'}</span></div><div class="l">Trading gate</div></div>
+            <div class="stat"><div class="n"><span class="badge ${gateCls}">${gateLabel}</span></div><div class="l">Shadow quality gate</div></div>
         </div>
         <p class="muted">Round-trip cost log ${a.round_trip_cost_log ?? '—'} · peer sign acc ${a.peer_sign_accuracy != null ? (a.peer_sign_accuracy*100).toFixed(0)+'%' : '—'}</p>
         ${g.reasons && g.reasons.length ? `<p class="muted">Gate: ${g.reasons.join('; ')}</p>` : ''}

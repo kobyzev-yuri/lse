@@ -831,16 +831,24 @@ async def api_ml_data_quality(strategy: str = "GAME_5M"):
 
 
 @app.get("/api/ml/event-reaction/{ticker}", response_class=JSONResponse)
-async def api_ml_event_reaction(ticker: str):
+async def api_ml_event_reaction(ticker: str, event_date: str = ""):
     """Inference event-reaction CatBoost для тикера (dataset ±окно или live features)."""
+    from datetime import date as date_cls
+
     t = (ticker or "").strip().upper()
     if not t:
         raise HTTPException(status_code=400, detail="ticker required")
+    ev_d = None
+    if event_date.strip():
+        try:
+            ev_d = date_cls.fromisoformat(event_date.strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="event_date must be YYYY-MM-DD")
 
     def _run() -> Dict[str, Any]:
         from services.event_reaction_catboost_signal import predict_event_reaction_for_ticker
 
-        return predict_event_reaction_for_ticker(t)
+        return predict_event_reaction_for_ticker(t, event_date=ev_d)
 
     try:
         data = await asyncio.to_thread(_run)

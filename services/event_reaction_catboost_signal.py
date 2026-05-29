@@ -260,6 +260,50 @@ def _entry_window_days() -> int:
         return 14
 
 
+def _load_dataset_row_by_date(symbol: str, event_date: Any) -> Optional[Dict[str, Any]]:
+    """Load event_reaction_dataset row for symbol on a specific calendar date (ET)."""
+    from datetime import date as date_cls, datetime
+
+    from report_generator import get_engine
+    from sqlalchemy import text
+
+    sym = str(symbol or "").strip().upper()
+    if not sym or event_date is None:
+        return None
+    if isinstance(event_date, datetime):
+        ev_d = event_date.date()
+    elif isinstance(event_date, date_cls):
+        ev_d = event_date
+    else:
+        try:
+            ev_d = date_cls.fromisoformat(str(event_date).strip()[:10])
+        except ValueError:
+            return None
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT id, symbol, event_time_et, features_before
+                    FROM event_reaction_dataset
+                    WHERE UPPER(symbol) = :sym
+                      AND features_before IS NOT NULL
+                      AND features_before <> '{}'::jsonb
+                      AND event_time_et IS NOT NULL
+                      AND event_time_et::date = :ev_d
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """
+                ),
+                {"sym": sym, "ev_d": ev_d},
+            ).mappings().first()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.debug("event_reaction row by date %s %s: %s", sym, ev_d, e)
+        return None
+
+
 def _load_nearest_dataset_row(symbol: str) -> Optional[Dict[str, Any]]:
     from report_generator import get_engine
     from sqlalchemy import text
@@ -306,13 +350,15 @@ def _json_obj(raw: Any) -> Dict[str, Any]:
     return {}
 
 
-def predict_event_reaction_for_ticker(symbol: str) -> Dict[str, Any]:
+def predict_event_reaction_for_ticker(symbol: str, *, event_date: Any = None) -> Dict[str, Any]:
     """
-    Prefer materialized features_before from event_reaction_dataset near today;
-    else live compute from the same event_time_et.
+    Prefer materialized features_before from event_reaction_dataset.
+    If event_date is set, load that KB row; else nearest row ±window around today.
     """
     sym = str(symbol or "").strip().upper()
-    row = _load_nearest_dataset_row(sym)
+    row = _load_dataset_row_by_date(sym, event_date) if event_date is not None else None
+    if row is None and event_date is None:
+        row = _load_nearest_dataset_row(sym)
     if row:
         feats = _json_obj(row.get("features_before"))
         if feats:
@@ -322,6 +368,15 @@ def predict_event_reaction_for_ticker(symbol: str) -> Dict[str, Any]:
         evt = row.get("event_time_et")
         if evt is not None:
             return predict_event_reaction_live(sym, evt)
+    if event_date is not None:
+        return {
+            "event_reaction_ml_status": "no_features",
+            "event_reaction_ml_note": (
+                f"Нет features_before в event_reaction_dataset для {sym} на {str(event_date)[:10]}."
+            ),
+            "event_reaction_ml_symbol": sym,
+            "event_reaction_ml_event_date": str(event_date)[:10],
+        }
     return {
         "event_reaction_ml_status": "no_event",
         "event_reaction_ml_note": f"Нет строки event_reaction_dataset ±{_entry_window_days()}d.",

@@ -134,7 +134,7 @@ curl -s 'https://<host>/api/earnings/spillover/NVDA?since=2026-01-01&limit=3' | 
 | Sign acc | ~67% | Знак pred vs фактический 5d |
 | Class acc | ~87% | Точное имя сценария vs LLM label |
 | Mean pseudo PnL (log) | ~+0.027 | Средний «если бы торговали по знаку» минус costs |
-| Trading gate | ready/blocked | Пороги `ML_READINESS_EARNINGS_SHADOW_*` |
+| Shadow quality gate | quality ok / below threshold | Пороги `ML_READINESS_EARNINGS_SHADOW_*`; badge **«Shadow quality · advisory only»** — не разрешение на сделки |
 
 Строка таблицы: META · дата · pred scenario · actual 5d · ✓/✗ sign · ✓/✗ class · mean peer 5d.
 
@@ -186,7 +186,7 @@ curl -s 'https://<host>/api/earnings/spillover/NVDA?since=2026-01-01&limit=3' | 
 | Слой | Статус (prod) | Роль |
 |------|---------------|------|
 | `quotes_regime_earnings_v1` | active | Признаки для scenario classifier |
-| CatBoost регрессия | active | Product advisory, карточки `/api/ml/event-reaction/{ticker}` |
+| CatBoost регрессия | active | Product advisory; `/api/ml/event-reaction/{ticker}?event_date=YYYY-MM-DD` в Brief |
 | UP/DOWN/FLAT | active | Правило по порогу на фактическом 5d |
 | LLM scenario hints | active | Extract → `earnings_event_detail` |
 | Scenario classifier | active (pilot) | Multi-class, мало labels (~15) |
@@ -206,28 +206,28 @@ Prod snapshot: ~498 rows dataset, ~267 earnings_v1 features, ~15 LLM scenario la
 
 ---
 
-## Аудит: заглушки и неполная реализация (2026-05-28)
+## Аудит: заглушки и неполная реализация (2026-05-29)
 
 Проверка: smoke всех API на prod (`lse-bot`).
 
 | Элемент | Статус | Что происходит |
 |---------|--------|----------------|
 | Таблица событий | ✅ prod | Реальные KB + materials + LLM флаги |
-| Event Brief панель | ⚠️ частично | **Не показывает** evidence quotes, guidance, capex из API — данные есть, UI урезан |
-| Brief → CatBoost regression | ⚠️ UX-дыра | Запрос `/api/ml/event-reaction/{symbol}` **без event_date** — работает только если у тикера есть `event_reaction_dataset` **±14d от сегодня**. Для **исторического** Brief (META апрель) блок регрессии **молча скрыт** |
-| Peer graph | ✅ prod | 96 рёбер; UI обрезает список **40** без явного счётчика |
-| Spillover dropdown | ⚠️ | Source = только тикеры из **загруженного списка событий**, не все nodes графа |
-| Shadow «Trading gate ready» | ⚠️ формулировка | Gate = качество shadow; **не** включение trading. Нужен badge «advisory only» |
+| Event Brief панель | ✅ P0 | evidence, guidance, capex, affected, status partial |
+| Brief → CatBoost regression | ✅ P0 | `?event_date=` в API и UI; явное сообщение если нет features |
+| Peer graph | ✅ P0 | «Показано 40 из N» рёбер |
+| Spillover dropdown | ✅ P0 | Source = union(events, graph sources) |
+| Shadow gate label | ✅ P0 | «Shadow quality · advisory only», gate → «Shadow quality gate» |
 | Shadow refresh | ✅ | Работает; долгий запрос без progress bar |
 | Fusion | ✅ advisory | `execution_blocked` всегда; regression/scenario могут быть partial |
 | Fusion без event_date | ⚠️ | Берёт **последнюю** KB дату (вкл. сегодня) — для DELL в день отчёта LLM пустой |
-| ML layers | ⚠️ | **Нет** строк про Shadow/Fusion/readiness JSON |
+| ML layers | ⚠️ P1 | **Нет** строк про Shadow/Fusion/readiness JSON |
 | Scenario classifier | ⚠️ pilot | ~3 класса в модели при большем числе LLM scenario types |
 | Materials gaps | ⚠️ data | ~24% universe без materials; future dates — SEC после отчёта |
 | Fool ingest | ⚠️ ops | 429 rate limit; junk URLs в discover-links (ARM) |
 | Связь с GAME_5M | ❌ by design | Нет auto-signal в бот; fusion advisory only |
 
-**Итого:** явных «fake/mock» API нет; основные проблемы — **обрезанный UI Brief**, **regression без привязки к event_date**, **свежие события без LLM/outcomes**, **misleading gate label**.
+**Итого P0 закрыт (2026-05-29).** Остаётся P1: materials coverage, ML layers tab, свежие события без LLM/outcomes.
 
 ---
 
@@ -235,15 +235,15 @@ Prod snapshot: ~498 rows dataset, ~267 earnings_v1 features, ~15 LLM scenario la
 
 Приоритеты: P0 = пользователь видит правду; P1 = полнота данных; P2 = trading path (отдельное решение).
 
-### P0 — UI / API correctness (1–2 дня)
+### P0 — UI / API correctness ✅ (2026-05-29)
 
-| # | Задача | Результат |
-|---|--------|-----------|
-| 1 | Brief: передавать `event_date` в `/api/ml/event-reaction` или inference из `features_before` **этого** KB row | Регрессия на историческом Brief |
-| 2 | Brief: показать `evidence_quotes`, `guidance`, `capex_notes`, статус `partial` | Полный Event Brief в UI |
-| 3 | Shadow: badge «Advisory only · не для сделок»; переименовать gate → «Shadow quality gate» | Нет ложного «ready для trading» |
-| 4 | Peer graph: «показано 40 из N» + фильтр по source | Прозрачность обрезки |
-| 5 | Spillover select: union(events, graph sources) | NVDA всегда в списке |
+| # | Задача | Статус |
+|---|--------|--------|
+| 1 | Brief: `event_date` в `/api/ml/event-reaction` | ✅ |
+| 2 | Brief: evidence, guidance, capex, partial | ✅ |
+| 3 | Shadow: «Shadow quality · advisory only» | ✅ |
+| 4 | Peer graph: «40 из N» | ✅ |
+| 5 | Spillover: union(events, graph) | ✅ |
 
 ### P1 — Data coverage (ongoing, cron)
 
