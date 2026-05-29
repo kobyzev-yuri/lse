@@ -44,7 +44,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Earnings ML refresh pipeline")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--dataset-version", default="v0_expanded_baseline")
-    ap.add_argument("--backfill-limit", type=int, default=300)
+    ap.add_argument("--backfill-limit", type=int, default=600)
     ap.add_argument("--skip-labels", action="store_true")
     ap.add_argument("--skip-backfill", action="store_true")
     ap.add_argument("--skip-train", action="store_true")

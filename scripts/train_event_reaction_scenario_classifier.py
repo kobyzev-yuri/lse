@@ -168,6 +168,17 @@ def main() -> int:
 
     train_df = frame.iloc[:n_train]
     valid_df = frame.iloc[n_train:]
+    unseen_valid = set(valid_df["target_scenario"].unique()) - set(train_df["target_scenario"].unique())
+    if unseen_valid:
+        logger.warning(
+            "Valid holdout has classes absent from train (%s); training on full labeled sample without eval_set",
+            sorted(unseen_valid),
+        )
+        train_df = frame
+        valid_df = frame.iloc[0:0]
+        n_train, n_valid = int(n_total), 0
+        metrics["holdout_skipped"] = True
+        metrics["unseen_valid_classes"] = sorted(unseen_valid)
     X_train = train_df[feature_names]
     y_train = train_df["target_scenario"]
     X_valid = valid_df[feature_names]
@@ -207,10 +218,15 @@ def main() -> int:
         verbose=False,
         early_stopping_rounds=40,
     )
-    model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
-    pred = model.predict(valid_pool)
-    acc = float(np.mean(pred.reshape(-1) == y_valid.to_numpy()))
-    metrics["valid_accuracy"] = round(acc, 4)
+    if n_valid > 0:
+        model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
+        pred = model.predict(valid_pool)
+        acc = float(np.mean(pred.reshape(-1) == y_valid.to_numpy()))
+        metrics["valid_accuracy"] = round(acc, 4)
+    else:
+        model.fit(train_pool)
+        metrics["valid_accuracy"] = None
+        acc = float("nan")
 
     out_final = args.out.strip() or (
         "/app/logs/ml/models/event_reaction_scenario_catboost.cbm"

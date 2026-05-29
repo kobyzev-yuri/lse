@@ -49,10 +49,11 @@
 | 6 | `run_earnings_intelligence_prod_eval.py --skip-ml-refresh` | ✅ 2026-05-29 15:22 UTC |
 | 7 | DELL / свежие KB (materials + LLM) | ✅ prod brief ok |
 | 8 | Fool 429 + ARM junk discover-links | 📋 отложено |
-| 11 | ANET/AVGO/GOOGL/PLTR coverage | 🔄 materials+LLM ✅; ERD skeleton + labels |
-| 12 | ERD: `--include-earnings-universe` в build/cron/prod_eval | 🔄 код |
+| 11 | ANET/AVGO/GOOGL/PLTR coverage | ✅ ERD + materials + earnings_v1 backfill |
+| 12 | ERD cron allowlist + backfill `--include-all-symbols` | ✅ `99e2715`, `339d17f` |
+| 13 | **Train:** scenario classifier + regression refresh | 🔄 prod run |
 
-**P1 #11:** KB (yfinance), SEC materials, LLM extract, brief `ok`, readiness materials **100%**. Хвост: **0 строк** в `event_reaction_dataset` — slim prod-конфиг без ANET/GOOGL/… → **#12** allowlist конфиг ∪ earnings universe.
+**P1 #11–12:** ERD **527** строк, **482** `quotes_regime_earnings_v1`, **23** `llm_scenario_v0`; cron исправлен. Train: `run_earnings_ml_refresh` full + event-reaction CatBoost.
 
 **P1 #6 итог:** sync 81 rows, ingest 0, extract 1 (ARM), shadow `n_matured=27` (не упал), readiness `overall_grid_ready=true`.
 
