@@ -156,6 +156,12 @@ const fmtPct = (logRet) => {
     return `<span class="${cls}">${simple >= 0 ? '+' : ''}${simple.toFixed(2)}%</span>`;
 };
 const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const evidenceQuoteText = (q) => {
+    if (q == null) return '';
+    if (typeof q === 'string') return q;
+    if (typeof q === 'object') return q.quote || q.text || q.content || '';
+    return String(q);
+};
 const fmtGuidance = (g) => {
     if (g == null || g === '') return '—';
     if (typeof g === 'object') return esc(JSON.stringify(g, null, 2));
@@ -285,7 +291,13 @@ async function loadBrief(symbol, eventDate) {
     const statusBadge = b.status === 'partial'
         ? '<span class="badge planned">partial</span>'
         : (b.status === 'ok' ? '<span class="badge ok">ok</span>' : `<span class="badge no">${esc(b.status||'—')}</span>`);
-    const evidence = (b.evidence_quotes || []).slice(0, 5).map(q => `<div class="quote">«${esc(q)}»</div>`).join('') || '<span class="muted">—</span>';
+    const evidence = (b.evidence_quotes || []).slice(0, 5).map(q => {
+        const txt = evidenceQuoteText(q);
+        if (!txt) return '';
+        const topic = (q && typeof q === 'object' && q.topic && q.topic !== 'other')
+            ? `<span class="muted">${esc(q.topic)} · </span>` : '';
+        return `<div class="quote">${topic}«${esc(txt)}»</div>`;
+    }).filter(Boolean).join('') || '<span class="muted">—</span>';
     const affected = (b.affected_tickers || []).map(a => typeof a === 'object' ? (a.ticker || a.symbol || JSON.stringify(a)) : a).slice(0, 12);
     content.innerHTML = `
         <p><strong>${esc(b.headline||'—')}</strong> ${statusBadge}</p>

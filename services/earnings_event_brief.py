@@ -30,6 +30,31 @@ def _parse_json(val: Any) -> dict | list | None:
     return None
 
 
+def _normalize_evidence_quotes(raw: Any) -> list[dict[str, str]]:
+    """LLM stores {topic, quote}; legacy rows may be plain strings."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw[:5]:
+        if isinstance(item, str):
+            q = item.strip()
+            if q:
+                out.append({"topic": "other", "quote": q})
+            continue
+        if not isinstance(item, dict):
+            continue
+        q = str(item.get("quote") or item.get("text") or item.get("content") or "").strip()
+        if not q:
+            continue
+        out.append(
+            {
+                "topic": str(item.get("topic") or "other").strip() or "other",
+                "quote": q,
+            }
+        )
+    return out
+
+
 def _top_scenario(guidance_summary: dict | None) -> dict | None:
     if not guidance_summary:
         return None
@@ -221,9 +246,7 @@ def build_event_brief(
     )
     scenario = _top_scenario(guidance)
 
-    evidence = guidance.get("evidence_quotes") or []
-    if not isinstance(evidence, list):
-        evidence = []
+    evidence = _normalize_evidence_quotes(guidance.get("evidence_quotes"))
 
     brief: dict[str, Any] = {
         "status": "ok",
@@ -244,7 +267,7 @@ def build_event_brief(
         "affected_tickers": affected,
         "peer_graph": peers,
         "peer_spillover_outcomes": peer_outcomes,
-        "evidence_quotes": evidence[:5],
+        "evidence_quotes": evidence,
         "source_outcomes": {
             "forward_log_ret_1d": outcomes.get("forward_log_ret_1d"),
             "forward_log_ret_2d": outcomes.get("forward_log_ret_2d"),

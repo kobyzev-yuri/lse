@@ -258,13 +258,19 @@ def format_brief_telegram(brief: dict[str, Any], *, max_peers: int = 6) -> str:
             lines.append(f"  {t}: 1d {_log_ret_pct(r1)}" + (f" 5d {_log_ret_pct(r5)}" if r5 is not None else ""))
     quotes = brief.get("evidence_quotes") or []
     if quotes:
-        q0 = quotes[0]
-        if isinstance(q0, dict):
-            txt = str(q0.get("quote") or q0.get("text") or "")[:200]
+        lines.append("")
+    for q in quotes[:3]:
+        if isinstance(q, dict):
+            txt = str(q.get("quote") or q.get("text") or "").strip()
+            topic = str(q.get("topic") or "").strip()
         else:
-            txt = str(q0)[:200]
-        if txt:
-            lines.extend(["", f"\"{txt}…\"" if len(txt) >= 200 else f"\"{txt}\""])
+            txt = str(q).strip()
+            topic = ""
+        if not txt:
+            continue
+        snippet = txt[:200] + ("…" if len(txt) > 200 else "")
+        prefix = f"[{topic}] " if topic and topic != "other" else ""
+        lines.append(f"\"{prefix}{snippet}\"")
     lines.append("")
     lines.append(f"Web: /earnings → {sym}")
     return "\n".join(lines)
