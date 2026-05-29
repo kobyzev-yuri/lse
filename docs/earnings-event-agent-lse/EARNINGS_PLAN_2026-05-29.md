@@ -51,9 +51,9 @@
 | 8 | Fool 429 + ARM junk discover-links | 📋 отложено |
 | 11 | ANET/AVGO/GOOGL/PLTR coverage | ✅ ERD + materials + earnings_v1 backfill |
 | 12 | ERD cron allowlist + backfill `--include-all-symbols` | ✅ `99e2715`, `339d17f` |
-| 13 | **Train:** scenario classifier + regression refresh | 🔄 prod run |
+| 13 | **Train:** scenario classifier + regression refresh | ✅ deploy `838e9fa` 2026-05-29 |
 
-**P1 #11–12:** ERD **527** строк, **482** `quotes_regime_earnings_v1`, **23** `llm_scenario_v0`; cron исправлен. Train: `run_earnings_ml_refresh` full + event-reaction CatBoost.
+**P1 #11–13:** ERD **527**, **482** `earnings_v1`, **23** LLM labels; scenario `.cbm` + regression RMSE≈0.141; shadow **n=33**. Deploy: `838e9fa`.
 
 **P1 #6 итог:** sync 81 rows, ingest 0, extract 1 (ARM), shadow `n_matured=27` (не упал), readiness `overall_grid_ready=true`.
 
