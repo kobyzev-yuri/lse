@@ -119,6 +119,9 @@ def _detail_has_llm_extraction(engine, kb_id: int) -> bool:
         except Exception:
             return False
     return bool(isinstance(gs, dict) and gs.get("extraction_meta"))
+
+
+def _upsert_event_detail(engine, *, kb_id: int, payload: dict[str, Any], extraction_meta: dict[str, Any]) -> None:
     guidance = dict(payload.get("guidance_summary") or {})
     guidance["extraction_meta"] = extraction_meta
     q = text(
