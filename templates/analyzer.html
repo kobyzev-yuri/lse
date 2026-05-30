@@ -713,10 +713,17 @@ function renderMlDataQuality(data, strategy) {
     const scGapSymbols = eiSc.symbols_without_labels || [];
     const scPending = eiSc.hints_pending_apply || [];
     const scSparse = eiSc.sparse_classes_below_min_samples || [];
-    if (scGapSymbols.length || scPending.length || scSparse.length || eiSc.features_gap_rows || eiSc.labels_without_earnings_v1_features) {
+    if (scGapSymbols.length || scPending.length || scSparse.length || eiSc.features_gap_rows || eiSc.labels_without_earnings_v1_features || (eiSc.events_missing_llm_extract || []).length) {
         html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.85rem;"><strong>Пробелы classifier dataset:</strong></p><ul style="margin:0 0 0.5rem 1rem;padding:0;font-size:0.82rem;">';
         if (scGapSymbols.length) {
             html += '<li>Universe без llm_scenario_v0 labels: <code>' + esc(scGapSymbols.slice(0, 12).join(', ')) + (scGapSymbols.length > 12 ? '…' : '') + '</code></li>';
+        }
+        const scExtract = eiSc.events_missing_llm_extract || [];
+        if (scExtract.length) {
+            html += '<li>Нужен LLM extract (пустые scenario_hints): ';
+            html += scExtract.slice(0, 6).map(function (p) { return esc((p.symbol || '?') + ' ' + (p.event_date || '')); }).join(', ');
+            if (scExtract.length > 6) html += '…';
+            html += '</li>';
         }
         if (scPending.length) {
             html += '<li>Hints есть, label не применён: ';

@@ -319,7 +319,8 @@ def gate_scenario_classifier_dataset(data: Dict[str, Any]) -> Dict[str, Any]:
     min_trainable = _cfg_int("ML_READINESS_SCENARIO_MIN_TRAINABLE_ROWS", 18)
     min_classes = _cfg_int("ML_READINESS_SCENARIO_MIN_CLASSES", 3)
     max_symbols_no_label = _cfg_int("ML_READINESS_SCENARIO_MAX_SYMBOLS_WITHOUT_LABELS", 12)
-    max_hints_pending = _cfg_int("ML_READINESS_SCENARIO_MAX_HINTS_PENDING", 6)
+    max_hints_pending = _cfg_int("ML_READINESS_SCENARIO_MAX_HINTS_PENDING", 3)
+    max_missing_extract = _cfg_int("ML_READINESS_SCENARIO_MAX_MISSING_EXTRACT", 8)
     max_label_no_features = _cfg_int("ML_READINESS_SCENARIO_MAX_LABEL_NO_FEATURES", 0)
     max_sparse_classes = _cfg_int("ML_READINESS_SCENARIO_MAX_SPARSE_CLASSES", 2)
 
@@ -328,6 +329,7 @@ def gate_scenario_classifier_dataset(data: Dict[str, Any]) -> Dict[str, Any]:
     n_classes = int(sc.get("n_classes_distinct") or 0)
     symbols_without = sc.get("symbols_without_labels") or []
     hints_pending = sc.get("hints_pending_apply") or []
+    extract_missing = sc.get("events_missing_llm_extract") or []
     sparse = sc.get("sparse_classes_below_min_samples") or []
     label_no_features = int(sc.get("labels_without_earnings_v1_features") or 0)
     features_gap = int(sc.get("features_gap_rows") or 0)
@@ -342,6 +344,8 @@ def gate_scenario_classifier_dataset(data: Dict[str, Any]) -> Dict[str, Any]:
         reasons.append(f"symbols_without_labels>{max_symbols_no_label}")
     if len(hints_pending) > max_hints_pending:
         reasons.append(f"hints_pending>{max_hints_pending}")
+    if len(extract_missing) > max_missing_extract:
+        reasons.append(f"missing_llm_extract>{max_missing_extract}")
     if label_no_features > max_label_no_features:
         reasons.append(f"labels_without_features>{max_label_no_features}")
     if len(sparse) > max_sparse_classes:
@@ -359,6 +363,9 @@ def gate_scenario_classifier_dataset(data: Dict[str, Any]) -> Dict[str, Any]:
         "symbols_without_labels": symbols_without[:12],
         "symbols_with_hints_pending_apply": (sc.get("symbols_with_hints_pending_apply") or [])[:12],
         "hints_pending_apply": hints_pending[:8],
+        "events_missing_llm_extract": extract_missing[:8],
+        "symbols_needing_llm_extract": (sc.get("symbols_needing_llm_extract") or [])[:12],
+        "n_events_missing_llm_extract": len(extract_missing),
         "sparse_classes_below_min_samples": sparse[:8],
         "labels_without_earnings_v1_features": label_no_features,
         "features_gap_rows": features_gap,

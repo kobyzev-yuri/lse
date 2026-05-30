@@ -148,6 +148,7 @@ def collect_scenario_classifier_coverage(
     symbols_without_labels = sorted(s for s in sym_set if s not in symbols_with_labels)
 
     hints_pending: list[dict[str, Any]] = []
+    extract_missing: list[dict[str, Any]] = []
     label_no_features = 0
     n_llm_labels = 0
     n_events_with_hints = 0
@@ -217,7 +218,8 @@ def collect_scenario_classifier_coverage(
             pending_rows = conn.execute(
                 text(
                     """
-                    SELECT UPPER(TRIM(kb.ticker)) AS symbol, kb.ts::date AS event_date, erd.label_source
+                    SELECT UPPER(TRIM(kb.ticker)) AS symbol, kb.ts::date AS event_date, erd.label_source,
+                           jsonb_array_length(COALESCE(ed.guidance_summary->'scenario_hints', '[]'::jsonb)) AS n_hints
                     FROM earnings_event_detail ed
                     JOIN knowledge_base kb ON kb.id = ed.knowledge_base_id
                     JOIN event_reaction_dataset erd ON erd.knowledge_base_id = ed.knowledge_base_id
@@ -232,7 +234,7 @@ def collect_scenario_classifier_coverage(
                         OR erd.final_label IN ('UP','DOWN','FLAT')
                       )
                     ORDER BY kb.ts DESC
-                    LIMIT 24
+                    LIMIT 48
                     """
                 ),
                 {
@@ -242,18 +244,24 @@ def collect_scenario_classifier_coverage(
                     "symbols": sym_set,
                 },
             ).mappings()
-            hints_pending = [
-                {
+            hints_pending: list[dict[str, Any]] = []
+            extract_missing: list[dict[str, Any]] = []
+            for r in pending_rows:
+                item = {
                     "symbol": str(r["symbol"]),
                     "event_date": r["event_date"].isoformat() if r.get("event_date") else None,
                     "label_source": r.get("label_source"),
+                    "n_hints": int(r.get("n_hints") or 0),
                 }
-                for r in pending_rows
-            ]
+                if int(r.get("n_hints") or 0) > 0:
+                    hints_pending.append(item)
+                else:
+                    extract_missing.append(item)
     except Exception as e:
         out["coverage_error"] = str(e)
 
     symbols_with_hints_no_label = sorted({str(p["symbol"]) for p in hints_pending if p.get("symbol")})
+    symbols_needing_extract = sorted({str(p["symbol"]) for p in extract_missing if p.get("symbol")})
     features_gap_rows = max(0, n_llm_labels - n_trainable)
 
     out.update(
@@ -269,6 +277,9 @@ def collect_scenario_classifier_coverage(
             "symbols_without_labels": symbols_without_labels,
             "symbols_with_hints_pending_apply": symbols_with_hints_no_label,
             "hints_pending_apply": hints_pending[:12],
+            "events_missing_llm_extract": extract_missing[:12],
+            "symbols_needing_llm_extract": symbols_needing_extract[:12],
+            "n_events_missing_llm_extract": len(extract_missing),
             "labels_without_earnings_v1_features": label_no_features,
             "features_gap_rows": features_gap_rows,
             "symbols_never_in_train": symbols_without_labels,
