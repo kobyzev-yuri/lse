@@ -25,9 +25,9 @@
 
 | # | Задача | Smoke |
 |---|--------|-------|
-| 4 | Dataset `(source_event, peer) → peer_forward_log_ret_5d` | SQL row count ≥ N |
-| 5 | Baseline propagation score | shadow peer sign vs actual |
-| 6 | Fusion/Brief: optional pred peer column | API field smoke |
+| 4 | Dataset `(source_event, peer) → peer_forward_log_ret_5d` | `scripts/build_peer_spillover_dataset.py --dry-run` |
+| 5 | Baseline propagation score | `baseline_weighted_sign_acc` в summary JSON |
+| 6 | UI: LLM vs ML scenario на Events/Brief/Fusion | smoke `/earnings` + brief API |
 
 См. [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §5 peer spillover ML.
 

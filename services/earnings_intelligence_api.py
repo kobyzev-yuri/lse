@@ -17,6 +17,7 @@ from services.earnings_event_brief import (
     load_peer_spillover_outcomes,
 )
 from services.earnings_intelligence_universe import get_earnings_intelligence_universe
+from services.earnings_scenario_signal import predict_scenario_from_features
 from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_game_5m
 
 
@@ -84,6 +85,8 @@ def list_intelligence_events(
           ed.guidance_summary->>'management_tone' AS management_tone,
           ed.guidance_summary AS guidance_summary,
           erd.final_label,
+          erd.label_source,
+          erd.features_before,
           (SELECT count(*) FROM earnings_material em
              WHERE UPPER(em.symbol) = UPPER(TRIM(kb.ticker))
                AND em.event_date = kb.ts::date
@@ -130,6 +133,7 @@ def list_intelligence_events(
                 gs = None
         scen = _top_scenario(gs if isinstance(gs, dict) else None)
         top_scenario = (scen or {}).get("scenario") if scen else r.get("final_label")
+        ml = predict_scenario_from_features(sym, r.get("features_before"))
         if has_materials:
             materials_count += 1
         if has_llm:
@@ -147,6 +151,11 @@ def list_intelligence_events(
                 "has_llm": has_llm,
                 "management_tone": r.get("management_tone"),
                 "top_scenario": top_scenario,
+                "llm_scenario": top_scenario,
+                "llm_scenario_source": "llm_scenario_hints" if scen else r.get("label_source"),
+                "ml_scenario": ml.get("predicted_scenario"),
+                "ml_scenario_proba": ml.get("predicted_scenario_proba"),
+                "ml_scenario_status": ml.get("scenario_classifier_status"),
                 "brief_ready": has_llm,
                 "brief_url": f"/api/earnings/brief/{sym}"
                 + (f"?event_date={ev_d.isoformat()}" if ev_d else ""),
@@ -513,6 +522,22 @@ def get_ml_layers_status(
     clf_ready = clf_status == "ok" and scenario_model_path.is_file() and llm_scenario_applied >= 8
 
     root = Path(__file__).resolve().parents[1]
+    peer_model_path = Path("/app/logs/ml/models/peer_spillover_forward5d_catboost.cbm")
+    peer_metrics_path = Path("/app/logs/ml/ml_data_quality/last_peer_spillover_train_metrics.json")
+    if not peer_model_path.is_file():
+        peer_model_path = root / "local/models/peer_spillover_forward5d_catboost.cbm"
+        peer_metrics_path = root / "local/logs/ml_data_quality/last_peer_spillover_train_metrics.json"
+    peer_metrics: dict[str, Any] = {}
+    if peer_metrics_path.is_file():
+        try:
+            import json
+
+            peer_metrics = json.loads(peer_metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            peer_metrics = {}
+    peer_mets = peer_metrics.get("metrics") if isinstance(peer_metrics.get("metrics"), dict) else {}
+    peer_ready = peer_metrics.get("status") == "ok" and peer_model_path.is_file()
+
     from services.earnings_intelligence_readiness import (
         default_readiness_metrics_path,
         default_shadow_report_path,
@@ -640,6 +665,24 @@ def get_ml_layers_status(
             "description": (
                 "Offline-оценка classifier на созревших событиях. "
                 "Shadow quality gate — качество ML, **не** разрешение на сделки (advisory only)."
+            ),
+        },
+        {
+            "id": "peer_spillover_regressor",
+            "title": "Peer spillover ML (Phase C)",
+            "status": "active" if peer_ready else "pilot",
+            "target": "peer_forward_log_ret_5d per (source_event, peer)",
+            "script": "scripts/train_peer_spillover_regressor.py",
+            "model_path": str(peer_model_path) if peer_model_path.is_file() else None,
+            "metrics": {
+                "n_train": peer_mets.get("n_train"),
+                "rmse_valid": peer_mets.get("rmse_valid"),
+                "sign_accuracy_valid": peer_mets.get("sign_accuracy_valid"),
+                "baseline_sign_accuracy_valid": peer_mets.get("baseline_sign_accuracy_valid"),
+            },
+            "description": (
+                "CatBoostRegressor: edge weight + source quotes_regime_earnings_v1 → pred 5d log-ret пира. "
+                "Dataset: build_peer_spillover_dataset.py. Brief: peer_spillover_ml[]. Advisory only."
             ),
         },
         {

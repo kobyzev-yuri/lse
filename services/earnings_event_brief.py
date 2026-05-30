@@ -15,6 +15,8 @@ from services.event_reaction_labeling import (
     build_outcomes_after,
     load_quotes_window,
 )
+from services.earnings_scenario_signal import predict_scenario_from_features
+from services.peer_spillover_signal import predict_peer_spillover_batch
 
 
 def _parse_json(val: Any) -> dict | list | None:
@@ -267,6 +269,11 @@ def build_event_brief(
         "affected_tickers": affected,
         "peer_graph": peers,
         "peer_spillover_outcomes": peer_outcomes,
+        "peer_spillover_ml": predict_peer_spillover_batch(
+            source_symbol=symbol,
+            features_before=features,
+            peer_edges=peers,
+        ),
         "evidence_quotes": evidence,
         "source_outcomes": {
             "forward_log_ret_1d": outcomes.get("forward_log_ret_1d"),
@@ -279,6 +286,7 @@ def build_event_brief(
             "feature_builder_version": features.get("feature_builder_version"),
             "ticker_price_regime": row.get("ticker_price_regime"),
         },
+        "scenario_ml": predict_scenario_from_features(symbol, features),
         "generated_at_utc": datetime.utcnow().isoformat() + "Z",
     }
 

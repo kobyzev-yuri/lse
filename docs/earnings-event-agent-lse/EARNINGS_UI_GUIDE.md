@@ -10,7 +10,7 @@
 
 | Вкладка | Вопрос, на который отвечает | API |
 |---------|------------------------------|-----|
-| **События** | Что было / что готово по каждому earnings? | `GET /api/earnings/intelligence` |
+| **События** | Что было / что готово по каждому earnings? LLM vs ML scenario в таблице | `GET /api/earnings/intelligence` |
 | **Peer graph** | Кого считаем «пиром» лидера и с каким весом? | `GET /api/earnings/peer-graph` |
 | **Spillover** | Как пиры **фактически** отреагировали после отчёта лидера? | `GET /api/earnings/spillover/{symbol}` |
 | **Shadow** | Насколько classifier угадывает сценарий **после созревания** 5d? | `GET /api/earnings/shadow-report` |
@@ -37,14 +37,16 @@ Event Brief (деталь события): `GET /api/earnings/brief/{symbol}?eve
 | Materials | Число полезных материалов (`parsed` / `extracted`) на **эту дату** |
 | LLM | `yes` если есть `management_tone` в `earnings_event_detail` |
 | Tone | bullish / bearish / neutral (из LLM) |
-| Scenario | Первый `scenario_hints` или `final_label` |
+| **LLM scenario** | Hint из extract (`scenario_hints`) или `final_label` — **не** CatBoost |
+| **ML scenario** | Pred scenario classifier (`quotes_regime_earnings_v1`); proba в UI; «—» = нет features / модель off |
 
 ### Пример (prod, META 2026-04-29)
 
 1. Нажмите **Brief** на строке META.
 2. Откроется панель:
    - **Headline:** `META capex / AI infra signal — watch peer spillover`
-   - **Scenario:** `capex_positive_for_infra_peers`
+   - **Scenario (LLM):** `capex_positive_for_infra_peers`
+   - **Scenario classifier (ML):** pred CatBoost + proba + expected source sign (отдельный блок)
    - **Source outcomes:** фактические 1d/5d log-return META из quotes
    - **Peer spillover:** таблица пиров (MU, NVDA, …) с 1d/5d от даты отчёта META
 

@@ -66,6 +66,7 @@ def main() -> int:
     q_dir = _default_q_dir()
     q_dir.mkdir(parents=True, exist_ok=True)
     scenario_metrics_path = q_dir / "last_event_reaction_scenario_train_metrics.json"
+    peer_spillover_metrics_path = q_dir / "last_peer_spillover_train_metrics.json"
 
     py = sys.executable
     if not args.skip_labels:
@@ -113,6 +114,38 @@ def main() -> int:
         rc = _run(train_cmd)
         if rc != 0 and not dry_run:
             logger.warning("Scenario classifier train returned %s (may be insufficient labels)", rc)
+
+        peer_dataset_cmd = [
+            py,
+            "scripts/build_peer_spillover_dataset.py",
+            "--dataset-version",
+            args.dataset_version,
+            "--since",
+            "2026-01-01",
+        ]
+        if dry_run:
+            peer_dataset_cmd.append("--dry-run")
+        else:
+            peer_dataset_cmd.extend(["--json-out", str(q_dir / "peer_spillover_dataset.json")])
+        rc = _run(peer_dataset_cmd)
+        if rc != 0 and not dry_run:
+            logger.warning("Peer spillover dataset build returned %s", rc)
+
+        peer_train_cmd = [
+            py,
+            "scripts/train_peer_spillover_regressor.py",
+            "--dataset-version",
+            args.dataset_version,
+            "--feature-builder-version",
+            "quotes_regime_earnings_v1",
+            "--json-metrics-out",
+            str(peer_spillover_metrics_path),
+        ]
+        if dry_run:
+            peer_train_cmd.append("--dry-run")
+        rc = _run(peer_train_cmd)
+        if rc != 0 and not dry_run:
+            logger.warning("Peer spillover train returned %s (may be insufficient rows)", rc)
 
     if not args.skip_readiness:
         from report_generator import get_engine

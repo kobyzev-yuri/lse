@@ -96,10 +96,11 @@
     <ul>
         <li><strong>Регрессия (сейчас в prod):</strong> CatBoost предсказывает <code>forward_log_ret_5d</code> — log-доходность на 5 торговых дней после отчёта. API: <code>/api/ml/event-reaction/{ticker}</code>. Признаки из daily quotes + market regime; тексты earnings пока не в product feature_builder.</li>
         <li><strong>UP/DOWN/FLAT:</strong> не классификатор, а правило по порогу на фактической 5d log-return (backfill из quotes).</li>
-        <li><strong>Scenario hints (LLM):</strong> из transcript/8-K — <code>capex_positive_for_infra_peers</code>, <code>gap_up_follow_through</code> и др. Скрипт <code>apply_earnings_scenario_labels.py</code> может записать их в <code>final_label</code>.</li>
+        <li><strong>Scenario (LLM):</strong> из transcript/8-K — <code>capex_positive_for_infra_peers</code>, … Колонка <strong>LLM scenario</strong> в таблице.</li>
+        <li><strong>Scenario (ML):</strong> CatBoost multi-class по <code>quotes_regime_earnings_v1</code> — колонка <strong>ML scenario</strong>, вкладки Fusion / Shadow. Не путать с LLM.</li>
         <li><strong>Peer graph:</strong> directed edges «лидер → пир» с весом. Spillover = forward returns пиров от <em>даты отчёта лидера</em> (event-study), не скользящая корреляция.</li>
         <li><strong>quotes_regime_earnings_v1:</strong> backfill с peer graph + tone — <code>run_earnings_ml_refresh.py</code>.</li>
-        <li><strong>Классификатор сценариев (pilot):</strong> <code>train_event_reaction_scenario_classifier.py</code> после <code>apply_earnings_scenario_labels --universe</code>.</li>
+        <li><strong>Классификатор сценариев (pilot):</strong> train на LLM-метках; прогноз — Fusion + колонка ML; качество — вкладка Shadow.</li>
         <li><strong>Дата отчёта:</strong> колонка Date в «Событиях»; кнопки Brief/Fusion подставляют тикер и дату на своей вкладке. Telegram: <code>/earnings META 2026-04-29</code>.</li>
     </ul>
 </details>
@@ -135,9 +136,10 @@
         <strong>События</strong> — календарь отчётов universe (GAME_5M + portfolio + context).
         <ul>
             <li><strong>Date</strong> — дата earnings в <code>knowledge_base</code>.</li>
-            <li><strong>Materials / LLM</strong> — есть ли parsed materials и извлечённые факты (tone, scenario).</li>
-            <li><strong>Контекст</strong> (панель под вкладками) — тикер + дата сохраняются при переключении вкладок и в sessionStorage.</li>
-            <li><strong>Brief / Fusion / Spillover</strong> в строке — подставляют контекст и открывают вкладку.</li>
+            <li><strong>LLM scenario</strong> — hint из extract (transcript/8-K); может отличаться от ML.</li>
+            <li><strong>ML scenario</strong> — pred CatBoost classifier (<code>quotes_regime_earnings_v1</code>); proba в скобках. «—» = нет features или модель off.</li>
+            <li><strong>Materials / LLM / Tone</strong> — покрытие материалами и extract.</li>
+            <li><strong>Brief / Fusion / Shadow</strong> — детали по строке; Shadow показывает pred vs факт после созревания 5d.</li>
         </ul>
     </div>
     <div class="toolbar">
@@ -150,18 +152,19 @@
     <div class="summary" id="summaryBox"></div>
     <div id="missingList"></div>
     <table>
-        <thead><tr><th>Ticker</th><th>Date</th><th>Group</th><th>Materials</th><th>LLM</th><th>Tone</th><th>Scenario</th><th></th></tr></thead>
+        <thead><tr><th>Ticker</th><th>Date</th><th>Group</th><th>Mat</th><th>LLM</th><th>Tone</th><th>LLM scenario</th><th>ML scenario</th><th></th></tr></thead>
         <tbody id="eventsBody"></tbody>
     </table>
 </div>
 
 <div id="panel-brief" class="panel">
     <div class="tab-intro">
-        <strong>Event Brief</strong> — один отчёт: LLM-факты, guidance/capex, цитаты, фактические 1d/5d по source и таблица spillover по пирам.
+        <strong>Event Brief</strong> — один отчёт: LLM-факты, ML-слои, guidance/capex, spillover по пирам.
         <ul>
-            <li>Тикер + <strong>дата отчёта</strong> (как в колонке Date на «Событиях»).</li>
-            <li>CatBoost 5d — advisory регрессия; при несовпадении версии features возможен пересчёт.</li>
-            <li>Не путать с <code>/corr</code> — здесь event-study от даты отчёта, не скользящая корреляция.</li>
+            <li><strong>Scenario (LLM)</strong> — из extract; headline и rationale.</li>
+            <li><strong>Scenario classifier (ML)</strong> — pred CatBoost + proba + ожидаемый знак source (advisory).</li>
+            <li><strong>Regression (ML)</strong> — pred 5d log-return source в %.</li>
+            <li><strong>Peer spillover</strong> — фактические 1d/5d пиров (не ML-прогноз; Phase C добавит pred peers).</li>
         </ul>
     </div>
     <p class="muted" style="font-size:0.78rem;margin-bottom:0.5rem">Тикер и дата — в панели <strong>Контекст</strong> выше (сохраняются при смене вкладок).</p>
@@ -199,7 +202,7 @@
 
 <div id="panel-spillover" class="panel">
     <div class="tab-intro">
-        <strong>Spillover</strong> — event-study: как пиры из графа реально сходили/росли на 1d и 5d <em>после каждой прошлой даты отчёта</em> выбранного source.
+        <strong>Spillover</strong> — <em>фактическая история</em>: как пиры ходили 1d/5d после прошлых отчётов source. Это не ML-прогноз (peer spillover ML — Phase C).
         <ul>
             <li><strong>Source</strong> — тикер, который отчитался (лидер); пиры берутся из <code>peer_graph_edge</code> где source = этот тикер.</li>
             <li>Для каждой даты: tone/scenario source, его 5d, таблица пиров с pill <strong>1d</strong> / <strong>5d</strong>.</li>
@@ -213,8 +216,9 @@
 
 <div id="panel-shadow" class="panel">
     <div class="tab-intro">
-        <strong>Shadow</strong> — offline-качество классификатора сценариев на уже созревших отчётах (есть фактический 5d). <span class="badge planned">Advisory only</span> — не разрешение на сделки.
+        <strong>Shadow</strong> — таблица качества <em>классификатора сценариев</em>: pred ML vs факт 5d source и LLM-метка. Смотрите параллельно с колонкой ML scenario в «Событиях».
         <ul>
+            <li><strong>Pred scenario</strong> — то же, что ML scenario / Fusion (CatBoost до созревания 5d).</li>
             <li><strong>Sign</strong> — совпал ли знак 5d у <em>source</em> с эвристикой сценария (capex → source часто вниз, gap_up → вверх).</li>
             <li><strong>Class</strong> — pred scenario = LLM-метка <code>llm_scenario_v0</code>; «—» если метки нет или только UP/DOWN/FLAT.</li>
             <li><strong>Peer 5d</strong> — среднее 5d по пирам; peer sign acc в шапке — доля угадываний знака пиров.</li>
@@ -230,8 +234,9 @@
 
 <div id="panel-fusion" class="panel">
     <div class="tab-intro">
-        <strong>Fusion</strong> — сводка ML + Brief для одной даты: регрессия 5d, классификатор сценария, текстовый advisory (alignment / conviction).
+        <strong>Fusion</strong> — одно событие: регрессия 5d (source) + <strong>scenario classifier</strong> + advisory. LLM scenario — на Brief, не здесь.
         <ul>
+            <li><strong>Regression ML</strong> — «сколько» по source; <strong>Scenario ML</strong> — «какая история».</li>
             <li><strong>execution blocked</strong> — всегда; не подключено к GAME_5M / portfolio bot.</li>
             <li>Тикер и дата — как на Brief; из таблицы кнопка Fusion подставляет их автоматически.</li>
         </ul>
@@ -244,6 +249,9 @@
     <div class="tab-intro">
         <strong>ML слои</strong> — статус пайплайна earnings grid: features, регрессия, LLM-метки, classifier, shadow, fusion, readiness JSON.
         <ul>
+            <li><strong>Regression</strong> — pred 5d log-return <em>source</em> (Fusion / Brief).</li>
+            <li><strong>Scenario classifier</strong> — pred класс сценария source (Events ML scenario, Shadow, Fusion).</li>
+            <li><strong>Peer spillover ML</strong> — Phase C: pred 5d <em>пиров</em>; пока только факт на Spillover / dataset builder.</li>
             <li>Слои <span class="badge ok">active</span> / <span class="badge planned">pilot</span> / planned — что уже в prod.</li>
             <li>Подробнее: <a href="/earnings/guide" style="color:#93c5fd">руководство</a>, <code>docs/TRADE_ML_DATASETS_AND_TARGETS_RU.md</code> §7.</li>
         </ul>
@@ -272,6 +280,28 @@ const fmtGuidance = (g) => {
 };
 const badgeMat = (ev) => ev.materials_useful > 0 ? `<span class="badge ok">${ev.materials_useful}</span>` : '<span class="badge no">0</span>';
 const badgeLlm = (ev) => ev.has_llm ? '<span class="badge ok">yes</span>' : '<span class="badge no">—</span>';
+const fmtMlScenario = (ev) => {
+    const st = ev.ml_scenario_status;
+    if (st === 'ok' && ev.ml_scenario) {
+        const p = ev.ml_scenario_proba != null ? ` <span class="muted">${(Number(ev.ml_scenario_proba) * 100).toFixed(0)}%</span>` : '';
+        return `<code title="CatBoost classifier">${esc(ev.ml_scenario)}</code>${p}`;
+    }
+    if (st && st !== 'ok') return `<span class="muted" title="${esc(st)}">${esc(st)}</span>`;
+    return '<span class="muted">—</span>';
+};
+const fmtScenarioMlBlock = (sm) => {
+    if (!sm || typeof sm !== 'object') return '';
+    const st = sm.scenario_classifier_status;
+    if (st === 'ok' && sm.predicted_scenario) {
+        const proba = sm.predicted_scenario_proba != null ? (Number(sm.predicted_scenario_proba) * 100).toFixed(0) + '%' : '—';
+        const sign = sm.predicted_scenario_sign != null ? sm.predicted_scenario_sign : '—';
+        return `<div class="block"><h3>Scenario classifier (ML)</h3>
+            <code>${esc(sm.predicted_scenario)}</code> · proba ${proba} · expected source sign ${sign}
+            <div class="muted">CatBoost по quotes_regime_earnings_v1; advisory only. LLM scenario выше — отдельный слой.</div></div>`;
+    }
+    return `<div class="block"><h3>Scenario classifier (ML)</h3>
+        <span class="muted">${esc(st || 'pending')}${sm.scenario_classifier_note ? ': ' + esc(sm.scenario_classifier_note) : ''}</span></div>`;
+};
 const horizonPills = () =>
     '<span class="horizon-pills"><span class="pill pill-spillover" title="forward log-return, 1 торг. день после отчёта">1d</span>'
     + '<span class="pill pill-spillover" title="forward log-return, 5 торг. дней после отчёта">5d</span></span>';
@@ -459,7 +489,8 @@ function applyFilter() {
         return `
         <tr${rowCls}><td><strong>${ev.symbol}</strong></td><td>${ev.event_date||'—'}</td><td>${groupBadges(ev.group)}</td>
         <td>${badgeMat(ev)}</td><td>${badgeLlm(ev)}</td><td>${ev.management_tone||'—'}</td>
-        <td><code>${ev.top_scenario||'—'}</code></td>
+        <td><code title="LLM hint">${esc(ev.llm_scenario || ev.top_scenario || '—')}</code></td>
+        <td>${fmtMlScenario(ev)}</td>
         <td><button type="button" class="link-btn" data-sym="${ev.symbol}" data-event-date="${ev.event_date||''}">Brief</button>
         <button type="button" class="link-btn" data-fusion="${ev.symbol}" data-fusion-date="${ev.event_date||''}">Fusion</button>
         <button type="button" class="link-btn" data-spill="${ev.symbol}">Spillover</button></td></tr>`;
@@ -503,12 +534,12 @@ async function loadBrief(symbol, eventDate) {
         if (mlRes.ok) {
             const ml = await mlRes.json();
             if (ml.event_reaction_ml_status === 'ok') {
-                mlHtml = `<div class="block"><h3>CatBoost regression (5d)</h3>
+                mlHtml = `<div class="block"><h3>Regression ML (5d source)</h3>
                     pred log-ret ${Number(ml.event_reaction_ml_forward_log_ret_5d_pred).toFixed(4)} ≈ ${fmtPct(ml.event_reaction_ml_forward_log_ret_5d_pred)}
                     · direction ${ml.event_reaction_ml_provisional_direction || '—'}
                     ${ml.event_reaction_ml_event_time_et ? `<div class="muted">event ${esc(ml.event_reaction_ml_event_time_et)}</div>` : ''}</div>`;
             } else {
-                mlHtml = `<div class="block"><h3>CatBoost regression (5d)</h3>
+                mlHtml = `<div class="block"><h3>Regression ML (5d source)</h3>
                     <span class="muted">${esc(ml.event_reaction_ml_status)}: ${esc(ml.event_reaction_ml_note || 'нет features для этой даты')}</span></div>`;
             }
         }
@@ -535,9 +566,10 @@ async function loadBrief(symbol, eventDate) {
     content.innerHTML = `
         <p><strong>${esc(b.headline||'—')}</strong> ${statusBadge}</p>
         ${b.reason ? `<p class="muted">${esc(b.reason)}</p>` : ''}
-        <p class="muted">Tone: ${esc(b.management_tone||'—')} · Scenario: <code>${esc(scen.id||'—')}</code>
-        ${scen.confidence != null ? ` · conf ${esc(scen.confidence)}` : ''}</p>
+        <p class="muted">Tone: ${esc(b.management_tone||'—')} · LLM scenario: <code>${esc(scen.id||'—')}</code>
+        ${scen.confidence != null ? ` · conf ${esc(scen.confidence)}` : ''} · source ${esc(scen.source||'—')}</p>
         ${scen.rationale ? `<p class="muted">${esc(scen.rationale)}</p>` : ''}
+        ${fmtScenarioMlBlock(b.scenario_ml)}
         ${mlHtml}
         <div class="detail-grid">
             <div class="block"><h3>Guidance &amp; capex</h3>
@@ -667,12 +699,13 @@ async function loadFusion(eventDate) {
                 status ${reg.status||'—'}<br>
                 pred log ${reg.forward_log_ret_5d_pred != null ? reg.forward_log_ret_5d_pred.toFixed(4) : '—'}
                 · ${reg.forward_log_ret_5d_pred != null ? fmtPct(reg.forward_log_ret_5d_pred) : '—'}<br>
-                <span class="muted">bias ${adv.regression_bias||'—'}</span>
+                <span class="muted">5d source · ${adv.regression_bias||'—'}</span>
             </div>
-            <div class="block"><h3>Scenario ML</h3>
+            <div class="block"><h3>Scenario classifier (ML)</h3>
                 <code>${scen.predicted_scenario||'—'}</code> (${scen.scenario_classifier_status||'—'})
-                · proba ${scen.predicted_scenario_proba ?? '—'}<br>
-                <span class="muted">bias ${adv.scenario_bias||'—'} · sign ${scen.predicted_scenario_sign ?? '—'}</span>
+                · proba ${scen.predicted_scenario_proba != null ? (Number(scen.predicted_scenario_proba)*100).toFixed(0)+'%' : '—'}<br>
+                <span class="muted">expected source sign ${scen.predicted_scenario_sign ?? '—'} · bias ${adv.scenario_bias||'—'}</span>
+                <div class="muted" style="margin-top:0.35rem">Сравните с LLM scenario на вкладке Brief и с фактом — на Shadow.</div>
             </div>
         </div>`;
 }
