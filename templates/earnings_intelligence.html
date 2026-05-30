@@ -47,6 +47,12 @@
         .peer-table th { color: #94a3b8; font-weight: 600; font-size: 0.72rem; }
         .pill { display: inline-block; padding: 0.1rem 0.38rem; border-radius: 999px; font-size: 0.68rem; font-weight: 700; text-transform: none; letter-spacing: 0.02em; }
         .pill-spillover { background: #1e3a5f; color: #93c5fd; }
+        .pill-ml { background: #422006; color: #fde047; }
+        .ml-compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.65rem; }
+        @media (max-width: 700px) { .ml-compare-grid { grid-template-columns: 1fr; } }
+        .ml-layer { border-radius: 6px; padding: 0.45rem 0.55rem; font-size: 0.82rem; border: 1px solid #334155; }
+        .ml-layer.llm { background: #1e293b; }
+        .ml-layer.ml { background: #1a2e1a; border-color: #365314; }
         .block h3 .horizon-pills { display: inline-flex; gap: 0.25rem; margin-left: 0.35rem; vertical-align: middle; }
         .block h3 .peer-count { color: #64748b; font-weight: 500; }
         .pos { color: #86efac; } .neg { color: #fca5a5; }
@@ -164,7 +170,7 @@
             <li><strong>Scenario (LLM)</strong> — из extract; headline и rationale.</li>
             <li><strong>Scenario classifier (ML)</strong> — pred CatBoost + proba + ожидаемый знак source (advisory).</li>
             <li><strong>Regression (ML)</strong> — pred 5d log-return source в %.</li>
-            <li><strong>Peer spillover</strong> — фактические 1d/5d пиров (не ML-прогноз; Phase C добавит pred peers).</li>
+            <li><strong>Peer spillover</strong> — факт 1d/5d пиров + колонка <span class="pill pill-ml">5d ML</span> (CatBoost regressor); Sign = совпадение знака fact vs pred.</li>
         </ul>
     </div>
     <p class="muted" style="font-size:0.78rem;margin-bottom:0.5rem">Тикер и дата — в панели <strong>Контекст</strong> выше (сохраняются при смене вкладок).</p>
@@ -202,10 +208,11 @@
 
 <div id="panel-spillover" class="panel">
     <div class="tab-intro">
-        <strong>Spillover</strong> — <em>фактическая история</em>: как пиры ходили 1d/5d после прошлых отчётов source. Это не ML-прогноз (peer spillover ML — Phase C).
+        <strong>Spillover</strong> — история отчётов source: факт 1d/5d пиров + ML pred 5d (если есть features).
         <ul>
-            <li><strong>Source</strong> — тикер, который отчитался (лидер); пиры берутся из <code>peer_graph_edge</code> где source = этот тикер.</li>
-            <li>Для каждой даты: tone/scenario source, его 5d, таблица пиров с pill <strong>1d</strong> / <strong>5d</strong>.</li>
+            <li><strong>Source</strong> — тикер-лидер; пиры из <code>peer_graph_edge</code>.</li>
+            <li>Для каждой даты: LLM scenario, <strong>ML scenario</strong> (classifier), source 5d, таблица пиров (fact + ML pred).</li>
+            <li>Текущий контекст (тикер + дата) — сверху отдельным блоком с полным Brief spillover.</li>
             <li>Из таблицы «События» кнопка Spillover подставляет source и открывает эту вкладку.</li>
         </ul>
     </div>
@@ -236,7 +243,8 @@
     <div class="tab-intro">
         <strong>Fusion</strong> — одно событие: регрессия 5d (source) + <strong>scenario classifier</strong> + advisory. LLM scenario — на Brief, не здесь.
         <ul>
-            <li><strong>Regression ML</strong> — «сколько» по source; <strong>Scenario ML</strong> — «какая история».</li>
+            <li><strong>Regression ML</strong> — «сколько» по source; <strong>Scenario ML</strong> — «какая история»; сравните с LLM на Brief.</li>
+            <li><strong>Peer spillover ML</strong> — pred 5d по каждому peer (CatBoost); fact vs pred в таблице.</li>
             <li><strong>execution blocked</strong> — всегда; не подключено к GAME_5M / portfolio bot.</li>
             <li>Тикер и дата — как на Brief; из таблицы кнопка Fusion подставляет их автоматически.</li>
         </ul>
@@ -251,7 +259,7 @@
         <ul>
             <li><strong>Regression</strong> — pred 5d log-return <em>source</em> (Fusion / Brief).</li>
             <li><strong>Scenario classifier</strong> — pred класс сценария source (Events ML scenario, Shadow, Fusion).</li>
-            <li><strong>Peer spillover ML</strong> — Phase C: pred 5d <em>пиров</em>; пока только факт на Spillover / dataset builder.</li>
+            <li><strong>Peer spillover ML</strong> — pred 5d <em>пиров</em> (Brief / Spillover / Fusion); sign acc в readiness.</li>
             <li>Слои <span class="badge ok">active</span> / <span class="badge planned">pilot</span> / planned — что уже в prod.</li>
             <li>Подробнее: <a href="/earnings/guide" style="color:#93c5fd">руководство</a>, <code>docs/TRADE_ML_DATASETS_AND_TARGETS_RU.md</code> §7.</li>
         </ul>
@@ -289,28 +297,88 @@ const fmtMlScenario = (ev) => {
     if (st && st !== 'ok') return `<span class="muted" title="${esc(st)}">${esc(st)}</span>`;
     return '<span class="muted">—</span>';
 };
-const fmtScenarioMlBlock = (sm) => {
-    if (!sm || typeof sm !== 'object') return '';
+const fmtScenarioMlInline = (sm) => {
+    if (!sm || typeof sm !== 'object') return '<span class="muted">—</span>';
     const st = sm.scenario_classifier_status;
     if (st === 'ok' && sm.predicted_scenario) {
-        const proba = sm.predicted_scenario_proba != null ? (Number(sm.predicted_scenario_proba) * 100).toFixed(0) + '%' : '—';
-        const sign = sm.predicted_scenario_sign != null ? sm.predicted_scenario_sign : '—';
-        return `<div class="block"><h3>Scenario classifier (ML)</h3>
-            <code>${esc(sm.predicted_scenario)}</code> · proba ${proba} · expected source sign ${sign}
-            <div class="muted">CatBoost по quotes_regime_earnings_v1; advisory only. LLM scenario выше — отдельный слой.</div></div>`;
+        const proba = sm.predicted_scenario_proba != null ? ` ${(Number(sm.predicted_scenario_proba) * 100).toFixed(0)}%` : '';
+        return `<code title="CatBoost classifier">${esc(sm.predicted_scenario)}</code><span class="muted">${proba}</span>`;
     }
-    return `<div class="block"><h3>Scenario classifier (ML)</h3>
-        <span class="muted">${esc(st || 'pending')}${sm.scenario_classifier_note ? ': ' + esc(sm.scenario_classifier_note) : ''}</span></div>`;
+    return `<span class="muted" title="${esc(st || '')}">${esc(st || '—')}</span>`;
+};
+const fmtLlmVsMlScenarioCompare = (b) => {
+    const llm = b.scenario || {};
+    const sm = b.scenario_ml || {};
+    const llmConf = llm.confidence != null ? ` · conf ${esc(llm.confidence)}` : '';
+    const sign = sm.predicted_scenario_sign != null ? ` · sign ${sm.predicted_scenario_sign}` : '';
+    return `<div class="ml-compare-grid">
+        <div class="ml-layer llm"><strong>LLM scenario</strong><br>
+            <code>${esc(llm.id || '—')}</code>${llmConf}
+            <div class="muted">tone ${esc(b.management_tone || '—')} · ${esc(llm.source || '—')}</div></div>
+        <div class="ml-layer ml"><strong>ML scenario (classifier)</strong><br>
+            ${fmtScenarioMlInline(sm)}${sign}
+            <div class="muted">advisory · quotes_regime_earnings_v1</div></div>
+    </div>`;
 };
 const horizonPills = () =>
     '<span class="horizon-pills"><span class="pill pill-spillover" title="forward log-return, 1 торг. день после отчёта">1d</span>'
     + '<span class="pill pill-spillover" title="forward log-return, 5 торг. дней после отчёта">5d</span></span>';
-const peerSpilloverTable = (peers, escTicker = true) => {
-    const body = peers.map(p => {
-        const t = escTicker ? esc(p.ticker) : p.ticker;
-        return `<tr><td>${t}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(p.forward_log_ret_5d)}</td></tr>`;
+const indexPeerMl = (mlArr) => {
+    const m = {};
+    (mlArr || []).forEach(row => {
+        const t = String(row.peer_ticker || '').toUpperCase();
+        if (t) m[t] = row;
+    });
+    return m;
+};
+const fmtMlPeerPred = (mlRow) => {
+    if (!mlRow) return '<span class="muted">—</span>';
+    const st = mlRow.peer_spillover_ml_status;
+    if (st === 'ok' && mlRow.peer_forward_log_ret_5d_pred != null) {
+        return fmtPct(mlRow.peer_forward_log_ret_5d_pred);
+    }
+    const note = mlRow.peer_spillover_ml_note || st || '—';
+    return `<span class="muted" title="${esc(note)}">${esc(st || '—')}</span>`;
+};
+const signMatchIcon = (actualLog, predLog) => {
+    if (actualLog == null || predLog == null || !Number.isFinite(Number(actualLog)) || !Number.isFinite(Number(predLog))) {
+        return '<span class="muted">—</span>';
+    }
+    const same = (Number(actualLog) >= 0) === (Number(predLog) >= 0);
+    return same
+        ? '<span class="pos" title="same sign fact vs ML">✓</span>'
+        : '<span class="neg" title="opposite sign">✗</span>';
+};
+const peerSpilloverCompareTable = (outcomes, mlArr, escTicker = true) => {
+    const mlByPeer = indexPeerMl(mlArr);
+    const okPeers = (outcomes || []).filter(p => p.status === 'ok');
+    const peerSet = new Set(okPeers.map(p => String(p.ticker || '').toUpperCase()));
+    (mlArr || []).forEach(r => {
+        const t = String(r.peer_ticker || '').toUpperCase();
+        if (t) peerSet.add(t);
+    });
+    const peers = [...peerSet].sort();
+    if (!peers.length) return '<span class="muted">нет пиров в графе</span>';
+    const body = peers.map(ticker => {
+        const p = okPeers.find(x => String(x.ticker || '').toUpperCase() === ticker) || { ticker };
+        const ml = mlByPeer[ticker];
+        const t = escTicker ? esc(ticker) : ticker;
+        const r5 = p.forward_log_ret_5d;
+        const pred = ml?.peer_forward_log_ret_5d_pred;
+        return `<tr><td>${t}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(r5)}</td>
+            <td>${fmtMlPeerPred(ml)}</td><td>${signMatchIcon(r5, pred)}</td></tr>`;
     }).join('');
-    return `<table class="peer-table"><thead><tr><th>Peer</th><th><span class="pill pill-spillover">1d</span></th><th><span class="pill pill-spillover">5d</span></th></tr></thead><tbody>${body}</tbody></table>`;
+    return `<table class="peer-table"><thead><tr>
+        <th>Peer</th><th><span class="pill pill-spillover">1d</span> fact</th>
+        <th><span class="pill pill-spillover">5d</span> fact</th>
+        <th><span class="pill pill-ml">5d</span> ML</th><th>Sign</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+};
+const peerSpilloverMlSummary = (mlArr) => {
+    const ok = (mlArr || []).filter(r => r.peer_spillover_ml_status === 'ok');
+    if (!ok.length) return '<span class="muted">ML spillover: нет pred (нет модели или features)</span>';
+    const n = ok.length;
+    return `<span class="muted">ML spillover: ${n} peer pred · advisory only</span>`;
 };
 let allEvents = [], currentFilter = 'all', graphData = null;
 const EI_CTX_KEY = 'earnings_intelligence_ctx_v1';
@@ -552,6 +620,7 @@ async function loadBrief(symbol, eventDate) {
     if (!res.ok) throw new Error(b.detail || JSON.stringify(b));
     const scen = b.scenario || {}, src = b.source_outcomes || {};
     const peers = (b.peer_spillover_outcomes || []).filter(p => p.status === 'ok');
+    const peerMl = b.peer_spillover_ml || [];
     const statusBadge = b.status === 'partial'
         ? '<span class="badge planned">partial</span>'
         : (b.status === 'ok' ? '<span class="badge ok">ok</span>' : `<span class="badge no">${esc(b.status||'—')}</span>`);
@@ -566,10 +635,8 @@ async function loadBrief(symbol, eventDate) {
     content.innerHTML = `
         <p><strong>${esc(b.headline||'—')}</strong> ${statusBadge}</p>
         ${b.reason ? `<p class="muted">${esc(b.reason)}</p>` : ''}
-        <p class="muted">Tone: ${esc(b.management_tone||'—')} · LLM scenario: <code>${esc(scen.id||'—')}</code>
-        ${scen.confidence != null ? ` · conf ${esc(scen.confidence)}` : ''} · source ${esc(scen.source||'—')}</p>
-        ${scen.rationale ? `<p class="muted">${esc(scen.rationale)}</p>` : ''}
-        ${fmtScenarioMlBlock(b.scenario_ml)}
+        ${fmtLlmVsMlScenarioCompare(b)}
+        ${scen.rationale ? `<p class="muted">LLM rationale: ${esc(scen.rationale)}</p>` : ''}
         ${mlHtml}
         <div class="detail-grid">
             <div class="block"><h3>Guidance &amp; capex</h3>
@@ -583,7 +650,8 @@ async function loadBrief(symbol, eventDate) {
             <div class="block"><h3>Source outcomes (quotes)</h3>
                 1d ${fmtPct(src.forward_log_ret_1d)} · 5d ${fmtPct(src.forward_log_ret_5d)} · label ${esc(src.final_label_auto||'—')}</div>
             <div class="block"><h3>Peer spillover <span class="peer-count">(${peers.length})</span>${horizonPills()}</h3>
-                ${peerSpilloverTable(peers, true)}</div>
+                ${peerSpilloverMlSummary(peerMl)}
+                ${peerSpilloverCompareTable(peers, peerMl, true)}</div>
         </div>`;
     } catch (err) {
         content.innerHTML = `<span class="err">${esc(err.message || String(err))}</span>`;
@@ -616,23 +684,46 @@ async function loadGraph() {
 }
 
 async function loadSpillover() {
-    const { symbol: sym } = getEiContext();
+    const { symbol: sym, eventDate: ctxDate } = getEiContext();
     if (!sym) {
         document.getElementById('spilloverContent').innerHTML = '<span class="err">Укажите тикер в панели Контекст</span>';
         return;
     }
     const box = document.getElementById('spilloverContent');
     box.innerHTML = '<span class="muted">Загрузка…</span>';
+    const parts = [];
+    if (ctxDate) {
+        try {
+            const bRes = await fetch(`/api/earnings/brief/${encodeURIComponent(sym)}?event_date=${encodeURIComponent(ctxDate)}`);
+            const b = await bRes.json();
+            if (bRes.ok && (b.status === 'ok' || b.status === 'partial')) {
+                const peers = (b.peer_spillover_outcomes || []).filter(p => p.status === 'ok');
+                const peerMl = b.peer_spillover_ml || [];
+                parts.push(`<div class="block" style="border:1px solid #365314"><h3>Контекст · ${sym} · ${ctxDate}</h3>
+                    <div class="muted">Tone ${esc(b.management_tone||'—')} · source 5d ${fmtPct((b.source_outcomes||{}).forward_log_ret_5d)}</div>
+                    ${fmtLlmVsMlScenarioCompare(b)}
+                    ${peerSpilloverMlSummary(peerMl)}
+                    ${peerSpilloverCompareTable(peers, peerMl, false)}</div>`);
+            }
+        } catch (_) {}
+    }
     const res = await fetch(`/api/earnings/spillover/${encodeURIComponent(sym)}?since=2026-01-01&limit=8`);
     const data = await res.json();
     document.getElementById('spilloverNote').textContent = data.note || '';
-    if (!(data.events||[]).length) { box.innerHTML = '<div class="err">Нет past events с spillover</div>'; return; }
-    box.innerHTML = data.events.map(ev => {
+    if (!(data.events||[]).length && !parts.length) {
+        box.innerHTML = '<div class="err">Нет past events с spillover</div>';
+        return;
+    }
+    const historyHtml = (data.events || []).map(ev => {
         const peers = (ev.peer_outcomes||[]).filter(p => p.status==='ok');
+        const peerMl = ev.peer_spillover_ml || [];
+        const sm = ev.scenario_ml || {};
         return `<div class="block"><h3>${sym} · ${ev.event_date} · spillover${horizonPills()}</h3>
-            <div class="muted">tone ${ev.management_tone||'—'} · scenario ${ev.top_scenario||'—'} · source 5d ${fmtPct(ev.source_forward_log_ret_5d)}</div>
-            ${peerSpilloverTable(peers, false)}</div>`;
+            <div class="muted">tone ${ev.management_tone||'—'} · LLM ${esc(ev.top_scenario||'—')} · ML ${fmtScenarioMlInline(sm)} · source 5d ${fmtPct(ev.source_forward_log_ret_5d)}</div>
+            ${peerSpilloverMlSummary(peerMl)}
+            ${peerSpilloverCompareTable(peers, peerMl, false)}</div>`;
     }).join('');
+    box.innerHTML = parts.join('') + (historyHtml || '<span class="muted">Нет истории spillover</span>');
 }
 
 async function loadShadow(refresh) {
@@ -688,11 +779,21 @@ async function loadFusion(eventDate) {
     const data = await res.json();
     if (!res.ok) { el.innerHTML = `<span class="err">${data.detail || JSON.stringify(data)}</span>`; return; }
     const adv = data.advisory || {}, reg = data.regression_ml || {}, scen = data.scenario_ml || {};
+    const llmScen = (data.brief_headline || {}).llm_scenario;
+    const peerOut = data.peer_spillover || [];
+    const peerMl = data.peer_spillover_ml || [];
+    const okPeers = peerOut.filter(p => p.status === 'ok');
     el.innerHTML = `
         <div class="block"><h3>Advisory</h3>
             <p><strong>${adv.summary||'—'}</strong></p>
             <p class="muted">Alignment ${adv.alignment||'—'} · Conviction ${adv.conviction||'—'} · execution blocked</p>
             ${(adv.notes||[]).map(n => `<p class="muted">${n}</p>`).join('')}
+        </div>
+        <div class="ml-compare-grid">
+            <div class="ml-layer llm"><strong>LLM scenario</strong><br><code>${esc(llmScen||'—')}</code>
+                <div class="muted">из Brief extract</div></div>
+            <div class="ml-layer ml"><strong>ML scenario (classifier)</strong><br>${fmtScenarioMlInline(scen)}
+                <div class="muted">bias ${adv.scenario_bias||'—'} · sign ${scen.predicted_scenario_sign ?? '—'}</div></div>
         </div>
         <div class="detail-grid">
             <div class="block"><h3>Regression ML</h3>
@@ -704,9 +805,13 @@ async function loadFusion(eventDate) {
             <div class="block"><h3>Scenario classifier (ML)</h3>
                 <code>${scen.predicted_scenario||'—'}</code> (${scen.scenario_classifier_status||'—'})
                 · proba ${scen.predicted_scenario_proba != null ? (Number(scen.predicted_scenario_proba)*100).toFixed(0)+'%' : '—'}<br>
-                <span class="muted">expected source sign ${scen.predicted_scenario_sign ?? '—'} · bias ${adv.scenario_bias||'—'}</span>
-                <div class="muted" style="margin-top:0.35rem">Сравните с LLM scenario на вкладке Brief и с фактом — на Shadow.</div>
+                <span class="muted">expected source sign ${scen.predicted_scenario_sign ?? '—'}</span>
+                <div class="muted" style="margin-top:0.35rem">Shadow — pred vs факт после созревания 5d.</div>
             </div>
+        </div>
+        <div class="block"><h3>Peer spillover ML <span class="peer-count">(${okPeers.length})</span></h3>
+            ${peerSpilloverMlSummary(peerMl)}
+            ${peerSpilloverCompareTable(okPeers, peerMl, true)}
         </div>`;
 }
 

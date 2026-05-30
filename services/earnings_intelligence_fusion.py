@@ -157,5 +157,6 @@ def build_earnings_fusion_advisory(
         },
         "scenario_ml": scen_out,
         "peer_spillover": brief.get("peer_spillover_outcomes"),
+        "peer_spillover_ml": brief.get("peer_spillover_ml"),
         "advisory": advisory,
     }

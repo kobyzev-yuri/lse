@@ -23,22 +23,50 @@
 
 ## P1 — Peer spillover ML (Phase C)
 
-| # | Задача | Smoke |
-|---|--------|-------|
-| 4 | Dataset `(source_event, peer) → peer_forward_log_ret_5d` | `scripts/build_peer_spillover_dataset.py --dry-run` |
-| 5 | Baseline propagation score | `baseline_weighted_sign_acc` в summary JSON |
-| 6 | UI: LLM vs ML scenario на Events/Brief/Fusion | smoke `/earnings` + brief API |
+| # | Задача | Smoke | Статус |
+|---|--------|-------|--------|
+| 4 | Dataset `(source_event, peer) → peer_forward_log_ret_5d` | `build_peer_spillover_dataset.py --dry-run` | ✅ **162 rows**, 29 events, 14 peers |
+| 5 | Baseline propagation score | `baseline_weighted_sign_acc` в summary JSON | ✅ **36.4%** baseline; ML valid **85.4%** |
+| 6 | UI: LLM vs ML scenario на Events/Brief/Fusion | smoke `/earnings` + brief API | ✅ `scenario_ml` в brief; Fusion bias labels |
 
 См. [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §5 peer spillover ML.
 
 ---
 
+## P1.5 — Dataset gate fix (2026-05-30 вечер)
+
+| # | Задача | Результат |
+|---|--------|-----------|
+| A | Разделить `hints_pending_apply` vs `events_missing_llm_extract` | commit `f48b676`; gate не блокировался на пустых `[]` hints |
+| B | force-reextract 7 symbols + apply labels | +4 labels (ANET, PLTR, AMD, GOOGL); **25** LLM labels |
+| C | Incremental ML refresh | grid **true**, scenario **true**, peer **true** (21:42 UTC) |
+
+**Readiness snapshot (prod):**
+
+| Gate | Значение |
+|------|----------|
+| `overall_grid_ready` | **true** |
+| `overall_scenario_classifier_ready` | **true** |
+| `overall_peer_spillover_ready` | **true** |
+| LLM labels | **25** / 5 classes |
+| Classifier valid_acc | **42.9%** (n_valid=7; holdout появился) |
+| Peer spillover sign_acc | **85.4%** vs baseline **31.7%** |
+| Shadow | n=33, sign **60.6%** |
+
+**Остаток датасета (не блокирует gate):**
+
+- `symbols_without_labels`: CIEN, DELL, NBIS
+- `events_missing_llm_extract`: 6 (auto_quotes / kb_skeleton, hints=0)
+- sparse classes: `miss_or_guide_breakdown`, `beat_revaluation_down` (по 1 sample)
+
+---
+
 ## P2 — llm labels (backlog)
 
-| # | Задача | Примечание |
-|---|--------|------------|
-| 7 | Ingest transcript для 7 events | DELL, GOOGL, AMD, AMZN, ANET, CIEN, NBIS — сейчас **24/28** |
-| 8 | force-reextract + apply | после materials |
+| # | Задача | Примечание | Статус |
+|---|--------|------------|--------|
+| 7 | Ingest transcript для 7 events | DELL, GOOGL, AMD, AMZN, ANET, CIEN, NBIS | 🔄 **25/28** labeled; materials sync cron |
+| 8 | force-reextract + apply | после materials | ✅ batch 30.05; cron extract `:25 */6` |
 
 ---
 
@@ -59,10 +87,22 @@ for sym in ('META','MSFT'):
 "
 ```
 
+Последний smoke 30.05: META/MSFT brief **ok**, `scenario_ml` ok, fusion mismatch **None**.
+
 ---
 
 ## Acceptance Phase C (interim)
 
-- [ ] Peer spillover dataset rows ≥ 100 (source×peer×event)
-- [ ] Baseline weighted spillover sign accuracy documented
-- [ ] Phase B doc signed off in EARNINGS_PLAN_2026-05-31.md
+- [x] Peer spillover dataset rows ≥ 100 (source×peer×event) — **162 rows**, 29 events, 14 peers (2026-05-30)
+- [x] Baseline weighted spillover sign accuracy documented — **36.4%** same-sign; ML valid **85.4%** vs baseline **31.7%**
+- [x] Phase B doc signed off in EARNINGS_PLAN_2026-05-31.md
+- [x] Analyzer readiness gates green (grid + scenario + peer)
+
+---
+
+## Следующие шаги (Phase C product → D)
+
+1. ~~**UI ML spillover + classifier**~~ — Brief/Spillover/Fusion: fact vs ML pred peers, LLM vs ML scenario (2026-05-30).
+2. **Накопление labels** — CIEN/DELL/NBIS + shadow **≥50** matured (roadmap Phase B targets).
+3. **Phase C product** (roadmap §Phase C): Telegram alert после отчёта, runbook partial brief, weekly prod_eval.
+4. **Phase D** — только после C + backtest: `event_fusion_policy.py`, shadow walk-forward.

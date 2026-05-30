@@ -410,6 +410,7 @@ def get_spillover_history(
                 gs = None
         scen = _top_scenario(gs if isinstance(gs, dict) else None)
         top_scenario = (scen or {}).get("scenario") if scen else None
+        scen_ml = brief.get("scenario_ml") or {}
         events_out.append(
             {
                 "event_date": ev_d.isoformat(),
@@ -418,6 +419,12 @@ def get_spillover_history(
                 "source_forward_log_ret_1d": src_out.get("forward_log_ret_1d"),
                 "source_forward_log_ret_5d": src_out.get("forward_log_ret_5d"),
                 "peer_outcomes": peer_rows,
+                "peer_spillover_ml": brief.get("peer_spillover_ml") or [],
+                "scenario_ml": {
+                    "predicted_scenario": scen_ml.get("predicted_scenario"),
+                    "predicted_scenario_proba": scen_ml.get("predicted_scenario_proba"),
+                    "scenario_classifier_status": scen_ml.get("scenario_classifier_status"),
+                },
             }
         )
 
