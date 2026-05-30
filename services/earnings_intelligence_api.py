@@ -704,10 +704,12 @@ def get_ml_layers_status(
             "script": "scripts/run_earnings_ml_refresh.py",
             "metrics": {
                 "overall_grid_ready": readiness_gates.get("overall_grid_ready"),
+                "overall_scenario_classifier_ready": readiness_gates.get("overall_scenario_classifier_ready"),
                 "overall_peer_spillover_ready": readiness_gates.get("overall_peer_spillover_ready"),
                 "overall_trading_shadow_ready": readiness_gates.get("overall_trading_shadow_ready"),
                 "sources_ready": (readiness_gates.get("sources") or {}).get("ready"),
                 "classifier_ready": (readiness_gates.get("scenario_classifier") or {}).get("ready"),
+                "classifier_dataset_ready": (readiness_gates.get("scenario_classifier_dataset") or {}).get("ready"),
                 "peer_spillover_ready": (readiness_gates.get("peer_spillover_regressor") or {}).get("ready"),
             },
             "description": (

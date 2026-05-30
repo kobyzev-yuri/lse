@@ -200,8 +200,10 @@ def collect_earnings_intelligence_readiness(
             "earnings_v1_feature_rows": int(erd.get("with_earnings_features") or 0),
         }
         from services.peer_spillover_dataset import collect_peer_spillover_coverage
+        from services.scenario_classifier_dataset import collect_scenario_classifier_coverage
 
         min_peer_samples = _cfg_int("ML_READINESS_PEER_SPILLOVER_MIN_PEER_SAMPLES", 2)
+        min_class_samples = _cfg_int("ML_READINESS_SCENARIO_MIN_CLASS_SAMPLES", 2)
         out["peer_spillover_dataset"] = collect_peer_spillover_coverage(
             engine,
             dataset_version=dataset_version,
@@ -209,6 +211,14 @@ def collect_earnings_intelligence_readiness(
             since=since,
             universe=sym_set,
             min_peer_samples=min_peer_samples,
+        )
+        out["scenario_classifier_dataset"] = collect_scenario_classifier_coverage(
+            engine,
+            dataset_version=dataset_version,
+            feature_builder_version=feature_builder_version,
+            since=since,
+            universe=sym_set,
+            min_class_samples=min_class_samples,
         )
     except Exception as e:
         out["error"] = str(e)
@@ -268,13 +278,23 @@ def gate_scenario_classifier(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any
     if not metrics:
         return {"ready": False, "reasons": ["no_scenario_metrics_file"], "valid_accuracy": None, "n_train": 0}
     st = metrics.get("status")
-    if st not in ("ok", "dry_run"):
+    if st not in ("ok",):
         reasons.append(f"status={st}")
     mets = metrics.get("metrics") if isinstance(metrics.get("metrics"), dict) else metrics
     n_train = int(mets.get("n_train") or metrics.get("n_train") or 0)
+    n_valid = int(mets.get("n_valid") or 0)
     min_train = _cfg_int("ML_READINESS_EARNINGS_SCENARIO_MIN_TRAIN", 6)
+    min_valid = _cfg_int("ML_READINESS_SCENARIO_MIN_VALID", 4)
+    min_classes = _cfg_int("ML_READINESS_SCENARIO_MIN_CLASSES", 3)
     if n_train < min_train:
         reasons.append(f"n_train<{min_train}")
+    if n_valid < min_valid:
+        reasons.append(f"n_valid<{min_valid}")
+    classes = mets.get("classes") or []
+    if isinstance(classes, list) and len(classes) < min_classes:
+        reasons.append(f"n_classes<{min_classes}")
+    if mets.get("holdout_skipped"):
+        reasons.append("holdout_skipped")
     acc = mets.get("valid_accuracy")
     if acc is not None:
         min_acc = _cfg_float("ML_READINESS_EARNINGS_SCENARIO_MIN_ACCURACY", 0.0)
@@ -285,7 +305,63 @@ def gate_scenario_classifier(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any
         "reasons": reasons,
         "valid_accuracy": acc,
         "n_train": n_train,
+        "n_valid": n_valid,
+        "n_classes": len(classes) if isinstance(classes, list) else None,
+        "holdout_skipped": bool(mets.get("holdout_skipped")),
         "status": st,
+    }
+
+
+def gate_scenario_classifier_dataset(data: Dict[str, Any]) -> Dict[str, Any]:
+    reasons: list[str] = []
+    sc = data.get("scenario_classifier_dataset") if isinstance(data.get("scenario_classifier_dataset"), dict) else {}
+    min_labels = _cfg_int("ML_READINESS_EARNINGS_MIN_SCENARIO_LABELS", 8)
+    min_trainable = _cfg_int("ML_READINESS_SCENARIO_MIN_TRAINABLE_ROWS", 18)
+    min_classes = _cfg_int("ML_READINESS_SCENARIO_MIN_CLASSES", 3)
+    max_symbols_no_label = _cfg_int("ML_READINESS_SCENARIO_MAX_SYMBOLS_WITHOUT_LABELS", 12)
+    max_hints_pending = _cfg_int("ML_READINESS_SCENARIO_MAX_HINTS_PENDING", 6)
+    max_label_no_features = _cfg_int("ML_READINESS_SCENARIO_MAX_LABEL_NO_FEATURES", 0)
+    max_sparse_classes = _cfg_int("ML_READINESS_SCENARIO_MAX_SPARSE_CLASSES", 2)
+
+    n_labels = int(sc.get("n_llm_labels") or 0)
+    n_trainable = int(sc.get("n_trainable_rows") or 0)
+    n_classes = int(sc.get("n_classes_distinct") or 0)
+    symbols_without = sc.get("symbols_without_labels") or []
+    hints_pending = sc.get("hints_pending_apply") or []
+    sparse = sc.get("sparse_classes_below_min_samples") or []
+    label_no_features = int(sc.get("labels_without_earnings_v1_features") or 0)
+    features_gap = int(sc.get("features_gap_rows") or 0)
+
+    if n_labels < min_labels:
+        reasons.append(f"n_llm_labels<{min_labels}")
+    if n_trainable < min_trainable:
+        reasons.append(f"n_trainable_rows<{min_trainable}")
+    if n_classes < min_classes:
+        reasons.append(f"n_classes<{min_classes}")
+    if len(symbols_without) > max_symbols_no_label:
+        reasons.append(f"symbols_without_labels>{max_symbols_no_label}")
+    if len(hints_pending) > max_hints_pending:
+        reasons.append(f"hints_pending>{max_hints_pending}")
+    if label_no_features > max_label_no_features:
+        reasons.append(f"labels_without_features>{max_label_no_features}")
+    if len(sparse) > max_sparse_classes:
+        reasons.append(f"sparse_classes>{max_sparse_classes}")
+    if features_gap > 0:
+        reasons.append(f"features_gap_rows={features_gap}")
+
+    return {
+        "ready": len(reasons) == 0,
+        "reasons": reasons,
+        "n_llm_labels": n_labels,
+        "n_trainable_rows": n_trainable,
+        "n_classes_distinct": n_classes,
+        "labels_by_class": sc.get("labels_by_class"),
+        "symbols_without_labels": symbols_without[:12],
+        "symbols_with_hints_pending_apply": (sc.get("symbols_with_hints_pending_apply") or [])[:12],
+        "hints_pending_apply": hints_pending[:8],
+        "sparse_classes_below_min_samples": sparse[:8],
+        "labels_without_earnings_v1_features": label_no_features,
+        "features_gap_rows": features_gap,
     }
 
 
@@ -431,23 +507,27 @@ def build_earnings_intelligence_gates(
     g_sources = gate_sources(snapshot)
     g_features = gate_features(snapshot)
     g_labels = gate_scenario_labels(snapshot)
+    g_scenario_ds = gate_scenario_classifier_dataset(snapshot)
     g_scenario = gate_scenario_classifier(scenario_metrics)
     g_regression = gate_earnings_regression(regression_metrics)
     g_peer_ds = gate_peer_spillover_dataset(snapshot)
     g_peer_model = gate_peer_spillover_regressor(peer_spillover_metrics)
     g_shadow = gate_trading_shadow(shadow_report)
-    grid_core = all(g.get("ready") for g in (g_sources, g_features, g_labels, g_scenario))
+    scenario_ready = bool(g_scenario_ds.get("ready")) and bool(g_scenario.get("ready"))
+    grid_core = all(g.get("ready") for g in (g_sources, g_features, g_scenario_ds, g_scenario))
     peer_ready = bool(g_peer_ds.get("ready")) and bool(g_peer_model.get("ready"))
     return {
         "sources": g_sources,
         "features": g_features,
         "scenario_labels": g_labels,
+        "scenario_classifier_dataset": g_scenario_ds,
         "scenario_classifier": g_scenario,
         "regression": g_regression,
         "peer_spillover_dataset": g_peer_ds,
         "peer_spillover_regressor": g_peer_model,
         "trading_shadow": g_shadow,
         "overall_grid_ready": grid_core,
+        "overall_scenario_classifier_ready": scenario_ready,
         "overall_with_regression": grid_core and bool(g_regression.get("ready")),
         "overall_trading_shadow_ready": grid_core and bool(g_shadow.get("ready")),
         "overall_peer_spillover_ready": peer_ready,
@@ -505,9 +585,10 @@ def write_earnings_intelligence_readiness(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     logger.info(
-        "Wrote earnings intelligence readiness → %s grid=%s peer=%s",
+        "Wrote earnings intelligence readiness → %s grid=%s scenario=%s peer=%s",
         out_path,
         gates["overall_grid_ready"],
+        gates.get("overall_scenario_classifier_ready"),
         gates.get("overall_peer_spillover_ready"),
     )
     return bundle

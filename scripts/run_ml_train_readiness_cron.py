@@ -173,6 +173,7 @@ def _gate_earnings_intelligence(
         "ready": overall,
         "reasons": reasons,
         "overall_grid_ready": overall,
+        "overall_scenario_classifier_ready": bool(gates.get("overall_scenario_classifier_ready")),
         "overall_peer_spillover_ready": bool(gates.get("overall_peer_spillover_ready")),
         "gates": gates,
     }

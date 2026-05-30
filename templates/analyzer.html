@@ -407,9 +407,12 @@ function fmtGateEarningsIntelligence(eiBlock) {
     const line = (ok ? '<span style="color:#86efac;">✓</span> ' : '<span style="color:#fca5a5;">✗</span> ') +
         (r ? '<span class="muted">' + esc(r) + '</span>' : '');
     const peerOk = g.overall_peer_spillover_ready;
+    const scenOk = g.overall_scenario_classifier_ready;
     const peerLine = peerOk === true ? ' · peer <span style="color:#86efac;">✓</span>' :
         (peerOk === false ? ' · peer <span style="color:#fca5a5;">✗</span>' : '');
-    return line + peerLine + '<br><code style="font-size:0.78rem;">grid</code>';
+    const scenLine = scenOk === true ? ' · clf <span style="color:#86efac;">✓</span>' :
+        (scenOk === false ? ' · clf <span style="color:#fca5a5;">✗</span>' : '');
+    return line + scenLine + peerLine + '<br><code style="font-size:0.78rem;">grid</code>';
 }
 
 function renderMlDataQuality(data, strategy) {
@@ -561,7 +564,7 @@ function renderMlDataQuality(data, strategy) {
                 html += '</p>';
             } else if (k.indexOf('scenario') >= 0) {
                 const m = d.metrics || {};
-                html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · acc valid <code>' + esc(m.valid_accuracy != null ? m.valid_accuracy : '—') + '</code> · n_train <code>' + esc(m.n_train != null ? m.n_train : d.n_train) + '</code> · classes <code>' + esc((m.classes || []).length) + '</code></p>';
+                html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · acc valid <code>' + esc(m.valid_accuracy != null ? m.valid_accuracy : '—') + '</code> · n_train <code>' + esc(m.n_train != null ? m.n_train : d.n_train) + '</code> · n_valid <code>' + esc(m.n_valid) + '</code> · classes <code>' + esc((m.classes || []).length) + '</code>' + (m.holdout_skipped ? ' · holdout_skipped' : '') + '</p>';
             } else if (k.indexOf('peer_spillover_last') >= 0) {
                 const m = d.metrics || {};
                 const ds = m.dataset_summary || {};
@@ -653,6 +656,11 @@ function renderMlDataQuality(data, strategy) {
     } else if (egr.overall_peer_spillover_ready === false) {
         html += '<p style="margin:0 0 0.35rem 0;color:#fca5a5;"><strong>✗ overall_peer_spillover_ready</strong> — см. гейты peer_spillover_* ниже</p>';
     }
+    if (egr.overall_scenario_classifier_ready === true) {
+        html += '<p style="margin:0 0 0.45rem 0;color:#86efac;"><strong>✓ overall_scenario_classifier_ready</strong> (dataset + classifier)</p>';
+    } else if (egr.overall_scenario_classifier_ready === false) {
+        html += '<p style="margin:0 0 0.35rem 0;color:#fca5a5;"><strong>✗ overall_scenario_classifier_ready</strong> — см. scenario_classifier_* ниже</p>';
+    }
     const owr = eiGates.overall_with_regression;
     if (owr === false && egr.overall_grid_ready === true) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Advisory regression gate отдельно: <code>overall_with_regression=false</code> (RMSE event_reaction).</p>';
@@ -661,6 +669,7 @@ function renderMlDataQuality(data, strategy) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Файл: <code>' + esc(egr.file_path) + '</code></p>';
     }
     const eiPs = eiSnap.peer_spillover_dataset || {};
+    const eiSc = eiSnap.scenario_classifier_dataset || {};
     html += '<table style="font-size:0.86rem;border-collapse:collapse;margin:0.25rem 0 0.5rem 0;">';
     [
         ['universe_size', eiSnap.universe_size],
@@ -671,6 +680,9 @@ function renderMlDataQuality(data, strategy) {
         ['peer_graph_edge_rows', eiSrc.peer_graph_edge_rows],
         ['llm_scenario_labels', eiLf.llm_scenario_labels],
         ['earnings_v1_feature_rows', eiLf.earnings_v1_feature_rows],
+        ['scenario_n_trainable', eiSc.n_trainable_rows],
+        ['scenario_n_classes', eiSc.n_classes_distinct],
+        ['scenario_hints_pending', (eiSc.hints_pending_apply || []).length],
         ['peer_spillover_n_rows', eiPs.n_rows],
         ['peer_spillover_n_events', eiPs.n_events],
         ['peer_spillover_n_trainable', eiPs.n_trainable_rows],
@@ -682,7 +694,7 @@ function renderMlDataQuality(data, strategy) {
         html += '<tr><td style="padding:2px 8px 2px 0;color:#94a3b8;">' + esc(pair[0]) + '</td><td><code>' + esc(pair[1]) + '</code></td></tr>';
     });
     html += '</table>';
-    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier', 'regression', 'peer_spillover_dataset', 'peer_spillover_regressor'];
+    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier_dataset', 'scenario_classifier', 'regression', 'peer_spillover_dataset', 'peer_spillover_regressor'];
     html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.85rem;"><strong>Гейты:</strong></p><ul style="margin:0 0 0.5rem 1rem;padding:0;font-size:0.84rem;">';
     gateNames.forEach(function (gn) {
         const g = eiGates[gn] || {};
@@ -694,6 +706,38 @@ function renderMlDataQuality(data, strategy) {
         html += '</li>';
     });
     html += '</ul>';
+    const clfGate = eiGates.scenario_classifier || {};
+    if (clfGate.valid_accuracy != null || clfGate.n_train != null) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0.15rem 0 0.35rem 0;">Scenario classifier train: acc valid <code>' + esc(clfGate.valid_accuracy) + '</code> · n_train <code>' + esc(clfGate.n_train) + '</code> · n_valid <code>' + esc(clfGate.n_valid) + '</code> · classes <code>' + esc(clfGate.n_classes) + '</code>' + (clfGate.holdout_skipped ? ' · <span style="color:#fcd34d">holdout_skipped</span>' : '') + '</p>';
+    }
+    const scGapSymbols = eiSc.symbols_without_labels || [];
+    const scPending = eiSc.hints_pending_apply || [];
+    const scSparse = eiSc.sparse_classes_below_min_samples || [];
+    if (scGapSymbols.length || scPending.length || scSparse.length || eiSc.features_gap_rows || eiSc.labels_without_earnings_v1_features) {
+        html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.85rem;"><strong>Пробелы classifier dataset:</strong></p><ul style="margin:0 0 0.5rem 1rem;padding:0;font-size:0.82rem;">';
+        if (scGapSymbols.length) {
+            html += '<li>Universe без llm_scenario_v0 labels: <code>' + esc(scGapSymbols.slice(0, 12).join(', ')) + (scGapSymbols.length > 12 ? '…' : '') + '</code></li>';
+        }
+        if (scPending.length) {
+            html += '<li>Hints есть, label не применён: ';
+            html += scPending.slice(0, 6).map(function (p) { return esc((p.symbol || '?') + ' ' + (p.event_date || '')); }).join(', ');
+            if (scPending.length > 6) html += '…';
+            html += '</li>';
+        }
+        if (scSparse.length) {
+            html += '<li>Sparse classes (&lt;' + esc(eiSc.min_class_samples_threshold || 2) + ' samples): <code>' + esc(scSparse.join(', ')) + '</code></li>';
+        }
+        if (eiSc.labels_without_earnings_v1_features) {
+            html += '<li>Labels без earnings_v1 features: <code>' + esc(eiSc.labels_without_earnings_v1_features) + '</code> — нужен backfill</li>';
+        }
+        if (eiSc.features_gap_rows) {
+            html += '<li>Features gap (label→trainable): <code>' + esc(eiSc.features_gap_rows) + '</code></li>';
+        }
+        if (eiSc.labels_by_class && Object.keys(eiSc.labels_by_class).length) {
+            html += '<li>Распределение классов: <code>' + esc(JSON.stringify(eiSc.labels_by_class)) + '</code></li>';
+        }
+        html += '</ul>';
+    }
     const psGate = eiGates.peer_spillover_regressor || {};
     if (psGate.rmse_valid != null || psGate.sign_accuracy_valid != null) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0.15rem 0 0.35rem 0;">Peer spillover train: RMSE valid <code>' + esc(psGate.rmse_valid) + '</code> · sign acc <code>' + esc(psGate.sign_accuracy_valid) + '</code> · baseline sign <code>' + esc(psGate.baseline_sign_accuracy_valid) + '</code> · n_train <code>' + esc(psGate.n_train) + '</code></p>';

@@ -40,6 +40,7 @@ from services.event_reaction_labeling import (  # noqa: E402
     FEATURE_BUILDER_VERSION_QUOTES,
     event_reaction_numeric_feature_keys,
 )
+from services.scenario_classifier_dataset import load_scenario_training_frame  # noqa: E402
 
 
 def _json_obj(raw: Any) -> Dict[str, Any]:
@@ -54,74 +55,6 @@ def _json_obj(raw: Any) -> Dict[str, Any]:
         except Exception:
             return {}
     return {}
-
-
-def load_scenario_training_frame(
-    engine,
-    *,
-    dataset_version: str,
-    feature_builder_version: str,
-) -> pd.DataFrame:
-    from sqlalchemy import text
-
-    numeric_keys = event_reaction_numeric_feature_keys(feature_builder_version)
-    quote_keys = event_reaction_numeric_feature_keys(FEATURE_BUILDER_VERSION_QUOTES)
-    extra_keys = tuple(k for k in numeric_keys if k not in quote_keys)
-
-    q = text(
-        """
-        SELECT id, symbol, event_time_et, final_label, label_source, features_before
-        FROM event_reaction_dataset
-        WHERE dataset_version = :dv
-          AND final_label IS NOT NULL
-          AND TRIM(final_label) <> ''
-          AND label_source = :label_source
-          AND features_before IS NOT NULL AND features_before <> '{}'::jsonb
-          AND (features_before->>'feature_builder_version') = :fbv
-        ORDER BY event_time_et NULLS LAST, id
-        """
-    )
-    with engine.connect() as conn:
-        df = pd.read_sql(
-            q,
-            conn,
-            params={"dv": dataset_version, "fbv": feature_builder_version, "label_source": LABEL_SOURCE},
-        )
-    rows: List[Dict[str, Any]] = []
-    for _, r in df.iterrows():
-        label = str(r.get("final_label") or "").strip()
-        if not label or label in RULE_LABELS:
-            continue
-        fb = _json_obj(r.get("features_before"))
-        rec: Dict[str, Any] = {
-            "id": int(r["id"]),
-            "symbol": str(r["symbol"]).strip().upper(),
-            "event_time_et": r.get("event_time_et"),
-            "target_scenario": label,
-        }
-        skip = False
-        for k in quote_keys:
-            try:
-                fv = float(fb.get(k))
-            except (TypeError, ValueError):
-                skip = True
-                break
-            if not math.isfinite(fv):
-                skip = True
-                break
-            rec[k] = fv
-        if skip:
-            continue
-        for k in extra_keys:
-            try:
-                fv = float(fb.get(k)) if fb.get(k) is not None else 0.0
-            except (TypeError, ValueError):
-                fv = 0.0
-            if not math.isfinite(fv):
-                fv = 0.0
-            rec[k] = fv
-        rows.append(rec)
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
 def main() -> int:

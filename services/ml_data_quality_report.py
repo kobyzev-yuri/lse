@@ -521,6 +521,7 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
     ei = bundle.get("earnings_intelligence_readiness") if isinstance(bundle.get("earnings_intelligence_readiness"), dict) else {}
     bundle["earnings_grid_readiness"] = {
         "overall_grid_ready": (ei.get("gates") or {}).get("overall_grid_ready"),
+        "overall_scenario_classifier_ready": (ei.get("gates") or {}).get("overall_scenario_classifier_ready"),
         "overall_peer_spillover_ready": (ei.get("gates") or {}).get("overall_peer_spillover_ready"),
         "gates": ei.get("gates"),
         "snapshot": ei.get("snapshot"),
