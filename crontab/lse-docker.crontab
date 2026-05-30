@@ -25,8 +25,9 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 18 */2 * * * flock -n /tmp/lse_earnings_materials_sync.lock docker exec lse-bot python scripts/sync_earnings_material_registry.py --since 2026-01-01 --limit 500 --discover-links --no-auto-fool >> /home/ai8049520/lse/logs/earnings_materials_sync.log 2>&1
 20 */2 * * * flock -n /tmp/lse_earnings_materials_ingest.lock docker exec lse-bot python scripts/ingest_earnings_materials.py --status registered,failed,downloaded --limit 40 >> /home/ai8049520/lse/logs/earnings_materials_ingest.log 2>&1
 25 */6 * * * flock -n /tmp/lse_earnings_materials_extract.lock docker exec lse-bot python scripts/extract_earnings_material_facts.py --since 2026-01-01 --limit 8 >> /home/ai8049520/lse/logs/earnings_materials_extract.log 2>&1
-# Earnings ML grid refresh: scenario labels → quotes_regime_earnings_v1 backfill → classifier dry-run + readiness JSON.
-30 */6 * * * flock -n /tmp/lse_earnings_ml_refresh.lock docker exec lse-bot python scripts/run_earnings_ml_refresh.py >> /home/ai8049520/lse/logs/earnings_ml_refresh.log 2>&1
+# Earnings ML: refresh datasets (labels/outcomes/features) + incremental retrain + readiness JSON.
+# Nightly full train + shadow: 23:52 below. Quotes/outcomes mature daily — :30 keeps models aligned.
+30 */6 * * * flock -n /tmp/lse_earnings_ml_refresh.lock docker exec -e EARNINGS_ML_REFRESH_APPLY_DATA=1 -e EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN=1 lse-bot python scripts/run_earnings_ml_refresh.py >> /home/ai8049520/lse/logs/earnings_ml_refresh.log 2>&1
 10 */2 * * * flock -n /tmp/lse_news_newsapi.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode newsapi >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 0 */2 * * * flock -n /tmp/lse_news_investing.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode investing >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 10 * * * * docker exec lse-bot python scripts/sync_vector_kb_cron.py >> /home/ai8049520/lse/logs/sync_vector_kb.log 2>&1
@@ -52,8 +53,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 50 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0 -e ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
 # Event-reaction model refresh for advisory product cards only; skips GAME_5M/portfolio so it does not overwrite unrelated models.
 51 23 * * 1-5 flock -n /tmp/lse_event_reaction_full_train.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e ML_READINESS_SKIP_GAME5M=1 -e ML_READINESS_SKIP_PORTFOLIO=1 -e ML_READINESS_SKIP_EVENT_REACTION=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/event_reaction_full_train.log 2>&1
-# Earnings grid full retrain (scenario classifier .cbm) when readiness gates pass; skips other models.
-52 23 * * 1-5 flock -n /tmp/lse_earnings_grid_full_train.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e ML_READINESS_SKIP_GAME5M=1 -e ML_READINESS_SKIP_PORTFOLIO=1 -e ML_READINESS_SKIP_EVENT_REACTION=1 lse-bot python scripts/run_earnings_ml_refresh.py >> /home/ai8049520/lse/logs/earnings_grid_full_train.log 2>&1
+# Earnings grid full retrain (scenario + peer spillover .cbm) + shadow; after ERD build/backfill (23:33–37).
+52 23 * * 1-5 flock -n /tmp/lse_earnings_grid_full_train.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e ML_READINESS_SKIP_GAME5M=1 -e ML_READINESS_SKIP_PORTFOLIO=1 -e ML_READINESS_SKIP_EVENT_REACTION=1 lse-bot python scripts/run_earnings_ml_refresh.py --full >> /home/ai8049520/lse/logs/earnings_grid_full_train.log 2>&1
 # Отчёт качества данных без LLM и без профилирования local/datasets/*.csv.
 53 23 * * 1-5 flock -n /tmp/lse_ml_data_quality_report.lock docker exec lse-bot python scripts/run_ml_data_quality_report.py --no-default-datasets --json-out /app/logs/ml/ml_data_quality/report_daily.json >> /home/ai8049520/lse/logs/ml_data_quality_report_cron.log 2>&1
 # Recovery D4a: накопление сводки τ×K по TIME_EXIT_EARLY (JSONL для go/no-go перед D4b).

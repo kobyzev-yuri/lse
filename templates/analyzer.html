@@ -765,7 +765,7 @@ function renderMlDataQuality(data, strategy) {
     if (missing.length) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0;">Без материалов: <code>' + esc(missing.slice(0, 12).join(', ')) + (missing.length > 12 ? '…' : '') + '</code></p>';
     }
-    html += '<p class="muted" style="font-size:0.8rem;margin:0.45rem 0 0 0;">Cron: <code>run_earnings_ml_refresh.py</code> · пороги: <code>ML_READINESS_EARNINGS_*</code>, <code>ML_READINESS_PEER_SPILLOVER_*</code> · включить в readiness: <code>ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0</code></p>';
+    html += '<p class="muted" style="font-size:0.8rem;margin:0.45rem 0 0 0;">Cron: <code>run_earnings_ml_refresh.py</code> каждые 6h (<code>EARNINGS_ML_REFRESH_APPLY_DATA</code> + incremental train) · nightly <code>--full</code> 23:52 · пороги: <code>ML_READINESS_EARNINGS_*</code>, <code>ML_READINESS_PEER_SPILLOVER_*</code>, <code>ML_READINESS_SCENARIO_*</code></p>';
     html += '</div></details>';
     }
 
