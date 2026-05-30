@@ -10,7 +10,6 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from services.earnings_event_brief import load_peer_edges, load_peer_spillover_outcomes
 from services.event_reaction_labeling import (
     FEATURE_BUILDER_VERSION_EARNINGS,
     FEATURE_BUILDER_VERSION_QUOTES,
@@ -44,6 +43,8 @@ def build_peer_spillover_dataset_rows(
     y: peer_forward_log_ret_5d
     Features (MVP): edge weight, relation_type, source_forward_log_ret_5d, scenario sign hints.
     """
+    from services.earnings_event_brief import load_peer_edges, load_peer_spillover_outcomes
+
     q = text(
         """
         SELECT

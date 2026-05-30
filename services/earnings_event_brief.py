@@ -16,7 +16,6 @@ from services.event_reaction_labeling import (
     load_quotes_window,
 )
 from services.earnings_scenario_signal import predict_scenario_from_features
-from services.peer_spillover_signal import predict_peer_spillover_batch
 
 
 def _parse_json(val: Any) -> dict | list | None:
@@ -249,6 +248,7 @@ def build_event_brief(
     scenario = _top_scenario(guidance)
 
     evidence = _normalize_evidence_quotes(guidance.get("evidence_quotes"))
+    from services.peer_spillover_signal import predict_peer_spillover_batch
 
     brief: dict[str, Any] = {
         "status": "ok",
