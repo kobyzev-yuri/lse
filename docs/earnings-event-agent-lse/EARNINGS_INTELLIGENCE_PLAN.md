@@ -132,6 +132,7 @@ isProject: false
 
 - **Deploy:** ✅ prod `0a243f2` (30.05); см. [EARNINGS_PLAN_2026-05-30.md](./EARNINGS_PLAN_2026-05-30.md).
 - **Док LLM↔ML:** [EARNINGS_LLM_ML_LABELS_AND_TRAINING.md](./EARNINGS_LLM_ML_LABELS_AND_TRAINING.md).
+- **Product roadmap (полное решение):** [EARNINGS_PRODUCT_ROADMAP.md](./EARNINGS_PRODUCT_ROADMAP.md).
 - **ERD skeleton:** ✅ mitigated — `--include-earnings-universe` в build/backfill/cron.
 - **Материалы:** Fool 429 / ARM junk — периодический cleanup; DELL path ✅.
 - **Backfill:** ~11% строк (`features:no_quotes`) — seed quotes для редких тикеров.

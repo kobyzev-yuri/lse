@@ -664,11 +664,15 @@ async function loadFusion(eventDate) {
         </div>
         <div class="detail-grid">
             <div class="block"><h3>Regression ML</h3>
-                status ${reg.status||'—'} · pred ${reg.forward_log_ret_5d_pred != null ? reg.forward_log_ret_5d_pred.toFixed(4) : '—'}
+                status ${reg.status||'—'}<br>
+                pred log ${reg.forward_log_ret_5d_pred != null ? reg.forward_log_ret_5d_pred.toFixed(4) : '—'}
+                · ${reg.forward_log_ret_5d_pred != null ? fmtPct(reg.forward_log_ret_5d_pred) : '—'}<br>
+                <span class="muted">bias ${adv.regression_bias||'—'}</span>
             </div>
             <div class="block"><h3>Scenario ML</h3>
-                ${scen.predicted_scenario||'—'} (${scen.scenario_classifier_status||'—'})
-                · proba ${scen.predicted_scenario_proba ?? '—'}
+                <code>${scen.predicted_scenario||'—'}</code> (${scen.scenario_classifier_status||'—'})
+                · proba ${scen.predicted_scenario_proba ?? '—'}<br>
+                <span class="muted">bias ${adv.scenario_bias||'—'} · sign ${scen.predicted_scenario_sign ?? '—'}</span>
             </div>
         </div>`;
 }

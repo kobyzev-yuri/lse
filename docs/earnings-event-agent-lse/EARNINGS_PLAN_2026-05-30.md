@@ -72,6 +72,7 @@
 2. Seed quotes для 45 строк `features:no_quotes`.
 3. Spillover peers=0 на META/MSFT в API — проверить `peer_graph_edge` + outcomes для affected tickers.
 4. Док: [EARNINGS_LLM_ML_LABELS_AND_TRAINING.md](./EARNINGS_LLM_ML_LABELS_AND_TRAINING.md) — LLM vs ML, фазы prod.
+5. **Полный prod:** [EARNINGS_PRODUCT_ROADMAP.md](./EARNINGS_PRODUCT_ROADMAP.md) · sprint [EARNINGS_PLAN_2026-05-31.md](./EARNINGS_PLAN_2026-05-31.md).
 
 ---
 
