@@ -89,6 +89,8 @@
 
 Граф или таблица рёбер: `(source, target, relation_type, weight)` — усиление существующих `TICKER_GROUPS` / корреляционного контекста GAME_5M на **дневном** горизонте.
 
+**Реализация MVP:** hand-curated каталог [`services/peer_graph_catalog.py`](../../services/peer_graph_catalog.py) → seed в `peer_graph_edge`. Принципы построения, типы связей, веса и полная таблица «лидер → пиры»: **[PEER_GRAPH_PRINCIPLES.md](./PEER_GRAPH_PRINCIPLES.md)**.
+
 ### 4.4 `market_regime_daily`
 
 Снимок по дате: режим для SPY/NDX/VIX, breadth (если есть источник), флаги calendar/geo risk (как в [NEWS_SIGNAL_ARCHITECTURE.md](../NEWS_SIGNAL_ARCHITECTURE.md) §6).

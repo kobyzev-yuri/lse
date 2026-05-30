@@ -141,7 +141,7 @@ LLM возвращает структурированный JSON; поле `scen
 | Quotes до события | log-ret окна, RSI, drawdown, … |
 | Market regime | `mkt_*` из `market_regime_daily` |
 | Earnings context | tone, timing flags из LLM **как скаляры** (не текст) |
-| Peer graph | `peer_graph_out_degree`, `peer_graph_weight_sum` |
+| Peer graph | `peer_graph_out_degree`, `peer_graph_weight_sum` — рёбра из [PEER_GRAPH_PRINCIPLES.md](./PEER_GRAPH_PRINCIPLES.md) / `peer_graph_catalog.py` |
 | Peer momentum | агрегаты по топ-N соседям из `peer_graph_edge` |
 | Категориальный | `symbol` |
 

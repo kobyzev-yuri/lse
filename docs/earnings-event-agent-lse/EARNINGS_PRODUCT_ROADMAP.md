@@ -96,7 +96,7 @@ flowchart TB
 | 3.1 | Skeleton from KB | `build_event_reaction_dataset.py --include-earnings-universe` | 23:33 пн–пт |
 | 3.2 | Outcomes + rule labels | `backfill_event_reaction_labeling.py` | 23:36 regime_v1 all symbols |
 | 3.3 | Earnings grid features | same + `quotes_regime_earnings_v1` | 23:37 `--include-earnings-universe` |
-| 3.4 | Peer graph | `seed_peer_graph_edges.py`, `peer_graph_edge` | ≥96 edges, sources META/NVDA/… |
+| 3.4 | Peer graph | `seed_peer_graph_edges.py`, `peer_graph_edge`, [PEER_GRAPH_PRINCIPLES.md](./PEER_GRAPH_PRINCIPLES.md) | 69 edges, 16 sources (META/NVDA/…) |
 
 Target: **earnings_v1 ≥ 95%** строк ERD universe.
 

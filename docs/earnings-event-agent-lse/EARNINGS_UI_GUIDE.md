@@ -64,7 +64,7 @@ curl -s 'https://<host>/api/earnings/brief/META?event_date=2026-04-29' | jq '.he
 
 ### Что это
 
-Направленный граф **`peer_graph_edge`**: `source → target`, вес 0–1, тип связи (`ai_infra_supply`, `hyperscaler_capex`, …). Задан каталогом + seed (96 рёбер на prod), **не** выучен из котировок.
+Направленный граф **`peer_graph_edge`**: `source → target`, вес 0–1, тип связи (`ai_infra_supply`, `ai_infra_customer`, …). Задан каталогом + seed (**69 рёбер**, 16 sources) — см. [PEER_GRAPH_PRINCIPLES.md](./PEER_GRAPH_PRINCIPLES.md); **не** выучен из котировок.
 
 ### Как читать
 

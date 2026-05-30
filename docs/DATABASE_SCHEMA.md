@@ -183,7 +183,7 @@ DDL: `db/knowledge_pg/sql/022_premarket_daily_features.sql`.
 
 ### Таблица `peer_graph_edge`
 
-Рёбра графа влияния между тикерами.
+Рёбра графа влияния между тикерами. Каталог MVP и принципы: [PEER_GRAPH_PRINCIPLES.md](earnings-event-agent-lse/PEER_GRAPH_PRINCIPLES.md); seed из [`services/peer_graph_catalog.py`](../services/peer_graph_catalog.py).
 
 | Колонка | Тип | Описание |
 |---------|-----|----------|

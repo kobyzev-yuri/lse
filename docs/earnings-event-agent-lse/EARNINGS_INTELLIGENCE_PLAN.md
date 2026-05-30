@@ -44,7 +44,7 @@ isProject: false
 | Materials registry + SEC auto | ✅ | `sync_earnings_material_registry.py`, `services/earnings_material_auto_sources.py` |
 | Hybrid ingest | ✅ | HTML + pypdf, cron каждые 2 ч |
 | LLM extractor | ✅ | 16+ tickers с `management_tone`, 22 events с `scenario_hints` (prod) |
-| Peer graph | ✅ | **96 рёбер** (`peer_graph_catalog.py`, `seed_peer_graph_edges.py`) |
+| Peer graph | ✅ | **69 рёбер**, 16 sources — [`peer_graph_catalog.py`](../../services/peer_graph_catalog.py), [PEER_GRAPH_PRINCIPLES.md](./PEER_GRAPH_PRINCIPLES.md), `seed_peer_graph_edges.py` |
 | Cron materials | ✅ | sync :18, ingest :20, extract :25 (каждые 2–6 ч) |
 
 ### Этап 2 — Event Brief + UI (prod)
@@ -152,7 +152,7 @@ isProject: false
 | 1. Materials registry | ✅ | `earnings_material`, `services/earnings_material_catalog.py`, `scripts/sync_earnings_material_registry.py` |
 | 2. Hybrid ingest | ✅ | HTML + **pypdf** (`services/earnings_material_parser.py`), `scripts/ingest_earnings_materials.py` |
 | 3. LLM extractor | ✅ pilot | `services/earnings_material_extractor.py`, `scripts/extract_earnings_material_facts.py` → `earnings_event_detail` |
-| 4. Peer graph v0 | ✅ | `services/peer_graph_catalog.py`, `scripts/seed_peer_graph_edges.py` — **27 рёбер** в prod |
+| 4. Peer graph v0 | ✅ | [`peer_graph_catalog.py`](../../services/peer_graph_catalog.py), `seed_peer_graph_edges.py` — **69 рёбер**; принципы и таблицы: [PEER_GRAPH_PRINCIPLES.md](./PEER_GRAPH_PRINCIPLES.md) |
 | 5. Cron | ✅ | `crontab/lse-docker.crontab`: sync / ingest / extract каждые 2–6 ч |
 | 6. Token audit | ✅ | `scripts/audit_earnings_materials_pipeline.py --symbols META,NVDA` — event-level ~**27k tok/событие** |
 
@@ -192,7 +192,7 @@ isProject: false
 - Для каждого отчёта хранить материалы: press release, presentation, transcript, follow-up transcript, SEC/IR ссылки.
 - LLM использовать как extractor: достать факты, а не принимать торговое решение.
 - Основной вывод: сценарий реакции и влияние на peers, например `capex_positive_for_infra_peers`, `beat_selloff_pullback`, `guide_breakdown`, `gap_up_fade`.
-- Для META-like кейса явно выделить “source ticker reaction” и “affected tickers reaction”: META падает, но MU/SNDK/AMD/LITE получают позитивный spillover.
+- Для META-like кейса явно выделить “source ticker reaction” и “affected tickers reaction”: META падает, но MU/SNDK/AMD/LITE получают позитивный spillover. Каталог: [PEER_GRAPH_PRINCIPLES.md](./PEER_GRAPH_PRINCIPLES.md).
 
 ## Архитектура
 ```mermaid
@@ -232,7 +232,7 @@ flowchart TD
    Реализация: `earnings_material` хранит `source_url`, `material_type`, `parse_status`, `local_path`, `content_sha256`, `content_text` и связь с `knowledge_base_id`, если событие уже есть в KB.
 2. **Hybrid ingest:** `scripts/ingest_earnings_materials.py` + `services/earnings_material_parser.py` (HTML + pypdf PDF). Audit: `scripts/audit_earnings_materials_pipeline.py`.
 3. **Extractor:** `services/earnings_material_extractor.py`, `scripts/extract_earnings_material_facts.py` — JSON в `earnings_event_detail.guidance_summary` / `affected_tickers`.
-4. **Peer graph:** `services/peer_graph_catalog.py`, `scripts/seed_peer_graph_edges.py`.
+4. **Peer graph:** [`services/peer_graph_catalog.py`](../../services/peer_graph_catalog.py), `scripts/seed_peer_graph_edges.py` — см. [PEER_GRAPH_PRINCIPLES.md](./PEER_GRAPH_PRINCIPLES.md).
 5. **Outcomes:** для source ticker и affected tickers считать log-returns 1d/2d/5d/20d — **следующий шаг** (brief + peer spillover).
 6. **Scenario labels:** `scripts/apply_earnings_scenario_labels.py` — LLM `scenario_hints` → `event_reaction_dataset.final_label` (`llm_scenario_v0`). ✅ 15 labels на prod.
 7. **Event Brief:** `services/earnings_event_brief.py`, `scripts/build_earnings_event_brief.py` — JSON для UI/бота. ✅ + peer spillover.
