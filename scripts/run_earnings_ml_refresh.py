@@ -49,13 +49,19 @@ def main() -> int:
     ap.add_argument("--skip-backfill", action="store_true")
     ap.add_argument("--skip-train", action="store_true")
     ap.add_argument("--skip-readiness", action="store_true")
+    ap.add_argument(
+        "--full",
+        action="store_true",
+        help="Full train/write (same as ML_READINESS_TRAIN_MODE=full); overrides dry-run default",
+    )
     args = ap.parse_args()
 
     from config_loader import get_config_value
 
     mode = (get_config_value("ML_READINESS_TRAIN_MODE") or "dry_run").strip().lower()
-    full_train = mode in ("full", "train", "write", "prod")
+    full_train = args.full or mode in ("full", "train", "write", "prod")
     dry_run = args.dry_run or not full_train
+    logger.info("ML refresh mode=%s dry_run=%s", mode if not args.full else "full(cli)", dry_run)
 
     q_dir = _default_q_dir()
     q_dir.mkdir(parents=True, exist_ok=True)
