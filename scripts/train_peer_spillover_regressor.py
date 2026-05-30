@@ -78,11 +78,7 @@ def main() -> int:
         or (get_config_value("EVENT_REACTION_DATASET_VERSION", "") or "").strip()
         or "v0_expanded_baseline"
     )
-    fbv = (
-        args.feature_builder_version.strip()
-        or (get_config_value("EVENT_REACTION_FEATURE_BUILDER_VERSION", "") or "").strip()
-        or FEATURE_BUILDER_VERSION_EARNINGS
-    )
+    fbv = args.feature_builder_version.strip() or FEATURE_BUILDER_VERSION_EARNINGS
     min_required = max(12, int(args.min_rows))
 
     engine = get_engine()
