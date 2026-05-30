@@ -6,6 +6,7 @@ Examples:
   python scripts/extract_earnings_material_facts.py --dry-run --symbols META,NVDA
   python scripts/extract_earnings_material_facts.py --symbol META --event-date 2026-04-29
   python scripts/extract_earnings_material_facts.py --symbols META,NVDA --limit 5
+  python scripts/extract_earnings_material_facts.py --symbol META --event-date 2026-04-29 --force-reextract
 """
 from __future__ import annotations
 
@@ -203,6 +204,11 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=10, help="Max events to process")
     ap.add_argument("--model", default="", help="Override LLM model (EARNINGS_EXTRACT_MODEL env)")
     ap.add_argument("--json-out", default="", help="Write dry-run / results JSON")
+    ap.add_argument(
+        "--force-reextract",
+        action="store_true",
+        help="Re-run LLM even if earnings_event_detail already has extraction_meta",
+    )
     args = ap.parse_args()
 
     symbols: set[str] | None = None
@@ -241,7 +247,7 @@ def main() -> int:
             event_date=event_date,
             fallback=next((m.get("knowledge_base_id") for m in materials if m.get("knowledge_base_id")), None),
         )
-        if kb_id_precheck and _detail_has_llm_extraction(engine, kb_id_precheck):
+        if kb_id_precheck and _detail_has_llm_extraction(engine, kb_id_precheck) and not args.force_reextract:
             logger.info("%s %s skip: LLM extraction already in earnings_event_detail", symbol, event_date)
             results.append(
                 {
