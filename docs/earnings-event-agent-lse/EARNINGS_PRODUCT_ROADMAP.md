@@ -259,7 +259,8 @@ cat /app/logs/ml/ml_data_quality/last_earnings_scenario_shadow.json | jq .aggreg
 |------|------|
 | 2026-05-29 | [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md) ✅ |
 | 2026-05-30 | [EARNINGS_PLAN_2026-05-30.md](./EARNINGS_PLAN_2026-05-30.md) ✅ |
-| **2026-05-31** | [EARNINGS_PLAN_2026-05-31.md](./EARNINGS_PLAN_2026-05-31.md) — sprint phase B |
+| **2026-05-31** | [EARNINGS_PLAN_2026-05-31.md](./EARNINGS_PLAN_2026-05-31.md) — sprint phase B ✅ (ev1 494/494) |
+| **2026-06-01** | [EARNINGS_PLAN_2026-06-01.md](./EARNINGS_PLAN_2026-06-01.md) — Phase C peer spillover ML |
 
 ---
 
