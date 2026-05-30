@@ -150,15 +150,17 @@ def load_peer_edges(engine: Engine, *, source_ticker: str) -> list[dict[str, Any
 
 def _peer_tickers_for_brief(
     *,
+    source_symbol: str,
     peers: list[dict[str, Any]],
     affected: list[Any],
     max_peers: int = 12,
 ) -> list[str]:
+    src = str(source_symbol or "").strip().upper()
     seen: set[str] = set()
     ordered: list[str] = []
     for p in peers:
         t = str(p.get("target_ticker") or "").strip().upper()
-        if t and t not in seen:
+        if t and t != src and t not in seen:
             seen.add(t)
             ordered.append(t)
     for item in affected:
@@ -168,7 +170,7 @@ def _peer_tickers_for_brief(
             t = str(item.get("ticker") or item.get("symbol") or "").strip().upper()
         else:
             continue
-        if t and t not in seen:
+        if t and t != src and t not in seen:
             seen.add(t)
             ordered.append(t)
     return ordered[:max_peers]
@@ -240,7 +242,11 @@ def build_event_brief(
     features = features if isinstance(features, dict) else {}
 
     peers = load_peer_edges(engine, source_ticker=symbol)
-    peer_targets = _peer_tickers_for_brief(peers=peers, affected=affected)
+    peer_targets = _peer_tickers_for_brief(
+        source_symbol=symbol,
+        peers=peers,
+        affected=affected,
+    )
     graph_peer_set = {
         str(p.get("target_ticker") or "").strip().upper()
         for p in peers

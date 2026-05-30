@@ -208,12 +208,12 @@
 
 <div id="panel-spillover" class="panel">
     <div class="tab-intro">
-        <strong>Spillover</strong> — история отчётов source: факт 1d/5d пиров + ML pred 5d (если есть features).
+        <strong>Spillover</strong> — история отчётов source: факт 1d/5d пиров + ML pred 5d (pilot).
         <ul>
-            <li><strong>Source</strong> — тикер-лидер; пиры из <code>peer_graph_edge</code>.</li>
-            <li>Для каждой даты: LLM scenario, <strong>ML scenario</strong> (classifier), source 5d, таблица пиров (fact + ML pred).</li>
-            <li>Текущий контекст (тикер + дата) — сверху отдельным блоком с полным Brief spillover.</li>
-            <li>Из таблицы «События» кнопка Spillover подставляет source и открывает эту вкладку.</li>
+            <li><strong>Source</strong> — тикер-лидер; пиры из <code>peer_graph_edge</code> (+ LLM affected с quotes).</li>
+            <li>Таблица: graph peers и affected <em>с fact</em>; aff без котировок (OPENAI и т.п.) скрыты.</li>
+            <li><strong>ML spillover — pilot:</strong> мало train rows; pred часто ≈0; Sign — sanity check, не KPI; не для сделок.</li>
+            <li>Контекст (тикер + дата) — сверху; дата не дублируется в истории ниже.</li>
         </ul>
     </div>
     <p class="muted" style="font-size:0.78rem;margin-bottom:0.5rem">Source = тикер из <strong>Контекст</strong>. <button type="button" class="btn" id="loadSpilloverBtn">Обновить историю</button></p>
@@ -361,10 +361,10 @@ const peerSpilloverCompareTable = (outcomes, mlArr, escTicker = true) => {
     const peerSet = new Set(okPeers.map(p => String(p.ticker || '').toUpperCase()));
     (mlArr || []).forEach(r => {
         const t = String(r.peer_ticker || '').toUpperCase();
-        if (t) peerSet.add(t);
+        if (t && r.relation_type !== 'affected_only') peerSet.add(t);
     });
     const peers = [...peerSet].sort();
-    if (!peers.length) return '<span class="muted">нет пиров в графе</span>';
+    if (!peers.length) return '<span class="muted">нет пиров с fact или graph edge</span>';
     const body = peers.map(ticker => {
         const p = okPeers.find(x => String(x.ticker || '').toUpperCase() === ticker) || { ticker };
         const ml = mlByPeer[ticker];
@@ -380,12 +380,19 @@ const peerSpilloverCompareTable = (outcomes, mlArr, escTicker = true) => {
         <th><span class="pill pill-ml">5d</span> ML</th><th>Sign</th>
     </tr></thead><tbody>${body}</tbody></table>`;
 };
-const peerSpilloverMlSummary = (mlArr) => {
+const peerSpilloverMlSummary = (mlArr, outcomes) => {
     const ok = (mlArr || []).filter(r => r.peer_spillover_ml_status === 'ok');
-    if (!ok.length) return '<span class="muted">ML spillover: нет pred (нет модели или features)</span>';
-    const aff = ok.filter(r => r.relation_type === 'affected_only').length;
-    const affNote = aff ? ` · ${aff} via LLM affected` : '';
-    return `<span class="muted">ML spillover: ${ok.length} peer pred${affNote} · advisory only · Sign = fact vs pred 5d</span>`;
+    if (!ok.length) {
+        return '<span class="muted">ML spillover (pilot): нет pred · advisory only</span>';
+    }
+    const okTickers = new Set((outcomes || []).filter(p => p.status === 'ok').map(p => String(p.ticker || '').toUpperCase()));
+    const graphN = ok.filter(r => r.relation_type !== 'affected_only').length;
+    const affShown = ok.filter(r => r.relation_type === 'affected_only' && okTickers.has(String(r.peer_ticker || '').toUpperCase())).length;
+    const affHidden = ok.filter(r => r.relation_type === 'affected_only' && !okTickers.has(String(r.peer_ticker || '').toUpperCase())).length;
+    let parts = [`graph ${graphN} pred`];
+    if (affShown) parts.push(`${affShown} affected w/ fact`);
+    if (affHidden) parts.push(`${affHidden} aff без quotes скрыты`);
+    return `<span class="muted">ML spillover (pilot): ${parts.join(' · ')} · Sign = sanity check · не для сделок</span>`;
 };
 let allEvents = [], currentFilter = 'all', graphData = null;
 const EI_CTX_KEY = 'earnings_intelligence_ctx_v1';
@@ -657,7 +664,7 @@ async function loadBrief(symbol, eventDate) {
             <div class="block"><h3>Source outcomes (quotes)</h3>
                 1d ${fmtPct(src.forward_log_ret_1d)} · 5d ${fmtPct(src.forward_log_ret_5d)} · label ${esc(src.final_label_auto||'—')}</div>
             <div class="block"><h3>Peer spillover <span class="peer-count">(${peers.length})</span>${horizonPills()}</h3>
-                ${peerSpilloverMlSummary(peerMl)}
+                ${peerSpilloverMlSummary(peerMl, peers)}
                 ${peerSpilloverCompareTable(peers, peerMl, true)}</div>
         </div>`;
     } catch (err) {
@@ -709,7 +716,7 @@ async function loadSpillover() {
                 parts.push(`<div class="block" style="border:1px solid #365314"><h3>Контекст · ${sym} · ${ctxDate}</h3>
                     <div class="muted">Tone ${esc(b.management_tone||'—')} · source 5d ${fmtPct((b.source_outcomes||{}).forward_log_ret_5d)}</div>
                     ${fmtLlmVsMlScenarioCompare(b)}
-                    ${peerSpilloverMlSummary(peerMl)}
+                    ${peerSpilloverMlSummary(peerMl, peers)}
                     ${peerSpilloverCompareTable(peers, peerMl, false)}</div>`);
             }
         } catch (_) {}
@@ -730,7 +737,7 @@ async function loadSpillover() {
         const sm = ev.scenario_ml || {};
         return `<div class="block"><h3>${sym} · ${ev.event_date} · spillover${horizonPills()}</h3>
             <div class="muted">tone ${ev.management_tone||'—'} · LLM ${esc(ev.top_scenario||'—')} · ML ${fmtScenarioMlInline(sm)} · source 5d ${fmtPct(ev.source_forward_log_ret_5d)}</div>
-            ${peerSpilloverMlSummary(peerMl)}
+            ${peerSpilloverMlSummary(peerMl, peers)}
             ${peerSpilloverCompareTable(peers, peerMl, false)}</div>`;
     }).join('');
     box.innerHTML = parts.join('') + (historyHtml || (parts.length ? '' : '<span class="muted">Нет истории spillover</span>'));
@@ -820,7 +827,7 @@ async function loadFusion(eventDate) {
             </div>
         </div>
         <div class="block"><h3>Peer spillover ML <span class="peer-count">(${okPeers.length})</span></h3>
-            ${peerSpilloverMlSummary(peerMl)}
+            ${peerSpilloverMlSummary(peerMl, okPeers)}
             ${peerSpilloverCompareTable(okPeers, peerMl, true)}
         </div>`;
 }

@@ -27,7 +27,21 @@
 |---|--------|-------|--------|
 | 4 | Dataset `(source_event, peer) → peer_forward_log_ret_5d` | `build_peer_spillover_dataset.py --dry-run` | ✅ **162 rows**, 29 events, 14 peers |
 | 5 | Baseline propagation score | `baseline_weighted_sign_acc` в summary JSON | ✅ **36.4%** baseline; ML valid **85.4%** |
-| 6 | UI: LLM vs ML scenario + peer spillover ML | smoke `/earnings` Brief/Spillover/Fusion | ✅ `be72376` deploy 22:21 UTC; META 16 peer ML preds |
+| 6 | UI: LLM vs ML scenario + peer spillover ML | smoke `/earnings` Brief/Spillover/Fusion | ✅ `be72376` → `8f4834d` spillover UX |
+
+---
+
+## P1.6 — Spillover ML UX (2026-05-30 поздно)
+
+| # | Fix | Commit |
+|---|-----|--------|
+| A | ML pred для LLM `affected` (GOOGL на MSFT) | `8f4834d` |
+| B | Не дублировать Контекст в истории spillover | `8f4834d` |
+| C | Исключить **source** из affected peers (ALAB→ALAB) | *(этот commit)* |
+| D | Таблица: graph + affected **с fact**; aff без quotes скрыты | *(этот commit)* |
+| E | Подпись pilot: pred ≈0, Sign ≠ KPI, advisory only | *(этот commit)* |
+
+**Наблюдение (ALAB):** holdout sign acc 85% — среднее; на event pred сжимаются к ~0; `affected_only` давали одинаковый pred — не для train/sizing до B9 + больше rows.
 
 См. [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §5 peer spillover ML.
 
@@ -105,26 +119,47 @@ print('spillover scenario_ml', (ev.get('scenario_ml') or {}).get('predicted_scen
 
 ## План на 2026-05-31 (завтра)
 
-**Prod:** `be72376` · gates green · Phase C ML **закрыт** · Phase C **product** — следующий блок.
+**Prod после push:** spillover pilot UX + self-peer fix · gates green · Phase C ML **закрыт**.
+
+### Утро — smoke
+
+```bash
+# ALAB: нет строки ALAB в peers; aff без quotes скрыты
+# MSFT 2026-04-29: GOOGL aff с fact; один блок Контекст
+docker exec lse-bot python3 -c "
+import json, urllib.request
+b=json.loads(urllib.request.urlopen('http://127.0.0.1:8080/api/earnings/brief/ALAB?event_date=2026-02-10',timeout=60).read())
+tickers=[p.get('ticker') for p in b.get('peer_spillover_outcomes') or []]
+assert 'ALAB' not in tickers, tickers
+print('ALAB peers ok', tickers)
+"
+```
+
+`/earnings` → Spillover ALAB · Brief META/MSFT · analyzer gates.
+
+### Приоритеты
 
 | P | Задача | Критерий |
 |---|--------|----------|
-| **P0** | Накопление labels | cron extract/apply; CIEN/DELL/NBIS — хотя бы +1 label или materials |
+| **P0** | Labels backlog | CIEN/DELL/NBIS + cron extract/apply; цель **28/28** или +materials |
 | **P0** | Shadow ≥50 matured | `n_matured` в shadow-report (сейчас 33) |
-| **P1** | Telegram alert после отчёта | Brief link + LLM/ML scenario + top 3 peers (roadmap C) |
-| **P1** | Runbook partial brief / no materials | md в `docs/earnings-event-agent-lse/` |
-| **P1** | Weekly prod_eval в cron/runbook | `run_earnings_intelligence_prod_eval` |
-| **P2** | Materials junk audit (ARM, bare PDF) | roadmap B8 |
-| **P2** | Weighted spillover validation metric | roadmap B9 |
-| **—** | Phase D | **не начинать** без C sign-off + backtest |
+| **P1** | Runbook earnings desk | partial brief, no materials, **ML spillover pilot** (pred≈0, Sign sanity), failure modes (MSFT source −4% при gap_up) |
+| **P1** | Telegram alert после отчёта | Brief link + LLM/ML scenario + top 3 graph peers |
+| **P1** | Weekly prod_eval | cron/runbook `run_earnings_intelligence_prod_eval` |
+| **P2** | Weighted spillover metric (B9) | validation до обсуждения качества ML |
+| **P2** | Materials junk audit (B8) | ARM, bare PDF |
+| **—** | Phase D | **не начинать** |
 
-**Smoke утром:** `/earnings` META 2026-04-29 → Brief (LLM/ML compare + peer ML cols) · Fusion · Spillover context block · analyzer gates.
+### Не делать завтра
+
+- Не подключать spillover/classifier к GAME_5M (Phase D).
+- Не переобучать spillover «ради UI» — сначала labels + rows.
 
 ---
 
 ## Следующие шаги (Phase C product → D)
 
-1. ~~**UI ML spillover + classifier**~~ — ✅ `be72376` (2026-05-30 22:21 UTC).
-2. **Накопление labels** — CIEN/DELL/NBIS + shadow **≥50** matured (roadmap Phase B targets).
-3. **Phase C product** (roadmap §Phase C): Telegram alert после отчёта, runbook partial brief, weekly prod_eval.
-4. **Phase D** — только после C + backtest: `event_fusion_policy.py`, shadow walk-forward.
+1. ~~**UI ML spillover + classifier**~~ — ✅ `be72376` … spillover pilot UX (2026-05-30).
+2. **Runbook + labels + shadow≥50** — Phase B maturity + Phase C product ops.
+3. **Phase C product:** Telegram alert, weekly prod_eval.
+4. **Phase D** — только после C + backtest.
