@@ -27,7 +27,7 @@
 |---|--------|-------|--------|
 | 4 | Dataset `(source_event, peer) → peer_forward_log_ret_5d` | `build_peer_spillover_dataset.py --dry-run` | ✅ **162 rows**, 29 events, 14 peers |
 | 5 | Baseline propagation score | `baseline_weighted_sign_acc` в summary JSON | ✅ **36.4%** baseline; ML valid **85.4%** |
-| 6 | UI: LLM vs ML scenario на Events/Brief/Fusion | smoke `/earnings` + brief API | ✅ `scenario_ml` в brief; Fusion bias labels |
+| 6 | UI: LLM vs ML scenario + peer spillover ML | smoke `/earnings` Brief/Spillover/Fusion | ✅ `be72376` deploy 22:21 UTC; META 16 peer ML preds |
 
 См. [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §5 peer spillover ML.
 
@@ -76,18 +76,20 @@
 docker exec lse-bot python3 -c "
 import json, urllib.request
 BASE='http://127.0.0.1:8080'
-for sym in ('META','MSFT'):
-  ed='2026-04-29'
-  b=json.loads(urllib.request.urlopen(f'{BASE}/api/earnings/brief/{sym}?event_date={ed}',timeout=60).read())
-  f=json.loads(urllib.request.urlopen(f'{BASE}/api/earnings/fusion/{sym}?event_date={ed}',timeout=60).read())
-  s=json.loads(urllib.request.urlopen(f'{BASE}/api/earnings/spillover/{sym}?limit=1',timeout=60).read())
-  po=(s.get('events') or [{}])[0].get('peer_outcomes') or []
-  ok=sum(1 for p in po if p.get('status')=='ok')
-  print(sym,'brief',b.get('status'),'fusion',f.get('feature_version_mismatch'),'spillover',ok,len(po))
+sym, ed = 'META', '2026-04-29'
+b=json.loads(urllib.request.urlopen(f'{BASE}/api/earnings/brief/{sym}?event_date={ed}',timeout=60).read())
+f=json.loads(urllib.request.urlopen(f'{BASE}/api/earnings/fusion/{sym}?event_date={ed}',timeout=60).read())
+s=json.loads(urllib.request.urlopen(f'{BASE}/api/earnings/spillover/{sym}?limit=1',timeout=60).read())
+ev=(s.get('events') or [{}])[0]
+sm=b.get('scenario_ml') or {}
+ml=[x for x in (b.get('peer_spillover_ml') or []) if x.get('peer_spillover_ml_status')=='ok']
+print('brief', b.get('status'), 'scenario_ml', sm.get('predicted_scenario'), 'peer_ml_ok', len(ml))
+print('fusion peer_ml', len(f.get('peer_spillover_ml') or []))
+print('spillover scenario_ml', (ev.get('scenario_ml') or {}).get('predicted_scenario'))
 "
 ```
 
-Последний smoke 30.05: META/MSFT brief **ok**, `scenario_ml` ok, fusion mismatch **None**.
+Последний smoke **30.05 22:21 UTC** (`be72376`): META brief **ok**, scenario_ml `capex_positive_for_infra_peers`, **16/16** peer_spillover_ml ok; fusion + spillover API с `peer_spillover_ml` / `scenario_ml`.
 
 ---
 
@@ -97,12 +99,32 @@ for sym in ('META','MSFT'):
 - [x] Baseline weighted spillover sign accuracy documented — **36.4%** same-sign; ML valid **85.4%** vs baseline **31.7%**
 - [x] Phase B doc signed off in EARNINGS_PLAN_2026-05-31.md
 - [x] Analyzer readiness gates green (grid + scenario + peer)
+- [x] UI: LLM vs ML scenario + peer spillover ML pred в Brief / Spillover / Fusion (`be72376`)
+
+---
+
+## План на 2026-05-31 (завтра)
+
+**Prod:** `be72376` · gates green · Phase C ML **закрыт** · Phase C **product** — следующий блок.
+
+| P | Задача | Критерий |
+|---|--------|----------|
+| **P0** | Накопление labels | cron extract/apply; CIEN/DELL/NBIS — хотя бы +1 label или materials |
+| **P0** | Shadow ≥50 matured | `n_matured` в shadow-report (сейчас 33) |
+| **P1** | Telegram alert после отчёта | Brief link + LLM/ML scenario + top 3 peers (roadmap C) |
+| **P1** | Runbook partial brief / no materials | md в `docs/earnings-event-agent-lse/` |
+| **P1** | Weekly prod_eval в cron/runbook | `run_earnings_intelligence_prod_eval` |
+| **P2** | Materials junk audit (ARM, bare PDF) | roadmap B8 |
+| **P2** | Weighted spillover validation metric | roadmap B9 |
+| **—** | Phase D | **не начинать** без C sign-off + backtest |
+
+**Smoke утром:** `/earnings` META 2026-04-29 → Brief (LLM/ML compare + peer ML cols) · Fusion · Spillover context block · analyzer gates.
 
 ---
 
 ## Следующие шаги (Phase C product → D)
 
-1. ~~**UI ML spillover + classifier**~~ — Brief/Spillover/Fusion: fact vs ML pred peers, LLM vs ML scenario (2026-05-30).
+1. ~~**UI ML spillover + classifier**~~ — ✅ `be72376` (2026-05-30 22:21 UTC).
 2. **Накопление labels** — CIEN/DELL/NBIS + shadow **≥50** matured (roadmap Phase B targets).
 3. **Phase C product** (roadmap §Phase C): Telegram alert после отчёта, runbook partial brief, weekly prod_eval.
 4. **Phase D** — только после C + backtest: `event_fusion_policy.py`, shadow walk-forward.

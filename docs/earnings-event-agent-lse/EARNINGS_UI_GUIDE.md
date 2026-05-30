@@ -12,7 +12,7 @@
 |---------|------------------------------|-----|
 | **События** | Что было / что готово по каждому earnings? LLM vs ML scenario в таблице | `GET /api/earnings/intelligence` |
 | **Peer graph** | Кого считаем «пиром» лидера и с каким весом? | `GET /api/earnings/peer-graph` |
-| **Spillover** | Как пиры **фактически** отреагировали после отчёта лидера? | `GET /api/earnings/spillover/{symbol}` |
+| **Spillover** | Факт 1d/5d пиров + **ML pred 5d** (classifier scenario в шапке event) | `GET /api/earnings/spillover/{symbol}` |
 | **Shadow** | Насколько classifier угадывает сценарий **после созревания** 5d? | `GET /api/earnings/shadow-report` |
 | **Fusion** | Сводный advisory: регрессия + scenario ML + brief | `GET /api/earnings/fusion/{symbol}` |
 | **ML слои** | Статус пайплайна данных и моделей | `GET /api/earnings/ml-layers` |
@@ -45,13 +45,12 @@ Event Brief (деталь события): `GET /api/earnings/brief/{symbol}?eve
 1. Нажмите **Brief** на строке META.
 2. Откроется панель:
    - **Headline:** `META capex / AI infra signal — watch peer spillover`
-   - **Scenario (LLM):** `capex_positive_for_infra_peers`
-   - **Scenario classifier (ML):** pred CatBoost + proba + expected source sign (отдельный блок)
+   - **LLM vs ML scenario:** две колонки — hint из extract и pred CatBoost classifier (proba, expected source sign)
    - **Source outcomes:** фактические 1d/5d log-return META из quotes
-   - **Peer spillover:** таблица пиров (MU, NVDA, …) с 1d/5d от даты отчёта META
+   - **Peer spillover:** таблица пиров — колонки **1d fact · 5d fact · 5d ML · Sign** (совпадение знака fact vs CatBoost pred)
 
 ```bash
-curl -s 'https://<host>/api/earnings/brief/META?event_date=2026-04-29' | jq '.headline, .scenario, .peer_spillover_outcomes[:3]'
+curl -s 'https://<host>/api/earnings/brief/META?event_date=2026-04-29' | jq '.scenario.id, .scenario_ml.predicted_scenario, [.peer_spillover_ml[]|select(.peer_spillover_ml_status=="ok")|{peer:.peer_ticker,pred:.peer_forward_log_ret_5d_pred}][:3]'
 ```
 
 ### Кнопки в строке
@@ -89,21 +88,21 @@ META → NVDA (hyperscaler_capex, weight 0.85)
 
 ### Что это
 
-**Event-study:** для каждого **прошлого** earnings source-тикера считаем forward log-return **пиров** от **даты отчёта source**, горизонты 1d и 5d (торговые дни).
+**Event-study:** для каждого **прошлого** earnings source-тикера — forward log-return **пиров** от **даты отчёта source** (1d/5d fact) и **CatBoost pred 5d** (`peer_spillover_ml`), если есть `quotes_regime_earnings_v1`.
 
 ### Как пользоваться
 
-1. Выберите source (например **NVDA**).
-2. **Загрузить историю** — до 8 последних событий с 2026-01-01.
+1. Задайте **Контекст** (тикер + дата) — сверху блок «Контекст · …» с LLM/ML scenario и peer ML table.
+2. **Загрузить историю** — до 8 последних событий с 2026-01-01; в шапке каждого event: LLM scenario, ML scenario, source 5d.
 
-### Пример (NVDA 2026-05-20, prod)
+### Пример (META 2026-04-29, prod `be72376`)
 
-- Source 5d: фактическая доходность NVDA после отчёта.
-- Peers: MU, AMD, … — их 1d/5d от 2026-05-20.
-- Scenario/tone из LLM extract того события.
+- LLM: `capex_positive_for_infra_peers` · ML classifier: то же, proba ~85%
+- Peer table: MU fact 5d vs ML pred; колонка **Sign** ✓/✗
+- API: 16 peer ML preds со status `ok`
 
 ```bash
-curl -s 'https://<host>/api/earnings/spillover/NVDA?since=2026-01-01&limit=3' | jq '.events[0] | {date: .event_date, scenario: .top_scenario, source_5d: .source_forward_log_ret_5d}'
+curl -s 'https://<host>/api/earnings/spillover/META?limit=1' | jq '.events[0] | {date:.event_date, llm:.top_scenario, ml:.scenario_ml.predicted_scenario, peer_ml:([.peer_spillover_ml[]|select(.peer_spillover_ml_status=="ok")]|length)}'
 ```
 
 Если **«Нет past events с spillover»** — нет KB earnings для тикера в окне или нет quotes для пиров.
@@ -149,8 +148,9 @@ curl -s 'https://<host>/api/earnings/spillover/NVDA?since=2026-01-01&limit=3' | 
 **Advisory bundle** для одного события:
 
 1. **Regression ML** — CatBoost `forward_log_ret_5d` (`quotes_regime_v1`, product-модель).
-2. **Scenario ML** — multi-class classifier (`quotes_regime_earnings_v1`).
-3. **Advisory** — alignment / conviction; **`execution_blocked: true` всегда**.
+2. **Scenario ML** — multi-class classifier (`quotes_regime_earnings_v1`); блок **LLM vs ML scenario**.
+3. **Peer spillover ML** — таблица fact vs pred 5d по каждому peer из графа.
+4. **Advisory** — alignment / conviction; **`execution_blocked: true` всегда**.
 
 ### Как пользоваться
 
@@ -167,7 +167,8 @@ curl -s 'https://<host>/api/earnings/spillover/NVDA?since=2026-01-01&limit=3' | 
     "execution_blocked": true
   },
   "regression_ml": { "forward_log_ret_5d_pred": 0.012 },
-  "scenario_ml": { "predicted_scenario": "gap_up_follow_through", "scenario_classifier_status": "ok" }
+  "scenario_ml": { "predicted_scenario": "gap_up_follow_through", "scenario_classifier_status": "ok" },
+  "peer_spillover_ml": [{ "peer_ticker": "MU", "peer_spillover_ml_status": "ok", "peer_forward_log_ret_5d_pred": 0.05 }]
 }
 ```
 
@@ -191,9 +192,10 @@ curl -s 'https://<host>/api/earnings/spillover/NVDA?since=2026-01-01&limit=3' | 
 | CatBoost регрессия | active | Product advisory; `/api/ml/event-reaction/{ticker}?event_date=YYYY-MM-DD` в Brief |
 | UP/DOWN/FLAT | active | Правило по порогу на фактическом 5d |
 | LLM scenario hints | active | Extract → `earnings_event_detail` |
-| Scenario classifier | active (pilot) | Multi-class, мало labels (~15) |
+| Scenario classifier | active | Multi-class; Events / Brief / Fusion / Spillover |
+| Peer spillover ML | active | CatBoost regressor per peer; Brief / Spillover / Fusion |
 
-Prod snapshot: ~498 rows dataset, ~267 earnings_v1 features, ~15 LLM scenario labels applied.
+Prod snapshot (2026-05-30): ~494 earnings_v1 features, **25** LLM scenario labels, peer spillover **162** train rows, sign acc valid **85.4%**.
 
 ---
 
@@ -201,10 +203,10 @@ Prod snapshot: ~498 rows dataset, ~267 earnings_v1 features, ~15 LLM scenario la
 
 | | Spillover | Shadow |
 |---|-----------|--------|
-| **Вопрос** | Как **пиры** отреагировали на отчёт **лидера**? | Насколько **classifier** угадал сценарий/знак? |
-| **Данные** | Quotes пиров от event_date | features + matured 5d source |
-| **UI** | Spillover tab | Shadow tab |
-| **Trading** | Описание рынка | Метрика качества ML |
+| **Вопрос** | Как **пиры** отреагировали (fact) и что pred **spillover ML**? | Насколько **classifier** угадал сценарий/знак source? |
+| **Данные** | Quotes пиров + CatBoost pred от event_date | features + matured 5d source |
+| **UI** | Spillover tab (fact + ML cols) | Shadow tab |
+| **Trading** | Описание рынка + advisory pred | Метрика качества ML |
 
 ---
 
