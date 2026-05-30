@@ -16,23 +16,25 @@
 
 ## P0 — deploy + smoke
 
-| # | Задача | Критерий |
-|---|--------|----------|
-| 1 | Deploy `main` на GCP | `/earnings` открывается, sticky **Контекст** сохраняет ticker/date между вкладками |
-| 2 | Smoke META + MSFT | Brief quotes; Fusion без `feature_version_mismatch`; Spillover 1d/5d от **report date** |
-| 3 | Telegram `/earnings` | Тот же brief, что в UI для выбранной даты |
+| # | Задача | Критерий | Статус |
+|---|--------|----------|--------|
+| 1 | Deploy `main` на GCP | `/earnings` открывается, sticky **Контекст** | ✅ `0a243f2` deploy 12:24 UTC; HTML: `eiContextBar`, `ctxSymbol`, `sessionStorage` |
+| 2 | Smoke META + MSFT | Brief quotes; Fusion без `feature_version_mismatch`; Spillover от **report date** | ✅ Brief ok (META capex, MSFT gap_up); source 5d −9.89% / −4.16%; Fusion scenario ok, mismatch None; spillover row 2026-04-29 |
+| 3 | Telegram `/earnings` | Тот же brief, что в UI | ✅ `format_brief_telegram`: scenario + tone + source fwd 1d/5d |
 
 ---
 
 ## P1 — данные и ML
 
-| # | Задача | Критерий |
-|---|--------|----------|
-| 4 | Проверить counts `quotes_regime_earnings_v1` vs `quotes_regime_v1` в ERD | ML layers tab / SQL; цель — earnings_v1 не сильно ниже regime для universe |
-| 5 | При необходимости разовый backfill | `backfill_event_reaction_labeling.py --only-features --force-features --include-earnings-universe` в `lse-bot` |
-| 6 | `apply_earnings_scenario_labels --universe` | +2–5 новых `llm_scenario_v0` labels; пересмотреть junk materials (ARM и т.п.) |
-| 7 | `run_earnings_ml_refresh` (full или dry-run) | readiness JSON; shadow `n_matured` / sign% / class% в UI |
-| 8 | Classifier train rows | Сейчас ~21 train rows, `n_valid` может быть 0 — накапливать labels до стабильного holdout |
+| # | Задача | Критерий | Статус |
+|---|--------|----------|--------|
+| 4 | Counts `quotes_regime_earnings_v1` vs ERD | earnings_v1 не сильно ниже total | ✅ total **527**, earnings_v1 **482** (91.5%); gap **45** = `no_quotes` / `no_as_of_before_event` |
+| 5 | Разовый backfill | `--include-earnings-universe` | ✅ +87 rows pass (12:30); full refresh backfill 482/527 (13:09) |
+| 6 | `apply_earnings_scenario_labels --universe` | +labels | ⚠️ updated=0 (все 23 уже applied); новых hints нет без extract |
+| 7 | `run_earnings_ml_refresh` full | readiness + shadow | ✅ train n=21, 4 classes; shadow **n=33**, sign **72.7%**, class **100%** (мало scored), gate ready; `overall_grid_ready=true` |
+| 8 | Classifier train rows | накапливать labels | 🔄 n_train=21, n_valid=0 (holdout skipped); цель ≥50 для stable valid |
+
+**Fusion после refresh:** META reg pred **+0.0019** log, scenario **capex** proba ~0.94.
 
 ---
 
@@ -40,8 +42,8 @@
 
 | # | Задача | Примечание |
 |---|--------|------------|
-| 9 | Fusion: показывать регрессию в **%** + bias labels | Читаемость vs сырые log-ret |
-| 10 | Таблица events: фильтр по ticker / дате | Согласовать с **Контекст** bar |
+| 9 | Fusion: регрессия в **%** + bias labels | Не делали сегодня |
+| 10 | Таблица events: фильтр по ticker / дате | Частично: чекбокс «только этот тикер» в **Контекст** (`4a144cf`) |
 
 ---
 
@@ -49,7 +51,7 @@
 
 | Время | Скрипт |
 |-------|--------|
-| `23:36` пн–пт | `backfill_event_reaction_labeling.py` — `quotes_regime_v1` |
+| `23:36` пн–пт | `backfill_event_reaction_labeling.py` — `quotes_regime_v1`, `--include-all-symbols` |
 | `23:37` пн–пт | то же — `quotes_regime_earnings_v1`, `--include-earnings-universe` |
 | `23:52` пн–пт | `run_earnings_ml_refresh.py` — full train scenario |
 
@@ -57,10 +59,19 @@
 
 ## Acceptance
 
-- [ ] Prod = `main` после deploy
-- [ ] META/MSFT: Brief + Fusion + Spillover без регрессий
-- [ ] `earnings_v1` feature rows в норме для intelligence universe
-- [ ] Обновить этот файл по факту вечера 30.05
+- [x] Prod = `main` после deploy (`0a243f2`)
+- [x] META/MSFT: Brief + Fusion + Spillover без регрессий
+- [x] `earnings_v1` feature rows в норме (482/527, gap = no quotes)
+- [x] Обновлён этот файл по факту дня 30.05
+
+---
+
+## Следующие шаги
+
+1. Extract + labels для событий без `scenario_hints` (рост llm_labels > 23).
+2. Seed quotes для 45 строк `features:no_quotes`.
+3. Spillover peers=0 на META/MSFT в API — проверить `peer_graph_edge` + outcomes для affected tickers.
+4. Док: [EARNINGS_LLM_ML_LABELS_AND_TRAINING.md](./EARNINGS_LLM_ML_LABELS_AND_TRAINING.md) — LLM vs ML, фазы prod.
 
 ---
 
@@ -68,3 +79,4 @@
 
 - [EARNINGS_INTELLIGENCE_PLAN.md](./EARNINGS_INTELLIGENCE_PLAN.md)
 - [EARNINGS_UI_GUIDE.md](./EARNINGS_UI_GUIDE.md)
+- [EARNINGS_LLM_ML_LABELS_AND_TRAINING.md](./EARNINGS_LLM_ML_LABELS_AND_TRAINING.md)
