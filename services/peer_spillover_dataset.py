@@ -257,3 +257,136 @@ def summarize_peer_spillover_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "baseline_weighted_sign_acc": round(baseline_hits / len(rows), 4) if rows else None,
         "generated_at_utc": datetime.utcnow().isoformat() + "Z",
     }
+
+
+def collect_peer_spillover_coverage(
+    engine: Engine,
+    *,
+    dataset_version: str = "v0_expanded_baseline",
+    feature_builder_version: str = FEATURE_BUILDER_VERSION_EARNINGS,
+    since: date | str = "2026-01-01",
+    limit: int = 2000,
+    universe: list[str] | None = None,
+    min_peer_samples: int = 2,
+) -> dict[str, Any]:
+    """
+    Dataset quality snapshot for analyzer / readiness gates.
+
+    Highlights training gaps: sources with matured events but no peer rows,
+    graph peers never seen in y, cold peers with too few samples.
+    """
+    from services.earnings_intelligence_universe import get_earnings_intelligence_universe
+
+    sym_set = sorted({s.strip().upper() for s in (universe or get_earnings_intelligence_universe()) if s.strip()})
+    raw_rows = build_peer_spillover_dataset_rows(
+        engine,
+        dataset_version=dataset_version,
+        feature_builder_version=feature_builder_version,
+        since=since,
+        limit=limit,
+    )
+    train_frame = load_peer_spillover_training_frame(
+        engine,
+        dataset_version=dataset_version,
+        feature_builder_version=feature_builder_version,
+        since=since,
+        limit=limit,
+    )
+    summary = summarize_peer_spillover_rows(raw_rows)
+
+    rows_by_source: dict[str, int] = {}
+    rows_by_peer: dict[str, int] = {}
+    sources_with_rows: set[str] = set()
+    peers_with_rows: set[str] = set()
+    for r in raw_rows:
+        src = str(r["source_symbol"]).upper()
+        peer = str(r["peer_ticker"]).upper()
+        rows_by_source[src] = rows_by_source.get(src, 0) + 1
+        rows_by_peer[peer] = rows_by_peer.get(peer, 0) + 1
+        sources_with_rows.add(src)
+        peers_with_rows.add(peer)
+
+    matured_sources: set[str] = set()
+    graph_sources: set[str] = set()
+    graph_peers: set[str] = set()
+    try:
+        with engine.connect() as conn:
+            matured_q = text(
+                """
+                SELECT DISTINCT UPPER(TRIM(erd.symbol)) AS source_symbol
+                FROM event_reaction_dataset erd
+                JOIN knowledge_base kb ON kb.id = erd.knowledge_base_id
+                WHERE erd.dataset_version = :dv
+                  AND kb.ts::date >= CAST(:since AS date)
+                  AND UPPER(TRIM(erd.symbol)) = ANY(:symbols)
+                  AND erd.features_before IS NOT NULL
+                  AND erd.features_before <> '{}'::jsonb
+                  AND (erd.features_before->>'feature_builder_version') = :fbv
+                  AND erd.outcomes_after ? 'forward_log_ret_5d'
+                  AND EXISTS (
+                    SELECT 1 FROM peer_graph_edge pge
+                    WHERE UPPER(TRIM(pge.source_ticker)) = UPPER(TRIM(erd.symbol))
+                      AND COALESCE(pge.relation_type, '') <> 'sector_etf'
+                  )
+                """
+            )
+            matured_sources = {
+                str(r["source_symbol"]).upper()
+                for r in conn.execute(
+                    matured_q,
+                    {"dv": dataset_version, "fbv": feature_builder_version, "since": str(since)[:10], "symbols": sym_set},
+                ).mappings()
+            }
+            graph_sources = {
+                str(r[0]).upper()
+                for r in conn.execute(
+                    text(
+                        """
+                        SELECT DISTINCT UPPER(TRIM(source_ticker))
+                        FROM peer_graph_edge
+                        WHERE COALESCE(relation_type, '') <> 'sector_etf'
+                          AND UPPER(TRIM(source_ticker)) = ANY(:symbols)
+                        """
+                    ),
+                    {"symbols": sym_set},
+                ).all()
+            }
+            graph_peers = {
+                str(r[0]).upper()
+                for r in conn.execute(
+                    text(
+                        """
+                        SELECT DISTINCT UPPER(TRIM(target_ticker))
+                        FROM peer_graph_edge
+                        WHERE COALESCE(relation_type, '') <> 'sector_etf'
+                          AND UPPER(TRIM(target_ticker)) = ANY(:symbols)
+                        """
+                    ),
+                    {"symbols": sym_set},
+                ).all()
+            }
+    except Exception as e:
+        summary["coverage_error"] = str(e)
+
+    sources_without_rows = sorted(matured_sources - sources_with_rows)
+    graph_sources_without_rows = sorted(graph_sources - sources_with_rows)
+    peers_in_graph_not_in_train = sorted(graph_peers - peers_with_rows)
+    cold_peers = sorted(p for p, n in rows_by_peer.items() if n < max(1, int(min_peer_samples)))
+    universe_sources_never_leader = sorted(s for s in sym_set if s in graph_peers and s not in graph_sources)
+    features_gap_rows = max(0, len(raw_rows) - len(train_frame))
+
+    return {
+        **summary,
+        "n_trainable_rows": int(len(train_frame)),
+        "features_gap_rows": features_gap_rows,
+        "rows_by_source_top": dict(sorted(rows_by_source.items(), key=lambda x: -x[1])[:8]),
+        "rows_by_peer_top": dict(sorted(rows_by_peer.items(), key=lambda x: -x[1])[:12]),
+        "matured_sources_with_graph": len(matured_sources),
+        "sources_with_spillover_rows": len(sources_with_rows),
+        "sources_without_spillover_rows": sources_without_rows,
+        "graph_sources_without_spillover_rows": graph_sources_without_rows,
+        "peers_in_graph_not_in_train": peers_in_graph_not_in_train,
+        "cold_peers_below_min_samples": cold_peers,
+        "min_peer_samples_threshold": max(1, int(min_peer_samples)),
+        "universe_symbols_peer_only": universe_sources_never_leader,
+    }

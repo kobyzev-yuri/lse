@@ -65,6 +65,20 @@ def default_scenario_train_metrics_path(project_root: Path | None = None) -> Pat
     return root / "local" / "logs" / "ml_data_quality" / "last_event_reaction_scenario_train_metrics.json"
 
 
+def default_peer_spillover_train_metrics_path(project_root: Path | None = None) -> Path:
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml/ml_data_quality/last_peer_spillover_train_metrics.json")
+    root = project_root or Path(__file__).resolve().parents[1]
+    return root / "local" / "logs" / "ml_data_quality" / "last_peer_spillover_train_metrics.json"
+
+
+def default_peer_spillover_dataset_path(project_root: Path | None = None) -> Path:
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml/ml_data_quality/peer_spillover_dataset.json")
+    root = project_root or Path(__file__).resolve().parents[1]
+    return root / "local" / "logs" / "ml_data_quality" / "peer_spillover_dataset.json"
+
+
 def collect_earnings_intelligence_readiness(
     engine: Engine,
     *,
@@ -185,6 +199,17 @@ def collect_earnings_intelligence_readiness(
             "named_scenario_labels": int(erd.get("named_scenario_labels") or 0),
             "earnings_v1_feature_rows": int(erd.get("with_earnings_features") or 0),
         }
+        from services.peer_spillover_dataset import collect_peer_spillover_coverage
+
+        min_peer_samples = _cfg_int("ML_READINESS_PEER_SPILLOVER_MIN_PEER_SAMPLES", 2)
+        out["peer_spillover_dataset"] = collect_peer_spillover_coverage(
+            engine,
+            dataset_version=dataset_version,
+            feature_builder_version=feature_builder_version,
+            since=since,
+            universe=sym_set,
+            min_peer_samples=min_peer_samples,
+        )
     except Exception as e:
         out["error"] = str(e)
         logger.warning("earnings intelligence readiness: %s", e)
@@ -264,6 +289,87 @@ def gate_scenario_classifier(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any
     }
 
 
+def gate_peer_spillover_dataset(data: Dict[str, Any]) -> Dict[str, Any]:
+    reasons: list[str] = []
+    ps = data.get("peer_spillover_dataset") if isinstance(data.get("peer_spillover_dataset"), dict) else {}
+    min_rows = _cfg_int("ML_READINESS_PEER_SPILLOVER_MIN_ROWS", 100)
+    min_events = _cfg_int("ML_READINESS_PEER_SPILLOVER_MIN_EVENTS", 10)
+    min_trainable = _cfg_int("ML_READINESS_PEER_SPILLOVER_MIN_TRAINABLE_ROWS", 80)
+    max_gap_sources = _cfg_int("ML_READINESS_PEER_SPILLOVER_MAX_SOURCES_WITHOUT_ROWS", 8)
+    max_cold_peers = _cfg_int("ML_READINESS_PEER_SPILLOVER_MAX_COLD_PEERS", 12)
+    max_graph_peers_missing = _cfg_int("ML_READINESS_PEER_SPILLOVER_MAX_GRAPH_PEERS_MISSING", 10)
+
+    n_rows = int(ps.get("n_rows") or 0)
+    n_events = int(ps.get("n_events") or 0)
+    n_trainable = int(ps.get("n_trainable_rows") or 0)
+    gap_sources = ps.get("sources_without_spillover_rows") or []
+    cold_peers = ps.get("cold_peers_below_min_samples") or []
+    missing_peers = ps.get("peers_in_graph_not_in_train") or []
+    features_gap = int(ps.get("features_gap_rows") or 0)
+
+    if n_rows < min_rows:
+        reasons.append(f"n_rows<{min_rows}")
+    if n_events < min_events:
+        reasons.append(f"n_events<{min_events}")
+    if n_trainable < min_trainable:
+        reasons.append(f"n_trainable_rows<{min_trainable}")
+    if len(gap_sources) > max_gap_sources:
+        reasons.append(f"sources_without_rows>{max_gap_sources}")
+    if len(cold_peers) > max_cold_peers:
+        reasons.append(f"cold_peers>{max_cold_peers}")
+    if len(missing_peers) > max_graph_peers_missing:
+        reasons.append(f"graph_peers_missing>{max_graph_peers_missing}")
+    if features_gap > 0:
+        reasons.append(f"features_gap_rows={features_gap}")
+
+    return {
+        "ready": len(reasons) == 0,
+        "reasons": reasons,
+        "n_rows": n_rows,
+        "n_events": n_events,
+        "n_trainable_rows": n_trainable,
+        "baseline_weighted_sign_acc": ps.get("baseline_weighted_sign_acc"),
+        "sources_without_spillover_rows": gap_sources[:12],
+        "cold_peers_below_min_samples": cold_peers[:12],
+        "peers_in_graph_not_in_train": missing_peers[:12],
+        "features_gap_rows": features_gap,
+    }
+
+
+def gate_peer_spillover_regressor(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    reasons: list[str] = []
+    if not metrics:
+        return {"ready": False, "reasons": ["no_peer_spillover_metrics_file"], "rmse_valid": None, "n_train": 0}
+    st = metrics.get("status")
+    if st != "ok":
+        reasons.append(f"status={st}")
+    mets = metrics.get("metrics") if isinstance(metrics.get("metrics"), dict) else {}
+    n_train = int(mets.get("n_train") or 0)
+    min_train = _cfg_int("ML_READINESS_PEER_SPILLOVER_MIN_TRAIN", 80)
+    if n_train < min_train:
+        reasons.append(f"n_train<{min_train}")
+    rmse_max = _cfg_float("ML_READINESS_PEER_SPILLOVER_RMSE_MAX", 0.15)
+    rmse = mets.get("rmse_valid")
+    if rmse is None or (isinstance(rmse, (int, float)) and float(rmse) > rmse_max):
+        reasons.append(f"rmse_valid>{rmse_max}")
+    min_sign = _cfg_float("ML_READINESS_PEER_SPILLOVER_MIN_SIGN_ACCURACY", 0.5)
+    sign_acc = mets.get("sign_accuracy_valid")
+    if sign_acc is not None and float(sign_acc) < min_sign:
+        reasons.append(f"sign_accuracy_valid<{min_sign}")
+    baseline_sign = mets.get("baseline_sign_accuracy_valid")
+    if sign_acc is not None and baseline_sign is not None and float(sign_acc) <= float(baseline_sign):
+        reasons.append("sign_acc_not_above_baseline")
+    return {
+        "ready": len(reasons) == 0,
+        "reasons": reasons,
+        "rmse_valid": rmse,
+        "sign_accuracy_valid": sign_acc,
+        "baseline_sign_accuracy_valid": baseline_sign,
+        "n_train": n_train,
+        "status": st,
+    }
+
+
 def gate_earnings_regression(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Reuse event-reaction regression thresholds for earnings grid layer."""
     reasons: list[str] = []
@@ -319,6 +425,7 @@ def build_earnings_intelligence_gates(
     *,
     scenario_metrics: Optional[Dict[str, Any]] = None,
     regression_metrics: Optional[Dict[str, Any]] = None,
+    peer_spillover_metrics: Optional[Dict[str, Any]] = None,
     shadow_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     g_sources = gate_sources(snapshot)
@@ -326,18 +433,24 @@ def build_earnings_intelligence_gates(
     g_labels = gate_scenario_labels(snapshot)
     g_scenario = gate_scenario_classifier(scenario_metrics)
     g_regression = gate_earnings_regression(regression_metrics)
+    g_peer_ds = gate_peer_spillover_dataset(snapshot)
+    g_peer_model = gate_peer_spillover_regressor(peer_spillover_metrics)
     g_shadow = gate_trading_shadow(shadow_report)
     grid_core = all(g.get("ready") for g in (g_sources, g_features, g_labels, g_scenario))
+    peer_ready = bool(g_peer_ds.get("ready")) and bool(g_peer_model.get("ready"))
     return {
         "sources": g_sources,
         "features": g_features,
         "scenario_labels": g_labels,
         "scenario_classifier": g_scenario,
         "regression": g_regression,
+        "peer_spillover_dataset": g_peer_ds,
+        "peer_spillover_regressor": g_peer_model,
         "trading_shadow": g_shadow,
         "overall_grid_ready": grid_core,
         "overall_with_regression": grid_core and bool(g_regression.get("ready")),
         "overall_trading_shadow_ready": grid_core and bool(g_shadow.get("ready")),
+        "overall_peer_spillover_ready": peer_ready,
     }
 
 
@@ -347,6 +460,7 @@ def write_earnings_intelligence_readiness(
     project_root: Path | None = None,
     scenario_metrics_path: Path | None = None,
     regression_metrics_path: Path | None = None,
+    peer_spillover_metrics_path: Path | None = None,
     dataset_version: str = DEFAULT_DATASET_VERSION,
     feature_builder_version: str = DEFAULT_FEATURE_BUILDER,
 ) -> Dict[str, Any]:
@@ -357,6 +471,7 @@ def write_earnings_intelligence_readiness(
         feature_builder_version=feature_builder_version,
     )
     scen_path = scenario_metrics_path or default_scenario_train_metrics_path(root)
+    peer_path = peer_spillover_metrics_path or default_peer_spillover_train_metrics_path(root)
     reg_path = regression_metrics_path or (
         Path("/app/logs/ml/ml_data_quality/last_event_reaction_train_metrics.json")
         if Path("/app/logs").exists()
@@ -364,11 +479,13 @@ def write_earnings_intelligence_readiness(
     )
     scen_data = _json_load(scen_path)
     reg_data = _json_load(reg_path)
+    peer_data = _json_load(peer_path)
     shadow_data = _json_load(default_shadow_report_path(root))
     gates = build_earnings_intelligence_gates(
         snap,
         scenario_metrics=scen_data,
         regression_metrics=reg_data,
+        peer_spillover_metrics=peer_data,
         shadow_report=shadow_data,
     )
     bundle = {
@@ -379,11 +496,18 @@ def write_earnings_intelligence_readiness(
         "metrics_paths": {
             "scenario_classifier": str(scen_path),
             "regression": str(reg_path),
+            "peer_spillover_regressor": str(peer_path),
+            "peer_spillover_dataset": str(default_peer_spillover_dataset_path(root)),
             "scenario_shadow": str(default_shadow_report_path(root)),
         },
     }
     out_path = default_readiness_metrics_path(root)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    logger.info("Wrote earnings intelligence readiness → %s overall_grid_ready=%s", out_path, gates["overall_grid_ready"])
+    logger.info(
+        "Wrote earnings intelligence readiness → %s grid=%s peer=%s",
+        out_path,
+        gates["overall_grid_ready"],
+        gates.get("overall_peer_spillover_ready"),
+    )
     return bundle

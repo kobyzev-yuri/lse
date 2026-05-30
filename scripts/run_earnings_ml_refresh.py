@@ -155,6 +155,7 @@ def main() -> int:
             get_engine(),
             project_root=project_root,
             scenario_metrics_path=scenario_metrics_path,
+            peer_spillover_metrics_path=peer_spillover_metrics_path,
         )
 
     if not args.skip_readiness and not dry_run:

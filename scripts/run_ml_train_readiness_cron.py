@@ -164,12 +164,18 @@ def _gate_earnings_intelligence(
     reasons: list[str] = []
     if not overall:
         for name, g in gates.items():
-            if name == "overall_grid_ready" or not isinstance(g, dict):
+            if name.startswith("overall_") or not isinstance(g, dict):
                 continue
             if not g.get("ready"):
                 for r in g.get("reasons") or []:
                     reasons.append(f"{name}:{r}")
-    return {"ready": overall, "reasons": reasons, "overall_grid_ready": overall, "gates": gates}
+    return {
+        "ready": overall,
+        "reasons": reasons,
+        "overall_grid_ready": overall,
+        "overall_peer_spillover_ready": bool(gates.get("overall_peer_spillover_ready")),
+        "gates": gates,
+    }
 
 
 def main() -> int:

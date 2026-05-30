@@ -263,8 +263,10 @@ def _collect_earnings_intelligence_readiness_bundle(engine, project_root: Path) 
     from services.earnings_intelligence_readiness import (
         build_earnings_intelligence_gates,
         collect_earnings_intelligence_readiness,
+        default_peer_spillover_train_metrics_path,
         default_readiness_metrics_path,
         default_scenario_train_metrics_path,
+        default_shadow_report_path,
     )
 
     out: Dict[str, Any] = {"error": None, "file": None, "snapshot": None, "gates": None}
@@ -279,14 +281,22 @@ def _collect_earnings_intelligence_readiness_bundle(engine, project_root: Path) 
                 return out
         snap = collect_earnings_intelligence_readiness(engine)
         scen = _json_load(default_scenario_train_metrics_path(project_root))
+        peer = _json_load(default_peer_spillover_train_metrics_path(project_root))
         reg_path = (
             Path("/app/logs/ml/ml_data_quality/last_event_reaction_train_metrics.json")
             if Path("/app/logs").exists()
             else project_root / "local" / "logs" / "ml_data_quality" / "last_event_reaction_train_metrics.json"
         )
         reg = _json_load(reg_path)
+        shadow = _json_load(default_shadow_report_path(project_root))
         out["snapshot"] = snap
-        out["gates"] = build_earnings_intelligence_gates(snap, scenario_metrics=scen, regression_metrics=reg)
+        out["gates"] = build_earnings_intelligence_gates(
+            snap,
+            scenario_metrics=scen,
+            regression_metrics=reg,
+            peer_spillover_metrics=peer,
+            shadow_report=shadow,
+        )
     except Exception as e:
         out["error"] = str(e)
         logger.warning("earnings intelligence readiness bundle: %s", e)
@@ -482,12 +492,20 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
             "event_reaction_rmse_max": float(
                 (get_config_value("ML_READINESS_EVENT_REACTION_RMSE_MAX", "0.12") or "0.12").strip()
             ),
+            "peer_spillover_rmse_max": float(
+                (get_config_value("ML_READINESS_PEER_SPILLOVER_RMSE_MAX", "0.15") or "0.15").strip()
+            ),
+            "peer_spillover_min_rows": int(
+                (get_config_value("ML_READINESS_PEER_SPILLOVER_MIN_ROWS", "100") or "100").strip()
+            ),
         }
     except (ValueError, TypeError):
         bundle["readiness_thresholds"] = {
             "portfolio_rmse_max": 0.08,
             "game5m_auc_min": 0.52,
             "event_reaction_rmse_max": 0.12,
+            "peer_spillover_rmse_max": 0.15,
+            "peer_spillover_min_rows": 100,
         }
     recs = (bundle.get("ml_train_readiness_jsonl") or {}).get("last_records") or []
     latest = recs[-1] if recs else {}
@@ -503,6 +521,7 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
     ei = bundle.get("earnings_intelligence_readiness") if isinstance(bundle.get("earnings_intelligence_readiness"), dict) else {}
     bundle["earnings_grid_readiness"] = {
         "overall_grid_ready": (ei.get("gates") or {}).get("overall_grid_ready"),
+        "overall_peer_spillover_ready": (ei.get("gates") or {}).get("overall_peer_spillover_ready"),
         "gates": ei.get("gates"),
         "snapshot": ei.get("snapshot"),
         "file_path": (ei.get("file") or {}).get("path"),

@@ -783,6 +783,8 @@ def _compute_ml_data_quality_bundle(strategy: str = "GAME_5M") -> Dict[str, Any]
     pf = q_dir / "last_portfolio_train_metrics.json"
     er = q_dir / "last_event_reaction_train_metrics.json"
     ei_scenario = q_dir / "last_event_reaction_scenario_train_metrics.json"
+    peer_spillover = q_dir / "last_peer_spillover_train_metrics.json"
+    peer_dataset = q_dir / "peer_spillover_dataset.json"
     if g5.is_file():
         tpaths["game5m_entry_last"] = g5
     if pf.is_file():
@@ -791,6 +793,10 @@ def _compute_ml_data_quality_bundle(strategy: str = "GAME_5M") -> Dict[str, Any]
         tpaths["event_reaction_last"] = er
     if ei_scenario.is_file():
         tpaths["event_reaction_scenario_last"] = ei_scenario
+    if peer_spillover.is_file():
+        tpaths["peer_spillover_last"] = peer_spillover
+    if peer_dataset.is_file():
+        tpaths["peer_spillover_dataset"] = peer_dataset
     tickers: Optional[List[str]] = None
     try:
         tf = get_tickers_fast()

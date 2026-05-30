@@ -406,7 +406,10 @@ function fmtGateEarningsIntelligence(eiBlock) {
     const r = (g.reasons || []).filter(Boolean).slice(0, 3).join(', ');
     const line = (ok ? '<span style="color:#86efac;">✓</span> ' : '<span style="color:#fca5a5;">✗</span> ') +
         (r ? '<span class="muted">' + esc(r) + '</span>' : '');
-    return line + '<br><code style="font-size:0.78rem;">grid</code>';
+    const peerOk = g.overall_peer_spillover_ready;
+    const peerLine = peerOk === true ? ' · peer <span style="color:#86efac;">✓</span>' :
+        (peerOk === false ? ' · peer <span style="color:#fca5a5;">✗</span>' : '');
+    return line + peerLine + '<br><code style="font-size:0.78rem;">grid</code>';
 }
 
 function renderMlDataQuality(data, strategy) {
@@ -559,6 +562,13 @@ function renderMlDataQuality(data, strategy) {
             } else if (k.indexOf('scenario') >= 0) {
                 const m = d.metrics || {};
                 html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · acc valid <code>' + esc(m.valid_accuracy != null ? m.valid_accuracy : '—') + '</code> · n_train <code>' + esc(m.n_train != null ? m.n_train : d.n_train) + '</code> · classes <code>' + esc((m.classes || []).length) + '</code></p>';
+            } else if (k.indexOf('peer_spillover_last') >= 0) {
+                const m = d.metrics || {};
+                const ds = m.dataset_summary || {};
+                html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · RMSE valid <code>' + esc(m.rmse_valid) + '</code> · sign acc <code>' + esc(m.sign_accuracy_valid) + '</code> · baseline sign <code>' + esc(m.baseline_sign_accuracy_valid) + '</code> · n_train <code>' + esc(m.n_train) + '</code> · dataset rows <code>' + esc(ds.n_rows) + '</code></p>';
+            } else if (k.indexOf('peer_spillover_dataset') >= 0) {
+                const s = d.summary || {};
+                html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;">rows <code>' + esc(s.n_rows) + '</code> · events <code>' + esc(s.n_events) + '</code> · peers <code>' + esc(s.n_peers_distinct) + '</code> · baseline sign <code>' + esc(s.baseline_weighted_sign_acc) + '</code></p>';
             } else {
                 const m = d.metrics || {};
                 html += '<p style="margin:0.15rem 0 0.5rem 1rem;font-size:0.88rem;"><code>status=' + esc(d.status) + '</code> · RMSE valid <code>' + esc(m.rmse_valid) + '</code> · n_train <code>' + esc(d.n_train) + '</code></p>';
@@ -638,6 +648,11 @@ function renderMlDataQuality(data, strategy) {
     } else {
         html += '<p class="muted" style="margin:0 0 0.45rem 0;">Нет файла readiness — запустите <code>run_earnings_ml_refresh.py</code>.</p>';
     }
+    if (egr.overall_peer_spillover_ready === true) {
+        html += '<p style="margin:0 0 0.45rem 0;color:#86efac;"><strong>✓ overall_peer_spillover_ready</strong> (dataset + regressor)</p>';
+    } else if (egr.overall_peer_spillover_ready === false) {
+        html += '<p style="margin:0 0 0.35rem 0;color:#fca5a5;"><strong>✗ overall_peer_spillover_ready</strong> — см. гейты peer_spillover_* ниже</p>';
+    }
     const owr = eiGates.overall_with_regression;
     if (owr === false && egr.overall_grid_ready === true) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Advisory regression gate отдельно: <code>overall_with_regression=false</code> (RMSE event_reaction).</p>';
@@ -645,6 +660,7 @@ function renderMlDataQuality(data, strategy) {
     if (egr.file_path) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Файл: <code>' + esc(egr.file_path) + '</code></p>';
     }
+    const eiPs = eiSnap.peer_spillover_dataset || {};
     html += '<table style="font-size:0.86rem;border-collapse:collapse;margin:0.25rem 0 0.5rem 0;">';
     [
         ['universe_size', eiSnap.universe_size],
@@ -655,6 +671,10 @@ function renderMlDataQuality(data, strategy) {
         ['peer_graph_edge_rows', eiSrc.peer_graph_edge_rows],
         ['llm_scenario_labels', eiLf.llm_scenario_labels],
         ['earnings_v1_feature_rows', eiLf.earnings_v1_feature_rows],
+        ['peer_spillover_n_rows', eiPs.n_rows],
+        ['peer_spillover_n_events', eiPs.n_events],
+        ['peer_spillover_n_trainable', eiPs.n_trainable_rows],
+        ['peer_baseline_sign_acc', eiPs.baseline_weighted_sign_acc],
     ].forEach(function (pair) {
         if (pair[1] === undefined || pair[1] === null) {
             return;
@@ -662,7 +682,7 @@ function renderMlDataQuality(data, strategy) {
         html += '<tr><td style="padding:2px 8px 2px 0;color:#94a3b8;">' + esc(pair[0]) + '</td><td><code>' + esc(pair[1]) + '</code></td></tr>';
     });
     html += '</table>';
-    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier', 'regression'];
+    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier', 'regression', 'peer_spillover_dataset', 'peer_spillover_regressor'];
     html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.85rem;"><strong>Гейты:</strong></p><ul style="margin:0 0 0.5rem 1rem;padding:0;font-size:0.84rem;">';
     gateNames.forEach(function (gn) {
         const g = eiGates[gn] || {};
@@ -674,11 +694,34 @@ function renderMlDataQuality(data, strategy) {
         html += '</li>';
     });
     html += '</ul>';
+    const psGate = eiGates.peer_spillover_regressor || {};
+    if (psGate.rmse_valid != null || psGate.sign_accuracy_valid != null) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0.15rem 0 0.35rem 0;">Peer spillover train: RMSE valid <code>' + esc(psGate.rmse_valid) + '</code> · sign acc <code>' + esc(psGate.sign_accuracy_valid) + '</code> · baseline sign <code>' + esc(psGate.baseline_sign_accuracy_valid) + '</code> · n_train <code>' + esc(psGate.n_train) + '</code></p>';
+    }
+    const gapSources = eiPs.sources_without_spillover_rows || [];
+    const coldPeers = eiPs.cold_peers_below_min_samples || [];
+    const missingPeers = eiPs.peers_in_graph_not_in_train || [];
+    if (gapSources.length || coldPeers.length || missingPeers.length) {
+        html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.85rem;"><strong>Пробелы датасета (контроль):</strong></p><ul style="margin:0 0 0.5rem 1rem;padding:0;font-size:0.82rem;">';
+        if (gapSources.length) {
+            html += '<li>Sources с matured 5d + graph, но без peer-строк: <code>' + esc(gapSources.slice(0, 10).join(', ')) + (gapSources.length > 10 ? '…' : '') + '</code></li>';
+        }
+        if (coldPeers.length) {
+            html += '<li>Cold peers (&lt;' + esc(eiPs.min_peer_samples_threshold || 2) + ' samples): <code>' + esc(coldPeers.slice(0, 12).join(', ')) + '</code></li>';
+        }
+        if (missingPeers.length) {
+            html += '<li>Пиры в graph, нет в train y: <code>' + esc(missingPeers.slice(0, 12).join(', ')) + (missingPeers.length > 12 ? '…' : '') + '</code></li>';
+        }
+        if (eiPs.features_gap_rows) {
+            html += '<li>Features gap (raw→trainable): <code>' + esc(eiPs.features_gap_rows) + '</code> строк отброшено (нет quotes_regime_earnings_v1)</li>';
+        }
+        html += '</ul>';
+    }
     const missing = eiSrc.symbols_without_materials || [];
     if (missing.length) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0;">Без материалов: <code>' + esc(missing.slice(0, 12).join(', ')) + (missing.length > 12 ? '…' : '') + '</code></p>';
     }
-    html += '<p class="muted" style="font-size:0.8rem;margin:0.45rem 0 0 0;">Cron: <code>run_earnings_ml_refresh.py</code> · пороги: <code>ML_READINESS_EARNINGS_*</code> · включить в readiness: <code>ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0</code></p>';
+    html += '<p class="muted" style="font-size:0.8rem;margin:0.45rem 0 0 0;">Cron: <code>run_earnings_ml_refresh.py</code> · пороги: <code>ML_READINESS_EARNINGS_*</code>, <code>ML_READINESS_PEER_SPILLOVER_*</code> · включить в readiness: <code>ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0</code></p>';
     html += '</div></details>';
     }
 
