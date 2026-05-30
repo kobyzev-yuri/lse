@@ -241,6 +241,12 @@ def build_event_brief(
 
     peers = load_peer_edges(engine, source_ticker=symbol)
     peer_targets = _peer_tickers_for_brief(peers=peers, affected=affected)
+    graph_peer_set = {
+        str(p.get("target_ticker") or "").strip().upper()
+        for p in peers
+        if str(p.get("relation_type") or "") != "sector_etf"
+    }
+    extra_ml_peers = [t for t in peer_targets if t not in graph_peer_set]
     peer_outcomes = load_peer_spillover_outcomes(
         source_event_date=event_date,
         peer_tickers=peer_targets,
@@ -273,6 +279,7 @@ def build_event_brief(
             source_symbol=symbol,
             features_before=features,
             peer_edges=peers,
+            extra_peer_tickers=extra_ml_peers,
         ),
         "evidence_quotes": evidence,
         "source_outcomes": {

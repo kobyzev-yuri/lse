@@ -331,11 +331,17 @@ const indexPeerMl = (mlArr) => {
     });
     return m;
 };
-const fmtMlPeerPred = (mlRow) => {
-    if (!mlRow) return '<span class="muted">—</span>';
+const fmtMlPeerPred = (mlRow, hasFact) => {
+    if (!mlRow) {
+        return hasFact
+            ? '<span class="muted" title="нет pred (не equity / нет features)">—</span>'
+            : '<span class="muted">—</span>';
+    }
     const st = mlRow.peer_spillover_ml_status;
     if (st === 'ok' && mlRow.peer_forward_log_ret_5d_pred != null) {
-        return fmtPct(mlRow.peer_forward_log_ret_5d_pred);
+        const rel = mlRow.relation_type === 'affected_only'
+            ? ' <span class="muted" title="LLM affected, нет ребра в peer_graph">aff</span>' : '';
+        return fmtPct(mlRow.peer_forward_log_ret_5d_pred) + rel;
     }
     const note = mlRow.peer_spillover_ml_note || st || '—';
     return `<span class="muted" title="${esc(note)}">${esc(st || '—')}</span>`;
@@ -366,7 +372,7 @@ const peerSpilloverCompareTable = (outcomes, mlArr, escTicker = true) => {
         const r5 = p.forward_log_ret_5d;
         const pred = ml?.peer_forward_log_ret_5d_pred;
         return `<tr><td>${t}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(r5)}</td>
-            <td>${fmtMlPeerPred(ml)}</td><td>${signMatchIcon(r5, pred)}</td></tr>`;
+            <td>${fmtMlPeerPred(ml, p.status === 'ok')}</td><td>${signMatchIcon(r5, pred)}</td></tr>`;
     }).join('');
     return `<table class="peer-table"><thead><tr>
         <th>Peer</th><th><span class="pill pill-spillover">1d</span> fact</th>
@@ -377,8 +383,9 @@ const peerSpilloverCompareTable = (outcomes, mlArr, escTicker = true) => {
 const peerSpilloverMlSummary = (mlArr) => {
     const ok = (mlArr || []).filter(r => r.peer_spillover_ml_status === 'ok');
     if (!ok.length) return '<span class="muted">ML spillover: нет pred (нет модели или features)</span>';
-    const n = ok.length;
-    return `<span class="muted">ML spillover: ${n} peer pred · advisory only</span>`;
+    const aff = ok.filter(r => r.relation_type === 'affected_only').length;
+    const affNote = aff ? ` · ${aff} via LLM affected` : '';
+    return `<span class="muted">ML spillover: ${ok.length} peer pred${affNote} · advisory only · Sign = fact vs pred 5d</span>`;
 };
 let allEvents = [], currentFilter = 'all', graphData = null;
 const EI_CTX_KEY = 'earnings_intelligence_ctx_v1';
@@ -714,7 +721,10 @@ async function loadSpillover() {
         box.innerHTML = '<div class="err">Нет past events с spillover</div>';
         return;
     }
-    const historyHtml = (data.events || []).map(ev => {
+    const skipDates = ctxDate && parts.length ? new Set([ctxDate]) : new Set();
+    const historyHtml = (data.events || [])
+        .filter(ev => !skipDates.has(ev.event_date))
+        .map(ev => {
         const peers = (ev.peer_outcomes||[]).filter(p => p.status==='ok');
         const peerMl = ev.peer_spillover_ml || [];
         const sm = ev.scenario_ml || {};
@@ -723,7 +733,7 @@ async function loadSpillover() {
             ${peerSpilloverMlSummary(peerMl)}
             ${peerSpilloverCompareTable(peers, peerMl, false)}</div>`;
     }).join('');
-    box.innerHTML = parts.join('') + (historyHtml || '<span class="muted">Нет истории spillover</span>');
+    box.innerHTML = parts.join('') + (historyHtml || (parts.length ? '' : '<span class="muted">Нет истории spillover</span>'));
 }
 
 async function loadShadow(refresh) {

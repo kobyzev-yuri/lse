@@ -153,12 +153,16 @@ def predict_peer_spillover_batch(
     source_symbol: str,
     features_before: Any,
     peer_edges: List[dict[str, Any]],
+    extra_peer_tickers: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    src = str(source_symbol or "").strip().upper()
     for edge in peer_edges or []:
         peer = str(edge.get("target_ticker") or edge.get("peer_ticker") or "").upper()
-        if not peer or edge.get("relation_type") == "sector_etf":
+        if not peer or peer == src or edge.get("relation_type") == "sector_etf":
             continue
+        seen.add(peer)
         out.append(
             predict_peer_spillover(
                 source_symbol=source_symbol,
@@ -166,6 +170,20 @@ def predict_peer_spillover_batch(
                 features_before=features_before,
                 edge_weight=float(edge.get("weight") or 0.5),
                 relation_type=str(edge.get("relation_type") or "unknown"),
+            )
+        )
+    for raw in extra_peer_tickers or []:
+        peer = str(raw or "").strip().upper()
+        if not peer or peer == src or peer in seen:
+            continue
+        seen.add(peer)
+        out.append(
+            predict_peer_spillover(
+                source_symbol=source_symbol,
+                peer_ticker=peer,
+                features_before=features_before,
+                edge_weight=0.5,
+                relation_type="affected_only",
             )
         )
     return out
