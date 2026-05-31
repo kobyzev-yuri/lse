@@ -482,7 +482,9 @@ def build_ml_data_quality_report(
 def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -> Dict[str, Any]:
     """Срез readiness/метрик под выбранную стратегию в анализаторе (GAME_5M | PORTFOLIO | ALL)."""
     from config_loader import get_config_value
+    from pathlib import Path
 
+    project_root = Path(__file__).resolve().parents[1]
     su = (strategy or "GAME_5M").strip().upper()
     bundle["strategy_focus"] = su
     try:

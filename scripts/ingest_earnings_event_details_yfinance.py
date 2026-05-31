@@ -234,7 +234,7 @@ def _upsert_detail(
           fiscal_period = EXCLUDED.fiscal_period,
           eps_actual = EXCLUDED.eps_actual,
           eps_estimate = EXCLUDED.eps_estimate,
-          guidance_summary = EXCLUDED.guidance_summary,
+          guidance_summary = COALESCE(earnings_event_detail.guidance_summary, '{}'::jsonb) || EXCLUDED.guidance_summary,
           affected_tickers = EXCLUDED.affected_tickers,
           updated_at = NOW()
         """
