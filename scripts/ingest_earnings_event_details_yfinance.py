@@ -183,6 +183,27 @@ def _ensure_kb_earnings_row(
     return int(row[0]) if row else None
 
 
+def _detail_has_llm_extraction(engine, knowledge_base_id: int) -> bool:
+    q = text(
+        """
+        SELECT guidance_summary
+        FROM earnings_event_detail
+        WHERE knowledge_base_id = :kb_id
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(q, {"kb_id": int(knowledge_base_id)}).first()
+    if not row or not row[0]:
+        return False
+    gs = row[0]
+    if isinstance(gs, str):
+        try:
+            gs = json.loads(gs)
+        except Exception:
+            return False
+    return bool(isinstance(gs, dict) and gs.get("extraction_meta"))
+
+
 def _upsert_detail(
     engine,
     *,
@@ -217,6 +238,30 @@ def _upsert_detail(
     }
     if dry_run:
         logger.info("dry-run upsert kb=%s %s %s", knowledge_base_id, ticker, guidance_summary)
+        return
+    if _detail_has_llm_extraction(engine, int(knowledge_base_id)):
+        q = text(
+            """
+            UPDATE earnings_event_detail
+            SET
+              fiscal_period = :fiscal_period,
+              eps_actual = :eps_actual,
+              eps_estimate = :eps_estimate,
+              updated_at = NOW()
+            WHERE knowledge_base_id = :knowledge_base_id
+            """
+        )
+        with engine.begin() as conn:
+            conn.execute(
+                q,
+                {
+                    "knowledge_base_id": int(knowledge_base_id),
+                    "fiscal_period": fiscal_period,
+                    "eps_actual": eps_actual,
+                    "eps_estimate": eps_estimate,
+                },
+            )
+        logger.debug("%s kb=%s yfinance refresh: preserved LLM extraction_meta", ticker, knowledge_base_id)
         return
     q = text(
         """
