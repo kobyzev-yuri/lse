@@ -55,9 +55,7 @@
         .row .label { color: #94a3b8; max-width: 58%; }
         .block-title { font-size: 0.72rem; color: #64748b; text-transform: uppercase; margin: 0.45rem 0 0.2rem; }
         .reasoning { font-size: 0.78rem; color: #cbd5e1; margin-top: 0.35rem; line-height: 1.35; }
-        .llm-btn { margin-top: 0.55rem; width: 100%; font-size: 0.78rem; }
-        .llm-block { margin-top: 0.45rem; padding: 0.55rem; background: #0f172a; border-radius: 6px; font-size: 0.78rem; color: #cbd5e1; white-space: pre-wrap; display: none; }
-        .llm-block.open { display: block; }
+        .llm-btn { margin-top: 0.55rem; width: 100%; font-size: 0.78rem; box-sizing: border-box; text-align: center; text-decoration: none; display: inline-block; }
         .muted { color: #94a3b8; font-size: 0.78rem; }
         .chart-link { font-size: 0.78rem; margin-top: 0.35rem; }
         .chart-link a { color: #7dd3fc; }
@@ -232,8 +230,7 @@
             }
             html += '</div>';
             if (LSE_WEB_LLM_ENABLED) {
-                html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">LLM (полный контекст)</button>';
-                html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';
+                html += '<a class="btn llm-btn" href="/api/portfolio/card/' + encodeURIComponent(c.ticker) + '/llm.html?corr_days=30" target="_blank" rel="noopener">LLM (полный контекст)</a>';
             }
             html += '<div class="chart-link"><a href="/portfolio/daily?ticker=' + encodeURIComponent(c.ticker) + '">График daily (quotes)</a></div>';
             html += '</div>';
@@ -261,38 +258,8 @@
                 }
                 updatedEl.textContent = data.updated_at ? new Date(data.updated_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—';
                 container.innerHTML = (data.cards || []).map(renderCard).join('');
-                document.querySelectorAll('.llm-btn').forEach(function(btn) {
-                    btn.addEventListener('click', function() { onLlm(this.getAttribute('data-ticker')); });
-                });
             } catch (e) {
                 container.innerHTML = '<div style="color:#fca5a5;">' + escapeHtml(e.message) + '</div>';
-            }
-        }
-        async function onLlm(ticker) {
-            var block = document.getElementById('llm-' + ticker);
-            if (!block || !LSE_WEB_LLM_ENABLED) return;
-            block.classList.add('open');
-            block.innerHTML = '<span class="muted">Загрузка LLM…</span>';
-            var controller = new AbortController();
-            var tid = setTimeout(function() { controller.abort(); }, 180000);
-            try {
-                var r = await fetch('/api/portfolio/card/' + encodeURIComponent(ticker) + '/llm?corr_days=30', { signal: controller.signal });
-                clearTimeout(tid);
-                if (!r.ok) {
-                    var err = await r.json().catch(function() { return {}; });
-                    block.textContent = 'Ошибка ' + r.status + ': ' + (err.detail || r.statusText);
-                    return;
-                }
-                var data = await r.json();
-                var ana = data.llm_analysis || {};
-                var parts = [];
-                if (ana.reasoning) parts.push(ana.reasoning);
-                if (ana.decision) parts.push('Решение LLM: ' + ana.decision + (ana.confidence != null ? ' (уверенность ' + fmt(ana.confidence, 2) + ')' : ''));
-                if (Array.isArray(ana.key_factors) && ana.key_factors.length) parts.push('Ключевое: ' + ana.key_factors.join(' · '));
-                block.textContent = parts.length ? parts.join('\n\n') : JSON.stringify(ana, null, 2);
-            } catch (e) {
-                clearTimeout(tid);
-                block.textContent = e.name === 'AbortError' ? 'Таймаут запроса.' : ('Ошибка: ' + e.message);
             }
         }
         document.getElementById('refreshBtn').addEventListener('click', function() { loadCards(false).then(scheduleAuto); });

@@ -80,9 +80,7 @@
         .verdict-block { margin: 0.55rem 0; padding: 0.55rem 0.65rem; background: #0f172a; border: 1px solid #334155; border-radius: 8px; font-size: 0.8rem; line-height: 1.35; }
         .verdict-label { font-weight: 700; color: #e2e8f0; }
         .verdict-reason { color: #94a3b8; margin-top: 0.25rem; }
-        .llm-btn { margin-top: 0.6rem; width: 100%; font-size: 0.8rem; }
-        .llm-block { margin-top: 0.5rem; padding: 0.6rem; background: #0f172a; border-radius: 6px; font-size: 0.8rem; color: #cbd5e1; white-space: pre-wrap; display: none; }
-        .llm-block.open { display: block; }
+        .llm-btn { margin-top: 0.6rem; width: 100%; font-size: 0.8rem; box-sizing: border-box; text-align: center; text-decoration: none; display: inline-block; }
         .loading-llm { color: #94a3b8; }
         .chart-link { font-size: 0.8rem; margin-top: 0.4rem; }
         .chart-link a { color: #7dd3fc; }
@@ -428,8 +426,7 @@
                 html += '<div class="row"><span class="label">Макро</span><span class="value muted" style="font-size:0.85rem;">' + macroLine + '</span></div>';
             }
             if (LSE_WEB_LLM_ENABLED) {
-                html += '<button class="btn llm-btn" data-ticker="' + escapeHtml(c.ticker) + '">Вывод LLM</button>';
-                html += '<div class="llm-block" id="llm-' + escapeHtml(c.ticker) + '"></div>';
+                html += '<a class="btn llm-btn" href="/api/game5m/card/' + encodeURIComponent(c.ticker) + '/llm.html" target="_blank" rel="noopener">Вывод LLM</a>';
             }
             html += '<div class="chart-link"><a href="/visualization?ticker=' + encodeURIComponent(c.ticker) + '" target="_blank">График 5m</a></div>';
             html += '</div>';
@@ -448,50 +445,10 @@
                 }
                 updatedEl.textContent = data.updated_at ? new Date(data.updated_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—';
                 container.innerHTML = (data.cards || []).map(renderCard).join('');
-                document.querySelectorAll('.llm-btn').forEach(function(btn) {
-                    btn.addEventListener('click', function() { onLlmClick(this.getAttribute('data-ticker')); });
-                });
             } catch (e) {
                 container.innerHTML = '<div style="color:#fca5a5;">' + escapeHtml(e.message) + '</div>';
             }
             return Promise.resolve();
-        }
-        async function onLlmClick(ticker) {
-            const block = document.getElementById('llm-' + ticker);
-            if (!block || !LSE_WEB_LLM_ENABLED) return;
-            if (block.classList.contains('open') && block.dataset.loaded === '1') return;
-            block.classList.add('open');
-            block.innerHTML = '<span class="loading-llm">Загрузка LLM… (может занять до 1–2 мин)</span>';
-            const controller = new AbortController();
-            const timeoutId = setTimeout(function() { controller.abort(); }, 120000);
-            try {
-                const r = await fetch('/api/game5m/card/' + encodeURIComponent(ticker) + '/llm', { signal: controller.signal });
-                clearTimeout(timeoutId);
-                if (!r.ok) {
-                    var errBody = '';
-                    try { var j = await r.json(); errBody = j.detail || JSON.stringify(j); } catch (_) { errBody = await r.text() || r.statusText; }
-                    block.textContent = 'Ошибка ' + r.status + ': ' + (errBody || r.statusText);
-                    block.dataset.loaded = '1';
-                    return;
-                }
-                const data = await r.json();
-                let text = (data.llm_reasoning || '').trim();
-                if (data.llm_key_factors && Array.isArray(data.llm_key_factors) && data.llm_key_factors.length > 0) {
-                    var labels = data.llm_key_factors.filter(function(f){ return f && String(f).trim().length > 0; }).map(function(f){ return String(f).trim(); });
-                    if (labels.length > 0) text += (text ? '\n\nКлючевое: ' : '') + labels.join(' · ');
-                }
-                if (!text) text = 'Нет вывода LLM.';
-                block.textContent = text;
-                block.dataset.loaded = '1';
-            } catch (e) {
-                clearTimeout(timeoutId);
-                if (e.name === 'AbortError') {
-                    block.textContent = 'Таймаут (запрос дольше 2 мин). Попробуйте ещё раз или проверьте сервер.';
-                } else {
-                    block.textContent = 'Ошибка: ' + escapeHtml(e.message);
-                }
-                block.dataset.loaded = '1';
-            }
         }
         document.getElementById('refreshBtn').addEventListener('click', function() {
             loadCards(false).then(function() { scheduleAutoRefresh(); });

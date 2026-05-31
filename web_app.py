@@ -2544,7 +2544,7 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
     }
 
 
-def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int) -> Dict[str, Any]:
+def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int, *, include_prompts: bool = False) -> Dict[str, Any]:
     """LLM по одному тикеру портфеля: полный контекст (корреляция кластера, новости, риск-лимиты в карточке)."""
     from services.portfolio_card import (
         get_portfolio_cluster_context,
@@ -2603,12 +2603,18 @@ def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int) -> Dict[str, A
         logger.debug("portfolio card decision_stack single %s: %s", ticker, e)
     merged = {
         **base,
+        "ticker": ticker,
         "llm_analysis": _make_json_safe(r.get("llm_analysis")),
         "technical_data": _make_json_safe(r.get("technical_data")),
         "strategy_result": _make_json_safe(r.get("strategy_result")),
         "news_count": r.get("news_count"),
         "base_decision": r.get("base_decision"),
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
     }
+    if include_prompts:
+        merged["prompt_system"] = r.get("prompt_system")
+        merged["prompt_user"] = r.get("prompt_user")
+        return merged
     return portfolio_llm_public_payload(merged)
 
 
@@ -2775,7 +2781,7 @@ def _build_portfolio_daily_charts_bulk(days: int) -> Dict[str, Any]:
     return {"days": days, "tickers": tickers, "charts": charts}
 
 
-def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
+def _compute_game5m_card_llm_sync(ticker: str, *, include_prompts: bool = False) -> Dict[str, Any]:
     """Синхронный расчёт вывода LLM для карточки 5m (запускается в потоке, чтобы не блокировать event loop)."""
     from services.recommend_5m import get_decision_5m
     from services.cluster_recommend import (
@@ -2783,8 +2789,7 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
         build_cluster_note_for_5m_llm,
         get_avg_volatility_20_pct_from_quotes,
     )
-    from services.llm_service import get_llm_service
-    from report_generator import get_engine
+    from services.llm_service import enrich_technical_data_with_earnings, get_llm_service
 
     d5 = get_decision_5m(ticker, days=5, use_llm_news=True)
     if not d5:
@@ -2800,7 +2805,6 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
                 tech_by_ticker[t] = {"price": d.get("price"), "rsi": d.get("rsi_5m")}
         except Exception:
             pass
-    # Второй аргумент — только тикеры игры 5m (подпись и порядок в cluster_note); матрица — по полному универсу.
     cluster_note = (
         build_cluster_note_for_5m_llm(ticker, game_5m or [ticker], corr_matrix, tech_by_ticker)
         if corr_matrix
@@ -2808,29 +2812,37 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
     )
     llm_reasoning = None
     llm_key_factors = None
+    llm_analysis = None
+    prompt_user = None
+    prompt_system = None
+    llm_note = None
     avg_volatility_20 = get_avg_volatility_20_pct_from_quotes(ticker)
+    technical_data = enrich_technical_data_with_earnings(
+        ticker,
+        {
+            "close": d5.get("price"),
+            "rsi": d5.get("rsi_5m"),
+            "volatility_5": d5.get("volatility_5m_pct"),
+            "avg_volatility_20": avg_volatility_20,
+            "technical_signal": d5.get("technical_decision_effective") or d5.get("decision"),
+            "technical_signal_core": d5.get("technical_decision_core") or d5.get("decision"),
+            "catboost_entry_proba_good": d5.get("catboost_entry_proba_good"),
+            "catboost_signal_status": d5.get("catboost_signal_status"),
+            "catboost_fusion_note": d5.get("catboost_fusion_note"),
+            "cluster_note": cluster_note,
+            "momentum_2h_pct": d5.get("momentum_2h_pct"),
+            "take_profit_pct": d5.get("take_profit_pct"),
+            "stop_loss_pct": d5.get("stop_loss_pct"),
+            "estimated_upside_pct_day": d5.get("estimated_upside_pct_day"),
+            "price_forecast_5m": d5.get("price_forecast_5m"),
+            "price_forecast_5m_summary": d5.get("price_forecast_5m_summary"),
+        },
+        strategy_name="GAME_5M",
+    )
     if cluster_note:
         try:
             llm = get_llm_service()
             if getattr(llm, "client", None):
-                technical_data = {
-                    "close": d5.get("price"),
-                    "rsi": d5.get("rsi_5m"),
-                    "volatility_5": d5.get("volatility_5m_pct"),
-                    "avg_volatility_20": avg_volatility_20,
-                    "technical_signal": d5.get("technical_decision_effective") or d5.get("decision"),
-                    "technical_signal_core": d5.get("technical_decision_core") or d5.get("decision"),
-                    "catboost_entry_proba_good": d5.get("catboost_entry_proba_good"),
-                    "catboost_signal_status": d5.get("catboost_signal_status"),
-                    "catboost_fusion_note": d5.get("catboost_fusion_note"),
-                    "cluster_note": cluster_note,
-                    "momentum_2h_pct": d5.get("momentum_2h_pct"),
-                    "take_profit_pct": d5.get("take_profit_pct"),
-                    "stop_loss_pct": d5.get("stop_loss_pct"),
-                    "estimated_upside_pct_day": d5.get("estimated_upside_pct_day"),
-                    "price_forecast_5m": d5.get("price_forecast_5m"),
-                    "price_forecast_5m_summary": d5.get("price_forecast_5m_summary"),
-                }
                 news_list = [{"source": "KB", "content": (d5.get("kb_news_impact") or "")[:500], "sentiment_score": 0.5}]
                 sentiment = 0.35 if "негатив" in (d5.get("kb_news_impact") or "").lower() else (0.65 if "позитив" in (d5.get("kb_news_impact") or "").lower() else 0.5)
                 result = llm.analyze_trading_situation(
@@ -2840,16 +2852,42 @@ def _compute_game5m_card_llm_sync(ticker: str) -> Dict[str, Any]:
                 )
                 if result and result.get("llm_analysis"):
                     ana = result["llm_analysis"]
+                    llm_analysis = ana
                     llm_reasoning = ana.get("reasoning") or ""
                     llm_key_factors = ana.get("key_factors")
+                if include_prompts and result:
+                    prompt_user = result.get("prompt_user")
+                    prompt_system = result.get("prompt_system")
+            else:
+                llm_note = "LLM client недоступен (ключ / конфиг)."
         except Exception as e:
             llm_reasoning = f"Ошибка LLM: {e!s}"
-    return {
+            llm_note = llm_reasoning
+    else:
+        llm_note = "Нет cluster_note — LLM с корреляцией не вызывался."
+
+    out: Dict[str, Any] = {
         "ticker": ticker,
+        "decision": d5.get("decision"),
         "llm_reasoning": llm_reasoning,
         "llm_key_factors": llm_key_factors,
+        "llm_analysis": _make_json_safe(llm_analysis),
         "technical_signal": d5.get("technical_decision_effective") or d5.get("decision"),
+        "price": d5.get("price"),
+        "rsi_5m": d5.get("rsi_5m"),
+        "momentum_2h_pct": d5.get("momentum_2h_pct"),
+        "volatility_5m_pct": d5.get("volatility_5m_pct"),
+        "take_profit_pct": d5.get("take_profit_pct"),
+        "kb_news_impact": d5.get("kb_news_impact"),
+        "cluster_note": cluster_note,
+        "earnings_entry_context_block": technical_data.get("earnings_entry_context_block"),
+        "llm_note": llm_note,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
     }
+    if include_prompts:
+        out["prompt_user"] = prompt_user
+        out["prompt_system"] = prompt_system
+    return out
 
 
 @app.get("/api/game5m/card/{ticker}/llm", response_class=JSONResponse)
@@ -2871,6 +2909,44 @@ async def get_game5m_card_llm(ticker: str):
     if result.get("_error"):
         raise HTTPException(status_code=result.get("_status", 404), detail=result.get("_error", "Нет данных"))
     return _to_jsonable(result)
+
+
+@app.get("/api/game5m/card/{ticker}/llm.html", response_class=HTMLResponse)
+async def get_game5m_card_llm_html(ticker: str):
+    """Полный LLM-отчёт по тикеру 5m в HTML (отдельная вкладка, не сбрасывается автообновлением карточек)."""
+    from services.card_llm_report_html import build_game5m_card_llm_html
+    from services.game_report_html import esc, render_game_report_document
+
+    if not web_llm_enabled():
+        raise HTTPException(status_code=403, detail="WEB: LLM disabled")
+    ticker = ticker.strip().upper()
+    try:
+        from services.ticker_groups import get_tickers_game_5m
+    except ImportError as e:
+        raise HTTPException(status_code=501, detail=f"Модули недоступны: {e}")
+    if ticker not in (get_tickers_game_5m() or []):
+        raise HTTPException(status_code=404, detail="Тикер не в игре 5m")
+    try:
+        result = await asyncio.to_thread(_compute_game5m_card_llm_sync, ticker, include_prompts=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка расчёта LLM: {e!s}")
+    if result.get("_error"):
+        err = str(result.get("_error") or "Нет данных")
+        html = render_game_report_document(
+            title=f"GAME_5M · LLM · {ticker}",
+            subtitle=err,
+            body_html=f'<p class="note">{esc(err)}</p>',
+        )
+        return HTMLResponse(
+            content=html,
+            status_code=int(result.get("_status", 404)),
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+    html = build_game5m_card_llm_html(result)
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
 
 
 @app.get("/game5m/cards", response_class=HTMLResponse)
@@ -2912,6 +2988,38 @@ async def get_portfolio_card_llm(ticker: str, corr_days: int = 30):
     if result.get("_error"):
         raise HTTPException(status_code=int(result.get("_status", 404)), detail=result.get("_error", "Нет данных"))
     return JSONResponse(content=_api_json_body(result))
+
+
+@app.get("/api/portfolio/card/{ticker}/llm.html", response_class=HTMLResponse)
+async def get_portfolio_card_llm_html(ticker: str, corr_days: int = 30):
+    """Полный LLM-отчёт по тикеру портфеля в HTML (отдельная вкладка)."""
+    from services.card_llm_report_html import build_portfolio_card_llm_html
+    from services.game_report_html import esc, render_game_report_document
+
+    if not web_llm_enabled():
+        raise HTTPException(status_code=403, detail="WEB: LLM disabled")
+    t = ticker.strip().upper()
+    try:
+        result = await asyncio.to_thread(_compute_portfolio_card_llm_sync, t, corr_days, include_prompts=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка LLM портфеля: {e!s}")
+    if result.get("_error"):
+        err = str(result.get("_error") or "Нет данных")
+        html = render_game_report_document(
+            title=f"Portfolio · LLM · {t}",
+            subtitle=err,
+            body_html=f'<p class="note">{esc(err)}</p>',
+        )
+        return HTMLResponse(
+            content=html,
+            status_code=int(result.get("_status", 404)),
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+    html = build_portfolio_card_llm_html(result)
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
 
 
 @app.get("/api/portfolio/charts", response_class=JSONResponse)
