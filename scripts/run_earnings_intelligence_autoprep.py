@@ -59,16 +59,29 @@ def main() -> int:
     ap.add_argument("--skip-readiness", action="store_true")
     ap.add_argument("--no-auto-fool", action="store_true", default=True, help="Skip Fool probing (default for cron)")
     ap.add_argument("--auto-fool", action="store_false", dest="no_auto_fool")
+    ap.add_argument(
+        "--new-events-only",
+        action="store_true",
+        default=True,
+        help="Sync/ingest/extract only calendar events without LLM extraction (default for cron)",
+    )
+    ap.add_argument(
+        "--all-events",
+        action="store_true",
+        help="Process all KB events since --since (backfill; disables --new-events-only)",
+    )
     args = ap.parse_args()
+    new_events_only = bool(args.new_events_only and not args.all_events)
 
     from services.earnings_intelligence_universe import universe_symbols_csv
 
     py = sys.executable
     sym_csv = args.symbols.strip() or universe_symbols_csv()
     sym_set = {s.strip().upper() for s in sym_csv.split(",") if s.strip()}
-    logger.info("Autoprep universe: %s tickers", len(sym_set))
+    logger.info("Autoprep universe: %s tickers; new_events_only=%s", len(sym_set), new_events_only)
 
     steps: dict[str, int] = {}
+    pending_count = 0
 
     if not args.skip_kb_yfinance:
         yf_cmd = [
@@ -87,59 +100,86 @@ def main() -> int:
         if rc != 0 and not args.dry_run:
             logger.warning("kb_yfinance_seed exited %s — continuing sync/ingest", rc)
 
-    sync_cmd = [
-        py,
-        "scripts/sync_earnings_material_registry.py",
-        "--ensure-table",
-        "--since",
-        args.since,
-        "--symbols",
-        sym_csv,
-        "--limit",
-        str(max(1, args.sync_limit)),
-        "--discover-links",
-    ]
-    if args.no_auto_fool:
-        sync_cmd.append("--no-auto-fool")
-    if args.dry_run:
-        sync_cmd.append("--dry-run")
-    rc = _run(sync_cmd)
-    steps["materials_sync"] = rc
-    if rc != 0 and not args.dry_run:
-        return rc
+    if new_events_only and not args.dry_run:
+        from datetime import datetime as dt_parse
 
-    ingest_cmd = [
-        py,
-        "scripts/ingest_earnings_materials.py",
-        "--ensure-table",
-        "--status",
-        "registered,failed,downloaded",
-        "--limit",
-        str(max(1, args.ingest_limit)),
-    ]
-    if args.dry_run:
-        ingest_cmd.append("--dry-run")
-    rc = _run(ingest_cmd)
-    steps["materials_ingest"] = rc
-    if rc != 0 and not args.dry_run:
-        logger.warning("materials_ingest exited %s — continuing extract", rc)
+        from report_generator import get_engine
+        from services.earnings_calendar_new_events import load_pending_calendar_events
 
-    extract_cmd = [
-        py,
-        "scripts/extract_earnings_material_facts.py",
-        "--since",
-        args.since,
-        "--symbols",
-        sym_csv,
-        "--limit",
-        str(max(1, args.extract_limit)),
-    ]
-    if args.dry_run:
-        extract_cmd.append("--dry-run")
-    rc = _run(extract_cmd)
-    steps["materials_extract"] = rc
-    if rc != 0 and not args.dry_run:
-        logger.warning("materials_extract exited %s", rc)
+        since_d = dt_parse.strptime(args.since.strip()[:10], "%Y-%m-%d").date()
+        pending_count = len(
+            load_pending_calendar_events(get_engine(), since=since_d, symbols=sym_set, limit=max(1, args.sync_limit))
+        )
+        logger.info("Pending calendar events (no LLM extract yet): %s", pending_count)
+        if pending_count == 0:
+            logger.info("No new/in-progress calendar events — skipping materials sync/ingest/extract")
+            steps["materials_sync"] = 0
+            steps["materials_ingest"] = 0
+            steps["materials_extract"] = 0
+
+    run_materials = (not new_events_only) or pending_count != 0 or args.dry_run
+    if run_materials:
+        sync_cmd = [
+            py,
+            "scripts/sync_earnings_material_registry.py",
+            "--ensure-table",
+            "--since",
+            args.since,
+            "--symbols",
+            sym_csv,
+            "--limit",
+            str(max(1, args.sync_limit)),
+            "--discover-links",
+        ]
+        if new_events_only:
+            sync_cmd.append("--new-events-only")
+        if args.no_auto_fool:
+            sync_cmd.append("--no-auto-fool")
+        if args.dry_run:
+            sync_cmd.append("--dry-run")
+        rc = _run(sync_cmd)
+        steps["materials_sync"] = rc
+        if rc != 0 and not args.dry_run:
+            return rc
+
+        ingest_cmd = [
+            py,
+            "scripts/ingest_earnings_materials.py",
+            "--ensure-table",
+            "--status",
+            "registered,failed",
+            "--since",
+            args.since,
+            "--limit",
+            str(max(1, args.ingest_limit)),
+        ]
+        if new_events_only:
+            ingest_cmd.append("--new-events-only")
+        if args.dry_run:
+            ingest_cmd.append("--dry-run")
+        rc = _run(ingest_cmd)
+        steps["materials_ingest"] = rc
+        if rc != 0 and not args.dry_run:
+            logger.warning("materials_ingest exited %s — continuing extract", rc)
+
+        extract_cmd = [
+            py,
+            "scripts/extract_earnings_material_facts.py",
+            "--since",
+            args.since,
+            "--symbols",
+            sym_csv,
+            "--limit",
+            str(max(1, args.extract_limit)),
+        ]
+        if new_events_only:
+            extract_cmd.append("--new-events-only")
+        if args.dry_run:
+            extract_cmd.append("--dry-run")
+        rc = _run(extract_cmd)
+        steps["materials_extract"] = rc
+        if rc != 0 and not args.dry_run:
+            logger.warning("materials_extract exited %s", rc)
 
     readiness_summary: dict = {}
     if not args.skip_readiness and not args.dry_run:
@@ -163,6 +203,8 @@ def main() -> int:
         "script": "run_earnings_intelligence_autoprep",
         "finished_at_utc": datetime.now(timezone.utc).isoformat(),
         "dry_run": args.dry_run,
+        "new_events_only": new_events_only,
+        "pending_calendar_events": pending_count if new_events_only else None,
         "universe_size": len(sym_set),
         "steps": steps,
         "readiness": readiness_summary,

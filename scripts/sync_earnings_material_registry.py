@@ -392,9 +392,49 @@ def build_sync_rows(
     auto_sec: bool,
     auto_fool: bool,
     dry_run: bool,
+    new_events_only: bool = False,
 ) -> list[SyncRow]:
     rows: list[SyncRow] = []
     seen: set[tuple[str, str | None, str, str]] = set()
+
+    pending_keys: set[tuple[str, date]] | None = None
+    brand_new_keys: set[tuple[str, date]] | None = None
+    if new_events_only:
+        from services.earnings_calendar_new_events import (
+            brand_new_event_keys as _brand_new_keys,
+            load_pending_calendar_events,
+            pending_event_keys as _pending_keys,
+        )
+
+        pending_events = load_pending_calendar_events(
+            engine,
+            since=since,
+            symbols=symbols,
+            limit=limit,
+        )
+        pending_keys = _pending_keys(pending_events)
+        brand_new_keys = _brand_new_keys(pending_events)
+        logger.info(
+            "New-events-only: pending=%s brand_new=%s",
+            len(pending_keys),
+            len(brand_new_keys),
+        )
+        if not pending_keys:
+            return rows
+
+    def event_allowed(sym: str, ev_date: date | None) -> bool:
+        if pending_keys is None:
+            return True
+        if not isinstance(ev_date, date):
+            return False
+        return (sym.upper(), ev_date) in pending_keys
+
+    def event_is_brand_new(sym: str, ev_date: date | None) -> bool:
+        if brand_new_keys is None:
+            return True
+        if not isinstance(ev_date, date):
+            return False
+        return (sym.upper(), ev_date) in brand_new_keys
 
     def add(row: SyncRow) -> None:
         key = (
@@ -421,22 +461,25 @@ def build_sync_rows(
         ev_date = ev.get("event_date")
         if not isinstance(ev_date, date):
             continue
-        catalog_rows = catalog_for_event(sym, ev_date)
-        for cm in catalog_rows:
-            add(_catalog_row(cm, kb_id=kb_id, sync_source="kb+catalog"))
-        if auto_sec or auto_fool:
-            known_urls = {cm.source_url for cm in catalog_rows}
-            for cm in auto_materials_for_event(
-                sym,
-                ev_date,
-                include_sec=auto_sec,
-                include_fool=auto_fool,
-            ):
-                if cm.source_url in known_urls:
-                    continue
-                add(_catalog_row(cm, kb_id=kb_id, sync_source="auto_sources"))
+        if not event_allowed(sym, ev_date):
+            continue
+        if event_is_brand_new(sym, ev_date):
+            catalog_rows = catalog_for_event(sym, ev_date)
+            for cm in catalog_rows:
+                add(_catalog_row(cm, kb_id=kb_id, sync_source="kb+catalog"))
+            if auto_sec or auto_fool:
+                known_urls = {cm.source_url for cm in catalog_rows}
+                for cm in auto_materials_for_event(
+                    sym,
+                    ev_date,
+                    include_sec=auto_sec,
+                    include_fool=auto_fool,
+                ):
+                    if cm.source_url in known_urls:
+                        continue
+                    add(_catalog_row(cm, kb_id=kb_id, sync_source="auto_sources"))
 
-    if auto_sec or auto_fool:
+    if (auto_sec or auto_fool) and not new_events_only:
         for sym, ev_date in _load_orphan_material_events(engine, symbols):
             if (sym, ev_date) in kb_event_keys:
                 continue
@@ -467,7 +510,7 @@ def build_sync_rows(
                 known_urls.add(cm.source_url)
                 add(_catalog_row(cm, kb_id=kb_id, sync_source="auto_sources"))
 
-    if include_priority_catalog:
+    if include_priority_catalog and not new_events_only:
         for cm in priority_catalog():
             if symbols and cm.symbol not in symbols:
                 continue
@@ -478,7 +521,11 @@ def build_sync_rows(
 
     if discover_links:
         for item in _load_discovered_links(engine):
-            if symbols and str(item["symbol"]).upper() not in symbols:
+            sym = str(item["symbol"]).upper()
+            ev_date = item.get("event_date")
+            if symbols and sym not in symbols:
+                continue
+            if not event_allowed(sym, ev_date if isinstance(ev_date, date) else None):
                 continue
             row = _discovered_row(item)
             if row:
@@ -563,6 +610,11 @@ def main() -> int:
     ap.add_argument("--priority-catalog", action="store_true", default=True)
     ap.add_argument("--no-priority-catalog", action="store_false", dest="priority_catalog")
     ap.add_argument("--discover-links", action="store_true", help="Add discovered_links from parsed IR pages")
+    ap.add_argument(
+        "--new-events-only",
+        action="store_true",
+        help="Only sync materials for calendar events without LLM extraction (brand-new or in-progress)",
+    )
     ap.add_argument("--ensure-kb-catalog", action="store_true", default=True, help="Create missing KB EARNINGS rows for catalog events")
     ap.add_argument("--no-ensure-kb-catalog", action="store_false", dest="ensure_kb_catalog")
     args = ap.parse_args()
@@ -590,6 +642,7 @@ def main() -> int:
         auto_sec=args.auto_sec,
         auto_fool=args.auto_fool,
         dry_run=args.dry_run,
+        new_events_only=args.new_events_only,
     )
     n = upsert_rows(engine, rows, dry_run=args.dry_run)
     logger.info("%s %s earnings_material sync rows", "Checked" if args.dry_run else "Upserted", n)

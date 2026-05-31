@@ -17,6 +17,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from datetime import date
 from typing import Any
 
 from sqlalchemy import text
@@ -62,7 +63,10 @@ def _load_rows(
     material_id: int | None,
     limit: int,
     force: bool,
+    pending_event_keys: set[tuple[str, date]] | None = None,
 ) -> list[dict[str, Any]]:
+    if pending_event_keys is not None and not pending_event_keys:
+        return []
     where = ["1=1"]
     params: dict[str, Any] = {"limit": int(limit)}
     if not force:
@@ -74,6 +78,16 @@ def _load_rows(
     if material_id:
         where.append("id = :material_id")
         params["material_id"] = int(material_id)
+    if pending_event_keys is not None:
+        pairs = sorted(pending_event_keys)
+        where.append(
+            "(UPPER(TRIM(symbol)), event_date) IN ("
+            + ", ".join(f"(:sym_{i}, :dt_{i})" for i in range(len(pairs)))
+            + ")"
+        )
+        for i, (sym, ev_date) in enumerate(pairs):
+            params[f"sym_{i}"] = sym
+            params[f"dt_{i}"] = ev_date
     q = text(
         f"""
         SELECT
@@ -209,6 +223,12 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=10)
     ap.add_argument("--timeout-sec", type=int, default=45)
     ap.add_argument("--store-dir", default=str(DEFAULT_STORE_DIR))
+    ap.add_argument(
+        "--new-events-only",
+        action="store_true",
+        help="Only download materials for calendar events without LLM extraction",
+    )
+    ap.add_argument("--since", default="2026-01-01", help="With --new-events-only, KB events on/after date")
     args = ap.parse_args()
 
     statuses = tuple(s.strip() for s in args.status.split(",") if s.strip())
@@ -220,6 +240,18 @@ def main() -> int:
     if args.ensure_table:
         _ensure_table(engine)
 
+    pending_keys: set[tuple[str, date]] | None = None
+    if args.new_events_only:
+        from datetime import datetime
+
+        from services.earnings_calendar_new_events import load_pending_calendar_events, pending_event_keys
+
+        since_d = datetime.strptime(args.since.strip()[:10], "%Y-%m-%d").date()
+        sym_set = {args.symbol.strip().upper()} if args.symbol.strip() else None
+        pending = load_pending_calendar_events(engine, since=since_d, symbols=sym_set, limit=max(1, args.limit * 4))
+        pending_keys = pending_event_keys(pending)
+        logger.info("New-events-only ingest: pending calendar events=%s", len(pending_keys))
+
     rows = _load_rows(
         engine,
         statuses=statuses or ("registered",),
@@ -227,6 +259,7 @@ def main() -> int:
         material_id=args.id or None,
         limit=max(1, args.limit),
         force=args.force,
+        pending_event_keys=pending_keys,
     )
     if not rows:
         logger.info("No earnings_material rows to process")

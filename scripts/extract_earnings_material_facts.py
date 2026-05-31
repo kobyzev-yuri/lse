@@ -49,6 +49,7 @@ def _load_materials(
     symbols: set[str] | None,
     event_date: date | None,
     since: date | None,
+    pending_event_keys: set[tuple[str, date]] | None = None,
 ) -> list[dict[str, Any]]:
     where = ["parse_status IN ('parsed', 'extracted')"]
     params: dict[str, Any] = {}
@@ -61,6 +62,18 @@ def _load_materials(
     if since:
         where.append("event_date >= :since")
         params["since"] = since
+    if pending_event_keys is not None:
+        if not pending_event_keys:
+            return []
+        pairs = sorted(pending_event_keys)
+        where.append(
+            "(UPPER(TRIM(symbol)), event_date) IN ("
+            + ", ".join(f"(:sym_{i}, :dt_{i})" for i in range(len(pairs)))
+            + ")"
+        )
+        for i, (sym, ev_date) in enumerate(pairs):
+            params[f"sym_{i}"] = sym
+            params[f"dt_{i}"] = ev_date
     q = text(
         f"""
         SELECT
@@ -209,6 +222,11 @@ def main() -> int:
         action="store_true",
         help="Re-run LLM even if earnings_event_detail already has extraction_meta",
     )
+    ap.add_argument(
+        "--new-events-only",
+        action="store_true",
+        help="Only extract for calendar events without LLM extraction yet",
+    )
     args = ap.parse_args()
 
     symbols: set[str] | None = None
@@ -220,11 +238,25 @@ def main() -> int:
         logger.info("Universe symbols for extract: %s", len(symbols))
 
     engine = get_engine()
+    pending_keys: set[tuple[str, date]] | None = None
+    if args.new_events_only:
+        from services.earnings_calendar_new_events import load_pending_calendar_events, pending_event_keys
+
+        pending = load_pending_calendar_events(
+            engine,
+            since=_parse_date(args.since),
+            symbols=symbols,
+            limit=max(1, args.limit * 4),
+        )
+        pending_keys = pending_event_keys(pending)
+        logger.info("New-events-only extract: pending calendar events=%s", len(pending_keys))
+
     rows = _load_materials(
         engine,
         symbols=symbols,
         event_date=_parse_date(args.event_date),
         since=_parse_date(args.since),
+        pending_event_keys=pending_keys,
     )
     groups = _group_events(rows)
     if not groups:

@@ -41,7 +41,9 @@ Autoprep использует **более жёсткий product-tier shadow** 
 
 Лог: `logs/earnings_autoprep.log` · снимок: `last_earnings_intelligence_autoprep.json`
 
-**Ручные шаги не нужны** — analyzer показывает gates и время последнего autoprep.
+**Ручные шаги не нужны** — analyzer показывает gates и время последного autoprep.
+
+Cron по умолчанию **`--new-events-only`**: sync/ingest/extract только для календарных событий **без LLM extraction** (новая дата в KB или pipeline ещё не закрыт). Уже обработанные события не перекачиваются. Backfill: `run_earnings_intelligence_autoprep.py --all-events`.
 
 ### 2.2 Materials (legacy — заменено autoprep)
 
