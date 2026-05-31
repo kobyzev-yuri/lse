@@ -661,6 +661,18 @@ function renderMlDataQuality(data, strategy) {
     } else if (egr.overall_scenario_classifier_ready === false) {
         html += '<p style="margin:0 0 0.35rem 0;color:#fca5a5;"><strong>✗ overall_scenario_classifier_ready</strong> — см. scenario_classifier_* ниже</p>';
     }
+    if (egr.overall_trading_shadow_ready === true) {
+        html += '<p style="margin:0 0 0.45rem 0;color:#86efac;"><strong>✓ overall_trading_shadow_ready</strong> (scenario shadow на созревших событиях)</p>';
+    } else if (egr.overall_trading_shadow_ready === false) {
+        html += '<p style="margin:0 0 0.35rem 0;color:#fca5a5;"><strong>✗ overall_trading_shadow_ready</strong> — см. trading_shadow ниже</p>';
+    }
+    const shAgg = egr.shadow_aggregate || {};
+    if (shAgg.n_matured != null || shAgg.sign_accuracy != null) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Shadow aggregate: n_matured <code>' + esc(shAgg.n_matured) + '</code> · sign acc <code>' + esc(shAgg.sign_accuracy) + '</code> · class acc <code>' + esc(shAgg.class_accuracy) + '</code> · pseudo_pnl log <code>' + esc(shAgg.mean_pseudo_pnl_log) + '</code></p>';
+    }
+    if (egr.shadow_file_path) {
+        html += '<p class="muted" style="font-size:0.78rem;margin:0 0 0.35rem 0;">Shadow JSON: <code>' + esc(egr.shadow_file_path) + '</code></p>';
+    }
     const owr = eiGates.overall_with_regression;
     if (owr === false && egr.overall_grid_ready === true) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Advisory regression gate отдельно: <code>overall_with_regression=false</code> (RMSE event_reaction).</p>';
@@ -694,7 +706,7 @@ function renderMlDataQuality(data, strategy) {
         html += '<tr><td style="padding:2px 8px 2px 0;color:#94a3b8;">' + esc(pair[0]) + '</td><td><code>' + esc(pair[1]) + '</code></td></tr>';
     });
     html += '</table>';
-    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier_dataset', 'scenario_classifier', 'regression', 'peer_spillover_dataset', 'peer_spillover_regressor'];
+    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier_dataset', 'scenario_classifier', 'regression', 'peer_spillover_dataset', 'peer_spillover_regressor', 'trading_shadow'];
     html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.85rem;"><strong>Гейты:</strong></p><ul style="margin:0 0 0.5rem 1rem;padding:0;font-size:0.84rem;">';
     gateNames.forEach(function (gn) {
         const g = eiGates[gn] || {};

@@ -204,6 +204,16 @@ def build_portfolio_fusion_user_message(
         parts.append(str(strategy_outcome_stats)[:1200])
 
     parts.append("")
+    eb = (td.get("earnings_entry_context_block") or "").strip()
+    if eb:
+        parts.append("=== EARNINGS (последний отчёт + spillover по горизонту игры) ===")
+        parts.append(eb)
+        parts.append(
+            "Учти earnings в reasoning/key_factors; spillover ML — pilot с низкой метрикой; "
+            "не меняй decision только из-за earnings."
+        )
+
+    parts.append("")
     parts.append(
         "=== ЗАДАЧА ===\n"
         "Дай итоговое решение о входе в JSON (см. system). Поля decision и decision_fused должны совпадать."
@@ -245,6 +255,28 @@ def chat_completion_token_limit_params(
     if re.match(r"^gpt-5", mid) or mid.startswith("o1") or mid.startswith("o3") or mid.startswith("o4"):
         return {"max_completion_tokens": limit}
     return {"max_tokens": limit}
+
+
+def append_earnings_entry_context_section(text: str, technical_data: Dict[str, Any]) -> str:
+    """Append earnings advisory: last own report + spillover gated by game horizon."""
+    block = (technical_data or {}).get("earnings_entry_context_block")
+    if not block:
+        return text
+    return (
+        f"{text}\n\n=== EARNINGS (последний отчёт + spillover по горизонту игры) ===\n"
+        f"{block}\n"
+        "Учти в reasoning/key_factors; spillover ML — pilot; не меняй decision только из-за earnings."
+    )
+
+
+def enrich_technical_data_with_earnings(
+    ticker: str,
+    technical_data: Dict[str, Any],
+    strategy_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    from services.earnings_llm_context import attach_earnings_entry_context
+
+    return attach_earnings_entry_context(ticker, technical_data, strategy_name=strategy_name)
 
 
 def format_game5m_execution_context_for_llm(technical_data: Dict[str, Any]) -> str:
@@ -942,6 +974,9 @@ Sentiment анализ:
         Собирает промпт (system + user) для решения о входе без вызова LLM.
         Те же входы, что у analyze_trading_situation. Для /prompt_entry: всегда заполнять user_prompt в JSON.
         """
+        technical_data = enrich_technical_data_with_earnings(
+            ticker, technical_data or {}, strategy_name=strategy_name,
+        )
         if entry_prompt_profile == "portfolio_fusion":
             return {
                 "prompt_system": get_portfolio_entry_fusion_system_prompt(),
@@ -1039,6 +1074,7 @@ Sentiment анализ:
             ticker, technical_data, news_data or [], sentiment_score,
         )
         user_message += f"\n\n{fusion_block}"
+        user_message = append_earnings_entry_context_section(user_message, technical_data)
         user_message += (
             "\n\nВерни JSON с полями decision (legacy) и decision_fused, как в system prompt."
         )
@@ -1153,6 +1189,10 @@ Sentiment анализ:
             build_geopolitical_block,
             geo_cluster_bridge_hint,
             geopolitical_followup_hint,
+        )
+
+        technical_data = enrich_technical_data_with_earnings(
+            ticker, technical_data or {}, strategy_name=strategy_name,
         )
 
         if entry_prompt_profile == "portfolio_fusion":
@@ -1271,6 +1311,7 @@ Sentiment анализ:
                 ticker, technical_data, news_data, sentiment_score,
             )
             user_message += f"\n\n{fusion_block}"
+            user_message = append_earnings_entry_context_section(user_message, technical_data)
             user_message += (
                 "\n\nВерни JSON с полями decision (legacy) и decision_fused, как в system prompt."
             )

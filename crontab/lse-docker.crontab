@@ -55,6 +55,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 51 23 * * 1-5 flock -n /tmp/lse_event_reaction_full_train.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e ML_READINESS_SKIP_GAME5M=1 -e ML_READINESS_SKIP_PORTFOLIO=1 -e ML_READINESS_SKIP_EVENT_REACTION=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/event_reaction_full_train.log 2>&1
 # Earnings grid full retrain (scenario + peer spillover .cbm) + shadow; after ERD build/backfill (23:33–37).
 52 23 * * 1-5 flock -n /tmp/lse_earnings_grid_full_train.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e ML_READINESS_SKIP_GAME5M=1 -e ML_READINESS_SKIP_PORTFOLIO=1 -e ML_READINESS_SKIP_EVENT_REACTION=1 lse-bot python scripts/run_earnings_ml_refresh.py --full >> /home/ai8049520/lse/logs/earnings_grid_full_train.log 2>&1
+# Weekly earnings prod eval: materials → labels → ML refresh → shadow → readiness JSON (Phase C ops).
+0 6 * * 0 flock -n /tmp/lse_earnings_prod_eval.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e EARNINGS_ML_REFRESH_APPLY_DATA=1 lse-bot python scripts/run_earnings_intelligence_prod_eval.py >> /home/ai8049520/lse/logs/earnings_prod_eval.log 2>&1
 # Отчёт качества данных без LLM и без профилирования local/datasets/*.csv.
 53 23 * * 1-5 flock -n /tmp/lse_ml_data_quality_report.lock docker exec lse-bot python scripts/run_ml_data_quality_report.py --no-default-datasets --json-out /app/logs/ml/ml_data_quality/report_daily.json >> /home/ai8049520/lse/logs/ml_data_quality_report_cron.log 2>&1
 # Recovery D4a: накопление сводки τ×K по TIME_EXIT_EARLY (JSONL для go/no-go перед D4b).

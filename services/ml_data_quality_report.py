@@ -519,13 +519,30 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
         "earnings_intelligence": latest.get("earnings_intelligence"),
     }
     ei = bundle.get("earnings_intelligence_readiness") if isinstance(bundle.get("earnings_intelligence_readiness"), dict) else {}
+    ei_gates = ei.get("gates") if isinstance(ei.get("gates"), dict) else {}
+    shadow_agg = None
+    shadow_path = None
+    try:
+        from services.earnings_intelligence_readiness import default_shadow_report_path
+
+        shadow_path_obj = default_shadow_report_path(project_root)
+        shadow_path = str(shadow_path_obj) if shadow_path_obj.is_file() else None
+        shadow_raw = _json_load(shadow_path_obj) if shadow_path_obj.is_file() else None
+        if isinstance(shadow_raw, dict):
+            agg = shadow_raw.get("aggregate")
+            shadow_agg = agg if isinstance(agg, dict) else None
+    except Exception:
+        shadow_agg = None
     bundle["earnings_grid_readiness"] = {
-        "overall_grid_ready": (ei.get("gates") or {}).get("overall_grid_ready"),
-        "overall_scenario_classifier_ready": (ei.get("gates") or {}).get("overall_scenario_classifier_ready"),
-        "overall_peer_spillover_ready": (ei.get("gates") or {}).get("overall_peer_spillover_ready"),
-        "gates": ei.get("gates"),
+        "overall_grid_ready": ei_gates.get("overall_grid_ready"),
+        "overall_scenario_classifier_ready": ei_gates.get("overall_scenario_classifier_ready"),
+        "overall_peer_spillover_ready": ei_gates.get("overall_peer_spillover_ready"),
+        "overall_trading_shadow_ready": ei_gates.get("overall_trading_shadow_ready"),
+        "gates": ei_gates,
         "snapshot": ei.get("snapshot"),
         "file_path": (ei.get("file") or {}).get("path"),
+        "shadow_file_path": shadow_path,
+        "shadow_aggregate": shadow_agg,
     }
     ext = bundle.get("external_train_metrics") if isinstance(bundle.get("external_train_metrics"), dict) else {}
     if su == "PORTFOLIO":
