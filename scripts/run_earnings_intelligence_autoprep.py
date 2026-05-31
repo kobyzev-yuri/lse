@@ -178,7 +178,15 @@ def main() -> int:
             extract_cmd.append("--dry-run")
         rc = _run(extract_cmd)
         steps["materials_extract"] = rc
-        if rc != 0 and not args.dry_run:
+        if rc == 2 and not args.dry_run:
+            from services.proxyapi_balance import read_earnings_llm_balance_alert
+
+            alert = read_earnings_llm_balance_alert(project_root=project_root) or {}
+            logger.error(
+                "materials_extract stopped: ProxyAPI insufficient balance — %s",
+                alert.get("message") or "see last_earnings_llm_balance_alert.json",
+            )
+        elif rc != 0 and not args.dry_run:
             logger.warning("materials_extract exited %s", rc)
 
     readiness_summary: dict = {}
@@ -199,6 +207,14 @@ def main() -> int:
         }
         steps["readiness_snapshot"] = 0
 
+    llm_balance_alert: dict = {}
+    if not args.dry_run:
+        from services.proxyapi_balance import read_earnings_llm_balance_alert
+
+        raw_alert = read_earnings_llm_balance_alert(project_root=project_root)
+        if isinstance(raw_alert, dict) and raw_alert.get("active"):
+            llm_balance_alert = raw_alert
+
     summary = {
         "script": "run_earnings_intelligence_autoprep",
         "finished_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -208,6 +224,7 @@ def main() -> int:
         "universe_size": len(sym_set),
         "steps": steps,
         "readiness": readiness_summary,
+        "llm_balance_alert": llm_balance_alert or None,
         "next_cron": "run_earnings_ml_refresh.py каждые 6h + nightly --full (labels/train/spillover/shadow)",
     }
     out_dir = _q_dir()

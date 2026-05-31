@@ -279,8 +279,36 @@ def extract_event_facts_with_llm(
             **kwargs,
         )
     except Exception as exc:
+        from services.proxyapi_balance import balance_error_payload
+
+        bal = balance_error_payload(exc)
+        if bal:
+            logger.error("EARNINGS EXTRACT ProxyAPI balance: %s", bal["message"])
+            return {
+                "status": "insufficient_balance",
+                "reason": bal["message"],
+                "error_code": bal["error_code"],
+                "raw_error": bal.get("raw_error"),
+                "token_plan": plan,
+            }
         logger.exception("earnings extract LLM failed: %s", exc)
         return {"status": "error", "reason": str(exc), "token_plan": plan}
+
+    if resp.get("api_error") or resp.get("error"):
+        from services.proxyapi_balance import balance_error_payload
+
+        err_text = str(resp.get("error") or resp.get("response") or "")
+        bal = balance_error_payload(err_text)
+        if bal:
+            logger.error("EARNINGS EXTRACT ProxyAPI balance: %s", bal["message"])
+            return {
+                "status": "insufficient_balance",
+                "reason": bal["message"],
+                "error_code": bal["error_code"],
+                "raw_error": bal.get("raw_error"),
+                "token_plan": plan,
+                "model": resp.get("model"),
+            }
 
     text = (resp.get("response") or "").strip()
     structured = _parse_json_object(text)

@@ -651,6 +651,14 @@ function renderMlDataQuality(data, strategy) {
     } else {
         html += '<p class="muted" style="margin:0 0 0.45rem 0;">Нет файла readiness — запустите <code>run_earnings_ml_refresh.py</code>.</p>';
     }
+    const llmBal = egr.llm_balance_alert || {};
+    if (llmBal.active) {
+        html += '<p style="margin:0 0 0.55rem 0;padding:0.5rem 0.6rem;border-radius:6px;border:1px solid rgba(248,113,113,0.55);background:rgba(127,29,29,0.35);color:#fecaca;"><strong>⚠ ProxyAPI: недостаточный баланс</strong> — earnings LLM extract остановлен';
+        if (llmBal.detected_at_utc) {
+            html += ' (<code>' + esc(llmBal.detected_at_utc) + '</code>)';
+        }
+        html += '. ' + esc(llmBal.message || 'Пополните proxyapi.ru') + ' · лог: <code>logs/earnings_autoprep.log</code> · файл: <code>last_earnings_llm_balance_alert.json</code></p>';
+    }
     if (egr.overall_peer_spillover_ready === true) {
         html += '<p style="margin:0 0 0.45rem 0;color:#86efac;"><strong>✓ overall_peer_spillover_ready</strong> (dataset + regressor)</p>';
     } else if (egr.overall_peer_spillover_ready === false) {

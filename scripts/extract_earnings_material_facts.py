@@ -265,6 +265,7 @@ def main() -> int:
 
     results: list[dict[str, Any]] = []
     processed = 0
+    balance_hit = False
     for (symbol, event_date), materials in sorted(groups.items(), key=lambda x: (x[0][0], x[0][1] or date.min)):
         if processed >= max(1, args.limit):
             break
@@ -337,7 +338,30 @@ def main() -> int:
             "model": out.get("model"),
             "usage": usage,
             "token_plan": out.get("token_plan"),
+            "reason": out.get("reason"),
         }
+        if out.get("status") == "insufficient_balance":
+            from services.proxyapi_balance import write_earnings_llm_balance_alert
+
+            write_earnings_llm_balance_alert(
+                {
+                    "source": "extract_earnings_material_facts",
+                    "symbol": symbol,
+                    "event_date": result_row["event_date"],
+                    "message": out.get("reason"),
+                    "error_code": out.get("error_code"),
+                    "raw_error": out.get("raw_error"),
+                },
+                project_root=project_root,
+            )
+            logger.error(
+                "ProxyAPI balance exhausted at %s %s — stopping extract batch (pending events remain)",
+                symbol,
+                event_date,
+            )
+            results.append(result_row)
+            balance_hit = True
+            break
         if structured and out.get("status") in ("ok", "parse_warning"):
             kb_id = _resolve_kb_id(
                 engine,
@@ -368,6 +392,11 @@ def main() -> int:
     total_tok = sum(int((r.get("token_plan") or {}).get("total_tokens_est") or 0) for r in results)
     logger.info("Processed %s events; sum_total_tokens_est≈%s", processed, total_tok)
 
+    if not balance_hit:
+        from services.proxyapi_balance import clear_earnings_llm_balance_alert
+
+        clear_earnings_llm_balance_alert(project_root=project_root)
+
     out_path = args.json_out.strip()
     if not out_path and args.dry_run:
         out_dir = project_root / "logs" / "earnings_materials"
@@ -377,7 +406,9 @@ def main() -> int:
         Path(out_path).write_text(json.dumps(results, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
         logger.info("Wrote %s", out_path)
 
-    failed = [r for r in results if r.get("status") not in ("ok", "dry_run", "parse_warning")]
+    failed = [r for r in results if r.get("status") not in ("ok", "dry_run", "parse_warning", "skipped")]
+    if balance_hit:
+        return 2
     return 0 if not failed else 1
 
 

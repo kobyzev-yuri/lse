@@ -562,6 +562,14 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
             }
     except Exception:
         pass
+    try:
+        from services.proxyapi_balance import read_earnings_llm_balance_alert
+
+        bal = read_earnings_llm_balance_alert(project_root=project_root)
+        if isinstance(bal, dict) and bal.get("active"):
+            bundle["earnings_grid_readiness"]["llm_balance_alert"] = bal
+    except Exception:
+        pass
     ext = bundle.get("external_train_metrics") if isinstance(bundle.get("external_train_metrics"), dict) else {}
     if su == "PORTFOLIO":
         bundle["external_train_metrics_focus"] = {
