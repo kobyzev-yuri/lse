@@ -2789,7 +2789,11 @@ def _compute_game5m_card_llm_sync(ticker: str, *, include_prompts: bool = False)
         build_cluster_note_for_5m_llm,
         get_avg_volatility_20_pct_from_quotes,
     )
-    from services.llm_service import enrich_technical_data_with_earnings, get_llm_service
+    from services.llm_service import (
+        enrich_technical_data_with_earnings,
+        enrich_technical_data_with_premarket,
+        get_llm_service,
+    )
 
     d5 = get_decision_5m(ticker, days=5, use_llm_news=True)
     if not d5:
@@ -2839,6 +2843,9 @@ def _compute_game5m_card_llm_sync(ticker: str, *, include_prompts: bool = False)
         },
         strategy_name="GAME_5M",
     )
+    technical_data = enrich_technical_data_with_premarket(
+        ticker, technical_data, decision_5m=d5, strategy_name="GAME_5M",
+    )
     if cluster_note:
         try:
             llm = get_llm_service()
@@ -2881,6 +2888,9 @@ def _compute_game5m_card_llm_sync(ticker: str, *, include_prompts: bool = False)
         "kb_news_impact": d5.get("kb_news_impact"),
         "cluster_note": cluster_note,
         "earnings_entry_context_block": technical_data.get("earnings_entry_context_block"),
+        "premarket_entry_context_block": technical_data.get("premarket_entry_context_block"),
+        "premarket_gap_pct": technical_data.get("premarket_gap_pct"),
+        "session_phase": technical_data.get("session_phase") or d5.get("session_phase"),
         "llm_note": llm_note,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
     }

@@ -121,6 +121,8 @@ print('spillover scenario_ml', (ev.get('scenario_ml') or {}).get('predicted_scen
 
 **Prod после push:** spillover pilot UX + self-peer fix · gates green · Phase C ML **закрыт**.
 
+**Open-path MVP (после autoprep):** [OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md](../OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md) — analyzer gates `overall_earnings_autoprep_ready` / `overall_open_path_mvp_prerequisites_ready`.
+
 ### Утро — smoke
 
 ```bash

@@ -152,6 +152,8 @@ def main() -> int:
 
     if not args.skip_ml_refresh:
         refresh_cmd = [py, "scripts/run_earnings_ml_refresh.py"]
+        if full:
+            refresh_cmd.append("--full")
         if args.dry_run:
             refresh_cmd.append("--dry-run")
         rc = _run(refresh_cmd)
@@ -177,6 +179,10 @@ def main() -> int:
         "universe": sorted(sym_set),
         "steps": {name: rc for name, rc in steps},
         "overall_grid_ready": (readiness.get("gates") or {}).get("overall_grid_ready"),
+        "overall_earnings_autoprep_ready": (readiness.get("gates") or {}).get("overall_earnings_autoprep_ready"),
+        "overall_open_path_mvp_prerequisites_ready": (readiness.get("gates") or {}).get(
+            "overall_open_path_mvp_prerequisites_ready"
+        ),
         "trading_shadow_ready": (readiness.get("gates") or {}).get("trading_shadow", {}).get("ready"),
         "fusion_advisory_only": True,
     }

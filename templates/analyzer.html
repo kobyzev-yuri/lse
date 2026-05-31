@@ -666,6 +666,22 @@ function renderMlDataQuality(data, strategy) {
     } else if (egr.overall_trading_shadow_ready === false) {
         html += '<p style="margin:0 0 0.35rem 0;color:#fca5a5;"><strong>✗ overall_trading_shadow_ready</strong> — см. trading_shadow ниже</p>';
     }
+    const autoprep = eiGates.earnings_autoprep || {};
+    const openPath = eiGates.open_path_mvp_prerequisites || {};
+    if (egr.overall_earnings_autoprep_ready === true) {
+        html += '<p style="margin:0 0 0.45rem 0;color:#86efac;"><strong>✓ overall_earnings_autoprep_ready</strong> — cron-пайплайн earnings (grid + spillover + shadow product-tier)</p>';
+    } else if (egr.overall_earnings_autoprep_ready === false) {
+        html += '<p style="margin:0 0 0.35rem 0;color:#fca5a5;"><strong>✗ overall_earnings_autoprep_ready</strong> — ' + esc((autoprep.reasons || []).slice(0, 4).join('; ')) + '</p>';
+    }
+    if (egr.overall_open_path_mvp_prerequisites_ready === true) {
+        html += '<p style="margin:0 0 0.55rem 0;padding:0.45rem 0.55rem;border-radius:6px;border:1px solid rgba(52,211,153,0.45);background:rgba(6,78,59,0.2);color:#86efac;"><strong>✓ Можно начинать MVP open-path classifier</strong> (premarket + gap history + earnings autoprep). См. <code>docs/OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md</code></p>';
+    } else if (egr.overall_open_path_mvp_prerequisites_ready === false) {
+        html += '<p style="margin:0 0 0.45rem 0;color:#fde68a;"><strong>○ Open-path MVP</strong> — ждём: ' + esc((openPath.reasons || []).slice(0, 4).join('; ')) + '</p>';
+    }
+    const od = eiSnap.open_path_data || {};
+    if (od.premarket_feature_trading_days != null || od.gap_forecast_open_rows != null) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Open-path data: premarket days <code>' + esc(od.premarket_feature_trading_days) + '</code> · gap open rows <code>' + esc(od.gap_forecast_open_rows) + '</code></p>';
+    }
     const shAgg = egr.shadow_aggregate || {};
     if (shAgg.n_matured != null || shAgg.sign_accuracy != null) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Shadow aggregate: n_matured <code>' + esc(shAgg.n_matured) + '</code> · sign acc <code>' + esc(shAgg.sign_accuracy) + '</code> · class acc <code>' + esc(shAgg.class_accuracy) + '</code> · pseudo_pnl log <code>' + esc(shAgg.mean_pseudo_pnl_log) + '</code></p>';
@@ -679,6 +695,15 @@ function renderMlDataQuality(data, strategy) {
     }
     if (egr.file_path) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Файл: <code>' + esc(egr.file_path) + '</code></p>';
+    }
+    const apLast = egr.autoprep_last || {};
+    if (apLast.finished_at_utc) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Autoprep cron: <code>' + esc(apLast.finished_at_utc) + '</code>';
+        if (apLast.steps) {
+            var stepKeys = Object.keys(apLast.steps);
+            html += ' · steps ' + esc(stepKeys.join(', '));
+        }
+        html += '</p>';
     }
     const eiPs = eiSnap.peer_spillover_dataset || {};
     const eiSc = eiSnap.scenario_classifier_dataset || {};
@@ -706,7 +731,7 @@ function renderMlDataQuality(data, strategy) {
         html += '<tr><td style="padding:2px 8px 2px 0;color:#94a3b8;">' + esc(pair[0]) + '</td><td><code>' + esc(pair[1]) + '</code></td></tr>';
     });
     html += '</table>';
-    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier_dataset', 'scenario_classifier', 'regression', 'peer_spillover_dataset', 'peer_spillover_regressor', 'trading_shadow'];
+    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier_dataset', 'scenario_classifier', 'regression', 'peer_spillover_dataset', 'peer_spillover_regressor', 'trading_shadow', 'earnings_autoprep', 'open_path_mvp_prerequisites'];
     html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.85rem;"><strong>Гейты:</strong></p><ul style="margin:0 0 0.5rem 1rem;padding:0;font-size:0.84rem;">';
     gateNames.forEach(function (gn) {
         const g = eiGates[gn] || {};
@@ -784,7 +809,7 @@ function renderMlDataQuality(data, strategy) {
     if (missing.length) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0;">Без материалов: <code>' + esc(missing.slice(0, 12).join(', ')) + (missing.length > 12 ? '…' : '') + '</code></p>';
     }
-    html += '<p class="muted" style="font-size:0.8rem;margin:0.45rem 0 0 0;">Cron: <code>run_earnings_ml_refresh.py</code> каждые 6h (<code>EARNINGS_ML_REFRESH_APPLY_DATA</code> + incremental train) · nightly <code>--full</code> 23:52 · пороги: <code>ML_READINESS_EARNINGS_*</code>, <code>ML_READINESS_PEER_SPILLOVER_*</code>, <code>ML_READINESS_SCENARIO_*</code></p>';
+    html += '<p class="muted" style="font-size:0.8rem;margin:0.45rem 0 0 0;">Cron materials: <code>run_earnings_intelligence_autoprep.py</code> каждые 2h (KB→sync→ingest→extract→readiness) · ML <code>run_earnings_ml_refresh.py</code> каждые 6h + 23:52 full · ERD 23:33–37 · Sun 05:30 seed_quotes + 06:00 prod_eval</p>';
     html += '</div></details>';
     }
 

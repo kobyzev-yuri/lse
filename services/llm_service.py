@@ -279,6 +279,34 @@ def enrich_technical_data_with_earnings(
     return attach_earnings_entry_context(ticker, technical_data, strategy_name=strategy_name)
 
 
+def enrich_technical_data_with_premarket(
+    ticker: str,
+    technical_data: Dict[str, Any],
+    *,
+    decision_5m: Optional[Dict[str, Any]] = None,
+    strategy_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    from services.premarket_llm_context import attach_premarket_entry_context
+
+    return attach_premarket_entry_context(
+        ticker,
+        technical_data,
+        decision_5m=decision_5m,
+        strategy_name=strategy_name or "GAME_5M",
+    )
+
+
+def append_premarket_entry_context_section(text: str, technical_data: Dict[str, Any]) -> str:
+    """Append premarket gap advisory when session is PRE_MARKET."""
+    block = (technical_data or {}).get("premarket_entry_context_block")
+    if not block:
+        return text
+    return (
+        f"{text}\n\n=== PREMARKET (гэп к prev close, только PRE_MARKET) ===\n"
+        f"{block}"
+    )
+
+
 def format_game5m_execution_context_for_llm(technical_data: Dict[str, Any]) -> str:
     """
     Строки для user-промпта: импульс 2ч и тейк/стоп по правилам GAME_5m,
@@ -977,6 +1005,11 @@ Sentiment анализ:
         technical_data = enrich_technical_data_with_earnings(
             ticker, technical_data or {}, strategy_name=strategy_name,
         )
+        strat = (strategy_name or "").strip().upper().replace("-", "_")
+        if strat in ("GAME_5M", "5M", "GAME5M"):
+            technical_data = enrich_technical_data_with_premarket(
+                ticker, technical_data, strategy_name=strategy_name,
+            )
         if entry_prompt_profile == "portfolio_fusion":
             return {
                 "prompt_system": get_portfolio_entry_fusion_system_prompt(),
@@ -1055,7 +1088,7 @@ Sentiment анализ:
                 else:
                     user_message += " Учти при рекомендации: при In-Sync бумага движется с сектором; при Independent — на собственных драйверах."
         premarket_note = technical_data.get("premarket_note")
-        if premarket_note:
+        if premarket_note and not technical_data.get("premarket_entry_context_block"):
             user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
         if cluster_note:
             user_message += f"\n\nКластер и корреляция (обязательно учти в key_factors и reasoning):\n{cluster_note}"
@@ -1075,6 +1108,7 @@ Sentiment анализ:
         )
         user_message += f"\n\n{fusion_block}"
         user_message = append_earnings_entry_context_section(user_message, technical_data)
+        user_message = append_premarket_entry_context_section(user_message, technical_data)
         user_message += (
             "\n\nВерни JSON с полями decision (legacy) и decision_fused, как в system prompt."
         )
@@ -1194,6 +1228,11 @@ Sentiment анализ:
         technical_data = enrich_technical_data_with_earnings(
             ticker, technical_data or {}, strategy_name=strategy_name,
         )
+        strat = (strategy_name or "").strip().upper().replace("-", "_")
+        if strat in ("GAME_5M", "5M", "GAME5M"):
+            technical_data = enrich_technical_data_with_premarket(
+                ticker, technical_data, strategy_name=strategy_name,
+            )
 
         if entry_prompt_profile == "portfolio_fusion":
             system_prompt = get_portfolio_entry_fusion_system_prompt()
@@ -1292,7 +1331,7 @@ Sentiment анализ:
                             " Учти при рекомендации: при In-Sync бумага движется с сектором; при Independent — на собственных драйверах."
                         )
             premarket_note = technical_data.get("premarket_note")
-            if premarket_note:
+            if premarket_note and not technical_data.get("premarket_entry_context_block"):
                 user_message += f"\n\nКонтекст сессии:\n{premarket_note}\n\nУчти это при рекомендации входа (в премаркете ликвидность ниже)."
             if cluster_note:
                 user_message += f"\n\nКластер и корреляция (обязательно учти в key_factors и reasoning):\n{cluster_note}"
@@ -1312,6 +1351,7 @@ Sentiment анализ:
             )
             user_message += f"\n\n{fusion_block}"
             user_message = append_earnings_entry_context_section(user_message, technical_data)
+            user_message = append_premarket_entry_context_section(user_message, technical_data)
             user_message += (
                 "\n\nВерни JSON с полями decision (legacy) и decision_fused, как в system prompt."
             )

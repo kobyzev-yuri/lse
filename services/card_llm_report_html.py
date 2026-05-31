@@ -30,6 +30,8 @@ def build_game5m_card_llm_html(payload: dict[str, Any]) -> str:
         meta.append(f"Vol 5m: {_fmt_num(payload.get('volatility_5m_pct'), 2)}%")
     if payload.get("take_profit_pct") is not None:
         meta.append(f"Тейк: +{_fmt_num(payload.get('take_profit_pct'), 2)}%")
+    if payload.get("session_phase") == "PRE_MARKET" and payload.get("premarket_gap_pct") is not None:
+        meta.append(f"Premarket gap: {float(payload['premarket_gap_pct']):+.2f}%")
 
     parts = [
         f'<div class="ticker-section"><h2>{esc(ticker)} — {esc(decision)}</h2>',
@@ -40,6 +42,10 @@ def build_game5m_card_llm_html(payload: dict[str, Any]) -> str:
     kb = payload.get("kb_news_impact")
     if kb:
         parts.append(section_h2_pre("KB (влияние на решение)", str(kb)))
+
+    pm = (payload.get("premarket_entry_context_block") or "").strip()
+    if pm:
+        parts.append(section_h2_pre("Premarket (гэп, только PRE_MARKET)", pm))
 
     earn = (payload.get("earnings_entry_context_block") or "").strip()
     if earn:

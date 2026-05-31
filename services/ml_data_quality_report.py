@@ -538,12 +538,28 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
         "overall_scenario_classifier_ready": ei_gates.get("overall_scenario_classifier_ready"),
         "overall_peer_spillover_ready": ei_gates.get("overall_peer_spillover_ready"),
         "overall_trading_shadow_ready": ei_gates.get("overall_trading_shadow_ready"),
+        "overall_earnings_autoprep_ready": ei_gates.get("overall_earnings_autoprep_ready"),
+        "overall_open_path_mvp_prerequisites_ready": ei_gates.get("overall_open_path_mvp_prerequisites_ready"),
         "gates": ei_gates,
         "snapshot": ei.get("snapshot"),
         "file_path": (ei.get("file") or {}).get("path"),
         "shadow_file_path": shadow_path,
         "shadow_aggregate": shadow_agg,
     }
+    try:
+        from services.earnings_intelligence_readiness import default_readiness_metrics_path
+
+        autoprep_path = default_readiness_metrics_path(project_root).parent / "last_earnings_intelligence_autoprep.json"
+        autoprep_raw = _json_load(autoprep_path) if autoprep_path.is_file() else None
+        if isinstance(autoprep_raw, dict):
+            bundle["earnings_grid_readiness"]["autoprep_last"] = {
+                "finished_at_utc": autoprep_raw.get("finished_at_utc"),
+                "steps": autoprep_raw.get("steps"),
+                "readiness": autoprep_raw.get("readiness"),
+                "file_path": str(autoprep_path),
+            }
+    except Exception:
+        pass
     ext = bundle.get("external_train_metrics") if isinstance(bundle.get("external_train_metrics"), dict) else {}
     if su == "PORTFOLIO":
         bundle["external_train_metrics_focus"] = {

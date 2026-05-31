@@ -220,6 +220,28 @@ def collect_earnings_intelligence_readiness(
             universe=sym_set,
             min_class_samples=min_class_samples,
         )
+        try:
+            pm_days = conn.execute(
+                text("SELECT COUNT(DISTINCT trade_date) FROM premarket_daily_features")
+            ).scalar()
+            gap_open_rows = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM game5m_gap_forecast_daily WHERE open_gap_pct IS NOT NULL"
+                )
+            ).scalar()
+            gap_pm_rows = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM game5m_gap_forecast_daily WHERE premarket_gap_pct IS NOT NULL"
+                )
+            ).scalar()
+            out["open_path_data"] = {
+                "premarket_feature_trading_days": int(pm_days or 0),
+                "gap_forecast_open_rows": int(gap_open_rows or 0),
+                "gap_forecast_premarket_rows": int(gap_pm_rows or 0),
+            }
+        except Exception as e_od:
+            logger.debug("open_path_data counts: %s", e_od)
+            out["open_path_data"] = {"error": str(e_od)}
     except Exception as e:
         out["error"] = str(e)
         logger.warning("earnings intelligence readiness: %s", e)
@@ -503,6 +525,91 @@ def gate_trading_shadow(shadow_report: Optional[Dict[str, Any]]) -> Dict[str, An
     }
 
 
+def gate_earnings_autoprep(
+    gates: Dict[str, Any],
+    snapshot: Dict[str, Any],
+    *,
+    shadow_report: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Composite «автоподготовка earnings → product ops»:
+    grid + peer spillover + product-tier shadow + минимум LLM labels.
+    Все шаги покрыты cron (см. docs/OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md).
+    """
+    reasons: list[str] = []
+    min_labels = _cfg_int("ML_READINESS_EARNINGS_AUTOPREP_MIN_LLM_LABELS", 40)
+    min_shadow_matured = _cfg_int("ML_READINESS_EARNINGS_AUTOPREP_MIN_SHADOW_MATURED", 50)
+    min_shadow_sign = _cfg_float("ML_READINESS_EARNINGS_AUTOPREP_MIN_SIGN_ACCURACY", 0.58)
+
+    lf = snapshot.get("labels_and_features") if isinstance(snapshot.get("labels_and_features"), dict) else {}
+    n_labels = int(lf.get("llm_scenario_labels") or 0)
+
+    grid_ok = bool(gates.get("overall_grid_ready"))
+    peer_ok = bool(gates.get("overall_peer_spillover_ready"))
+    if not grid_ok:
+        reasons.append("overall_grid_ready=false")
+    if not peer_ok:
+        reasons.append("overall_peer_spillover_ready=false")
+    if n_labels < min_labels:
+        reasons.append(f"llm_scenario_labels<{min_labels}")
+
+    agg = (shadow_report or {}).get("aggregate") if isinstance(shadow_report, dict) else {}
+    if not isinstance(agg, dict):
+        agg = {}
+    n_matured = int(agg.get("n_matured") or agg.get("n_sign_scored") or 0)
+    sign_acc = agg.get("sign_accuracy")
+    if n_matured < min_shadow_matured:
+        reasons.append(f"shadow_n_matured<{min_shadow_matured}")
+    if sign_acc is None:
+        reasons.append("shadow_no_sign_accuracy")
+    elif float(sign_acc) < min_shadow_sign:
+        reasons.append(f"shadow_sign_accuracy<{min_shadow_sign}")
+
+    return {
+        "ready": len(reasons) == 0,
+        "reasons": reasons,
+        "llm_scenario_labels": n_labels,
+        "shadow_n_matured": n_matured,
+        "shadow_sign_accuracy": sign_acc,
+        "overall_grid_ready": grid_ok,
+        "overall_peer_spillover_ready": peer_ok,
+        "cron_doc": "crontab/lse-docker.crontab + run_earnings_ml_refresh.py",
+        "advisory_only": True,
+    }
+
+
+def gate_open_path_mvp_prerequisites(
+    snapshot: Dict[str, Any],
+    *,
+    earnings_autoprep: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Data + earnings autoprep gates before starting open-path scenario classifier MVP."""
+    reasons: list[str] = []
+    min_pm_days = _cfg_int("OPEN_PATH_MVP_MIN_PREMARKET_TRADING_DAYS", 60)
+    min_gap_open = _cfg_int("OPEN_PATH_MVP_MIN_GAP_FORECAST_OPEN_ROWS", 120)
+
+    od = snapshot.get("open_path_data") if isinstance(snapshot.get("open_path_data"), dict) else {}
+    pm_days = int(od.get("premarket_feature_trading_days") or 0)
+    gap_open = int(od.get("gap_forecast_open_rows") or 0)
+
+    if not earnings_autoprep.get("ready"):
+        reasons.append("earnings_autoprep_not_ready")
+    if pm_days < min_pm_days:
+        reasons.append(f"premarket_trading_days<{min_pm_days}")
+    if gap_open < min_gap_open:
+        reasons.append(f"gap_forecast_open_rows<{min_gap_open}")
+
+    return {
+        "ready": len(reasons) == 0,
+        "reasons": reasons,
+        "premarket_feature_trading_days": pm_days,
+        "gap_forecast_open_rows": gap_open,
+        "earnings_autoprep_ready": bool(earnings_autoprep.get("ready")),
+        "next_step_doc": "docs/OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md §4",
+        "advisory_only": True,
+    }
+
+
 def build_earnings_intelligence_gates(
     snapshot: Dict[str, Any],
     *,
@@ -523,6 +630,15 @@ def build_earnings_intelligence_gates(
     scenario_ready = bool(g_scenario_ds.get("ready")) and bool(g_scenario.get("ready"))
     grid_core = all(g.get("ready") for g in (g_sources, g_features, g_scenario_ds, g_scenario))
     peer_ready = bool(g_peer_ds.get("ready")) and bool(g_peer_model.get("ready"))
+    g_autoprep = gate_earnings_autoprep(
+        {
+            "overall_grid_ready": grid_core,
+            "overall_peer_spillover_ready": peer_ready,
+        },
+        snapshot,
+        shadow_report=shadow_report,
+    )
+    g_open_path = gate_open_path_mvp_prerequisites(snapshot, earnings_autoprep=g_autoprep)
     return {
         "sources": g_sources,
         "features": g_features,
@@ -533,11 +649,15 @@ def build_earnings_intelligence_gates(
         "peer_spillover_dataset": g_peer_ds,
         "peer_spillover_regressor": g_peer_model,
         "trading_shadow": g_shadow,
+        "earnings_autoprep": g_autoprep,
+        "open_path_mvp_prerequisites": g_open_path,
         "overall_grid_ready": grid_core,
         "overall_scenario_classifier_ready": scenario_ready,
         "overall_with_regression": grid_core and bool(g_regression.get("ready")),
         "overall_trading_shadow_ready": grid_core and bool(g_shadow.get("ready")),
         "overall_peer_spillover_ready": peer_ready,
+        "overall_earnings_autoprep_ready": bool(g_autoprep.get("ready")),
+        "overall_open_path_mvp_prerequisites_ready": bool(g_open_path.get("ready")),
     }
 
 
