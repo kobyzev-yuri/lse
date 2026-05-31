@@ -16,28 +16,66 @@
         .help-panel ul { margin: 0.5rem 0 0 1.1rem; }
         .help-panel li { margin: 0.35rem 0; }
         .help-panel code { background: #1e293b; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.78rem; }
-        .tab-bar { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem; }
-        .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+
+        /* Focus bar — единственный источник контекста */
+        .focus-bar {
+            position: sticky; top: 0; z-index: 20;
+            background: linear-gradient(180deg, #0f172a 0%, #0c1222 100%);
+            border: 1px solid #334155; border-radius: 10px;
+            padding: 0.65rem 0.85rem; margin-bottom: 0.75rem;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+        }
+        .focus-bar.empty { border-color: #7c2d12; }
+        .focus-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        .focus-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; font-weight: 700; min-width: 4.5rem; }
+        .focus-title { font-size: 1.05rem; font-weight: 700; color: #f1f5f9; }
+        .focus-meta { font-size: 0.78rem; color: #94a3b8; flex: 1; min-width: 8rem; }
+        .focus-pickers { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+        select, .ticker-input { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 0.35rem 0.5rem; font-size: 0.85rem; }
+        .ticker-input { width: 5.5rem; min-width: 4rem; text-transform: uppercase; }
+
+        /* Navigation */
+        .ei-nav { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; align-items: center; }
+        .ei-nav-group { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+        .nav-sep { color: #475569; font-size: 0.75rem; padding: 0 0.25rem; user-select: none; }
+        .nav-hint { font-size: 0.75rem; color: #64748b; margin-left: auto; }
         .btn { background: #0f3460; color: #e2e8f0; border: none; padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; }
+        .btn:hover:not(:disabled) { background: #1e4976; }
         .btn.active { background: #1d4ed8; }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn-ghost { background: transparent; border: 1px solid #334155; }
+        .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+
+        .view { display: none; }
+        .view.active { display: block; }
+        .view-lead { font-size: 0.82rem; color: #94a3b8; margin-bottom: 0.75rem; line-height: 1.5; max-width: 52rem; }
+        .view-lead strong { color: #cbd5e1; }
+        .empty-state {
+            background: #0f172a; border: 1px dashed #475569; border-radius: 10px;
+            padding: 2rem 1.25rem; text-align: center; color: #94a3b8; font-size: 0.88rem;
+        }
+        .empty-state .btn { margin-top: 0.75rem; }
+
         .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.5rem; margin-bottom: 1rem; }
         .stat { background: #16213e; border-radius: 8px; padding: 0.6rem 0.75rem; border: 1px solid #334155; }
         .stat .n { font-size: 1.25rem; font-weight: 700; color: #7dd3fc; }
         .stat .l { font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; }
-        .panel { display: none; }
-        .panel.active { display: block; }
+
         table { width: 100%; border-collapse: collapse; font-size: 0.82rem; background: #16213e; border-radius: 8px; overflow: hidden; }
         th, td { padding: 0.45rem 0.5rem; text-align: left; border-bottom: 1px solid #334155; }
         th { color: #94a3b8; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
-        tr:hover td { background: #1e293b; }
+        tr.event-row { cursor: pointer; }
+        tr.event-row:hover td { background: #1e293b; }
+        tr.event-row.selected td { background: #1e3a5f !important; }
+        tr.shadow-row.selected td { background: #1e3a5f !important; }
+
         .badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
         .badge.ok { background: #14532d; color: #86efac; }
         .badge.planned { background: #422006; color: #fde047; }
         .badge.no { background: #334155; color: #94a3b8; }
         .badge.game { background: #1e3a5f; color: #93c5fd; }
         .badge.pf { background: #312e81; color: #c4b5fd; }
-        .link-btn { color: #7dd3fc; cursor: pointer; text-decoration: underline; background: none; border: none; font: inherit; }
-        .detail-panel { margin-top: 1rem; padding: 1rem; background: #0f172a; border: 1px solid #334155; border-radius: 10px; }
+
         .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
         @media (max-width: 700px) { .detail-grid { grid-template-columns: 1fr; } }
         .block { background: #16213e; border-radius: 8px; padding: 0.65rem; font-size: 0.82rem; margin-bottom: 0.65rem; }
@@ -45,7 +83,7 @@
         .peer-table { width: 100%; font-size: 0.78rem; }
         .peer-table td, .peer-table th { padding: 0.25rem 0.35rem; border-bottom: 1px solid #334155; }
         .peer-table th { color: #94a3b8; font-weight: 600; font-size: 0.72rem; }
-        .pill { display: inline-block; padding: 0.1rem 0.38rem; border-radius: 999px; font-size: 0.68rem; font-weight: 700; text-transform: none; letter-spacing: 0.02em; }
+        .pill { display: inline-block; padding: 0.1rem 0.38rem; border-radius: 999px; font-size: 0.68rem; font-weight: 700; text-transform: none; }
         .pill-spillover { background: #1e3a5f; color: #93c5fd; }
         .pill-ml { background: #422006; color: #fde047; }
         .ml-compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.65rem; }
@@ -64,90 +102,69 @@
         @media (max-width: 900px) { .graph-wrap { grid-template-columns: 1fr; } }
         .edge-row { font-size: 0.8rem; padding: 0.35rem 0; border-bottom: 1px solid #334155; }
         .weight-bar { display: inline-block; height: 6px; background: #3b82f6; border-radius: 3px; vertical-align: middle; margin-left: 0.35rem; }
-        select, .ticker-input { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 0.35rem 0.5rem; font-size: 0.85rem; }
-        .ticker-input { width: 5.5rem; min-width: 4rem; text-transform: uppercase; }
-        .view-title { font-size: 1rem; margin: 0 0 0.65rem; color: #e2e8f0; font-weight: 600; }
         .layer-card { border-left: 3px solid #475569; padding-left: 0.5rem; margin-bottom: 0.65rem; }
         .layer-card.active { border-left-color: #22c55e; }
         .layer-card.planned { border-left-color: #eab308; }
-        .tab-intro { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 0.6rem 0.75rem; margin-bottom: 0.75rem; font-size: 0.82rem; line-height: 1.5; color: #cbd5e1; }
-        .tab-intro strong { color: #e2e8f0; }
-        .tab-intro ul { margin: 0.45rem 0 0 1.1rem; }
-        .tab-intro li { margin: 0.25rem 0; }
         .shadow-legend { font-size: 0.78rem; margin-bottom: 0.65rem; }
         .shadow-legend dt { color: #94a3b8; font-weight: 600; margin-top: 0.35rem; }
         .shadow-legend dd { margin: 0.15rem 0 0 0; color: #cbd5e1; }
-        .ei-context-bar {
-            position: sticky; top: 0; z-index: 15;
-            background: #0f172a; border: 1px solid #334155; border-radius: 8px;
-            padding: 0.5rem 0.65rem; margin-bottom: 0.75rem;
-            display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.35);
-        }
-        .ei-context-bar .ctx-label { font-size: 0.78rem; color: #94a3b8; font-weight: 600; }
-        .ei-context-hint { font-size: 0.78rem; color: #7dd3fc; margin-left: auto; }
-        tr.ctx-row td { background: #1e3a5f !important; }
+        .view-title { font-size: 1rem; margin: 0 0 0.65rem; color: #e2e8f0; font-weight: 600; }
+        .link-btn { color: #7dd3fc; cursor: pointer; text-decoration: underline; background: none; border: none; font: inherit; }
     </style>
 </head>
 <body>
 {% include "partials/site_nav_standalone.html" %}
 <div class="header">
     <h1>Earnings Intelligence</h1>
-    <div class="sub">Календарь earnings → материалы → LLM facts → peer spillover. Отдельно от дневной <code>/corr</code>.</div>
+    <div class="sub">Один отчёт в фокусе: календарь → обзор → ML → пиры. Системные экраны — граф, качество модели, pipeline.</div>
 </div>
 
 <details class="help-panel">
-    <summary>Как читать этот экран — кратко · <a href="/earnings/guide" style="color:#93c5fd">полное руководство (RU)</a></summary>
-    <p class="muted" style="margin:0.35rem 0">Вкладки: <strong>События</strong> (календарь) · <strong>Brief</strong> · <strong>Spillover</strong> · <strong>Fusion</strong> — одинаковый экран с тулбаром; из таблицы кнопки Brief/Fusion/Spillover переключают вкладку. Тикер — поле ввода (не длинный список).</p>
+    <summary>Как устроен экран · <a href="/earnings/guide" style="color:#93c5fd">полное руководство</a></summary>
     <ul>
-        <li><strong>Регрессия (сейчас в prod):</strong> CatBoost предсказывает <code>forward_log_ret_5d</code> — log-доходность на 5 торговых дней после отчёта. API: <code>/api/ml/event-reaction/{ticker}</code>. Признаки из daily quotes + market regime; тексты earnings пока не в product feature_builder.</li>
-        <li><strong>UP/DOWN/FLAT:</strong> не классификатор, а правило по порогу на фактической 5d log-return (backfill из quotes).</li>
-        <li><strong>Scenario (LLM):</strong> из transcript/8-K — <code>capex_positive_for_infra_peers</code>, … Колонка <strong>LLM scenario</strong> в таблице.</li>
-        <li><strong>Scenario (ML):</strong> CatBoost multi-class по <code>quotes_regime_earnings_v1</code> — колонка <strong>ML scenario</strong>, вкладки Fusion / Shadow. Не путать с LLM.</li>
-        <li><strong>Peer graph:</strong> directed edges «лидер → пир» с весом. Spillover = forward returns пиров от <em>даты отчёта лидера</em> (event-study), не скользящая корреляция.</li>
-        <li><strong>quotes_regime_earnings_v1:</strong> backfill с peer graph + tone — <code>run_earnings_ml_refresh.py</code>.</li>
-        <li><strong>Классификатор сценариев (pilot):</strong> train на LLM-метках; прогноз — Fusion + колонка ML; качество — вкладка Shadow.</li>
-        <li><strong>Дата отчёта:</strong> колонка Date в «Событиях»; кнопки Brief/Fusion подставляют тикер и дату на своей вкладке. Telegram: <code>/earnings META 2026-04-29</code>.</li>
+        <li><strong>Календарь</strong> — выберите строку: задаётся активный тикер и дата отчёта.</li>
+        <li><strong>Обзор / ML прогноз / Пиры</strong> — три среза <em>одного</em> события; без выбора недоступны.</li>
+        <li><strong>Peer graph / Качество ML / ML pipeline</strong> — справочник и мониторинг; не привязаны к одному отчёту.</li>
+        <li>LLM scenario — из transcript/8-K; ML scenario — CatBoost classifier. Регрессия 5d — отдельный слой на вкладке ML прогноз.</li>
     </ul>
 </details>
 
 <datalist id="eiTickerList"></datalist>
-<div class="tab-bar">
-    <button class="btn active" data-tab="events">События</button>
-    <button class="btn" data-tab="brief">Brief</button>
-    <button class="btn" data-tab="graph">Peer graph</button>
-    <button class="btn" data-tab="spillover">Spillover</button>
-    <button class="btn" data-tab="shadow">Shadow</button>
-    <button class="btn" data-tab="fusion">Fusion</button>
-    <button class="btn" data-tab="ml">ML слои</button>
-</div>
 
-<div id="eiContextBar" class="ei-context-bar" aria-label="Выбранный тикер и дата отчёта">
-    <span class="ctx-label">Контекст</span>
-    <label class="muted">Ticker</label>
-    <input id="ctxSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="MSFT">
-    <label class="muted">Дата</label>
-    <select id="ctxEventDate" title="Даты отчётов для выбранного тикера"></select>
-    <button type="button" class="btn" data-ctx-go="brief">Brief</button>
-    <button type="button" class="btn" data-ctx-go="fusion">Fusion</button>
-    <button type="button" class="btn" data-ctx-go="spillover">Spillover</button>
-    <label class="muted" style="display:flex;align-items:center;gap:0.25rem;font-size:0.78rem">
-        <input type="checkbox" id="ctxFilterEvents" /> только этот тикер в таблице
-    </label>
-    <span id="ctxHint" class="ei-context-hint">—</span>
-</div>
-
-<div id="panel-events" class="panel active">
-    <div class="tab-intro">
-        <strong>События</strong> — календарь отчётов universe (GAME_5M + portfolio + context).
-        <ul>
-            <li><strong>Date</strong> — дата earnings в <code>knowledge_base</code>.</li>
-            <li><strong>LLM scenario</strong> — hint из extract (transcript/8-K); может отличаться от ML.</li>
-            <li><strong>ML scenario</strong> — pred CatBoost classifier (<code>quotes_regime_earnings_v1</code>); proba в скобках. «—» = нет features или модель off.</li>
-            <li><strong>Materials / LLM / Tone</strong> — покрытие материалами и extract.</li>
-            <li><strong>Brief / Fusion / Shadow</strong> — детали по строке; Shadow показывает pred vs факт после созревания 5d.</li>
-        </ul>
+<!-- Единственный контекст: тикер + дата -->
+<div id="focusBar" class="focus-bar empty">
+    <div class="focus-row">
+        <span class="focus-label">Событие</span>
+        <div class="focus-pickers">
+            <input id="ctxSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="Тикер">
+            <select id="ctxEventDate" title="Дата отчёта"></select>
+        </div>
+        <span id="focusTitle" class="focus-title muted">не выбрано</span>
+        <span id="focusMeta" class="focus-meta"></span>
+        <button type="button" class="btn btn-ghost" id="focusClearBtn" disabled>Сбросить</button>
     </div>
+</div>
+
+<!-- Навигация без дублей Brief/Fusion/Spillover -->
+<div class="ei-nav">
+    <div class="ei-nav-group">
+        <button class="btn active" data-view="calendar">Календарь</button>
+        <button class="btn" data-view="overview" data-needs-event>Обзор</button>
+        <button class="btn" data-view="ml" data-needs-event>ML прогноз</button>
+        <button class="btn" data-view="peers" data-needs-event>Пиры</button>
+    </div>
+    <span class="nav-sep">|</span>
+    <div class="ei-nav-group">
+        <button class="btn" data-view="graph">Peer graph</button>
+        <button class="btn" data-view="shadow">Качество ML</button>
+        <button class="btn" data-view="pipeline">ML pipeline</button>
+    </div>
+    <span id="navHint" class="nav-hint"></span>
+</div>
+
+<!-- Календарь: единственное место выбора события -->
+<div id="view-calendar" class="view active">
+    <p class="view-lead"><strong>Календарь</strong> — клик по строке выбирает событие и открывает «Обзор». Фильтры universe; подсветка — текущий выбор.</p>
     <div class="toolbar">
         <button class="btn active" data-filter="all">Все</button>
         <button class="btn" data-filter="GAME_5M">GAME_5M</button>
@@ -158,113 +175,73 @@
     <div class="summary" id="summaryBox"></div>
     <div id="missingList"></div>
     <table>
-        <thead><tr><th>Ticker</th><th>Date</th><th>Group</th><th>Mat</th><th>LLM</th><th>Tone</th><th>LLM scenario</th><th>ML scenario</th><th></th></tr></thead>
+        <thead><tr><th>Ticker</th><th>Date</th><th>Group</th><th>Mat</th><th>LLM</th><th>Tone</th><th>LLM scenario</th><th>ML scenario</th></tr></thead>
         <tbody id="eventsBody"></tbody>
     </table>
 </div>
 
-<div id="panel-brief" class="panel">
-    <div class="tab-intro">
-        <strong>Event Brief</strong> — один отчёт: LLM-факты, ML-слои, guidance/capex, spillover по пирам.
-        <ul>
-            <li><strong>Scenario (LLM)</strong> — из extract; headline и rationale.</li>
-            <li><strong>Scenario classifier (ML)</strong> — pred CatBoost + proba + ожидаемый знак source (advisory).</li>
-            <li><strong>Regression (ML)</strong> — pred 5d log-return source в %.</li>
-            <li><strong>Peer spillover</strong> — факт 1d/5d пиров + колонка <span class="pill pill-ml">5d ML</span> (CatBoost regressor); Sign = совпадение знака fact vs pred.</li>
-        </ul>
+<!-- Обзор: Event Brief одного отчёта -->
+<div id="view-overview" class="view">
+    <p class="view-lead"><strong>Обзор</strong> — LLM-факты, guidance, цитаты, исход source и сводка по пирам для выбранного отчёта.</p>
+    <div id="overviewEmpty" class="empty-state" hidden>
+        <p>Выберите событие в календаре или укажите тикер и дату выше.</p>
+        <button type="button" class="btn" data-goto="calendar">Открыть календарь</button>
     </div>
-    <p class="muted" style="font-size:0.78rem;margin-bottom:0.5rem">Тикер и дата — в панели <strong>Контекст</strong> выше (сохраняются при смене вкладок).</p>
-    <h2 id="detailTitle" class="view-title">Event Brief</h2>
-    <div id="briefContent" class="muted">Выберите строку в «Событиях» или введите тикер и дату.</div>
+    <div id="overviewContent"></div>
 </div>
 
-<div id="panel-graph" class="panel">
-    <div class="tab-intro">
-        <strong>Peer graph</strong> — статическая карта «кто на кого влияет после earnings», из таблицы <code>peer_graph_edge</code>.
-        <ul>
-            <li><strong>Ребро (edge):</strong> <code>source → target</code> — после отчёта <em>source</em> (лидер, например META) ожидаем влияние на <em>target</em> (пир: NVDA, MU, …).</li>
-            <li><strong>weight 0–1</strong> — сила связи (чем длиннее синяя полоска в списке Edges, тем выше вес).</li>
-            <li><strong>relation_type</strong> — тип связи (supplier, peer, sector и т.д., см. в списке Edges).</li>
-            <li>Это <em>не</em> дневная матрица <code>/corr</code>: граф задаёт <strong>кого смотреть</strong>, а фактические % — на вкладке <strong>Spillover</strong> / в Brief.</li>
-        </ul>
+<!-- ML прогноз: Fusion + regression (бывшие Fusion + часть Brief) -->
+<div id="view-ml" class="view">
+    <p class="view-lead"><strong>ML прогноз</strong> — advisory по одному событию: регрессия 5d source, classifier сценария, сводка alignment. Без исполнения сделок.</p>
+    <div id="mlEmpty" class="empty-state" hidden>
+        <p>Нужен активный тикер и дата отчёта.</p>
+        <button type="button" class="btn" data-goto="calendar">Выбрать в календаре</button>
     </div>
+    <div id="mlContent"></div>
+</div>
+
+<!-- Пиры: spillover только активного события -->
+<div id="view-peers" class="view">
+    <p class="view-lead"><strong>Пиры</strong> — forward returns пиров после даты отчёта <em>лидера</em> (1d/5d fact vs ML pred). Только выбранное событие.</p>
+    <div id="peersEmpty" class="empty-state" hidden>
+        <p>Укажите тикер-лидер и дату его отчёта.</p>
+        <button type="button" class="btn" data-goto="calendar">Выбрать в календаре</button>
+    </div>
+    <div id="peersContent"></div>
+</div>
+
+<!-- Peer graph -->
+<div id="view-graph" class="view">
+    <p class="view-lead"><strong>Peer graph</strong> — статическая карта «лидер → пир» из <code>peer_graph_edge</code>. Клик по source подставляет тикер в контекст (дату выберите в календаре).</p>
     <div class="graph-wrap">
         <div class="block">
-            <h3>Sources (out-degree)</h3>
-            <p class="muted" style="margin-bottom:0.4rem;font-size:0.76rem;text-transform:none;font-weight:400;color:#94a3b8">
-                Тикеры-лидеры с исходящими рёбрами: сколько пиров в графе «слушают» этот source. Клик по тикеру → вкладка <strong>Spillover</strong> (история отчётов и 1d/5d пиров).
-            </p>
+            <h3>Sources (лидеры)</h3>
             <div id="graphSources"></div>
         </div>
         <div class="block">
-            <h3>Edges</h3>
-            <p class="muted" style="margin-bottom:0.4rem;font-size:0.76rem;text-transform:none;font-weight:400;color:#94a3b8">
-                Список рёбер <code>source → target</code> (первые 40 из полного графа). Для полной истории движений после даты отчёта используйте Spillover или Brief.
-            </p>
+            <h3>Edges (первые 40)</h3>
             <div id="graphEdges"></div>
         </div>
     </div>
 </div>
 
-<div id="panel-spillover" class="panel">
-    <div class="tab-intro">
-        <strong>Spillover</strong> — история отчётов source: факт 1d/5d пиров + ML pred 5d (pilot).
-        <ul>
-            <li><strong>Source</strong> — тикер-лидер; пиры из <code>peer_graph_edge</code> (+ LLM affected с quotes).</li>
-            <li>Таблица: graph peers и affected <em>с fact</em>; aff без котировок (OPENAI и т.п.) скрыты.</li>
-            <li><strong>ML spillover — pilot:</strong> мало train rows; pred часто ≈0; Sign — sanity check, не KPI; не для сделок.</li>
-            <li>Контекст (тикер + дата) — сверху; дата не дублируется в истории ниже.</li>
-        </ul>
-    </div>
-    <p class="muted" style="font-size:0.78rem;margin-bottom:0.5rem">Source = тикер из <strong>Контекст</strong>. <button type="button" class="btn" id="loadSpilloverBtn">Обновить историю</button></p>
-    <p class="muted" id="spilloverNote"></p>
-    <div id="spilloverContent"></div>
-</div>
-
-<div id="panel-shadow" class="panel">
-    <div class="tab-intro">
-        <strong>Shadow</strong> — таблица качества <em>классификатора сценариев</em>: pred ML vs факт 5d source и LLM-метка. Смотрите параллельно с колонкой ML scenario в «Событиях».
-        <ul>
-            <li><strong>Pred scenario</strong> — то же, что ML scenario / Fusion (CatBoost до созревания 5d).</li>
-            <li><strong>Sign</strong> — совпал ли знак 5d у <em>source</em> с эвристикой сценария (capex → source часто вниз, gap_up → вверх).</li>
-            <li><strong>Class</strong> — pred scenario = LLM-метка <code>llm_scenario_v0</code>; «—» если метки нет или только UP/DOWN/FLAT.</li>
-            <li><strong>Peer 5d</strong> — среднее 5d по пирам; peer sign acc в шапке — доля угадываний знака пиров.</li>
-            <li><strong>Pseudo PnL</strong> — условная доходность «торговли знаком сценария» на source минус round-trip cost.</li>
-        </ul>
-    </div>
+<!-- Shadow QA -->
+<div id="view-shadow" class="view">
+    <p class="view-lead"><strong>Качество ML</strong> — shadow report classifier: pred vs факт после созревания 5d. При выбранном событии строка подсвечивается; можно фильтровать таблицу.</p>
     <div class="toolbar">
-        <button class="btn" id="loadShadowBtn">Загрузить shadow report</button>
-        <button class="btn" id="refreshShadowBtn">Пересчитать (refresh)</button>
+        <button class="btn" id="loadShadowBtn">Загрузить</button>
+        <button class="btn" id="refreshShadowBtn">Пересчитать</button>
+        <label class="muted" style="display:flex;align-items:center;gap:0.25rem;font-size:0.78rem">
+            <input type="checkbox" id="shadowFilterActive" /> только активное событие
+        </label>
     </div>
-    <div id="shadowContent" class="muted">Нажмите «Загрузить shadow report».</div>
+    <div id="shadowContent" class="muted">Нажмите «Загрузить».</div>
 </div>
 
-<div id="panel-fusion" class="panel">
-    <div class="tab-intro">
-        <strong>Fusion</strong> — одно событие: регрессия 5d (source) + <strong>scenario classifier</strong> + advisory. LLM scenario — на Brief, не здесь.
-        <ul>
-            <li><strong>Regression ML</strong> — «сколько» по source; <strong>Scenario ML</strong> — «какая история»; сравните с LLM на Brief.</li>
-            <li><strong>Peer spillover ML</strong> — pred 5d по каждому peer (CatBoost); fact vs pred в таблице.</li>
-            <li><strong>execution blocked</strong> — всегда; не подключено к GAME_5M / portfolio bot.</li>
-            <li>Тикер и дата — как на Brief; из таблицы кнопка Fusion подставляет их автоматически.</li>
-        </ul>
-    </div>
-    <p class="muted" style="font-size:0.78rem;margin-bottom:0.5rem">Тикер и дата — в <strong>Контекст</strong>. <button type="button" class="btn" id="loadFusionBtn">Fusion advisory</button></p>
-    <div id="fusionContent" class="muted">Регрессия + scenario classifier + brief (без исполнения сделок).</div>
-</div>
-
-<div id="panel-ml" class="panel">
-    <div class="tab-intro">
-        <strong>ML слои</strong> — статус пайплайна earnings grid: features, регрессия, LLM-метки, classifier, shadow, fusion, readiness JSON.
-        <ul>
-            <li><strong>Regression</strong> — pred 5d log-return <em>source</em> (Fusion / Brief).</li>
-            <li><strong>Scenario classifier</strong> — pred класс сценария source (Events ML scenario, Shadow, Fusion).</li>
-            <li><strong>Peer spillover ML</strong> — pred 5d <em>пиров</em> (Brief / Spillover / Fusion); sign acc в readiness.</li>
-            <li>Слои <span class="badge ok">active</span> / <span class="badge planned">pilot</span> / planned — что уже в prod.</li>
-            <li>Подробнее: <a href="/earnings/guide" style="color:#93c5fd">руководство</a>, <code>docs/TRADE_ML_DATASETS_AND_TARGETS_RU.md</code> §7.</li>
-        </ul>
-    </div>
-    <div id="mlLayersContent" class="muted">Загрузка…</div>
+<!-- ML pipeline -->
+<div id="view-pipeline" class="view">
+    <p class="view-lead"><strong>ML pipeline</strong> — статус слоёв данных и моделей earnings grid.</p>
+    <div id="pipelineContent" class="muted">Загрузка…</div>
 </div>
 
 <script>
@@ -321,8 +298,8 @@ const fmtLlmVsMlScenarioCompare = (b) => {
     </div>`;
 };
 const horizonPills = () =>
-    '<span class="horizon-pills"><span class="pill pill-spillover" title="forward log-return, 1 торг. день после отчёта">1d</span>'
-    + '<span class="pill pill-spillover" title="forward log-return, 5 торг. дней после отчёта">5d</span></span>';
+    '<span class="horizon-pills"><span class="pill pill-spillover" title="1 торг. день после отчёта">1d</span>'
+    + '<span class="pill pill-spillover" title="5 торг. дней после отчёта">5d</span></span>';
 const indexPeerMl = (mlArr) => {
     const m = {};
     (mlArr || []).forEach(row => {
@@ -334,13 +311,13 @@ const indexPeerMl = (mlArr) => {
 const fmtMlPeerPred = (mlRow, hasFact) => {
     if (!mlRow) {
         return hasFact
-            ? '<span class="muted" title="нет pred (не equity / нет features)">—</span>'
+            ? '<span class="muted" title="нет pred">—</span>'
             : '<span class="muted">—</span>';
     }
     const st = mlRow.peer_spillover_ml_status;
     if (st === 'ok' && mlRow.peer_forward_log_ret_5d_pred != null) {
         const rel = mlRow.relation_type === 'affected_only'
-            ? ' <span class="muted" title="LLM affected, нет ребра в peer_graph">aff</span>' : '';
+            ? ' <span class="muted" title="LLM affected, нет ребра в графе">aff</span>' : '';
         return fmtPct(mlRow.peer_forward_log_ret_5d_pred) + rel;
     }
     const note = mlRow.peer_spillover_ml_note || st || '—';
@@ -355,7 +332,7 @@ const signMatchIcon = (actualLog, predLog) => {
         ? '<span class="pos" title="same sign fact vs ML">✓</span>'
         : '<span class="neg" title="opposite sign">✗</span>';
 };
-const peerSpilloverCompareTable = (outcomes, mlArr, escTicker = true) => {
+const peerSpilloverCompareTable = (outcomes, mlArr) => {
     const mlByPeer = indexPeerMl(mlArr);
     const okPeers = (outcomes || []).filter(p => p.status === 'ok');
     const peerSet = new Set(okPeers.map(p => String(p.ticker || '').toUpperCase()));
@@ -368,10 +345,9 @@ const peerSpilloverCompareTable = (outcomes, mlArr, escTicker = true) => {
     const body = peers.map(ticker => {
         const p = okPeers.find(x => String(x.ticker || '').toUpperCase() === ticker) || { ticker };
         const ml = mlByPeer[ticker];
-        const t = escTicker ? esc(ticker) : ticker;
         const r5 = p.forward_log_ret_5d;
         const pred = ml?.peer_forward_log_ret_5d_pred;
-        return `<tr><td>${t}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(r5)}</td>
+        return `<tr><td>${esc(ticker)}</td><td>${fmtPct(p.forward_log_ret_1d)}</td><td>${fmtPct(r5)}</td>
             <td>${fmtMlPeerPred(ml, p.status === 'ok')}</td><td>${signMatchIcon(r5, pred)}</td></tr>`;
     }).join('');
     return `<table class="peer-table"><thead><tr>
@@ -382,83 +358,36 @@ const peerSpilloverCompareTable = (outcomes, mlArr, escTicker = true) => {
 };
 const peerSpilloverMlSummary = (mlArr, outcomes) => {
     const ok = (mlArr || []).filter(r => r.peer_spillover_ml_status === 'ok');
-    if (!ok.length) {
-        return '<span class="muted">ML spillover (pilot): нет pred · advisory only</span>';
-    }
+    if (!ok.length) return '<span class="muted">ML spillover (pilot): нет pred · advisory only</span>';
     const okTickers = new Set((outcomes || []).filter(p => p.status === 'ok').map(p => String(p.ticker || '').toUpperCase()));
     const graphN = ok.filter(r => r.relation_type !== 'affected_only').length;
     const affShown = ok.filter(r => r.relation_type === 'affected_only' && okTickers.has(String(r.peer_ticker || '').toUpperCase())).length;
-    const affHidden = ok.filter(r => r.relation_type === 'affected_only' && !okTickers.has(String(r.peer_ticker || '').toUpperCase())).length;
-    let parts = [`graph ${graphN} pred`];
-    if (affShown) parts.push(`${affShown} affected w/ fact`);
-    if (affHidden) parts.push(`${affHidden} aff без quotes скрыты`);
-    return `<span class="muted">ML spillover (pilot): ${parts.join(' · ')} · Sign = sanity check · не для сделок</span>`;
+    return `<span class="muted">ML spillover (pilot): graph ${graphN} pred${affShown ? ` · ${affShown} affected w/ fact` : ''} · Sign = sanity check</span>`;
 };
-let allEvents = [], currentFilter = 'all', graphData = null;
-const EI_CTX_KEY = 'earnings_intelligence_ctx_v1';
-let eiContext = { symbol: '', eventDate: '', filterEventsOnly: false };
+
+let allEvents = [], currentFilter = 'all', graphData = null, currentView = 'calendar';
+let activeBrief = null;
+const EI_CTX_KEY = 'earnings_intelligence_ctx_v2';
+let eiContext = { symbol: '', eventDate: '' };
+
+function hasActiveEvent() {
+    return !!(eiContext.symbol && eiContext.eventDate);
+}
 
 function loadEiContextFromStorage() {
     try {
-        const raw = sessionStorage.getItem(EI_CTX_KEY);
+        const raw = sessionStorage.getItem(EI_CTX_KEY) || sessionStorage.getItem('earnings_intelligence_ctx_v1');
         if (!raw) return;
         const o = JSON.parse(raw);
         if (o && typeof o === 'object') {
             eiContext.symbol = String(o.symbol || '').toUpperCase();
             eiContext.eventDate = String(o.eventDate || '');
-            eiContext.filterEventsOnly = !!o.filterEventsOnly;
         }
     } catch (_) {}
 }
 
 function saveEiContext() {
-    try {
-        sessionStorage.setItem(EI_CTX_KEY, JSON.stringify(eiContext));
-    } catch (_) {}
-}
-
-function updateCtxHint() {
-    const el = document.getElementById('ctxHint');
-    if (!el) return;
-    const s = eiContext.symbol || '—';
-    const d = eiContext.eventDate || '—';
-    el.textContent = s !== '—' ? `${s} · ${d}` : 'выберите тикер';
-}
-
-function readContextFromBar() {
-    const sym = getTickerInput('ctxSymbol');
-    const d = document.getElementById('ctxEventDate')?.value || '';
-    eiContext.symbol = sym;
-    eiContext.eventDate = d;
-    eiContext.filterEventsOnly = !!document.getElementById('ctxFilterEvents')?.checked;
-    saveEiContext();
-    updateCtxHint();
-}
-
-function setEiContext(sym, eventDate, opts = {}) {
-    const s = String(sym || '').trim().toUpperCase();
-    if (s) eiContext.symbol = s;
-    if (eventDate !== undefined && eventDate !== null && String(eventDate).trim()) {
-        eiContext.eventDate = String(eventDate).trim().slice(0, 10);
-    }
-    if (opts.filterEventsOnly != null) eiContext.filterEventsOnly = !!opts.filterEventsOnly;
-    const ctxSym = document.getElementById('ctxSymbol');
-    const ctxDate = document.getElementById('ctxEventDate');
-    if (ctxSym && s) ctxSym.value = s;
-    if (ctxDate && s) fillDateSelect(ctxDate, s, eiContext.eventDate || null);
-    if (ctxDate && eiContext.eventDate) ctxDate.value = eiContext.eventDate;
-    const filt = document.getElementById('ctxFilterEvents');
-    if (filt) filt.checked = eiContext.filterEventsOnly;
-    saveEiContext();
-    updateCtxHint();
-    if (opts.refreshTable !== false && document.getElementById('panel-events')?.classList.contains('active')) {
-        applyFilter();
-    }
-}
-
-function getEiContext() {
-    readContextFromBar();
-    return { symbol: eiContext.symbol, eventDate: eiContext.eventDate };
+    try { sessionStorage.setItem(EI_CTX_KEY, JSON.stringify(eiContext)); } catch (_) {}
 }
 
 function eventDatesForSymbol(sym) {
@@ -471,7 +400,7 @@ function fillDateSelect(sel, sym, preferred) {
     if (!sel) return;
     const dates = eventDatesForSymbol(sym);
     if (!dates.length) {
-        sel.innerHTML = '<option value="">— нет в списке —</option>';
+        sel.innerHTML = '<option value="">— нет дат —</option>';
         return;
     }
     sel.innerHTML = dates.map(d => `<option value="${d}">${d}</option>`).join('');
@@ -485,25 +414,139 @@ function eiTickers() {
     return [...new Set([...fromEvents, ...fromGraph])].sort();
 }
 
-function getTickerInput(id) {
-    return (document.getElementById(id)?.value || '').trim().toUpperCase();
-}
-
-function setTickerInput(id, sym) {
-    const el = document.getElementById(id);
-    if (el && sym) el.value = String(sym).trim().toUpperCase();
-}
-
 function refreshTickerList() {
-    const syms = eiTickers();
     const list = document.getElementById('eiTickerList');
-    if (list) list.innerHTML = syms.map(s => `<option value="${s}"></option>`).join('');
+    if (list) list.innerHTML = eiTickers().map(s => `<option value="${s}"></option>`).join('');
 }
 
-function onCtxSymbolChange() {
-    const sym = getTickerInput('ctxSymbol');
-    fillDateSelect(document.getElementById('ctxEventDate'), sym, null);
-    readContextFromBar();
+function getTickerInput() {
+    return (document.getElementById('ctxSymbol')?.value || '').trim().toUpperCase();
+}
+
+function readContextFromBar() {
+    const sym = getTickerInput();
+    const d = document.getElementById('ctxEventDate')?.value || '';
+    eiContext.symbol = sym;
+    if (d) eiContext.eventDate = d.slice(0, 10);
+    saveEiContext();
+    updateFocusBar();
+    applyFilter();
+}
+
+function setActiveEvent(sym, eventDate, opts = {}) {
+    const s = String(sym || '').trim().toUpperCase();
+    if (!s) return;
+    const explicitDate = eventDate !== undefined && eventDate !== null && String(eventDate).trim();
+    eiContext.symbol = s;
+    if (explicitDate) {
+        eiContext.eventDate = String(eventDate).trim().slice(0, 10);
+    } else {
+        const dates = eventDatesForSymbol(s);
+        eiContext.eventDate = dates.length ? dates[0] : '';
+    }
+    const ctxSym = document.getElementById('ctxSymbol');
+    const ctxDate = document.getElementById('ctxEventDate');
+    if (ctxSym) ctxSym.value = s;
+    fillDateSelect(ctxDate, s, eiContext.eventDate);
+    if (ctxDate && eiContext.eventDate) ctxDate.value = eiContext.eventDate;
+    saveEiContext();
+    updateFocusBar();
+    activeBrief = null;
+    if (opts.refreshTable !== false) applyFilter();
+    updateNavState();
+    if (opts.navigate) showView(opts.navigate, { skipEventCheck: true });
+    if (opts.reload !== false && needsEventView(currentView)) reloadActiveView();
+}
+
+function clearActiveEvent() {
+    eiContext = { symbol: '', eventDate: '' };
+    document.getElementById('ctxSymbol').value = '';
+    document.getElementById('ctxEventDate').innerHTML = '<option value="">—</option>';
+    activeBrief = null;
+    saveEiContext();
+    updateFocusBar();
+    applyFilter();
+    updateNavState();
+    if (needsEventView(currentView)) showView('calendar');
+}
+
+function updateFocusBar() {
+    const bar = document.getElementById('focusBar');
+    const title = document.getElementById('focusTitle');
+    const meta = document.getElementById('focusMeta');
+    const clearBtn = document.getElementById('focusClearBtn');
+    const ok = hasActiveEvent();
+    bar.classList.toggle('empty', !ok);
+    clearBtn.disabled = !ok;
+    if (!ok) {
+        title.textContent = 'не выбрано';
+        title.className = 'focus-title muted';
+        meta.textContent = 'Выберите строку в календаре или укажите тикер и дату';
+        return;
+    }
+    const ev = allEvents.find(e => e.symbol === eiContext.symbol && e.event_date === eiContext.eventDate);
+    title.textContent = `${eiContext.symbol} · ${eiContext.eventDate}`;
+    title.className = 'focus-title';
+    if (ev) {
+        meta.textContent = [
+            ev.group ? `group ${ev.group}` : '',
+            ev.has_llm ? 'LLM ✓' : 'LLM —',
+            ev.ml_scenario ? `ML ${ev.ml_scenario}` : '',
+            ev.management_tone ? `tone ${ev.management_tone}` : '',
+        ].filter(Boolean).join(' · ');
+    } else {
+        meta.textContent = 'событие вне текущего списка календаря';
+    }
+}
+
+function needsEventView(name) {
+    return ['overview', 'ml', 'peers'].includes(name);
+}
+
+function updateNavState() {
+    const ok = hasActiveEvent();
+    document.querySelectorAll('[data-needs-event]').forEach(btn => {
+        btn.disabled = !ok;
+        btn.title = ok ? '' : 'Сначала выберите событие';
+    });
+    const hint = document.getElementById('navHint');
+    if (hint) {
+        hint.textContent = ok ? '' : 'Событие не выбрано — доступен календарь и системные вкладки';
+    }
+}
+
+function showView(name, opts = {}) {
+    if (needsEventView(name) && !hasActiveEvent() && !opts.skipEventCheck) {
+        showView('calendar');
+        return;
+    }
+    currentView = name;
+    document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
+    if (name === 'graph' && !graphData) loadGraph();
+    if (name === 'pipeline') loadPipeline();
+    if (name === 'shadow') loadShadow(false);
+    if (needsEventView(name)) reloadActiveView();
+}
+
+function reloadActiveView() {
+    if (!hasActiveEvent()) {
+        toggleEmptyStates(true);
+        return;
+    }
+    toggleEmptyStates(false);
+    if (currentView === 'overview') loadOverview();
+    else if (currentView === 'ml') loadMlAdvisory();
+    else if (currentView === 'peers') loadPeers();
+}
+
+function toggleEmptyStates(show) {
+    ['overview', 'ml', 'peers'].forEach(v => {
+        const empty = document.getElementById(v + 'Empty');
+        const content = document.getElementById(v === 'overview' ? 'overviewContent' : v + 'Content');
+        if (empty) empty.hidden = !show;
+        if (content) content.style.display = show ? 'none' : 'block';
+    });
 }
 
 function groupBadges(group) {
@@ -514,26 +557,23 @@ function groupBadges(group) {
     }).join(' ');
 }
 
-function showTab(name) {
-    readContextFromBar();
-    document.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-    document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
-    updateCtxHint();
-    if (name === 'graph' && !graphData) loadGraph();
-    if (name === 'ml') loadMlLayers();
-    if (name === 'shadow') loadShadow(false);
+async function fetchBrief(sym, evd) {
+    const briefUrl = `/api/earnings/brief/${encodeURIComponent(sym)}?event_date=${encodeURIComponent(evd)}`;
+    const res = await fetch(briefUrl);
+    const b = await res.json();
+    if (!res.ok) throw new Error(b.detail || JSON.stringify(b));
+    return b;
 }
 
-function goContextTab(tab) {
-    const { symbol, eventDate } = getEiContext();
-    if (!symbol) {
-        alert('Укажите тикер в панели Контекст');
-        return;
+async function ensureBrief() {
+    if (activeBrief && activeBrief._sym === eiContext.symbol && activeBrief._date === eiContext.eventDate) {
+        return activeBrief;
     }
-    showTab(tab);
-    if (tab === 'brief') loadBrief(symbol, eventDate);
-    else if (tab === 'fusion') loadFusion(eventDate);
-    else if (tab === 'spillover') loadSpillover();
+    const b = await fetchBrief(eiContext.symbol, eiContext.eventDate);
+    b._sym = eiContext.symbol;
+    b._date = eiContext.eventDate;
+    activeBrief = b;
+    return b;
 }
 
 async function loadList() {
@@ -555,120 +595,154 @@ async function loadList() {
     applyFilter();
     document.getElementById('updatedAt').textContent = new Date().toLocaleTimeString();
     refreshTickerList();
+    updateFocusBar();
+    updateNavState();
 }
 
 function applyFilter() {
     let ev = allEvents;
     if (currentFilter === 'GAME_5M') ev = ev.filter(e => (e.group || '').includes('GAME_5M'));
     else if (currentFilter === 'portfolio') ev = ev.filter(e => (e.group || '').includes('portfolio'));
-    if (eiContext.filterEventsOnly && eiContext.symbol) {
-        ev = ev.filter(e => e.symbol === eiContext.symbol);
-    }
-    const ctxSym = eiContext.symbol;
-    const ctxDate = eiContext.eventDate;
+    const selSym = eiContext.symbol;
+    const selDate = eiContext.eventDate;
     document.getElementById('eventsBody').innerHTML = ev.map(ev => {
-        const rowCls = (ctxSym && ev.symbol === ctxSym && (!ctxDate || ev.event_date === ctxDate)) ? ' class="ctx-row"' : '';
+        const selected = selSym && ev.symbol === selSym && ev.event_date === selDate;
         return `
-        <tr${rowCls}><td><strong>${ev.symbol}</strong></td><td>${ev.event_date||'—'}</td><td>${groupBadges(ev.group)}</td>
-        <td>${badgeMat(ev)}</td><td>${badgeLlm(ev)}</td><td>${ev.management_tone||'—'}</td>
-        <td><code title="LLM hint">${esc(ev.llm_scenario || ev.top_scenario || '—')}</code></td>
-        <td>${fmtMlScenario(ev)}</td>
-        <td><button type="button" class="link-btn" data-sym="${ev.symbol}" data-event-date="${ev.event_date||''}">Brief</button>
-        <button type="button" class="link-btn" data-fusion="${ev.symbol}" data-fusion-date="${ev.event_date||''}">Fusion</button>
-        <button type="button" class="link-btn" data-spill="${ev.symbol}">Spillover</button></td></tr>`;
+        <tr class="event-row${selected ? ' selected' : ''}" data-sym="${ev.symbol}" data-date="${ev.event_date||''}">
+            <td><strong>${ev.symbol}</strong></td><td>${ev.event_date||'—'}</td><td>${groupBadges(ev.group)}</td>
+            <td>${badgeMat(ev)}</td><td>${badgeLlm(ev)}</td><td>${ev.management_tone||'—'}</td>
+            <td><code title="LLM">${esc(ev.llm_scenario || ev.top_scenario || '—')}</code></td>
+            <td>${fmtMlScenario(ev)}</td>
+        </tr>`;
     }).join('');
 }
 
-function handleEventsTableClick(e) {
-    const btn = e.target.closest('button.link-btn');
-    if (!btn || !btn.closest('#eventsBody')) return;
-    if (btn.dataset.sym) {
-        setEiContext(btn.dataset.sym, btn.dataset.eventDate || '');
-        goContextTab('brief');
-        return;
-    }
-    if (btn.dataset.fusion) {
-        setEiContext(btn.dataset.fusion, btn.dataset.fusionDate || '');
-        goContextTab('fusion');
-        return;
-    }
-    if (btn.dataset.spill) {
-        setEiContext(btn.dataset.spill, '', { filterEventsOnly: false });
-        goContextTab('spillover');
+function onCalendarRowClick(e) {
+    const row = e.target.closest('tr.event-row');
+    if (!row) return;
+    setActiveEvent(row.dataset.sym, row.dataset.date, { navigate: 'overview' });
+}
+
+async function loadOverview() {
+    const box = document.getElementById('overviewContent');
+    box.innerHTML = '<span class="muted">Загрузка…</span>';
+    try {
+        const b = await ensureBrief();
+        const scen = b.scenario || {}, src = b.source_outcomes || {};
+        const peers = (b.peer_spillover_outcomes || []).filter(p => p.status === 'ok');
+        const peerMl = b.peer_spillover_ml || [];
+        const statusBadge = b.status === 'partial'
+            ? '<span class="badge planned">partial</span>'
+            : (b.status === 'ok' ? '<span class="badge ok">ok</span>' : `<span class="badge no">${esc(b.status||'—')}</span>`);
+        const evidence = (b.evidence_quotes || []).slice(0, 5).map(q => {
+            const txt = evidenceQuoteText(q);
+            if (!txt) return '';
+            const topic = (q && typeof q === 'object' && q.topic && q.topic !== 'other')
+                ? `<span class="muted">${esc(q.topic)} · </span>` : '';
+            return `<div class="quote">${topic}«${esc(txt)}»</div>`;
+        }).filter(Boolean).join('') || '<span class="muted">—</span>';
+        const affected = (b.affected_tickers || []).map(a => typeof a === 'object' ? (a.ticker || a.symbol || JSON.stringify(a)) : a).slice(0, 12);
+        box.innerHTML = `
+            <h2 class="view-title">${esc(eiContext.symbol)} · ${esc(eiContext.eventDate)}</h2>
+            <p><strong>${esc(b.headline||'—')}</strong> ${statusBadge}</p>
+            ${b.reason ? `<p class="muted">${esc(b.reason)}</p>` : ''}
+            ${fmtLlmVsMlScenarioCompare(b)}
+            ${scen.rationale ? `<p class="muted">LLM rationale: ${esc(scen.rationale)}</p>` : ''}
+            <div class="detail-grid">
+                <div class="block"><h3>Guidance &amp; capex</h3>
+                    <div><strong>Guidance:</strong> ${fmtGuidance(b.guidance)}</div>
+                    <div style="margin-top:0.35rem"><strong>Capex:</strong> ${fmtGuidance(b.capex_notes)}</div>
+                    ${affected.length ? `<div style="margin-top:0.35rem"><strong>Affected:</strong> ${affected.map(esc).join(', ')}</div>` : ''}
+                </div>
+                <div class="block"><h3>Evidence quotes</h3>${evidence}</div>
+            </div>
+            <div class="detail-grid">
+                <div class="block"><h3>Source outcomes</h3>
+                    1d ${fmtPct(src.forward_log_ret_1d)} · 5d ${fmtPct(src.forward_log_ret_5d)} · label ${esc(src.final_label_auto||'—')}</div>
+                <div class="block"><h3>Peer snapshot <span class="peer-count">(${peers.length})</span>${horizonPills()}</h3>
+                    <p class="muted" style="margin-bottom:0.35rem">Краткая сводка; полная таблица — вкладка «Пиры».</p>
+                    ${peerSpilloverCompareTable(peers, peerMl)}</div>
+            </div>`;
+    } catch (err) {
+        box.innerHTML = `<span class="err">${esc(err.message || String(err))}</span>`;
     }
 }
 
-async function loadBrief(symbol, eventDate) {
-    const content = document.getElementById('briefContent');
-    if (symbol) setEiContext(symbol, eventDate || '', { refreshTable: false });
-    const { symbol: sym, eventDate: evd } = getEiContext();
-    if (!sym) {
-        content.innerHTML = '<span class="err">Укажите тикер в панели Контекст</span>';
-        return;
-    }
-    document.getElementById('detailTitle').textContent = `${sym} · ${evd || '—'}`;
-    content.innerHTML = '<span class="muted">Загрузка…</span>';
-    let mlHtml = '';
+async function loadMlAdvisory() {
+    const el = document.getElementById('mlContent');
+    el.innerHTML = '<span class="muted">Загрузка…</span>';
+    const sym = eiContext.symbol, evd = eiContext.eventDate;
+    let regHtml = '';
     try {
-        let mlUrl = `/api/ml/event-reaction/${encodeURIComponent(sym)}`;
-        if (evd) mlUrl += `?event_date=${encodeURIComponent(evd)}`;
-        const mlRes = await fetch(mlUrl);
+        const mlRes = await fetch(`/api/ml/event-reaction/${encodeURIComponent(sym)}?event_date=${encodeURIComponent(evd)}`);
         if (mlRes.ok) {
             const ml = await mlRes.json();
             if (ml.event_reaction_ml_status === 'ok') {
-                mlHtml = `<div class="block"><h3>Regression ML (5d source)</h3>
+                regHtml = `<div class="block"><h3>Regression ML (5d source)</h3>
                     pred log-ret ${Number(ml.event_reaction_ml_forward_log_ret_5d_pred).toFixed(4)} ≈ ${fmtPct(ml.event_reaction_ml_forward_log_ret_5d_pred)}
                     · direction ${ml.event_reaction_ml_provisional_direction || '—'}
                     ${ml.event_reaction_ml_event_time_et ? `<div class="muted">event ${esc(ml.event_reaction_ml_event_time_et)}</div>` : ''}</div>`;
             } else {
-                mlHtml = `<div class="block"><h3>Regression ML (5d source)</h3>
-                    <span class="muted">${esc(ml.event_reaction_ml_status)}: ${esc(ml.event_reaction_ml_note || 'нет features для этой даты')}</span></div>`;
+                regHtml = `<div class="block"><h3>Regression ML (5d source)</h3>
+                    <span class="muted">${esc(ml.event_reaction_ml_status)}: ${esc(ml.event_reaction_ml_note || 'нет features')}</span></div>`;
             }
         }
     } catch (_) {}
     try {
-    const briefUrl = `/api/earnings/brief/${encodeURIComponent(sym)}`
-        + (evd ? `?event_date=${encodeURIComponent(evd)}` : '');
-    const res = await fetch(briefUrl);
-    const b = await res.json();
-    if (!res.ok) throw new Error(b.detail || JSON.stringify(b));
-    const scen = b.scenario || {}, src = b.source_outcomes || {};
-    const peers = (b.peer_spillover_outcomes || []).filter(p => p.status === 'ok');
-    const peerMl = b.peer_spillover_ml || [];
-    const statusBadge = b.status === 'partial'
-        ? '<span class="badge planned">partial</span>'
-        : (b.status === 'ok' ? '<span class="badge ok">ok</span>' : `<span class="badge no">${esc(b.status||'—')}</span>`);
-    const evidence = (b.evidence_quotes || []).slice(0, 5).map(q => {
-        const txt = evidenceQuoteText(q);
-        if (!txt) return '';
-        const topic = (q && typeof q === 'object' && q.topic && q.topic !== 'other')
-            ? `<span class="muted">${esc(q.topic)} · </span>` : '';
-        return `<div class="quote">${topic}«${esc(txt)}»</div>`;
-    }).filter(Boolean).join('') || '<span class="muted">—</span>';
-    const affected = (b.affected_tickers || []).map(a => typeof a === 'object' ? (a.ticker || a.symbol || JSON.stringify(a)) : a).slice(0, 12);
-    content.innerHTML = `
-        <p><strong>${esc(b.headline||'—')}</strong> ${statusBadge}</p>
-        ${b.reason ? `<p class="muted">${esc(b.reason)}</p>` : ''}
-        ${fmtLlmVsMlScenarioCompare(b)}
-        ${scen.rationale ? `<p class="muted">LLM rationale: ${esc(scen.rationale)}</p>` : ''}
-        ${mlHtml}
-        <div class="detail-grid">
-            <div class="block"><h3>Guidance &amp; capex</h3>
-                <div><strong>Guidance:</strong> ${fmtGuidance(b.guidance)}</div>
-                <div style="margin-top:0.35rem"><strong>Capex:</strong> ${fmtGuidance(b.capex_notes)}</div>
-                ${affected.length ? `<div style="margin-top:0.35rem"><strong>Affected:</strong> ${affected.map(esc).join(', ')}</div>` : ''}
+        const res = await fetch(`/api/earnings/fusion/${encodeURIComponent(sym)}?event_date=${encodeURIComponent(evd)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+        const adv = data.advisory || {}, reg = data.regression_ml || {}, scen = data.scenario_ml || {};
+        const llmScen = (data.brief_headline || {}).llm_scenario;
+        el.innerHTML = `
+            <h2 class="view-title">${esc(sym)} · ${esc(evd)}</h2>
+            <div class="block"><h3>Advisory</h3>
+                <p><strong>${adv.summary||'—'}</strong></p>
+                <p class="muted">Alignment ${adv.alignment||'—'} · Conviction ${adv.conviction||'—'} · execution blocked</p>
+                ${(adv.notes||[]).map(n => `<p class="muted">${n}</p>`).join('')}
             </div>
-            <div class="block"><h3>Evidence quotes</h3>${evidence}</div>
-        </div>
-        <div class="detail-grid">
-            <div class="block"><h3>Source outcomes (quotes)</h3>
-                1d ${fmtPct(src.forward_log_ret_1d)} · 5d ${fmtPct(src.forward_log_ret_5d)} · label ${esc(src.final_label_auto||'—')}</div>
-            <div class="block"><h3>Peer spillover <span class="peer-count">(${peers.length})</span>${horizonPills()}</h3>
-                ${peerSpilloverMlSummary(peerMl, peers)}
-                ${peerSpilloverCompareTable(peers, peerMl, true)}</div>
-        </div>`;
+            <div class="ml-compare-grid">
+                <div class="ml-layer llm"><strong>LLM scenario</strong><br><code>${esc(llmScen||'—')}</code></div>
+                <div class="ml-layer ml"><strong>ML scenario</strong><br>${fmtScenarioMlInline(scen)}
+                    <div class="muted">bias ${adv.scenario_bias||'—'} · sign ${scen.predicted_scenario_sign ?? '—'}</div></div>
+            </div>
+            ${regHtml}
+            <div class="detail-grid">
+                <div class="block"><h3>Regression (fusion API)</h3>
+                    status ${reg.status||'—'}<br>
+                    pred ${reg.forward_log_ret_5d_pred != null ? fmtPct(reg.forward_log_ret_5d_pred) : '—'}
+                    <span class="muted"> · ${adv.regression_bias||'—'}</span>
+                </div>
+                <div class="block"><h3>Scenario classifier</h3>
+                    <code>${scen.predicted_scenario||'—'}</code>
+                    · proba ${scen.predicted_scenario_proba != null ? (Number(scen.predicted_scenario_proba)*100).toFixed(0)+'%' : '—'}
+                    <div class="muted">expected source sign ${scen.predicted_scenario_sign ?? '—'}</div>
+                </div>
+            </div>`;
     } catch (err) {
-        content.innerHTML = `<span class="err">${esc(err.message || String(err))}</span>`;
+        el.innerHTML = `<span class="err">${esc(err.message || String(err))}</span>`;
+    }
+}
+
+async function loadPeers() {
+    const box = document.getElementById('peersContent');
+    box.innerHTML = '<span class="muted">Загрузка…</span>';
+    try {
+        const b = await ensureBrief();
+        const peers = (b.peer_spillover_outcomes || []).filter(p => p.status === 'ok');
+        const peerMl = b.peer_spillover_ml || [];
+        const src = b.source_outcomes || {};
+        box.innerHTML = `
+            <h2 class="view-title">${esc(eiContext.symbol)} · ${esc(eiContext.eventDate)} · peer spillover</h2>
+            <div class="block">
+                <div class="muted">Source 5d ${fmtPct(src.forward_log_ret_5d)} · tone ${esc(b.management_tone||'—')}</div>
+                ${fmtLlmVsMlScenarioCompare(b)}
+                ${peerSpilloverMlSummary(peerMl, peers)}
+            </div>
+            <div class="block"><h3>Peers ${horizonPills()}</h3>
+                ${peerSpilloverCompareTable(peers, peerMl)}</div>`;
+    } catch (err) {
+        box.innerHTML = `<span class="err">${esc(err.message || String(err))}</span>`;
     }
 }
 
@@ -682,66 +756,25 @@ async function loadGraph() {
     (graphData.edges||[]).forEach(e => { (bySource[e.source] = bySource[e.source] || []).push(e); });
     document.getElementById('graphSources').innerHTML = Object.keys(bySource).sort().map(s => {
         const n = bySource[s].length;
-        return `<div class="edge-row"><button class="link-btn" data-src="${s}">${s}</button> → ${n} peers</div>`;
+        const active = s === eiContext.symbol ? ' style="font-weight:700;color:#7dd3fc"' : '';
+        return `<div class="edge-row"><button class="link-btn" data-src="${s}"${active}>${s}</button> → ${n} peers</div>`;
     }).join('') || '<span class="muted">нет рёбер</span>';
     document.getElementById('graphSources').querySelectorAll('[data-src]').forEach(btn => {
-        btn.addEventListener('click', () => { setEiContext(btn.dataset.src, ''); goContextTab('spillover'); });
+        btn.addEventListener('click', () => {
+            setActiveEvent(btn.dataset.src, '', { navigate: 'calendar' });
+        });
     });
     const edges = graphData.edges || [];
     const shown = edges.slice(0, 40);
     document.getElementById('graphEdges').innerHTML =
-        `<p class="muted">Показано ${shown.length} из ${edges.length} рёбер</p>` +
+        `<p class="muted">${shown.length} / ${edges.length}</p>` +
         shown.map(e =>
         `<div class="edge-row"><strong>${e.source}</strong> → ${e.target} <span class="muted">${e.relation_type}</span>
         <span class="weight-bar" style="width:${Math.round(e.weight*80)}px"></span> ${e.weight}</div>`
     ).join('');
 }
 
-async function loadSpillover() {
-    const { symbol: sym, eventDate: ctxDate } = getEiContext();
-    if (!sym) {
-        document.getElementById('spilloverContent').innerHTML = '<span class="err">Укажите тикер в панели Контекст</span>';
-        return;
-    }
-    const box = document.getElementById('spilloverContent');
-    box.innerHTML = '<span class="muted">Загрузка…</span>';
-    const parts = [];
-    if (ctxDate) {
-        try {
-            const bRes = await fetch(`/api/earnings/brief/${encodeURIComponent(sym)}?event_date=${encodeURIComponent(ctxDate)}`);
-            const b = await bRes.json();
-            if (bRes.ok && (b.status === 'ok' || b.status === 'partial')) {
-                const peers = (b.peer_spillover_outcomes || []).filter(p => p.status === 'ok');
-                const peerMl = b.peer_spillover_ml || [];
-                parts.push(`<div class="block" style="border:1px solid #365314"><h3>Контекст · ${sym} · ${ctxDate}</h3>
-                    <div class="muted">Tone ${esc(b.management_tone||'—')} · source 5d ${fmtPct((b.source_outcomes||{}).forward_log_ret_5d)}</div>
-                    ${fmtLlmVsMlScenarioCompare(b)}
-                    ${peerSpilloverMlSummary(peerMl, peers)}
-                    ${peerSpilloverCompareTable(peers, peerMl, false)}</div>`);
-            }
-        } catch (_) {}
-    }
-    const res = await fetch(`/api/earnings/spillover/${encodeURIComponent(sym)}?since=2026-01-01&limit=8`);
-    const data = await res.json();
-    document.getElementById('spilloverNote').textContent = data.note || '';
-    if (!(data.events||[]).length && !parts.length) {
-        box.innerHTML = '<div class="err">Нет past events с spillover</div>';
-        return;
-    }
-    const skipDates = ctxDate && parts.length ? new Set([ctxDate]) : new Set();
-    const historyHtml = (data.events || [])
-        .filter(ev => !skipDates.has(ev.event_date))
-        .map(ev => {
-        const peers = (ev.peer_outcomes||[]).filter(p => p.status==='ok');
-        const peerMl = ev.peer_spillover_ml || [];
-        const sm = ev.scenario_ml || {};
-        return `<div class="block"><h3>${sym} · ${ev.event_date} · spillover${horizonPills()}</h3>
-            <div class="muted">tone ${ev.management_tone||'—'} · LLM ${esc(ev.top_scenario||'—')} · ML ${fmtScenarioMlInline(sm)} · source 5d ${fmtPct(ev.source_forward_log_ret_5d)}</div>
-            ${peerSpilloverMlSummary(peerMl, peers)}
-            ${peerSpilloverCompareTable(peers, peerMl, false)}</div>`;
-    }).join('');
-    box.innerHTML = parts.join('') + (historyHtml || (parts.length ? '' : '<span class="muted">Нет истории spillover</span>'));
-}
+let shadowDataCache = null;
 
 async function loadShadow(refresh) {
     const el = document.getElementById('shadowContent');
@@ -750,150 +783,110 @@ async function loadShadow(refresh) {
     const res = await fetch(url);
     const data = await res.json();
     if (!res.ok) { el.innerHTML = `<span class="err">${data.detail || JSON.stringify(data)}</span>`; return; }
+    shadowDataCache = data;
+    renderShadow();
+}
+
+function renderShadow() {
+    const data = shadowDataCache;
+    const el = document.getElementById('shadowContent');
+    if (!data) { el.innerHTML = '<span class="muted">Нажмите «Загрузить».</span>'; return; }
+    const filterActive = document.getElementById('shadowFilterActive')?.checked;
+    let rows = data.rows || [];
+    if (filterActive && hasActiveEvent()) {
+        rows = rows.filter(r => r.symbol === eiContext.symbol && r.event_date === eiContext.eventDate);
+    }
     const a = data.aggregate || {}, g = data.trading_gate || {};
     const gateCls = g.ready ? 'ok' : 'no';
-    const gateLabel = g.ready ? 'quality ok' : 'below threshold';
-    const scored = `sign ${a.n_sign_scored ?? '—'} · class ${a.n_class_scored ?? '—'} · peer sign ${a.n_peer_sign_scored ?? '—'}`;
+    const selSym = eiContext.symbol, selDate = eiContext.eventDate;
     el.innerHTML = `
-        <p class="muted"><span class="badge planned">Shadow quality · advisory only</span> — не разрешение на сделки. Оценено строк: ${scored} из ${a.n_matured ?? '—'} matured.</p>
+        <p class="muted"><span class="badge planned">Shadow · advisory only</span>
+            ${filterActive && hasActiveEvent() ? `Показана 1 строка · ${selSym} ${selDate}` : `Строк: ${rows.length} из ${(data.rows||[]).length}`}
+            · matured ${a.n_matured ?? '—'}</p>
         <dl class="shadow-legend">
-            <dt>Sign ✓ / ✗</dt><dd>Знак фактического 5d source vs ожидание сценария (capex → source обычно −, gap_up → +).</dd>
-            <dt>Class ✓ / ✗ / —</dt><dd>Совпадение pred с <code>final_label</code> только при <code>label_source=llm_scenario_v0</code>; иначе «—».</dd>
-            <dt>Peer 5d</dt><dd>Среднее log-return пиров из графа после даты отчёта source (как в Brief spillover).</dd>
+            <dt>Sign ✓ / ✗</dt><dd>Знак 5d source vs ожидание сценария.</dd>
+            <dt>Class ✓ / ✗</dt><dd>Pred vs LLM-метка при label_source=llm_scenario_v0.</dd>
         </dl>
         <div class="summary">
-            <div class="stat"><div class="n">${a.n_matured ?? '—'}</div><div class="l">Matured</div></div>
             <div class="stat"><div class="n">${a.sign_accuracy != null ? (a.sign_accuracy*100).toFixed(0)+'%' : '—'}</div><div class="l">Sign acc</div></div>
             <div class="stat"><div class="n">${a.class_accuracy != null ? (a.class_accuracy*100).toFixed(0)+'%' : '—'}</div><div class="l">Class acc</div></div>
-            <div class="stat"><div class="n">${a.mean_pseudo_pnl_log != null ? a.mean_pseudo_pnl_log.toFixed(4) : '—'}</div><div class="l">Mean pseudo PnL (log)</div></div>
-            <div class="stat"><div class="n"><span class="badge ${gateCls}">${gateLabel}</span></div><div class="l">Shadow quality gate</div></div>
+            <div class="stat"><div class="n">${a.mean_pseudo_pnl_log != null ? a.mean_pseudo_pnl_log.toFixed(4) : '—'}</div><div class="l">Pseudo PnL</div></div>
+            <div class="stat"><div class="n"><span class="badge ${gateCls}">${g.ready ? 'gate ok' : 'below'}</span></div><div class="l">Quality gate</div></div>
         </div>
-        <p class="muted">Round-trip cost log ${a.round_trip_cost_log ?? '—'} · peer sign acc ${a.peer_sign_accuracy != null ? (a.peer_sign_accuracy*100).toFixed(0)+'%' : '—'}</p>
-        ${g.reasons && g.reasons.length ? `<p class="muted">Gate: ${g.reasons.join('; ')}</p>` : ''}
-        <table><thead><tr><th>Ticker</th><th>Date</th><th>Pred scenario</th><th>Actual 5d (source)</th><th>Sign</th><th>Class</th><th>Peer 5d (mean)</th></tr></thead>
-        <tbody>${(data.rows||[]).map(r => `<tr>
-            <td>${r.symbol}</td><td>${r.event_date||'—'}</td>
+        ${!rows.length ? '<p class="muted">Нет строк для фильтра.</p>' : `
+        <table><thead><tr><th>Ticker</th><th>Date</th><th>Pred</th><th>Actual 5d</th><th>Sign</th><th>Class</th><th>Peer 5d</th></tr></thead>
+        <tbody>${rows.map(r => {
+            const sel = r.symbol === selSym && r.event_date === selDate;
+            return `<tr class="shadow-row${sel ? ' selected' : ''}"><td>${r.symbol}</td><td>${r.event_date||'—'}</td>
             <td><code>${r.predicted_scenario||'—'}</code></td>
             <td>${fmtPct(r.actual_forward_log_ret_5d)}</td>
             <td>${r.sign_match == null ? '—' : (r.sign_match ? '✓' : '✗')}</td>
             <td>${r.class_match == null ? '—' : (r.class_match ? '✓' : '✗')}</td>
-            <td>${fmtPct(r.peer_spillover?.mean_forward_log_ret_5d)}</td>
-        </tr>`).join('')}</tbody></table>`;
+            <td>${fmtPct(r.peer_spillover?.mean_forward_log_ret_5d)}</td></tr>`;
+        }).join('')}</tbody></table>`}`;
 }
 
-async function loadFusion(eventDate) {
-    if (eventDate) setEiContext(eiContext.symbol, eventDate, { refreshTable: false });
-    const { symbol: sym, eventDate: evd } = getEiContext();
-    if (!sym) {
-        document.getElementById('fusionContent').innerHTML = '<span class="err">Укажите тикер в панели Контекст</span>';
-        return;
-    }
-    const el = document.getElementById('fusionContent');
-    el.innerHTML = '<span class="muted">Загрузка…</span>';
-    let url = `/api/earnings/fusion/${encodeURIComponent(sym)}`;
-    if (evd) url += `?event_date=${encodeURIComponent(evd)}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (!res.ok) { el.innerHTML = `<span class="err">${data.detail || JSON.stringify(data)}</span>`; return; }
-    const adv = data.advisory || {}, reg = data.regression_ml || {}, scen = data.scenario_ml || {};
-    const llmScen = (data.brief_headline || {}).llm_scenario;
-    const peerOut = data.peer_spillover || [];
-    const peerMl = data.peer_spillover_ml || [];
-    const okPeers = peerOut.filter(p => p.status === 'ok');
-    el.innerHTML = `
-        <div class="block"><h3>Advisory</h3>
-            <p><strong>${adv.summary||'—'}</strong></p>
-            <p class="muted">Alignment ${adv.alignment||'—'} · Conviction ${adv.conviction||'—'} · execution blocked</p>
-            ${(adv.notes||[]).map(n => `<p class="muted">${n}</p>`).join('')}
-        </div>
-        <div class="ml-compare-grid">
-            <div class="ml-layer llm"><strong>LLM scenario</strong><br><code>${esc(llmScen||'—')}</code>
-                <div class="muted">из Brief extract</div></div>
-            <div class="ml-layer ml"><strong>ML scenario (classifier)</strong><br>${fmtScenarioMlInline(scen)}
-                <div class="muted">bias ${adv.scenario_bias||'—'} · sign ${scen.predicted_scenario_sign ?? '—'}</div></div>
-        </div>
-        <div class="detail-grid">
-            <div class="block"><h3>Regression ML</h3>
-                status ${reg.status||'—'}<br>
-                pred log ${reg.forward_log_ret_5d_pred != null ? reg.forward_log_ret_5d_pred.toFixed(4) : '—'}
-                · ${reg.forward_log_ret_5d_pred != null ? fmtPct(reg.forward_log_ret_5d_pred) : '—'}<br>
-                <span class="muted">5d source · ${adv.regression_bias||'—'}</span>
-            </div>
-            <div class="block"><h3>Scenario classifier (ML)</h3>
-                <code>${scen.predicted_scenario||'—'}</code> (${scen.scenario_classifier_status||'—'})
-                · proba ${scen.predicted_scenario_proba != null ? (Number(scen.predicted_scenario_proba)*100).toFixed(0)+'%' : '—'}<br>
-                <span class="muted">expected source sign ${scen.predicted_scenario_sign ?? '—'}</span>
-                <div class="muted" style="margin-top:0.35rem">Shadow — pred vs факт после созревания 5d.</div>
-            </div>
-        </div>
-        <div class="block"><h3>Peer spillover ML <span class="peer-count">(${okPeers.length})</span></h3>
-            ${peerSpilloverMlSummary(peerMl, okPeers)}
-            ${peerSpilloverCompareTable(okPeers, peerMl, true)}
-        </div>`;
-}
-
-async function loadMlLayers() {
+async function loadPipeline() {
     const res = await fetch('/api/earnings/ml-layers');
     const data = await res.json();
     const fmtMet = (m) => {
         if (!m || typeof m !== 'object') return '';
         return Object.entries(m).filter(([,v]) => v != null).map(([k,v]) => `${k}: ${typeof v === 'number' && k.includes('accuracy') ? (v*100).toFixed(0)+'%' : v}`).join(' · ');
     };
-    document.getElementById('mlLayersContent').innerHTML = `
-        <p class="muted">Dataset ${data.dataset_version}: ${data.dataset_rows} rows · outcomes ${data.rows_with_outcomes} · named scenarios ${data.named_scenario_labels}</p>
-        <p class="muted">${data.daily_corr_note}</p>
-        <p class="muted">Стек ML (ridge vs regression vs classifier): <a href="/earnings/guide" style="color:#93c5fd">guide</a> · см. TRADE_ML_DATASETS §7 в repo.</p>
+    document.getElementById('pipelineContent').innerHTML = `
+        <p class="muted">Dataset ${data.dataset_version}: ${data.dataset_rows} rows · outcomes ${data.rows_with_outcomes}</p>
         ${(data.layers||[]).map(l => `<div class="layer-card ${l.status==='active'?'active':l.status==='planned'?'planned':''}">
             <strong>${l.title}</strong> <span class="badge ${l.status==='planned'?'planned':l.status==='pending'?'no':'ok'}">${l.status}</span>
             <div class="muted">${l.description}</div>
             ${l.target ? `<div>target: <code>${l.target}</code></div>` : ''}
             ${l.api ? `<div>API: <code>${l.api}</code></div>` : ''}
-            ${l.json_path ? `<div class="muted">JSON: <code>${l.json_path}</code></div>` : ''}
-            ${l.script ? `<div class="muted">script: <code>${l.script}</code></div>` : ''}
             ${fmtMet(l.metrics) ? `<div>${fmtMet(l.metrics)}</div>` : ''}
-            ${l.blocked_by && l.blocked_by.length ? `<div class="muted">Нужно: ${l.blocked_by.join('; ')}</div>` : ''}
         </div>`).join('')}`;
 }
 
-document.getElementById('eventsBody').addEventListener('click', handleEventsTableClick);
-document.querySelectorAll('[data-tab]').forEach(btn => btn.addEventListener('click', () => showTab(btn.dataset.tab)));
+function onCtxSymbolChange() {
+    const sym = getTickerInput();
+    fillDateSelect(document.getElementById('ctxEventDate'), sym, null);
+    readContextFromBar();
+    activeBrief = null;
+    if (hasActiveEvent() && needsEventView(currentView)) reloadActiveView();
+}
+
+document.getElementById('eventsBody').addEventListener('click', onCalendarRowClick);
+document.querySelectorAll('[data-view]').forEach(btn => btn.addEventListener('click', () => showView(btn.dataset.view)));
 document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => {
     document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active'); currentFilter = btn.dataset.filter; applyFilter();
 }));
+document.querySelectorAll('[data-goto]').forEach(btn => btn.addEventListener('click', () => showView(btn.dataset.goto)));
 document.getElementById('refreshBtn').addEventListener('click', () => loadList().catch(e => alert(e.message)));
-document.getElementById('loadSpilloverBtn').addEventListener('click', () => { readContextFromBar(); loadSpillover(); });
 document.getElementById('loadShadowBtn').addEventListener('click', () => loadShadow(false));
 document.getElementById('refreshShadowBtn').addEventListener('click', () => loadShadow(true));
-document.getElementById('loadFusionBtn').addEventListener('click', () => goContextTab('fusion'));
-
+document.getElementById('shadowFilterActive').addEventListener('change', renderShadow);
+document.getElementById('focusClearBtn').addEventListener('click', clearActiveEvent);
 document.getElementById('ctxSymbol')?.addEventListener('change', onCtxSymbolChange);
 document.getElementById('ctxSymbol')?.addEventListener('blur', onCtxSymbolChange);
 document.getElementById('ctxEventDate')?.addEventListener('change', () => {
     readContextFromBar();
-    applyFilter();
-});
-document.getElementById('ctxFilterEvents')?.addEventListener('change', () => {
-    readContextFromBar();
-    applyFilter();
-});
-document.querySelectorAll('[data-ctx-go]').forEach(btn => {
-    btn.addEventListener('click', () => goContextTab(btn.dataset.ctxGo));
+    activeBrief = null;
+    if (hasActiveEvent() && needsEventView(currentView)) reloadActiveView();
 });
 
 loadEiContextFromStorage();
 
 loadList().then(() => {
     if (eiContext.symbol) {
-        setEiContext(eiContext.symbol, eiContext.eventDate, { refreshTable: true });
+        setActiveEvent(eiContext.symbol, eiContext.eventDate, { refreshTable: true, reload: false });
     }
     const p = new URLSearchParams(location.search);
     const sym = (p.get('symbol') || '').toUpperCase();
     const evd = p.get('event_date') || '';
-    const tab = (p.get('tab') || 'brief').toLowerCase();
+    const tabMap = { brief: 'overview', fusion: 'ml', spillover: 'peers', overview: 'overview', ml: 'ml', peers: 'peers', calendar: 'calendar', graph: 'graph', shadow: 'shadow', pipeline: 'pipeline' };
+    const tab = tabMap[(p.get('tab') || 'overview').toLowerCase()] || 'overview';
     if (sym) {
-        setEiContext(sym, evd);
-        goContextTab(tab === 'fusion' ? 'fusion' : (tab === 'spillover' ? 'spillover' : 'brief'));
+        setActiveEvent(sym, evd, { navigate: tab, reload: true });
+    } else if (tab !== 'calendar') {
+        showView(tab);
     }
 }).catch(e => { document.getElementById('eventsBody').innerHTML = `<tr><td colspan="8" class="err">${e.message}</td></tr>`; });
 </script>
