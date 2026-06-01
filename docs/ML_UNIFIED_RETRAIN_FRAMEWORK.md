@@ -1,12 +1,48 @@
 # Единый каркас ML: readiness + переобучение по накоплению данных
 
+**Статус:** зафиксировано в prod с коммита `3ad797b` (2026-06-01).  
+**Аудитория:** разработка, ops, продукт.  
+**Связь с readiness:** гейты отвечают на «**можно ли** использовать контур»; каркас переобучения — «**когда** обновлять данные и `.cbm` по мере накопления фактов». Это **два слоя одной концепции**, не дублирующие cron.
+
 **Цель:** все обучаемые контуры LSE следуют **одному контракту** (фазы, артефакты, cron, analyzer).  
-**Период переобучения** — не фиксированный «каждые 6h», а **data-driven**: train когда накопилось достаточно новых наблюдений; time-based — только fallback и слот full/shadow.
+**Период переобучения** — не фиксированный «каждые 6h», а **data-driven**: train когда накопилось достаточно новых наблюдений; time-based — только fallback и слот `--full` / shadow.
 
-**Эталон реализации:** `open_path` + `earnings_grid` (уже близки к целевому виду).  
-**Код каркаса:** `services/ml_contour_refresh.py`, диспетчер (фаза 2): `scripts/run_ml_refresh_dispatcher.py`.
+**Код:** `services/ml_contour_refresh.py`, `services/ml_contour_deltas.py`, `services/ml_contour_runner.py`, `scripts/run_ml_refresh_dispatcher.py`.
 
-Связанные документы: [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md), [OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md](OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md), [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md).
+Связанные документы:
+
+- [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md) — JSONL гейты, `last_*` метрики, analyzer
+- [OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md](OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md) — earnings + open-path product gates
+- [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) — сетки и таргеты
+
+---
+
+## 0. Два слоя readiness (концепция)
+
+| Слой | Вопрос | Артефакты | Где смотреть |
+|------|--------|-----------|--------------|
+| **Product / quality gates** | Достаточно ли данных и метрик, чтобы контур считался готовым? | `last_earnings_intelligence_readiness.json`, `last_open_path_readiness.json`, `ml_train_readiness.jsonl` | Analyzer: earnings grid, open-path ETA, таблица гейтов |
+| **Retrain orchestration** | Пора ли **пересобрать** dataset / переобучить модель на новых фактах? | `last_<contour>_ml_refresh.json`, `ml_contours_status.json` | Analyzer: «Переобучение ML по контурам»; `GET /api/ml/data-quality` |
+
+**Правила:**
+
+1. **Гейт `ready=true` не включает** runtime (`*_CATBOOST_ENABLED`) — только advisory / decision stack readiness.
+2. **Train без гейта** допустим (накопление, dry-run); **continuous train после product gate** — только при `ML_*_CONTINUOUS_TRAIN=1` или эквиваленте.
+3. **Poll частый (6h), train редкий** — частота train = f(Δ данных), не f(tick cron).
+4. ETA до product-ready (open-path) и **фаза** контура в `ml_contours_status` — одна картина прогресса для ops.
+
+```text
+  [новые сделки / labels / ERD rows]
+           │
+           ▼
+  evaluate_retrain_trigger  ──► apply-data / train / skip
+           │
+           ▼
+  write_*_readiness / ml_train_readiness.jsonl  ──► gates (quality)
+           │
+           ▼
+  ml_contours_status.json + analyzer
+```
 
 ---
 
@@ -78,8 +114,8 @@ should_full_shadow = full_cron_slot AND phase ≥ quality_tuning
 | `game5m_entry` | `max(closed_at)` closed GAME_5M BUY | `trade_history` |
 | `portfolio` | `max(date)` portfolio BUY context | `trade_history` |
 | `event_reaction_regression` | `count(*)` labeled ERD since watermark | `event_reaction_dataset` |
-| `earnings_grid` | `llm_scenario_labels` + feature rows | readiness snapshot |
-| `open_path` | premarket sessions + rule labels | `game5m_open_path_labels` |
+| `earnings_grid` | новые `llm_scenario_v0` rows | `event_reaction_dataset.updated_at` |
+| `open_path` | rule labels после close | `game5m_open_path_labels.created_at` |
 | `multiday_lr` | новые daily rows по universe | `quotes` |
 | `recovery` | строки JSONL export | файл + `trade_history` |
 | `gap_forecast` | `n_complete` в log | `game5m_gap_forecast_daily` |
@@ -126,57 +162,83 @@ Readiness по-прежнему может быть **общим** (`last_earnin
 
 ---
 
-## 6. Cron (целевая схема)
+## 6. Cron (prod, `crontab/lse-docker.crontab`)
 
-**Фаза 1 (минимальные изменения):** существующие `run_*_ml_refresh.py` внутри вызывают `evaluate_retrain_trigger` — поведение снаружи то же.
-
-**Фаза 2:** один poll-диспетчер:
+**Единый poll (data-driven):**
 
 ```cron
-# Каждые 6h: проверка всех контуров (train только по триггеру)
-15 */6 * * * docker exec lse-bot python scripts/run_ml_refresh_dispatcher.py
-
-# Nightly: full/shadow слоты по registry.full_cron
-50 23 * * 1-5 docker exec lse-bot python scripts/run_ml_refresh_dispatcher.py --slot nightly
-0  6 * * 0   docker exec lse-bot python scripts/run_ml_refresh_dispatcher.py --slot weekly_full
+# Каждые 6h: все ACTIVE контуры — train только если evaluate_retrain_trigger
+15 */6 * * * flock -n /tmp/lse_ml_refresh_dispatcher.lock \
+  docker exec lse-bot python scripts/run_ml_refresh_dispatcher.py \
+  >> …/logs/ml_refresh_dispatcher.log 2>&1
 ```
 
-Per-contour locks: `/tmp/lse_ml_refresh_<contour_id>.lock`.
+**ACTIVE контуры в dispatcher:** `open_path`, `earnings_grid`, `game5m_entry`, `portfolio`, `event_reaction_regression`.
+
+**Nightly / full (принудительный `--full` или ops-флаги):**
+
+| Cron MSK | Скрипт | Контур |
+|----------|--------|--------|
+| `23:45` пн–пт | `label_open_path_scenarios.py` | open-path labels |
+| `23:46` пн–пт | `run_open_path_ml_refresh.py --apply-data --incremental-train --skip-labels` | open-path |
+| `23:50` пн–пт | `run_ml_train_readiness_cron.py` | JSONL gates + `ml_contours_status` |
+| `23:51` пн–пт | `run_event_reaction_ml_refresh.py --full` | event-reaction regression |
+| `23:52` пн–пт | `run_earnings_ml_refresh.py --full` | earnings grid + shadow |
+| `23:48` вс | `run_open_path_ml_refresh.py --full` | open-path shadow + continuous |
+| `23:40` пн–пт | `run_daily_game5m_ml_pipeline.py` | legacy datasets + entry train |
+
+Per-contour lock в dispatcher: `/tmp/lse_ml_refresh_<contour_id>.lock` (через `flock` на dispatcher).
+
+**Удалено при миграции:** отдельные `*/6` cron для `run_earnings_ml_refresh` и `run_open_path_ml_refresh` — их заменяет dispatcher.
 
 ---
 
-## 7. Analyzer (единый блок)
+## 7. Analyzer и API
 
-Под блоком «ML: готовность» — таблица **всех контуров**:
+**Блок «ML: готовность и качество данных»** (`/analyzer`):
 
-| Контур | Фаза | ETA | Новых с last train | Last train | Continuous | Действие |
-|--------|------|-----|-------------------|------------|------------|----------|
-| Open-path | accumulating | ~79 d | 3 sessions | 2026-06-01 | off | … |
+| UI | Источник | Слой |
+|----|----------|------|
+| Таблица гейтов `ml_train_readiness.jsonl` | cron 23:50 | quality gates |
+| Earnings intelligence grid + open-path ETA | `last_*_readiness.json` | product gates |
+| **«Переобучение ML по контурам»** | `ml_contours_status.json` | retrain orchestration |
 
-Данные: `GET /api/ml/data-quality` → `ml_contours_status` (агрегат из `services/ml_contour_refresh.py`).
+**API:** `GET /api/ml/data-quality?strategy=GAME_5M`
 
-Кнопки:
+- `earnings_grid_readiness`, `readiness_latest` — gates
+- `ml_contours_status` — aggregate всех 8 контуров (в т.ч. registry-only)
+- `cache_meta` — TTL read `report_daily.json` (~6h); `?refresh=1` — полный пересчёт
 
-- **Обновить блок** — cache read (как сейчас)
+**Кнопки:**
+
+- **Обновить блок** — cache read
 - **Полный перерасчёт** — `?refresh=1`
-- **Переобучить контур** — `POST /api/ml/refresh?contour=game5m_entry` (ops, с lock)
+- *(план)* **POST /api/ml/refresh?contour=…** — ops
+
+**Ручная проверка на prod:**
+
+```bash
+docker exec lse-bot python scripts/run_ml_refresh_dispatcher.py --dry-run
+cat /app/logs/ml/ml_data_quality/ml_contours_status.json | jq '.contours[] | {id:.contour_id, phase, train:.trigger.should_train}'
+curl -sS 'http://127.0.0.1:8080/api/ml/data-quality' | jq '.ml_contours_status.contours | length, .cache_meta'
+```
 
 ---
 
-## 8. Матрица миграции контуров
+## 8. Матрица контуров (prod 2026-06-01)
 
-| contour_id | Readiness сегодня | Refresh сегодня | Шаг 1 | Шаг 2 | Шаг 3 |
-|------------|-------------------|-----------------|-------|-------|-------|
-| `open_path` | ✅ полный | ✅ 6h+nightly | alias keys → unified | ETA уже есть | — |
-| `earnings_grid` | ✅ полный | ✅ 6h+23:52 | trigger by labels delta | `continuous_learning` block | peer/reg sub-contours |
-| `game5m_entry` | ⚠️ ml_train_readiness | ⚠️ daily pipeline | `run_game5m_entry_ml_refresh.py` | min 8 new trades | shadow backtest gate |
-| `portfolio` | ⚠️ ml_train_readiness | ⚠️ nightly dry-run | wrapper + trade delta | continuous after gate | — |
-| `event_reaction_regression` | ⚠️ ml_train_readiness | ⚠️ 23:51 full only | wrapper + ERD delta | decouple from earnings grid | — |
-| `multiday_lr` | ⚠️ analyzer arbiter | ❌ manual | registry + quotes delta | nightly refit JSON | readiness in jsonl |
-| `recovery` | ❌ | ❌ stats only | export delta trigger | train in refresh script | D4 gate |
-| `gap_forecast` | ⚠️ arbiter | ❌ log only | refit on n_complete delta | no cbm | telemetry only |
+| contour_id | Quality gates | Refresh script | Dispatcher | Continuous после gate |
+|------------|---------------|----------------|------------|------------------------|
+| `open_path` | ✅ `open_path_readiness.py` + ETA | ✅ trigger | ✅ | ✅ `OPEN_PATH_ML_CONTINUOUS_TRAIN` |
+| `earnings_grid` | ✅ `earnings_intelligence_readiness.py` | ✅ trigger | ✅ | config `ML_EARNINGS_GRID_CONTINUOUS_TRAIN` |
+| `game5m_entry` | ✅ `ml_train_readiness.jsonl` | ✅ trade Δ | ✅ | если gate.ready → `continuous_prod` |
+| `portfolio` | ✅ JSONL | ✅ trade Δ | ✅ | если gate.ready |
+| `event_reaction_regression` | ✅ JSONL | ✅ ERD Δ | ✅ | — |
+| `multiday_lr` | ⚠️ analyzer arbiter | ❌ registry | status only | — |
+| `recovery` | ❌ D4 stats | ❌ registry | status only | — |
+| `gap_forecast` | ⚠️ analyzer arbiter | ❌ registry | status only | — |
 
-**Приоритет внедрения:** game5m_entry → portfolio → event_reaction → multiday_lr → recovery → gap_forecast.
+**Дефолты `ML_*_RETRAIN_MIN_NEW_UNITS`:** open_path 5 · earnings_grid 3 · game5m_entry 8 · portfolio 5 · event_reaction 10.
 
 ---
 
@@ -212,18 +274,25 @@ def run_contour_refresh(contour_id: str, *, full: bool = False) -> int:
 
 ---
 
-## 10. Критерии готовности каркаса (Definition of Done)
+## 10. Definition of Done (каркас переобучения)
 
-- [x] `services/ml_contour_refresh.py` — registry + trigger + aggregate status
-- [x] `evaluate_retrain_trigger` покрыт тестами (delta, staleness, full slot, continuous)
-- [x] `open_path` и `earnings_grid` используют trigger (не train «вслепую» каждые 6h)
-- [x] `run_game5m_entry_ml_refresh.py` + portfolio + event_reaction wrappers
-- [x] `ml_contours_status.json` + секция в analyzer
-- [x] `run_ml_train_readiness_cron.py` обновляет aggregate после JSONL
+**Сделано (prod):**
+
+- [x] Registry + `evaluate_retrain_trigger` + тесты
+- [x] Trigger в `run_open_path_ml_refresh.py`, `run_earnings_ml_refresh.py`
+- [x] Wrappers: game5m_entry, portfolio, event_reaction_regression
 - [x] `run_ml_refresh_dispatcher.py` + cron `15 */6`
+- [x] `ml_contours_status.json` + таблица в analyzer
+- [x] `run_ml_train_readiness_cron.py` → aggregate после JSONL
+- [x] TTL cache `/api/ml/data-quality` (`ML_DATA_QUALITY_REPORT_CACHE_HOURS`)
 - [x] Config keys в `config.env.example`
-- [ ] multiday_lr / recovery / gap_forecast refresh scripts (registry-only)
-- [ ] `POST /api/ml/refresh?contour=` (ops)
+
+**Backlog (в рамках той же концепции readiness):**
+
+- [ ] Refresh scripts: multiday_lr, recovery, gap_forecast
+- [ ] `continuous_learning` UI block для earnings_grid (как open-path)
+- [ ] `POST /api/ml/refresh?contour=` для ops
+- [ ] Единый `run_ml_refresh_dispatcher.py --slot nightly` вместо разрозненных full-cron (опционально)
 
 ---
 

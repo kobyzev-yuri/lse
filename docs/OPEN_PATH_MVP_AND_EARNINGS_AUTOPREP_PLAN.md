@@ -58,11 +58,13 @@ Cron по умолчанию **`--new-events-only`**: sync/ingest/extract тол
 | `23:36` | `backfill_event_reaction_labeling.py` (quotes_regime_v1) | outcomes UP/DOWN/FLAT |
 | `23:37` | `backfill_event_reaction_labeling.py` (quotes_regime_earnings_v1) | earnings_v1 features |
 
-### 2.4 ML grid + spillover (каждые 6 h + nightly full)
+### 2.4 ML grid + spillover (data-driven poll + nightly full)
+
+См. **[ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md)** — единый каркас readiness + переобучение.
 
 | Cron | Скрипт | Шаги |
 |------|--------|------|
-| `:30 */6` | `run_earnings_ml_refresh.py` | apply labels → outcomes → earnings_v1 → train scenario → **build_peer_spillover_dataset** → **train_peer_spillover_regressor** → readiness JSON |
+| `:15 */6` | `run_ml_refresh_dispatcher.py` | poll всех контуров; earnings/open-path train **только по триггеру** Δ labels |
 | `23:52` | `run_earnings_ml_refresh.py --full` | + shadow report + полный retrain .cbm |
 
 `run_earnings_ml_refresh.py` включает:

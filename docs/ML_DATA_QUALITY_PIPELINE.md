@@ -141,7 +141,9 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 
 В Docker контейнер `lse-bot` получает `config.env` как **файл** `/app/config.env` (volume), без `env_file` в compose — переменные `ML_READINESS_*` в `docker exec … env` могут быть пустыми; скрипт `run_ml_train_readiness_cron.py` читает пороги через `config_loader` (env процесса **или** файл).
 
-В веб-интерфейсе на странице **`/analyzer`** блок «ML: готовность…» и JSON **`GET /api/ml/data-quality`** (тот же сборщик, что `run_ml_data_quality_report`, без профилирования `local/datasets/*.csv` для скорости).
+**Единый каркас переобучения** (data-driven train, фазы, dispatcher): см. **[ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md)** — дополняет гейты §5.1, не заменяет их.
+
+В веб-интерфейсе на странице **`/analyzer`** блок «ML: готовность…» и JSON **`GET /api/ml/data-quality`** (тот же сборщик, что `run_ml_data_quality_report`, без профилирования `local/datasets/*.csv` для скорости). Таблица **«Переобучение ML по контурам»** — из `ml_contours_status.json`.
 
 ### 5.2 Event-reaction в product: advisory rollout
 
