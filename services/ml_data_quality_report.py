@@ -542,6 +542,8 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
         "overall_trading_shadow_ready": ei_gates.get("overall_trading_shadow_ready"),
         "overall_earnings_autoprep_ready": ei_gates.get("overall_earnings_autoprep_ready"),
         "overall_open_path_mvp_prerequisites_ready": ei_gates.get("overall_open_path_mvp_prerequisites_ready"),
+        "overall_open_path_classifier_ready": ei_gates.get("overall_open_path_classifier_ready"),
+        "overall_open_path_classifier_model_ready": ei_gates.get("overall_open_path_classifier_model_ready"),
         "gates": ei_gates,
         "snapshot": ei.get("snapshot"),
         "file_path": (ei.get("file") or {}).get("path"),
@@ -568,6 +570,16 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
         bal = read_earnings_llm_balance_alert(project_root=project_root)
         if isinstance(bal, dict) and bal.get("active"):
             bundle["earnings_grid_readiness"]["llm_balance_alert"] = bal
+    except Exception:
+        pass
+    try:
+        from services.open_path_readiness import default_readiness_metrics_path as open_path_readiness_path
+
+        op_raw = _json_load(open_path_readiness_path(project_root))
+        if isinstance(op_raw, dict):
+            bundle["earnings_grid_readiness"]["open_path_product_eta"] = op_raw.get("product_eta")
+            bundle["earnings_grid_readiness"]["open_path_continuous_learning"] = op_raw.get("continuous_learning")
+            bundle["earnings_grid_readiness"]["open_path_readiness_file"] = str(open_path_readiness_path(project_root))
     except Exception:
         pass
     ext = bundle.get("external_train_metrics") if isinstance(bundle.get("external_train_metrics"), dict) else {}

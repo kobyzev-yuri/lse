@@ -221,6 +221,13 @@ def collect_earnings_intelligence_readiness(
             min_class_samples=min_class_samples,
         )
         try:
+            from services.open_path_classifier_dataset import collect_open_path_classifier_coverage
+
+            out["open_path_classifier_dataset"] = collect_open_path_classifier_coverage(engine, since=since)
+        except Exception as e_opc:
+            logger.debug("open_path_classifier_dataset: %s", e_opc)
+            out["open_path_classifier_dataset"] = {"error": str(e_opc)}
+        try:
             pm_days = conn.execute(
                 text("SELECT COUNT(DISTINCT trade_date) FROM premarket_daily_features")
             ).scalar()
@@ -617,6 +624,8 @@ def build_earnings_intelligence_gates(
     regression_metrics: Optional[Dict[str, Any]] = None,
     peer_spillover_metrics: Optional[Dict[str, Any]] = None,
     shadow_report: Optional[Dict[str, Any]] = None,
+    open_path_train_metrics: Optional[Dict[str, Any]] = None,
+    open_path_shadow_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     g_sources = gate_sources(snapshot)
     g_features = gate_features(snapshot)
@@ -639,6 +648,14 @@ def build_earnings_intelligence_gates(
         shadow_report=shadow_report,
     )
     g_open_path = gate_open_path_mvp_prerequisites(snapshot, earnings_autoprep=g_autoprep)
+    from services.open_path_readiness import build_open_path_gates
+
+    open_path_gates = build_open_path_gates(
+        snapshot,
+        train_metrics=open_path_train_metrics,
+        shadow_report=open_path_shadow_report,
+        prerequisites_ready=bool(g_open_path.get("ready")),
+    )
     return {
         "sources": g_sources,
         "features": g_features,
@@ -651,6 +668,7 @@ def build_earnings_intelligence_gates(
         "trading_shadow": g_shadow,
         "earnings_autoprep": g_autoprep,
         "open_path_mvp_prerequisites": g_open_path,
+        **open_path_gates,
         "overall_grid_ready": grid_core,
         "overall_scenario_classifier_ready": scenario_ready,
         "overall_with_regression": grid_core and bool(g_regression.get("ready")),
@@ -688,12 +706,22 @@ def write_earnings_intelligence_readiness(
     reg_data = _json_load(reg_path)
     peer_data = _json_load(peer_path)
     shadow_data = _json_load(default_shadow_report_path(root))
+    from services.open_path_readiness import (
+        default_shadow_report_path as default_open_path_shadow_path,
+        default_train_metrics_path as default_open_path_train_metrics_path,
+        write_open_path_readiness,
+    )
+
+    open_path_train_data = _json_load(default_open_path_train_metrics_path(root))
+    open_path_shadow_data = _json_load(default_open_path_shadow_path(root))
     gates = build_earnings_intelligence_gates(
         snap,
         scenario_metrics=scen_data,
         regression_metrics=reg_data,
         peer_spillover_metrics=peer_data,
         shadow_report=shadow_data,
+        open_path_train_metrics=open_path_train_data,
+        open_path_shadow_report=open_path_shadow_data,
     )
     bundle = {
         "readiness_version": "earnings_intelligence_v1",
@@ -706,8 +734,19 @@ def write_earnings_intelligence_readiness(
             "peer_spillover_regressor": str(peer_path),
             "peer_spillover_dataset": str(default_peer_spillover_dataset_path(root)),
             "scenario_shadow": str(default_shadow_report_path(root)),
+            "open_path_classifier": str(default_open_path_train_metrics_path(root)),
+            "open_path_shadow": str(default_open_path_shadow_path(root)),
         },
     }
+    try:
+        write_open_path_readiness(
+            engine,
+            project_root=root,
+            train_metrics_path=default_open_path_train_metrics_path(root),
+            prerequisites_ready=bool(gates.get("overall_open_path_mvp_prerequisites_ready")),
+        )
+    except Exception as e_opw:
+        logger.debug("write_open_path_readiness: %s", e_opw)
     out_path = default_readiness_metrics_path(root)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

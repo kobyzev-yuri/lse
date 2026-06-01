@@ -686,9 +686,81 @@ function renderMlDataQuality(data, strategy) {
     } else if (egr.overall_open_path_mvp_prerequisites_ready === false) {
         html += '<p style="margin:0 0 0.45rem 0;color:#fde68a;"><strong>○ Open-path MVP</strong> — ждём: ' + esc((openPath.reasons || []).slice(0, 4).join('; ')) + '</p>';
     }
+    if (egr.overall_open_path_classifier_ready === true) {
+        html += '<p style="margin:0 0 0.45rem 0;color:#86efac;"><strong>✓ overall_open_path_classifier_ready</strong> (dataset + train + shadow product-tier)</p>';
+    } else if (egr.overall_open_path_classifier_ready === false) {
+        html += '<p style="margin:0 0 0.35rem 0;color:#fca5a5;"><strong>✗ overall_open_path_classifier_ready</strong> — см. open_path_* гейты ниже</p>';
+    } else if (egr.overall_open_path_classifier_model_ready === true) {
+        html += '<p style="margin:0 0 0.35rem 0;color:#fde68a;"><strong>○ Open-path model ready</strong>, shadow/product gate ещё не закрыт</p>';
+    }
     const od = eiSnap.open_path_data || {};
+    const opDs = eiSnap.open_path_classifier_dataset || {};
     if (od.premarket_feature_trading_days != null || od.gap_forecast_open_rows != null) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Open-path data: premarket days <code>' + esc(od.premarket_feature_trading_days) + '</code> · gap open rows <code>' + esc(od.gap_forecast_open_rows) + '</code></p>';
+    }
+    if (opDs.n_rule_labels != null || opDs.n_trainable_rows != null) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Open-path labels: rule <code>' + esc(opDs.n_rule_labels) + '</code> · trainable <code>' + esc(opDs.n_trainable_rows) + '</code> · classes <code>' + esc(opDs.n_classes_distinct) + '</code> · unlabeled gap rows <code>' + esc(opDs.n_gap_open_unlabeled) + '</code></p>';
+    }
+    const opEta = egr.open_path_product_eta || {};
+    const opCl = egr.open_path_continuous_learning || {};
+    if (opEta.phase || opEta.eta_days_calendar_max != null) {
+        var etaLine = '<p style="margin:0.35rem 0;padding:0.45rem 0.55rem;border-radius:6px;font-size:0.84rem;';
+        if (opEta.phase === 'product_ready') {
+            etaLine += 'border:1px solid rgba(52,211,153,0.45);background:rgba(6,78,59,0.18);color:#86efac;">';
+            etaLine += '<strong>Product-ready</strong> — open-path classifier прошёл product gate.';
+        } else if (opEta.phase === 'quality_tuning') {
+            etaLine += 'border:1px solid rgba(251,191,36,0.35);background:rgba(120,53,15,0.15);color:#fde68a;">';
+            etaLine += '<strong>Данные собраны</strong> — ждём качество train/shadow';
+            if ((opEta.quality_blockers || []).length) {
+                etaLine += ': ' + esc((opEta.quality_blockers || []).slice(0, 3).join('; '));
+            }
+        } else {
+            etaLine += 'border:1px solid rgba(148,163,184,0.25);background:rgba(30,41,59,0.35);color:#cbd5e1;">';
+            etaLine += '<strong>ETA product-ready (оценка):</strong> ';
+            if (opEta.eta_days_calendar_max != null && opEta.eta_date_utc_approx) {
+                etaLine += '~<code>' + esc(opEta.eta_days_calendar_max) + '</code> кал. дн. · ориентир <code>' + esc(opEta.eta_date_utc_approx) + '</code>';
+            } else {
+                etaLine += 'темп накопления пока не оценить (cron/lookback ' + esc(opEta.lookback_days) + 'd)';
+            }
+            if ((opEta.blocking_bottlenecks || []).length) {
+                etaLine += ' · bottleneck: <code>' + esc((opEta.blocking_bottlenecks || []).join(', ')) + '</code>';
+            }
+        }
+        if (opEta.note_ru) {
+            etaLine += '<br><span class="muted" style="font-size:0.8rem;">' + esc(opEta.note_ru) + '</span>';
+        }
+        etaLine += '</p>';
+        html += etaLine;
+    }
+    if ((opEta.bottlenecks || []).length && opEta.phase !== 'product_ready') {
+        html += '<table style="font-size:0.8rem;border-collapse:collapse;margin:0 0 0.45rem 0;"><tr style="color:#94a3b8;"><th style="text-align:left;padding:2px 8px 2px 0;">Метрика</th><th>now</th><th>target</th><th>Δ window</th><th>ETA d</th></tr>';
+        (opEta.bottlenecks || []).forEach(function (b) {
+            if (!b.blocking && b.ready) {
+                return;
+            }
+            html += '<tr><td style="padding:2px 8px 2px 0;">' + esc(b.label || b.id) + '</td>';
+            html += '<td><code>' + esc(b.current) + '</code></td><td><code>' + esc(b.target) + '</code></td>';
+            html += '<td><code>' + esc(b.increment_in_window) + '</code></td><td><code>' + esc(b.eta_days_calendar != null ? b.eta_days_calendar : '—') + '</code></td></tr>';
+        });
+        html += '</table>';
+    }
+    if (opCl.mode) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Continuous ML: mode <code>' + esc(opCl.mode) + '</code>';
+        if (opCl.continuous_train_enabled != null) {
+            html += ' · train <code>' + (opCl.continuous_train_enabled ? 'on' : 'off') + '</code>';
+        }
+        var lr = opCl.last_refresh || {};
+        var lt = opCl.last_train || {};
+        if (lr.finished_at_utc) {
+            html += ' · refresh <code>' + esc(String(lr.finished_at_utc).slice(0, 19)) + '</code>';
+        }
+        if (lt.trained_at_utc) {
+            html += ' · last train <code>' + esc(String(lt.trained_at_utc).slice(0, 19)) + '</code> n=' + esc(lt.n_train);
+        }
+        html += '</p>';
+        if (opCl.policy_ru) {
+            html += '<p class="muted" style="font-size:0.78rem;margin:0 0 0.35rem 0;">' + esc(opCl.policy_ru) + '</p>';
+        }
     }
     const shAgg = egr.shadow_aggregate || {};
     if (shAgg.n_matured != null || shAgg.sign_accuracy != null) {
@@ -732,6 +804,10 @@ function renderMlDataQuality(data, strategy) {
         ['peer_spillover_n_events', eiPs.n_events],
         ['peer_spillover_n_trainable', eiPs.n_trainable_rows],
         ['peer_baseline_sign_acc', eiPs.baseline_weighted_sign_acc],
+        ['open_path_rule_labels', opDs.n_rule_labels],
+        ['open_path_trainable_rows', opDs.n_trainable_rows],
+        ['open_path_n_classes', opDs.n_classes_distinct],
+        ['open_path_gap_unlabeled', opDs.n_gap_open_unlabeled],
     ].forEach(function (pair) {
         if (pair[1] === undefined || pair[1] === null) {
             return;
@@ -739,7 +815,7 @@ function renderMlDataQuality(data, strategy) {
         html += '<tr><td style="padding:2px 8px 2px 0;color:#94a3b8;">' + esc(pair[0]) + '</td><td><code>' + esc(pair[1]) + '</code></td></tr>';
     });
     html += '</table>';
-    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier_dataset', 'scenario_classifier', 'regression', 'peer_spillover_dataset', 'peer_spillover_regressor', 'trading_shadow', 'earnings_autoprep', 'open_path_mvp_prerequisites'];
+    const gateNames = ['sources', 'features', 'scenario_labels', 'scenario_classifier_dataset', 'scenario_classifier', 'regression', 'peer_spillover_dataset', 'peer_spillover_regressor', 'trading_shadow', 'earnings_autoprep', 'open_path_mvp_prerequisites', 'open_path_classifier_dataset', 'open_path_classifier', 'open_path_trading_shadow'];
     html += '<p style="margin:0.35rem 0 0.15rem 0;font-size:0.85rem;"><strong>Гейты:</strong></p><ul style="margin:0 0 0.5rem 1rem;padding:0;font-size:0.84rem;">';
     gateNames.forEach(function (gn) {
         const g = eiGates[gn] || {};
@@ -754,6 +830,14 @@ function renderMlDataQuality(data, strategy) {
     const clfGate = eiGates.scenario_classifier || {};
     if (clfGate.valid_accuracy != null || clfGate.n_train != null) {
         html += '<p class="muted" style="font-size:0.82rem;margin:0.15rem 0 0.35rem 0;">Scenario classifier train: acc valid <code>' + esc(clfGate.valid_accuracy) + '</code> · n_train <code>' + esc(clfGate.n_train) + '</code> · n_valid <code>' + esc(clfGate.n_valid) + '</code> · classes <code>' + esc(clfGate.n_classes) + '</code>' + (clfGate.holdout_skipped ? ' · <span style="color:#fcd34d">holdout_skipped</span>' : '') + '</p>';
+    }
+    const opClfGate = eiGates.open_path_classifier || {};
+    if (opClfGate.valid_accuracy != null || opClfGate.n_train != null) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0.15rem 0 0.35rem 0;">Open-path classifier train: acc valid <code>' + esc(opClfGate.valid_accuracy) + '</code> · n_train <code>' + esc(opClfGate.n_train) + '</code> · classes <code>' + esc(opClfGate.n_classes) + '</code>' + (opClfGate.holdout_skipped ? ' · <span style="color:#fcd34d">holdout_skipped</span>' : '') + '</p>';
+    }
+    const opShadowGate = eiGates.open_path_trading_shadow || {};
+    if (opShadowGate.sign_accuracy != null || opShadowGate.class_accuracy != null) {
+        html += '<p class="muted" style="font-size:0.82rem;margin:0 0 0.35rem 0;">Open-path shadow: sign <code>' + esc(opShadowGate.sign_accuracy) + '</code> · class <code>' + esc(opShadowGate.class_accuracy) + '</code> · n <code>' + esc(opShadowGate.n_matured) + '</code></p>';
     }
     const scGapSymbols = eiSc.symbols_without_labels || [];
     const scPending = eiSc.hints_pending_apply || [];

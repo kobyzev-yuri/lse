@@ -177,10 +177,24 @@ flowchart TD
 
 ### Sprint «open-path MVP» (после зелёного gate)
 
-1. DDL + `label_open_path_scenarios.py` + nightly cron.
-2. Analyzer gate `open_path_classifier_dataset`.
-3. Shadow-only CatBoost + секция в analyzer.
-4. Подключить блок в LLM/HTML (как premarket context).
+1. ~~DDL + `label_open_path_scenarios.py` + nightly cron.~~ ✅ Sprint B (2026-06-01)
+2. ~~Analyzer gate `open_path_classifier_dataset`.~~ ✅ + `open_path_classifier` + `open_path_trading_shadow`
+3. ~~Shadow-only CatBoost + секция в analyzer.~~ ✅ `run_open_path_ml_refresh.py`
+4. Подключить блок в LLM/HTML (как premarket context) — после `overall_open_path_classifier_ready`
+
+**Sprint B артефакты (реализовано):**
+
+| Артефакт | Путь |
+|----------|------|
+| DDL | `db/knowledge_pg/sql/028_game5m_open_path_labels.sql` |
+| Rule labels | `services/open_path_labels.py` |
+| Dataset | `services/open_path_classifier_dataset.py` |
+| Inference | `services/open_path_scenario_signal.py` |
+| Shadow | `services/open_path_scenario_shadow.py` |
+| Readiness | `services/open_path_readiness.py` |
+| Label cron | `scripts/label_open_path_scenarios.py` |
+| ML refresh | `scripts/run_open_path_ml_refresh.py` |
+| Train | `scripts/train_open_path_scenario_classifier.py` |
 
 ---
 
@@ -196,10 +210,32 @@ ML_READINESS_EARNINGS_AUTOPREP_MIN_SIGN_ACCURACY=0.58
 OPEN_PATH_MVP_MIN_PREMARKET_TRADING_DAYS=60
 OPEN_PATH_MVP_MIN_GAP_FORECAST_OPEN_ROWS=120
 
-# Cron flags (already used)
-EARNINGS_ML_REFRESH_APPLY_DATA=1
-EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN=1
-ML_READINESS_TRAIN_MODE=full
+# Open-path classifier product gates
+ML_READINESS_OPEN_PATH_MIN_TRAIN_ROWS=200
+ML_READINESS_OPEN_PATH_MIN_TRAINABLE_ROWS=150
+ML_READINESS_OPEN_PATH_MIN_CLASSES=4
+ML_READINESS_OPEN_PATH_CLASSIFIER_MIN_TRAIN=120
+ML_READINESS_OPEN_PATH_CLASSIFIER_MIN_ACCURACY=0.35
+ML_READINESS_OPEN_PATH_SHADOW_MIN_MATURED=80
+ML_READINESS_OPEN_PATH_SHADOW_MIN_SIGN_ACCURACY=0.55
+ML_READINESS_OPEN_PATH_SHADOW_MIN_CLASS_ACCURACY=0.35
+ML_READINESS_OPEN_PATH_SHADOW_MIN_MEAN_PNL_LOG=0.0
+
+# Rule label thresholds (v0)
+OPEN_PATH_RULE_GAP_MIN_PCT=0.8
+OPEN_PATH_RULE_STRONG_GAP_PCT=4.0
+OPEN_PATH_RULE_FADE_MIN_PCT=1.5
+OPEN_PATH_RULE_FOLLOW_THROUGH_LOG=0.003
+OPEN_PATH_RULE_BOUNCE_LOG=0.005
+OPEN_PATH_RULE_CONTINUATION_LOG=-0.003
+
+# Cron flags
+OPEN_PATH_ML_REFRESH_APPLY_DATA=1
+OPEN_PATH_ML_REFRESH_INCREMENTAL_TRAIN=1
+ML_READINESS_OPEN_PATH_TRAIN_MODE=full
+OPEN_PATH_SCENARIO_CLASSIFIER_ENABLED=true
+OPEN_PATH_ML_CONTINUOUS_TRAIN=1
+OPEN_PATH_ETA_LOOKBACK_DAYS=21
 ```
 
 ---
