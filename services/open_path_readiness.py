@@ -73,9 +73,12 @@ def collect_open_path_readiness_snapshot(
     *,
     since: str = DEFAULT_SINCE,
 ) -> Dict[str, Any]:
+    from services.open_path_classifier_dataset import collect_open_path_data_counts
+
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "since": since,
+        "open_path_data": collect_open_path_data_counts(engine),
         "open_path_classifier_dataset": collect_open_path_classifier_coverage(engine, since=since),
     }
 

@@ -261,42 +261,21 @@ def _table_exists(conn, table_name: str) -> bool:
 def _collect_earnings_intelligence_readiness_bundle(engine, project_root: Path) -> Dict[str, Any]:
     """Snapshot + gates for earnings ML grid (analyzer / readiness cron)."""
     from services.earnings_intelligence_readiness import (
-        build_earnings_intelligence_gates,
-        collect_earnings_intelligence_readiness,
-        default_peer_spillover_train_metrics_path,
         default_readiness_metrics_path,
-        default_scenario_train_metrics_path,
-        default_shadow_report_path,
+        write_earnings_intelligence_readiness,
     )
 
     out: Dict[str, Any] = {"error": None, "file": None, "snapshot": None, "gates": None}
     try:
+        write_earnings_intelligence_readiness(engine, project_root=project_root)
         file_path = default_readiness_metrics_path(project_root)
-        if file_path.is_file():
-            data = _json_load(file_path)
-            if data:
-                out["file"] = {"path": str(file_path), "data": data}
-                out["snapshot"] = data.get("snapshot")
-                out["gates"] = data.get("gates")
-                return out
-        snap = collect_earnings_intelligence_readiness(engine)
-        scen = _json_load(default_scenario_train_metrics_path(project_root))
-        peer = _json_load(default_peer_spillover_train_metrics_path(project_root))
-        reg_path = (
-            Path("/app/logs/ml/ml_data_quality/last_event_reaction_train_metrics.json")
-            if Path("/app/logs").exists()
-            else project_root / "local" / "logs" / "ml_data_quality" / "last_event_reaction_train_metrics.json"
-        )
-        reg = _json_load(reg_path)
-        shadow = _json_load(default_shadow_report_path(project_root))
-        out["snapshot"] = snap
-        out["gates"] = build_earnings_intelligence_gates(
-            snap,
-            scenario_metrics=scen,
-            regression_metrics=reg,
-            peer_spillover_metrics=peer,
-            shadow_report=shadow,
-        )
+        data = _json_load(file_path)
+        if data:
+            out["file"] = {"path": str(file_path), "data": data}
+            out["snapshot"] = data.get("snapshot")
+            out["gates"] = data.get("gates")
+        else:
+            out["error"] = f"missing_readiness_file:{file_path}"
     except Exception as e:
         out["error"] = str(e)
         logger.warning("earnings intelligence readiness bundle: %s", e)

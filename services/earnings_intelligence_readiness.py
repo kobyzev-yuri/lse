@@ -221,34 +221,17 @@ def collect_earnings_intelligence_readiness(
             min_class_samples=min_class_samples,
         )
         try:
-            from services.open_path_classifier_dataset import collect_open_path_classifier_coverage
+            from services.open_path_classifier_dataset import (
+                collect_open_path_classifier_coverage,
+                collect_open_path_data_counts,
+            )
 
             out["open_path_classifier_dataset"] = collect_open_path_classifier_coverage(engine, since=since)
+            out["open_path_data"] = collect_open_path_data_counts(engine)
         except Exception as e_opc:
             logger.debug("open_path_classifier_dataset: %s", e_opc)
             out["open_path_classifier_dataset"] = {"error": str(e_opc)}
-        try:
-            pm_days = conn.execute(
-                text("SELECT COUNT(DISTINCT trade_date) FROM premarket_daily_features")
-            ).scalar()
-            gap_open_rows = conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM game5m_gap_forecast_daily WHERE open_gap_pct IS NOT NULL"
-                )
-            ).scalar()
-            gap_pm_rows = conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM game5m_gap_forecast_daily WHERE premarket_gap_pct IS NOT NULL"
-                )
-            ).scalar()
-            out["open_path_data"] = {
-                "premarket_feature_trading_days": int(pm_days or 0),
-                "gap_forecast_open_rows": int(gap_open_rows or 0),
-                "gap_forecast_premarket_rows": int(gap_pm_rows or 0),
-            }
-        except Exception as e_od:
-            logger.debug("open_path_data counts: %s", e_od)
-            out["open_path_data"] = {"error": str(e_od)}
+            out["open_path_data"] = {"error": str(e_opc)}
     except Exception as e:
         out["error"] = str(e)
         logger.warning("earnings intelligence readiness: %s", e)

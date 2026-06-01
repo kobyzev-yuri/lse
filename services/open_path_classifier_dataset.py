@@ -37,6 +37,30 @@ def open_path_numeric_feature_keys() -> tuple[str, ...]:
     return NUMERIC_FEATURE_KEYS
 
 
+def collect_open_path_data_counts(engine: Engine) -> dict[str, Any]:
+    """Premarket/gap row counts for readiness gates and ETA."""
+    out: dict[str, Any] = {}
+    try:
+        with engine.connect() as conn:
+            pm_days = conn.execute(
+                text("SELECT COUNT(DISTINCT trade_date) FROM premarket_daily_features")
+            ).scalar()
+            gap_open_rows = conn.execute(
+                text("SELECT COUNT(*) FROM game5m_gap_forecast_daily WHERE open_gap_pct IS NOT NULL")
+            ).scalar()
+            gap_pm_rows = conn.execute(
+                text("SELECT COUNT(*) FROM game5m_gap_forecast_daily WHERE premarket_gap_pct IS NOT NULL")
+            ).scalar()
+        out = {
+            "premarket_feature_trading_days": int(pm_days or 0),
+            "gap_forecast_open_rows": int(gap_open_rows or 0),
+            "gap_forecast_premarket_rows": int(gap_pm_rows or 0),
+        }
+    except Exception as e:
+        out = {"error": str(e)}
+    return out
+
+
 def _cfg_float(key: str, default: float) -> float:
     try:
         from config_loader import get_config_value
