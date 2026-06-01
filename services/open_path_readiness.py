@@ -242,9 +242,9 @@ def write_open_path_readiness(
 
     if earnings_shadow_aggregate is None:
         try:
-            from services.earnings_intelligence_readiness import default_shadow_report_path
+            from services.earnings_intelligence_readiness import default_shadow_report_path as earnings_shadow_path
 
-            eraw = _json_load(default_shadow_report_path(root))
+            eraw = _json_load(earnings_shadow_path(root))
             if isinstance(eraw, dict):
                 earnings_shadow_aggregate = eraw.get("aggregate") if isinstance(eraw.get("aggregate"), dict) else None
         except Exception:
