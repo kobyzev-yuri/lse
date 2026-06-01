@@ -300,6 +300,18 @@ def main() -> int:
     with jsonl.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     logger.info("Дописано в %s | overall_production_ready=%s", jsonl, record["overall_production_ready"])
+    try:
+        from services.ml_contour_deltas import build_delta_resolver, build_readiness_resolver
+        from services.ml_contour_refresh import collect_aggregate_contours_status
+
+        collect_aggregate_contours_status(
+            root,
+            readiness_resolver=build_readiness_resolver(root),
+            delta_resolver=build_delta_resolver(root),
+        )
+        logger.info("Обновлён ml_contours_status.json")
+    except Exception as e:
+        logger.warning("ml_contours_status aggregate skipped: %s", e)
     return 0
 
 

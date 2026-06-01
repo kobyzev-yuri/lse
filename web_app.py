@@ -765,19 +765,26 @@ def _ml_runtime_snapshot_for_ui() -> Dict[str, Any]:
     }
 
 
-def _compute_ml_data_quality_bundle(strategy: str = "GAME_5M") -> Dict[str, Any]:
+def _compute_ml_data_quality_bundle(
+    strategy: str = "GAME_5M",
+    *,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
     """
     Единый снимок для веба: как run_ml_data_quality_report без профилирования CSV (dataset_paths=[]).
     Плюс пути к last_game5m / last_portfolio / last_event_reaction metrics, если файлы есть.
+    По умолчанию читает свежий report_daily.json (cron); ?refresh=1 — полный пересчёт.
     """
-    from services.ml_data_quality_report import build_ml_data_quality_report, enrich_ml_data_quality_for_strategy
+    from services.ml_data_quality_report import (
+        build_ml_data_quality_report,
+        default_report_daily_path,
+        enrich_ml_data_quality_for_strategy,
+    )
 
     root = Path(__file__).resolve().parent
     engine = get_engine()
-    if Path("/app/logs").exists():
-        q_dir = Path("/app/logs/ml/ml_data_quality")
-    else:
-        q_dir = root / "local" / "logs" / "ml_data_quality"
+    rd = default_report_daily_path(root)
+    q_dir = rd.parent
     tpaths: Dict[str, Path] = {}
     g5 = q_dir / "last_game5m_train_metrics.json"
     pf = q_dir / "last_portfolio_train_metrics.json"
@@ -798,38 +805,51 @@ def _compute_ml_data_quality_bundle(strategy: str = "GAME_5M") -> Dict[str, Any]
     if peer_dataset.is_file():
         tpaths["peer_spillover_dataset"] = peer_dataset
     tickers: Optional[List[str]] = None
-    try:
-        tf = get_tickers_fast()
-        if tf:
-            tickers = list(tf)
-    except Exception:
-        tickers = None
+    if force_refresh:
+        try:
+            tf = get_tickers_fast()
+            if tf:
+                tickers = list(tf)
+        except Exception:
+            tickers = None
     bundle = build_ml_data_quality_report(
         project_root=root,
         engine=engine,
         dataset_paths=[],
         fast_tickers=tickers,
         train_metrics_paths=tpaths if tpaths else None,
+        use_cache=not force_refresh,
+        force_refresh=force_refresh,
     )
-    rd = q_dir / "report_daily.json"
+    cache_meta = bundle.get("cache_meta") if isinstance(bundle.get("cache_meta"), dict) else {}
     bundle["ui_hints"] = {
         "dataset_csv_profile": "skipped (empty dataset_paths); full CSV profiles: scripts/run_ml_data_quality_report.py",
-        "report_daily_json": {"path": str(rd), "exists": rd.is_file()},
+        "report_daily_json": {
+            "path": str(rd),
+            "exists": rd.is_file(),
+            "cache": cache_meta.get("cache"),
+            "age_sec": cache_meta.get("age_sec"),
+        },
         "api": "/api/ml/data-quality",
+        "force_refresh": "GET ?refresh=1",
     }
     bundle["ml_runtime"] = _ml_runtime_snapshot_for_ui()
     return enrich_ml_data_quality_for_strategy(bundle, strategy)
 
 
 @app.get("/api/ml/data-quality", response_class=JSONResponse)
-async def api_ml_data_quality(strategy: str = "GAME_5M"):
+async def api_ml_data_quality(strategy: str = "GAME_5M", refresh: int = 0):
     """ML: гейты readiness (JSONL), last_* train metrics; ?strategy=PORTFOLIO — срез под портфель."""
     try:
         from functools import partial
 
         strat = (strategy or "GAME_5M").strip().upper()
+        force_refresh = int(refresh or 0) == 1
         loop = asyncio.get_event_loop()
-        bundle = await loop.run_in_executor(None, partial(_compute_ml_data_quality_bundle, strat))
+        bundle = await loop.run_in_executor(
+            None,
+            partial(_compute_ml_data_quality_bundle, strat, force_refresh=force_refresh),
+        )
         return _to_jsonable(bundle)
     except Exception as e:
         logger.exception("api_ml_data_quality failed")

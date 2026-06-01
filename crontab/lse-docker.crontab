@@ -24,8 +24,10 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Earnings autoprep (полный цикл documents): KB yfinance → sync → ingest → LLM extract → readiness JSON.
 # ML train/spillover/shadow: run_earnings_ml_refresh ниже. Analyzer только прогресс готовности.
 15 */2 * * * flock -n /tmp/lse_earnings_autoprep.lock docker exec lse-bot python scripts/run_earnings_intelligence_autoprep.py >> /home/ai8049520/lse/logs/earnings_autoprep.log 2>&1
-# Earnings ML: apply labels/outcomes/features + incremental retrain + readiness (после autoprep).
-30 */6 * * * flock -n /tmp/lse_earnings_ml_refresh.lock docker exec -e EARNINGS_ML_REFRESH_APPLY_DATA=1 -e EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN=1 lse-bot python scripts/run_earnings_ml_refresh.py >> /home/ai8049520/lse/logs/earnings_ml_refresh.log 2>&1
+# Unified ML refresh dispatcher (data-driven train trigger + ml_contours_status.json). See docs/ML_UNIFIED_RETRAIN_FRAMEWORK.md
+15 */6 * * * flock -n /tmp/lse_ml_refresh_dispatcher.lock docker exec lse-bot python scripts/run_ml_refresh_dispatcher.py >> /home/ai8049520/lse/logs/ml_refresh_dispatcher.log 2>&1
+# Earnings ML (legacy slot — optional; dispatcher covers */6 poll). Full train: 23:52 below.
+# 30 */6 * * * flock -n /tmp/lse_earnings_ml_refresh.lock docker exec lse-bot python scripts/run_earnings_ml_refresh.py >> ...
 10 */2 * * * flock -n /tmp/lse_news_newsapi.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode newsapi >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 0 */2 * * * flock -n /tmp/lse_news_investing.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode investing >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 10 * * * * docker exec lse-bot python scripts/sync_vector_kb_cron.py >> /home/ai8049520/lse/logs/sync_vector_kb.log 2>&1
@@ -45,18 +47,18 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 36 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --include-all-symbols --limit 8000 >> /home/ai8049520/lse/logs/event_reaction_labeling.log 2>&1
 # Restore earnings_v1 features for intelligence universe (after v1 backfill overwrites them).
 37 23 * * 1-5 flock -n /tmp/lse_erd_earnings_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --only-features --force-features --include-earnings-universe --limit 800 >> /home/ai8049520/lse/logs/event_reaction_earnings_labeling.log 2>&1
-# GAME_5M ML: stuck + continuation CSV, CatBoost entry, JSONL-отчёт (после ingest_market_bars и analyzer_autotune).
+# GAME_5M ML: stuck + continuation CSV, CatBoost entry, JSONL-отчёт (legacy; см. run_game5m_entry_ml_refresh via dispatcher).
 40 23 * * 1-5 flock -n /tmp/lse_game5m_daily_ml.lock docker exec lse-bot python scripts/run_daily_game5m_ml_pipeline.py >> /home/ai8049520/lse/logs/game5m_daily_ml_pipeline.log 2>&1
 # ML train readiness (dry-run): GAME_5M + portfolio + event_reaction (метрики/гейт как у остальных). -e ниже включает train event-reaction независимо от ML_READINESS_SKIP_EVENT_REACTION=1 в config.env. Уберите -e …=0 если нужен только build/backfill без гейта event в overall.
 50 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0 -e ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
-# Event-reaction model refresh for advisory product cards only; skips GAME_5M/portfolio so it does not overwrite unrelated models.
-51 23 * * 1-5 flock -n /tmp/lse_event_reaction_full_train.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e ML_READINESS_SKIP_GAME5M=1 -e ML_READINESS_SKIP_PORTFOLIO=1 -e ML_READINESS_SKIP_EVENT_REACTION=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/event_reaction_full_train.log 2>&1
+# Event-reaction regression refresh (full .cbm when trigger or --full).
+51 23 * * 1-5 flock -n /tmp/lse_event_reaction_ml_refresh.lock docker exec -e ML_READINESS_TRAIN_MODE=full lse-bot python scripts/run_event_reaction_ml_refresh.py --full >> /home/ai8049520/lse/logs/event_reaction_ml_refresh.log 2>&1
 # Earnings grid full retrain (scenario + peer spillover .cbm) + shadow; after ERD build/backfill (23:33–37).
 52 23 * * 1-5 flock -n /tmp/lse_earnings_grid_full_train.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e ML_READINESS_SKIP_GAME5M=1 -e ML_READINESS_SKIP_PORTFOLIO=1 -e ML_READINESS_SKIP_EVENT_REACTION=1 lse-bot python scripts/run_earnings_ml_refresh.py --full >> /home/ai8049520/lse/logs/earnings_grid_full_train.log 2>&1
 # Open-path labels (rule after close) + incremental ML refresh.
 45 23 * * 1-5 flock -n /tmp/lse_open_path_labels.lock docker exec lse-bot python scripts/label_open_path_scenarios.py --ensure-table >> /home/ai8049520/lse/logs/open_path_labels.log 2>&1
-46 23 * * 1-5 flock -n /tmp/lse_open_path_ml_nightly.lock docker exec -e OPEN_PATH_ML_REFRESH_APPLY_DATA=1 -e OPEN_PATH_ML_REFRESH_INCREMENTAL_TRAIN=1 lse-bot python scripts/run_open_path_ml_refresh.py --apply-data --incremental-train --skip-labels >> /home/ai8049520/lse/logs/open_path_ml_nightly.log 2>&1
-35 */6 * * * flock -n /tmp/lse_open_path_ml_refresh.lock docker exec -e OPEN_PATH_ML_REFRESH_APPLY_DATA=1 -e OPEN_PATH_ML_REFRESH_INCREMENTAL_TRAIN=1 lse-bot python scripts/run_open_path_ml_refresh.py >> /home/ai8049520/lse/logs/open_path_ml_refresh.log 2>&1
+46 23 * * 1-5 flock -n /tmp/lse_open_path_ml_nightly.lock docker exec lse-bot python scripts/run_open_path_ml_refresh.py --apply-data --incremental-train --skip-labels >> /home/ai8049520/lse/logs/open_path_ml_nightly.log 2>&1
+# Open-path */6 poll — via run_ml_refresh_dispatcher.py (15 */6)
 48 23 * * 0 flock -n /tmp/lse_open_path_ml_full.lock docker exec -e ML_READINESS_OPEN_PATH_TRAIN_MODE=full -e OPEN_PATH_ML_REFRESH_APPLY_DATA=1 -e OPEN_PATH_ML_CONTINUOUS_TRAIN=1 lse-bot python scripts/run_open_path_ml_refresh.py --full >> /home/ai8049520/lse/logs/open_path_ml_full.log 2>&1
 # Weekly earnings prod eval: полный end-to-end (materials + ERD + ML full + shadow).
 0 6 * * 0 flock -n /tmp/lse_earnings_prod_eval.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e EARNINGS_ML_REFRESH_APPLY_DATA=1 -e EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN=1 lse-bot python scripts/run_earnings_intelligence_prod_eval.py >> /home/ai8049520/lse/logs/earnings_prod_eval.log 2>&1

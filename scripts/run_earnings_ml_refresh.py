@@ -103,20 +103,58 @@ def main() -> int:
     args = ap.parse_args()
 
     from config_loader import get_config_value
+    from report_generator import get_engine
+    from services.ml_contour_runner import finalize_contour_refresh, plan_contour_refresh
+
+    trigger, gates, deltas = plan_contour_refresh(
+        "earnings_grid",
+        project_root,
+        get_engine(),
+        force_full=args.full,
+        force_apply=args.apply_data,
+    )
+    if not trigger.should_apply_data and not trigger.should_train and not args.dry_run:
+        logger.info(
+            "Earnings grid refresh skipped (no trigger): phase=%s reasons=%s deltas=%s",
+            trigger.phase,
+            trigger.reasons,
+            deltas,
+        )
+        finalize_contour_refresh(
+            project_root,
+            "earnings_grid",
+            trigger,
+            apply_ran=False,
+            train_ran=False,
+            full=False,
+            skipped=True,
+        )
+        return 0
 
     mode = (get_config_value("ML_READINESS_TRAIN_MODE") or "dry_run").strip().lower()
     full_train = args.full or mode in ("full", "train", "write", "prod")
-    apply_data = full_train or args.apply_data or _env_bool("EARNINGS_ML_REFRESH_APPLY_DATA", False)
-    incremental_train = full_train or args.incremental_train or _env_bool("EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN", False)
+    apply_data = (
+        full_train
+        or args.apply_data
+        or _env_bool("EARNINGS_ML_REFRESH_APPLY_DATA", False)
+        or trigger.should_apply_data
+    )
+    incremental_train = (
+        full_train
+        or args.incremental_train
+        or _env_bool("EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN", False)
+        or trigger.should_train
+    )
     train_dry_run = args.dry_run or not (full_train or incremental_train)
     data_dry_run = args.dry_run or not apply_data
 
     logger.info(
-        "ML refresh mode=%s apply_data=%s train_dry_run=%s full=%s",
+        "ML refresh mode=%s apply_data=%s train_dry_run=%s full=%s trigger=%s",
         mode if not args.full else "full(cli)",
         apply_data,
         train_dry_run,
         full_train,
+        trigger.reasons,
     )
 
     q_dir = _default_q_dir()
@@ -237,7 +275,8 @@ def main() -> int:
             peer_spillover_metrics_path=peer_spillover_metrics_path,
         )
 
-    if full_train and not args.skip_shadow and not train_dry_run:
+    run_shadow = (full_train or trigger.should_full_shadow) and not args.skip_shadow and not train_dry_run
+    if run_shadow:
         shadow_cmd = [py, "scripts/run_earnings_scenario_shadow_report.py"]
         rc = _run(shadow_cmd)
         if rc == 0:
@@ -246,6 +285,16 @@ def main() -> int:
                 scenario_metrics_path=scenario_metrics_path,
                 peer_spillover_metrics_path=peer_spillover_metrics_path,
             )
+
+    finalize_contour_refresh(
+        project_root,
+        "earnings_grid",
+        trigger,
+        apply_ran=apply_data and not data_dry_run,
+        train_ran=not train_dry_run and not args.skip_train,
+        full=full_train,
+        extra={"shadow_ran": run_shadow},
+    )
 
     logger.info(
         "Earnings ML refresh completed apply_data=%s train_dry_run=%s full=%s",

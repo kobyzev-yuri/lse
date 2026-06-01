@@ -84,9 +84,10 @@
 
 <div class="card" style="border: 1px solid rgba(196, 181, 253, 0.35);">
     <h2>ML: готовность и качество данных</h2>
-    <p class="muted" style="font-size:0.88rem;margin:0 0 0.5rem 0;">Снимок <code>GET /api/ml/data-quality</code> (без тяжёлого CSV). Срез гейтов и метрик — по <strong>стратегии из формы</strong> (PORTFOLIO не показывает GAME_5M/event-reaction в таблице).</p>
+    <p class="muted" style="font-size:0.88rem;margin:0 0 0.5rem 0;">Снимок <code>GET /api/ml/data-quality</code> (без тяжёлого CSV). Срез гейтов и метрик — по <strong>стратегии из формы</strong> (PORTFOLIO не показывает GAME_5M/event-reaction в таблице). <strong>Обновить блок</strong> — быстро из cron-кэша; <strong>Полный перерасчёт</strong> — пересборка БД + readiness (может занять минуты).</p>
     <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
         <button type="button" id="mlDataQualityRefresh" class="btn" style="padding:0.45rem 0.85rem;">Обновить блок</button>
+        <button type="button" id="mlDataQualityForceRefresh" class="btn" style="padding:0.45rem 0.85rem;">Полный перерасчёт</button>
         <a id="mlDataQualityJsonUrl" href="/api/ml/data-quality" target="_blank" rel="noopener" class="muted" style="font-size:0.9rem;">Открыть JSON</a>
     </div>
     <p id="mlDataQualityStatus" class="muted" style="min-height:1.2em;">Загрузка…</p>
@@ -415,6 +416,46 @@ function fmtGateEarningsIntelligence(eiBlock) {
     return line + scenLine + peerLine + '<br><code style="font-size:0.78rem;">grid</code>';
 }
 
+function renderMlContoursTable(data) {
+    const agg = data.ml_contours_status || {};
+    const rows = agg.contours || [];
+    if (!rows.length) {
+        return '<p class="muted" style="font-size:0.84rem;">Нет <code>ml_contours_status.json</code> — выполните <code>run_ml_refresh_dispatcher.py</code> или дождитесь cron.</p>';
+    }
+    let html = '<details open style="margin:0 0 0.65rem 0;border:1px solid rgba(129,140,248,0.35);border-radius:8px;padding:0.45rem 0.65rem;background:rgba(30,27,75,0.35);">';
+    html += '<summary style="cursor:pointer;font-weight:600;color:#e2e8f0;">Переобучение ML по контурам (data-driven)</summary>';
+    html += '<p class="muted" style="font-size:0.8rem;margin:0.45rem 0;">Train когда <code>new_units ≥ ML_*_RETRAIN_MIN_NEW_UNITS</code> или staleness; poll — <code>run_ml_refresh_dispatcher.py</code>. См. <code>docs/ML_UNIFIED_RETRAIN_FRAMEWORK.md</code>.</p>';
+    html += '<div style="overflow-x:auto;"><table style="width:100%;min-width:920px;border-collapse:collapse;font-size:0.82rem;">';
+    html += '<thead><tr style="text-align:left;border-bottom:1px solid rgba(148,163,184,0.35);">';
+    html += '<th style="padding:6px 8px;">Контур</th><th>Фаза</th><th>Δ apply</th><th>Δ train</th><th>Train?</th><th>Apply?</th><th>min new</th><th>Последний refresh</th>';
+    html += '</tr></thead><tbody>';
+    rows.forEach(function (row) {
+        const tr = row.trigger || {};
+        const cfg = row.config || {};
+        const lr = row.last_refresh || {};
+        const phase = row.phase || '—';
+        const phaseColor = phase === 'continuous_prod' ? '#86efac' : (phase === 'accumulating_data' ? '#fcd34d' : '#cbd5e1');
+        html += '<tr style="vertical-align:top;border-bottom:1px solid rgba(30,41,59,0.65);">';
+        html += '<td style="padding:8px;"><strong>' + esc(row.display_name_ru || row.contour_id) + '</strong><br><code style="font-size:0.75rem;">' + esc(row.contour_id) + '</code></td>';
+        html += '<td style="padding:8px;color:' + phaseColor + ';">' + esc(phase) + '</td>';
+        html += '<td style="padding:8px;"><code>' + esc(tr.new_units_since_last_apply != null ? tr.new_units_since_last_apply : '—') + '</code></td>';
+        html += '<td style="padding:8px;"><code>' + esc(tr.new_units_since_last_train != null ? tr.new_units_since_last_train : '—') + '</code></td>';
+        html += '<td style="padding:8px;">' + (tr.should_train ? '<span style="color:#86efac;">да</span>' : '<span class="muted">нет</span>') + '</td>';
+        html += '<td style="padding:8px;">' + (tr.should_apply_data ? '<span style="color:#86efac;">да</span>' : '<span class="muted">нет</span>') + '</td>';
+        html += '<td style="padding:8px;"><code>' + esc(cfg.min_new_units) + '</code></td>';
+        html += '<td style="padding:8px;font-size:0.78rem;"><code>' + esc((lr.finished_at_utc || '—').slice(0, 19)) + '</code>';
+        if (lr.skipped_no_trigger) {
+            html += '<br><span class="muted">skipped</span>';
+        }
+        if ((tr.reasons || []).length) {
+            html += '<br><span class="muted">' + esc((tr.reasons || []).slice(0, 2).join(', ')) + '</span>';
+        }
+        html += '</td></tr>';
+    });
+    html += '</tbody></table></div></details>';
+    return html;
+}
+
 function renderMlDataQuality(data, strategy) {
     const dbox = 'margin:0.45rem 0;border:1px solid rgba(148,163,184,0.22);border-radius:8px;padding:0.4rem 0.65rem;background:rgba(15,23,42,0.35);';
     const sumy = 'cursor:pointer;font-weight:600;color:#e2e8f0;user-select:none;';
@@ -423,6 +464,7 @@ function renderMlDataQuality(data, strategy) {
     const isGame5m = su === 'GAME_5M';
     let html = '';
     html += '<p style="margin:0 0 0.5rem 0;font-size:0.9rem;color:#cbd5e1;">Снимок: <code>' + esc(data.generated_at_utc) + '</code> · <code>v' + esc(data.report_version) + '</code> · стратегия <strong>' + esc(su) + '</strong></p>';
+    html += renderMlContoursTable(data);
 
     const thr = data.readiness_thresholds || {};
     const latest = data.readiness_latest || {};
@@ -957,32 +999,49 @@ function renderMlDataQuality(data, strategy) {
     const hints = data.ui_hints || {};
     const rd = hints.report_daily_json || {};
     html += '<p class="muted" style="margin:0.35rem 0 0 0;font-size:0.82rem;">' + esc(hints.dataset_csv_profile || '') + '</p>';
-    html += '<p class="muted" style="font-size:0.82rem;">Cron-отчёт: <code>' + esc(rd.path || '') + '</code> — ' + (rd.exists ? 'есть' : 'нет файла') + '.</p>';
+    const cacheTag = rd.cache === 'hit' ? 'кэш' : (rd.cache === 'refresh' ? 'пересчёт' : (rd.cache || '—'));
+    const ageSec = rd.age_sec != null ? (' · возраст ' + rd.age_sec + ' с') : '';
+    html += '<p class="muted" style="font-size:0.82rem;">Cron-отчёт: <code>' + esc(rd.path || '') + '</code> — ' + (rd.exists ? 'есть' : 'нет файла') + ' · ' + esc(cacheTag) + ageSec + '.</p>';
     html += '</div></details>';
 
     return html;
 }
 
-async function loadMlDataQuality() {
+async function loadMlDataQuality(forceRefresh) {
     const statusEl = document.getElementById('mlDataQualityStatus');
     const inner = document.getElementById('mlDataQualityInner');
+    const refreshBtn = document.getElementById('mlDataQualityRefresh');
+    const forceBtn = document.getElementById('mlDataQualityForceRefresh');
     if (!statusEl || !inner) {
         return;
     }
     const strat = (document.getElementById('strategy') && document.getElementById('strategy').value) || 'GAME_5M';
-    statusEl.textContent = 'Загрузка /api/ml/data-quality?strategy=' + strat + '…';
+    const q = new URLSearchParams({ strategy: strat });
+    if (forceRefresh) {
+        q.set('refresh', '1');
+    }
+    if (refreshBtn) { refreshBtn.disabled = true; }
+    if (forceBtn) { forceBtn.disabled = true; }
+    statusEl.textContent = (forceRefresh ? 'Полный перерасчёт' : 'Загрузка из кэша') + ' /api/ml/data-quality?strategy=' + strat + (forceRefresh ? '&refresh=1' : '') + '…';
     inner.innerHTML = '…';
     try {
-        const r = await fetch('/api/ml/data-quality?strategy=' + encodeURIComponent(strat));
+        const r = await fetch('/api/ml/data-quality?' + q.toString());
         const data = await r.json();
         if (!r.ok) {
             throw new Error((data && data.detail) || r.statusText || 'ошибка API');
         }
         inner.innerHTML = renderMlDataQuality(data, strat);
-        statusEl.textContent = 'Обновлено (' + strat + '): ' + new Date().toLocaleString();
+        const cacheMeta = data.cache_meta || {};
+        const hints = data.ui_hints || {};
+        const rd = hints.report_daily_json || {};
+        const cacheLabel = cacheMeta.cache === 'hit' ? 'кэш cron' : (cacheMeta.cache === 'refresh' ? 'live build' : (rd.cache || cacheMeta.cache || '—'));
+        statusEl.textContent = 'Обновлено (' + strat + ', ' + cacheLabel + '): ' + new Date().toLocaleString();
     } catch (e) {
         inner.innerHTML = '—';
         statusEl.innerHTML = '<span class="text-danger">' + esc(e.message || e) + '</span>';
+    } finally {
+        if (refreshBtn) { refreshBtn.disabled = false; }
+        if (forceBtn) { forceBtn.disabled = false; }
     }
 }
 
@@ -2140,7 +2199,8 @@ document.getElementById('useLlm').addEventListener('change', updateAnalyzerJsonL
 });
 document.getElementById('analyzerDownloadJson').addEventListener('click', function() { downloadAnalyzerJson(false); });
 document.getElementById('analyzerDownloadJsonFull').addEventListener('click', function() { downloadAnalyzerJson(true); });
-document.getElementById('mlDataQualityRefresh').addEventListener('click', loadMlDataQuality);
+document.getElementById('mlDataQualityRefresh').addEventListener('click', function() { loadMlDataQuality(false); });
+document.getElementById('mlDataQualityForceRefresh').addEventListener('click', function() { loadMlDataQuality(true); });
 document.getElementById('tuningRefreshBtn').addEventListener('click', loadTuningStatus);
 document.getElementById('tuningObserveBtn').addEventListener('click', observeTuningExperiment);
 document.getElementById('tuningApplyBtn').addEventListener('click', applyTuningKeyValue);

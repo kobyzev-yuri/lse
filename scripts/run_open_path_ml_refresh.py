@@ -94,30 +94,64 @@ def main() -> int:
     args = ap.parse_args()
 
     from config_loader import get_config_value
+    from report_generator import get_engine
+    from services.ml_contour_runner import finalize_contour_refresh, plan_contour_refresh
 
-    product_ready = _product_ready_from_disk()
+    trigger, gates, deltas = plan_contour_refresh(
+        "open_path",
+        project_root,
+        get_engine(),
+        force_full=args.full,
+        force_apply=args.apply_data,
+    )
+    if not trigger.should_apply_data and not trigger.should_train and not args.dry_run:
+        logger.info(
+            "Open-path refresh skipped (no trigger): phase=%s reasons=%s deltas=%s",
+            trigger.phase,
+            trigger.reasons,
+            deltas,
+        )
+        finalize_contour_refresh(
+            project_root,
+            "open_path",
+            trigger,
+            apply_ran=False,
+            train_ran=False,
+            full=False,
+            skipped=True,
+        )
+        return 0
+
+    product_ready = gates.get("product_ready", False)
     continuous_train = _env_bool("OPEN_PATH_ML_CONTINUOUS_TRAIN", product_ready)
 
     mode = (get_config_value("ML_READINESS_OPEN_PATH_TRAIN_MODE") or "dry_run").strip().lower()
     full_train = args.full or mode in ("full", "train", "write", "prod")
-    apply_data = full_train or args.apply_data or _env_bool("OPEN_PATH_ML_REFRESH_APPLY_DATA", False)
+    apply_data = (
+        full_train
+        or args.apply_data
+        or _env_bool("OPEN_PATH_ML_REFRESH_APPLY_DATA", False)
+        or trigger.should_apply_data
+    )
     incremental_train = (
         full_train
         or args.incremental_train
         or _env_bool("OPEN_PATH_ML_REFRESH_INCREMENTAL_TRAIN", False)
         or (continuous_train and apply_data)
+        or trigger.should_train
     )
     train_dry_run = args.dry_run or not (full_train or incremental_train)
     data_dry_run = args.dry_run or not apply_data
 
     logger.info(
-        "Open-path ML refresh mode=%s apply_data=%s train_dry_run=%s full=%s continuous=%s product_ready=%s",
+        "Open-path ML refresh mode=%s apply_data=%s train_dry_run=%s full=%s continuous=%s product_ready=%s trigger=%s",
         mode if not args.full else "full(cli)",
         apply_data,
         train_dry_run,
         full_train,
         continuous_train,
         product_ready,
+        trigger.reasons,
     )
 
     q_dir = _default_q_dir()
@@ -172,7 +206,8 @@ def main() -> int:
         _write_readiness(open_path_metrics_path=metrics_path, open_path_dataset_path=dataset_path)
 
     shadow_rc = 0
-    if full_train and not args.skip_shadow and not train_dry_run:
+    run_shadow = (full_train or trigger.should_full_shadow) and not args.skip_shadow and not train_dry_run
+    if run_shadow:
         shadow_cmd = [py, "scripts/run_open_path_scenario_shadow_report.py", "--since", args.since]
         shadow_rc = _run(shadow_cmd)
         if shadow_rc == 0 and not args.skip_readiness:
@@ -183,7 +218,7 @@ def main() -> int:
     write_refresh_log(
         project_root=project_root,
         payload={
-            "apply_data": apply_data,
+            "apply_data": apply_data and not data_dry_run,
             "train_ran": not train_dry_run and not args.skip_train,
             "train_rc": train_rc,
             "full": full_train,
@@ -191,8 +226,22 @@ def main() -> int:
             "product_ready": product_ready,
             "labeled_ok": labeled_ok,
             "n_trainable_after": n_trainable_after,
-            "shadow_ran": full_train and not train_dry_run and not args.skip_shadow,
+            "shadow_ran": run_shadow,
             "shadow_rc": shadow_rc,
+            "trigger_reasons": trigger.reasons,
+        },
+    )
+    finalize_contour_refresh(
+        project_root,
+        "open_path",
+        trigger,
+        apply_ran=apply_data and not data_dry_run,
+        train_ran=not train_dry_run and not args.skip_train,
+        full=full_train,
+        extra={
+            "train_rc": train_rc,
+            "n_trainable_after": n_trainable_after,
+            "shadow_ran": run_shadow,
         },
     )
 

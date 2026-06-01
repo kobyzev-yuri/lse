@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import bindparam, text
 
@@ -245,6 +246,81 @@ def collect_catboost_artifact_meta(project_root: Path) -> Dict[str, Any]:
     return found
 
 
+def default_ml_data_quality_dir(project_root: Path) -> Path:
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml/ml_data_quality")
+    return project_root / "local" / "logs" / "ml_data_quality"
+
+
+def default_report_daily_path(project_root: Path) -> Path:
+    return default_ml_data_quality_dir(project_root) / "report_daily.json"
+
+
+def _cfg_cache_hours(key: str, default: int = 6) -> int:
+    try:
+        from config_loader import get_config_value
+
+        raw = (get_config_value(key, str(default)) or str(default)).strip()
+        return max(1, int(raw))
+    except (ValueError, TypeError):
+        return max(1, default)
+
+
+def _readiness_cache_max_age_sec() -> int:
+    return _cfg_cache_hours("ML_READINESS_CACHE_MAX_AGE_HOURS", 6) * 3600
+
+
+def _report_cache_max_age_sec() -> int:
+    return _cfg_cache_hours("ML_DATA_QUALITY_REPORT_CACHE_HOURS", 6) * 3600
+
+
+def _file_age_sec(path: Path) -> Optional[float]:
+    if not path.is_file():
+        return None
+    try:
+        return max(0.0, time.time() - path.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def load_fresh_json(path: Path, max_age_sec: int) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """Return parsed JSON if file exists and mtime is within max_age_sec."""
+    meta: Dict[str, Any] = {"path": str(path), "cache": "miss"}
+    age = _file_age_sec(path)
+    if age is None:
+        meta["reason"] = "missing"
+        return None, meta
+    meta["age_sec"] = int(age)
+    if age > max_age_sec:
+        meta["reason"] = "stale"
+        return None, meta
+    data = _json_load(path)
+    if not data:
+        meta["reason"] = "invalid"
+        return None, meta
+    meta["cache"] = "hit"
+    return data, meta
+
+
+def _merge_external_train_metrics(
+    bundle: Dict[str, Any],
+    train_metrics_paths: Optional[Dict[str, Path]],
+) -> None:
+    if not train_metrics_paths:
+        return
+    ext: Dict[str, Any] = dict(bundle.get("external_train_metrics") or {})
+    for name, p in train_metrics_paths.items():
+        if p is None:
+            continue
+        pp = Path(p).expanduser()
+        data = _json_load(pp)
+        if data:
+            ext[name] = {"path": str(pp), "data": data}
+        else:
+            ext[name] = {"path": str(pp), "data": None, "note": "missing_or_invalid"}
+    bundle["external_train_metrics"] = ext
+
+
 def _table_exists(conn, table_name: str) -> bool:
     r = conn.execute(
         text(
@@ -258,7 +334,12 @@ def _table_exists(conn, table_name: str) -> bool:
     return r is not None
 
 
-def _collect_earnings_intelligence_readiness_bundle(engine, project_root: Path) -> Dict[str, Any]:
+def _collect_earnings_intelligence_readiness_bundle(
+    engine,
+    project_root: Path,
+    *,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
     """Snapshot + gates for earnings ML grid (analyzer / readiness cron)."""
     from services.earnings_intelligence_readiness import (
         default_readiness_metrics_path,
@@ -266,12 +347,25 @@ def _collect_earnings_intelligence_readiness_bundle(engine, project_root: Path) 
     )
 
     out: Dict[str, Any] = {"error": None, "file": None, "snapshot": None, "gates": None}
+    file_path = default_readiness_metrics_path(project_root)
+    max_age = _readiness_cache_max_age_sec()
+    data: Optional[Dict[str, Any]] = None
+    cache_meta: Dict[str, Any] = {}
+
+    if not force_refresh and file_path.is_file():
+        age = _file_age_sec(file_path)
+        if age is not None and age <= max_age:
+            data = _json_load(file_path)
+            if data:
+                cache_meta = {"cache": "hit", "age_sec": int(age)}
+
     try:
-        write_earnings_intelligence_readiness(engine, project_root=project_root)
-        file_path = default_readiness_metrics_path(project_root)
-        data = _json_load(file_path)
+        if data is None:
+            write_earnings_intelligence_readiness(engine, project_root=project_root)
+            data = _json_load(file_path)
+            cache_meta = {"cache": "refresh", "age_sec": 0}
         if data:
-            out["file"] = {"path": str(file_path), "data": data}
+            out["file"] = {"path": str(file_path), "data": data, **cache_meta}
             out["snapshot"] = data.get("snapshot")
             out["gates"] = data.get("gates")
         else:
@@ -419,11 +513,27 @@ def build_ml_data_quality_report(
     dataset_paths: Optional[List[Path]] = None,
     fast_tickers: Optional[List[str]] = None,
     train_metrics_paths: Optional[Dict[str, Path]] = None,
+    use_cache: bool = True,
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
     """
     engine — SQLAlchemy engine (get_engine()).
     train_metrics_paths — опционально пути к JSON от последнего dry-run (например game5m из --json-metrics-out).
+    use_cache — читать report_daily.json если свежий (HTTP / analyzer).
+    force_refresh — полный пересчёт + запись report_daily.json (cron, ?refresh=1).
     """
+    rd_path = default_report_daily_path(project_root)
+    if use_cache and not force_refresh:
+        cached, cache_meta = load_fresh_json(rd_path, _report_cache_max_age_sec())
+        if cached:
+            bundle = dict(cached)
+            bundle["cache_meta"] = {
+                "source": "report_daily.json",
+                **cache_meta,
+            }
+            _merge_external_train_metrics(bundle, train_metrics_paths)
+            return bundle
+
     paths = dataset_paths if dataset_paths is not None else default_dataset_paths(project_root)
     datasets = {str(p): profile_csv_light(p) for p in paths}
 
@@ -440,21 +550,23 @@ def build_ml_data_quality_report(
         "game5m_daily_ml_report_jsonl": collect_game5m_daily_ml_tail(project_root),
         "ml_train_readiness_jsonl": collect_ml_train_readiness_tail(project_root),
         "event_analytics": collect_event_analytics_stats(engine),
-        "earnings_intelligence_readiness": _collect_earnings_intelligence_readiness_bundle(engine, project_root),
+        "earnings_intelligence_readiness": _collect_earnings_intelligence_readiness_bundle(
+            engine,
+            project_root,
+            force_refresh=force_refresh,
+        ),
         "external_train_metrics": {},
+        "cache_meta": {"source": "live_build", "cache": "refresh"},
     }
-    if train_metrics_paths:
-        ext: Dict[str, Any] = {}
-        for name, p in train_metrics_paths.items():
-            if p is None:
-                continue
-            pp = Path(p).expanduser()
-            data = _json_load(pp)
-            if data:
-                ext[name] = {"path": str(pp), "data": data}
-            else:
-                ext[name] = {"path": str(pp), "data": None, "note": "missing_or_invalid"}
-        bundle["external_train_metrics"] = ext
+    _merge_external_train_metrics(bundle, train_metrics_paths)
+    try:
+        rd_path.parent.mkdir(parents=True, exist_ok=True)
+        rd_path.write_text(
+            json.dumps(bundle, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.debug("ml_data_quality: skip write %s: %s", rd_path, e)
     return bundle
 
 
@@ -559,6 +671,14 @@ def enrich_ml_data_quality_for_strategy(bundle: Dict[str, Any], strategy: str) -
             bundle["earnings_grid_readiness"]["open_path_product_eta"] = op_raw.get("product_eta")
             bundle["earnings_grid_readiness"]["open_path_continuous_learning"] = op_raw.get("continuous_learning")
             bundle["earnings_grid_readiness"]["open_path_readiness_file"] = str(open_path_readiness_path(project_root))
+    except Exception:
+        pass
+    try:
+        agg_path = default_ml_data_quality_dir(project_root) / "ml_contours_status.json"
+        agg_raw = _json_load(agg_path)
+        if isinstance(agg_raw, dict):
+            bundle["ml_contours_status"] = agg_raw
+            bundle["ml_contours_status_path"] = str(agg_path)
     except Exception:
         pass
     ext = bundle.get("external_train_metrics") if isinstance(bundle.get("external_train_metrics"), dict) else {}

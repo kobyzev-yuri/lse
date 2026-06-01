@@ -162,6 +162,8 @@ def main() -> int:
         dataset_paths=ds_paths,
         fast_tickers=fast or None,
         train_metrics_paths=train_paths if train_paths else None,
+        use_cache=False,
+        force_refresh=True,
     )
     bundle["train_invocation"] = train_sidecar
 
