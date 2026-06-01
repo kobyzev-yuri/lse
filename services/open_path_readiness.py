@@ -231,9 +231,9 @@ def write_open_path_readiness(
     prereq = prerequisites_ready
     if prereq is None:
         try:
-            from services.earnings_intelligence_readiness import default_readiness_metrics_path
+            from services.earnings_intelligence_readiness import default_readiness_metrics_path as earnings_readiness_path
 
-            ei = _json_load(default_readiness_metrics_path(root))
+            ei = _json_load(earnings_readiness_path(root))
             prereq = bool((ei or {}).get("gates", {}).get("overall_open_path_mvp_prerequisites_ready"))
             if earnings_snapshot is None and ei:
                 earnings_snapshot = (ei.get("snapshot") or {}) if isinstance(ei.get("snapshot"), dict) else None
