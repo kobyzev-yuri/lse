@@ -174,10 +174,11 @@ class ExecutionAgent:
                 # A fast-game lot on the same ticker must not prevent a portfolio entry.
                 strategies = trades["strategy_name"].fillna("").astype(str).str.strip().str.upper()
                 trades = trades[strategies != "GAME_5M"]
+            total = 0.0
             for p in compute_open_positions(trades):
                 if _canonical_ticker_for_positions(p.ticker) == want:
-                    return float(p.quantity)
-            return 0.0
+                    total += float(p.quantity)
+            return total
         except Exception as e:
             logger.warning(
                 "Не удалось определить открытую позицию по trade_history для %s: %s",
@@ -352,6 +353,7 @@ class ExecutionAgent:
                         SELECT strategy_name
                         FROM trade_history
                         WHERE ticker = :ticker AND side = 'BUY'
+                          AND COALESCE(NULLIF(TRIM(strategy_name), ''), 'Portfolio') != 'GAME_5M'
                         ORDER BY ts DESC
                         LIMIT 1
                     """),
@@ -371,6 +373,7 @@ class ExecutionAgent:
                     text("""
                         SELECT take_profit FROM trade_history
                         WHERE ticker = :ticker AND side = 'BUY'
+                          AND COALESCE(NULLIF(TRIM(strategy_name), ''), 'Portfolio') != 'GAME_5M'
                         ORDER BY ts DESC, id DESC LIMIT 1
                     """),
                     {"ticker": ticker},
@@ -897,6 +900,7 @@ class ExecutionAgent:
                     WHERE id = (
                         SELECT id FROM trade_history
                         WHERE ticker = :ticker AND side = 'BUY'
+                          AND COALESCE(NULLIF(TRIM(strategy_name), ''), 'Portfolio') != 'GAME_5M'
                         ORDER BY ts DESC, id DESC LIMIT 1
                     )
                 """),
@@ -1119,10 +1123,10 @@ class ExecutionAgent:
             if not trades.empty and "strategy_name" in trades.columns:
                 strategies = trades["strategy_name"].fillna("").astype(str).str.strip().str.upper()
                 trades = trades[strategies != "GAME_5M"]
-            open_from_history = {p.ticker: p for p in compute_open_positions(trades)}
+            open_from_history = list(compute_open_positions(trades))
         except Exception as e:
             logger.debug("Не удалось загрузить открытые позиции из trade_history: %s", e)
-            open_from_history = {}
+            open_from_history = []
 
         # Если по trade_history позиций нет — пробуем portfolio_state (обратная совместимость)
         if not open_from_history:
@@ -1132,18 +1136,20 @@ class ExecutionAgent:
                 return
             for _, pos_row in positions_df.iterrows():
                 ticker = pos_row["ticker"]
-                open_from_history[ticker] = type("OpenPos", (), {
+                open_from_history.append(type("OpenPos", (), {
                     "entry_price": float(pos_row["entry_price"]),
                     "entry_ts": pos_row["entry_ts"],
                     "quantity": float(pos_row["quantity"]),
                     "strategy_name": self._get_last_strategy_name(ticker) or "Portfolio",
-                })()
+                    "ticker": ticker,
+                })())
 
         stop_log_threshold = float(np.log(self.stop_loss_level)) if self.stop_loss_enabled else 0.0  # при отключённом стопе не срабатывает
 
         excluded = exclude_strategy_names or frozenset()
 
-        for ticker, p_open in open_from_history.items():
+        for p_open in open_from_history:
+            ticker = p_open.ticker
             entry_price = float(p_open.entry_price)
             entry_ts = p_open.entry_ts
             quantity = float(p_open.quantity)

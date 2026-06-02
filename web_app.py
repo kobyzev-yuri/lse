@@ -1644,7 +1644,7 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
     """Минимальный ответ для chart5m при отсутствии OHLC: только сделки GAME_5M за последние days дней."""
     from datetime import datetime, timedelta
     try:
-        from services.game_5m import get_open_position, get_open_position_any, get_trades_for_chart, trade_ts_to_et
+        from services.game_5m import get_open_position_game5m_vwap, get_trades_for_chart, trade_ts_to_et
     except ImportError:
         return {"ticker": ticker, "days": days, "times": [], "close": [], "trades": [], "no_ohlc": True}
     now = datetime.utcnow()
@@ -1676,7 +1676,7 @@ def _build_chart5m_trades_only(ticker: str, days: int) -> Dict[str, Any]:
         pass
     entry_price = None
     try:
-        pos = get_open_position_any(ticker) or get_open_position(ticker)
+        pos = get_open_position_game5m_vwap(ticker)
         if pos and pos.get("entry_price") is not None:
             entry_price = float(pos["entry_price"])
     except Exception:
@@ -1719,7 +1719,7 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
             get_decision_5m,
         )
         from services.chart_prolongation import fit_and_prolong
-        from services.game_5m import get_open_position, get_open_position_any, get_trades_for_chart
+        from services.game_5m import get_open_position_game5m_vwap, get_trades_for_chart
     except ImportError:
         return None
 
@@ -1891,8 +1891,8 @@ def _build_chart5m_data(ticker: str, days: int, *, source: str = "live") -> Opti
 
     entry_price = None
     try:
-        # Как крон и /pending: сначала любая открытая позиция по тикеру, иначе только GAME_5M
-        pos = get_open_position_any(ticker) or get_open_position(ticker)
+        # Линия входа на графике 5m — только позиция GAME_5M (Portfolio на том же тикере не смешиваем).
+        pos = get_open_position_game5m_vwap(ticker)
         if pos and pos.get("entry_price") is not None:
             entry_price = float(pos["entry_price"])
     except Exception:

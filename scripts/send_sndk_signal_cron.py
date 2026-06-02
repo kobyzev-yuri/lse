@@ -1156,7 +1156,7 @@ def main():
     try:
         from services.market_session import get_market_session_context
         from services.game_5m import (
-            resolve_open_position_for_game5m_close,
+            get_open_position_game5m_vwap,
             close_position,
             should_close_position,
             get_latest_buy_context_json,
@@ -1179,7 +1179,8 @@ def main():
             tickers_ah = [t for t in tickers_ah if has_5m_data(t)]
             for ticker in tickers_ah:
                 try:
-                    open_pos = resolve_open_position_for_game5m_close(ticker)
+                    # Только GAME_5M — portfolio fallback закрывает trading_cycle_cron.
+                    open_pos = get_open_position_game5m_vwap(ticker)
                     if not open_pos:
                         continue
                     d5 = get_decision_5m(ticker, use_llm_news=False)

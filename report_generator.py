@@ -124,7 +124,7 @@ class OpenPosition:
     quantity: float
     entry_price: float
     entry_ts: Optional[pd.Timestamp]
-    strategy_name: Optional[str] = None  # стратегия последнего BUY по этой позиции
+    strategy_name: Optional[str] = None  # ledger: strategy_name из BUY (GAME_5M, Portfolio, …)
     take_profit: Optional[float] = None
     stop_loss: Optional[float] = None
     context_json: Optional[str] = None
@@ -155,30 +155,43 @@ def load_trade_history(engine, strategy_name: Optional[str] = None) -> pd.DataFr
     return df
 
 
+def _canonical_ticker_for_positions(ticker) -> str:
+    """Единый ключ для агрегации позиций (как UPPER(TRIM) в SQL)."""
+    return str(ticker or "").strip().upper()
+
+
+def _strategy_for_ledger(strategy_name) -> str:
+    s = str(strategy_name or "").strip()
+    return s if s else "—"
+
+
+def _position_ledger_key(ticker, strategy_name) -> tuple[str, str]:
+    """Ключ нетто-позиции: Portfolio и GAME_5M на одном тикере — отдельные ledger."""
+    return (_canonical_ticker_for_positions(ticker), _strategy_for_ledger(strategy_name))
+
+
 def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
     """
     Строим PnL по каждой закрытой сделке.
-    Используем модель средневзвешенной цены входа и лог-доходности.
+    Нетто-позиция ведётся отдельно по (ticker, strategy_name) — игры не смешиваются.
     """
     results: List[TradePnL] = []
 
     if trades.empty:
         return results
 
-    # Убедимся в правильных типах
     trades = trades.copy()
     trades["quantity"] = trades["quantity"].astype(float)
     trades["price"] = trades["price"].astype(float)
     trades["commission"] = trades["commission"].astype(float)
 
-    # Состояние по тикерам
-    position_qty: Dict[str, float] = {}
-    position_cost: Dict[str, float] = {}  # суммарный cost basis (включая комиссии)
-    position_open_ts: Dict[str, Optional[pd.Timestamp]] = {}  # дата открытия текущей позиции (для /closed)
-    position_open_strategy: Dict[str, str] = {}  # стратегия открытия (первый BUY по позиции)
-    position_take_profit: Dict[str, Optional[float]] = {}
-    position_stop_loss: Dict[str, Optional[float]] = {}
-    position_context_json: Dict[str, Optional[str]] = {}
+    position_qty: Dict[tuple[str, str], float] = {}
+    position_cost: Dict[tuple[str, str], float] = {}
+    position_open_ts: Dict[tuple[str, str], Optional[pd.Timestamp]] = {}
+    position_open_strategy: Dict[tuple[str, str], str] = {}
+    position_take_profit: Dict[tuple[str, str], Optional[float]] = {}
+    position_stop_loss: Dict[tuple[str, str], Optional[float]] = {}
+    position_context_json: Dict[tuple[str, str], Optional[str]] = {}
 
     for _, row in trades.iterrows():
         ticker = row["ticker"]
@@ -189,59 +202,59 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
         ts = row["ts"]
         trade_id = int(row["id"])
         signal_type = row.get("signal_type") or ""
-        strategy = (row.get("strategy_name") or "").strip() or "—"
+        strategy = _strategy_for_ledger(row.get("strategy_name"))
+        ledger = _position_ledger_key(ticker, strategy)
         sentiment = (
             float(row["sentiment_at_trade"])
             if row["sentiment_at_trade"] is not None
             else None
         )
 
-        if ticker not in position_qty:
-            position_qty[ticker] = 0.0
-            position_cost[ticker] = 0.0
-            position_open_ts[ticker] = None
-            position_open_strategy[ticker] = "—"
-            position_take_profit[ticker] = None
-            position_stop_loss[ticker] = None
-            position_context_json[ticker] = None
+        if ledger not in position_qty:
+            position_qty[ledger] = 0.0
+            position_cost[ledger] = 0.0
+            position_open_ts[ledger] = None
+            position_open_strategy[ledger] = strategy
+            position_take_profit[ledger] = None
+            position_stop_loss[ledger] = None
+            position_context_json[ledger] = None
 
         if side == "BUY":
-            # Покупка: при открытии позиции (с 0) запоминаем дату и стратегию
-            if position_qty[ticker] == 0:
-                position_open_ts[ticker] = pd.to_datetime(ts)
-                position_open_strategy[ticker] = strategy
-                position_take_profit[ticker] = float(row["take_profit"]) if pd.notna(row.get("take_profit")) else None
-                position_stop_loss[ticker] = float(row["stop_loss"]) if pd.notna(row.get("stop_loss")) else None
-                position_context_json[ticker] = row.get("context_json")
-            position_qty[ticker] += qty
-            position_cost[ticker] += qty * price + commission
+            if position_qty[ledger] == 0:
+                position_open_ts[ledger] = pd.to_datetime(ts)
+                position_open_strategy[ledger] = strategy
+                position_take_profit[ledger] = float(row["take_profit"]) if pd.notna(row.get("take_profit")) else None
+                position_stop_loss[ledger] = float(row["stop_loss"]) if pd.notna(row.get("stop_loss")) else None
+                position_context_json[ledger] = row.get("context_json")
+            position_qty[ledger] += qty
+            position_cost[ledger] += qty * price + commission
         elif side == "SELL":
-            if position_qty[ticker] <= 0:
-                # Нет позиции — считаем PnL неизвестным, но фиксируем сделку
+            if position_qty[ledger] <= 0:
                 logger.debug(
-                    "Продажа без позиции (replay): %s, qty=%.2f, price=%.2f", ticker, qty, price
+                    "Продажа без позиции в ledger %s/%s: %s, qty=%.2f, price=%.2f",
+                    ledger[0],
+                    ledger[1],
+                    ticker,
+                    qty,
+                    price,
                 )
                 continue
 
-            # Средняя цена входа по проданным лотам
-            avg_entry = position_cost[ticker] / position_qty[ticker]
+            avg_entry = position_cost[ledger] / position_qty[ledger]
             cost_for_sold = avg_entry * qty
-
             proceeds = qty * price - commission
-
             gross_pnl = qty * (price - avg_entry)
             net_pnl = proceeds - cost_for_sold
-
-            # Лог-доходность по проданной части
             try:
                 log_ret = float(np.log(price / avg_entry))
             except Exception:
                 log_ret = 0.0
 
-            # Обновляем состояние позиции
-            entry_ts = position_open_ts.get(ticker)
-            entry_strat = position_open_strategy.get(ticker) or "—"
-            entry_ctx = position_context_json.get(ticker)
+            entry_ts = position_open_ts.get(ledger)
+            entry_strat = position_open_strategy.get(ledger) or strategy
+            entry_ctx = position_context_json.get(ledger)
+            take_profit_val = position_take_profit.get(ledger)
+            stop_loss_val = position_stop_loss.get(ledger)
             entry_impulse_pct = None
             if entry_ctx:
                 try:
@@ -249,11 +262,11 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
                     entry_impulse_pct = get_entry_impulse_pct(entry_ctx)
                 except Exception:
                     pass
-            position_qty[ticker] -= qty
-            position_cost[ticker] -= cost_for_sold
-            if position_qty[ticker] <= 0:
-                position_open_ts[ticker] = None
-                position_open_strategy[ticker] = "—"
+            position_qty[ledger] -= qty
+            position_cost[ledger] -= cost_for_sold
+            if position_qty[ledger] <= 0:
+                position_open_ts[ledger] = None
+                position_open_strategy[ledger] = strategy
 
             results.append(
                 TradePnL(
@@ -273,8 +286,8 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
                     entry_ts=entry_ts,
                     entry_strategy=entry_strat,
                     exit_strategy=strategy,
-                    take_profit=position_take_profit.get(ticker),
-                    stop_loss=position_stop_loss.get(ticker),
+                    take_profit=take_profit_val,
+                    stop_loss=stop_loss_val,
                     mfe=float(row.get("mfe")) if pd.notna(row.get("mfe")) else None,
                     mae=float(row.get("mae")) if pd.notna(row.get("mae")) else None,
                     context_json=entry_ctx,
@@ -286,16 +299,10 @@ def compute_closed_trade_pnls(trades: pd.DataFrame) -> List[TradePnL]:
     return results
 
 
-def _canonical_ticker_for_positions(ticker) -> str:
-    """Единый ключ для агрегации позиций (как UPPER(TRIM) в SQL). Иначе SNDK и «SNDK » дают разные корзины и /pending теряет строку."""
-    return str(ticker or "").strip().upper()
-
-
 def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
     """
     Список открытых позиций (есть BUY без полного SELL).
-    Использует ту же модель средневзвешенной цены входа.
-    Тикер нормализуется (strip + upper), чтобы BUY/SELL с разным написанием сходились.
+    Нетто ведётся отдельно по (ticker, strategy_name) — Portfolio и GAME_5M не смешиваются.
     """
     result: List[OpenPosition] = []
 
@@ -307,17 +314,19 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
     trades["price"] = trades["price"].astype(float)
     trades["commission"] = trades["commission"].astype(float)
 
-    position_qty: Dict[str, float] = {}
-    position_cost: Dict[str, float] = {}
-    position_open_ts: Dict[str, Optional[pd.Timestamp]] = {}
-    position_last_strategy: Dict[str, str] = {}
-    position_take_profit: Dict[str, Optional[float]] = {}
-    position_stop_loss: Dict[str, Optional[float]] = {}
-    position_context_json: Dict[str, Optional[str]] = {}
-    position_buy_legs: Dict[str, int] = {}
+    position_qty: Dict[tuple[str, str], float] = {}
+    position_cost: Dict[tuple[str, str], float] = {}
+    position_open_ts: Dict[tuple[str, str], Optional[pd.Timestamp]] = {}
+    position_strategy: Dict[tuple[str, str], str] = {}
+    position_take_profit: Dict[tuple[str, str], Optional[float]] = {}
+    position_stop_loss: Dict[tuple[str, str], Optional[float]] = {}
+    position_context_json: Dict[tuple[str, str], Optional[str]] = {}
+    position_buy_legs: Dict[tuple[str, str], int] = {}
+    position_display_ticker: Dict[tuple[str, str], str] = {}
 
     for _, row in trades.iterrows():
-        ticker = _canonical_ticker_for_positions(row["ticker"])
+        ticker_raw = row["ticker"]
+        ticker = _canonical_ticker_for_positions(ticker_raw)
         if not ticker:
             continue
         side = row["side"].upper()
@@ -325,58 +334,59 @@ def compute_open_positions(trades: pd.DataFrame) -> List[OpenPosition]:
         price = float(row["price"])
         commission = float(row["commission"]) if row["commission"] is not None else 0.0
         ts = row["ts"]
-        strategy = (row.get("strategy_name") or "").strip() or "—"
+        strategy = _strategy_for_ledger(row.get("strategy_name"))
+        ledger = (ticker, strategy)
 
-        if ticker not in position_qty:
-            position_qty[ticker] = 0.0
-            position_cost[ticker] = 0.0
-            position_open_ts[ticker] = None
-            position_last_strategy[ticker] = "—"
-            position_take_profit[ticker] = None
-            position_stop_loss[ticker] = None
-            position_context_json[ticker] = None
-            position_buy_legs[ticker] = 0
+        if ledger not in position_qty:
+            position_qty[ledger] = 0.0
+            position_cost[ledger] = 0.0
+            position_open_ts[ledger] = None
+            position_strategy[ledger] = strategy
+            position_take_profit[ledger] = None
+            position_stop_loss[ledger] = None
+            position_context_json[ledger] = None
+            position_buy_legs[ledger] = 0
+            position_display_ticker[ledger] = str(ticker_raw or ticker).strip() or ticker
 
         if side == "BUY":
-            if position_qty[ticker] == 0:
-                position_open_ts[ticker] = pd.to_datetime(ts)
-                position_take_profit[ticker] = float(row["take_profit"]) if pd.notna(row.get("take_profit")) else None
-                position_stop_loss[ticker] = float(row["stop_loss"]) if pd.notna(row.get("stop_loss")) else None
-                position_context_json[ticker] = row.get("context_json")
-                position_buy_legs[ticker] = 1
+            if position_qty[ledger] == 0:
+                position_open_ts[ledger] = pd.to_datetime(ts)
+                position_take_profit[ledger] = float(row["take_profit"]) if pd.notna(row.get("take_profit")) else None
+                position_stop_loss[ledger] = float(row["stop_loss"]) if pd.notna(row.get("stop_loss")) else None
+                position_context_json[ledger] = row.get("context_json")
+                position_buy_legs[ledger] = 1
             else:
-                position_buy_legs[ticker] = position_buy_legs.get(ticker, 0) + 1
+                position_buy_legs[ledger] = position_buy_legs.get(ledger, 0) + 1
                 if pd.notna(row.get("take_profit")):
-                    position_take_profit[ticker] = float(row["take_profit"])
+                    position_take_profit[ledger] = float(row["take_profit"])
                 if pd.notna(row.get("stop_loss")):
-                    position_stop_loss[ticker] = float(row["stop_loss"])
-            position_qty[ticker] += qty
-            position_cost[ticker] += qty * price + commission
-            position_last_strategy[ticker] = strategy
+                    position_stop_loss[ledger] = float(row["stop_loss"])
+            position_qty[ledger] += qty
+            position_cost[ledger] += qty * price + commission
         elif side == "SELL":
-            if position_qty[ticker] <= 0:
+            if position_qty[ledger] <= 0:
                 continue
-            avg_entry = position_cost[ticker] / position_qty[ticker]
+            avg_entry = position_cost[ledger] / position_qty[ledger]
             cost_for_sold = avg_entry * qty
-            position_qty[ticker] -= qty
-            position_cost[ticker] -= cost_for_sold
-            if position_qty[ticker] <= 0:
-                position_open_ts[ticker] = None
-                position_buy_legs[ticker] = 0
+            position_qty[ledger] -= qty
+            position_cost[ledger] -= cost_for_sold
+            if position_qty[ledger] <= 0:
+                position_open_ts[ledger] = None
+                position_buy_legs[ledger] = 0
 
-    for ticker, qty in position_qty.items():
-        if qty > 0 and position_cost.get(ticker, 0) > 0:
-            legs = max(1, int(position_buy_legs.get(ticker) or 1))
+    for ledger, qty in position_qty.items():
+        if qty > 0 and position_cost.get(ledger, 0) > 0:
+            legs = max(1, int(position_buy_legs.get(ledger) or 1))
             result.append(
                 OpenPosition(
-                    ticker=ticker,
+                    ticker=position_display_ticker.get(ledger) or ledger[0],
                     quantity=qty,
-                    entry_price=position_cost[ticker] / qty,
-                    entry_ts=position_open_ts.get(ticker),
-                    strategy_name=position_last_strategy.get(ticker) or "—",
-                    take_profit=position_take_profit.get(ticker),
-                    stop_loss=position_stop_loss.get(ticker),
-                    context_json=position_context_json.get(ticker),
+                    entry_price=position_cost[ledger] / qty,
+                    entry_ts=position_open_ts.get(ledger),
+                    strategy_name=position_strategy.get(ledger) or ledger[1],
+                    take_profit=position_take_profit.get(ledger),
+                    stop_loss=position_stop_loss.get(ledger),
+                    context_json=position_context_json.get(ledger),
                     buy_leg_count=legs,
                 )
             )

@@ -518,9 +518,10 @@ def get_open_position(ticker: str) -> Optional[dict[str, Any]]:
 def get_open_position_any(ticker: str) -> Optional[dict[str, Any]]:
     """
     Открытая позиция по тикеру по всей trade_history (любая стратегия).
-    Как в /pending: последний BUY без полного SELL, средневзвешенная цена входа.
-    Нужно, чтобы крон видел позиции, открытые не через GAME_5M (например с другой стратегией).
-    Поиск по UPPER(ticker), чтобы находить позиции при разном регистре в БД.
+
+    Устарело для операционной логики: смешивает Portfolio, GAME_5M и др. на одном тикере.
+    Для отчётов используйте ``report_generator.compute_open_positions`` (ledger по strategy_name).
+    Для GAME_5M — ``get_open_position_game5m_vwap``; для портфеля — ``compute_open_positions`` без GAME_5M.
     """
     ticker_upper = (ticker or "").strip().upper()
     if not ticker_upper:
@@ -654,10 +655,11 @@ def get_open_position_game5m_vwap(ticker: str) -> Optional[dict[str, Any]]:
 
 def resolve_open_position_for_game5m_close(ticker: str) -> Optional[dict[str, Any]]:
     """
-    Позиция для тейка/стопа в кроне 5m: приоритет — нетто GAME_5M (VWAP по стратегии),
-    иначе ``get_open_position_any`` / ``get_open_position`` (другая стратегия на тикере).
+    Позиция для тейка/стопа в кроне 5m: только лоты ``strategy_name=GAME_5M``.
+    Portfolio и другие стратегии на том же тикере не возвращаются — их закрывает trading_cycle_cron.
 
-    Отключить VWAP GAME_5M: ``GAME_5M_CLOSE_USE_GAME5M_VWAP=false``.
+    Приоритет — нетто GAME_5M (VWAP по стратегии); иначе последний BUY GAME_5M.
+    Отключить VWAP: ``GAME_5M_CLOSE_USE_GAME5M_VWAP=false``.
     """
     use = (get_config_value("GAME_5M_CLOSE_USE_GAME5M_VWAP", "true") or "true").strip().lower() in (
         "1",
@@ -668,7 +670,7 @@ def resolve_open_position_for_game5m_close(ticker: str) -> Optional[dict[str, An
         p = get_open_position_game5m_vwap(ticker)
         if p is not None:
             return p
-    return get_open_position_any(ticker) or get_open_position(ticker)
+    return get_open_position(ticker)
 
 
 def record_entry(

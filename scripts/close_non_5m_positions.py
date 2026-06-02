@@ -24,7 +24,7 @@ def main():
     only_tickers = [t.strip().upper() for t in argv if t.strip()] if argv else None
 
     from report_generator import get_engine, load_trade_history, compute_open_positions, get_latest_prices
-    from services.game_5m import get_open_position_any, close_position, GAME_5M_STRATEGY
+    from services.game_5m import close_position, GAME_5M_STRATEGY
 
     engine = get_engine()
     trades = load_trade_history(engine)
@@ -55,8 +55,13 @@ def main():
             print(f"  ⚠️ Нет котировок для {p.ticker} — пропуск. Обновите quotes или закройте вручную через close_game_position.py с ценой.")
             continue
         price = float(prices[p.ticker])
-        pos = get_open_position_any(p.ticker)
-        if not pos:
+        pos = {
+            "ticker": p.ticker,
+            "entry_price": p.entry_price,
+            "quantity": p.quantity,
+            "strategy_name": (p.strategy_name or "Portfolio").strip() or "Portfolio",
+        }
+        if not pos["quantity"] or pos["quantity"] <= 0:
             print(f"  ⚠️ Позиция {p.ticker} уже закрыта или не найдена.")
             continue
         if dry_run:
