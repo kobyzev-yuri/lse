@@ -96,6 +96,68 @@ def count_strategy_buys_since(engine: Engine, strategy: str, since: Optional[dat
         return 0
 
 
+def count_earnings_pending_scenario_apply(engine: Engine, *, dataset_version: str = "v0_expanded_baseline") -> int:
+    """KB events with non-empty LLM scenario_hints not yet applied to ERD (llm_scenario_v0)."""
+    try:
+        with engine.connect() as conn:
+            n = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(DISTINCT kb.id)
+                    FROM earnings_event_detail ed
+                    JOIN knowledge_base kb ON kb.id = ed.knowledge_base_id
+                    WHERE jsonb_array_length(
+                            COALESCE(ed.guidance_summary->'scenario_hints', '[]'::jsonb)
+                          ) > 0
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM event_reaction_dataset erd
+                        WHERE erd.knowledge_base_id = kb.id
+                          AND erd.dataset_version = :dv
+                          AND erd.label_source = 'llm_scenario_v0'
+                      )
+                    """
+                ),
+                {"dv": dataset_version},
+            ).scalar()
+            return int(n or 0)
+    except Exception:
+        return 0
+
+
+def count_earnings_extractions_since(engine: Engine, since: Optional[datetime]) -> int:
+    """New/updated LLM extractions on earnings_event_detail (extraction_meta), drives apply_labels."""
+    try:
+        clauses = ["ed.guidance_summary ? 'extraction_meta'"]
+        params: Dict[str, Any] = {}
+        if since is not None:
+            clauses.append("ed.updated_at >= :since")
+            params["since"] = since
+        sql = f"""
+            SELECT COUNT(DISTINCT kb.id)
+            FROM earnings_event_detail ed
+            JOIN knowledge_base kb ON kb.id = ed.knowledge_base_id
+            WHERE {' AND '.join(clauses)}
+        """
+        with engine.connect() as conn:
+            n = conn.execute(text(sql), params).scalar()
+            return int(n or 0)
+    except Exception:
+        return 0
+
+
+def count_earnings_grid_apply_units(engine: Engine, since_apply: Optional[datetime]) -> int:
+    """
+    Units that should trigger apply-data for earnings_grid.
+
+    Counting only new llm_scenario_v0 ERD rows misses fresh extracts (hints not applied yet).
+    """
+    llm_new = count_erd_rows_since(engine, since=since_apply, label_source="llm_scenario_v0")
+    pending = count_earnings_pending_scenario_apply(engine)
+    extracted = count_earnings_extractions_since(engine, since_apply)
+    return llm_new + pending + extracted
+
+
 def count_erd_rows_since(
     engine: Engine,
     *,
@@ -168,9 +230,7 @@ def count_deltas_for_contour(
         }
     if cid == "earnings_grid":
         return {
-            "new_units_apply": count_erd_rows_since(
-                engine, since=since_apply, label_source="llm_scenario_v0"
-            ),
+            "new_units_apply": count_earnings_grid_apply_units(engine, since_apply),
             "new_units_train": count_erd_rows_since(
                 engine, since=since_train, label_source="llm_scenario_v0"
             ),

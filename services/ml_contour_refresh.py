@@ -185,7 +185,7 @@ def resolve_phase(
         return ContourPhase.CONTINUOUS
     if product_ready:
         return ContourPhase.PRODUCT_READY
-    if dataset_ready and train_ready:
+    if dataset_ready and (train_ready or spec.contour_id == "earnings_grid"):
         return ContourPhase.QUALITY_TUNING
     return ContourPhase.ACCUMULATING
 
