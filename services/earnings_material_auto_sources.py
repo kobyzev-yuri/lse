@@ -179,7 +179,6 @@ def _fiscal_quarter_suffixes(event_date: date) -> tuple[str, ...]:
         q, fy = 3, y
     return (
         f"q{q}-{fy}-earnings-call-transcript",
-        f"q{fy}-earnings-call-transcript",
         f"q{q}-{fy}-earnings-transcript",
         "earnings-call-transcript",
         "earnings-transcript",
