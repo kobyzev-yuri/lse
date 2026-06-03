@@ -43,16 +43,27 @@ logger = logging.getLogger(__name__)
 
 
 def _portfolio_trade_pnl_suffix(trade: dict) -> str:
-    """P/L % для SELL в Telegram (как в GAME_5M cron)."""
+    """P/L в USD и % для SELL в Telegram."""
     if (trade.get("side") or "").upper() != "SELL":
         return ""
-    pnl = trade.get("pnl_pct")
-    if pnl is None:
-        return ""
+    parts: list[str] = []
+    pnl_usd = trade.get("pnl_usd")
+    pnl_pct = trade.get("pnl_pct")
     try:
-        return ", PnL %+.2f%%" % float(pnl)
+        if pnl_usd is not None:
+            parts.append("PnL $%+.2f" % float(pnl_usd))
     except (TypeError, ValueError):
+        pass
+    try:
+        if pnl_pct is not None:
+            parts.append("%+.2f%%" % float(pnl_pct))
+    except (TypeError, ValueError):
+        pass
+    if not parts:
         return ""
+    if len(parts) == 2:
+        return ", %s (%s)" % (parts[0], parts[1])
+    return ", " + parts[0]
 
 
 def _notify_portfolio_trades(agent: ExecutionAgent) -> None:

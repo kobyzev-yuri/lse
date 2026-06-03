@@ -644,6 +644,7 @@ class ExecutionAgent:
             if entry_px > 0
             else None
         )
+        pnl_usd = total_proceeds - quantity * entry_px if entry_px > 0 else None
         self._trades_done_this_run.append({
             "ts": datetime.now(),
             "ticker": ticker,
@@ -653,6 +654,8 @@ class ExecutionAgent:
             "signal_type": signal_type,
             "strategy_name": (strategy_name or "").strip() or "Portfolio",
             "pnl_pct": pnl_pct,
+            "pnl_usd": pnl_usd,
+            "total_value": total_proceeds,
         })
 
     # ---------- Ручная торговля (песочница / Telegram) ----------
@@ -895,10 +898,8 @@ class ExecutionAgent:
             return None
 
     def enrich_trade_pnl_pct(self, trade: dict) -> dict:
-        """Добавляет pnl_pct к SELL, если ещё нет (для Telegram после чтения из БД)."""
+        """Добавляет pnl_usd и pnl_pct к SELL для Telegram (в т.ч. после чтения из БД)."""
         if (trade.get("side") or "").upper() != "SELL":
-            return trade
-        if trade.get("pnl_pct") is not None:
             return trade
         entry = self.last_buy_price_for_sell(
             trade.get("ticker", ""),
@@ -906,10 +907,27 @@ class ExecutionAgent:
             before_ts=trade.get("ts"),
         )
         sell_px = trade.get("price")
+        qty = trade.get("quantity")
         if entry is None or not isinstance(sell_px, (int, float)) or sell_px <= 0:
             return trade
+        try:
+            qty_f = float(qty)
+        except (TypeError, ValueError):
+            return trade
+        if qty_f <= 0:
+            return trade
         out = dict(trade)
-        out["pnl_pct"] = 100.0 * (float(sell_px) - entry) / entry
+        entry_f = float(entry)
+        sell_f = float(sell_px)
+        if out.get("pnl_pct") is None and entry_f > 0:
+            out["pnl_pct"] = 100.0 * (sell_f - entry_f) / entry_f
+        if out.get("pnl_usd") is None:
+            tv = out.get("total_value")
+            if tv is not None:
+                out["pnl_usd"] = float(tv) - qty_f * entry_f
+            else:
+                proceeds = qty_f * sell_f * (1.0 - float(self.commission_rate))
+                out["pnl_usd"] = proceeds - qty_f * entry_f
         return out
 
     def get_recent_trades(
