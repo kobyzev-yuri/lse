@@ -1557,6 +1557,132 @@ def evaluate_game5m_continuation_gate(
     return out
 
 
+def _position_age_for_exit(
+    open_position: dict,
+    simulation_time: Optional[datetime] = None,
+) -> timedelta:
+    """Возраст открытой позиции от entry_ts до ref (live now или simulation_time)."""
+    entry_ts = open_position.get("entry_ts")
+    if entry_ts is None:
+        return timedelta(0)
+    import pandas as pd
+
+    ref = simulation_time if simulation_time is not None else datetime.now()
+    et = pd.Timestamp(entry_ts)
+    rt = pd.Timestamp(ref)
+    if et.tzinfo is None:
+        et = et.tz_localize(TRADE_HISTORY_TZ, ambiguous=True).tz_convert(CHART_DISPLAY_TZ)
+    else:
+        et = et.tz_convert(CHART_DISPLAY_TZ)
+    if rt.tzinfo is None:
+        rt = rt.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+    else:
+        rt = rt.tz_convert(CHART_DISPLAY_TZ)
+    age = rt - et
+    if hasattr(age, "to_pytimedelta"):
+        age = age.to_pytimedelta()
+    return age
+
+
+def _try_stale_reversal_exit(
+    open_position: dict,
+    *,
+    entry_price: float,
+    current_price: float,
+    momentum_2h_pct: Optional[float],
+    current_decision: str,
+    age: timedelta,
+    simulation_time: Optional[datetime] = None,
+) -> Tuple[bool, str, str]:
+    """TIME_EXIT_EARLY / stale_reversal, если включено и условия выполнены."""
+    stale_params = _game_5m_stale_reversal_exit_params(open_position.get("ticker"))
+    if not stale_params.get("enabled") or entry_price <= 0 or current_price <= 0:
+        return False, "", ""
+    pnl_current_pct = (current_price - entry_price) / entry_price * 100.0
+    try:
+        mom_current = None if momentum_2h_pct is None else float(momentum_2h_pct)
+    except (TypeError, ValueError):
+        mom_current = None
+    weak_mom = mom_current is None or mom_current <= float(stale_params["momentum_below"])
+    decision_norm = str(current_decision or "").strip().upper()
+    weak_decision = decision_norm in ("HOLD", "SELL")
+    min_age = timedelta(minutes=int(stale_params["min_age_minutes"]))
+    if not (
+        age >= min_age
+        and pnl_current_pct <= float(stale_params["max_pnl_pct"])
+        and weak_mom
+        and weak_decision
+    ):
+        return False, "", ""
+    _stale_log = logger.info if simulation_time is None else logger.debug
+    _stale_log(
+        "GAME_5M %s: stale/reversal exit — age=%s мин, PnL=%.2f%% <= %.2f%%, "
+        "mom2h=%s <= %.2f%%, decision=%s",
+        open_position.get("ticker", "?"),
+        int(age.total_seconds() // 60),
+        pnl_current_pct,
+        float(stale_params["max_pnl_pct"]),
+        "—" if mom_current is None else f"{mom_current:+.2f}%",
+        float(stale_params["momentum_below"]),
+        decision_norm or "—",
+    )
+    return True, "TIME_EXIT_EARLY", "stale_reversal"
+
+
+def _try_early_derisk_exit(
+    open_position: dict,
+    *,
+    entry_price: float,
+    current_price: float,
+    momentum_2h_pct: Optional[float],
+    current_decision: str,
+    age: timedelta,
+) -> Tuple[bool, str, str]:
+    """TIME_EXIT_EARLY / early_derisk при просадке и слабом импульсе (если включено в config)."""
+    try:
+        dr_enabled = (get_config_value("GAME_5M_EARLY_DERISK_ENABLED", "false") or "false").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+    except Exception:
+        dr_enabled = False
+    if not dr_enabled or entry_price <= 0 or current_price <= 0:
+        return False, "", ""
+    try:
+        min_age_min = int((get_config_value("GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES", "180") or "180").strip())
+    except (ValueError, TypeError):
+        min_age_min = 180
+    try:
+        max_loss_pct = float((get_config_value("GAME_5M_EARLY_DERISK_MAX_LOSS_PCT", "-2.0") or "-2.0").strip())
+    except (ValueError, TypeError):
+        max_loss_pct = -2.0
+    try:
+        weak_mom_below = float((get_config_value("GAME_5M_EARLY_DERISK_MOMENTUM_BELOW", "0.0") or "0.0").strip())
+    except (ValueError, TypeError):
+        weak_mom_below = 0.0
+    pnl_current_pct = (current_price - entry_price) / entry_price * 100.0
+    weak_mom = momentum_2h_pct is None or float(momentum_2h_pct) <= weak_mom_below
+    weak_decision = current_decision in ("HOLD", "SELL")
+    if not (
+        age >= timedelta(minutes=max(15, min_age_min))
+        and pnl_current_pct <= max_loss_pct
+        and weak_mom
+        and weak_decision
+    ):
+        return False, "", ""
+    logger.info(
+        "GAME_5M %s: early de-risk — age=%s мин, PnL=%.2f%% <= %.2f%%, mom2h=%s, decision=%s",
+        open_position.get("ticker", "?"),
+        int(age.total_seconds() // 60),
+        pnl_current_pct,
+        max_loss_pct,
+        "—" if momentum_2h_pct is None else f"{float(momentum_2h_pct):+.2f}%",
+        current_decision,
+    )
+    return True, "TIME_EXIT_EARLY", "early_derisk"
+
+
 def should_close_position(
     open_position: dict,
     current_decision: str,
@@ -1572,6 +1698,9 @@ def should_close_position(
     apply_hanger_json: Optional[bool] = None,
 ) -> Tuple[bool, str, str]:
     """Закрывать ли позицию: по тейку/стопу (цена), по истечении срока/сессии (TIME_EXIT), early de-risk (TIME_EXIT_EARLY).
+
+    При PnL по ``current_price`` (close) < 0 проверки ``stale_reversal`` и ``early_derisk`` идут **до** тейка
+    по ``bar_high``, чтобы wick в ``recent_bars_high_max`` не давал ``TAKE_PROFIT`` с исполнением в минус.
 
     Возвращает (should_close, signal_type, exit_detail). exit_detail — уточнение для TIME_EXIT:
     session_end | max_hold_minutes | max_hold_days; для TIME_EXIT_EARLY — early_derisk; иначе пустая строка.
@@ -1615,7 +1744,34 @@ def should_close_position(
         return False, "", ""
 
     entry_price = open_position.get("entry_price")
+    pnl_close_pct: Optional[float] = None
     if isinstance(entry_price, (int, float)) and entry_price > 0:
+        pnl_close_pct = (current_price - entry_price) / entry_price * 100.0
+        # При убытке по close не даём bar_high «перебить» stale/derisk: иначе TAKE_PROFIT по wick + fill в минус.
+        if pnl_close_pct < 0:
+            age_for_risk = _position_age_for_exit(open_position, simulation_time)
+            stale_hit, stale_sig, stale_det = _try_stale_reversal_exit(
+                open_position,
+                entry_price=float(entry_price),
+                current_price=float(current_price),
+                momentum_2h_pct=momentum_2h_pct,
+                current_decision=current_decision,
+                age=age_for_risk,
+                simulation_time=simulation_time,
+            )
+            if stale_hit:
+                return True, stale_sig, stale_det
+            derisk_hit, derisk_sig, derisk_det = _try_early_derisk_exit(
+                open_position,
+                entry_price=float(entry_price),
+                current_price=float(current_price),
+                momentum_2h_pct=momentum_2h_pct,
+                current_decision=current_decision,
+                age=age_for_risk,
+            )
+            if derisk_hit:
+                return True, derisk_sig, derisk_det
+
         tkr = open_position.get("ticker")
         take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=tkr, apply_hanger_json=apply_hanger_json)
         stop_pct = _effective_stop_loss_pct(momentum_2h_pct, ticker=tkr, apply_hanger_json=apply_hanger_json)
@@ -1710,61 +1866,27 @@ def should_close_position(
             except Exception as e:
                 logger.debug("GAME_5M session-end exit check: %s", e)
 
-    entry_ts = open_position.get("entry_ts")
-    if entry_ts is not None:
-        import pandas as pd
-
-        ref = simulation_time if simulation_time is not None else datetime.now()
-        et = pd.Timestamp(entry_ts)
-        rt = pd.Timestamp(ref)
-        if et.tzinfo is None:
-            et = et.tz_localize(TRADE_HISTORY_TZ, ambiguous=True).tz_convert(CHART_DISPLAY_TZ)
-        else:
-            et = et.tz_convert(CHART_DISPLAY_TZ)
-        if rt.tzinfo is None:
-            rt = rt.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
-        else:
-            rt = rt.tz_convert(CHART_DISPLAY_TZ)
-        age = rt - et
-        if hasattr(age, "to_pytimedelta"):
-            age = age.to_pytimedelta()
-    else:
-        age = timedelta(0)
+    age = _position_age_for_exit(open_position, simulation_time)
     max_min = _max_position_minutes(open_position.get("ticker"))
 
-    # Stale/reversal exit: explicit protection for old longs whose setup degraded.
-    # It is checked before EXIT_ONLY_TAKE so that enabling this flag can override the broad legacy mode.
-    stale_params = _game_5m_stale_reversal_exit_params(open_position.get("ticker"))
-    if stale_params.get("enabled") and isinstance(entry_price, (int, float)) and entry_price > 0:
-        pnl_current_pct = (current_price - entry_price) / entry_price * 100.0
-        try:
-            mom_current = None if momentum_2h_pct is None else float(momentum_2h_pct)
-        except (TypeError, ValueError):
-            mom_current = None
-        weak_mom = mom_current is None or mom_current <= float(stale_params["momentum_below"])
-        decision_norm = str(current_decision or "").strip().upper()
-        weak_decision = decision_norm in ("HOLD", "SELL")
-        min_age = timedelta(minutes=int(stale_params["min_age_minutes"]))
-        if (
-            age >= min_age
-            and pnl_current_pct <= float(stale_params["max_pnl_pct"])
-            and weak_mom
-            and weak_decision
-        ):
-            # Реплей (diagnose_hanger / replay_game5m_on_bars) задаёт simulation_time — не путать с живым кроном.
-            _stale_log = logger.info if simulation_time is None else logger.debug
-            _stale_log(
-                "GAME_5M %s: stale/reversal exit — age=%s мин, PnL=%.2f%% <= %.2f%%, "
-                "mom2h=%s <= %.2f%%, decision=%s",
-                open_position.get("ticker", "?"),
-                int(age.total_seconds() // 60),
-                pnl_current_pct,
-                float(stale_params["max_pnl_pct"]),
-                "—" if mom_current is None else f"{mom_current:+.2f}%",
-                float(stale_params["momentum_below"]),
-                decision_norm or "—",
-            )
-            return True, "TIME_EXIT_EARLY", "stale_reversal"
+    # Stale/reversal (PnL по close ≥ 0): как раньше, после тейка/стопа; при close < 0 — см. выше.
+    if (
+        isinstance(entry_price, (int, float))
+        and entry_price > 0
+        and pnl_close_pct is not None
+        and pnl_close_pct >= 0
+    ):
+        stale_hit, stale_sig, stale_det = _try_stale_reversal_exit(
+            open_position,
+            entry_price=float(entry_price),
+            current_price=float(current_price),
+            momentum_2h_pct=momentum_2h_pct,
+            current_decision=current_decision,
+            age=age,
+            simulation_time=simulation_time,
+        )
+        if stale_hit:
+            return True, stale_sig, stale_det
 
     if _game_5m_exit_only_take():
         return False, "", ""
@@ -1773,43 +1895,23 @@ def should_close_position(
     if age > timedelta(days=_max_position_days(open_position.get("ticker"))):
         return True, "TIME_EXIT", "max_hold_days"
 
-    # Early de-risk: если позиция долго в просадке и импульс/сигнал не поддерживают — закрываем раньше TIME_EXIT.
-    # По умолчанию выключено.
-    try:
-        dr_enabled = (get_config_value("GAME_5M_EARLY_DERISK_ENABLED", "false") or "false").strip().lower() in (
-            "1",
-            "true",
-            "yes",
+    # Early de-risk (PnL по close ≥ 0): после тейка; при close < 0 — см. блок выше (до тейка).
+    if (
+        isinstance(entry_price, (int, float))
+        and entry_price > 0
+        and pnl_close_pct is not None
+        and pnl_close_pct >= 0
+    ):
+        derisk_hit, derisk_sig, derisk_det = _try_early_derisk_exit(
+            open_position,
+            entry_price=float(entry_price),
+            current_price=float(current_price),
+            momentum_2h_pct=momentum_2h_pct,
+            current_decision=current_decision,
+            age=age,
         )
-    except Exception:
-        dr_enabled = False
-    if dr_enabled and isinstance(entry_price, (int, float)) and entry_price > 0:
-        try:
-            min_age_min = int((get_config_value("GAME_5M_EARLY_DERISK_MIN_AGE_MINUTES", "180") or "180").strip())
-        except (ValueError, TypeError):
-            min_age_min = 180
-        try:
-            max_loss_pct = float((get_config_value("GAME_5M_EARLY_DERISK_MAX_LOSS_PCT", "-2.0") or "-2.0").strip())
-        except (ValueError, TypeError):
-            max_loss_pct = -2.0
-        try:
-            weak_mom_below = float((get_config_value("GAME_5M_EARLY_DERISK_MOMENTUM_BELOW", "0.0") or "0.0").strip())
-        except (ValueError, TypeError):
-            weak_mom_below = 0.0
-        pnl_current_pct = (current_price - entry_price) / entry_price * 100.0
-        weak_mom = momentum_2h_pct is None or float(momentum_2h_pct) <= weak_mom_below
-        weak_decision = current_decision in ("HOLD", "SELL")
-        if age >= timedelta(minutes=max(15, min_age_min)) and pnl_current_pct <= max_loss_pct and weak_mom and weak_decision:
-            logger.info(
-                "GAME_5M %s: early de-risk — age=%s мин, PnL=%.2f%% <= %.2f%%, mom2h=%s, decision=%s",
-                open_position.get("ticker", "?"),
-                int(age.total_seconds() // 60),
-                pnl_current_pct,
-                max_loss_pct,
-                "—" if momentum_2h_pct is None else f"{float(momentum_2h_pct):+.2f}%",
-                current_decision,
-            )
-            return True, "TIME_EXIT_EARLY", "early_derisk"
+        if derisk_hit:
+            return True, derisk_sig, derisk_det
     # Важное правило твоего сценария:
     # SELL используем только как рекомендацию (в момент входа), но НЕ как причину выхода
     # для уже открытой позиции. Автозакрытие происходит только по TAKE_PROFIT / TIME_EXIT
