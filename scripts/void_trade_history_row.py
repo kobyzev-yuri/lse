@@ -12,6 +12,7 @@ import argparse
 import json
 import sys
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
@@ -20,6 +21,14 @@ sys.path.insert(0, str(project_root))
 from sqlalchemy import create_engine, text
 
 from config_loader import get_database_url
+
+
+def _json_safe(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
 
 
 def main() -> int:
@@ -57,9 +66,7 @@ def main() -> int:
             "voided_at_utc": datetime.now(timezone.utc).isoformat(),
             "reason": args.reason,
             "note": args.note,
-            "trade": {
-                **{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in record.items()},
-            },
+            "trade": {k: _json_safe(v) for k, v in record.items()},
         }
         print(json.dumps(audit, ensure_ascii=False, indent=2)[:2000])
 
