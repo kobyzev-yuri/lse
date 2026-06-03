@@ -638,6 +638,12 @@ class ExecutionAgent:
             reason,
             strategy_name or "N/A",
         )
+        entry_px = float(position.entry_price)
+        pnl_pct = (
+            100.0 * (current_price - entry_px) / entry_px
+            if entry_px > 0
+            else None
+        )
         self._trades_done_this_run.append({
             "ts": datetime.now(),
             "ticker": ticker,
@@ -646,6 +652,7 @@ class ExecutionAgent:
             "price": current_price,
             "signal_type": signal_type,
             "strategy_name": (strategy_name or "").strip() or "Portfolio",
+            "pnl_pct": pnl_pct,
         })
 
     # ---------- Ручная торговля (песочница / Telegram) ----------
@@ -853,6 +860,58 @@ class ExecutionAgent:
             for r in rows
         ]
 
+    def last_buy_price_for_sell(
+        self,
+        ticker: str,
+        *,
+        strategy_name: str | None = None,
+        before_ts: datetime | None = None,
+    ) -> float | None:
+        """Цена последнего BUY по тикеру (и стратегии) перед SELL — для P/L % в уведомлениях."""
+        ticker_u = str(ticker or "").strip().upper()
+        if not ticker_u:
+            return None
+        strat = (strategy_name or "").strip()
+        q = """
+            SELECT price FROM trade_history
+            WHERE UPPER(TRIM(ticker)) = :ticker AND side = 'BUY'
+        """
+        params: dict = {"ticker": ticker_u}
+        if strat:
+            q += " AND TRIM(COALESCE(strategy_name, '')) = :strategy"
+            params["strategy"] = strat
+        if before_ts is not None:
+            q += " AND ts <= :before_ts"
+            params["before_ts"] = before_ts
+        q += " ORDER BY ts DESC LIMIT 1"
+        with self.engine.connect() as conn:
+            row = conn.execute(text(q), params).fetchone()
+        if not row or row[0] is None:
+            return None
+        try:
+            px = float(row[0])
+            return px if px > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def enrich_trade_pnl_pct(self, trade: dict) -> dict:
+        """Добавляет pnl_pct к SELL, если ещё нет (для Telegram после чтения из БД)."""
+        if (trade.get("side") or "").upper() != "SELL":
+            return trade
+        if trade.get("pnl_pct") is not None:
+            return trade
+        entry = self.last_buy_price_for_sell(
+            trade.get("ticker", ""),
+            strategy_name=trade.get("strategy_name"),
+            before_ts=trade.get("ts"),
+        )
+        sell_px = trade.get("price")
+        if entry is None or not isinstance(sell_px, (int, float)) or sell_px <= 0:
+            return trade
+        out = dict(trade)
+        out["pnl_pct"] = 100.0 * (float(sell_px) - entry) / entry
+        return out
+
     def get_recent_trades(
         self,
         minutes_ago: int = 5,
@@ -872,7 +931,7 @@ class ExecutionAgent:
         query += " ORDER BY ts DESC LIMIT :limit"
         with self.engine.connect() as conn:
             rows = conn.execute(text(query), params).fetchall()
-        return [
+        trades = [
             {
                 "ts": r[0],
                 "ticker": r[1],
@@ -885,6 +944,7 @@ class ExecutionAgent:
             }
             for r in rows
         ]
+        return [self.enrich_trade_pnl_pct(t) for t in trades]
 
     def set_open_position_strategy(self, ticker: str, strategy_name: str) -> bool:
         """

@@ -42,6 +42,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _portfolio_trade_pnl_suffix(trade: dict) -> str:
+    """P/L % для SELL в Telegram (как в GAME_5M cron)."""
+    if (trade.get("side") or "").upper() != "SELL":
+        return ""
+    pnl = trade.get("pnl_pct")
+    if pnl is None:
+        return ""
+    try:
+        return ", PnL %+.2f%%" % float(pnl)
+    except (TypeError, ValueError):
+        return ""
+
+
 def _notify_portfolio_trades(agent: ExecutionAgent) -> None:
     """Отправить в Telegram уведомления о сделках портфельной игры. Сначала — сделки этого запуска (тейк/стоп), иначе — за последние 5 мин из БД."""
     token = get_config_value("TELEGRAM_BOT_TOKEN", "").strip()
@@ -54,12 +67,14 @@ def _notify_portfolio_trades(agent: ExecutionAgent) -> None:
     # Исключаем GAME_5M — те уведомляет send_sndk_signal_cron
     trades = [r for r in trades if (r.get("strategy_name") or "").strip() != "GAME_5M"]
     for r in trades:
+        r = agent.enrich_trade_pnl_pct(r)
         ts = r["ts"].strftime("%Y-%m-%d %H:%M") if hasattr(r["ts"], "strftime") else str(r["ts"])
         side_emoji = "🟢" if r["side"] == "BUY" else "🔴"
         strat = r.get("strategy_name", "—")
+        pnl_str = _portfolio_trade_pnl_suffix(r)
         text = (
             f"{side_emoji} Портфель {r['side']} {r['ticker']} x{r['quantity']:.0f} "
-            f"@ ${r['price']:.2f} ({r['signal_type']}) [{strat}]\n{ts}"
+            f"@ ${r['price']:.2f} ({r['signal_type']}) [{strat}]{pnl_str}\n{ts}"
         )
         for cid in chat_ids:
             try:
