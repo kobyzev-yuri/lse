@@ -145,29 +145,164 @@ def sec_8k_filings_near_date(
     return out
 
 
+def _fool_day_window() -> int:
+    try:
+        return max(0, int((get_config_value("EARNINGS_FOOL_PROBE_DAY_WINDOW", "1") or "1").strip()))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _fool_calendar_dates(event_date: date) -> list[date]:
+    """Fool paths often use publication date (event_date + 0..1 day), not always report day."""
+    w = _fool_day_window()
+    days = [event_date + timedelta(days=offset) for offset in range(-w, w + 1)]
+    seen: set[date] = set()
+    out: list[date] = []
+    for d in days:
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def _fiscal_quarter_suffixes(event_date: date) -> tuple[str, ...]:
+    """Best-effort US earnings-season quarter slug (Apr–Jun ≈ Q1 for many tech names)."""
+    m = event_date.month
+    y = event_date.year
+    if m in (1, 2, 3):
+        q, fy = 4, y - 1
+    elif m in (4, 5, 6):
+        q, fy = 1, y
+    elif m in (7, 8, 9):
+        q, fy = 2, y
+    else:
+        q, fy = 3, y
+    return (
+        f"q{q}-{fy}-earnings-call-transcript",
+        f"q{fy}-earnings-call-transcript",
+        f"q{q}-{fy}-earnings-transcript",
+        "earnings-call-transcript",
+        "earnings-transcript",
+    )
+
+
 def _fool_url_candidates(symbol: str, event_date: date) -> list[str]:
     sym = symbol.strip().upper()
     slugs = FOOL_SLUG_HINTS.get(sym, (f"{sym.lower()}-{sym.lower()}",))
-    y, m, d = event_date.year, event_date.month, event_date.day
-    base = f"https://www.fool.com/earnings/call-transcripts/{y:04d}/{m:02d}/{d:02d}"
-    suffixes = (
-        "earnings-call-transcript",
-        "earnings-transcript",
-        "q1-2026-earnings-call-transcript",
-        "q2-2026-earnings-call-transcript",
-        "q3-2026-earnings-call-transcript",
-        "q4-2026-earnings-call-transcript",
-    )
+    suffixes = _fiscal_quarter_suffixes(event_date)
     urls: list[str] = []
-    for slug in slugs:
-        for suffix in suffixes:
-            urls.append(f"{base}/{slug}-{suffix}/")
+    for ev_d in _fool_calendar_dates(event_date):
+        y, m, d = ev_d.year, ev_d.month, ev_d.day
+        base = f"https://www.fool.com/earnings/call-transcripts/{y:04d}/{m:02d}/{d:02d}"
+        for slug in slugs:
+            for suffix in suffixes:
+                urls.append(f"{base}/{slug}-{suffix}/")
     seen: set[str] = set()
     out: list[str] = []
     for u in urls:
         if u not in seen:
             seen.add(u)
             out.append(u)
+    return out
+
+
+_EXHIBIT_LINK_RE = re.compile(
+    r'href=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+_EXHIBIT_HINTS = (
+    "transcript",
+    "earnings-call",
+    "earnings_call",
+    "earnings call",
+    "conference-call",
+    "confcall",
+)
+
+
+def _sec_filing_index_url(cik: str, accession: str) -> str | None:
+    acc = (accession or "").strip()
+    if not acc:
+        return None
+    acc_flat = _accession_no_dashes(acc)
+    folder = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_flat}/"
+    if "-" in acc:
+        return folder + acc + "-index.htm"
+    return None
+
+
+def sec_8k_exhibit_materials_near_date(
+    symbol: str,
+    event_date: date,
+    *,
+    window_days: int = 5,
+) -> list[CatalogMaterial]:
+    """Parse SEC 8-K filing index for exhibit .htm/.txt transcripts (not only primary 8-K body)."""
+    sym = symbol.strip().upper()
+    cik = TICKER_CIK.get(sym)
+    if not cik:
+        return []
+    payload = _load_sec_submissions(cik)
+    if not payload:
+        return []
+    recent = (payload.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    filing_dates = recent.get("filingDate") or []
+    accession_numbers = recent.get("accessionNumber") or []
+    primary_docs = recent.get("primaryDocument") or []
+    lo = event_date - timedelta(days=window_days)
+    hi = event_date + timedelta(days=window_days)
+    out: list[CatalogMaterial] = []
+    seen_urls: set[str] = set()
+    for form, fdate_s, accession, primary in zip(forms, filing_dates, accession_numbers, primary_docs):
+        if str(form).upper() != "8-K":
+            continue
+        try:
+            fdate = date.fromisoformat(str(fdate_s)[:10])
+        except ValueError:
+            continue
+        if fdate < lo or fdate > hi:
+            continue
+        index_url = _sec_filing_index_url(cik, str(accession))
+        if not index_url:
+            continue
+        try:
+            resp = _sec_session().get(index_url, timeout=25)
+            if resp.status_code != 200:
+                continue
+            html = resp.text or ""
+        except Exception as e:
+            logger.debug("SEC index fetch failed %s: %s", index_url, e)
+            continue
+        base_folder = index_url.rsplit("/", 1)[0] + "/"
+        for m in _EXHIBIT_LINK_RE.finditer(html):
+            href = (m.group(1) or "").strip()
+            if not href or href.startswith("#"):
+                continue
+            low = href.lower()
+            if not any(h in low for h in _EXHIBIT_HINTS):
+                continue
+            if not (low.endswith(".htm") or low.endswith(".html") or low.endswith(".txt")):
+                continue
+            if low.startswith("http"):
+                url = href
+            else:
+                url = base_folder + href.lstrip("/")
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            out.append(
+                CatalogMaterial(
+                    symbol=sym,
+                    event_date=event_date,
+                    fiscal_period=None,
+                    material_type="transcript",
+                    source_name="SEC EDGAR exhibit",
+                    source_url=url,
+                    title=f"{sym} 8-K exhibit transcript ({fdate.isoformat()})",
+                    meta={"auto_source": "sec_8k_exhibit", "filing_date": fdate.isoformat(), "accession": accession},
+                )
+            )
     return out
 
 
@@ -219,16 +354,24 @@ def _probe_fool_url(url: str) -> tuple[bool, bool]:
         return False, False
 
 
+def _default_fool_max_probe() -> int:
+    try:
+        return max(6, int((get_config_value("EARNINGS_FOOL_MAX_PROBE", "18") or "18").strip()))
+    except (TypeError, ValueError):
+        return 18
+
+
 def fool_transcript_near_date(
     symbol: str,
     event_date: date,
     *,
-    max_probe: int = 6,
+    max_probe: int | None = None,
 ) -> CatalogMaterial | None:
     if fool_rate_limit_active():
         return None
+    probe_limit = max_probe if max_probe is not None else _default_fool_max_probe()
     pause_s = 0.35
-    for url in _fool_url_candidates(symbol, event_date)[: max(1, max_probe)]:
+    for url in _fool_url_candidates(symbol, event_date)[: max(1, probe_limit)]:
         ok, limited = _probe_fool_url(url)
         if limited:
             _set_fool_rate_limit_cooldown()
@@ -256,7 +399,9 @@ def auto_materials_for_event(
     *,
     include_sec: bool = True,
     include_fool: bool = True,
-    fool_max_probe: int = 6,
+    include_sec_exhibits: bool = True,
+    include_catalog: bool = True,
+    fool_max_probe: int | None = None,
 ) -> tuple[CatalogMaterial, ...]:
     sym = symbol.strip().upper()
     rows: list[CatalogMaterial] = []
@@ -270,8 +415,16 @@ def auto_materials_for_event(
         seen_urls.add(cm.source_url)
         rows.append(cm)
 
+    if include_catalog:
+        from services.earnings_material_catalog import catalog_for_event
+
+        for cm in catalog_for_event(sym, event_date):
+            add(cm)
     if include_sec:
         for cm in sec_8k_filings_near_date(sym, event_date):
+            add(cm)
+    if include_sec_exhibits:
+        for cm in sec_8k_exhibit_materials_near_date(sym, event_date):
             add(cm)
     if include_fool:
         add(fool_transcript_near_date(sym, event_date, max_probe=fool_max_probe))

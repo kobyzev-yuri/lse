@@ -221,6 +221,36 @@ CATALOG_MATERIALS: tuple[CatalogMaterial, ...] = (
         source_url="https://www.fool.com/earnings/call-transcripts/2026/05/05/astera-labs-alab-q1-2026-earnings-transcript/",
         title="Astera Labs Q1 2026 earnings call transcript",
     ),
+    # NBIS Q1 2026 — Fool exists; autoprep often skips Fool when 429 cooldown (use catalog).
+    CatalogMaterial(
+        symbol="NBIS",
+        event_date=date(2026, 5, 13),
+        fiscal_period="Q1 2026",
+        material_type="third_party_transcript",
+        source_name="The Motley Fool",
+        source_url="https://www.fool.com/earnings/call-transcripts/2026/05/13/nebius-nbis-q1-2026-earnings-transcript/",
+        title="Nebius Q1 2026 earnings call transcript",
+        meta={"primary_source": True},
+    ),
+    # AMD Q1 2026 — report 2026-05-05; Fool published 2026-05-06 (day-window probe).
+    CatalogMaterial(
+        symbol="AMD",
+        event_date=date(2026, 5, 5),
+        fiscal_period="Q1 2026",
+        material_type="third_party_transcript",
+        source_name="The Motley Fool",
+        source_url="https://www.fool.com/earnings/call-transcripts/2026/05/06/amd-amd-q1-2026-earnings-call-transcript/",
+        title="AMD Q1 2026 earnings call transcript",
+    ),
+    CatalogMaterial(
+        symbol="AMD",
+        event_date=date(2026, 5, 5),
+        fiscal_period="Q1 2026",
+        material_type="press_release",
+        source_name="AMD IR",
+        source_url="https://ir.amd.com/news-events/press-releases/detail/1284/amd-reports-first-quarter-2026-financial-results",
+        title="AMD Q1 2026 press release",
+    ),
 )
 
 
