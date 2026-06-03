@@ -1363,7 +1363,7 @@ def _game_5m_position_age_minutes(open_position: dict, *, ref: Optional[datetime
         else:
             et = et.tz_convert(CHART_DISPLAY_TZ)
         if rt.tzinfo is None:
-            rt = rt.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+            rt = rt.tz_localize(TRADE_HISTORY_TZ, ambiguous=True).tz_convert(CHART_DISPLAY_TZ)
         else:
             rt = rt.tz_convert(CHART_DISPLAY_TZ)
         return max(0.0, float((rt - et).total_seconds() / 60.0))
@@ -1575,7 +1575,8 @@ def _position_age_for_exit(
     else:
         et = et.tz_convert(CHART_DISPLAY_TZ)
     if rt.tzinfo is None:
-        rt = rt.tz_localize(CHART_DISPLAY_TZ, ambiguous=True)
+        # Как entry_ts: naive ref = wall clock в TRADE_HISTORY_TZ (MSK в trade_history), не ET.
+        rt = rt.tz_localize(TRADE_HISTORY_TZ, ambiguous=True).tz_convert(CHART_DISPLAY_TZ)
     else:
         rt = rt.tz_convert(CHART_DISPLAY_TZ)
     age = rt - et
