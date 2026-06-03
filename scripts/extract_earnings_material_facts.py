@@ -135,8 +135,33 @@ def _detail_has_llm_extraction(engine, kb_id: int) -> bool:
     return bool(isinstance(gs, dict) and gs.get("extraction_meta"))
 
 
+def _load_existing_guidance(engine, kb_id: int) -> dict[str, Any]:
+    q = text("SELECT guidance_summary FROM earnings_event_detail WHERE knowledge_base_id = :kb_id")
+    with engine.connect() as conn:
+        row = conn.execute(q, {"kb_id": kb_id}).first()
+    if not row or not row[0]:
+        return {}
+    gs = row[0]
+    if isinstance(gs, str):
+        try:
+            gs = json.loads(gs)
+        except json.JSONDecodeError:
+            return {}
+    return gs if isinstance(gs, dict) else {}
+
+
+def _merge_scenario_hints(existing: dict[str, Any], incoming: dict[str, Any]) -> None:
+    """Do not overwrite non-empty scenario_hints with an empty list from a weak re-extract."""
+    old_hints = existing.get("scenario_hints")
+    new_hints = incoming.get("scenario_hints")
+    if isinstance(old_hints, list) and len(old_hints) > 0:
+        if not isinstance(new_hints, list) or len(new_hints) == 0:
+            incoming["scenario_hints"] = old_hints
+
+
 def _upsert_event_detail(engine, *, kb_id: int, payload: dict[str, Any], extraction_meta: dict[str, Any]) -> None:
     guidance = dict(payload.get("guidance_summary") or {})
+    _merge_scenario_hints(_load_existing_guidance(engine, kb_id), guidance)
     guidance["extraction_meta"] = extraction_meta
     q = text(
         """
