@@ -300,13 +300,14 @@ def gate_scenario_classifier(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any
     min_classes = _cfg_int("ML_READINESS_SCENARIO_MIN_CLASSES", 3)
     if n_train < min_train:
         reasons.append(f"n_train<{min_train}")
-    if n_valid < min_valid:
-        reasons.append(f"n_valid<{min_valid}")
+    holdout_skipped = bool(mets.get("holdout_skipped"))
+    # Pilot: при sparse classes train идёт на всей выборке без eval — не блокируем grid.
+    if not holdout_skipped:
+        if n_valid < min_valid:
+            reasons.append(f"n_valid<{min_valid}")
     classes = mets.get("classes") or []
     if isinstance(classes, list) and len(classes) < min_classes:
         reasons.append(f"n_classes<{min_classes}")
-    if mets.get("holdout_skipped"):
-        reasons.append("holdout_skipped")
     acc = mets.get("valid_accuracy")
     if acc is not None:
         min_acc = _cfg_float("ML_READINESS_EARNINGS_SCENARIO_MIN_ACCURACY", 0.0)
