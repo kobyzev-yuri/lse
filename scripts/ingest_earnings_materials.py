@@ -244,13 +244,18 @@ def main() -> int:
     if args.new_events_only:
         from datetime import datetime
 
-        from services.earnings_calendar_new_events import load_pending_calendar_events, pending_event_keys
+        from services.earnings_calendar_new_events import (
+            load_materials_pipeline_calendar_events,
+            pending_event_keys,
+        )
 
         since_d = datetime.strptime(args.since.strip()[:10], "%Y-%m-%d").date()
         sym_set = {args.symbol.strip().upper()} if args.symbol.strip() else None
-        pending = load_pending_calendar_events(engine, since=since_d, symbols=sym_set, limit=max(1, args.limit * 4))
+        pending = load_materials_pipeline_calendar_events(
+            engine, since=since_d, symbols=sym_set, limit=max(1, args.limit * 4)
+        )
         pending_keys = pending_event_keys(pending)
-        logger.info("New-events-only ingest: pending calendar events=%s", len(pending_keys))
+        logger.info("New-events-only ingest: pipeline calendar events=%s", len(pending_keys))
 
     rows = _load_rows(
         engine,

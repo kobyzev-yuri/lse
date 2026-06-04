@@ -135,6 +135,15 @@ def _detail_has_llm_extraction(engine, kb_id: int) -> bool:
     return bool(isinstance(gs, dict) and gs.get("extraction_meta"))
 
 
+def _detail_needs_reextract(engine, kb_id: int) -> bool:
+    """Re-run when prior extract left empty scenario_hints (thin SEC-only pass)."""
+    guidance = _load_existing_guidance(engine, kb_id)
+    if not guidance.get("extraction_meta"):
+        return False
+    hints = guidance.get("scenario_hints")
+    return not isinstance(hints, list) or len(hints) == 0
+
+
 def _load_existing_guidance(engine, kb_id: int) -> dict[str, Any]:
     q = text("SELECT guidance_summary FROM earnings_event_detail WHERE knowledge_base_id = :kb_id")
     with engine.connect() as conn:
@@ -265,9 +274,12 @@ def main() -> int:
     engine = get_engine()
     pending_keys: set[tuple[str, date]] | None = None
     if args.new_events_only:
-        from services.earnings_calendar_new_events import load_pending_calendar_events, pending_event_keys
+        from services.earnings_calendar_new_events import (
+            load_materials_pipeline_calendar_events,
+            pending_event_keys,
+        )
 
-        pending = load_pending_calendar_events(
+        pending = load_materials_pipeline_calendar_events(
             engine,
             since=_parse_date(args.since),
             symbols=symbols,
@@ -305,7 +317,15 @@ def main() -> int:
             event_date=event_date,
             fallback=next((m.get("knowledge_base_id") for m in materials if m.get("knowledge_base_id")), None),
         )
-        if kb_id_precheck and _detail_has_llm_extraction(engine, kb_id_precheck) and not args.force_reextract:
+        needs_reextract = bool(
+            kb_id_precheck and _detail_needs_reextract(engine, kb_id_precheck)
+        )
+        if (
+            kb_id_precheck
+            and _detail_has_llm_extraction(engine, kb_id_precheck)
+            and not args.force_reextract
+            and not needs_reextract
+        ):
             logger.info("%s %s skip: LLM extraction already in earnings_event_detail", symbol, event_date)
             results.append(
                 {

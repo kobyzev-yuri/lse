@@ -57,7 +57,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--skip-kb-yfinance", action="store_true")
     ap.add_argument("--skip-readiness", action="store_true")
-    ap.add_argument("--no-auto-fool", action="store_true", default=True, help="Skip Fool probing (default for cron)")
+    ap.add_argument("--no-auto-fool", action="store_true", help="Skip Motley Fool transcript probing on sync")
     ap.add_argument("--auto-fool", action="store_false", dest="no_auto_fool")
     ap.add_argument(
         "--new-events-only",
@@ -104,13 +104,15 @@ def main() -> int:
         from datetime import datetime as dt_parse
 
         from report_generator import get_engine
-        from services.earnings_calendar_new_events import load_pending_calendar_events
+        from services.earnings_calendar_new_events import load_materials_pipeline_calendar_events
 
         since_d = dt_parse.strptime(args.since.strip()[:10], "%Y-%m-%d").date()
         pending_count = len(
-            load_pending_calendar_events(get_engine(), since=since_d, symbols=sym_set, limit=max(1, args.sync_limit))
+            load_materials_pipeline_calendar_events(
+                get_engine(), since=since_d, symbols=sym_set, limit=max(1, args.sync_limit)
+            )
         )
-        logger.info("Pending calendar events (no LLM extract yet): %s", pending_count)
+        logger.info("Materials pipeline calendar events: %s", pending_count)
         if pending_count == 0:
             logger.info("No new/in-progress calendar events — skipping materials sync/ingest/extract")
             steps["materials_sync"] = 0

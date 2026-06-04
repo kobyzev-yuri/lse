@@ -398,26 +398,26 @@ def build_sync_rows(
     seen: set[tuple[str, str | None, str, str]] = set()
 
     pending_keys: set[tuple[str, date]] | None = None
-    brand_new_keys: set[tuple[str, date]] | None = None
     if new_events_only:
         from services.earnings_calendar_new_events import (
-            brand_new_event_keys as _brand_new_keys,
-            load_pending_calendar_events,
+            brand_new_event_keys,
+            load_materials_pipeline_calendar_events,
             pending_event_keys as _pending_keys,
         )
 
-        pending_events = load_pending_calendar_events(
+        pending_events = load_materials_pipeline_calendar_events(
             engine,
             since=since,
             symbols=symbols,
             limit=limit,
         )
         pending_keys = _pending_keys(pending_events)
-        brand_new_keys = _brand_new_keys(pending_events)
+        n_enrich = sum(1 for ev in pending_events if "missing_rich_material" in str(ev.get("pipeline_reason") or ""))
         logger.info(
-            "New-events-only: pending=%s brand_new=%s",
+            "New-events-only: pipeline_events=%s brand_new=%s missing_rich_material=%s",
             len(pending_keys),
-            len(brand_new_keys),
+            len(brand_new_event_keys(pending_events)),
+            n_enrich,
         )
         if not pending_keys:
             return rows
@@ -428,13 +428,6 @@ def build_sync_rows(
         if not isinstance(ev_date, date):
             return False
         return (sym.upper(), ev_date) in pending_keys
-
-    def event_is_brand_new(sym: str, ev_date: date | None) -> bool:
-        if brand_new_keys is None:
-            return True
-        if not isinstance(ev_date, date):
-            return False
-        return (sym.upper(), ev_date) in brand_new_keys
 
     def add(row: SyncRow) -> None:
         key = (
@@ -463,21 +456,20 @@ def build_sync_rows(
             continue
         if not event_allowed(sym, ev_date):
             continue
-        if event_is_brand_new(sym, ev_date):
-            catalog_rows = catalog_for_event(sym, ev_date)
-            for cm in catalog_rows:
-                add(_catalog_row(cm, kb_id=kb_id, sync_source="kb+catalog"))
-            if auto_sec or auto_fool:
-                known_urls = {cm.source_url for cm in catalog_rows}
-                for cm in auto_materials_for_event(
-                    sym,
-                    ev_date,
-                    include_sec=auto_sec,
-                    include_fool=auto_fool,
-                ):
-                    if cm.source_url in known_urls:
-                        continue
-                    add(_catalog_row(cm, kb_id=kb_id, sync_source="auto_sources"))
+        catalog_rows = catalog_for_event(sym, ev_date)
+        for cm in catalog_rows:
+            add(_catalog_row(cm, kb_id=kb_id, sync_source="kb+catalog"))
+        if auto_sec or auto_fool:
+            known_urls = {cm.source_url for cm in catalog_rows}
+            for cm in auto_materials_for_event(
+                sym,
+                ev_date,
+                include_sec=auto_sec,
+                include_fool=auto_fool,
+            ):
+                if cm.source_url in known_urls:
+                    continue
+                add(_catalog_row(cm, kb_id=kb_id, sync_source="auto_sources"))
 
     if (auto_sec or auto_fool) and not new_events_only:
         for sym, ev_date in _load_orphan_material_events(engine, symbols):

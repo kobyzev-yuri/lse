@@ -216,6 +216,14 @@ _EXHIBIT_HINTS = (
     "earnings call",
     "conference-call",
     "confcall",
+    "ex99",
+    "ex-99",
+    "exhibit99",
+    "exhibit-99",
+    "exhibit 99",
+    "earnings release",
+    "financial results",
+    "press-release",
 )
 
 
