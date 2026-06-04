@@ -293,6 +293,8 @@ def sec_8k_exhibit_materials_near_date(
                 continue
             if low.startswith("http"):
                 url = href
+            elif href.startswith("/"):
+                url = "https://www.sec.gov" + href
             else:
                 url = base_folder + href.lstrip("/")
             if url in seen_urls:

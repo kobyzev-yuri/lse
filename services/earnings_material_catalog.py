@@ -251,6 +251,47 @@ CATALOG_MATERIALS: tuple[CatalogMaterial, ...] = (
         source_url="https://ir.amd.com/news-events/press-releases/detail/1284/amd-reports-first-quarter-2026-financial-results",
         title="AMD Q1 2026 press release",
     ),
+    # AMZN / GOOGL / ANET / DELL — Fool in catalog (no probe); SEC ex99 via auto after URL fix.
+    CatalogMaterial(
+        symbol="AMZN",
+        event_date=date(2026, 4, 29),
+        fiscal_period="Q1 2026",
+        material_type="third_party_transcript",
+        source_name="The Motley Fool",
+        source_url="https://www.fool.com/earnings/call-transcripts/2026/04/29/amazon-amzn-q1-2026-earnings-call-transcript/",
+        title="Amazon Q1 2026 earnings call transcript",
+        meta={"primary_source": True},
+    ),
+    CatalogMaterial(
+        symbol="GOOGL",
+        event_date=date(2026, 4, 29),
+        fiscal_period="Q1 2026",
+        material_type="third_party_transcript",
+        source_name="The Motley Fool",
+        source_url="https://www.fool.com/earnings/call-transcripts/2026/04/29/alphabet-googl-q1-2026-earnings-call-transcript/",
+        title="Alphabet Q1 2026 earnings call transcript",
+        meta={"primary_source": True},
+    ),
+    CatalogMaterial(
+        symbol="ANET",
+        event_date=date(2026, 5, 5),
+        fiscal_period="Q1 2026",
+        material_type="third_party_transcript",
+        source_name="The Motley Fool",
+        source_url="https://www.fool.com/earnings/call-transcripts/2026/05/05/arista-anet-q1-2026-earnings-transcript/",
+        title="Arista Q1 2026 earnings call transcript",
+        meta={"primary_source": True},
+    ),
+    CatalogMaterial(
+        symbol="DELL",
+        event_date=date(2026, 2, 26),
+        fiscal_period="FY2026 Q4",
+        material_type="third_party_transcript",
+        source_name="The Motley Fool",
+        source_url="https://www.fool.com/earnings/call-transcripts/2026/02/26/dell-dell-q4-2026-earnings-call-transcript/",
+        title="Dell Q4 FY2026 earnings call transcript",
+        meta={"primary_source": True},
+    ),
 )
 
 

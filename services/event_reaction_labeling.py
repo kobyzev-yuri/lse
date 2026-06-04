@@ -774,8 +774,10 @@ def labeling_updates_for_row(
     if want_o:
         if outs:
             out["outcomes_after"] = outs
-            out["final_label"] = label
-            out["label_source"] = "auto_quotes_v1"
+            preserved = str(row.get("label_source") or "").strip()
+            if preserved not in ("llm_scenario_v0", "manual"):
+                out["final_label"] = label
+                out["label_source"] = "auto_quotes_v1"
         else:
             notes.append(f"outcomes:{reason}")
 

@@ -165,20 +165,6 @@ def main() -> int:
 
     py = sys.executable
 
-    if not args.skip_labels:
-        label_cmd = [
-            py,
-            "scripts/apply_earnings_scenario_labels.py",
-            "--dataset-version",
-            args.dataset_version,
-            "--universe",
-        ]
-        if data_dry_run:
-            label_cmd.append("--dry-run")
-        rc = _run(label_cmd)
-        if rc != 0:
-            return rc
-
     if not args.skip_outcomes:
         outcomes_cmd = [
             py,
@@ -195,6 +181,20 @@ def main() -> int:
         if data_dry_run:
             outcomes_cmd.append("--dry-run")
         rc = _run(outcomes_cmd)
+        if rc != 0:
+            return rc
+
+    if not args.skip_labels:
+        label_cmd = [
+            py,
+            "scripts/apply_earnings_scenario_labels.py",
+            "--dataset-version",
+            args.dataset_version,
+            "--universe",
+        ]
+        if data_dry_run:
+            label_cmd.append("--dry-run")
+        rc = _run(label_cmd)
         if rc != 0:
             return rc
 
