@@ -128,6 +128,66 @@ def evaluate_multiday_entry_gate(d5: Dict[str, Any]) -> Dict[str, Any]:
     return base
 
 
+def evaluate_multiday_overnight_gate(d5: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Медвежий multiday → не держать лонг overnight / принудительный EOD flat (mode=apply в кроне).
+    Логика та же, что у entry gate; отдельный env для поэтапного rollout.
+    """
+    mode = _env_mode("GAME_5M_MULTIDAY_OVERNIGHT_GATE_MODE", "none")
+    tau_1d = _env_float("GAME_5M_MULTIDAY_OVERNIGHT_TAU_1D_PCT", _env_float("GAME_5M_MULTIDAY_ENTRY_TAU_1D_PCT", 0.25))
+    tau_other = _env_float("GAME_5M_MULTIDAY_OVERNIGHT_TAU_PCT", _env_float("GAME_5M_MULTIDAY_ENTRY_TAU_PCT", 0.15))
+    neg_min = max(
+        1,
+        min(
+            3,
+            _env_int(
+                "GAME_5M_MULTIDAY_OVERNIGHT_NEGATIVE_HORIZONS_MIN",
+                _env_int("GAME_5M_MULTIDAY_ENTRY_NEGATIVE_HORIZONS_MIN", 2),
+            ),
+        ),
+    )
+
+    base: Dict[str, Any] = {
+        "gate": "overnight",
+        "mode": mode,
+        "tau_1d_pct": tau_1d,
+        "tau_pct": tau_other,
+        "negative_horizons_min": neg_min,
+        "status": "skipped",
+        "would_avoid_overnight": False,
+        "note": None,
+        "horizons_pct": {},
+    }
+
+    if mode == "none":
+        base["skip_reason"] = "gate_mode_none"
+        return base
+
+    if not _forecast_ok(d5):
+        base["status"] = "unavailable"
+        base["skip_reason"] = "multiday_forecast_unavailable"
+        return base
+
+    pcts = _horizon_pcts(d5)
+    base["horizons_pct"] = {k: v for k, v in pcts.items() if v is not None}
+
+    h1 = pcts.get("1d")
+    negatives = sum(1 for k in ("1d", "2d", "3d") if pcts.get(k) is not None and float(pcts[k]) < -tau_other)
+    strong_1d_bear = h1 is not None and float(h1) < -tau_1d
+    quorum_bear = negatives >= neg_min
+    would_avoid = bool(strong_1d_bear or quorum_bear)
+    reasons: List[str] = []
+    if strong_1d_bear:
+        reasons.append(f"1d={h1:+.3f}% < -{tau_1d}%")
+    if quorum_bear:
+        reasons.append(f"негативных горизонтов {negatives}>={neg_min} (τ={tau_other}%)")
+
+    base["status"] = "ok"
+    base["would_avoid_overnight"] = would_avoid
+    base["note"] = "; ".join(reasons) if would_avoid else "multiday не блокирует overnight"
+    return base
+
+
 def evaluate_multiday_hold_gate(
     d5: Dict[str, Any],
     *,

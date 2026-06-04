@@ -1697,6 +1697,7 @@ def should_close_position(
     session_phase: Optional[str] = None,
     simulation_time: Optional[datetime] = None,
     apply_hanger_json: Optional[bool] = None,
+    d5_context: Optional[dict] = None,
 ) -> Tuple[bool, str, str]:
     """Закрывать ли позицию: по тейку/стопу (цена), по истечении срока/сессии (TIME_EXIT), early de-risk (TIME_EXIT_EARLY).
 
@@ -1743,6 +1744,22 @@ def should_close_position(
 
     if current_price is None or current_price <= 0:
         return False, "", ""
+
+    try:
+        from services.game5m_overnight_policy import try_overnight_policy_exit
+
+        oh_hit, oh_sig, oh_det = try_overnight_policy_exit(
+            open_position,
+            d5=d5_context,
+            current_decision=current_decision,
+            current_price=current_price,
+            session_phase=session_phase,
+            simulation_time=simulation_time,
+        )
+        if oh_hit:
+            return oh_hit, oh_sig, oh_det
+    except Exception as e:
+        logger.debug("GAME_5M overnight policy: %s", e)
 
     entry_price = open_position.get("entry_price")
     pnl_close_pct: Optional[float] = None

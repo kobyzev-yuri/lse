@@ -9,6 +9,7 @@ from unittest.mock import patch
 from services.multiday_lr_gate import (
     evaluate_multiday_entry_gate,
     evaluate_multiday_hold_gate,
+    evaluate_multiday_overnight_gate,
     finalize_technical_decision_with_multiday,
 )
 
@@ -49,6 +50,22 @@ class TestMultidayEntryGate(unittest.TestCase):
             finalize_technical_decision_with_multiday(out)
         self.assertEqual(out["technical_decision_effective"], "HOLD")
         self.assertTrue(out["multiday_lr_entry_gate_applied"])
+
+
+class TestMultidayOvernightGate(unittest.TestCase):
+    def test_bearish_avoid_overnight(self):
+        env = {
+            "GAME_5M_MULTIDAY_OVERNIGHT_GATE_MODE": "log_only",
+            "GAME_5M_MULTIDAY_OVERNIGHT_TAU_1D_PCT": "0.1",
+        }
+        d5 = {
+            "multiday_lr_horizon_1d_pct_vs_spot": -0.5,
+            "multiday_lr_horizon_2d_pct_vs_spot": 0.0,
+            "multiday_lr_horizon_3d_pct_vs_spot": 0.0,
+        }
+        with patch.dict(os.environ, env, clear=False):
+            g = evaluate_multiday_overnight_gate(d5)
+        self.assertTrue(g["would_avoid_overnight"])
 
 
 class TestMultidayHoldGate(unittest.TestCase):

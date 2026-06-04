@@ -585,6 +585,7 @@ def process_ticker(
                 pullback_from_high_pct=d5.get("pullback_from_high_pct"),
                 session_phase=ms.get("session_phase"),
                 apply_hanger_json=apply_hanger_json,
+                d5_context=d5,
             )
             entry = open_pos.get("entry_price")
             entry_f = float(entry) if entry is not None and entry > 0 else None
@@ -948,6 +949,21 @@ def process_ticker(
         logger.info("%s: решение BUY, позиции нет, но сессия=%s — пропуск рассылки (вход только в регулярную сессию 9:30–16:00 ET)", ticker, session_phase)
         return False
 
+    try:
+        from services.game5m_overnight_policy import should_block_new_buy_for_overnight
+
+        ms_entry = d5.get("market_session") if isinstance(d5.get("market_session"), dict) else {}
+        block_overnight, block_reason = should_block_new_buy_for_overnight(d5, ms_entry)
+        if block_overnight:
+            logger.info(
+                "%s: пропуск нового входа — overnight policy (%s)",
+                ticker,
+                block_reason,
+            )
+            return False
+    except Exception as e:
+        logger.debug("%s: overnight entry block check: %s", ticker, e)
+
     cooldown_min = get_cooldown_minutes()
     last_sent = last_signal_sent_at(ticker)
     if last_sent:
@@ -1170,8 +1186,112 @@ def main():
         from services.recommend_5m import get_decision_5m, has_5m_data, build_5m_close_context, merge_close_context_with_trade_narrative
         ctx = get_market_session_context()
         phase = (ctx.get("session_phase") or "").strip()
-        if phase in ("PRE_MARKET", "WEEKEND", "HOLIDAY"):
-            logger.info("Биржа закрыта (сессия=%s), пропуск поллинга 5m до 9:30 ET", phase)
+        if phase in ("WEEKEND", "HOLIDAY"):
+            logger.info("Биржа закрыта (сессия=%s), пропуск поллинга 5m", phase)
+            sys.exit(0)
+        if phase == "PRE_MARKET":
+            from config_loader import get_config_value as _cfg_pm
+            from services.game5m_overnight_policy import should_premarket_auto_flat
+
+            pm_flat_enabled = (_cfg_pm("GAME_5M_PREMARKET_AUTO_FLAT_ENABLED", "false") or "false").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if not pm_flat_enabled:
+                logger.info("Премаркет (сессия=%s): GAME_5M_PREMARKET_AUTO_FLAT_ENABLED=false — пропуск", phase)
+                sys.exit(0)
+            tickers_pm = [
+                t.strip()
+                for t in (
+                    sys.argv[1].strip().split(",")
+                    if len(sys.argv) > 1 and sys.argv[1].strip()
+                    else get_tickers_game_5m()
+                )
+                if t.strip()
+            ]
+            tickers_pm = [t for t in tickers_pm if has_5m_data(t)]
+            from services.premarket import get_premarket_context
+
+            for ticker in tickers_pm:
+                try:
+                    open_pos = get_open_position_game5m_vwap(ticker)
+                    if not open_pos:
+                        continue
+                    d5_pm = get_decision_5m(ticker, use_llm_news=False)
+                    if not d5_pm or d5_pm.get("price") is None:
+                        continue
+                    pm_ctx = get_premarket_context(ticker)
+                    gap_pm = pm_ctx.get("premarket_gap_pct") if isinstance(pm_ctx, dict) else None
+                    do_flat, flat_reason = should_premarket_auto_flat(d5_pm, premarket_gap_pct=gap_pm)
+                    if not do_flat:
+                        continue
+                    price_pm = float(d5_pm["price"])
+                    close_ctx_pm = build_5m_close_context(d5_pm)
+                    decision_pm = d5_pm.get("technical_decision_core") or d5_pm.get("decision", "HOLD")
+                    should_close_pm, exit_type_pm, exit_detail_pm = should_close_position(
+                        open_pos,
+                        decision_pm,
+                        price_pm,
+                        momentum_2h_pct=close_ctx_pm.get("momentum_2h_pct"),
+                        bar_high=close_ctx_pm.get("bar_high"),
+                        bar_low=close_ctx_pm.get("bar_low"),
+                        rsi_5m=close_ctx_pm.get("rsi_5m"),
+                        pullback_from_high_pct=d5_pm.get("pullback_from_high_pct"),
+                        session_phase=phase,
+                        d5_context=d5_pm,
+                    )
+                    if not (should_close_pm and exit_type_pm):
+                        should_close_pm, exit_type_pm, exit_detail_pm = True, "TIME_EXIT", "overnight_premarket_flat"
+                    exit_price_pm = price_pm
+                    strat_nm = (open_pos.get("strategy_name") or "GAME_5M").strip() or "GAME_5M"
+                    entry_ctx_pm = get_latest_buy_context_json(ticker, strat_nm)
+                    close_ctx_enriched_pm = merge_close_context_with_trade_narrative(
+                        close_ctx_pm,
+                        d5=d5_pm,
+                        exit_type=exit_type_pm,
+                        exit_detail=exit_detail_pm or flat_reason,
+                        open_position=open_pos,
+                        entry_ctx=entry_ctx_pm,
+                        exit_price=exit_price_pm,
+                        take_pct=0.0,
+                        stop_pct=0.0,
+                    )
+                    close_ctx_enriched_pm["overnight_premarket_flat"] = {
+                        "reason": flat_reason,
+                        "premarket_gap_pct": gap_pm,
+                    }
+                    if close_position(
+                        ticker,
+                        exit_price_pm,
+                        exit_type_pm,
+                        position=open_pos,
+                        context_json=close_ctx_enriched_pm,
+                        trade_ts=(
+                            close_ctx_pm.get("exit_5m_bar_open_et")
+                            or close_ctx_pm.get("decision_5m_bar_open_et")
+                            or close_ctx_pm.get("exit_bar_close_ts")
+                        ),
+                    ):
+                        logger.info(
+                            "PRE_MARKET %s: auto-flat %s — %s gap=%s",
+                            ticker,
+                            exit_type_pm,
+                            flat_reason,
+                            gap_pm,
+                        )
+                        if chat_ids:
+                            send_game5m_close_notification(
+                                token,
+                                chat_ids,
+                                ticker,
+                                exit_type_pm,
+                                exit_price_pm,
+                                open_pos.get("entry_price"),
+                                close_ctx_enriched_pm,
+                            )
+                except Exception as e:
+                    logger.warning("PRE_MARKET auto-flat %s: %s", ticker, e)
             sys.exit(0)
         if phase == "AFTER_HOURS":
             # Тикеры для проверки: из аргумента или config (get_tickers_game_5m импортирован вверху)
@@ -1245,6 +1365,7 @@ def main():
                         pullback_from_high_pct=d5.get("pullback_from_high_pct"),
                         session_phase=ms_ah.get("session_phase"),
                         apply_hanger_json=apply_hanger_json_ah,
+                        d5_context=d5,
                     )
                     try:
                         entry_ah0 = open_pos.get("entry_price")
