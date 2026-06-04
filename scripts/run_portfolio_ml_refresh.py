@@ -30,12 +30,19 @@ def main() -> int:
 
     from config_loader import get_config_value
     from report_generator import get_engine
-    from services.ml_contour_runner import finalize_contour_refresh, plan_contour_refresh
+    from services.ml_contour_refresh import contour_continuous_enabled, get_contour_spec
+    from services.ml_contour_runner import (
+        finalize_contour_refresh,
+        plan_contour_refresh,
+        should_write_catboost_model,
+    )
 
-    trigger, _g, deltas = plan_contour_refresh(
+    spec = get_contour_spec("portfolio")
+    engine = get_engine()
+    trigger, gates, deltas = plan_contour_refresh(
         "portfolio",
         project_root,
-        get_engine(),
+        engine,
         force_full=args.full,
         force_apply=args.apply_data,
     )
@@ -49,7 +56,16 @@ def main() -> int:
     mode = (get_config_value("ML_READINESS_TRAIN_MODE") or "dry_run").strip().lower()
     full_train = args.full or mode in ("full", "train", "write", "prod")
     do_train = trigger.should_train or full_train
-    train_dry_run = args.dry_run or not do_train or (not full_train and mode == "dry_run")
+    continuous = contour_continuous_enabled(spec, product_ready=gates.get("product_ready", False))
+    writes_cbm = should_write_catboost_model(
+        cli_dry_run=args.dry_run,
+        do_train=do_train,
+        full_train=full_train,
+        readiness_train_mode=mode,
+        phase=trigger.phase,
+        continuous_enabled=continuous,
+    )
+    train_dry_run = not writes_cbm
 
     q_dir = _default_q_dir()
     metrics_path = q_dir / "last_portfolio_train_metrics.json"
@@ -62,18 +78,24 @@ def main() -> int:
     ]
     if train_dry_run:
         train_cmd.append("--dry-run")
-    train_rc = subprocess.call(train_cmd, cwd=str(project_root))
+    logger.info(
+        "Portfolio refresh train writes_cbm=%s continuous=%s phase=%s",
+        writes_cbm,
+        continuous,
+        trigger.phase,
+    )
+    train_rc = subprocess.call(train_cmd, cwd=str(project_root)) if do_train else 0
 
     finalize_contour_refresh(
         project_root,
         "portfolio",
         trigger,
         apply_ran=True,
-        train_ran=do_train and not train_dry_run,
+        train_ran=writes_cbm and train_rc == 0,
         full=full_train,
         extra={"train_rc": train_rc},
     )
-    return 0
+    return 0 if train_rc == 0 else train_rc
 
 
 if __name__ == "__main__":

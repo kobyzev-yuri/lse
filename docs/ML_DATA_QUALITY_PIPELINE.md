@@ -137,7 +137,7 @@ python scripts/run_ml_data_quality_report.py --dataset path/to/custom.csv --json
 | `ML_READINESS_PORTFOLIO_RMSE_MAX` | Макс. RMSE valid (default `0.08`) |
 | `ML_READINESS_PORTFOLIO_MIN_TRAIN` | Мин. `n_train` (default `80`) |
 | `EVENT_REACTION_DATASET_VERSION` | Dataset для event-reaction train/readiness; product advisory: `v0_expanded_baseline` |
-| `EVENT_REACTION_FEATURE_BUILDER_VERSION` | Feature version для event-reaction train/readiness; product advisory: `quotes_regime_v1` |
+| `EVENT_REACTION_FEATURE_BUILDER_VERSION` | Feature version для train/readiness; на `v0_expanded_baseline` после cron 23:37 обычно `quotes_regime_earnings_v1` (train auto-fallback) |
 
 В Docker контейнер `lse-bot` получает `config.env` как **файл** `/app/config.env` (volume), без `env_file` в compose — переменные `ML_READINESS_*` в `docker exec … env` могут быть пустыми; скрипт `run_ml_train_readiness_cron.py` читает пороги через `config_loader` (env процесса **или** файл).
 

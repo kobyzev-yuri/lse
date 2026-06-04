@@ -68,6 +68,35 @@ def test_trigger_staleness_fallback():
     assert t.should_train is True
 
 
+def test_should_write_catboost_model_continuous_prod():
+    from services.ml_contour_runner import should_write_catboost_model
+
+    assert should_write_catboost_model(
+        cli_dry_run=False,
+        do_train=True,
+        full_train=False,
+        readiness_train_mode="dry_run",
+        phase="continuous_prod",
+        continuous_enabled=True,
+    )
+    assert not should_write_catboost_model(
+        cli_dry_run=False,
+        do_train=True,
+        full_train=False,
+        readiness_train_mode="dry_run",
+        phase="accumulating_data",
+        continuous_enabled=True,
+    )
+    assert should_write_catboost_model(
+        cli_dry_run=False,
+        do_train=True,
+        full_train=True,
+        readiness_train_mode="dry_run",
+        phase="accumulating_data",
+        continuous_enabled=False,
+    )
+
+
 def test_continuous_prod_trains_on_apply():
     spec = get_contour_spec("open_path")
     log = {"last_apply_at_utc": _iso_hours_ago(3)}

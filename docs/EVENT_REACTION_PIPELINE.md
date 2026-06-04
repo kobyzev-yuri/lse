@@ -23,7 +23,7 @@
 
 Вспомогательные таблицы (`market_regime_daily`, `peer_graph_edge`, …) по-прежнему опциональны; их можно подключать в следующих версиях `feature_builder_version` внутри JSON.
 
-**Product advisory dataset (с 2026-05-27):** для event-reaction CatBoost в карточках используется расширенная история **`v0_expanded_baseline`** с `feature_builder_version=quotes_regime_v1`. Она собрана из yfinance earnings history по 14 equity-тикерам FAST+MEDIUM+LONG: **498** событий, **451** trainable rows, 47,966 daily quote rows backfill.
+**Product advisory dataset (с 2026-05-27):** расширенная история **`v0_expanded_baseline`**. Nightly cron: сначала `quotes_regime_v1` (23:36), затем `quotes_regime_earnings_v1` на earnings-universe (23:37). Regression train (`train_event_reaction_catboost`) выбирает версию с trainable rows (обычно **earnings_v1**, супerset regime_v1). Inference читает `feature_builder_version` из `.meta.json`.
 
 **Earnings intelligence grid (с 2026-05-28):** отдельный контур для **сценарного классификатора** — `feature_builder_version=quotes_regime_earnings_v1` (quotes + regime + earnings tone/timing + peer graph topology + peer momentum). Оркестратор: **`scripts/run_earnings_ml_refresh.py`**. Метки: `label_source=llm_scenario_v0` из LLM `scenario_hints` (`apply_earnings_scenario_labels.py`). Train: **`train_event_reaction_scenario_classifier.py`**. Product-регрессия на `quotes_regime_v1` **не заменяется** этим слоем.
 

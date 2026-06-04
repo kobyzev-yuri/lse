@@ -9,12 +9,37 @@ from sqlalchemy.engine import Engine
 
 from services.ml_contour_deltas import count_deltas_for_contour, resolve_readiness_gates
 from services.ml_contour_refresh import (
+    ContourPhase,
     RetrainTrigger,
+    contour_continuous_enabled,
     evaluate_retrain_trigger,
     get_contour_spec,
     load_refresh_log,
     write_refresh_log,
 )
+
+
+def should_write_catboost_model(
+    *,
+    cli_dry_run: bool,
+    do_train: bool,
+    full_train: bool,
+    readiness_train_mode: str,
+    phase: str,
+    continuous_enabled: bool,
+) -> bool:
+    """
+    True → train subprocess runs without --dry-run and writes .cbm.
+
+    Readiness cron stays dry_run by default; continuous_prod contours (portfolio, game5m)
+    also write when ML_*_CONTINUOUS_TRAIN is enabled.
+    """
+    if cli_dry_run or not do_train:
+        return False
+    mode = (readiness_train_mode or "dry_run").strip().lower()
+    if full_train or mode in ("full", "train", "write", "prod"):
+        return True
+    return bool(continuous_enabled and phase == ContourPhase.CONTINUOUS.value)
 
 
 def plan_contour_refresh(

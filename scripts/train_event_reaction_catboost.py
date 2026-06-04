@@ -37,6 +37,7 @@ from services.event_reaction_labeling import (  # noqa: E402
     FEATURE_BUILDER_VERSION_QUOTES,
     active_feature_builder_version,
     event_reaction_numeric_feature_keys,
+    resolve_training_feature_builder_version,
 )
 
 
@@ -199,8 +200,14 @@ def main() -> int:
     from report_generator import get_engine
     from services.event_reaction_labeling import event_reaction_label_threshold_log
 
+    engine = get_engine()
     ds_version = (args.dataset_version or "").strip() or (get_config_value("EVENT_REACTION_DATASET_VERSION", "") or "").strip() or "v0"
-    fbv = (args.feature_builder_version or "").strip() or active_feature_builder_version()
+    fbv_pref = (args.feature_builder_version or "").strip() or active_feature_builder_version()
+    fbv = resolve_training_feature_builder_version(
+        engine,
+        dataset_version=ds_version,
+        preferred=fbv_pref,
+    )
     numeric_keys = event_reaction_numeric_feature_keys(fbv)
     cfg_mr = (get_config_value("EVENT_REACTION_TRAIN_MIN_ROWS", "") or "").strip()
     try:
@@ -209,8 +216,6 @@ def main() -> int:
         min_rows_eff = int(args.min_rows)
     # Не ниже 8 строк — иначе CatBoost/сплит нестабильны; верхний предел оставляем на усмотрение CLI.
     min_required = max(8, int(min_rows_eff))
-
-    engine = get_engine()
     df = load_training_frame(engine, dataset_version=ds_version, feature_builder_version=fbv)
     if df.empty:
         logger.error("Нет строк для обучения (проверьте разметку outcomes_after.forward_log_ret_5d и features_before).")

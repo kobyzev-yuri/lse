@@ -81,7 +81,12 @@ ls -la ~/lse/logs/ml/models/portfolio_return_catboost.*
 docker exec lse-bot ls -la /app/logs/ml/models/portfolio_return_catboost.*
 ```
 
-Regular retrain on prod: `scripts/run_ml_train_readiness_cron.py` (cron ~23:50 ET weekdays) may call `train_portfolio_catboost.py` when readiness gates pass; metrics also land in `logs/ml/ml_data_quality/last_portfolio_train_metrics.json` when the data-quality cron runs.
+Regular retrain on prod:
+
+- **`run_ml_train_readiness_cron.py`** (23:50 MSK) — dry-run metrics by default (`ML_READINESS_TRAIN_MODE=dry_run`).
+- **`run_portfolio_ml_refresh.py`** via dispatcher (`15 */6`) — writes **`portfolio_return_catboost.cbm`** when `continuous_prod` and `ML_PORTFOLIO_CONTINUOUS_TRAIN=1` (default after portfolio gate ready). Use `--full` or `ML_READINESS_TRAIN_MODE=full` for forced write.
+
+Metrics: `logs/ml/ml_data_quality/last_portfolio_train_metrics.json`.
 
 ## Training
 

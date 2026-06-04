@@ -72,6 +72,71 @@ QUOTE_FEATURE_KEYS_REQUIRED = (
 )
 
 
+def count_trainable_regression_rows(
+    engine,
+    *,
+    dataset_version: str,
+    feature_builder_version: str,
+) -> int:
+    """Rows matching train_event_reaction_catboost SQL filters for a feature_builder_version."""
+    from sqlalchemy import text
+
+    q = text(
+        """
+        SELECT COUNT(*)::int
+        FROM event_reaction_dataset
+        WHERE dataset_version = :dv
+          AND features_before IS NOT NULL AND features_before <> '{}'::jsonb
+          AND outcomes_after IS NOT NULL AND outcomes_after <> '{}'::jsonb
+          AND outcomes_after ? 'forward_log_ret_5d'
+          AND (features_before->>'feature_builder_version') = :fbv
+        """
+    )
+    with engine.connect() as conn:
+        return int(
+            conn.execute(
+                q,
+                {"dv": dataset_version, "fbv": feature_builder_version},
+            ).scalar()
+            or 0
+        )
+
+
+def resolve_training_feature_builder_version(
+    engine,
+    *,
+    dataset_version: str,
+    preferred: str = "",
+) -> str:
+    """
+    Pick feature_builder_version for regression train/inference.
+
+    Nightly cron writes quotes_regime_v1 then overwrites earnings-universe rows with
+    quotes_regime_earnings_v1 (superset). Prefer config, else fall back to the version
+    that actually has trainable rows in DB.
+    """
+    pref = (preferred or "").strip() or active_feature_builder_version()
+    if count_trainable_regression_rows(engine, dataset_version=dataset_version, feature_builder_version=pref) > 0:
+        return pref
+    for fbv in (
+        FEATURE_BUILDER_VERSION_EARNINGS,
+        FEATURE_BUILDER_VERSION_REGIME,
+        FEATURE_BUILDER_VERSION_QUOTES,
+    ):
+        if fbv == pref:
+            continue
+        n = count_trainable_regression_rows(engine, dataset_version=dataset_version, feature_builder_version=fbv)
+        if n > 0:
+            logger.info(
+                "event_reaction regression: preferred %s has 0 trainable rows; using %s (%s rows)",
+                pref,
+                fbv,
+                n,
+            )
+            return fbv
+    return pref
+
+
 def event_reaction_numeric_feature_keys(feature_builder_version: str) -> Tuple[str, ...]:
     """All numeric keys for CatBoost (quote + regime)."""
     quote = QUOTE_FEATURE_KEYS_REQUIRED
