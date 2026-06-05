@@ -204,6 +204,7 @@ Ridge **не заменяется** — это фоновый контур GAME_
 Ответить не «сколько % за 5 дней», а **«какая история разворачивается»** после конкретного earnings. Это критично, когда **source и peers двигаются в разные стороны**: META −10% при MU +28% — регрессия по META даёт одну цифру, а сценарий `capex_positive_for_infra_peers` перенаправляет внимание на **infra-пиров**.
 
 **Глубокий разбор LLM → label → train:** [earnings-event-agent-lse/EARNINGS_LLM_ML_LABELS_AND_TRAINING.md](earnings-event-agent-lse/EARNINGS_LLM_ML_LABELS_AND_TRAINING.md).  
+**Решение source vs peer (примеры META, NVDA):** тот же документ **§8**.  
 **UI / Fusion:** [earnings-event-agent-lse/EARNINGS_UI_GUIDE.md](earnings-event-agent-lse/EARNINGS_UI_GUIDE.md).
 
 Оркестратор: `scripts/run_earnings_ml_refresh.py`. Inference: `services/earnings_scenario_signal.py`. Fusion: `services/earnings_intelligence_fusion.py`.
@@ -297,7 +298,7 @@ Ridge **не заменяется** — это фоновый контур GAME_
 | `advisory.conviction` | `low` / `medium` (medium только при согласии + сильный pred) |
 | `peer_spillover` / `peer_spillover_ml` | Таблица по **каждому peer** |
 
-**`execution_blocked: true`** — Fusion **никогда** не шлёт ордер. Это research/advisory слой до фазы D ([EARNINGS_LLM_ML_LABELS_AND_TRAINING.md](earnings-event-agent-lse/EARNINGS_LLM_ML_LABELS_AND_TRAINING.md) §10).
+**`execution_blocked: true`** — Fusion **никогда** не шлёт ордер. Это research/advisory слой до фазы D ([EARNINGS_LLM_ML_LABELS_AND_TRAINING.md](earnings-event-agent-lse/EARNINGS_LLM_ML_LABELS_AND_TRAINING.md) §8, §11).
 
 ### Метрики L2 / shadow
 
