@@ -752,15 +752,24 @@ def _ml_runtime_snapshot_for_ui() -> Dict[str, Any]:
 
     er_path = (get_config_value("EVENT_REACTION_CATBOOST_MODEL_PATH", "") or "").strip()
     er_p = Path(er_path) if er_path else None
+    dual_track: Dict[str, Any] = {}
+    try:
+        from services.ml_product_runtime import build_dual_track_summary
+
+        dual_track = build_dual_track_summary()
+    except Exception:
+        pass
     return {
         "game5m_catboost_used_in_runtime": _truthy("GAME_5M_CATBOOST_ENABLED"),
         "portfolio_catboost_used_in_runtime": _truthy("PORTFOLIO_CATBOOST_ENABLED"),
         "event_reaction_model_path_configured": bool(er_path),
         "event_reaction_cbm_file_exists": bool(er_p and er_p.is_file()),
         "event_reaction_used_in_runtime": _truthy("EVENT_REACTION_CATBOOST_ENABLED"),
+        "dual_track": dual_track,
         "readiness_kill_switch_note": (
             "Флаг overall_production_ready в ml_train_readiness.jsonl — только сводка гейтов для дашборда; "
-            "он не выключает GAME_5M_CATBOOST_ENABLED / PORTFOLIO_CATBOOST_ENABLED и не меняет правила входа автоматически."
+            "он не выключает GAME_5M_CATBOOST_ENABLED / PORTFOLIO_CATBOOST_ENABLED и не меняет правила входа автоматически. "
+            "Legacy hot path исполняет promoted/legacy_apply контуры без DECISION_STACK_RESOLVE — см. docs/ML_STATUS_REPORT.md."
         ),
     }
 

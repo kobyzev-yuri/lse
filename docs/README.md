@@ -9,6 +9,7 @@
 | **Канон:** контуры, слои L1–L3, cron, promotion | [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) |
 | **План консолидации** (устранение дублей, фазы 0–4) | [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) |
 | **Ops-статус** (сделано / висит) | [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md) |
+| **Отчёт по ML-контурам** (dual-track, legacy vs stack) | [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md) |
 | L1 retrain (триггеры, registry) | [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md) |
 | L2 gates, data-quality API | [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md) |
 | L3 GAME_5M алгоритм | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) |

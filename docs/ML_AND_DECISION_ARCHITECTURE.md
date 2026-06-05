@@ -41,6 +41,16 @@
 Код L1: `services/ml_contour_refresh.py`, `services/ml_contour_deltas.py`, `services/ml_contour_runner.py`.  
 Код L3: `services/decision_stack/`, `services/recommend_5m.py`.
 
+### 1.1 Dual-track: legacy + decision_stack (параллельно)
+
+**Legacy hot path** (`technical_decision_effective`, portfolio guards) **исполняет сделки** и **уже включает** контуры с tier `promoted` / `legacy_apply` через свои флаги (`PORTFOLIO_CATBOOST_ENABLED`, `GAME_5M_MULTIDAY_ENTRY_GATE_MODE=apply`, …) — **без** `DECISION_STACK_RESOLVE_ENABLED=true`.
+
+**Decision stack** строит `decision_snapshot` параллельно. При `RESOLVE=false` (prod) — только shadow и `projected_effective_if_resolve`; при `RESOLVE=true` — stack может стать единым исполнителем (session veto и др.).
+
+`DECISION_STACK_OWN_FINALIZE=true` (default): CatBoost + multiday применяются в `apply_game5m_policy_gates()` **до** snapshot; результат попадает в legacy `technical_decision_effective`, который cron использует для входа.
+
+Реестр runtime: `services/ml_product_runtime.py`, CLI `scripts/print_ml_product_status.py`, отчёт [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md).
+
 ---
 
 ## 2. Три продуктовые поверхности
@@ -71,7 +81,7 @@ Earnings product: [earnings-event-agent-lse/EARNINGS_PRODUCT_ROADMAP.md](earning
 | `event_reaction_regression` | ✅ dispatcher | JSONL → `event_reaction` | Earnings advisory | `event_reaction` | off / advisory |
 | `earnings_grid` | ✅ dispatcher | `last_earnings_intelligence_readiness.json` | Earnings UI | — | shadow |
 | `open_path` | ✅ dispatcher | `last_open_path_readiness.json` | Open-path MVP | — | shadow |
-| `multiday_lr` | ✅ dispatcher | arbiter + JSONL advisory | GAME_5M | `multiday_lr` | log-only / caution |
+| `multiday_lr` | ✅ dispatcher | arbiter + JSONL advisory | GAME_5M | `multiday_lr` | **legacy_apply** entry; hold log_only |
 | `recovery` | ✅ dispatcher | D4a stats + metrics | GAME_5M exit | `recovery_ml` | log-only |
 | `gap_forecast` | ✅ dispatcher | arbiter + metrics JSON | GAME_5M | `gap_forecast` | caution; baseline сильнее |
 

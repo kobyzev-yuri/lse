@@ -23,9 +23,11 @@ GAME_5M должен принимать решение через единый `
    - `multiday_lr`;
    - будущие recovery/event/cluster контуры.
 4. Когда ML стабильно лучше baseline, он получает readiness `production` и gate mode `apply`.
-5. Итоговое поле для торгового контура: `decision_effective`.
+5. Итоговое поле для торгового контура: `decision_effective` (при `RESOLVE=false` на legacy это `technical_decision_effective`).
 
 Принцип: **наблюдаемая рыночная величина может быть production baseline; ML становится production только после доказанного преимущества над baseline.**
+
+**Dual-track:** готовые контуры включаются на **legacy hot path** сразу (`*_ENABLED`, gate `apply`), параллельно пишется `decision_snapshot`. `RESOLVE=true` не обязателен для первого включения ML — см. [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md).
 
 ---
 

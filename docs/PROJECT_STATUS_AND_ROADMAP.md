@@ -3,9 +3,10 @@
 **Обновлено:** 2026-06-05 (фазы 0–2 consolidation закрыты; фаза 3 L3 — в работе).
 
 **Каноническая архитектура ML и торговых решений:** [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md).  
-**План консолидации (устранение дублей):** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md).
+**План консолидации (устранение дублей):** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md).  
+**Полный отчёт по контурам (dual-track legacy + stack):** [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md).
 
-Этот файл — **живой ops-статус** (что сделано / что висит). Матрица контуров, cron и слои L1–L3 — только в каноне, здесь не дублируются.
+Этот файл — **живой ops-статус** (что сделано / что висит). Матрица контуров, cron и слои L1–L3 — в каноне и ML_STATUS_REPORT; здесь — краткая сводка.
 
 ---
 
@@ -15,7 +16,7 @@
 |-------------|-----------|-----------------|
 | **Unified ML retrain (L1)** | **8/8** контуров active refresh, dispatcher nightly `23:47` + weekly `06:05`, prod full train 2026-06-05 | `6607dad`, [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md) |
 | **ML readiness + data-quality (L2)** | Крон 23:50 / 23:53, analyzer, `/api/ml/data-quality` | [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md) |
-| **Decision stack (L3)** | Фазы 0–3 в коде; prod `DECISION_STACK_RESOLVE_ENABLED=false` (mirror) | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) |
+| **Decision stack (L3)** | Dual-track: legacy исполняет; stack shadow (`RESOLVE=false`) | [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md) §1 |
 | **Earnings autoprep + grid** | Autoprep `15 */2`, full train 23:52, shadow gates | [OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md](OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md) |
 | **Open-path MVP** | Labels 23:45, nightly 23:46, dispatcher poll | канон §5 |
 | **GAME_5M ML nightly** | Legacy 23:40 datasets + entry; dispatcher incremental | [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md) |
