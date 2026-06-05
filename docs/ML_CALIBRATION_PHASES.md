@@ -56,10 +56,10 @@
 
 ---
 
-## 5. Multiday ridge и пробел в автоматизации
+## 5. Multiday ridge в readiness
 
-- В **`ml_train_readiness.jsonl`** multiday **пока не пишется**; метрики собираются через **`--json-metrics-out`** и логи `train_game5m_multiday_lr.py`.
-- Рекомендуемый следующий шаг при стабилизации контура: одна строка в том же JSONL или включение снимка в `run_ml_data_quality_report.py` (по аналогии с `--json-metrics-out` других `train_*`).
+- С фазы 2 consolidation (`6607dad`): блок **`multiday_lr`** в `ml_train_readiness.jsonl` (advisory: `n_tickers_fitted`, `last_train_at_utc` из `last_multiday_lr_train_metrics.json`).
+- Walk-forward / gates для L3 — [GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md](GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md); фаза C — арбитр `multiday_lr_gates_arbiter` в анализаторе.
 
 ---
 

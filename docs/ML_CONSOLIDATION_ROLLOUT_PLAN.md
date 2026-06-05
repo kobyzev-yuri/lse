@@ -60,9 +60,11 @@
 
 **Критерий:** все 8 контуров в `ml_contours_status` с реальным `last_refresh`, не `registry-only`.
 
+**Prod sign-off (2026-06-05):** `6607dad` → deploy → full train session; все 8 контуров `train_ran=True` в `ml_contours_status.json`. Дополнительно: `730db19` (archive legacy scripts), `8a03ea9` (recovery `--jsonl` / auto-pick). Сводка CatBoost/артефактов — см. [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md).
+
 ---
 
-### Фаза 3 — L3 единый продукт (по контурам, не big-bang)
+### Фаза 3 — L3 единый продукт (по контурам, не big-bang) — **в работе с 2026-06-05**
 
 Порядок promotion (после L2 gate + фаза C):
 
@@ -76,6 +78,18 @@
 | 6 | `DECISION_STACK_RESOLVE_ENABLED` | 3–7 дней mirror без divergence |
 
 Earnings / open-path: **отдельная очередь** на shadow → product-tier ([EARNINGS_PRODUCT_ROADMAP.md](earnings-event-agent-lse/EARNINGS_PRODUCT_ROADMAP.md)); не блокирует фазу 3 GAME_5M.
+
+#### Спринт 3.0 — baseline и мониторинг (текущий)
+
+| # | Задача | DoD |
+|---|--------|-----|
+| 3.0.1 | Baseline mirror: `decision_stack_shadow_diff` за 7 дн. | JSON + запись в PROJECT_STATUS |
+| 3.0.2 | `scripts/report_decision_stack_mirror.py` | CLI: divergence rate, recent rows, exit 0/1 по порогу |
+| 3.0.3 | Portfolio L3 | Уже `PORTFOLIO_CATBOOST_ENABLED=true` — формально **promoted** (L2✅ + L3✅) |
+| 3.0.4 | Multiday entry gate | Prod сейчас `apply` — сверить с [GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md](GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md) §3.2 |
+| 3.0.5 | `catboost_entry_5m` | AUC≈0.50 — **заблокирован** до фазы C (analyzer backtest) |
+
+**Блокер RESOLVE:** `DECISION_STACK_RESOLVE_ENABLED=false` до 3–7 дней `resolve_divergence=0` (очередь 6).
 
 ---
 
