@@ -1,26 +1,12 @@
 #!/usr/bin/env python3
+"""ARCHIVED → scripts/archive/incidents/list_lite_trades_db.py"""
+from __future__ import annotations
+
 import sys
 from pathlib import Path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
 
-from config_loader import get_database_url
-from sqlalchemy import create_engine, text
-
-def main():
-    url = get_database_url()
-    e = create_engine(url)
-    with e.connect() as c:
-        r = c.execute(text("""
-            SELECT id, ts, side, quantity, price, signal_type, strategy_name, ts_timezone
-            FROM trade_history
-            WHERE ticker = 'LITE' AND strategy_name = 'GAME_5M'
-            ORDER BY ts
-        """))
-        rows = r.fetchall()
-    print("LITE GAME_5M в БД:", len(rows), "сделок")
-    for row in rows:
-        print(row)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _archive_stub import run_archived
 
 if __name__ == "__main__":
-    main()
+    run_archived("incidents/list_lite_trades_db.py")

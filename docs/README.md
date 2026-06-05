@@ -45,6 +45,8 @@
 
 ## Скрипты конвейера (кратко)
 
+Устаревшие и разовые скрипты: [scripts/archive/README.md](../scripts/archive/README.md) (stub в `scripts/` перенаправляют туда).
+
 | Скрипт | Назначение |
 |--------|------------|
 | `scripts/run_daily_game5m_ml_pipeline.py` | После сессии: stuck + continuation CSV + JSONL (train — через dispatcher / `run_game5m_entry_ml_refresh`) |

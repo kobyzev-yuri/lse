@@ -126,7 +126,7 @@
 |--------|------------|
 | `scripts/fetch_news_cron.py` | Сбор из RSS, Investing.com (календарь + лента), NewsAPI, Alpha Vantage, TickerNews (Yahoo + Marketaux в режимах `core`/`all`/`tickers`). |
 | `scripts/check_news_sources.py` | Диагностика: число записей в БД, один прогон RSS, наличие ключей NEWSAPI / Alpha Vantage / Marketaux. Запуск при «новостей нет». |
-| `scripts/add_manual_news.py` | Разовая вставка новости в knowledge_base: `python scripts/add_manual_news.py "Заголовок или текст" "https://..." [SNDK]`. Полезно для важной breaking news, которая ещё не попала в автоматический сбор. |
+| `scripts/add_manual_news.py` | Разовая вставка (архив: `scripts/archive/incidents/`). `python scripts/add_manual_news.py "Заголовок" "https://..." [SNDK]`. |
 | `scripts/sync_vector_kb_cron.py` | Backfill `embedding` для записей с `embedding IS NULL`. |
 | `scripts/add_sentiment_to_news_cron.py` | LLM: заполнение `sentiment_score` и `insight` для новостей без sentiment. |
 | `scripts/analyze_event_outcomes_cron.py` | Заполнение `outcome_json` (изменение цены после события). |

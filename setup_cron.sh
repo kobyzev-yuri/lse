@@ -111,8 +111,8 @@ cat >> "$CRON_FILE" << EOF
 
 # 5m/30m бары в Postgres (market_bars_5m, market_bars_30m) для бэктеста: Yahoo, окно по умолчанию 7 дн., UPSERT. Раз в сутки после вечернего обновления цен; flock — без параллельных запусков.
 25 23 * * * cd $PROJECT_DIR && flock -n /tmp/lse_market_bars_intraday.lock $PYTHON_PATH scripts/ingest_market_bars_intraday.py >> logs/cron_market_bars_intraday.log 2>&1
-# Recovery ML (анализатор + train): будни после US сессии (ожидается MSK). Без параллельных запусков.
-40 23 * * 1-5 cd $PROJECT_DIR && flock -n /tmp/lse_daily_recovery_pipeline.lock $PYTHON_PATH scripts/run_daily_game5m_recovery_pipeline.py >> logs/game5m_daily_recovery_pipeline.log 2>&1
+# DEPRECATED bare-metal ML cron: recovery/game5m ML — на Docker-VM используйте crontab/lse-docker.crontab
+# (run_daily_game5m_ml_pipeline.py 23:40 + run_ml_refresh_dispatcher.py). См. scripts/archive/README.md.
 EOF
 
 # Устанавливаем новый crontab
