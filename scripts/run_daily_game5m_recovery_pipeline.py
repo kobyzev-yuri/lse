@@ -73,7 +73,13 @@ def main() -> int:
     from services.trade_effectiveness_analyzer import analyze_trade_effectiveness
 
     logger.info("export recovery jsonl: days=%s strategy=%s", days, args.strategy)
-    payload = analyze_trade_effectiveness(days=days, strategy=args.strategy, export_recovery_ml=True, use_llm=False)
+    payload = analyze_trade_effectiveness(
+        days=days,
+        strategy=args.strategy,
+        export_recovery_ml=True,
+        use_llm=False,
+        sections="recovery",
+    )
     exp = payload.get("game5m_hold_recovery_export") if isinstance(payload, dict) else None
     if not isinstance(exp, dict) or exp.get("status") != "ok":
         logger.error("export failed/skipped: %s", exp)

@@ -101,8 +101,13 @@ def main() -> int:
         from services.trade_effectiveness_analyzer import analyze_trade_effectiveness
 
         logger.info("recovery export: days=%s", days)
+        # Export-only sections: skip ml_arbiters (multiday/gap on full universe — hours of CPU).
         payload = analyze_trade_effectiveness(
-            days=days, strategy="GAME_5M", export_recovery_ml=True, use_llm=False
+            days=days,
+            strategy="GAME_5M",
+            export_recovery_ml=True,
+            use_llm=False,
+            sections="recovery",
         )
         exp = payload.get("game5m_hold_recovery_export") if isinstance(payload, dict) else None
         if isinstance(exp, dict) and exp.get("status") == "ok":
