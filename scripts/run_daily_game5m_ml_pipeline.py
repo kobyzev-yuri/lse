@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Ежедневный конвейер после закрытия US-сессии (запуск по cron на VM):
+Ежедневный конвейер датасетов GAME_5M после закрытия US-сессии (cron 23:40 MSK):
 
   1) Сбор stuck-risk CSV + meta
   2) Сбор continuation / underprofit CSV + meta
-  3) Обучение CatBoost entry (GAME_5M) — при малом числе строк завершается кодом 2, это нормально
-  4) Дописать сводку в JSONL для тренда метрик
+  3) JSONL-сводка метаданных датасетов
 
-Проверка «тестирования» в анализаторе: GET /api/analyzer?strategy=GAME_5M — блок
-`catboost_entry_backtest` (модель `local/models/game5m_entry_catboost.cbm` + .meta.json на хосте веба).
+Обучение CatBoost entry — только через ``run_game5m_entry_ml_refresh.py``
+(dispatcher ``*/6`` poll или ``--slot nightly``). Legacy train: ``DAILY_ML_RUN_CATBOOST=1``.
+
+Проверка модели в анализаторе: GET /api/analyzer?strategy=GAME_5M — ``catboost_entry_backtest``.
 
 Запуск на сервере (как в docker-compose.yml: сервис lse, container_name lse-bot, WORKDIR /app).
 
@@ -25,8 +26,8 @@
     30 22 * * 1-5 cd /path/to/lse && docker compose exec -T lse python3 scripts/run_daily_game5m_ml_pipeline.py >> /path/to/lse/logs/game5m_daily_ml_pipeline.log 2>&1
 
 Переменные окружения:
-  DAILY_ML_MIN_CATBOOST_ROWS  — порог строк для train_game5m_catboost (default: 35)
-  DAILY_ML_SKIP_CATBOOST      — 1/true: не вызывать обучение
+  DAILY_ML_RUN_CATBOOST       — 1/true: legacy train в этом скрипте (не рекомендуется)
+  DAILY_ML_MIN_CATBOOST_ROWS  — порог строк для legacy train (default: 35)
   DAILY_ML_REPORT_JSONL       — путь к JSONL-отчёту (default: local/logs/game5m_daily_ml_report.jsonl)
   DAILY_ML_DATASETS_DRY_RUN   — 1/true: только --dry-run у датасетов (без записи CSV)
 """
@@ -90,7 +91,9 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     datasets_dry = _env_bool("DAILY_ML_DATASETS_DRY_RUN", False)
-    skip_cb = _env_bool("DAILY_ML_SKIP_CATBOOST", False)
+    run_cb = _env_bool("DAILY_ML_RUN_CATBOOST", False)
+    if _env_bool("DAILY_ML_SKIP_CATBOOST", False):
+        run_cb = False
     try:
         min_cb_rows = int((os.environ.get("DAILY_ML_MIN_CATBOOST_ROWS") or "35").strip())
     except (ValueError, TypeError):
@@ -138,8 +141,8 @@ def main() -> int:
         logger.error("build_game5m_continuation_dataset завершился с кодом %s", rc_cont)
         return rc_cont
 
-    catboost_summary: Dict[str, Any] = {"skipped": skip_cb}
-    if not skip_cb:
+    catboost_summary: Dict[str, Any] = {"skipped": not run_cb}
+    if run_cb:
         rc_cb = _run(
             [
                 py,
@@ -165,7 +168,7 @@ def main() -> int:
             catboost_summary["n_valid"] = meta.get("n_valid")
             catboost_summary["trained_at"] = meta.get("trained_at")
     else:
-        catboost_summary["note"] = "DAILY_ML_SKIP_CATBOOST"
+        catboost_summary["note"] = "train via run_game5m_entry_ml_refresh (dispatcher)"
 
     record = {
         "ts_utc": datetime.now(timezone.utc).isoformat(),

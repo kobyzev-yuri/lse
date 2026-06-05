@@ -1,5 +1,7 @@
 # Фазы калибровки ML-сеток: где что происходит и какая цель
 
+> **Матрица контуров и маппинг фаз:** [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) §4.
+
 Документ задаёт **единую терминологию** фаз для всех обучаемых контуров в репозитории: четыре **CatBoost**-сетки, **recovery** по JSONL, **multiday ridge** (регрессия по дневным close), а также точки интеграции с **`run_ml_train_readiness_cron`**, **`run_ml_data_quality_report`** и **анализатором** (`/analyzer`, `trade_effectiveness_analyzer`).
 
 **Принципы проекта:** где речь о доходностях в моделях и отчётах — **log-returns**; в торговых симуляциях и порогах «стоит ли входить» — **transaction costs**.

@@ -2,6 +2,18 @@
 
 Корневой обзор архитектуры: [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## ML и торговые решения (читать первым)
+
+| Задача | Документ |
+|--------|----------|
+| **Канон:** контуры, слои L1–L3, cron, promotion | [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) |
+| **План консолидации** (устранение дублей, фазы 0–4) | [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) |
+| **Ops-статус** (сделано / висит) | [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md) |
+| L1 retrain (триггеры, registry) | [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md) |
+| L2 gates, data-quality API | [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md) |
+| L3 GAME_5M алгоритм | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) |
+| Датасеты и таргеты всех сеток | [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) |
+
 ## Портфельная игра
 
 | Задача | Документ |
@@ -9,7 +21,9 @@
 | Алгоритм, стратегии, вход/выход, справочник `PORTFOLIO_*` | [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md) |
 | CatBoost (карточки, фильтр входа, ML-тейк, trailing) | [ML_PORTFOLIO_CATBOOST.md](ML_PORTFOLIO_CATBOOST.md) |
 | Крон vs GAME_5M, тейк/стоп в логах | [CRONS_AND_TAKE_STOP.md](CRONS_AND_TAKE_STOP.md) |
-| Ключи config.env | [CONFIG_OPTIONS_ANALYSIS.md](CONFIG_OPTIONS_ANALYSIS.md) §6 | Длинные бизнес-процессы: [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md). **Актуальный статус планов (что сделано / что висит / ссылки):** [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md). **Разметка БД, ML, метрики и LLM-отчёт о качестве данных:** [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md). **Readiness + переобучение ML по контурам:** [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md). **Фазы калибровки (все сетки + multiday ridge):** [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md). **Четыре CatBoost-сетки + earnings grid + ridge (датасеты, метрики, роль в решениях):** [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md). **Multiday ridge (дневка 1–3 торг. дня, GAME_5M):** [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md).
+| Ключи config.env | [CONFIG_OPTIONS_ANALYSIS.md](CONFIG_OPTIONS_ANALYSIS.md) §6 |
+| Бизнес-процессы | [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md) |
+| Multiday ridge | [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md) |
 
 ## Игра GAME_5M (одна цепочка: вход → удержание → выход → разбор)
 
@@ -33,7 +47,11 @@
 
 | Скрипт | Назначение |
 |--------|------------|
-| `scripts/run_daily_game5m_ml_pipeline.py` | После сессии: stuck CSV + continuation CSV + CatBoost + строка в `game5m_daily_ml_report.jsonl` |
+| `scripts/run_daily_game5m_ml_pipeline.py` | После сессии: stuck + continuation CSV + JSONL (train — через dispatcher / `run_game5m_entry_ml_refresh`) |
+| `scripts/run_ml_refresh_dispatcher.py` | Poll `*/6` или `--slot nightly` / `weekly_full` — все 8 ML contours |
+| `scripts/run_multiday_lr_ml_refresh.py` | Multiday ridge JSON refit (trigger / weekly_full) |
+| `scripts/run_recovery_ml_refresh.py` | Recovery export JSONL + CatBoost train |
+| `scripts/run_gap_forecast_refresh.py` | Gap forecast metrics + optional OLS coef suggestions |
 | `scripts/build_game5m_stuck_dataset.py` | Датасет риска зависания |
 | `scripts/build_game5m_continuation_dataset.py` | Датасет underprofit / continuation |
 | `scripts/train_game5m_catboost.py` | Обучение entry-модели; **`--json-metrics-out`** для машинного снимка метрик |

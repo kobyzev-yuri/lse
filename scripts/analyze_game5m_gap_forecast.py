@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -78,6 +79,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=90)
     parser.add_argument("--suggest-coefs", action="store_true")
+    parser.add_argument("--json-metrics-out", type=str, default="", help="Write pooled metrics JSON for ML contour refresh")
     args = parser.parse_args()
 
     from config_loader import get_config_value
@@ -97,6 +99,29 @@ def main() -> None:
 
     print(f"=== Gap forecast log ({args.days}d) ===")
     print(json.dumps(pooled, ensure_ascii=False, indent=2))
+
+    n_complete = 0
+    for key in ("sector", "ticker_v2", "game_sector_baseline", "premarket_baseline"):
+        block = pooled.get(key)
+        if isinstance(block, dict):
+            n_complete = max(n_complete, int(block.get("n_complete") or 0))
+
+    out_path = (args.json_metrics_out or "").strip()
+    if out_path:
+        body = {
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "days": int(args.days),
+            "sector_proxy": proxy,
+            "n_complete": n_complete,
+            "pooled": pooled,
+            "status": "ok" if n_complete > 0 else "insufficient_rows",
+        }
+        if args.suggest_coefs:
+            body["suggested_coefs"] = _suggest_ols_coefs(rows, proxy)
+        outp = Path(out_path)
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        outp.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\nWrote metrics: {outp.resolve()}")
 
     if args.suggest_coefs:
         sug = _suggest_ols_coefs(rows, proxy)

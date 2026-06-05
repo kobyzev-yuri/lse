@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Portfolio CatBoost refresh with data-driven trigger (new closed PORTFOLIO round-trips)."""
+"""Multiday LR ridge refresh: refit per-ticker JSON when data-driven trigger fires."""
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 project_root = Path(__file__).resolve().parent.parent
@@ -22,7 +24,7 @@ def _default_q_dir() -> Path:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Portfolio ML refresh")
+    ap = argparse.ArgumentParser(description="Multiday LR ML refresh")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--apply-data", action="store_true")
@@ -37,19 +39,18 @@ def main() -> int:
         should_write_catboost_model,
     )
 
-    spec = get_contour_spec("portfolio")
-    engine = get_engine()
+    spec = get_contour_spec("multiday_lr")
     trigger, gates, deltas = plan_contour_refresh(
-        "portfolio",
+        "multiday_lr",
         project_root,
-        engine,
+        get_engine(),
         force_full=args.full,
         force_apply=args.apply_data,
     )
     if not trigger.should_apply_data and not trigger.should_train and not args.dry_run:
-        logger.info("Portfolio refresh skipped: %s %s", trigger.reasons, deltas)
+        logger.info("Multiday LR refresh skipped: %s %s", trigger.reasons, deltas)
         finalize_contour_refresh(
-            project_root, "portfolio", trigger, apply_ran=False, train_ran=False, full=False, skipped=True
+            project_root, "multiday_lr", trigger, apply_ran=False, train_ran=False, full=False, skipped=True
         )
         return 0
 
@@ -57,7 +58,7 @@ def main() -> int:
     full_train = args.full or mode in ("full", "train", "write", "prod")
     do_train = trigger.should_train or full_train
     continuous = contour_continuous_enabled(spec, product_ready=gates.get("product_ready", False))
-    writes_cbm = should_write_catboost_model(
+    writes = should_write_catboost_model(
         cli_dry_run=args.dry_run,
         do_train=do_train,
         full_train=full_train,
@@ -65,35 +66,49 @@ def main() -> int:
         phase=trigger.phase,
         continuous_enabled=continuous,
     )
-    train_dry_run = not writes_cbm
+    train_dry_run = not writes
 
     q_dir = _default_q_dir()
-    metrics_path = q_dir / "last_portfolio_train_metrics.json"
+    q_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = q_dir / "last_multiday_lr_train_metrics.json"
+    tickers_source = (get_config_value("ML_MULTIDAY_LR_TICKERS_SOURCE") or "game5m").strip()
+
     py = sys.executable
     train_cmd = [
         py,
-        str(project_root / "scripts/train_portfolio_catboost.py"),
+        str(project_root / "scripts/train_game5m_multiday_lr.py"),
+        "--tickers-source",
+        tickers_source,
         "--json-metrics-out",
         str(metrics_path),
     ]
     if train_dry_run:
         train_cmd.append("--dry-run")
-    logger.info(
-        "Portfolio refresh train writes_cbm=%s continuous=%s phase=%s",
-        writes_cbm,
-        continuous,
-        trigger.phase,
-    )
+
     train_rc = subprocess.call(train_cmd, cwd=str(project_root)) if do_train else 0
+
+    summary: dict = {"status": "skipped"}
+    if metrics_path.is_file():
+        try:
+            raw = json.loads(metrics_path.read_text(encoding="utf-8"))
+            rows = raw if isinstance(raw, list) else []
+            summary = {
+                "status": "ok" if rows else "empty",
+                "n_tickers_fitted": len(rows),
+                "tickers_source": tickers_source,
+                "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as e:
+            summary = {"status": "metrics_read_error", "error": str(e)}
 
     finalize_contour_refresh(
         project_root,
-        "portfolio",
+        "multiday_lr",
         trigger,
         apply_ran=True,
-        train_ran=writes_cbm and train_rc == 0,
+        train_ran=writes and train_rc == 0,
         full=full_train,
-        extra={"train_rc": train_rc},
+        extra={"train_rc": train_rc, "summary": summary},
     )
     return 0 if train_rc == 0 else train_rc
 

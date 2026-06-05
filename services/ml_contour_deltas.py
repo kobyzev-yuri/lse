@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from services.ml_contour_refresh import MlContourSpec, load_refresh_log
+from services.ml_contour_refresh import MlContourSpec, default_ml_data_quality_dir, load_refresh_log
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:
@@ -87,6 +87,41 @@ def count_strategy_buys_since(engine: Engine, strategy: str, since: Optional[dat
                         SELECT COUNT(*) FROM trade_history
                         WHERE UPPER(TRIM(strategy_name)) = :s
                           AND UPPER(TRIM(side)) = 'BUY'
+                        """
+                    ),
+                    {"s": strategy.strip().upper()},
+                ).scalar()
+            return int(n or 0)
+    except Exception:
+        return 0
+
+
+def count_strategy_closed_since(engine: Engine, strategy: str, since: Optional[datetime]) -> int:
+    """
+    Closed round-trips: SELL rows for strategy (exit ts = watermark for train labels).
+    Matches compute_closed_trade_pnls / train_game5m_catboost sampling.
+    """
+    try:
+        with engine.connect() as conn:
+            if since is not None:
+                n = conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) FROM trade_history
+                        WHERE UPPER(TRIM(strategy_name)) = :s
+                          AND UPPER(TRIM(side)) = 'SELL'
+                          AND ts >= :since
+                        """
+                    ),
+                    {"s": strategy.strip().upper(), "since": since},
+                ).scalar()
+            else:
+                n = conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) FROM trade_history
+                        WHERE UPPER(TRIM(strategy_name)) = :s
+                          AND UPPER(TRIM(side)) = 'SELL'
                         """
                     ),
                     {"s": strategy.strip().upper()},
@@ -184,6 +219,94 @@ def count_erd_rows_since(
         return 0
 
 
+def count_quotes_daily_rows_since(
+    engine: Engine,
+    since: Optional[datetime],
+    *,
+    tickers: Optional[list[str]] = None,
+) -> int:
+    """New daily quote rows (multiday_lr data_unit)."""
+    try:
+        clauses = ["1=1"]
+        params: Dict[str, Any] = {}
+        if since is not None:
+            clauses.append("date >= :since_date")
+            params["since_date"] = since.date() if hasattr(since, "date") else since
+        if tickers:
+            upper = [str(t).strip().upper() for t in tickers if str(t).strip()]
+            if upper:
+                clauses.append("UPPER(TRIM(ticker)) = ANY(:tickers)")
+                params["tickers"] = upper
+        sql = f"SELECT COUNT(*) FROM quotes WHERE {' AND '.join(clauses)}"
+        with engine.connect() as conn:
+            n = conn.execute(text(sql), params).scalar()
+            return int(n or 0)
+    except Exception:
+        return 0
+
+
+def count_recovery_export_rows_since(engine: Engine, since: Optional[datetime]) -> int:
+    """Proxy for new recovery ML rows: TIME_EXIT_EARLY SELL since watermark."""
+    try:
+        with engine.connect() as conn:
+            if since is not None:
+                n = conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) FROM trade_history
+                        WHERE UPPER(TRIM(strategy_name)) = 'GAME_5M'
+                          AND UPPER(TRIM(side)) = 'SELL'
+                          AND UPPER(TRIM(COALESCE(signal_type, ''))) = 'TIME_EXIT_EARLY'
+                          AND ts >= :since
+                        """
+                    ),
+                    {"since": since},
+                ).scalar()
+            else:
+                n = conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) FROM trade_history
+                        WHERE UPPER(TRIM(strategy_name)) = 'GAME_5M'
+                          AND UPPER(TRIM(side)) = 'SELL'
+                          AND UPPER(TRIM(COALESCE(signal_type, ''))) = 'TIME_EXIT_EARLY'
+                        """
+                    ),
+                ).scalar()
+            return int(n or 0)
+    except Exception:
+        return 0
+
+
+def count_gap_forecast_complete_since(engine: Engine, since: Optional[datetime]) -> int:
+    """Rows with observed open gap (forecast_row) since watermark."""
+    try:
+        with engine.connect() as conn:
+            if since is not None:
+                n = conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) FROM game5m_gap_forecast_daily
+                        WHERE open_gap_pct IS NOT NULL
+                          AND updated_at >= :since
+                        """
+                    ),
+                    {"since": since},
+                ).scalar()
+            else:
+                n = conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) FROM game5m_gap_forecast_daily
+                        WHERE open_gap_pct IS NOT NULL
+                        """
+                    ),
+                ).scalar()
+            return int(n or 0)
+    except Exception:
+        return 0
+
+
 def count_open_path_labels_since(engine: Engine, since: Optional[datetime]) -> int:
     try:
         with engine.connect() as conn:
@@ -215,13 +338,13 @@ def count_deltas_for_contour(
 
     if cid == "game5m_entry":
         return {
-            "new_units_apply": count_strategy_buys_since(engine, "GAME_5M", since_apply),
-            "new_units_train": count_strategy_buys_since(engine, "GAME_5M", since_train),
+            "new_units_apply": count_strategy_closed_since(engine, "GAME_5M", since_apply),
+            "new_units_train": count_strategy_closed_since(engine, "GAME_5M", since_train),
         }
     if cid == "portfolio":
         return {
-            "new_units_apply": count_strategy_buys_since(engine, "PORTFOLIO", since_apply),
-            "new_units_train": count_strategy_buys_since(engine, "PORTFOLIO", since_train),
+            "new_units_apply": count_strategy_closed_since(engine, "PORTFOLIO", since_apply),
+            "new_units_train": count_strategy_closed_since(engine, "PORTFOLIO", since_train),
         }
     if cid == "event_reaction_regression":
         return {
@@ -240,6 +363,27 @@ def count_deltas_for_contour(
             "new_units_apply": count_open_path_labels_since(engine, since_apply),
             "new_units_train": count_open_path_labels_since(engine, since_train),
         }
+    if cid == "multiday_lr":
+        tickers: list[str] = []
+        try:
+            from services.ticker_groups import get_tickers_game_5m
+
+            tickers = [str(t).strip().upper() for t in get_tickers_game_5m() if str(t).strip()]
+        except Exception:
+            tickers = []
+        return {
+            "new_units_apply": count_quotes_daily_rows_since(engine, since_apply, tickers=tickers or None),
+            "new_units_train": count_quotes_daily_rows_since(engine, since_train, tickers=tickers or None),
+        }
+    if cid == "recovery":
+        return {
+            "new_units_apply": count_recovery_export_rows_since(engine, since_apply),
+            "new_units_train": count_recovery_export_rows_since(engine, since_train),
+        }
+    if cid == "gap_forecast":
+        n_apply = count_gap_forecast_complete_since(engine, since_apply)
+        n_train = count_gap_forecast_complete_since(engine, since_train)
+        return {"new_units_apply": n_apply, "new_units_train": n_train}
     return {"new_units_apply": None, "new_units_train": None}
 
 
@@ -287,6 +431,30 @@ def resolve_readiness_gates(
         n_train = int(metrics.get("n_train") or 0)
         st = metrics.get("status")
         out["dataset_ready"] = n_train > 0 or st == "ok"
+        return out
+
+    q_dir = default_ml_data_quality_dir(project_root)
+    if cid == "multiday_lr":
+        raw = _json_load(q_dir / spec.train_metrics_relpath)
+        rows = raw if isinstance(raw, list) else []
+        n_fitted = len(rows)
+        out["dataset_ready"] = n_fitted > 0
+        out["train_ready"] = n_fitted >= 3
+        return out
+
+    if cid == "recovery":
+        raw = _json_load(q_dir / spec.train_metrics_relpath) or {}
+        n_train = int(raw.get("n_train") or raw.get("n_total") or 0)
+        out["dataset_ready"] = n_train > 0
+        auc = raw.get("auc_valid")
+        out["train_ready"] = n_train >= 50 and auc is not None
+        return out
+
+    if cid == "gap_forecast":
+        raw = _json_load(q_dir / spec.train_metrics_relpath) or {}
+        n_complete = int(raw.get("n_complete") or 0)
+        out["dataset_ready"] = n_complete >= 12
+        out["train_ready"] = n_complete >= 30
         return out
 
     return out

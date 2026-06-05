@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Ежедневный recovery-пайплайн (после US-сессии): экспорт JSONL из анализатора + обучение CatBoost recovery.
+Legacy recovery-пайплайн: экспорт JSONL + train в одном скрипте.
 
-Задачи:
-  1) export_recovery_ml JSONL (days окно)
-  2) train_game5m_recovery_catboost.py на этом JSONL (по умолчанию H=120)
-  3) (опционально) сохранить краткую сводку в JSONL-лог для тренда
+**Рекомендуется:** ``run_recovery_ml_refresh.py`` (dispatcher poll / ``--slot weekly_full``).
 
-Запуск внутри контейнера (WORKDIR /app):
+  python3 scripts/run_recovery_ml_refresh.py --full
+
+Этот файл сохранён для ручного запуска:
   python3 scripts/run_daily_game5m_recovery_pipeline.py
 
 Cron на хосте (пример; часовой пояс — TZ хоста):

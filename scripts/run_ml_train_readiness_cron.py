@@ -272,6 +272,20 @@ def main() -> int:
     ei_data = _load_json(ei_readiness_path)
     ei_gate = _gate_earnings_intelligence(ei_data) if not skip_ei else {"ready": None, "reasons": ["skipped"]}
 
+    mlr_path = q_dir / "last_multiday_lr_train_metrics.json"
+    mlr_rows: list = []
+    if mlr_path.is_file():
+        try:
+            raw_mlr = json.loads(mlr_path.read_text(encoding="utf-8"))
+            mlr_rows = raw_mlr if isinstance(raw_mlr, list) else []
+        except Exception:
+            mlr_rows = []
+    mlr_gate = {
+        "ready": None,
+        "reasons": ["advisory_only"],
+        "n_tickers_fitted": len(mlr_rows),
+    }
+
     overall = True
     if not skip_g5:
         overall = overall and bool(g5_gate.get("ready"))
@@ -293,6 +307,11 @@ def main() -> int:
             "readiness_path": str(ei_readiness_path),
             "gate": ei_gate,
             "readiness": ei_data,
+        },
+        "multiday_lr": {
+            "metrics_path": str(mlr_path),
+            "gate": mlr_gate,
+            "metrics": {"n_tickers_fitted": len(mlr_rows), "tickers": [r.get("ticker") for r in mlr_rows[:20]]},
         },
         "overall_production_ready": overall,
         "overall_earnings_grid_ready": bool(ei_gate.get("ready")) if not skip_ei else None,

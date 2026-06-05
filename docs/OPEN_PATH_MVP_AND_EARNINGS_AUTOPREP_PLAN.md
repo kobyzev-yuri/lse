@@ -1,5 +1,7 @@
 # Earnings автоподготовка → Open-path MVP (классификация входа у open)
 
+> **Матрица контуров и единый cron:** [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) §5. Здесь — gates autoprep и open-path MVP.
+
 **Аудитория:** продукт, разработка, ops.  
 **Связанные документы:**
 
@@ -64,8 +66,8 @@ Cron по умолчанию **`--new-events-only`**: sync/ingest/extract тол
 
 | Cron | Скрипт | Шаги |
 |------|--------|------|
-| `:15 */6` | `run_ml_refresh_dispatcher.py` | poll всех контуров; earnings/open-path train **только по триггеру** Δ labels |
-| `23:52` | `run_earnings_ml_refresh.py --full` | + shadow report + полный retrain .cbm |
+| `:15 */6` | `run_ml_refresh_dispatcher.py` | poll всех контуров; train **только по триггеру** Δ |
+| `23:47` | `run_ml_refresh_dispatcher.py --slot nightly` | game5m, open-path, event_reaction, earnings_grid, portfolio |
 
 `run_earnings_ml_refresh.py` включает:
 

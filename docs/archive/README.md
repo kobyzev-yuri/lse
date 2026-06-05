@@ -51,3 +51,6 @@
 | `GAME_5M_INCORRECT_0925_CLOSES_2026-05-05.md` | Разбор некорректных SELL на границе открытия (09:25–09:30 ET); исторический инцидент + фиксы/рекомендации |
 | `GAME_5M_BUY_DECISION_AND_LLM.md` | Логически архивный документ в корне docs: старое подробное описание BUY/LLM. Канон: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
 | `GAME_5M_FEATURES_REUSE_AND_DECISION_SOURCE.md` | Логически архивный документ в корне docs: справочник по признакам и старым вариантам источника решения. Канон: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
+| `WEEKLY_PLAN_GAME5M_AND_ML_2026-05-06.md` | Снимок недели 2026-05-06. Канон: [ML_AND_DECISION_ARCHITECTURE.md](../ML_AND_DECISION_ARCHITECTURE.md), статус: [PROJECT_STATUS_AND_ROADMAP.md](../PROJECT_STATUS_AND_ROADMAP.md) |
+| `EARNINGS_PLAN_2026-05-29.md` … `EARNINGS_PLAN_2026-06-01.md` | Дневные earnings-планы. Актуально: [EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](../earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md) |
+| `EARNINGS_INTELLIGENCE_PLAN.md` | Черновик с frontmatter todos. Актуально: [EARNINGS_PRODUCT_ROADMAP.md](../earnings-event-agent-lse/EARNINGS_PRODUCT_ROADMAP.md) |

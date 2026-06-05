@@ -2,7 +2,7 @@
 """
 GAME_5M entry CatBoost refresh: datasets (optional) → train → unified refresh log.
 
-Data-driven trigger: new closed GAME_5M BUY rows since last apply/train.
+Data-driven trigger: new closed GAME_5M round-trips (SELL / exit ts) since last apply/train.
 See docs/ML_UNIFIED_RETRAIN_FRAMEWORK.md
 """
 from __future__ import annotations

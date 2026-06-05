@@ -2,6 +2,8 @@
 
 Краткая карта **компонентов**, **хранилищ** и **потоков данных**. Детальные пошаговые Mermaid-диаграммы — в [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md).
 
+**ML-контуры, retrain, gates и выход в торговлю:** [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) (канон; не дублировать здесь).
+
 ---
 
 ## 1. Компоненты

@@ -63,6 +63,7 @@ def main() -> int:
     parser.add_argument("--valid-ratio", type=float, default=0.2, help="Last fraction of rows for validation (time-ordered)")
     parser.add_argument("--out", type=str, default="", help="Output .cbm path (meta alongside .meta.json)")
     parser.add_argument("--dry-run", action="store_true", help="Only print stats, no model file")
+    parser.add_argument("--json-metrics-out", type=str, default="", help="Write train metrics JSON (ML contour refresh)")
     args = parser.parse_args()
 
     try:
@@ -187,13 +188,6 @@ def main() -> int:
     out_path = Path(out_final)
     meta_path = out_path.with_suffix(".meta.json")
 
-    if args.dry_run:
-        logger.info("Dry-run: не записываем %s", out_path)
-        return 0
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    model.save_model(str(out_path))
-
     meta = {
         "feature_names": feature_names,
         "cat_feature_indices": cat_features,
@@ -208,7 +202,22 @@ def main() -> int:
         "auc_valid": round(auc, 4) if auc == auc else None,
         "positive_rate": round(pos / n_total, 4) if n_total else None,
         "schema_note": "Признаки как в services/game5m_recovery_catboost.py / RECOVERY_ML_SCHEMA",
+        "status": "ok",
     }
+
+    metrics_out = (args.json_metrics_out or "").strip()
+    if metrics_out:
+        mp = Path(metrics_out)
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("Metrics JSON: %s", mp)
+
+    if args.dry_run:
+        logger.info("Dry-run: не записываем %s", out_path)
+        return 0
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    model.save_model(str(out_path))
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     logger.info("Сохранено: %s и %s", out_path, meta_path)
