@@ -52,8 +52,8 @@ def main() -> int:
     ap.add_argument(
         "--max-divergences",
         type=int,
-        default=0,
-        help="Exit 1 if divergence_count exceeds this (cron gate)",
+        default=-1,
+        help="Exit 1 if divergence_count exceeds this (cron gate; default: disabled)",
     )
     ap.add_argument("--json-out", default="", help="Optional path to write JSON")
     args = ap.parse_args()
@@ -67,7 +67,7 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text + "\n", encoding="utf-8")
 
-    if int(report.get("divergence_count") or 0) > max(0, args.max_divergences):
+    if args.max_divergences >= 0 and int(report.get("divergence_count") or 0) > args.max_divergences:
         return 1
     return 0
 

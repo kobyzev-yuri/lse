@@ -83,7 +83,7 @@ Earnings / open-path: **отдельная очередь** на shadow → prod
 
 | # | Задача | DoD |
 |---|--------|-----|
-| 3.0.1 | Baseline mirror: `decision_stack_shadow_diff` за 7 дн. | JSON + запись в PROJECT_STATUS |
+| 3.0.1 | Baseline mirror: `decision_stack_shadow_diff` за 7 дн. | ✅ 32 snap / 4 div (12.5%), session veto |
 | 3.0.2 | `scripts/report_decision_stack_mirror.py` | CLI: divergence rate, recent rows, exit 0/1 по порогу |
 | 3.0.3 | Portfolio L3 | Уже `PORTFOLIO_CATBOOST_ENABLED=true` — формально **promoted** (L2✅ + L3✅) |
 | 3.0.4 | Multiday entry gate | Prod сейчас `apply` — сверить с [GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md](GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md) §3.2 |

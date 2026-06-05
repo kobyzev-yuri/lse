@@ -42,6 +42,10 @@
 
 Коммиты: `6607dad` (L1 consolidation), `730db19` (archive), `8a03ea9` (recovery `--jsonl`). Все 8 контуров: `train_ran=True`. CatBoost: entry AUC≈0.50, portfolio RMSE≈0.078, recovery AUC≈0.71, event RMSE≈0.13. Multiday: **927** ridge JSON (merged universe).
 
+### Mirror baseline (фаза 3.0, 2026-06-05)
+
+`report_decision_stack_mirror.py --days 7`: 32 сделки со snapshot, **4 divergence** (12.5%) — все из-за `session: вне REGULAR`. `resolve_enabled_recommendation=false`. Артефакт: `last_decision_stack_mirror_report.json`.
+
 ---
 
 ## Долго отложенные (не баги)
