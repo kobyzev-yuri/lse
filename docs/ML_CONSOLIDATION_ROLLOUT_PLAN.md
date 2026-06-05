@@ -75,7 +75,7 @@
 | 3 | `premarket_gap_baseline` vs `gap_forecast` | ML только если beat baseline ([GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) §5) |
 | 4 | `recovery_ml` | D4b go/no-go |
 | 5 | `event_reaction` | advisory → optional veto после backtest |
-| 6 | `DECISION_STACK_RESOLVE_ENABLED` | 3–7 дней mirror без divergence |
+| 6 | `DECISION_STACK_RESOLVE_ENABLED` | **Опционально:** включается вручную, если статистика session-divergence ухудшится (см. §3.0 policy) |
 
 Earnings / open-path: **отдельная очередь** на shadow → product-tier ([EARNINGS_PRODUCT_ROADMAP.md](earnings-event-agent-lse/EARNINGS_PRODUCT_ROADMAP.md)); не блокирует фазу 3 GAME_5M.
 
@@ -89,7 +89,7 @@ Earnings / open-path: **отдельная очередь** на shadow → prod
 | 3.0.4 | Multiday entry gate | Prod сейчас `apply` — сверить с [GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md](GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md) §3.2 |
 | 3.0.5 | `catboost_entry_5m` | AUC≈0.50 — **заблокирован** до фазы C (analyzer backtest) |
 
-**Блокер RESOLVE:** `DECISION_STACK_RESOLVE_ENABLED=false` до 3–7 дней `resolve_divergence=0` (очередь 6).
+**Политика RESOLVE (2026-06-05, принято):** session-divergence (`NEAR_OPEN` / `NEAR_CLOSE` → stack HOLD, legacy STRONG_BUY) — **норма**, не блокер. Baseline 4/32 (12.5%): 3 прибыльных, 1 убыточная — **оставляем legacy** (`DECISION_STACK_RESOLVE_ENABLED=false`). Snapshot и `report_decision_stack_mirror.py` — телеметрия; при ухудшении edge включаем `RESOLVE=true` без смены кода.
 
 ---
 

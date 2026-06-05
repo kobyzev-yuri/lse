@@ -171,10 +171,10 @@ Train внутри скриптов **только по триггеру** (кр
 | 4 | L3 `DECISION_STACK_READINESS_<CONTOUR>=production` (или override) | `decision_snapshot` |
 | 5 | L3 gate mode `apply` | `DECISION_STACK_*_GATE_MODE=apply` |
 | 6 | Runtime flag | `*_ENABLED=true` |
-| 7 | Mirror 3–7 дней | `resolve_divergence=false` в логах |
-| 8 | `DECISION_STACK_RESOLVE_ENABLED=true` | только GAME_5M после sign-off |
+| 7 | Mirror-телеметрия | `report_decision_stack_mirror.py`, `decision_snapshot` в сделках |
+| 8 | `DECISION_STACK_RESOLVE_ENABLED=true` | **опционально**, ручной toggle после ops sign-off |
 
-**Сейчас на prod:** `DECISION_STACK_RESOLVE_ENABLED=false` — L3 в режиме mirror; это ожидаемо.
+**Сейчас на prod:** `DECISION_STACK_RESOLVE_ENABLED=false` — legacy исполняет; stack в shadow. Session-divergence (NEAR_OPEN/CLOSE) принята как норма, пока статистика за legacy ([ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) §3.0).
 
 ---
 

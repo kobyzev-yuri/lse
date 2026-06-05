@@ -33,7 +33,7 @@
 | **Portfolio CatBoost** | L2✅ L3✅ | Мониторинг RMSE/edge; уже в карточках | 3 ✅ |
 | **GAME_5M entry CatBoost** | AUC≈0.50, gate ❌ | Analyzer backtest фаза C | 3 (заблокирован) |
 | **Multiday LR gates** | REG on, entry `apply` | Сверка с log_only планом; hold `log_only` | 3 |
-| **L3 resolve на prod** | mirror | 3–7 дней `resolve_divergence=0` → enable | 3 |
+| **L3 resolve на prod** | mirror, **RESOLVE=false по политике** | Телеметрия mirror; `RESOLVE=true` — ручной toggle при смене статистики | 3 |
 | **Recovery D4b** | Модель AUC≈0.71, log-only | go/no-go по D4a stats | 3 |
 | **Event-reaction в торговле** | Train есть, gate RMSE | advisory only; hard-block после backtest | 3 |
 | **Prod config audit** | Локальный example OK | Audit боевого `/app/config.env` | 4 |
@@ -44,7 +44,7 @@
 
 ### Mirror baseline (фаза 3.0, 2026-06-05)
 
-`report_decision_stack_mirror.py --days 7`: 32 сделки со snapshot, **4 divergence** (12.5%) — все из-за `session: вне REGULAR`. `resolve_enabled_recommendation=false`. Артефакт: `last_decision_stack_mirror_report.json`.
+`report_decision_stack_mirror.py --days 7`: 32 сделки со snapshot, **4 divergence** (12.5%) — все `session: вне REGULAR` (NEAR_OPEN/CLOSE). **Принято как норма:** legacy остаётся исполнителем; stack только shadow. Включение `RESOLVE=true` — по ops-решению, если edge ухудшится. Артефакт: `last_decision_stack_mirror_report.json`.
 
 ---
 
