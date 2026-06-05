@@ -28,6 +28,12 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--apply-data", action="store_true")
+    ap.add_argument(
+        "--tickers-source",
+        choices=("game5m", "config", "merged"),
+        default="",
+        help="Override ML_MULTIDAY_LR_TICKERS_SOURCE (default: merged = quotes∪config)",
+    )
     args = ap.parse_args()
 
     from config_loader import get_config_value
@@ -71,7 +77,7 @@ def main() -> int:
     q_dir = _default_q_dir()
     q_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = q_dir / "last_multiday_lr_train_metrics.json"
-    tickers_source = (get_config_value("ML_MULTIDAY_LR_TICKERS_SOURCE") or "game5m").strip()
+    tickers_source = (args.tickers_source or get_config_value("ML_MULTIDAY_LR_TICKERS_SOURCE") or "merged").strip()
 
     py = sys.executable
     train_cmd = [

@@ -78,7 +78,7 @@ def test_multiday_lr_deltas_use_quotes(monkeypatch):
         return 11
 
     monkeypatch.setattr("services.ml_contour_deltas.count_quotes_daily_rows_since", _quotes)
-    monkeypatch.setattr("services.ticker_groups.get_tickers_game_5m", lambda: ["NVDA"])
+    monkeypatch.setattr("services.ml_contour_deltas._multiday_lr_ticker_universe", lambda _e: ["NVDA"])
     out = count_deltas_for_contour(MagicMock(), spec, {})
     assert out["new_units_apply"] == 11
     assert calls == ["quotes", "quotes"]

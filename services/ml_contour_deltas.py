@@ -219,6 +219,46 @@ def count_erd_rows_since(
         return 0
 
 
+def _multiday_lr_ticker_universe(engine: Engine) -> list[str]:
+    """Same universe as multiday_lr refresh (ML_MULTIDAY_LR_TICKERS_SOURCE, default merged)."""
+    try:
+        from config_loader import get_config_value
+
+        source = (get_config_value("ML_MULTIDAY_LR_TICKERS_SOURCE") or "merged").strip().lower()
+    except Exception:
+        source = "merged"
+    try:
+        if source == "game5m":
+            from services.ticker_groups import get_tickers_game_5m
+
+            return [str(t).strip().upper() for t in get_tickers_game_5m() if str(t).strip()]
+        if source == "config":
+            from services.ticker_groups import get_config_ticker_symbols_upper_unique
+
+            return list(get_config_ticker_symbols_upper_unique())
+        if source == "merged":
+            from services.ticker_groups import get_all_ticker_groups
+
+            from_quotes: list[str] = []
+            try:
+                with engine.connect() as conn:
+                    rows = conn.execute(text("SELECT DISTINCT ticker FROM quotes ORDER BY ticker"))
+                    from_quotes = [str(r[0]).strip().upper() for r in rows if r and r[0]]
+            except Exception:
+                pass
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for t in from_quotes + get_all_ticker_groups():
+                u = str(t).strip().upper()
+                if u and u not in seen:
+                    seen.add(u)
+                    ordered.append(u)
+            return sorted(ordered)
+    except Exception:
+        pass
+    return []
+
+
 def count_quotes_daily_rows_since(
     engine: Engine,
     since: Optional[datetime],
@@ -364,13 +404,7 @@ def count_deltas_for_contour(
             "new_units_train": count_open_path_labels_since(engine, since_train),
         }
     if cid == "multiday_lr":
-        tickers: list[str] = []
-        try:
-            from services.ticker_groups import get_tickers_game_5m
-
-            tickers = [str(t).strip().upper() for t in get_tickers_game_5m() if str(t).strip()]
-        except Exception:
-            tickers = []
+        tickers = _multiday_lr_ticker_universe(engine)
         return {
             "new_units_apply": count_quotes_daily_rows_since(engine, since_apply, tickers=tickers or None),
             "new_units_train": count_quotes_daily_rows_since(engine, since_train, tickers=tickers or None),
