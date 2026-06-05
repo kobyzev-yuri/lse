@@ -205,7 +205,7 @@ Inference: `services/earnings_scenario_signal.py` → `predict_scenario_from_fea
 - `predicted_scenario_proba` — вероятность выбранного класса;
 - `predicted_scenario_sign` — эвристика знака 5d **source** (для Shadow/Fusion, не факт).
 
-Карта знаков source (`SCENARIO_SOURCE_SIGN`): например `gap_up_follow_through → +1.0`, `capex_positive_for_infra_peers → -0.5`.
+Карта знаков source (`SCENARIO_SOURCE_SIGN`): например `gap_up_follow_through → +1.0`, `capex_positive_for_infra_peers → -0.5`. Полная таблица всех 7 классов, peer-sign и схема решения source vs peer — [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §5.
 
 ---
 

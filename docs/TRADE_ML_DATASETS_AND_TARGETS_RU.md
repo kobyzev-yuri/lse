@@ -201,39 +201,135 @@ Ridge **не заменяется** — это фоновый контур GAME_
 
 ### Цель
 
-Предсказать **тип сценария реакции** на earnings (не «сколько процентов», а **какая история**): `gap_up_follow_through`, `capex_positive_for_infra_peers`, `beat_selloff_pullback`, `cross_earnings_contagion` и др. Разрешает кейсы, где **source и кластер идут в разные стороны** (META −10% / MU +28% — spillover facts, сценарий «infra peers»).
+Ответить не «сколько % за 5 дней», а **«какая история разворачивается»** после конкретного earnings. Это критично, когда **source и peers двигаются в разные стороны**: META −10% при MU +28% — регрессия по META даёт одну цифру, а сценарий `capex_positive_for_infra_peers` перенаправляет внимание на **infra-пиров**.
 
-Оркестратор: `scripts/run_earnings_ml_refresh.py`. UI: `/earnings` → Shadow, Fusion. План: [earnings-event-agent-lse/EARNINGS_INTELLIGENCE_PLAN.md](earnings-event-agent-lse/EARNINGS_INTELLIGENCE_PLAN.md).
+**Глубокий разбор LLM → label → train:** [earnings-event-agent-lse/EARNINGS_LLM_ML_LABELS_AND_TRAINING.md](earnings-event-agent-lse/EARNINGS_LLM_ML_LABELS_AND_TRAINING.md).  
+**UI / Fusion:** [earnings-event-agent-lse/EARNINGS_UI_GUIDE.md](earnings-event-agent-lse/EARNINGS_UI_GUIDE.md).
 
-### Юнит наблюдения
+Оркестратор: `scripts/run_earnings_ml_refresh.py`. Inference: `services/earnings_scenario_signal.py`. Fusion: `services/earnings_intelligence_fusion.py`.
 
-Та же таблица **`event_reaction_dataset`**, но:
+### Юнит наблюдения и разметка
 
-- **X:** `feature_builder_version=quotes_regime_earnings_v1` — quotes + regime + **earnings tone/timing** + **peer graph** (`peer_graph_out_degree`, `peer_graph_weight_sum`) + **peer momentum** до события
-- **y:** `final_label` где `label_source=llm_scenario_v0` (из LLM `scenario_hints` через `scripts/apply_earnings_scenario_labels.py`)
+| Поле | Значение |
+|------|----------|
+| Таблица | `event_reaction_dataset` (одна строка = **одно** earnings-событие **одного** source-тикера) |
+| **X** | `features_before` с `feature_builder_version=quotes_regime_earnings_v1`: quotes, regime, tone/timing (скаляры из LLM), `peer_graph_*`, peer momentum |
+| **y** | `final_label` = ID сценария, `label_source=llm_scenario_v0` |
+| Исключения из train | `UP` / `DOWN` / `FLAT` (`label_source=auto_quotes_v1`) — это rule-метки, не scenario ML |
 
-LLM **не обучается** — только extractor и разметка из transcript/8-K.
+Цепочка метки: materials → LLM `scenario_hints` → `apply_earnings_scenario_labels.py` (top hint по confidence: high > medium > low) → CatBoost учится предсказывать класс **без повторного LLM** на inference.
 
-### Предикт
+### Каталог классов v0 (все 7)
 
-**CatBoostClassifier**, multi-class по именам сценариев. Метрики: valid accuracy, live **shadow report** (sign/class vs созревший `forward_log_ret_5d`, pseudo-PnL после transaction costs).
+Зашиты в промпт `services/earnings_material_extractor.py`. Модель предсказывает **ровно один** из них (+ proba по всем классам в `scenario_class_probs`).
 
-### Что даёт сверх регрессии (§4)
+| ID класса | Что означает (нарратив) | Типичный source (5d) | Куда смотреть по peers |
+|-----------|-------------------------|----------------------|-------------------------|
+| `gap_up_follow_through` | Позитивный гэп **удержался**, рост продолжается | Bullish | Peers по кластеру с умеренным позитивным spillover |
+| `gap_up_fade` | Гэп вверх **не удержался**, «продали новость» | Bearish / mixed | Осторожность по source; peers часто слабее source |
+| `beat_selloff_pullback` | Beat по цифрам, но акция **падает** (фиксация) | Short-term bearish | Не путать с полным развалом тезиса |
+| `beat_revaluation_down` | Цифры ок, но рынок **снижает мультипликатор** (capex, margin, risk) | Bearish | Долгий re-rating; peers из того же сектора под вопросом |
+| `miss_or_guide_breakdown` | Miss / плохой guidance — **ломается тезис** | Bearish | Избегать long source; contagion на слабых peers |
+| `cross_earnings_contagion` | Отчёт **тянет весь кластер** (одно направление) | Зависит от знака шока | Смотреть **всех** peers из `affected_tickers` / graph |
+| `capex_positive_for_infra_peers` | Source под давлением (capex/invest), но **infra-пиры** могут выиграть | Source часто **−** | **Главный peer-кейс:** MU, SNDK, AVGO и т.д. из peer graph |
 
-| Вопрос | Event regression | Scenario classifier |
-|--------|------------------|---------------------|
-| Выход | Число: pred **5d log-ret source** | Класс: **какой нарратив** |
-| META −0.5% pred, call про capex | Одна цифра по META | «Contagion / infra peers» → смотреть **peers** |
-| Слабый pred ≈ 0 | Неясно | Сценарий + confidence в **Fusion** |
-| Кластер | Не моделирует MU/SNDK | Связка с spillover / `cross_earnings_contagion` |
+**Важно:** класс описывает **событие source**, не «тикер навсегда». На новом отчёте тот же тикер может получить другой класс.
 
-**Статус (pilot):** мало LLM labels (~15+), shadow на ~27 matured events — **advisory only**, не подключено к GAME_5M execution.
+### Эвристики знака: source vs peer (код)
 
-### Peer spillover и weighted score (не эта модель)
+Модель выдаёт класс; для Fusion/Shadow знак 5d **source** и **peers** задаётся эвристикой (не отдельным target):
 
-- **Spillover tab** — **факты** `forward_log_ret_*` peers от даты отчёта source (event-study по `quotes`). Это **история для валидации**, не forward ML.
-- **Weighted spillover score** (план): `Σ weight_i × peer_ret_i` — одна метрика «как вёл себя кластер» для разметки и калибровки весов `peer_graph_edge`; в UI пока не вынесен.
-- **Peer spillover ML (план):** отдельная регрессия `(source_event, peer) → peer_forward_log_ret_5d` или propagation `impulse_i = sign_i × w_i × pred_shock_source`.
+**Source** — `SCENARIO_SOURCE_SIGN` в `services/earnings_scenario_signal.py`:
+
+| Класс | `predicted_scenario_sign` | Интерпретация |
+|-------|---------------------------|---------------|
+| `gap_up_follow_through` | **+1.0** | Ожидаем bullish 5d по source |
+| `beat_selloff_pullback` | −0.5 | Слабый/отрицательный bias |
+| `beat_revaluation_down` | **−1.0** | Bearish re-rating |
+| `miss_or_guide_breakdown` | **−1.0** | Bearish, сильный негатив |
+| `gap_up_fade` | −0.3 | Слабый негатив |
+| `cross_earnings_contagion` | **0.0** | Знак не у source — смотри кластер |
+| `capex_positive_for_infra_peers` | **−0.5** | Source под давлением; **peers отдельно** |
+
+**Peers** — `SCENARIO_PEER_SIGN` в `services/earnings_scenario_shadow.py` (для shadow / spillover tab):
+
+| Класс | Peer sign | Смысл |
+|-------|-----------|--------|
+| `capex_positive_for_infra_peers` | **+1.0** | Смотреть long/careful на infra peers |
+| `cross_earnings_contagion` | +0.5 | Peers в том же направлении, что шок |
+| `gap_up_follow_through` | +0.3 | Умеренный позитив spillover |
+| `miss_or_guide_breakdown` | −0.3 | Осторожность по связанным именам |
+
+### Как это помогает принять решение (source vs peer)
+
+```text
+Новый earnings у SOURCE (например META)
+    │
+    ├─ Event regression (§4)     → pred forward_log_ret_5d для META (число)
+    ├─ Scenario classifier (§5)  → predicted_scenario + proba + scenario_class_probs
+    ├─ LLM Brief                 → management_tone, affected_tickers, evidence_quotes
+    │
+    ├─ Решение по SOURCE-тикеру:
+    │     • regression: pred > +0.4% log → bullish_5d / иначе bearish/neutral
+    │     • scenario_sign: +1 / −1 / 0 из таблицы выше
+    │     • Fusion alignment: если regression и scenario конфликтуют → conviction=low
+    │
+    └─ Решение по PEER-тикерам (MU, SNDK, …):
+          • НЕ из scenario classifier напрямую (он обучен на source symbol)
+          • peer_spillover_outcomes — факты 1d/5d после прошлых отчётов (валидация)
+          • peer_spillover_ml — pred 5d log-ret для пары (source_event, peer)
+          • SCENARIO_PEER_SIGN + affected_tickers + peer_graph → кого смотреть в первую очередь
+```
+
+**Пример META capex (prod smoke):** regression pred source ≈ +0.19% (слабо bullish), scenario `capex_positive_for_infra_peers` proba ~94%, source_sign −0.5, peer_sign +1.0 → оператор **не** усиливает long META, а открывает **Spillover tab** для MU/SNDK и сравнивает с `peer_spillover_ml`.
+
+### Fusion advisory (`build_earnings_fusion_advisory`)
+
+| Поле | Роль |
+|------|------|
+| `regression_ml.forward_log_ret_5d_pred` | Числовой bias по **source** |
+| `scenario_ml.predicted_scenario` | Класс истории |
+| `scenario_ml.predicted_scenario_proba` | Уверенность модели |
+| `scenario_ml.scenario_class_probs` | Полное распределение по 7 классам |
+| `advisory.regression_bias` | `bullish_5d` / `bearish_5d` / `neutral_5d` |
+| `advisory.scenario_bias` | `scenario_bullish` / `bearish` / `mixed` |
+| `advisory.alignment` | `aligned_or_weak` / `conflict` / `partial` |
+| `advisory.conviction` | `low` / `medium` (medium только при согласии + сильный pred) |
+| `peer_spillover` / `peer_spillover_ml` | Таблица по **каждому peer** |
+
+**`execution_blocked: true`** — Fusion **никогда** не шлёт ордер. Это research/advisory слой до фазы D ([EARNINGS_LLM_ML_LABELS_AND_TRAINING.md](earnings-event-agent-lse/EARNINGS_LLM_ML_LABELS_AND_TRAINING.md) §10).
+
+### Метрики L2 / shadow
+
+| Метрика | Где | Prod (ориентир) |
+|---------|-----|-----------------|
+| `valid_accuracy` | `last_event_reaction_scenario_train_metrics.json` | ~67% при n_train≈24 |
+| Sign accuracy (source 5d) | `last_earnings_scenario_shadow.json` | ~64% на matured |
+| Class accuracy vs LLM label | shadow report | зависит от редких классов |
+| Peer sign accuracy | shadow | отдельно от source |
+| Readiness | `overall_scenario_classifier_ready`, `overall_grid_ready` | grid ready, shadow pilot |
+
+Редкие классы (`miss_or_guide_breakdown`, `beat_revaluation_down`) часто по 1–2 sample — модель может их не предсказывать стабильно.
+
+### Связь с другими контурами (не дублировать)
+
+| Контур | Вопрос | vs scenario classifier |
+|--------|--------|------------------------|
+| Event regression (§4) | Сколько % source за 5d? | Число без нарратива |
+| Peer spillover ML (§9) | Сколько % **конкретного peer**? | Per-peer регрессия |
+| Spillover tab (факты) | Как peers **ходили** на прошлых отчётах? | Backtest, не forward |
+| GAME_5M decision_stack | Вход long 5m сегодня? | **Не подключено** (фаза D+) |
+
+### Планируемое использование (roadmap)
+
+| Фаза | Source-тикер | Peer-тикеры |
+|------|--------------|-------------|
+| **A (сейчас)** | Fusion + Brief advisory | Spillover tab + peer_spillover_ml в UI |
+| **B** | Оператор доверяет при ≥80 LLM labels, shadow sign≥58% | Те же gates + peer sign accuracy |
+| **C** | Event desk alerts, watchlist | Peer watchlist из `affected_tickers` |
+| **D (долго)** | Soft veto/boost в GAME_5M при `miss_or_guide_breakdown` + high proba | `event_fusion` policy с hard caps |
+
+Veto по `miss_or_guide_breakdown` — **только после** доказанного shadow backtest с transaction costs.
 
 ---
 
