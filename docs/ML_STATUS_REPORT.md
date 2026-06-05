@@ -140,6 +140,7 @@ Cron: вс 06:10 MSK — `report_decision_stack_mirror.py --days 14`
 
 | Документ | Тема |
 |----------|------|
+| [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) | **Датасеты, метки, метрики, complementarity, путь к единой точке** |
 | [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) | Канон L1–L3 |
 | [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) | Фазы 0–4 |
 | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) | Алгоритм GAME_5M |

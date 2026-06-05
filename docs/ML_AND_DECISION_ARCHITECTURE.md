@@ -92,7 +92,7 @@ Earnings product: [earnings-event-agent-lse/EARNINGS_PRODUCT_ROADMAP.md](earning
 | Product regression | `forward_log_ret_5d` | `quotes_regime_v1` | `train_event_reaction_catboost.py` | Advisory 5d |
 | Earnings grid | `final_label` (scenario) | `quotes_regime_earnings_v1` | `train_event_reaction_scenario_classifier.py` | Fusion / shadow |
 
-Подробнее: [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md).
+Подробнее: [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) (§сводная матрица, §10 complementarity, §11 единая точка решения).
 
 ---
 

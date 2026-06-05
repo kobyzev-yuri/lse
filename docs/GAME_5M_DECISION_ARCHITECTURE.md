@@ -27,7 +27,7 @@ GAME_5M должен принимать решение через единый `
 
 Принцип: **наблюдаемая рыночная величина может быть production baseline; ML становится production только после доказанного преимущества над baseline.**
 
-**Dual-track:** готовые контуры включаются на **legacy hot path** сразу (`*_ENABLED`, gate `apply`), параллельно пишется `decision_snapshot`. `RESOLVE=true` не обязателен для первого включения ML — см. [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md).
+**Dual-track:** готовые контуры включаются на **legacy hot path** сразу (`*_ENABLED`, gate `apply`), параллельно пишется `decision_snapshot`. `RESOLVE=true` не обязателен для первого включения ML — см. [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md), дорожная карта единой точки — [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) §11.
 
 ---
 
