@@ -154,6 +154,7 @@ Train внутри скриптов **только по триггеру** (кр
 | `15 */2` | `run_earnings_intelligence_autoprep.py` (materials, не train) |
 | вс 23:48 | open-path `--full` shadow |
 | вс 06:00 | `run_earnings_intelligence_prod_eval.py` |
+| вс 06:10 | `report_decision_stack_mirror.py --days 14` | mirror telemetry (phase 3) |
 
 Детали retrain-контракта: [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md).
 

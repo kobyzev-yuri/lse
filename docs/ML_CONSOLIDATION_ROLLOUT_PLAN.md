@@ -79,17 +79,32 @@
 
 Earnings / open-path: **отдельная очередь** на shadow → product-tier ([EARNINGS_PRODUCT_ROADMAP.md](earnings-event-agent-lse/EARNINGS_PRODUCT_ROADMAP.md)); не блокирует фазу 3 GAME_5M.
 
-#### Спринт 3.0 — baseline и мониторинг (текущий)
+#### Спринт 3.0 — baseline и мониторинг ✅
 
 | # | Задача | DoD |
 |---|--------|-----|
 | 3.0.1 | Baseline mirror: `decision_stack_shadow_diff` за 7 дн. | ✅ 32 snap / 4 div (12.5%), session veto |
-| 3.0.2 | `scripts/report_decision_stack_mirror.py` | CLI: divergence rate, recent rows, exit 0/1 по порогу |
-| 3.0.3 | Portfolio L3 | Уже `PORTFOLIO_CATBOOST_ENABLED=true` — формально **promoted** (L2✅ + L3✅) |
-| 3.0.4 | Multiday entry gate | Prod сейчас `apply` — сверить с [GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md](GAME_5M_MULTIDAY_LR_GATES_ROLLOUT_PLAN.md) §3.2 |
-| 3.0.5 | `catboost_entry_5m` | AUC≈0.50 — **заблокирован** до фазы C (analyzer backtest) |
+| 3.0.2 | `scripts/report_decision_stack_mirror.py` | ✅ CLI + session/unexpected split + weekly cron вс 06:10 |
+| 3.0.3 | Portfolio L3 | ✅ `PORTFOLIO_CATBOOST_ENABLED=true` — promoted (L2✅ + L3✅) |
+| 3.0.4 | Multiday entry gate | ✅ Prod `apply` — **намеренно** (legacy L3); arbiter `monitoring` |
+| 3.0.5 | `catboost_entry_5m` | ❌ AUC≈0.50, n_valid=45 — defer до накопления сделок |
 
-**Политика RESOLVE (2026-06-05, принято):** session-divergence (`NEAR_OPEN` / `NEAR_CLOSE` → stack HOLD, legacy STRONG_BUY) — **норма**, не блокер. Baseline 4/32 (12.5%): 3 прибыльных, 1 убыточная — **оставляем legacy** (`DECISION_STACK_RESOLVE_ENABLED=false`). Snapshot и `report_decision_stack_mirror.py` — телеметрия; при ухудшении edge включаем `RESOLVE=true` без смены кода.
+**Политика RESOLVE (2026-06-05):** session-divergence — **норма**; legacy исполняет; `RESOLVE=true` — ручной toggle при ухудшении `unexpected_divergence`.
+
+#### Спринт 3.1 — оценка контуров (2026-06-05) ✅
+
+| Контур | Вердикт | Действие |
+|--------|---------|----------|
+| **Portfolio CatBoost** | L3 prod | Мониторинг RMSE |
+| **Multiday entry** | `apply`, arbiter monitoring | would_hold +0.71% vs pass +1.09% — оставить, следить |
+| **Multiday hold** | `log_only`, 3/5 would_defer | Hold apply **не включать** |
+| **Gap forecast ML** | premarket naive MAE≈1.41%, sign≈79% | ML ridge не beat baseline — **caution**, не promotion |
+| **Recovery D4b** | 15 TE / 13 gate в 21d | **Defer** 2–4 недели (go/no-go не закрыт) |
+| **Event-reaction** | RMSE gate ❌ | Advisory only |
+| **Entry CatBoost** | AUC≈0.50 | Defer; нужно больше закрытых round-trips |
+| **RESOLVE** | 5/41 session div (14d) | false по политике |
+
+**Логический упор фазы 3:** promotion без новых данных — только portfolio; остальное — накопление телеметрии + weekly mirror. Следующий триггер: n_valid entry ≥80 или multiday hold ≥5 would_defer → пересмотр.
 
 ---
 

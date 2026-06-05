@@ -69,6 +69,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 53 23 * * 1-5 flock -n /tmp/lse_ml_data_quality_report.lock docker exec lse-bot python scripts/run_ml_data_quality_report.py --no-default-datasets --json-out /app/logs/ml/ml_data_quality/report_daily.json >> /home/ai8049520/lse/logs/ml_data_quality_report_cron.log 2>&1
 # Recovery D4a: накопление сводки τ×K по TIME_EXIT_EARLY (JSONL для go/no-go перед D4b).
 54 23 * * 1-5 flock -n /tmp/lse_recovery_d4a_stats.lock docker exec lse-bot python scripts/run_recovery_d4a_stats_cron.py >> /home/ai8049520/lse/logs/recovery_d4a_stats_cron.log 2>&1
+# Decision stack mirror telemetry (phase 3): weekly shadow diff, no RESOLVE gate.
+10 6 * * 0 flock -n /tmp/lse_decision_stack_mirror.lock docker exec lse-bot python scripts/report_decision_stack_mirror.py --days 14 --strategy ALL --json-out /app/logs/ml/ml_data_quality/last_decision_stack_mirror_report.json >> /home/ai8049520/lse/logs/decision_stack_mirror.log 2>&1
 
 # Premarket ML feature snapshots: script writes only during PRE_MARKET.
 10 12,14 * * 1-5 flock -n /tmp/lse_premarket_features.lock docker exec lse-bot python scripts/ingest_premarket_daily_features.py --ensure-table >> /home/ai8049520/lse/logs/premarket_features.log 2>&1

@@ -29,13 +29,14 @@
 
 | Направление | Статус | Следующий шаг | Фаза plan |
 |-------------|--------|---------------|-----------|
-| **L3 promotion (спринт 3.0)** | Baseline mirror | `report_decision_stack_mirror.py` + 7d shadow diff | 3 |
-| **Portfolio CatBoost** | L2✅ L3✅ | Мониторинг RMSE/edge; уже в карточках | 3 ✅ |
-| **GAME_5M entry CatBoost** | AUC≈0.50, gate ❌ | Analyzer backtest фаза C | 3 (заблокирован) |
-| **Multiday LR gates** | REG on, entry `apply` | Сверка с log_only планом; hold `log_only` | 3 |
-| **L3 resolve на prod** | mirror, **RESOLVE=false по политике** | Телеметрия mirror; `RESOLVE=true` — ручной toggle при смене статистики | 3 |
-| **Recovery D4b** | Модель AUC≈0.71, log-only | go/no-go по D4a stats | 3 |
-| **Event-reaction в торговле** | Train есть, gate RMSE | advisory only; hard-block после backtest | 3 |
+| **L3 promotion** | Спринт 3.1 завершён | Только portfolio promoted; остальное defer/telemetry | 3 ✅ упор |
+| **Portfolio CatBoost** | L2✅ L3✅ | Мониторинг RMSE/edge | 3 ✅ |
+| **GAME_5M entry CatBoost** | AUC≈0.50, n_valid=45 | Defer до ≥80 valid rows | 3 (заблокирован) |
+| **Multiday LR gates** | entry `apply` monitoring; hold log_only 3/5 | Hold apply не включать | 3 |
+| **Gap forecast ML** | naive baseline лучше ridge | Caution, не L3 promotion | 3 |
+| **L3 resolve** | RESOLVE=false, 5/41 session div (14d) | Weekly cron mirror; toggle вручную | 3 |
+| **Recovery D4b** | 15 TE / 13 gate | Defer 2–4 нед | 3 |
+| **Event-reaction** | RMSE gate ❌ | Advisory only | 3 |
 | **Prod config audit** | Локальный example OK | Audit боевого `/app/config.env` | 4 |
 
 ### Prod ML full train (2026-06-05)
@@ -44,7 +45,7 @@
 
 ### Mirror baseline (фаза 3.0, 2026-06-05)
 
-`report_decision_stack_mirror.py --days 7`: 32 сделки со snapshot, **4 divergence** (12.5%) — все `session: вне REGULAR` (NEAR_OPEN/CLOSE). **Принято как норма:** legacy остаётся исполнителем; stack только shadow. Включение `RESOLVE=true` — по ops-решению, если edge ухудшится. Артефакт: `last_decision_stack_mirror_report.json`.
+7d: 32 snap / 4 div (12.5%). 14d: 41 snap / 5 div (12.2%) — все **session_veto**. `unexpected_divergence=0`. Политика: legacy исполняет; cron вс 06:10 MSK. Артефакт: `last_decision_stack_mirror_report.json`.
 
 ---
 

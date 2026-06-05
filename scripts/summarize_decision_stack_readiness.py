@@ -111,7 +111,7 @@ def summarize(path: Path) -> None:
     _print_block(
         "Apply / Shadow Recommendation",
         [
-            "keep DECISION_STACK_RESOLVE_ENABLED=false until shadow diff exists on fresh deployed code",
+            "DECISION_STACK_RESOLVE_ENABLED=false (policy): session divergence is expected; toggle true only if unexpected_divergence grows",
             "portfolio_catboost can participate as readiness-gated contour; keep runtime evidence monitoring",
             (
                 "multiday gates stay log_only: "

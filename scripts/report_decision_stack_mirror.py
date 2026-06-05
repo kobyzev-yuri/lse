@@ -22,13 +22,26 @@ from services.trade_effectiveness_analyzer import (  # noqa: E402
 )
 
 
+def _classify_divergence(row: dict) -> str:
+    reasons = row.get("primary_reasons") or []
+    joined = " ".join(str(r) for r in reasons).lower()
+    if "session" in joined or "near_open" in joined or "near_close" in joined:
+        return "session_veto"
+    return "other"
+
+
 def _build_report(*, strategy: str, days: int, limit: int) -> dict:
     closed = _load_closed_trades(days=days, strategy_name=strategy)
     effects = _estimate_trade_effects(closed, {})
+    shadow_full = _build_decision_stack_shadow_diff(strategy, closed, effects, limit=9999)
     shadow = _build_decision_stack_shadow_diff(strategy, closed, effects, limit=limit)
     with_snap = int(shadow.get("trades_with_snapshot") or 0)
     diverged = int(shadow.get("divergence_count") or 0)
     rate = (diverged / with_snap) if with_snap else None
+    recent = shadow.get("recent_divergences") or []
+    all_div_rows = shadow_full.get("recent_divergences") or []
+    session_div = sum(1 for r in all_div_rows if _classify_divergence(r) == "session_veto")
+    other_div = max(0, diverged - session_div)
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "strategy": strategy,
@@ -37,9 +50,16 @@ def _build_report(*, strategy: str, days: int, limit: int) -> dict:
         "trades_with_snapshot": with_snap,
         "divergence_count": diverged,
         "divergence_rate": round(rate, 4) if rate is not None else None,
-        "resolve_enabled_recommendation": diverged == 0 and with_snap >= 5,
+        "session_divergence_count": session_div,
+        "unexpected_divergence_count": other_div,
+        "resolve_policy": "legacy_executes",
+        "resolve_enabled_recommendation": other_div == 0 and with_snap >= 5,
+        "resolve_policy_note": (
+            "session_veto divergence accepted as norm while legacy stats hold; "
+            "toggle DECISION_STACK_RESOLVE_ENABLED=true only if unexpected_divergence grows"
+        ),
         "by_game": shadow.get("by_game") or {},
-        "recent_divergences": shadow.get("recent_divergences") or [],
+        "recent_divergences": recent,
         "description": shadow.get("description"),
     }
 
