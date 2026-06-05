@@ -23,6 +23,33 @@ def _default_q_dir() -> Path:
     return project_root / "local" / "logs" / "ml_data_quality"
 
 
+def _resolve_recovery_jsonl(*, cli_path: str = "") -> str:
+    """JSONL for train: --jsonl > env/config > newest game5m_recovery_ml_*.jsonl in /app/logs."""
+    explicit = (cli_path or os.environ.get("GAME_5M_RECOVERY_TRAIN_JSONL") or "").strip()
+    if not explicit:
+        try:
+            from config_loader import get_config_value
+
+            explicit = (get_config_value("GAME_5M_RECOVERY_TRAIN_JSONL", "") or "").strip()
+        except Exception:
+            explicit = ""
+    if explicit and Path(explicit).is_file():
+        return explicit
+    log_dirs = [Path("/app/logs"), project_root / "local" / "logs", project_root / "logs"]
+    newest: tuple[float, str] = (0.0, "")
+    for d in log_dirs:
+        if not d.is_dir():
+            continue
+        for p in d.glob("game5m_recovery_ml_*.jsonl"):
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= newest[0]:
+                newest = (mtime, str(p))
+    return newest[1]
+
+
 def _env_int(key: str, default: int) -> int:
     raw = (os.environ.get(key) or "").strip()
     if not raw:
@@ -47,6 +74,7 @@ def main() -> int:
     ap.add_argument("--apply-data", action="store_true")
     ap.add_argument("--skip-export", action="store_true")
     ap.add_argument("--skip-train", action="store_true")
+    ap.add_argument("--jsonl", default="", help="Recovery export JSONL (skip-export or re-train)")
     args = ap.parse_args()
 
     from config_loader import get_config_value
@@ -135,10 +163,9 @@ def main() -> int:
             train_cmd.append("--dry-run")
         train_rc = subprocess.call(train_cmd, cwd=str(project_root))
     elif do_train and not jsonl_path:
-        cfg_jsonl = (get_config_value("GAME_5M_RECOVERY_TRAIN_JSONL", "") or "").strip()
-        if cfg_jsonl and Path(cfg_jsonl).is_file():
-            jsonl_path = cfg_jsonl
-            logger.info("recovery train using configured jsonl: %s", jsonl_path)
+        jsonl_path = _resolve_recovery_jsonl(cli_path=args.jsonl)
+        if jsonl_path:
+            logger.info("recovery train using jsonl: %s", jsonl_path)
             py = sys.executable
             train_cmd = [
                 py,
@@ -154,7 +181,9 @@ def main() -> int:
                 train_cmd.append("--dry-run")
             train_rc = subprocess.call(train_cmd, cwd=str(project_root))
         else:
-            logger.warning("recovery train skipped: no export jsonl")
+            logger.warning(
+                "recovery train skipped: no export jsonl (use --jsonl PATH or export first)"
+            )
             train_rc = 0
 
     finalize_contour_refresh(
