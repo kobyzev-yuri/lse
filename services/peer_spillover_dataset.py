@@ -14,6 +14,7 @@ from services.event_reaction_labeling import (
     FEATURE_BUILDER_VERSION_EARNINGS,
     FEATURE_BUILDER_VERSION_QUOTES,
     event_reaction_numeric_feature_keys,
+    timing_from_features_before,
 )
 
 
@@ -100,7 +101,11 @@ def build_peer_spillover_dataset_rows(
         ]
         if not targets:
             continue
-        spill = load_peer_spillover_outcomes(source_event_date=event_date, peer_tickers=targets)
+        spill = load_peer_spillover_outcomes(
+            source_event_date=event_date,
+            peer_tickers=targets,
+            source_market_phase=timing_from_features_before(ev.get("features_before")),
+        )
         spill_by = {str(p.get("ticker") or "").upper(): p for p in spill if p.get("status") == "ok"}
 
         for edge in peers:
@@ -127,6 +132,7 @@ def build_peer_spillover_dataset_rows(
                     "knowledge_base_id": ev.get("knowledge_base_id"),
                     "relation_type": edge.get("relation_type"),
                     "edge_weight": weight,
+                    "source_market_phase": timing_from_features_before(ev.get("features_before")),
                     "source_forward_log_ret_5d": round(src_5d_f, 6),
                     "peer_forward_log_ret_5d": round(peer_5d_f, 6),
                     "baseline_propagation_log": round(weight * src_5d_f, 6),
@@ -136,7 +142,7 @@ def build_peer_spillover_dataset_rows(
 
 
 def peer_spillover_categorical_features() -> tuple[str, ...]:
-    return ("source_symbol", "peer_ticker", "relation_type")
+    return ("source_symbol", "peer_ticker", "relation_type", "source_market_phase")
 
 
 def peer_spillover_numeric_edge_features() -> tuple[str, ...]:
@@ -200,6 +206,7 @@ def load_peer_spillover_training_frame(
             "source_symbol": str(r["source_symbol"]).upper(),
             "peer_ticker": str(r["peer_ticker"]).upper(),
             "relation_type": str(r.get("relation_type") or "unknown"),
+            "source_market_phase": str(r.get("source_market_phase") or "UNKNOWN").upper(),
             "edge_weight": float(r.get("edge_weight") or 0.5),
         }
         skip = False

@@ -1,12 +1,12 @@
 """
 Авторазметка строк event_reaction_dataset из daily quotes (MVP).
 
-- features_before: log-returns и волатильность до якорной даты as_of (последний бар <= дня события ET).
-- outcomes_after: forward log-returns на 1/5/20 торговых дней от close(as_of).
-- final_label: rule-based UP/DOWN/FLAT относительно порога в log-пространстве (как portfolio ML edge).
+- features_before: log-returns и волатильность до leak-safe якоря (BMO → close T-1; AMH → close T).
+- outcomes_after: forward log-returns от outcome_anchor (обычно = features anchor для source).
+- final_label: rule UP/DOWN/FLAT vs vol-scaled или fixed log-порог.
 
-Версия `quotes_regime_v1` добавляет снимок `market_regime_daily` на `as_of_trade_date`
-(SPY/QQQ/DIA/^VIX, 1d log-returns, vix_regime). Peer-фичи — отдельно.
+Версия `quotes_regime_v1` добавляет снимок `market_regime_daily` на `as_of_trade_date`.
+Peer spillover использует `resolve_peer_outcome_anchor_date()` для якоря на peer-календаре.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -211,15 +212,37 @@ except Exception:  # pragma: no cover
     _ET = timezone.utc
 
 
-def event_reaction_label_threshold_log() -> float:
-    """Порог |forward log-ret| для UP/DOWN vs FLAT; по умолчанию как portfolio ML edge."""
+def _cfg_float(key: str, default: float) -> float:
+    try:
+        return float((get_config_value(key, str(default)) or str(default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def event_reaction_label_threshold_log(*, vol_10d_log_ret_std: Optional[float] = None) -> float:
+    """
+    Порог |forward log-ret| для UP/DOWN vs FLAT.
+
+    EVENT_REACTION_LABEL_THRESHOLD_MODE:
+      - fixed: только EVENT_REACTION_LABEL_THRESHOLD_LOG или portfolio edge
+      - vol_scaled (default): max(edge, k * vol_10d_log_ret_std)
+    """
     raw = (get_config_value("EVENT_REACTION_LABEL_THRESHOLD_LOG", "") or "").strip()
+    fixed: Optional[float] = None
     if raw:
         try:
-            return float(raw.replace(",", "."))
+            fixed = float(raw.replace(",", "."))
         except (TypeError, ValueError):
-            pass
-    return portfolio_ml_threshold_log()
+            fixed = None
+    floor = fixed if fixed is not None else portfolio_ml_threshold_log()
+    mode = (get_config_value("EVENT_REACTION_LABEL_THRESHOLD_MODE", "vol_scaled") or "vol_scaled").strip().lower()
+    if mode == "fixed":
+        return floor
+    vol = vol_10d_log_ret_std
+    if vol is None or not math.isfinite(float(vol)) or float(vol) <= 0:
+        return floor
+    k = _cfg_float("EVENT_REACTION_LABEL_VOL_K", 1.5)
+    return max(floor, float(k) * float(vol))
 
 
 def _event_date_et(ts: Any) -> date:
@@ -378,6 +401,141 @@ _EARNINGS_TIMING_ORD: Dict[str, float] = {
     "DURING_SESSION": 2.0,
     "AFTER_CLOSE": 3.0,
 }
+_ORD_TO_EARNINGS_TIMING: Dict[float, str] = {v: k for k, v in _EARNINGS_TIMING_ORD.items()}
+
+
+@dataclass(frozen=True)
+class EventAnchorResolution:
+    """Leak-safe calendar anchors on a symbol's trading-date series."""
+
+    earnings_market_phase: str
+    features_as_of_idx: int
+    outcome_start_idx: int
+    features_as_of_date: date
+    outcome_anchor_date: date
+    peer_outcome_anchor_date: date
+
+
+def normalize_earnings_market_phase(timing: Optional[str]) -> str:
+    phase = str(timing or "UNKNOWN").strip().upper()
+    if phase not in _EARNINGS_TIMING_ORD:
+        return "UNKNOWN"
+    return phase
+
+
+def parse_earnings_market_phase_from_detail(detail: Optional[Dict[str, Any]]) -> str:
+    if not detail:
+        return "UNKNOWN"
+    guidance = detail.get("guidance_summary") if isinstance(detail.get("guidance_summary"), dict) else {}
+    timing = str(guidance.get("report_timing") or "UNKNOWN").strip().upper()
+    if timing not in _EARNINGS_TIMING_ORD:
+        timing = _earnings_timing_from_hour(guidance.get("report_hour_et"))
+    return normalize_earnings_market_phase(timing)
+
+
+def timing_from_features_before(features_before: Any) -> str:
+    fb = _parse_json_field(features_before)
+    phase = str(fb.get("earnings_market_phase") or "").strip().upper()
+    if phase in _EARNINGS_TIMING_ORD:
+        return phase
+    try:
+        ord_val = float(fb.get("earnings_report_timing_ord"))
+        return normalize_earnings_market_phase(_ORD_TO_EARNINGS_TIMING.get(ord_val, "UNKNOWN"))
+    except (TypeError, ValueError):
+        return "UNKNOWN"
+
+
+def _index_of_trade_date(trade_dates: List[date], target: date) -> Optional[int]:
+    for i, td in enumerate(trade_dates):
+        if td == target:
+            return i
+    return None
+
+
+def _next_trading_day_after(d: date, trade_dates: List[date]) -> Optional[date]:
+    for td in trade_dates:
+        if td > d:
+            return td
+    return None
+
+
+def _prev_trading_day_strictly_before(d: date, trade_dates: List[date]) -> Optional[date]:
+    prev: Optional[date] = None
+    for td in trade_dates:
+        if td >= d:
+            break
+        prev = td
+    return prev
+
+
+def _reaction_trading_day(event_d: date, phase: str, trade_dates: List[date]) -> Optional[date]:
+    if phase == "AFTER_CLOSE":
+        return _next_trading_day_after(event_d, trade_dates)
+    if event_d in trade_dates:
+        return event_d
+    for td in trade_dates:
+        if td >= event_d:
+            return td
+    return None
+
+
+def resolve_peer_outcome_anchor_date(
+    event_d: date,
+    timing: str,
+    trade_dates: List[date],
+) -> Optional[date]:
+    """
+    Last close on peer calendar before the session that prices the source earnings shock.
+
+    BMO/DURING on Tue → peer reacts Tue open → anchor Mon close.
+    AMH on Tue → peer reacts Wed open → anchor Tue close.
+    """
+    phase = normalize_earnings_market_phase(timing)
+    react_d = _reaction_trading_day(event_d, phase, trade_dates)
+    if react_d is None:
+        return None
+    return _prev_trading_day_strictly_before(react_d, trade_dates)
+
+
+def resolve_event_anchors(
+    event_d: date,
+    timing: str,
+    trade_dates: List[date],
+) -> Optional[EventAnchorResolution]:
+    """
+    Source symbol anchors for features_before and outcomes_after.
+
+    BMO/DURING/UNKNOWN: features at T-1 close (no same-day reaction in bar).
+    AFTER_CLOSE: features at T close (daily bar is before AH release).
+    """
+    phase = normalize_earnings_market_phase(timing)
+    if phase == "UNKNOWN":
+        phase = "BEFORE_OPEN"
+
+    if phase == "AFTER_CLOSE":
+        feat_d = event_d if event_d in trade_dates else None
+        out_d = feat_d
+    else:
+        feat_d = _prev_trading_day_strictly_before(event_d, trade_dates)
+        out_d = feat_d
+
+    peer_anchor_d = resolve_peer_outcome_anchor_date(event_d, phase, trade_dates)
+    if feat_d is None or out_d is None or peer_anchor_d is None:
+        return None
+
+    fi = _index_of_trade_date(trade_dates, feat_d)
+    oi = _index_of_trade_date(trade_dates, out_d)
+    if fi is None or oi is None:
+        return None
+
+    return EventAnchorResolution(
+        earnings_market_phase=phase,
+        features_as_of_idx=fi,
+        outcome_start_idx=oi,
+        features_as_of_date=feat_d,
+        outcome_anchor_date=out_d,
+        peer_outcome_anchor_date=peer_anchor_d,
+    )
 
 _EARNINGS_TONE_ORD: Dict[str, float] = {
     "bearish": 0.0,
@@ -476,6 +634,7 @@ def enrich_features_with_earnings_detail(
         out["earnings_eps_estimate"] = 0.0
         out["earnings_eps_estimate_abs"] = 0.0
         out["earnings_report_timing_ord"] = _EARNINGS_TIMING_ORD["UNKNOWN"]
+        out["earnings_market_phase"] = "UNKNOWN"
         return out
     out["earnings_detail_present"] = 1.0
     try:
@@ -488,7 +647,9 @@ def enrich_features_with_earnings_detail(
     timing = str(guidance.get("report_timing") or "UNKNOWN").strip().upper()
     if timing not in _EARNINGS_TIMING_ORD:
         timing = _earnings_timing_from_hour(guidance.get("report_hour_et"))
-    out["earnings_report_timing_ord"] = _EARNINGS_TIMING_ORD.get(timing, _EARNINGS_TIMING_ORD["UNKNOWN"])
+    phase = normalize_earnings_market_phase(timing)
+    out["earnings_market_phase"] = phase
+    out["earnings_report_timing_ord"] = _EARNINGS_TIMING_ORD.get(phase, _EARNINGS_TIMING_ORD["UNKNOWN"])
     tone = str(guidance.get("management_tone") or "not_clear").strip().lower()
     out["earnings_tone_ord"] = _EARNINGS_TONE_ORD.get(tone, 1.5)
     hints = guidance.get("scenario_hints")
@@ -634,6 +795,7 @@ def build_outcomes_after(
     *,
     as_of_idx: int,
     horizons: Tuple[int, ...] = (1, 5, 20),
+    vol_10d_log_ret_std: Optional[float] = None,
 ) -> Tuple[Dict[str, Any], Optional[float]]:
     closes = df["close"].to_numpy(dtype=float)
     i0 = as_of_idx
@@ -648,15 +810,23 @@ def build_outcomes_after(
                 out[key] = round(lr, 6)
                 if h == 5:
                     primary_fwd = lr
-    thr = event_reaction_label_threshold_log()
+    thr = event_reaction_label_threshold_log(vol_10d_log_ret_std=vol_10d_log_ret_std)
+    mode = (get_config_value("EVENT_REACTION_LABEL_THRESHOLD_MODE", "vol_scaled") or "vol_scaled").strip().lower()
     out["threshold_log_used"] = round(thr, 8)
+    out["threshold_mode"] = mode
+    if vol_10d_log_ret_std is not None and math.isfinite(float(vol_10d_log_ret_std)):
+        out["threshold_vol_10d_log_ret_std"] = round(float(vol_10d_log_ret_std), 8)
     return out, primary_fwd
 
 
-def infer_final_label(forward_5d_log: Optional[float]) -> Optional[str]:
+def infer_final_label(
+    forward_5d_log: Optional[float],
+    *,
+    vol_10d_log_ret_std: Optional[float] = None,
+) -> Optional[str]:
     if forward_5d_log is None or not math.isfinite(forward_5d_log):
         return None
-    thr = event_reaction_label_threshold_log()
+    thr = event_reaction_label_threshold_log(vol_10d_log_ret_std=vol_10d_log_ret_std)
     if forward_5d_log > thr:
         return "UP"
     if forward_5d_log < -thr:
@@ -690,10 +860,17 @@ def compute_row_labeling(
     df.attrs["symbol"] = str(symbol or "").strip().upper()
 
     dates = list(df["d"])
-    as_of_i = _find_as_of_index(dates, event_d)
-    if as_of_i is None:
-        return None, None, None, "no_as_of_before_event"
+    detail = load_earnings_detail_for_event(
+        symbol,
+        event_d,
+        knowledge_base_id=knowledge_base_id,
+    )
+    phase = parse_earnings_market_phase_from_detail(detail)
+    anchors = resolve_event_anchors(event_d, phase, dates)
+    if anchors is None:
+        return None, None, None, "anchor_unresolved"
 
+    as_of_i = anchors.features_as_of_idx
     if as_of_i < min_past_bars:
         return None, None, None, "insufficient_past_bars"
 
@@ -706,14 +883,31 @@ def compute_row_labeling(
         symbol=symbol,
         knowledge_base_id=knowledge_base_id,
     )
+    feats["earnings_market_phase"] = anchors.earnings_market_phase
+    feats["outcome_anchor_trade_date"] = str(anchors.outcome_anchor_date)
+    feats["peer_outcome_anchor_trade_date"] = str(anchors.peer_outcome_anchor_date)
     miss = missing_quote_feature_keys(feats)
     if miss:
         return None, None, None, f"features:{miss}"
-    if as_of_i + 5 >= len(dates):
+
+    out_i = anchors.outcome_start_idx
+    if out_i + 5 >= len(dates):
         return feats, None, None, "insufficient_forward_for_5d"
 
-    outcomes, fwd5 = build_outcomes_after(df, as_of_idx=as_of_i, horizons=horizons)
-    label = infer_final_label(fwd5)
+    vol_std = feats.get("vol_10d_log_ret_std")
+    try:
+        vol_f = float(vol_std) if vol_std is not None else None
+    except (TypeError, ValueError):
+        vol_f = None
+
+    outcomes, fwd5 = build_outcomes_after(
+        df,
+        as_of_idx=out_i,
+        horizons=horizons,
+        vol_10d_log_ret_std=vol_f,
+    )
+    outcomes["outcome_anchor_trade_date"] = str(anchors.outcome_anchor_date)
+    label = infer_final_label(fwd5, vol_10d_log_ret_std=vol_f)
     return feats, outcomes, label, ""
 
 

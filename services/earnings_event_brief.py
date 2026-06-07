@@ -14,6 +14,7 @@ from services.event_reaction_labeling import (
     _log_ret_ratio,
     build_outcomes_after,
     load_quotes_window,
+    timing_from_features_before,
 )
 from services.earnings_scenario_signal import predict_scenario_from_features
 
@@ -180,9 +181,12 @@ def load_peer_spillover_outcomes(
     *,
     source_event_date: date,
     peer_tickers: list[str],
+    source_market_phase: str = "UNKNOWN",
     horizons: tuple[int, ...] = (1, 2, 5),
 ) -> list[dict[str, Any]]:
-    """Forward log-returns for peer tickers anchored at source earnings event date."""
+    """Forward log-returns for peer tickers anchored before the peer's reaction session."""
+    from services.event_reaction_labeling import resolve_peer_outcome_anchor_date
+
     d_min = source_event_date - timedelta(days=10)
     d_max = source_event_date + timedelta(days=60)
     out: list[dict[str, Any]] = []
@@ -195,7 +199,15 @@ def load_peer_spillover_outcomes(
             out.append({"ticker": sym_u, "status": "no_quotes"})
             continue
         dates = list(df["d"])
-        as_of_i = _find_as_of_index(dates, source_event_date)
+        peer_anchor_d = resolve_peer_outcome_anchor_date(
+            source_event_date,
+            source_market_phase,
+            dates,
+        )
+        if peer_anchor_d is None:
+            out.append({"ticker": sym_u, "status": "no_peer_anchor"})
+            continue
+        as_of_i = _find_as_of_index(dates, peer_anchor_d)
         if as_of_i is None:
             out.append({"ticker": sym_u, "status": "no_as_of_before_event"})
             continue
@@ -204,6 +216,8 @@ def load_peer_spillover_outcomes(
             "ticker": sym_u,
             "status": "ok",
             "anchor_date": str(dates[as_of_i]),
+            "source_market_phase": str(source_market_phase or "UNKNOWN").upper(),
+            "peer_outcome_anchor_date": peer_anchor_d.isoformat(),
         }
         for h in horizons:
             key = f"forward_log_ret_{h}d"
@@ -256,6 +270,7 @@ def build_event_brief(
     peer_outcomes = load_peer_spillover_outcomes(
         source_event_date=event_date,
         peer_tickers=peer_targets,
+        source_market_phase=timing_from_features_before(features),
     )
     scenario = _top_scenario(guidance)
 

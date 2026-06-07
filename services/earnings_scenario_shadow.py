@@ -12,7 +12,7 @@ from sqlalchemy.engine import Engine
 
 from config_loader import get_config_value
 from services.earnings_event_brief import load_peer_edges, load_peer_spillover_outcomes
-from services.event_reaction_labeling import FEATURE_BUILDER_VERSION_EARNINGS
+from services.event_reaction_labeling import FEATURE_BUILDER_VERSION_EARNINGS, timing_from_features_before
 from services.earnings_scenario_signal import (
     SCENARIO_SOURCE_SIGN,
     expected_sign_for_scenario,
@@ -116,12 +116,22 @@ def _load_matured_rows(
     return [dict(r) for r in rows]
 
 
-def _peer_mean_5d(engine: Engine, *, source_symbol: str, event_date: date) -> dict[str, Any]:
+def _peer_mean_5d(
+    engine: Engine,
+    *,
+    source_symbol: str,
+    event_date: date,
+    source_market_phase: str = "UNKNOWN",
+) -> dict[str, Any]:
     peers = load_peer_edges(engine, source_ticker=source_symbol)
     targets = [str(p.get("target_ticker") or "").upper() for p in peers if p.get("target_ticker")]
     if not targets:
         return {"n_peers": 0, "mean_forward_log_ret_5d": None, "status": "no_peers"}
-    spill = load_peer_spillover_outcomes(source_event_date=event_date, peer_tickers=targets[:12])
+    spill = load_peer_spillover_outcomes(
+        source_event_date=event_date,
+        peer_tickers=targets[:12],
+        source_market_phase=source_market_phase,
+    )
     vals = [
         float(p["forward_log_ret_5d"])
         for p in spill
@@ -204,7 +214,12 @@ def evaluate_earnings_scenario_shadow(
             if class_match:
                 class_hits += 1
 
-        peer_block = _peer_mean_5d(engine, source_symbol=sym, event_date=ev_d) if ev_d else {}
+        peer_block = _peer_mean_5d(
+            engine,
+            source_symbol=sym,
+            event_date=ev_d,
+            source_market_phase=timing_from_features_before(r.get("features_before")),
+        ) if ev_d else {}
         peer_mean = peer_block.get("mean_forward_log_ret_5d")
         peer_exp = SCENARIO_PEER_SIGN.get(str(pred_scenario or ""))
         peer_sign_match: bool | None = None
