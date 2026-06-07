@@ -1,8 +1,9 @@
 # Статус планов и дорожная карта
 
-**Обновлено:** 2026-06-05 (фазы 0–2 consolidation закрыты; фаза 3 L3 — в работе).
+**Обновлено:** 2026-06-07 (event anchors + vol-scaled labels + NDX в technical params; earnings full refresh на prod).
 
 **Каноническая архитектура ML и торговых решений:** [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md).  
+**Словарь терминов (L1/L2/L3, BMO/AMH, open-path…):** [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md).  
 **План консолидации (устранение дублей):** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md).  
 **Полный отчёт по контурам (dual-track legacy + stack):** [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md).
 
@@ -21,7 +22,8 @@
 | **Open-path MVP** | Labels 23:45, nightly 23:46, dispatcher poll | канон §5 |
 | **GAME_5M ML nightly** | Legacy 23:40 datasets + entry; dispatcher incremental | [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md) |
 | **Recovery TIME_EXIT** | D4a log-only + JSONL; крон 23:54 | [GAME_5M_TIME_EXIT_RECOVERY_PLAN.md](GAME_5M_TIME_EXIT_RECOVERY_PLAN.md) |
-| **Event / earnings MVP** | ERD build 23:33–37, regression refresh 23:51 | [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md) |
+| **Event / earnings MVP** | ERD build 23:33–37; leak-safe якоря BMO/AMH; vol-scaled labels; peer spillover calendar; full refresh 2026-06-07 | [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md), [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) §4 |
+| **NDX в technical params** | `^NDX` в `market_regime_daily`, `ndx_gap_pct` в recommend_5m | `8455cc0`, канон §2 |
 | **Анализатор** | `light=1`, async API, `ml_production_arbiter`, ML contours table | [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md) |
 
 ---
@@ -37,7 +39,7 @@
 | **Gap forecast ML** | naive baseline лучше ridge | Caution, не L3 promotion | 3 |
 | **L3 resolve** | RESOLVE=false, 5/41 session div (14d) | Weekly cron mirror; toggle вручную | 3 |
 | **Recovery D4b** | 15 TE / 13 gate | Defer 2–4 нед | 3 |
-| **Event-reaction** | RMSE gate ❌ | Advisory only | 3 |
+| **Event-reaction** | RMSE gate ❌; grid/peer gates ✅ после refresh | Advisory only; autoprep ждёт ≥40 LLM labels | 3 |
 | **Prod config audit** | Локальный example OK | Audit боевого `/app/config.env` | 4 |
 
 ### Prod ML full train (2026-06-05)

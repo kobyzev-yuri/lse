@@ -2,14 +2,18 @@
 
 Корневой обзор архитектуры: [ARCHITECTURE.md](ARCHITECTURE.md).
 
+> **Английские термины в ML-доках:** расшифровки и примеры — [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md). Торговые индикаторы (ATR, RSI…) — [TRADING_GLOSSARY.md](TRADING_GLOSSARY.md). Earnings-лексика — [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §10.
+
 ## ML и торговые решения (читать первым)
 
 | Задача | Документ |
 |--------|----------|
+| **Словарь ML:** L1/L2/L3, BMO/AMH, open-path vs event 5d, метрики | [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) |
 | **Канон:** контуры, слои L1–L3, cron, promotion | [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) |
 | **План консолидации** (устранение дублей, фазы 0–4) | [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) |
-| **Ops-статус** (сделано / висит) | [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md) |
-| **Отчёт по ML-контурам** (dual-track, legacy vs stack) | [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md) |
+| **Ops / dual-track статус** | [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md) |
+| **Ops-срез** (сделано / висит) | [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md) |
+| Earnings UI (`/earnings`), вкладки, BMO/AMH в Spillover | [earnings-event-agent-lse/EARNINGS_UI_GUIDE.md](earnings-event-agent-lse/EARNINGS_UI_GUIDE.md) |
 | L1 retrain (триггеры, registry) | [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md) |
 | L2 gates, data-quality API | [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md) |
 | L3 GAME_5M алгоритм | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) |
@@ -74,4 +78,5 @@
 |----------|--------|
 | **План внедрения 1–5 + источники (рабочая версия)** | [EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md) |
 | **IR и квартальная отчётность:** дефолтные акции из `TICKER_GROUPS` + ASML, ARM, примеры кварталов | [PUBLIC_IR_EARNINGS_SOURCES.md](earnings-event-agent-lse/PUBLIC_IR_EARNINGS_SOURCES.md) |
+| **UI `/earnings`:** вкладки, Brief, Spillover якоря, Shadow | [EARNINGS_UI_GUIDE.md](earnings-event-agent-lse/EARNINGS_UI_GUIDE.md) |
 | Earnings/event agent: дизайн, **Q&amp;A в Markdown** (удобно на GitHub), PDF/HTML | [earnings-event-agent-lse/](earnings-event-agent-lse/README.md) |

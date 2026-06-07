@@ -1,6 +1,8 @@
 # CatBoost-сетки, ridge multiday и earnings grid: датасеты, метки, метрики и путь к единой точке решения
 
-В репозитории **`lse`** несколько обучаемых **CatBoost**-моделей с разными юнитами наблюдения, признаками и типом предикта; отдельно — **ridge** по дневным log-доходностям на 1–3 торговых дня (не CatBoost) и **OLS gap forecast** (не CatBoost). Ниже — структура датасетов, метки, метрики L2, роль в **legacy hot path** и в **decision_stack** (путь к единому `decision_effective`).
+В репозитории **`lse`** несколько обучаемых **CatBoost**-моделей (градиентный бустинг, артефакт `.cbm`) с разными юнитами наблюдения, признаками и типом предикта; отдельно — **ridge** (линейная регрессия с L2) по дневным log-доходностям на 1–3 торговых дня (не CatBoost) и **OLS gap forecast** (ordinary least squares — линейная регрессия, не CatBoost). Ниже — структура датасетов, метки, метрики L2, роль в **legacy hot path** (текущий исполнитель) и в **decision_stack** (путь к единому `decision_effective`).
+
+**Словарь терминов:** [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) — L1/L2/L3, AUC, RMSE, BMO/AMH, open-path vs event 5d, shadow, spillover.
 
 **Связанные документы:**
 
@@ -16,6 +18,37 @@
 
 ---
 
+## 0. Event 5d vs Open-path — два разных контура (не смешивать)
+
+Полная таблица и примеры: [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) §5. Якоря BMO/AMH: [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md).
+
+| | **Event 5d** (реакция на earnings, горизонт ~5 дней) | **Open-path** (сценарий первого RTH-часа) |
+|---|-------------|---------------|
+| **Вопрос** | Куда пойдёт цена через ~5 торговых дней после отчёта? | Gap fade, continuation или chop в первый час? |
+| **Таблица / юнит** | `event_reaction_dataset` — 1 строка на событие | `game5m_open_path_labels` — `(symbol, trade_date)` |
+| **Target (y)** | `forward_log_ret_5d`, LLM `final_label` | `target_scenario` (rule после close) |
+| **Premarket в X** | **Нет** — leak-safe close-якорь (T−1 для BMO) | **Да** — по задумке |
+| **Prod-режим** | advisory (Brief) | shadow |
+| **Скрипты** | `backfill_event_reaction_labeling.py`, `train_event_reaction_catboost.py` | `label_open_path_scenarios.py`, `train_open_path_scenario_classifier.py` |
+
+**Пример — NVDA earnings BMO во вторник (один календарный день, два ML-вопроса):**
+
+```text
+Event 5d:
+  X на Mon close (без Tue premarket)
+  y = log-ret NVDA Mon close → +5 торговых дней
+  → «через неделю после отчёта UP/DOWN/FLAT?»
+
+Open-path (если есть GAME_5M в тот же trade_date):
+  X на Tue pre-open: gap, macro, multiday h1
+  y = rule по OHLC первого RTH-часа (fade / continuation / …)
+  → «как торговать открытие во вторник?»
+```
+
+> Критика «premarket leakage в event ML» относится к **неправильному якорю** event 5d, **не** к open-path.
+
+---
+
 ## Сводная матрица: датасет → метка → метрика → использование
 
 | Контур | Юнит наблюдения | Источник / таблица | Target (y) | L2-метрика | Legacy (исполняет) | Stack (`decision_snapshot`) | Prod (2026-06) |
@@ -25,8 +58,8 @@
 | **recovery** | 1 бар удержания (5m) | JSONL анализатора | `h{H}_y_recovery` бинарный | AUC valid | D4a telemetry (`RECOVERY_ML_ENABLED`) | `recovery_ml` log_only | telemetry |
 | **multiday_lr** | (ticker, day i) | daily `quotes` + opt. premarket | log-ret 1/2/3d forward | walk-forward OOS | `MULTIDAY_ENTRY/HOLD_GATE_MODE` | `multiday_lr` | entry apply |
 | **gap_forecast** | (symbol, trade_date) | `game5m_gap_forecast_daily` | `open_gap_pct` (факт) | MAE pp, sign agreement | `premarket_gap_baseline` (observable) | `gap_forecast` caution | ML < naive |
-| **event_reaction** | 1 earnings event | `event_reaction_dataset` | `forward_log_ret_5d` | RMSE valid ≤0.12 | advisory brief | `event_reaction` | advisory |
-| **earnings_grid** | 1 earnings event | ERD + LLM labels | `final_label` (scenario class) | valid accuracy | shadow `/earnings` | — (Fusion) | shadow |
+| **event_reaction** | 1 earnings event | `event_reaction_dataset` (ERD) | `forward_log_ret_5d` | RMSE valid ≤0.12 | advisory brief | `event_reaction` | advisory |
+| **earnings_grid** | 1 earnings event | ERD + LLM labels | `final_label` (класс сценария) | valid accuracy | shadow `/earnings` | — (Fusion) | shadow |
 | **peer_spillover** | (source_event, peer) | ERD + `peer_graph_edge` | `peer_forward_log_ret_5d` | sign accuracy | brief context | — | advisory |
 | **open_path** | (symbol, trade_date) pre-open | `game5m_open_path_labels` | `target_scenario` (rule) | accuracy, prerequisites | shadow | — | shadow |
 
@@ -386,9 +419,11 @@ Sector OLS + per-ticker v2; не `.cbm`. Поля в карточке: `ticker_o
 
 ## 8. Open-path scenario classifier
 
+> **Не путать с event 5d:** open-path — первый RTH-час; event 5d — forward ~5 дней после earnings. См. §0 и [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) §5.
+
 ### Цель
 
-Классифицировать **сценарий первого RTH-часа** (gap fade, continuation, chop…) по pre-open признакам. MVP внутри earnings/open-play; **не** блокирует GAME_5M cron.
+Классифицировать **сценарий первого RTH-часа** (Regular Trading Hours — основная сессия US: gap **fade** — схлопывание гэпа, **continuation** — продолжение, chop…) по pre-open признакам. MVP (минимальный продукт) внутри earnings/open-play; **не** блокирует GAME_5M cron.
 
 ### Юнит наблюдения
 

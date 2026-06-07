@@ -1,6 +1,6 @@
 # Earnings автоподготовка → Open-path MVP (классификация входа у open)
 
-> **Матрица контуров и единый cron:** [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) §5. Здесь — gates autoprep и open-path MVP.
+> **Матрица контуров и единый cron:** [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) §5. **Словарь:** [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) §5 (open-path vs event 5d). Здесь — gates autoprep и open-path MVP.
 
 **Аудитория:** продукт, разработка, ops.  
 **Связанные документы:**

@@ -1,7 +1,9 @@
 # ML и торговые решения: каноническая архитектура
 
-**Статус:** единая точка входа (обновлено 2026-06-05).  
+**Статус:** единая точка входа (обновлено 2026-06-07).  
 **Аудитория:** разработка, ops, продукт.
+
+**Словарь терминов:** английские идентификаторы и сокращения (L1/L2/L3, RESOLVE, shadow, BMO/AMH, spillover…) — [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md). В тексте ниже после первого упоминания часто даётся краткая расшифровка в скобках.
 
 Этот документ **заменяет** разрозненные «планы недели» и дублирующие rollout-описания как **источник правды по контурам ML и их выходу в продукт**. Детали по сеткам, скриптам и UI остаются в профильных deep-dive (ссылки в §8).
 
@@ -15,9 +17,9 @@
 
 | Слой | Вопрос | Инструменты | Артефакты |
 |------|--------|-------------|-----------|
-| **L1 — Retrain** | Пора ли пересобрать данные / `.cbm`? | `run_ml_refresh_dispatcher.py`, `run_*_ml_refresh.py` | `last_<contour>_ml_refresh.json`, `ml_contours_status.json` |
-| **L2 — Quality gates** | Достаточно ли данных и метрик? | `run_ml_train_readiness_cron.py`, readiness writers | `ml_train_readiness.jsonl`, `last_*_readiness.json` |
-| **L3 — Trading product** | Влияет ли сигнал на сделку? | `decision_stack`, `*_ENABLED`, gate modes | `decision_snapshot` в `context_json`, `decision_effective` |
+| **L1 — Retrain** (переобучение) | Пора ли пересобрать данные / `.cbm` (файл модели CatBoost)? | `run_ml_refresh_dispatcher.py` (единый планировщик), `run_*_ml_refresh.py` | `last_<contour>_ml_refresh.json`, `ml_contours_status.json` |
+| **L2 — Quality gates** (пороги качества) | Достаточно ли данных и метрик (AUC, RMSE…)? | `run_ml_train_readiness_cron.py`, readiness writers | `ml_train_readiness.jsonl`, `last_*_readiness.json` |
+| **L3 — Trading product** (влияние на сделку) | Влияет ли сигнал на сделку? | `decision_stack` (стек решений), `*_ENABLED`, `gate_mode` | `decision_snapshot` в `context_json`, `decision_effective` |
 
 **Жёсткие правила:**
 
@@ -43,9 +45,9 @@
 
 ### 1.1 Dual-track: legacy + decision_stack (параллельно)
 
-**Legacy hot path** (`technical_decision_effective`, portfolio guards) **исполняет сделки** и **уже включает** контуры с tier `promoted` / `legacy_apply` через свои флаги (`PORTFOLIO_CATBOOST_ENABLED`, `GAME_5M_MULTIDAY_ENTRY_GATE_MODE=apply`, …) — **без** `DECISION_STACK_RESOLVE_ENABLED=true`.
+**Legacy hot path** (текущий исполнитель: `technical_decision_effective`, portfolio guards) **исполняет сделки** и **уже включает** контуры с tier `promoted` / `legacy_apply` через свои флаги (`PORTFOLIO_CATBOOST_ENABLED`, `GAME_5M_MULTIDAY_ENTRY_GATE_MODE=apply`, …) — **без** `DECISION_STACK_RESOLVE_ENABLED=true`.
 
-**Decision stack** строит `decision_snapshot` параллельно. При `RESOLVE=false` (prod) — только shadow и `projected_effective_if_resolve`; при `RESOLVE=true` — stack может стать единым исполнителем (session veto и др.).
+**Decision stack** (параллельный сбор вкладов) строит `decision_snapshot` параллельно. При `RESOLVE=false` (prod; stack не исполняет) — только **shadow** (лог без блока) и `projected_effective_if_resolve`; при `RESOLVE=true` — stack может стать единым исполнителем (session **veto** — запрет агрессивного входа — и др.).
 
 `DECISION_STACK_OWN_FINALIZE=true` (default): CatBoost + multiday применяются в `apply_game5m_policy_gates()` **до** snapshot; результат попадает в legacy `technical_decision_effective`, который cron использует для входа.
 
@@ -61,9 +63,9 @@ ML-контуры **не все** сходятся в один торговый 
 |-------------|-----------|----------------------|-------------|
 | **GAME_5M trading** | `GAME_5M`, карточки 5m | `decision_stack` → `decision_effective` | entry CatBoost, multiday ridge, gap, recovery, macro |
 | **Portfolio trading** | `PORTFOLIO`, `/api/portfolio/cards` | `execution_agent` + карточки | portfolio CatBoost, multiday (planned) |
-| **Earnings intelligence** | `/earnings`, Telegram brief | Advisory / shadow; **не** блокирует BUY по умолчанию | event regression, scenario classifier, spillover, open-path |
+| **Earnings intelligence** | `/earnings`, Telegram brief | **Advisory** (подсказка) / **shadow** (только лог); **не** блокирует BUY по умолчанию | event regression (прогноз 5d), scenario classifier, **peer spillover** (реакция аналогов), **open-path** (первый час RTH) |
 
-Open-path classifier — **MVP внутри earnings/open-play**, shadow до закрытия product gates (`overall_open_path_classifier_ready`).
+Open-path classifier — **MVP** (минимальный продукт) внутри earnings/open-play, **shadow** до закрытия product gates (`overall_open_path_classifier_ready`). Не путать с **event 5d** — см. [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) §5.
 
 Канон GAME_5M: [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md).  
 Earnings product: [earnings-event-agent-lse/EARNINGS_PRODUCT_ROADMAP.md](earnings-event-agent-lse/EARNINGS_PRODUCT_ROADMAP.md).
@@ -214,6 +216,7 @@ UI: `/analyzer` → «Переобучение ML по контурам» (L1), 
 | Документ | Тема |
 |----------|------|
 | **Этот файл** | Контуры, слои, поверхности, cron, promotion |
+| [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) | **Словарь:** L1/L2/L3, метрики, BMO/AMH, open-path vs event 5d, примеры |
 | [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) | План устранения дублей и code gaps |
 | [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md) | Живой ops-статус (что сделано / висит) |
 | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) | Алгоритм решений GAME_5M |
@@ -225,7 +228,8 @@ UI: `/analyzer` → «Переобучение ML по контурам» (L1), 
 | [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md) | L1 контракт, триггеры, pseudocode |
 | [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md) | Фазы A–E по сеткам |
 | [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md) | L2 JSONL, API `/api/ml/data-quality` |
-| [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) | Датасеты, таргеты, метрики |
+| [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) | Датасеты, таргеты, метрики; §0 event 5d vs open-path |
+| [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md) | ERD backfill, якоря BMO/AMH, vol-scaled labels |
 | [DECISION_STACK_ROLLOUT_PLAN.md](DECISION_STACK_ROLLOUT_PLAN.md) | Имплементация L3 (фазы 0–14) |
 | [OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md](OPEN_PATH_MVP_AND_EARNINGS_AUTOPREP_PLAN.md) | Earnings autoprep + open-path gates |
 | [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md) | Earnings фазы 1–5 |

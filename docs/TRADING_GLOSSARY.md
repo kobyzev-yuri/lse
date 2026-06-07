@@ -1,6 +1,8 @@
 # Торговый Глоссарий
 
-Терминологический словарь для LSE Trading System
+Терминологический словарь для LSE Trading System.
+
+**ML, decision stack, earnings anchors:** отдельный словарь — [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) (L1/L2/L3, AUC, BMO/AMH, open-path vs event 5d, spillover, shadow…).
 
 ## A
 

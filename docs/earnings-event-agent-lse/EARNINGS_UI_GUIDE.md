@@ -2,7 +2,9 @@
 
 Страница: **`/earnings`** (FastAPI → `templates/earnings_intelligence.html`).
 
-Назначение: календарь отчётов → материалы (8-K, transcript) → LLM-факты → peer spillover → ML-слои (advisory). **Не исполняет сделки** и **не заменяет** `/corr` (дневная корреляция котировок).
+**Словарь терминов:** [ML_GLOSSARY_RU.md](../ML_GLOSSARY_RU.md) — BMO/AMH, spillover (кросс-влияние на peers), shadow, advisory, event 5d vs open-path. Earnings-лексика — [EARNINGS_EVENT_AGENT_DESIGN.md](./EARNINGS_EVENT_AGENT_DESIGN.md) §10.
+
+Назначение: календарь отчётов → материалы (8-K, transcript) → LLM-факты → **peer spillover** (реакция аналогов) → ML-слои (**advisory** — подсказка без автоблока). **Не исполняет сделки** (`execution_blocked: true`) и **не заменяет** `/corr` (дневная корреляция котировок).
 
 ---
 
@@ -10,12 +12,12 @@
 
 | Вкладка | Вопрос, на который отвечает | API |
 |---------|------------------------------|-----|
-| **События** | Что было / что готово по каждому earnings? LLM vs ML scenario в таблице | `GET /api/earnings/intelligence` |
-| **Peer graph** | Кого считаем «пиром» лидера и с каким весом? | `GET /api/earnings/peer-graph` |
-| **Spillover** | Факт 1d/5d пиров + **ML pred 5d** (classifier scenario в шапке event) | `GET /api/earnings/spillover/{symbol}` |
-| **Shadow** | Насколько classifier угадывает сценарий **после созревания** 5d? | `GET /api/earnings/shadow-report` |
-| **Fusion** | Сводный advisory: регрессия + scenario ML + brief | `GET /api/earnings/fusion/{symbol}` |
-| **ML слои** | Статус пайплайна данных и моделей | `GET /api/earnings/ml-layers` |
+| **События** | Что было / что готово по каждому earnings? LLM vs ML **scenario** (сценарий) в таблице | `GET /api/earnings/intelligence` |
+| **Peer graph** | Кого считаем «пиром» (аналогом) лидера и с каким **weight** (весом)? | `GET /api/earnings/peer-graph` |
+| **Spillover** | Факт 1d/5d пиров + **ML pred 5d**; якорь peer-календаря (BMO/AMH) | `GET /api/earnings/spillover/{symbol}` |
+| **Shadow** | Насколько **classifier** (классификатор) угадывает сценарий **после созревания** 5d? | `GET /api/earnings/shadow-report` |
+| **Fusion** | Сводный advisory (подсказка): регрессия + scenario ML + brief | `GET /api/earnings/fusion/{symbol}` |
+| **ML слои** | Статус пайплайна данных и моделей (L1/L2) | `GET /api/earnings/ml-layers` |
 
 Event Brief (деталь события): `GET /api/earnings/brief/{symbol}?event_date=YYYY-MM-DD` — открывается кнопкой **Brief** на вкладке События.
 
@@ -38,7 +40,9 @@ Event Brief (деталь события): `GET /api/earnings/brief/{symbol}?eve
 | LLM | `yes` если есть `management_tone` в `earnings_event_detail` |
 | Tone | bullish / bearish / neutral (из LLM) |
 | **LLM scenario** | Hint из extract (`scenario_hints`) или `final_label` — **не** CatBoost |
-| **ML scenario** | Pred scenario classifier (`quotes_regime_earnings_v1`); proba в UI; «—» = нет features / модель off |
+| **ML scenario** | Pred **scenario classifier** (`quotes_regime_earnings_v1`); **proba** (вероятность) в UI; «—» = нет features / модель off |
+
+> **LLM vs ML scenario:** LLM читает transcript/8-K; ML — табличный CatBoost по `features_before`. Оба advisory; расхождение нормально на pilot-объёме labels.
 
 ### Пример (prod, META 2026-04-29)
 
@@ -46,8 +50,8 @@ Event Brief (деталь события): `GET /api/earnings/brief/{symbol}?eve
 2. Откроется панель:
    - **Headline:** `META capex / AI infra signal — watch peer spillover`
    - **LLM vs ML scenario:** две колонки — hint из extract и pred CatBoost classifier (proba, expected source sign)
-   - **Source outcomes:** фактические 1d/5d log-return META из quotes
-   - **Peer spillover:** таблица пиров — колонки **1d fact · 5d fact · 5d ML · Sign** (совпадение знака fact vs CatBoost pred)
+   - **Source outcomes:** фактические 1d/5d **log-return** (лог-доходность) META из quotes; якорь source — BMO → close T−1, AMH → close T ([ML_GLOSSARY_RU.md](../ML_GLOSSARY_RU.md) §4.2)
+   - **Peer spillover:** таблица пиров — **1d fact · 5d fact · 5d ML · Sign** (совпадение знака fact vs CatBoost pred); fact 5d peer — от `peer_outcome_anchor_date`, не от календарной даты отчёта source
 
 ```bash
 curl -s 'https://<host>/api/earnings/brief/META?event_date=2026-04-29' | jq '.scenario.id, .scenario_ml.predicted_scenario, [.peer_spillover_ml[]|select(.peer_spillover_ml_status=="ok")|{peer:.peer_ticker,pred:.peer_forward_log_ret_5d_pred}][:3]'
@@ -88,7 +92,26 @@ META → NVDA (hyperscaler_capex, weight 0.85)
 
 ### Что это
 
-**Event-study:** для каждого **прошлого** earnings source-тикера — forward log-return **пиров** от **даты отчёта source** (1d/5d fact) и **CatBoost pred 5d** (`peer_spillover_ml`), если есть `quotes_regime_earnings_v1`.
+**Event-study** (исследование реакции на событие): для каждого **прошлого** earnings **source**-тикера — forward **log-return** пиров и **CatBoost pred 5d** (`peer_spillover_ml`).
+
+**Важно — якорь peer (не путать с датой отчёта в таблице):**
+
+| Source phase | Отчёт source | Peer торгует реакцию | Fact 5d peer считается от |
+|--------------|--------------|----------------------|---------------------------|
+| **BMO** (before market open) | Tue | Tue open | **Mon close** peer |
+| **AMH** (after close) | Tue | Wed open | **Tue close** peer |
+
+В API/Brief поле **`peer_outcome_anchor_date`** — дата этого якоря. Колонка **event_date** в UI — календарь KB; forward returns **не** «от event_date напрямую» для peer.
+
+**Пример — NVDA BMO Tue → AMD:**
+
+```text
+event_date в UI: Tue (дата отчёта NVDA)
+source_market_phase: BMO
+AMD forward_log_ret_5d: от Mon close AMD (peer_outcome_anchor_date = Mon)
+```
+
+Подробнее: [ML_GLOSSARY_RU.md](../ML_GLOSSARY_RU.md) §4.3, [EVENT_REACTION_PIPELINE.md](../EVENT_REACTION_PIPELINE.md).
 
 ### Как пользоваться
 
@@ -113,29 +136,31 @@ curl -s 'https://<host>/api/earnings/spillover/META?limit=1' | jq '.events[0] | 
 
 ### Что это
 
-**Live shadow report** — offline-оценка **scenario classifier** на событиях, где уже есть:
+**Live shadow report** — offline-оценка **scenario classifier** на событиях source (не peer), где уже есть:
 
 - `features_before` с `quotes_regime_earnings_v1`
-- созревший `forward_log_ret_5d` в `outcomes_after`
+- созревший `forward_log_ret_5d` в `outcomes_after` (event 5d — горизонт ~5 торговых дней)
 
-Сравниваем **предсказанный сценарий** vs **факт** (знак 5d return, совпадение класса с LLM label). Считаем **pseudo-PnL** после round-trip transaction costs (default 20 bps × 2).
+Сравниваем **предсказанный сценарий** vs **факт** (знак 5d return, совпадение класса с LLM label). Считаем **pseudo-PnL** (условный PnL «если бы торговали») после round-trip **transaction costs** (издержки сделки, default 20 bps × 2).
 
-**Shadow ≠ торговля.** Отчёт advisory; `trading_gate` — внутренний порог качества, не разрешение на сделки.
+**Shadow** (только лог/метрики) **≠ торговля.** Отчёт advisory; `trading_gate` — внутренний порог качества, не разрешение на сделки.
+
+> **Shadow vs Spillover:** Shadow — качество classifier по **source**; Spillover — fact/pred по **peers**. См. таблицу в конце документа.
 
 ### Кнопки
 
 - **Загрузить** — JSON с диска (`last_earnings_scenario_shadow.json`, обновляется cron/eval).
 - **Пересчитать (refresh)** — полный пересчёт (~20–30 с), `?refresh=true`.
 
-### Пример интерпретации (prod, 2026-05-28)
+### Пример интерпретации (prod, 2026-06-07 после full refresh)
 
 | Метрика | Значение | Смысл |
 |---------|----------|--------|
-| Matured | 27 | Событий с features + 5d outcome |
-| Sign acc | ~67% | Знак pred vs фактический 5d |
-| Class acc | ~87% | Точное имя сценария vs LLM label |
-| Mean pseudo PnL (log) | ~+0.027 | Средний «если бы торговали по знаку» минус costs |
-| Shadow quality gate | quality ok / below threshold | Пороги `ML_READINESS_EARNINGS_SHADOW_*`; badge **«Shadow quality · advisory only»** — не разрешение на сделки |
+| Matured | ~41 | Событий с features + созревший 5d outcome |
+| Sign acc | ~70% | **Sign accuracy** — знак pred vs фактический 5d source |
+| Class acc | ~56% (train valid) | Точное имя сценария vs LLM label; мало labels (~33) |
+| Mean pseudo PnL (log) | см. JSON | Средний «если бы торговали по знаку» минус costs |
+| Shadow quality gate | quality ok / below threshold | Пороги `ML_READINESS_EARNINGS_SHADOW_*`; badge **«Shadow quality · advisory only»** |
 
 Строка таблицы: META · дата · pred scenario · actual 5d · ✓/✗ sign · ✓/✗ class · mean peer 5d.
 
@@ -145,12 +170,12 @@ curl -s 'https://<host>/api/earnings/spillover/META?limit=1' | jq '.events[0] | 
 
 ### Что это
 
-**Advisory bundle** для одного события:
+**Advisory bundle** (сводка-подсказка) для одного события:
 
-1. **Regression ML** — CatBoost `forward_log_ret_5d` (`quotes_regime_v1`, product-модель).
-2. **Scenario ML** — multi-class classifier (`quotes_regime_earnings_v1`); блок **LLM vs ML scenario**.
-3. **Peer spillover ML** — таблица fact vs pred 5d по каждому peer из графа.
-4. **Advisory** — alignment / conviction; **`execution_blocked: true` всегда**.
+1. **Regression ML** — CatBoost `forward_log_ret_5d` (**event 5d** — прогноз на ~5 торговых дней; `quotes_regime_v1`, product-модель).
+2. **Scenario ML** — multi-class **classifier** (`quotes_regime_earnings_v1`); блок **LLM vs ML scenario**.
+3. **Peer spillover ML** — таблица fact vs pred 5d по каждому peer из графа (якорь peer — §3).
+4. **Advisory** — alignment / conviction; **`execution_blocked: true` всегда** (бот не торгует по Fusion).
 
 ### Как пользоваться
 
@@ -184,18 +209,20 @@ curl -s 'https://<host>/api/earnings/spillover/META?limit=1' | jq '.events[0] | 
 
 ## 6. Вкладка «ML слои»
 
-Справочник статусов пайплайна (не прогноз по тикеру).
+Справочник статусов пайплайна (не прогноз по тикеру). Термины L1/L2 — [ML_GLOSSARY_RU.md](../ML_GLOSSARY_RU.md) §1.
 
 | Слой | Статус (prod) | Роль |
 |------|---------------|------|
-| `quotes_regime_earnings_v1` | active | Признаки для scenario classifier |
-| CatBoost регрессия | active | Product advisory; `/api/ml/event-reaction/{ticker}?event_date=YYYY-MM-DD` в Brief |
-| UP/DOWN/FLAT | active | Правило по порогу на фактическом 5d |
+| `quotes_regime_earnings_v1` | active | **Feature builder** — признаки для scenario classifier |
+| CatBoost регрессия | active | Product advisory (**event 5d**); `/api/ml/event-reaction/{ticker}?event_date=YYYY-MM-DD` в Brief |
+| UP/DOWN/FLAT | active | Rule-метка по **vol-scaled** порогу на фактическом 5d |
 | LLM scenario hints | active | Extract → `earnings_event_detail` |
 | Scenario classifier | active | Multi-class; Events / Brief / Fusion / Spillover |
-| Peer spillover ML | active | CatBoost regressor per peer; Brief / Spillover / Fusion |
+| Peer spillover ML | active | CatBoost **regressor** per peer; Brief / Spillover / Fusion |
 
-Prod snapshot (2026-05-30): ~494 earnings_v1 features, **25** LLM scenario labels, peer spillover **162** train rows, sign acc valid **85.4%**.
+Prod snapshot (2026-06-07): ~471 ERD backfill; earnings_v1 features; **33** LLM scenario labels (autoprep gate **≥40**); peer spillover **188** train rows, sign acc valid **≈85%**; shadow **41** matured, sign **≈70%**. `overall_grid_ready` ✅, `overall_earnings_autoprep_ready` ❌.
+
+> **Event 5d vs open-path:** open-path classifier **не** на этой странице — shadow в GAME_5M контуре. См. [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §0.
 
 ---
 
@@ -203,8 +230,10 @@ Prod snapshot (2026-05-30): ~494 earnings_v1 features, **25** LLM scenario label
 
 | | Spillover | Shadow |
 |---|-----------|--------|
-| **Вопрос** | Как **пиры** отреагировали (fact) и что pred **spillover ML**? | Насколько **classifier** угадал сценарий/знак source? |
-| **Данные** | Quotes пиров + CatBoost pred от event_date | features + matured 5d source |
+| **Вопрос** | Как **пиры** (аналоги) отреагировали (fact) и что pred **spillover ML**? | Насколько **classifier** угадал сценарий/знак **source**? |
+| **Объект** | Peer-тикеры (MU, AMD, …) | Source-тикер отчёта (NVDA, META, …) |
+| **Якорь** | `peer_outcome_anchor_date` (BMO/AMH) | leak-safe source anchor (BMO → T−1) |
+| **Данные** | Quotes пиров + CatBoost pred | features + matured 5d source |
 | **UI** | Spillover tab (fact + ML cols) | Shadow tab |
 | **Trading** | Описание рынка + advisory pred | Метрика качества ML |
 
@@ -280,9 +309,11 @@ Prod snapshot (2026-05-30): ~494 earnings_v1 features, **25** LLM scenario label
 
 ## Связанные документы
 
+- [ML_GLOSSARY_RU.md](../ML_GLOSSARY_RU.md) — словарь ML, BMO/AMH, spillover, shadow
 - [EARNINGS_INTELLIGENCE_PLAN.md](./EARNINGS_INTELLIGENCE_PLAN.md) — архитектура и roadmap
 - [EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](./EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md) — MVP event_reaction
-- [EVENT_REACTION_PIPELINE.md](../EVENT_REACTION_PIPELINE.md) — регреssion prod path
+- [EVENT_REACTION_PIPELINE.md](../EVENT_REACTION_PIPELINE.md) — regression prod path, якоря, vol-scaled
+- [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §0 — event 5d vs open-path
 
 ## Cron (prod)
 
@@ -294,6 +325,6 @@ Prod snapshot (2026-05-30): ~494 earnings_v1 features, **25** LLM scenario label
 
 Полный eval: `ML_READINESS_TRAIN_MODE=full python3 scripts/run_earnings_intelligence_prod_eval.py`
 
-**ML-слои (ridge vs event regression vs classifier):** [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §4–§7.
+**ML-слои (ridge vs event regression vs classifier):** [TRADE_ML_DATASETS_AND_TARGETS_RU.md](../TRADE_ML_DATASETS_AND_TARGETS_RU.md) §4–§7, §0.
 
-**План ближайшей сессии:** [EARNINGS_PLAN_2026-05-29.md](./EARNINGS_PLAN_2026-05-29.md)
+**Ops-статус контуров:** [ML_STATUS_REPORT.md](../ML_STATUS_REPORT.md).

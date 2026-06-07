@@ -1,29 +1,32 @@
 # Отчёт по ML-плану: статус контуров и dual-track
 
-**Дата:** 2026-06-05  
+**Дата:** 2026-06-07  
 **Планы:** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md), [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md)  
-**Ops-срез:** [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md)
+**Ops-срез:** [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md)  
+**Словарь терминов:** [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) — L1/L2/L3, AUC, RMSE, shadow, BMO/AMH, open-path vs event 5d.
 
 ---
 
 ## 1. Dual-track: как устроено сейчас
+
+**Dual-track** (два параллельных пути) — legacy **исполняет** сделки, **decision stack** (стек решений) пишет **snapshot** (снимок вкладов) в `context_json` для аудита и будущего **RESOLVE** (единый исполнитель).
 
 Два параллельных пути **не ждут друг друга**:
 
 ```text
 rules + KB + macro + premarket_gap_baseline
         │
-        ├─► LEGACY HOT PATH (исполняет сделки сегодня)
+        ├─► LEGACY HOT PATH (текущий исполнитель — исполняет сделки сегодня)
         │     technical_decision_effective
         │     + CatBoost fusion (если ENABLED)
-        │     + multiday entry gate (если apply)
+        │     + multiday entry gate (если gate_mode=apply)
         │     + portfolio CatBoost (отдельная поверхность)
         │     cron: send_sndk_signal_cron → BUY/HOLD
         │
         └─► DECISION STACK (параллельно, в context_json)
-              decision_snapshot + contributions
-              projected_effective_if_resolve
-              RESOLVE=false → только shadow / телеметрия
+              decision_snapshot + contributions (вклады контуров)
+              projected_effective_if_resolve (что было бы при RESOLVE=true)
+              RESOLVE=false → только shadow (лог без блока) / telemetry (телеметрия)
               RESOLVE=true  → stack подменяет legacy (опционально)
 ```
 
@@ -34,7 +37,9 @@ rules + KB + macro + premarket_gap_baseline
 | `DECISION_STACK_RESOLVE_ENABLED` | **false** | **Legacy исполняет**; stack не подменяет |
 | Исполняемое поле GAME_5M | `technical_decision_effective` | Cron и вход смотрят сюда |
 
-**Ключевой принцип (зафиксирован):** контур с tier `promoted` или `legacy_apply` **включается на legacy сразу**, через свой `*_ENABLED` / `*_GATE_MODE`, **не дожидаясь** `RESOLVE=true` и не дожидаясь «завершения фазы 3».
+**Пример divergence (расхождение legacy vs stack):** rules дают STRONG_BUY у open; stack при `RESOLVE=false` может записать `projected_effective_if_resolve=HOLD` из-за **session veto** (запрет агрессивного входа у NEAR_OPEN). Cron всё равно исполняет legacy — это **норма**, не баг (см. §4).
+
+**Ключевой принцип (зафиксирован):** контур с tier `promoted` (в проде) или `legacy_apply` (на legacy через gate) **включается на legacy сразу**, через свой `*_ENABLED` / `*_GATE_MODE`, **не дожидаясь** `RESOLVE=true` и не дожидаясь «завершения фазы 3».
 
 `RESOLVE=true` — отдельный рычаг для **единого** stack-исполнителя (session veto NEAR_OPEN/CLOSE и т.д.), не для первого включения ML.
 
@@ -63,18 +68,22 @@ docker exec lse-bot python scripts/print_ml_product_status.py --json
 
 ## 3. Матрица по каждому ML-контуру
 
+Легенда: **L1** — retrain (переобучение); **L2** — readiness gates (пороги качества); **L3** — влияние на сделку; **AUC** — качество классификатора; **RMSE** — ошибка регрессии. Подробнее: [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) §1–2.
+
 ### L1 / L2 / L3 / Legacy / Stack
 
-| Контур | L1 train | L2 gate | Product tier | **Legacy исполняет?** | Stack (RESOLVE=false) | Метрики (2026-06-05) |
+| Контур | L1 train | L2 gate | Product tier | **Legacy исполняет?** | Stack (RESOLVE=false) | Метрики (2026-06-07) |
 |--------|----------|---------|--------------|----------------------|------------------------|----------------------|
 | **portfolio** | ✅ | ✅ ready | **promoted** | ✅ `PORTFOLIO_CATBOOST_ENABLED=true` | shadow | RMSE≈0.078 |
 | **multiday_lr** | ✅ 927 tickers | advisory | **legacy_apply** | ✅ entry `apply`, hold `log_only` | shadow | would_hold +0.71% vs pass +1.09% |
 | **game5m_entry** | ✅ | ❌ AUC | **disabled** | ❌ `CATBOOST_ENABLED` unset/false | shadow | AUC≈0.50, n_valid=45 |
 | **recovery** | ✅ | D4a | **telemetry** | телеметрия only (D4a) | shadow | AUC≈0.71; 15 TE / 13 gate |
 | **gap_forecast** | ✅ | caution | **advisory** | baseline `premarket_gap` на legacy; ML — нет | shadow | naive MAE≈1.41% > ridge |
-| **event_reaction** | ✅ | ❌ RMSE | **advisory** | ✅ advisory (`ENABLED=true`) | shadow | RMSE≈0.13 |
-| **earnings_grid** | ✅ | partial | **shadow** | UI/Telegram shadow | — | grid ready, autoprep labels<40 |
+| **event_reaction** | ✅ | ❌ RMSE | **advisory** | ✅ advisory (`ENABLED=true`) | shadow | RMSE≈0.13; leak-safe якоря BMO/AMH |
+| **earnings_grid** | ✅ | partial | **shadow** | UI/Telegram shadow | — | `overall_grid_ready` ✅; autoprep labels **33/40** |
 | **open_path** | ✅ | ❌ | **shadow** | ❌ | — | prerequisites не готовы |
+
+**Event / earnings refresh (2026-06-07):** ERD backfill 471 строк; peer spillover train **188** rows, sign acc valid **≈85%**, `same_sign_rate` **0.40** (после fix peer calendar); scenario shadow **41** matured, sign acc **≈70%**. Якоря и vol-scaled labels — [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md), [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) §4.
 
 ### CatBoost-сети на диске (prod full train 2026-06-05)
 
@@ -92,12 +101,14 @@ docker exec lse-bot python scripts/print_ml_product_status.py --json
 
 ## 4. RESOLVE и mirror
 
-| Метрика | 7d | 14d |
-|---------|----|----|
-| Сделки со snapshot | 32 | 41 |
-| Divergence | 4 (12.5%) | 5 (12.2%) |
-| Session veto | все | все |
-| Unexpected | 0 | 0 |
+**Mirror report** — сравнение legacy `technical_decision_effective` vs `projected_effective_if_resolve` из stack на закрытых сделках.
+
+| Метрика | 7d | 14d | Расшифровка |
+|---------|----|-----|-------------|
+| Сделки со snapshot | 32 | 41 | GAME_5M с `decision_snapshot` |
+| Divergence | 4 (12.5%) | 5 (12.2%) | legacy ≠ projected |
+| Session veto | все | все | расхождение из-за NEAR_OPEN/CLOSE |
+| Unexpected | 0 | 0 | divergence без объяснимой причины |
 
 **Политика:** session-divergence — норма; legacy остаётся исполнителем. `RESOLVE=true` — только при росте `unexpected_divergence` или ухудшении edge.
 
@@ -117,7 +128,7 @@ Cron: вс 06:10 MSK — `report_decision_stack_mirror.py --days 14`
 | D4a go + 20+ TE с gate | recovery | PR D4b defer на legacy |
 | ML ridge beat naive на OOS | gap_forecast | осторожный apply в stack / legacy |
 | `unexpected_divergence > 0` | RESOLVE | рассмотреть `DECISION_STACK_RESOLVE_ENABLED=true` |
-| earnings labels ≥ 40 | earnings_grid | shadow → product tier |
+| earnings labels ≥ 40 | earnings_grid | shadow → product tier; сейчас **33** LLM labels |
 
 ### Очередь по фазе 3 (без big-bang)
 
@@ -140,7 +151,10 @@ Cron: вс 06:10 MSK — `report_decision_stack_mirror.py --days 14`
 
 | Документ | Тема |
 |----------|------|
-| [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) | **Датасеты, метки, метрики, complementarity, путь к единой точке** |
+| [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) | **Словарь:** L1/L2/L3, метрики, BMO/AMH, open-path vs event 5d |
+| [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) | **Датасеты, метки, метрики, complementarity, §0 event vs open-path** |
+| [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md) | ERD backfill, якоря, vol-scaled labels |
+| [earnings-event-agent-lse/EARNINGS_UI_GUIDE.md](earnings-event-agent-lse/EARNINGS_UI_GUIDE.md) | UI `/earnings`, вкладки Spillover / Shadow / Fusion |
 | [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) | Канон L1–L3 |
 | [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) | Фазы 0–4 |
 | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) | Алгоритм GAME_5M |

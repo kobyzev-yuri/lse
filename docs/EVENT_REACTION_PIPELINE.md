@@ -1,5 +1,7 @@
 # Event / earnings: авторазметка `event_reaction_dataset`, cron и контроль
 
+**Словарь:** BMO/AMH, якоря, vol-scaled порог, spillover — [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) §4–5.
+
 **Скелет строк** создаётся из KB: `scripts/build_event_reaction_dataset.py --from-kb-earnings`.  
 **MVP авторазметка** (признаки до события, forward-исходы, rule-based `final_label`) из daily **`quotes`**: модуль `services/event_reaction_labeling.py`, CLI `scripts/backfill_event_reaction_labeling.py`.
 
@@ -84,12 +86,61 @@
 
 | Компонент | Назначение |
 |-----------|------------|
-| `services/event_reaction_labeling.py` | Якорь: последний торговый день с `date <=` дня события в **America/New_York**; из `quotes` — log-returns до/после close якоря; `final_label` UP/DOWN/FLAT по \|forward 5d log-ret\| vs порог |
+| `services/event_reaction_labeling.py` | Leak-safe якоря по фазе отчёта; log-returns до/после close якоря; `final_label` UP/DOWN/FLAT vs порог (vol-scaled или fixed) |
 | `scripts/backfill_event_reaction_labeling.py` | Батчевый `UPDATE` пустых (или с `--force-*`) строк |
+
+### Якоря и фаза отчёта (BMO / AMH)
+
+**Зачем:** daily `quotes` не знают «до» или «после» отчёта внутри календарного дня T. Якорь фиксирует последний close **без утечки** реакции рынка в признаки `features_before`.
+
+| Фаза (`earnings_market_phase`) | Расшифровка | `features_as_of_date` | `outcome_anchor_date` (source) |
+|--------------------------------|-------------|----------------------|--------------------------------|
+| **BMO** / **DURING** / UNKNOWN | отчёт до или в RTH (before market open) | close **T−1** | close **T−1** |
+| **AFTER_CLOSE** (AMH) | after hours, после close RTH | close **T** | close **T** |
+
+Поля в JSON outcomes: `earnings_market_phase`, `outcome_anchor_trade_date`, `threshold_mode`.
+
+**Пример — NVDA BMO во вторник 2026-02-25:**
+
+```text
+event_d = Tue 2026-02-25, phase = BMO
+features_as_of_date = Mon 2026-02-24   ← X без Tue premarket/open
+forward_log_ret_5d от Mon close
+```
+
+**Пример — NVDA AMH (after close) во вторник:**
+
+```text
+event_d = Tue 2026-02-25, phase = AFTER_CLOSE
+features_as_of_date = Tue 2026-02-25 close   ← daily бар закрылся до AH-релиза
+forward_log_ret_5d от Tue close
+```
+
+### Peer spillover: отдельный календарь аналога
+
+Для строк **peer** (`peer_spillover_dataset`) исход считается от `peer_outcome_anchor_date` — последний close peer **до** сессии, где peer торгует реакцию на shock source.
+
+| Source phase | Source event day T | Peer торгует реакцию | `peer_outcome_anchor_date` |
+|--------------|-------------------|----------------------|----------------------------|
+| BMO | Tue | Tue open | **Mon** close peer |
+| AMH | Tue | Wed open | **Tue** close peer |
+
+**Пример — NVDA BMO Tue → AMD (peer):** forward AMD от **Mon** close (не от Tue — иначе в бар попадёт pre-earnings и post-shock).
+
+Подробнее и типичные ошибки: [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) §4.2–4.3. Код: `resolve_event_anchors()`, `resolve_peer_outcome_anchor_date()`.
+
+### Порог меток UP / DOWN / FLAT
 
 **Версии в JSON:** `feature_builder_version` = `quotes_mvp_1`, `outcome_builder_version` = `quotes_fwd_1`. После смены формул — новая строка версии в JSON и/или новый `dataset_version` в таблице.
 
-**Порог для меток:** конфиг `EVENT_REACTION_LABEL_THRESHOLD_LOG` (log-пространство); если не задан — используется тот же effective edge, что и `portfolio_ml_threshold_log()` (согласованность с портфельным ML). См. `config.env.example`.
+| Режим (`EVENT_REACTION_LABEL_THRESHOLD_MODE`) | Формула |
+|-----------------------------------------------|---------|
+| **`vol_scaled`** (default) | `threshold = max(edge, K × vol_10d_log_ret_std)`, `K` = `EVENT_REACTION_LABEL_VOL_K` (1.5) |
+| **`fixed`** | только `EVENT_REACTION_LABEL_THRESHOLD_LOG` или portfolio edge |
+
+`edge` без явного конфига — `portfolio_ml_threshold_log()` (согласованность с портфельным ML). См. `config.env.example`.
+
+**Пример vol-scaled:** при `vol_10d = 0.03`, `K = 1.5`, `edge = 0.004` → порог `0.045`; forward +2% → **FLAT**; forward +6% → **UP** по знаку.
 
 **CLI (важные флаги):** `--dataset-version`, `--limit`, `--dry-run`, `--only-features`, `--only-outcomes`, `--force-features`, `--force-outcomes`, `--horizons 1,5,20`, `--id-from` / `--id-to`, `--since` / `--until` (ISO time, сравнение с `event_time_et`).
 
