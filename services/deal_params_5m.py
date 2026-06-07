@@ -21,6 +21,7 @@ FULL_ENTRY_KEYS = (
     "stop_loss_enabled", "stop_loss_pct", "take_profit_pct",
     "entry_advice", "entry_advice_reason", "entry_advice_reason_local",
     "macro_risk_level", "macro_equity_gap_bias", "macro_risk_reasons", "macro_indicators",
+    "ndx_gap_pct", "spy_gap_pct", "ndx_premarket_last", "ndx_prev_close",
     "macro_predicted_sector_gap_pct", "macro_sector_proxy",
     "high_5d", "low_5d", "pullback_from_high_pct",
     "last_bar_high", "last_bar_low", "recent_bars_high_max", "recent_bars_low_min",

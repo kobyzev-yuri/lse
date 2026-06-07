@@ -56,6 +56,16 @@ def get_macro_oil_ticker() -> str:
     return (get_config_value("GAME_5M_MACRO_OIL_TICKER", "CL=F") or "CL=F").strip()
 
 
+def get_macro_equity_index_tickers() -> List[str]:
+    try:
+        from services.ticker_groups import get_macro_equity_index_tickers as _cfg_tickers
+
+        return _cfg_tickers()
+    except Exception as e:
+        logger.debug("macro equity index tickers fallback: %s", e)
+        return ["^NDX", "SPY"]
+
+
 def get_indicator_gap_detail(ticker: str) -> Dict[str, Any]:
     """
     Гэп % к предыдущему close: премаркет (PRE_MARKET) или последние два дня в quotes.
@@ -206,7 +216,9 @@ def evaluate_macro_premarket_risk() -> Dict[str, Any]:
     vix_calm_for_oil_fav = _cfg_float("GAME_5M_MACRO_VIX_CALM_MAX_FOR_OIL_FAV", 1.0)
 
     indicators: Dict[str, Dict[str, Any]] = {}
-    for t in forex + [vix_t, oil_t]:
+    for t in forex + [vix_t, oil_t] + get_macro_equity_index_tickers():
+        if t in indicators:
+            continue
         det = get_indicator_gap_detail(t)
         indicators[t] = {
             "gap_pct": det.get("gap_pct"),

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-UPSERT daily market regime snapshot (SPY, QQQ as NDX proxy, DIA, ^VIX) into market_regime_daily.
+UPSERT daily market regime snapshot (SPY, ^NDX, DIA, ^VIX) into market_regime_daily.
 
-Reads daily closes from public.quotes. Log-returns use natural log (project convention).
+Reads daily closes from public.quotes. ^NDX is primary for ndx_close; QQQ fallback if missing.
+Log-returns use natural log (project convention).
 
   python scripts/ingest_market_regime_daily.py --days 400
   python scripts/ingest_market_regime_daily.py --from-date 2024-01-01 --dry-run
@@ -26,6 +27,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from config_loader import get_database_url
+from services.ticker_groups import get_market_ndx_fallback_ticker, get_market_ndx_ticker
 from services.ingest_multiday_lr_daily_features_common import (
     default_date_range,
     parse_date_arg,
@@ -35,13 +37,28 @@ from services.ingest_multiday_lr_daily_features_common import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# quotes ticker -> market_regime_daily column
+# quotes ticker -> market_regime_daily column (NDX resolved in _build_rows)
 INDEX_MAP: Dict[str, str] = {
     "SPY": "spy_close",
-    "QQQ": "ndx_close",
     "DIA": "dia_close",
     "^VIX": "vix_close",
 }
+
+
+def _index_quote_tickers() -> List[str]:
+    ndx = get_market_ndx_ticker()
+    fb = get_market_ndx_fallback_ticker()
+    tickers = list(INDEX_MAP.keys()) + [ndx]
+    if fb.upper() != ndx.upper():
+        tickers.append(fb)
+    seen: set[str] = set()
+    out: List[str] = []
+    for t in tickers:
+        u = t.strip().upper()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(t.strip())
+    return out
 
 UPSERT_SQL = """
 INSERT INTO market_regime_daily (
@@ -98,7 +115,8 @@ def _ensure_table(engine) -> None:
 
 def _calendar_trade_dates(engine, d0: date, d1: date) -> Tuple[List[date], str]:
     """Prefer SPY calendar; fall back to any index series present in quotes."""
-    for sym in ("SPY", "QQQ", "DIA", "^VIX"):
+    ndx = get_market_ndx_ticker()
+    for sym in ("SPY", ndx, get_market_ndx_fallback_ticker(), "DIA", "^VIX"):
         dates = trading_dates_from_quotes(engine, sym, d0, d1)
         if dates:
             return dates, sym
@@ -107,7 +125,7 @@ def _calendar_trade_dates(engine, d0: date, d1: date) -> Tuple[List[date], str]:
 
 def _missing_index_tickers(engine, d0: date, d1: date) -> List[str]:
     out: List[str] = []
-    for sym in INDEX_MAP:
+    for sym in _index_quote_tickers():
         if not trading_dates_from_quotes(engine, sym, d0, d1):
             out.append(sym)
     return out
@@ -149,6 +167,8 @@ def _build_rows(
 ) -> List[Dict[str, Any]]:
     if not trade_dates:
         return []
+    ndx_ticker = get_market_ndx_ticker()
+    ndx_fallback = get_market_ndx_fallback_ticker()
     piv: Dict[str, pd.Series] = {}
     for tkr, col in INDEX_MAP.items():
         sub = closes[closes["ticker"] == tkr]
@@ -157,8 +177,17 @@ def _build_rows(
         else:
             s = sub.groupby("trade_date", as_index=True)["close"].last().sort_index()
             piv[col] = s
+    ndx_series: Dict[str, pd.Series] = {}
+    for tkr in (ndx_ticker, ndx_fallback):
+        sub = closes[closes["ticker"] == tkr.upper()]
+        if sub.empty:
+            sub = closes[closes["ticker"] == tkr]
+        if sub.empty:
+            continue
+        ndx_series[tkr.upper()] = sub.groupby("trade_date", as_index=True)["close"].last().sort_index()
     rows: List[Dict[str, Any]] = []
     prev: Dict[str, Optional[float]] = {c: None for c in INDEX_MAP.values()}
+    prev_ndx: Optional[float] = None
     for td in sorted(trade_dates):
         cur: Dict[str, Optional[float]] = {}
         for col in INDEX_MAP.values():
@@ -170,13 +199,35 @@ def _build_rows(
                 except (TypeError, ValueError):
                     val = None
             cur[col] = val
-        feats: Dict[str, Any] = {"builder_version": "quotes_regime_v1", "ndx_ticker": "QQQ"}
+        ndx_val: Optional[float] = None
+        ndx_source = ndx_ticker
+        for tkr in (ndx_ticker, ndx_fallback):
+            series = ndx_series.get(tkr.upper())
+            if series is not None and td in series.index:
+                raw = series.loc[td]
+                try:
+                    ndx_val = float(raw.iloc[-1] if hasattr(raw, "iloc") else raw)
+                    ndx_source = tkr
+                    break
+                except (TypeError, ValueError):
+                    continue
+        cur["ndx_close"] = ndx_val
+        feats: Dict[str, Any] = {
+            "builder_version": "quotes_regime_v1",
+            "ndx_ticker": ndx_source,
+            "ndx_primary_ticker": ndx_ticker,
+            "ndx_fallback_ticker": ndx_fallback,
+        }
         flags: Dict[str, Any] = {}
         for tkr, col in INDEX_MAP.items():
             lr = _log_return(cur[col], prev[col]) if cur[col] is not None else None
             if lr is not None:
                 feats[f"log_ret_1d_{col.replace('_close', '')}"] = round(lr, 8)
             prev[col] = cur[col]
+        ndx_lr = _log_return(ndx_val, prev_ndx) if ndx_val is not None else None
+        if ndx_lr is not None:
+            feats["log_ret_1d_ndx"] = round(ndx_lr, 8)
+        prev_ndx = ndx_val
         vix = cur.get("vix_close")
         flags["vix_regime"] = _vix_regime(vix)
         spy_lr = feats.get("log_ret_1d_spy")
@@ -206,7 +257,7 @@ def main() -> int:
     parser.add_argument(
         "--no-auto-seed",
         action="store_true",
-        help="Do not fetch missing SPY/QQQ/DIA/^VIX into quotes via yfinance",
+        help="Do not fetch missing SPY/^NDX/QQQ/DIA/^VIX into quotes via yfinance",
     )
     args = parser.parse_args()
 
@@ -222,7 +273,7 @@ def main() -> int:
     if args.ensure_table:
         _ensure_table(engine)
 
-    tickers = list(INDEX_MAP.keys())
+    tickers = _index_quote_tickers()
     if not args.no_auto_seed and not args.dry_run:
         missing = _missing_index_tickers(engine, d0, d1)
         if missing:
@@ -231,7 +282,13 @@ def main() -> int:
 
     trade_dates, cal_sym = _calendar_trade_dates(engine, d0, d1)
     if not trade_dates:
-        logger.error("No index quotes (SPY/QQQ/DIA/^VIX) between %s and %s", d0, d1)
+        logger.error(
+            "No index quotes (SPY/%s/%s/DIA/^VIX) between %s and %s",
+            get_market_ndx_ticker(),
+            get_market_ndx_fallback_ticker(),
+            d0,
+            d1,
+        )
         return 1
     logger.info("Calendar from %s: %s trading days", cal_sym, len(trade_dates))
     closes = _load_closes(engine, tickers, d0, d1)

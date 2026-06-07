@@ -30,6 +30,7 @@ _NON_EQUITY_SYMBOLS: frozenset[str] = frozenset(
         "TLT",
         "SPY",
         "NDX",
+        "^NDX",
         "DIA",
         "VIX",
         "^VIX",

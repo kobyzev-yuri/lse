@@ -28,9 +28,15 @@ DEFAULT_TICKERS_LONG = (
 DEFAULT_GAME_5M_FAST = "SNDK,NBIS,ASML,MU,LITE,CIEN"
 # Correlation “all vs all”: megacap + semis + VIX/oil/gold/forex + extra drivers (ANET, INTC, DELL, …) for LLM/matrix context.
 DEFAULT_GAME_5M_CORRELATION_CONTEXT = (
-    "MSFT,META,GOOGL,AMZN,NVDA,SMH,QQQ,TLT,^VIX,CL=F,GC=F,GBPUSD=X,"
+    "MSFT,META,GOOGL,AMZN,NVDA,SMH,^NDX,QQQ,TLT,^VIX,CL=F,GC=F,GBPUSD=X,"
     "ANET,INTC,DELL,ALAB,AVGO,ORCL,PLTR,AMD"
 )
+
+# Daily index series for market_regime_daily + optional macro/correlation context.
+DEFAULT_MARKET_INDEX_TICKERS = "SPY,^NDX,DIA,^VIX"
+DEFAULT_MACRO_EQUITY_INDEX_TICKERS = "^NDX,SPY"
+DEFAULT_MARKET_REGIME_NDX_TICKER = "^NDX"
+DEFAULT_MARKET_REGIME_NDX_FALLBACK_TICKER = "QQQ"
 
 
 def get_tickers_fast() -> List[str]:
@@ -47,6 +53,59 @@ def get_tickers_game_5m() -> List[str]:
     if raw:
         return [t.strip() for t in raw.split(",") if t.strip()]
     return get_tickers_fast()
+
+
+def _parse_ticker_csv(raw: str) -> List[str]:
+    return [t.strip() for t in (raw or "").split(",") if t.strip()]
+
+
+def get_market_index_tickers() -> List[str]:
+    """SPY / ^NDX / DIA / ^VIX — котировки для market_regime_daily и update_prices_cron."""
+    raw = get_config_value("MARKET_INDEX_TICKERS", DEFAULT_MARKET_INDEX_TICKERS) or DEFAULT_MARKET_INDEX_TICKERS
+    seen: set[str] = set()
+    out: List[str] = []
+    for t in _parse_ticker_csv(raw):
+        u = t.strip().upper()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(t.strip())
+    ndx = get_market_ndx_ticker()
+    fb = get_market_ndx_fallback_ticker()
+    for extra in (ndx, fb):
+        u = extra.strip().upper()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(extra.strip())
+    return out
+
+
+def get_market_ndx_ticker() -> str:
+    """Yahoo symbol for Nasdaq-100 index (default ^NDX)."""
+    raw = (get_config_value("MARKET_REGIME_NDX_TICKER", DEFAULT_MARKET_REGIME_NDX_TICKER) or "").strip()
+    return raw or DEFAULT_MARKET_REGIME_NDX_TICKER
+
+
+def get_market_ndx_fallback_ticker() -> str:
+    """Fallback ETF when ^NDX quotes are missing (default QQQ)."""
+    raw = (
+        get_config_value("MARKET_REGIME_NDX_FALLBACK_TICKER", DEFAULT_MARKET_REGIME_NDX_FALLBACK_TICKER) or ""
+    ).strip()
+    return raw or DEFAULT_MARKET_REGIME_NDX_FALLBACK_TICKER
+
+
+def get_macro_equity_index_tickers() -> List[str]:
+    """Equity benchmarks in GAME_5m technical/macro payload (premarket gap %)."""
+    raw = get_config_value("GAME_5M_MACRO_EQUITY_INDEX_TICKERS", DEFAULT_MACRO_EQUITY_INDEX_TICKERS) or ""
+    if not raw.strip():
+        return [get_market_ndx_ticker()]
+    seen: set[str] = set()
+    out: List[str] = []
+    for t in _parse_ticker_csv(raw):
+        u = t.strip().upper()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(t.strip())
+    return out
 
 
 def get_game_5m_correlation_context() -> List[str]:
@@ -104,13 +163,14 @@ def get_oil_ticker() -> str:
 
 
 def get_all_ticker_groups() -> List[str]:
-    """Объединённый список: быстрые → средние → долгие, без дубликатов."""
+    """Объединённый список: быстрые → средние → долгие + индексы, без дубликатов."""
     fast = get_tickers_fast()
     medium = get_tickers_medium()
     long_ = get_tickers_long()
+    indices = get_market_index_tickers()
     seen = set()
     result = []
-    for t in fast + medium + long_:
+    for t in fast + medium + long_ + indices:
         if t not in seen:
             seen.add(t)
             result.append(t)

@@ -1207,6 +1207,7 @@ TECHNICAL_SIGNAL_KEYS = (
     "pullback_from_high_pct", "session_high",
     "kb_news_impact", "entry_advice", "entry_advice_reason", "entry_advice_reason_local",
     "macro_risk_level", "macro_equity_gap_bias", "macro_risk_reasons", "macro_indicators",
+    "ndx_gap_pct", "spy_gap_pct", "ndx_premarket_last", "ndx_prev_close",
     "macro_predicted_sector_gap_pct", "macro_sector_proxy",
     "market_session",
     "session_phase", "entry_price_basis",
@@ -2577,6 +2578,22 @@ def get_decision_5m(
         out["macro_indicators"] = {
             k: v.get("gap_pct") for k, v in (macro_risk.get("indicators") or {}).items()
         }
+        try:
+            from services.ticker_groups import get_market_ndx_ticker
+
+            ndx_t = get_market_ndx_ticker()
+            ndx_info = (macro_risk.get("indicators") or {}).get(ndx_t) or {}
+            spy_info = (macro_risk.get("indicators") or {}).get("SPY") or {}
+            if ndx_info.get("gap_pct") is not None:
+                out["ndx_gap_pct"] = ndx_info.get("gap_pct")
+            if spy_info.get("gap_pct") is not None:
+                out["spy_gap_pct"] = spy_info.get("gap_pct")
+            if ndx_info.get("premarket_last") is not None:
+                out["ndx_premarket_last"] = ndx_info.get("premarket_last")
+            if ndx_info.get("prev_close") is not None:
+                out["ndx_prev_close"] = ndx_info.get("prev_close")
+        except Exception as e_ndx:
+            logger.debug("ndx macro fields для %s: %s", ticker, e_ndx)
         if macro_risk.get("macro_predicted_sector_gap_pct") is not None:
             out["macro_predicted_sector_gap_pct"] = macro_risk.get("macro_predicted_sector_gap_pct")
             out["macro_sector_proxy"] = macro_risk.get("macro_sector_proxy")
