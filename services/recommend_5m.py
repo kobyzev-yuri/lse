@@ -315,8 +315,6 @@ def _compute_rth_open_gap_pct(
         from datetime import date as date_type
         from datetime import time as dt_time
 
-        from services.premarket import get_prev_close_from_db
-
         dts_et = pd.to_datetime(df["datetime"])
         if dts_et.dt.tz is None:
             try:
@@ -330,10 +328,7 @@ def _compute_rth_open_gap_pct(
             target_date = pd.Timestamp(target_date).date()
         t_start = dt_time(*US_SESSION_START)
         t_end = dt_time(*US_SESSION_END)
-        if trade_date is not None:
-            prev_close = _prev_close_before_trade_date(ticker, trade_date)
-        else:
-            prev_close = get_prev_close_from_db(ticker)
+        prev_close = _prev_close_before_trade_date(ticker, target_date)
         if prev_close is None or float(prev_close) <= 0:
             prev_mask = (dts_et.dt.date < target_date) & (dts_et.dt.time >= t_start) & (dts_et.dt.time <= t_end)
             prev_df = df.loc[prev_mask].sort_values("datetime")
@@ -2535,13 +2530,22 @@ def get_decision_5m(
         )
     except Exception as e:
         logger.debug("macro_premarket_risk для %s: %s", ticker, e)
+    if out.get("premarket_gap_pct") is None:
+        try:
+            from services.game5m_gap_forecast import load_frozen_gap_snapshot
+
+            frozen_pm = load_frozen_gap_snapshot(ticker)
+            if frozen_pm and frozen_pm.get("premarket_gap_pct") is not None:
+                out["premarket_gap_pct"] = round(float(frozen_pm["premarket_gap_pct"]), 2)
+        except Exception as e_fpm:
+            logger.debug("frozen premarket_gap %s: %s", ticker, e_fpm)
     premarket_gap_baseline = None
     try:
-        if premarket_context and premarket_context.get("premarket_gap_pct") is not None:
+        if out.get("premarket_gap_pct") is not None:
             from services.premarket_gap_baseline import evaluate_premarket_gap_baseline
 
             premarket_gap_baseline = evaluate_premarket_gap_baseline(
-                premarket_context.get("premarket_gap_pct"),
+                out.get("premarket_gap_pct"),
                 very_negative_news=bool(very_negative and not relax_very_neg),
                 macro_risk_level=macro_risk.get("risk_level"),
                 macro_equity_gap_bias=macro_risk.get("equity_gap_bias"),

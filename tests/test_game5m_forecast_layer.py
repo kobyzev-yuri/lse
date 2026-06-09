@@ -46,6 +46,19 @@ class TestGame5mForecastLayer(unittest.TestCase):
         self.assertTrue(opp["should_boost_entry"])
         self.assertEqual(opp["reason"], "gap_up_confirmed")
 
+    def test_effective_gap_prefers_premarket_for_regime(self):
+        env = build_game5m_forecast_envelope(
+            {
+                "premarket_gap_pct": -2.0,
+                "ticker_open_gap_predicted_pct": 0.1,
+                "ticker_open_gap_ml_advisory_pct": 0.1,
+                "multiday_lr_horizon_1d_pct_vs_spot": -0.4,
+            }
+        )
+        self.assertEqual(env["open_gap"]["effective_pct"], -2.0)
+        self.assertEqual(env["open_gap"]["model_advisory_pct"], 0.1)
+        self.assertEqual(env["regime"], "aligned_bearish")
+
     def test_gap_up_opportunity_detects_fade_risk(self):
         env = build_game5m_forecast_envelope(
             {

@@ -91,15 +91,37 @@ def main() -> int:
     rc = subprocess.call(cmd, cwd=str(project_root))
     wrote = metrics_path.is_file()
 
+    train_rc = None
+    pooled_ready = False
+    if trigger.should_train or args.full:
+        train_cmd = [
+            py,
+            str(project_root / "scripts/train_premarket_gap_model.py"),
+            "--days",
+            str(lookback),
+        ]
+        if args.dry_run:
+            train_cmd.append("--dry-run")
+        train_rc = subprocess.call(train_cmd, cwd=str(project_root))
+        pooled_ready = train_rc == 0
+
     finalize_contour_refresh(
         project_root,
         "gap_forecast",
         trigger,
         apply_ran=wrote,
-        train_ran=wrote and rc == 0,
+        train_ran=pooled_ready,
         full=args.full,
-        extra={"analyze_rc": rc, "lookback_days": lookback, "suggest_coefs": suggest},
+        extra={
+            "analyze_rc": rc,
+            "train_rc": train_rc,
+            "pooled_ready": pooled_ready,
+            "lookback_days": lookback,
+            "suggest_coefs": suggest,
+        },
     )
+    if train_rc is not None and train_rc != 0:
+        return train_rc
     return 0 if rc == 0 else rc
 
 

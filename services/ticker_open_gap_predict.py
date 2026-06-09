@@ -325,8 +325,15 @@ def get_ticker_gap_model_version() -> str:
 
 def resolve_ticker_open_gap_fact(
     payload: Dict[str, Any],
+    *,
+    frozen: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[float], Optional[str]]:
     """Фактический гэп тикера: open RTH приоритетнее премаркета."""
+    if frozen and frozen.get("open_gap_pct") is not None:
+        try:
+            return round(float(frozen["open_gap_pct"]), 2), "open_db"
+        except (TypeError, ValueError):
+            pass
     if payload.get("rth_open_gap_pct") is not None:
         try:
             return round(float(payload["rth_open_gap_pct"]), 2), "open_9_30_et"
@@ -340,6 +347,25 @@ def resolve_ticker_open_gap_fact(
     return None, None
 
 
+def _use_frozen_gap_snapshot(session_phase: Optional[str], frozen: Optional[Dict[str, Any]]) -> bool:
+    """После open не пересчитывать OLS без премаркета — брать утренний снапшот из БД."""
+    if not frozen or frozen.get("pred_ticker_gap_pct") is None:
+        return False
+    phase = (session_phase or "").strip().upper()
+    if phase == "PRE_MARKET" and frozen.get("open_gap_pct") is None:
+        return False
+    return True
+
+
+def _pred_detail_from_frozen(frozen: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "predicted_pct": round(float(frozen["pred_ticker_gap_pct"]), 3),
+        "source": str(frozen.get("pred_ticker_source") or "frozen_db"),
+        "model_version": frozen.get("pred_ticker_model_version"),
+        "frozen_snapshot": True,
+    }
+
+
 def attach_ticker_open_gap_fields(
     out: Dict[str, Any],
     *,
@@ -347,15 +373,41 @@ def attach_ticker_open_gap_fields(
     macro_risk: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Заполняет ticker_open_gap_* на карточке / в get_decision_5m."""
+    frozen: Optional[Dict[str, Any]] = None
+    try:
+        from services.game5m_gap_forecast import load_frozen_gap_snapshot
+
+        frozen = load_frozen_gap_snapshot(ticker)
+    except Exception as e:
+        logger.debug("frozen_gap_snapshot %s: %s", ticker, e)
+
     pm = out.get("premarket_gap_pct")
-    pred_detail = predict_ticker_open_gap_detail(
-        ticker,
-        macro_risk=macro_risk,
-        premarket_gap_pct=float(pm) if pm is not None else None,
-    )
+    if pm is None and frozen and frozen.get("premarket_gap_pct") is not None:
+        try:
+            pm = round(float(frozen["premarket_gap_pct"]), 2)
+            out["premarket_gap_pct"] = pm
+        except (TypeError, ValueError):
+            pm = None
+
+    session_phase = str(out.get("session_phase") or "")
+    if _use_frozen_gap_snapshot(session_phase, frozen):
+        pred_detail = _pred_detail_from_frozen(frozen)  # type: ignore[arg-type]
+    else:
+        pred_detail = predict_ticker_open_gap_detail(
+            ticker,
+            macro_risk=macro_risk,
+            premarket_gap_pct=float(pm) if pm is not None else None,
+        )
+
     pred = pred_detail.get("predicted_pct")
     pred_src = pred_detail.get("source")
-    fact, fact_basis = resolve_ticker_open_gap_fact(out)
+    if pred is not None:
+        out["ticker_open_gap_ml_advisory_pct"] = pred
+        out["ticker_open_gap_ml_advisory_source"] = pred_src
+    if pm is not None:
+        out["ticker_open_gap_observable_baseline_pct"] = round(float(pm), 3)
+
+    fact, fact_basis = resolve_ticker_open_gap_fact(out, frozen=frozen)
     if pred is not None:
         out["ticker_open_gap_predicted_pct"] = pred
     out["ticker_open_gap_predicted_source"] = pred_src

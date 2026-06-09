@@ -105,30 +105,49 @@ def get_indicator_gap_detail(ticker: str) -> Dict[str, Any]:
         logger.debug("premarket gap %s: %s", t, e)
 
     try:
+        from datetime import datetime
+
         from sqlalchemy import text
         from report_generator import get_engine
 
+        try:
+            from zoneinfo import ZoneInfo
+
+            today_et = datetime.now(ZoneInfo("America/New_York")).date()
+        except ImportError:
+            today_et = datetime.utcnow().date()
+
         eng = get_engine()
         with eng.connect() as conn:
-            rows = conn.execute(
+            prev_row = conn.execute(
                 text(
                     """
                     SELECT close FROM quotes
-                    WHERE ticker = :ticker
+                    WHERE ticker = :ticker AND date < :trade_date
                     ORDER BY date DESC
-                    LIMIT 2
+                    LIMIT 1
                     """
                 ),
-                {"ticker": t},
-            ).fetchall()
-        if len(rows) >= 2 and rows[0][0] is not None and rows[1][0] is not None:
-            last = float(rows[0][0])
-            prev = float(rows[1][0])
+                {"ticker": t, "trade_date": today_et},
+            ).fetchone()
+            today_row = conn.execute(
+                text(
+                    """
+                    SELECT close FROM quotes
+                    WHERE ticker = :ticker AND date = :trade_date
+                    LIMIT 1
+                    """
+                ),
+                {"ticker": t, "trade_date": today_et},
+            ).fetchone()
+        if prev_row and prev_row[0] is not None and today_row and today_row[0] is not None:
+            prev = float(prev_row[0])
+            last = float(today_row[0])
             out["premarket_last"] = last
             out["prev_close"] = prev
             if prev > 0:
                 out["gap_pct"] = round((last / prev - 1.0) * 100.0, 2)
-                out["source"] = "quotes_2d"
+                out["source"] = "quotes_today_vs_prev"
     except Exception as e:
         logger.debug("quotes gap %s: %s", t, e)
     return out

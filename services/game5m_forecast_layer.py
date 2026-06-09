@@ -30,8 +30,10 @@ def _sign(v: Optional[float], tau: float = 0.10) -> int:
 
 def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
     gap = _f(d5.get("ticker_open_gap_predicted_pct"))
+    gap_ml = _f(d5.get("ticker_open_gap_ml_advisory_pct"))
     gap_fact = _f(d5.get("ticker_open_gap_fact_pct"))
     pm_gap = _f(d5.get("premarket_gap_pct"))
+    effective_gap = pm_gap if pm_gap is not None else gap
     sector_gap = _f(d5.get("macro_predicted_sector_gap_pct"))
     h1 = _f(d5.get("multiday_lr_horizon_1d_pct_vs_spot"))
     h2 = _f(d5.get("multiday_lr_horizon_2d_pct_vs_spot"))
@@ -39,7 +41,7 @@ def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
     confidence = _f(d5.get("ticker_open_gap_confidence"))
     uncertainty = _f(d5.get("ticker_open_gap_uncertainty_p80_pp"))
 
-    gap_s = _sign(gap)
+    gap_s = _sign(effective_gap)
     md_vals = [x for x in (h1, h2, h3) if x is not None]
     md_avg = sum(md_vals) / len(md_vals) if md_vals else None
     md_s = _sign(md_avg)
@@ -83,12 +85,15 @@ def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
     envelope = {
         "version": 1,
         "open_gap": {
-            "predicted_pct": gap,
+            "predicted_pct": effective_gap,
+            "effective_pct": effective_gap,
+            "model_advisory_pct": gap_ml if gap_ml is not None else gap,
             "fact_pct": gap_fact,
             "premarket_gap_pct": pm_gap,
             "observable_baseline_pct": pm_gap,
             "sector_predicted_pct": sector_gap,
             "source": d5.get("ticker_open_gap_predicted_source"),
+            "model_advisory_source": d5.get("ticker_open_gap_ml_advisory_source"),
             "model_version": d5.get("ticker_open_gap_model_version"),
             "confidence": confidence,
             "uncertainty_p80_pp": uncertainty,

@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, time, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datetime import date
 
 import pandas as pd
 
@@ -63,21 +66,29 @@ def _true_premarket_slice(df: pd.DataFrame, dt_col: str, *, et_now: Optional[dat
     return df.loc[mask].copy().sort_values(dt_col).reset_index(drop=True)
 
 
-def get_prev_close_from_db(ticker: str) -> Optional[float]:
-    """Последний close из quotes (предыдущий торговый день)."""
+def get_prev_close_from_db(ticker: str, *, trade_date: Optional["date"] = None) -> Optional[float]:
+    """Close последнего торгового дня строго до trade_date (по умолчанию — сегодня ET)."""
     try:
+        from datetime import date as date_type
+
         from config_loader import get_database_url
         from sqlalchemy import create_engine, text
+
+        if trade_date is None:
+            et = _et_now()
+            trade_date = et.date() if et is not None else date_type.today()
         engine = create_engine(get_database_url())
         with engine.connect() as conn:
             row = conn.execute(
-                text("""
+                text(
+                    """
                     SELECT close FROM quotes
-                    WHERE ticker = :ticker
+                    WHERE ticker = :ticker AND date < :trade_date
                     ORDER BY date DESC
                     LIMIT 1
-                """),
-                {"ticker": ticker},
+                    """
+                ),
+                {"ticker": ticker, "trade_date": trade_date},
             ).fetchone()
         if row and row[0] is not None:
             return float(row[0])

@@ -373,6 +373,40 @@ def record_open_gaps_all(
     return {"mode": "ok", "trade_date": str(td), "open_filled": n_ok}
 
 
+def load_frozen_gap_snapshot(
+    symbol: str,
+    *,
+    engine=None,
+    trade_date: Optional[date] = None,
+) -> Optional[Dict[str, Any]]:
+    """Снимок premarket-прогноза за trade_date (не пересчитывать OLS после open)."""
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None
+    td = trade_date or _et_trade_date()
+    eng = engine or _get_engine()
+    from sqlalchemy import text
+
+    try:
+        with eng.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT premarket_gap_pct, pred_ticker_gap_pct, pred_ticker_source,
+                           pred_ticker_model_version, pred_sector_gap_pct, open_gap_pct,
+                           snapshot_ts_premarket, premarket_last, prev_close
+                    FROM game5m_gap_forecast_daily
+                    WHERE trade_date = :td AND symbol = :sym
+                    """
+                ),
+                {"td": td, "sym": sym},
+            ).mappings().first()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.debug("load_frozen_gap_snapshot %s: %s", sym, e)
+        return None
+
+
 def fetch_gap_forecast_rows(
     engine,
     *,
