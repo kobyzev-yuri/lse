@@ -2,7 +2,7 @@
 
 Единая терминология для блоков отчёта `/analyzer`, арбитров, reviews и будущего `promotion_gate`.
 
-**Rollout:** [ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md](ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md).
+**Rollout:** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) фаза 4; архив: [archive/ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md](archive/ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md).
 
 ---
 

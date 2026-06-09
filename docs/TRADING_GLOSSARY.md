@@ -305,7 +305,7 @@ weighted_sentiment = Σ(sentiment_i * weight_i) / Σ(weight_i)
 
 **Где различие важно:** только при учёте новостей из KB в рекомендации 5m (`services/recommend_5m.py`). При негативе (sentiment 0,35–0,4) STRONG_BUY понижается до BUY; при сильном негативе (< 0,35) оба переводятся в HOLD. На исполнение (открытие позиции, рассылка в Telegram, запись в trade_history) BUY и STRONG_BUY влияют одинаково — оба ведут к одному действию.
 
-Подробнее: [GAME_5M_BUY_DECISION_AND_LLM.md](GAME_5M_BUY_DECISION_AND_LLM.md).
+Подробнее: [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md).
 
 ---
 

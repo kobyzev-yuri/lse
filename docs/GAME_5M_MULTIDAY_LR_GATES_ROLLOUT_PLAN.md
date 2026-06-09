@@ -1,7 +1,7 @@
 # План внедрения multiday ridge gates (GAME_5M, фаза D)
 
-**Статус:** согласован поэтапный rollout — **сейчас ждём накопления log-only телеметрии** перед `apply`.  
-**Связанные документы:** [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md) (модель и фазы A–E), [GAME_5M_MULTIDAY_LR_FEATURE_ENRICHMENT_PLAN.md](GAME_5M_MULTIDAY_LR_FEATURE_ENRICHMENT_PLAN.md) (v3-признаки), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md).
+**Статус (2026-06-09):** entry gate **`apply` на legacy**; hold — **`log_only`**. Walk-forward OOS v3nm: verdict **ready** (`last_multiday_wf_game5m.json`). Hold `apply` — **не включать** до ≥5 would_defer.  
+**Связанные документы:** [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md), [CONSOLIDATION_NEXT_PLAN.md](CONSOLIDATION_NEXT_PLAN.md) §3.2, [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md).
 
 ---
 
@@ -20,7 +20,7 @@
 
 | Компонент | Статус |
 |-----------|--------|
-| Расчёт прогноза на карточке 5m | Зависит от `GAME_5M_MULTIDAY_LR_REG_ENABLED` (по умолчанию **false** в проде). |
+| Расчёт прогноза на карточке 5m | `GAME_5M_MULTIDAY_LR_REG_ENABLED=true` на prod; feature set **v3nm**. |
 | Гейт **входа** (`finalize_technical_decision_with_multiday` в `get_decision_5m`) | Реализован: `none` / `log_only` / **apply** (BUY/STRONG_BUY → HOLD). |
 | Гейт **удержания** (`evaluate_multiday_hold_gate` в `send_sndk_signal_cron`) | Телеметрия в `exit_context_json.multiday_lr_hold_gate`; **`apply` в кроне не откладывает выход** (явный warning + `hold_gate_apply_not_implemented`). |
 | Арбитр выборки | `multiday_lr_gates_arbiter` в отчёте анализатора + сводка в `ml_production_arbiter`. |

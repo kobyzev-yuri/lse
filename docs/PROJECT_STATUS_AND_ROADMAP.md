@@ -1,10 +1,12 @@
 # Статус планов и дорожная карта
 
-**Обновлено:** 2026-06-07 (event anchors + vol-scaled labels + NDX в technical params; earnings full refresh на prod).
+**Обновлено:** 2026-06-09 (v2.0.0: gap pred/fact fix, pooled ridge, multiday WF OOS, документация консолидирована).
 
+**Версия проекта:** [VERSION.md](../VERSION.md) v2.0.0.  
 **Каноническая архитектура ML и торговых решений:** [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md).  
 **Словарь терминов (L1/L2/L3, BMO/AMH, open-path…):** [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md).  
-**План консолидации (устранение дублей):** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md).  
+**План консолидации (фазы 0–4):** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md).  
+**Ближайший план (спринты 3.2–3.3):** [CONSOLIDATION_NEXT_PLAN.md](CONSOLIDATION_NEXT_PLAN.md).  
 **Полный отчёт по контурам (dual-track legacy + stack):** [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md).
 
 Этот файл — **живой ops-статус** (что сделано / что висит). Матрица контуров, cron и слои L1–L3 — в каноне и ML_STATUS_REPORT; здесь — краткая сводка.
@@ -35,12 +37,35 @@
 | **L3 promotion** | Спринт 3.1 завершён | Только portfolio promoted; остальное defer/telemetry | 3 ✅ упор |
 | **Portfolio CatBoost** | L2✅ L3✅ | Мониторинг RMSE/edge | 3 ✅ |
 | **GAME_5M entry CatBoost** | AUC≈0.50, n_valid=45 | Defer до ≥80 valid rows | 3 (заблокирован) |
-| **Multiday LR gates** | entry `apply` monitoring; hold log_only 3/5 | Hold apply не включать | 3 |
-| **Gap forecast ML** | naive baseline лучше ridge | Caution, не L3 promotion | 3 |
+| **Multiday LR gates** | entry `apply`; WF v3nm **ready** (OOS 540 pts, sign 56%) | Hold apply не включать; weekly WF cron | 3.2 |
+| **Gap forecast ML** | display fix ✅; pooled ridge trained; naive PM лучше на 90d | Ждать morning snapshots pooled; 30d rolling | 3.2 |
 | **L3 resolve** | RESOLVE=false, 5/41 session div (14d) | Weekly cron mirror; toggle вручную | 3 |
 | **Recovery D4b** | 15 TE / 13 gate | Defer 2–4 нед | 3 |
 | **Event-reaction** | RMSE gate ❌; grid/peer gates ✅ после refresh | Advisory only; autoprep ждёт ≥40 LLM labels | 3 |
-| **Prod config audit** | Локальный example OK | Audit боевого `/app/config.env` | 4 |
+| **Prod config audit** | Локальный example OK | Audit боевого `/app/config.env` | 3.2 / 4 |
+
+### Gap predict / fact (2026-06-09, `ff0650f` + `813d77c`)
+
+| Что | Статус |
+|-----|--------|
+| Frozen pred после open из `game5m_gap_forecast_daily` | ✅ prod |
+| Fact: `prev_close` строго до trade_date | ✅ prod |
+| Карточки: строки «Прогноз ML» + «Премаркет» | ✅ prod |
+| Pooled ridge artifact | ✅ `pooled_gap_model.json`, n_train=301 |
+| Сегодняшние snapshots | OLS v2; pooled с **следующего** premarket_cron |
+| OOS 90d | ML MAE 1.62pp vs naive PM 1.36pp — **caution** |
+
+### Multiday walk-forward OOS (2026-06-09)
+
+Артефакт: `/app/logs/ml/ml_data_quality/last_multiday_wf_game5m.json` (8 тикеров GAME_5M, v2 vs v3nm, ~79 мин).
+
+| Горизонт | v2 pooled RMSE(log) / sign | v3nm pooled |
+|----------|---------------------------|-------------|
+| 1d | 0.0479 / 51% | **0.0474 / 56%** |
+| 2d | 0.0633 / 56% | **0.0627 / 61%** |
+| 3d | 0.0785 / 57% | **0.0781 / 59%** |
+
+Вердикт арбитра: **ready**. Live feature set v3nm подтверждён.
 
 ### Prod ML full train (2026-06-05)
 
@@ -75,7 +100,9 @@
 ## Полезные ссылки
 
 - Канон ML + решения: [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md)
+- Версия: [VERSION.md](../VERSION.md)
 - Консолидация: [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md)
+- Ближайший план: [CONSOLIDATION_NEXT_PLAN.md](CONSOLIDATION_NEXT_PLAN.md)
 - Навигация: [README.md](README.md)
 - Recovery: [GAME_5M_TIME_EXIT_RECOVERY_PLAN.md](GAME_5M_TIME_EXIT_RECOVERY_PLAN.md)
 - Earnings: [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md)

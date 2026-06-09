@@ -106,6 +106,20 @@ Earnings / open-path: **отдельная очередь** на shadow → prod
 
 **Логический упор фазы 3:** promotion без новых данных — только portfolio; остальное — накопление телеметрии + weekly mirror. Следующий триггер: n_valid entry ≥80 или multiday hold ≥5 would_defer → пересмотр.
 
+#### Спринт 3.2 — gap hardening + multiday OOS (2026-06-09) 🟡
+
+| # | Задача | DoD |
+|---|--------|-----|
+| 3.2.1 | Gap pred/fact display fix | ✅ `ff0650f`, `813d77c` — frozen snapshot, naive PM на карточках |
+| 3.2.2 | Pooled ridge train hook | ✅ `pooled_gap_model.json`; snapshots с следующего premarket_cron |
+| 3.2.3 | Multiday WF OOS (8 tickers, v2 vs v3nm) | ✅ `last_multiday_wf_game5m.json`, verdict **ready** |
+| 3.2.4 | `scripts/run_multiday_wf_game5m.py` в repo | ✅ |
+| 3.2.5 | Документация v2.0.0 | ✅ VERSION, CONSOLIDATION_NEXT, archive moves |
+| 3.2.6 | Prod config audit | backlog |
+| 3.2.7 | Gap pooled vs PM rolling 30d | после 3.2.2 на prod |
+
+Детальный чеклист: [CONSOLIDATION_NEXT_PLAN.md](CONSOLIDATION_NEXT_PLAN.md).
+
 ---
 
 ### Фаза 4 — Ops и UI (backlog)
@@ -113,7 +127,7 @@ Earnings / open-path: **отдельная очередь** на shadow → prod
 - `POST /api/ml/refresh?contour=`
 - `continuous_learning` UI для `earnings_grid`
 - `analyzer_contours` registry sync с `ML_CONTOUR_REGISTRY`
-- Повторный prod config audit ([CLEANUP_CONFIG_AND_CODE_PLAN_2026-05-07.md](CLEANUP_CONFIG_AND_CODE_PLAN_2026-05-07.md))
+- Повторный prod config audit ([archive/CLEANUP_CONFIG_AND_CODE_PLAN_2026-05-07.md](archive/CLEANUP_CONFIG_AND_CODE_PLAN_2026-05-07.md))
 
 ---
 

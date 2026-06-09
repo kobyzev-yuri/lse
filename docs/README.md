@@ -1,8 +1,15 @@
 # Документация LSE — навигация
 
-Корневой обзор архитектуры: [ARCHITECTURE.md](ARCHITECTURE.md).
+**Версия проекта:** [VERSION.md](../VERSION.md) **v2.0.0** (ML Consolidation, 2026-06-09).
 
-> **Английские термины в ML-доках:** расшифровки и примеры — [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md). Торговые индикаторы (ATR, RSI…) — [TRADING_GLOSSARY.md](TRADING_GLOSSARY.md). Earnings-лексика — [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §10.
+| Слой | Документ |
+|------|----------|
+| Архитектура компонентов | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Бизнес-процессы + статус §0 | [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md) |
+| Ops-срез (сделано / висит) | [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md) |
+| Ближайший план консолидации | [CONSOLIDATION_NEXT_PLAN.md](CONSOLIDATION_NEXT_PLAN.md) |
+
+> **Английские термины в ML-доках:** [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md). Торговые индикаторы — [TRADING_GLOSSARY.md](TRADING_GLOSSARY.md). Earnings — [earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md](earnings-event-agent-lse/EARNINGS_EVENT_AGENT_DESIGN.md) §10.
 
 ## ML и торговые решения (читать первым)
 
@@ -13,6 +20,7 @@
 | **План консолидации** (устранение дублей, фазы 0–4) | [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) |
 | **Ops / dual-track статус** | [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md) |
 | **Ops-срез** (сделано / висит) | [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md) |
+| **Спринты 3.2–3.3** | [CONSOLIDATION_NEXT_PLAN.md](CONSOLIDATION_NEXT_PLAN.md) |
 | Earnings UI (`/earnings`), вкладки, BMO/AMH в Spillover | [earnings-event-agent-lse/EARNINGS_UI_GUIDE.md](earnings-event-agent-lse/EARNINGS_UI_GUIDE.md) |
 | L1 retrain (триггеры, registry) | [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md) |
 | L2 gates, data-quality API | [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md) |
@@ -71,6 +79,7 @@
 | `scripts/run_ml_train_readiness_cron.py` | Регулярные метрики + гейты готовности → `ml_train_readiness.jsonl` |
 | `scripts/train_game5m_multiday_lr.py` | Ridge по дневным close (1–3 торг. дня); `--tickers-source`, **`--json-metrics-out`**, `--dry-run` — см. [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md) |
 | `scripts/snapshot_analyzer_report.py` | Снимок JSON анализатора для офлайна / cron |
+| `scripts/run_multiday_wf_game5m.py` | Walk-forward OOS multiday LR (v2 vs v3nm) → `last_multiday_wf_game5m.json` |
 
 ## Earnings / event agent (дизайн)
 

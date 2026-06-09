@@ -2,7 +2,7 @@
 
 Как эволюционировать от монолитного `config.env` к реестру параметров в БД **без** переноса секретов и без потери деплоя через git.
 
-**Rollout:** [ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md](ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md).
+**Rollout:** [CONSOLIDATION_NEXT_PLAN.md](CONSOLIDATION_NEXT_PLAN.md) (фаза 4); архив: [archive/ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md](archive/ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md).
 
 ---
 

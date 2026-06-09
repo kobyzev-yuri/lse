@@ -1,9 +1,38 @@
 # Бизнес-процессы и потоки данных LSE Trading System
 
-> **Актуальная карта архитектуры и потоков (читать первым):** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).  
+> **Версия проекта:** [VERSION.md](VERSION.md) v2.0.0 (2026-06-09).  
+> **Актуальная карта архитектуры:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).  
+> **ML-контуры и статус:** [docs/ML_STATUS_REPORT.md](docs/ML_STATUS_REPORT.md), [docs/PROJECT_STATUS_AND_ROADMAP.md](docs/PROJECT_STATUS_AND_ROADMAP.md).  
 > Ниже — развёрнутые пошаговые диаграммы (Mermaid) по инициализации, котировкам, новостям, исполнению, Telegram и деплою.
 
-Данный документ описывает основные бизнес-процессы и потоки данных системы автоматической торговли на Лондонской фондовой бирже в стандартной нотации [Mermaid](https://mermaid.js.org/), которая поддерживается в Markdown и GitHub.
+Данный документ описывает основные бизнес-процессы и потоки данных торговой системы LSE (NYSE/US equities, песочница) в стандартной нотации [Mermaid](https://mermaid.js.org/).
+
+---
+
+## 0. Статус бизнес-процессов (2026-06-09)
+
+Сводка для ops; детали ML — в [docs/CONSOLIDATION_NEXT_PLAN.md](docs/CONSOLIDATION_NEXT_PLAN.md).
+
+| § | Процесс | Статус | Runtime / артефакт |
+|---|---------|--------|-------------------|
+| 1 | Инициализация БД, seed котировок | **prod** | `init_db.py`, PostgreSQL `lse_trading` |
+| 2 | Обновление дневных котировок | **prod** | `update_prices.py`, cron |
+| 2b | Премаркет + 5m intraday | **prod** | `premarket_daily_features`, Yahoo 1m |
+| 3 | Импорт и обработка новостей | **prod** | `knowledge_base`, RSS/LLM |
+| 4 | Анализ сигналов GAME_5M / портфель | **prod** | `recommend_5m`, `game_5m`, dual-track snapshot |
+| 5 | Исполнение сделок | **prod** | Legacy `technical_decision_effective`; `trade_history` |
+| 6 | Риски (стоп, тейк, hanger) | **prod** | `game_5m.should_close_position` |
+| 7 | Отчёты и анализатор | **prod** | `trade_effectiveness_analyzer`, веб `/analyzer` |
+| 8 | Векторная KB | **prod** | pgvector, embedding |
+| 9 | Telegram-бот | **prod** | `run_telegram_bot.py`, кроны сигналов |
+| 10 | Деплой GCP Docker | **prod** | `deploy_from_github.sh`, `lse-bot` |
+| — | ML L1 retrain (8 контуров) | **prod** | Dispatcher `23:47` |
+| — | Gap open predict | **caution** | Frozen pred ✅; ML не beat naive PM OOS |
+| — | Multiday LR 1–3d | **prod entry** | Entry gate `apply`; WF OOS **ready** |
+| — | Decision stack RESOLVE | **shadow** | `RESOLVE=false`, weekly mirror |
+| — | Earnings / event-reaction | **advisory** | `/earnings`, shadow grid |
+
+---
 
 ## Содержание
 
@@ -981,6 +1010,11 @@ flowchart LR
 - ✅ Добавлена стратегия Neutral для неопределённых рыночных режимов
 - ✅ Улучшена обработка новостей: фильтрация шума, сортировка по важности
 - ✅ Обновлены диаграммы бизнес-процессов для Telegram бота
+
+### Изменения в версии 2.0.0 (2026-06-09):
+- ✅ Добавлен §0: таблица статуса бизнес-процессов и ML-контуров
+- ✅ Ссылки на VERSION, ML_STATUS_REPORT, CONSOLIDATION_NEXT_PLAN
+- ✅ Уточнение: LSE = US equities sandbox, не LSE биржа Лондона
 
 ### Изменения в версии 1.2.0:
 - ✅ Добавлен раздел 10: Telegram бот-агент с webhook и маршрутизацией команд

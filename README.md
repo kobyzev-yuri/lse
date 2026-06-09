@@ -40,11 +40,16 @@ python web_app.py                  # http://localhost:8080 (порт в compose 
 
 ## Документация (иерархия)
 
+**Версия:** [VERSION.md](VERSION.md) **v2.0.0** — статус процессов, ML-консолидация, ближайший план.
+
 ### Основа
 | Документ | Содержание |
 |----------|------------|
+| [VERSION.md](VERSION.md) | Версия проекта, сводка статусов, история |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Компоненты, хранилища, dataflow |
-| [BUSINESS_PROCESSES.md](BUSINESS_PROCESSES.md) | Пошаговые процессы и диаграммы |
+| [BUSINESS_PROCESSES.md](BUSINESS_PROCESSES.md) | Процессы, диаграммы, **§0 статус** |
+| [docs/PROJECT_STATUS_AND_ROADMAP.md](docs/PROJECT_STATUS_AND_ROADMAP.md) | Живой ops-срез |
+| [docs/CONSOLIDATION_NEXT_PLAN.md](docs/CONSOLIDATION_NEXT_PLAN.md) | Спринты 3.2–3.3 |
 | [docs/DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md) | Таблицы `lse_trading`, поля |
 | [QUICKSTART.md](QUICKSTART.md) | Установка и первый запуск |
 
@@ -90,7 +95,7 @@ python web_app.py                  # http://localhost:8080 (порт в compose 
 | [docs/BACKTESTING_GUIDE.md](docs/BACKTESTING_GUIDE.md) | Бэктестинг |
 | [docs/TELEGRAM_BOT_SETUP.md](docs/TELEGRAM_BOT_SETUP.md) | Настройка бота |
 | [WEB_INTERFACE.md](WEB_INTERFACE.md) | Веб-интерфейс |
-| [ROADMAP.md](ROADMAP.md) | Планы развития |
+| [docs/README.md](docs/README.md) | Полная навигация по docs |
 | [docs/archive/README.md](docs/archive/README.md) | Устаревшие и разовые документы |
 
 ---
@@ -132,5 +137,5 @@ python scripts/run_telegram_bot.py
 
 ## Версия
 
-**Версия:** 1.4.0  
-**Обновление документации:** 2026-03-27 — выровнена иерархия README → ARCHITECTURE → тематические документы; устаревшие материалы перенесены в [docs/archive/](docs/archive/).
+**Версия:** 2.0.0 (ML Consolidation)  
+**Обновление:** 2026-06-09 — канон ML, dual-track статус, gap/multiday OOS, архив устаревших планов. Подробности: [VERSION.md](VERSION.md).

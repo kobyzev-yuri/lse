@@ -4,7 +4,7 @@
 
 **Статус:** фазы 0–3 в коде (snapshot, fusion, own_finalize, resolve); на проде `RESOLVE=false` — mirror + `projected_effective_if_resolve`.  
 **Каноническая продуктовая концепция GAME_5M:** [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md). Этот документ оставлен как rollout/implementation plan для `decision_stack`, а не как единственный источник алгоритма принятия решений.  
-**Связано:** [ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md](ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md), [ANALYZER_CONTOUR_ARCHITECTURE.md](ANALYZER_CONTOUR_ARCHITECTURE.md), [NEWS_SIGNAL_ARCHITECTURE.md](NEWS_SIGNAL_ARCHITECTURE.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md).
+**Связано:** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md), [ANALYZER_CONTOUR_ARCHITECTURE.md](ANALYZER_CONTOUR_ARCHITECTURE.md), [NEWS_SIGNAL_ARCHITECTURE.md](NEWS_SIGNAL_ARCHITECTURE.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md).
 
 ---
 

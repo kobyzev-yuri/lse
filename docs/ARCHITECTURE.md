@@ -1,6 +1,8 @@
 # Архитектура LSE (актуальный контур)
 
-Краткая карта **компонентов**, **хранилищ** и **потоков данных**. Детальные пошаговые Mermaid-диаграммы — в [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md).
+**Версия:** [VERSION.md](../VERSION.md) v2.0.0.
+
+Краткая карта **компонентов**, **хранилищ** и **потоков данных**. Детальные пошаговые Mermaid-диаграммы и **§0 статус процессов** — в [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md).
 
 **ML-контуры, retrain, gates и выход в торговлю:** [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) (канон; не дублировать здесь).
 
@@ -160,7 +162,7 @@ flowchart LR
 
 | Документ | Содержание |
 |----------|------------|
-| [ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md](ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md) | фазы 0–14, feature flags, порядок PR |
+| [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) | фазы 0–4 ML consolidation; legacy фазы 0–14: [archive/ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md](archive/ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md) |
 | [ANALYZER_CONTOUR_ARCHITECTURE.md](ANALYZER_CONTOUR_ARCHITECTURE.md) | контуры, роли `model_eval` / `diagnostic` / `policy_gate`, реестр |
 | [CONFIG_REGISTRY_ARCHITECTURE.md](CONFIG_REGISTRY_ARCHITECTURE.md) | гибрид `config.env` + PostgreSQL (каталог, experiments, audit) |
 

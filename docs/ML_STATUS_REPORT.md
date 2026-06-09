@@ -1,7 +1,8 @@
 # Отчёт по ML-плану: статус контуров и dual-track
 
-**Дата:** 2026-06-07  
-**Планы:** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md), [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md)  
+**Дата:** 2026-06-09  
+**Версия:** [VERSION.md](../VERSION.md) v2.0.0  
+**Планы:** [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md), [CONSOLIDATION_NEXT_PLAN.md](CONSOLIDATION_NEXT_PLAN.md)  
 **Ops-срез:** [PROJECT_STATUS_AND_ROADMAP.md](PROJECT_STATUS_AND_ROADMAP.md)  
 **Словарь терминов:** [ML_GLOSSARY_RU.md](ML_GLOSSARY_RU.md) — L1/L2/L3, AUC, RMSE, shadow, BMO/AMH, open-path vs event 5d.
 
@@ -75,10 +76,10 @@ docker exec lse-bot python scripts/print_ml_product_status.py --json
 | Контур | L1 train | L2 gate | Product tier | **Legacy исполняет?** | Stack (RESOLVE=false) | Метрики (2026-06-07) |
 |--------|----------|---------|--------------|----------------------|------------------------|----------------------|
 | **portfolio** | ✅ | ✅ ready | **promoted** | ✅ `PORTFOLIO_CATBOOST_ENABLED=true` | shadow | RMSE≈0.078 |
-| **multiday_lr** | ✅ 927 tickers | advisory | **legacy_apply** | ✅ entry `apply`, hold `log_only` | shadow | would_hold +0.71% vs pass +1.09% |
+| **multiday_lr** | ✅ 927 tickers | **ready** (WF 2026-06-09) | **legacy_apply** | ✅ entry `apply`, hold `log_only` | shadow | v3nm 1d sign 56%, RMSE 0.047 |
 | **game5m_entry** | ✅ | ❌ AUC | **disabled** | ❌ `CATBOOST_ENABLED` unset/false | shadow | AUC≈0.50, n_valid=45 |
 | **recovery** | ✅ | D4a | **telemetry** | телеметрия only (D4a) | shadow | AUC≈0.71; 15 TE / 13 gate |
-| **gap_forecast** | ✅ | caution | **advisory** | baseline `premarket_gap` на legacy; ML — нет | shadow | naive MAE≈1.41% > ridge |
+| **gap_forecast** | ✅ pooled ridge | caution | **advisory** | frozen pred + naive PM на карточках; ML L3 — нет | shadow | 90d OOS: ML MAE 1.62pp > PM 1.36pp |
 | **event_reaction** | ✅ | ❌ RMSE | **advisory** | ✅ advisory (`ENABLED=true`) | shadow | RMSE≈0.13; leak-safe якоря BMO/AMH |
 | **earnings_grid** | ✅ | partial | **shadow** | UI/Telegram shadow | — | `overall_grid_ready` ✅; autoprep labels **33/40** |
 | **open_path** | ✅ | ❌ | **shadow** | ❌ | — | prerequisites не готовы |
@@ -126,7 +127,9 @@ Cron: вс 06:10 MSK — `report_decision_stack_mirror.py --days 14`
 | `n_valid ≥ 80` или AUC ≥ 0.52 | game5m_entry | `GAME_5M_CATBOOST_ENABLED=true` на **legacy** (не ждать RESOLVE) |
 | `would_defer ≥ 5` + arbiter OK | multiday hold | `GAME_5M_MULTIDAY_HOLD_GATE_MODE=apply` на legacy |
 | D4a go + 20+ TE с gate | recovery | PR D4b defer на legacy |
-| ML ridge beat naive на OOS | gap_forecast | осторожный apply в stack / legacy |
+| Pooled ridge в morning snapshots 3 дня | gap_forecast | rolling 30d pooled vs PM → promotion review |
+| ML ridge beat naive на 30d rolling | gap_forecast | осторожный apply в stack / legacy |
+| Weekly `run_multiday_wf_game5m.py` | multiday_lr | артефакт `last_multiday_wf_game5m.json` |
 | `unexpected_divergence > 0` | RESOLVE | рассмотреть `DECISION_STACK_RESOLVE_ENABLED=true` |
 | earnings labels ≥ 40 | earnings_grid | shadow → product tier; сейчас **33** LLM labels |
 
@@ -156,6 +159,7 @@ Cron: вс 06:10 MSK — `report_decision_stack_mirror.py --days 14`
 | [EVENT_REACTION_PIPELINE.md](EVENT_REACTION_PIPELINE.md) | ERD backfill, якоря, vol-scaled labels |
 | [earnings-event-agent-lse/EARNINGS_UI_GUIDE.md](earnings-event-agent-lse/EARNINGS_UI_GUIDE.md) | UI `/earnings`, вкладки Spillover / Shadow / Fusion |
 | [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) | Канон L1–L3 |
+| [CONSOLIDATION_NEXT_PLAN.md](CONSOLIDATION_NEXT_PLAN.md) | Спринты 3.2–3.3 |
 | [ML_CONSOLIDATION_ROLLOUT_PLAN.md](ML_CONSOLIDATION_ROLLOUT_PLAN.md) | Фазы 0–4 |
 | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) | Алгоритм GAME_5M |
 | [DECISION_STACK_ROLLOUT_PLAN.md](DECISION_STACK_ROLLOUT_PLAN.md) | Имплементация stack |

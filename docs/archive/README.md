@@ -2,7 +2,15 @@
 
 Здесь лежат **устаревшие или разовые** материалы: черновики планов, инциденты, дубли summary-файлов, заметки по миграциям. Они **не поддерживаются** как актуальный источник правды.
 
-**Актуальная точка входа:** [README.md](../../README.md) → [docs/ARCHITECTURE.md](../ARCHITECTURE.md).
+**Актуальная точка входа:** [VERSION.md](../../VERSION.md) v2.0.0 → [README.md](../../README.md) → [ARCHITECTURE.md](../ARCHITECTURE.md).
+
+| Дата архивации | Файл | Замена |
+|----------------|------|--------|
+| 2026-06-09 | `ROADMAP_v1.1.0_2026-02-14.md` | [VERSION.md](../../VERSION.md), [CONSOLIDATION_NEXT_PLAN.md](../CONSOLIDATION_NEXT_PLAN.md) |
+| 2026-06-09 | `ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md` | [ML_AND_DECISION_ARCHITECTURE.md](../ML_AND_DECISION_ARCHITECTURE.md) |
+| 2026-06-09 | `CLEANUP_CONFIG_AND_CODE_PLAN_2026-05-07.md` | [CONSOLIDATION_NEXT_PLAN.md](../CONSOLIDATION_NEXT_PLAN.md) §3.2.4 |
+| 2026-06-09 | `GAME_5M_BUY_DECISION_AND_LLM.md` | [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
+| 2026-06-09 | `GAME_5M_FEATURES_REUSE_AND_DECISION_SOURCE.md` | [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
 
 | Файл | Почему в архиве |
 |------|-----------------|
@@ -36,7 +44,7 @@
 | `TRADING_AGENT_READINESS_2026-04-26.md` | Старый readiness-анализ от 2026-02-20; актуально: ARCHITECTURE.md и PORTFOLIO_GAME.md |
 | `VECTOR_KB_IMPLEMENTATION_2026-04-26.md` | Старый implementation-note; актуально: VECTOR_KB_USAGE.md, NEWS.md, KNOWLEDGE_BASE_FIELDS.md |
 | `PREMARKET_PLAN_2026-04-26.md` | Промежуточный план премаркета; актуально: GAME_5M_PREMARKET_AND_IMPULSE.md |
-| `GAME_5M_CURRENT_PLAN_CHECKLIST_2026-04-26.md` | Промежуточный статусный чеклист GAME_5M; актуально: GAME_5M_CALCULATIONS_AND_REPORTING.md и GAME_5M_BUY_DECISION_AND_LLM.md |
+| `GAME_5M_CURRENT_PLAN_CHECKLIST_2026-04-26.md` | Промежуточный статусный чеклист GAME_5M; актуально: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
 | `STRATEGY_FACTORY_2026-04-27.md` | Старое описание фабрики стратегий; актуально: PORTFOLIO_GAME.md и STRATEGIES_LLM_AND_REPORTS.md |
 | `LLM_GUIDANCE_2026-04-27.md` | Старый контур `get_llm_guidance`; актуально: STRATEGIES_LLM_AND_REPORTS.md и LLM_MODEL_SELECTION.md |
 | `SENTIMENT_ANALYSIS_2026-04-27.md` | Старый общий обзор sentiment; актуально: SENTIMENT_NEWS.md и NEWS.md |
@@ -45,12 +53,15 @@
 | `CRON_TICKERS_EXPLANATION_2026-04-27.md` | Старый sandbox-разбор тикеров cron; актуально: TICKER_GROUPS.md и RUN_GAME_SERVICES.md |
 | `TELEGRAM_WEBHOOK_TEST_2026-04-27.md` | Разовая пошаговая проверка webhook; актуально: TELEGRAM_BOT_SETUP.md и DEPLOY_GCP.md |
 | `GAME_5M_PREMARKET_MOMENTUM_2026-04-27.md` | Короткий дубль премаркет-импульса; объединено в GAME_5M_PREMARKET_AND_IMPULSE.md |
-| `GAME_5M_ENTRY_STRATEGIES_2026-04-27.md` | Короткий дубль про technical/LLM вход; актуально: GAME_5M_BUY_DECISION_AND_LLM.md |
+| `GAME_5M_ENTRY_STRATEGIES_2026-04-27.md` | Короткий дубль про technical/LLM вход; актуально: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
 | `SANDBOX_TRADE_EXAMPLE_2026-04-27.md` | Старый демонстрационный сценарий сделок; актуально: DATABASE_SCHEMA.md и PORTFOLIO_GAME.md |
 | `GAME_5M_FALSE_TAKE_PROFIT_SESSION_HIGH_2026-04-29.md` | Разбор ложного TAKE_PROFIT из-за `session_high`; исправлено в коде, для обучения такие строки исключаются |
 | `GAME_5M_INCORRECT_0925_CLOSES_2026-05-05.md` | Разбор некорректных SELL на границе открытия (09:25–09:30 ET); исторический инцидент + фиксы/рекомендации |
-| `GAME_5M_BUY_DECISION_AND_LLM.md` | Логически архивный документ в корне docs: старое подробное описание BUY/LLM. Канон: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
-| `GAME_5M_FEATURES_REUSE_AND_DECISION_SOURCE.md` | Логически архивный документ в корне docs: справочник по признакам и старым вариантам источника решения. Канон: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
+| `GAME_5M_BUY_DECISION_AND_LLM.md` | Старое описание BUY/LLM (перенесено из docs/ 2026-06-09). Канон: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
+| `GAME_5M_FEATURES_REUSE_AND_DECISION_SOURCE.md` | Справочник признаков (перенесено из docs/ 2026-06-09). Канон: [GAME_5M_DECISION_ARCHITECTURE.md](../GAME_5M_DECISION_ARCHITECTURE.md) |
+| `ROADMAP_v1.1.0_2026-02-14.md` | Roadmap v1.1 (2026-02). Канон: [VERSION.md](../../VERSION.md), [PROJECT_STATUS_AND_ROADMAP.md](../PROJECT_STATUS_AND_ROADMAP.md) |
+| `ARCHITECTURE_OPTIMIZATION_ROLLOUT_PLAN.md` | План analyzer/registry до ML consolidation. Канон: [ML_AND_DECISION_ARCHITECTURE.md](../ML_AND_DECISION_ARCHITECTURE.md) |
+| `CLEANUP_CONFIG_AND_CODE_PLAN_2026-05-07.md` | План cleanup config/code от 2026-05-07 |
 | `WEEKLY_PLAN_GAME5M_AND_ML_2026-05-06.md` | Снимок недели 2026-05-06. Канон: [ML_AND_DECISION_ARCHITECTURE.md](../ML_AND_DECISION_ARCHITECTURE.md), статус: [PROJECT_STATUS_AND_ROADMAP.md](../PROJECT_STATUS_AND_ROADMAP.md) |
 | `EARNINGS_PLAN_2026-05-29.md` … `EARNINGS_PLAN_2026-06-01.md` | Дневные earnings-планы. Актуально: [EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md](../earnings-event-agent-lse/EARNINGS_EVENT_AGENT_IMPLEMENTATION_PLAN.md) |
 | `EARNINGS_INTELLIGENCE_PLAN.md` | Черновик с frontmatter todos. Актуально: [EARNINGS_PRODUCT_ROADMAP.md](../earnings-event-agent-lse/EARNINGS_PRODUCT_ROADMAP.md) |
