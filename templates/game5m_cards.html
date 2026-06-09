@@ -244,10 +244,18 @@
                 var p = Number(pred);
                 var pCls = p >= 0 ? 'positive' : 'negative';
                 var src = (c.ticker_open_gap_predicted_source || '').toLowerCase();
-                var srcHint = src === 'ticker_ols_v2_premarket_blend' ? 'OLS v2 + премаркет'
-                    : (src === 'ticker_ols_v2' || src === 'ticker_ols' ? 'OLS v2 по тикеру' : (src === 'sector_proxy' ? 'прокси SMH' : src));
-                html += '<div class="row"><span class="label">Прогноз</span><span class="value ' + pCls + '" title="' + escapeHtml(srcHint) + '">' +
+                var srcHint = src === 'pooled_ridge_v1' ? 'pooled ridge (PM + sector + тикер)'
+                    : (src === 'ticker_ols_v2_premarket_blend' ? 'OLS v2 + премаркет'
+                    : (src === 'ticker_ols_v2' || src === 'ticker_ols' ? 'OLS v2 по тикеру' : (src === 'sector_proxy' ? 'прокси SMH' : src)));
+                html += '<div class="row"><span class="label">Прогноз ML</span><span class="value ' + pCls + '" title="' + escapeHtml(srcHint) + '">' +
                     (p >= 0 ? '+' : '') + fmt(p, 2) + '%</span></div>';
+            }
+            var pmBase = c.ticker_open_gap_observable_baseline_pct != null ? c.ticker_open_gap_observable_baseline_pct : c.premarket_gap_pct;
+            if (pmBase != null && pmBase !== undefined && !isNaN(Number(pmBase))) {
+                var b = Number(pmBase);
+                var bCls = b >= 0 ? 'positive' : 'negative';
+                html += '<div class="row"><span class="label">Премаркет</span><span class="value ' + bCls + '" title="Naive baseline: последняя PM-цена к вчерашнему close (часто точнее ML)">' +
+                    (b >= 0 ? '+' : '') + fmt(b, 2) + '%</span></div>';
             }
             if (fact != null && fact !== undefined && !isNaN(Number(fact))) {
                 var f = Number(fact);
@@ -257,7 +265,7 @@
                 html += '<div class="row"><span class="label">' + escapeHtml(factLbl) + '</span><span class="value ' + fCls + '">' +
                     (f >= 0 ? '+' : '') + fmt(f, 2) + '%</span></div>';
             }
-            html += renderDetails('Что значит гэп на open', '<p>Это отдельный прогноз разрыва между предыдущим close и open 9:30 ET. Он полезен как контекст старта сессии и не равен дневному ridge-прогнозу 1–3 торговых дня.</p>');
+            html += renderDetails('Что значит гэп на open', '<p><strong>Прогноз ML</strong> — модель (pooled ridge или OLS) по премаркету и макро; записывается утром и не пересчитывается после open.</p><p><strong>Премаркет</strong> — naive baseline: PM-цена к вчерашнему close; на OOS часто ближе к факту open, чем ML.</p><p><strong>Факт</strong> — реальный гэп первого RTH-бара 9:30 ET.</p>');
             return html;
         }
         function renderMultidayLrTable(c) {
