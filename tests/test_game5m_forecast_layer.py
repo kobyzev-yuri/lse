@@ -18,7 +18,8 @@ class TestGame5mForecastLayer(unittest.TestCase):
         )
         self.assertTrue(env["ready"])
         self.assertEqual(env["regime"], "gap_fade_risk")
-        self.assertEqual(env["open_gap"]["source"], "pooled_ridge_v1")
+        self.assertEqual(env["open_gap"]["source"], "ml_only")
+        self.assertEqual(env["open_gap"]["model_advisory_source"], "pooled_ridge_v1")
 
     def test_neutral_when_no_forecast(self):
         env = build_game5m_forecast_envelope({})
@@ -56,6 +57,8 @@ class TestGame5mForecastLayer(unittest.TestCase):
             }
         )
         self.assertEqual(env["open_gap"]["effective_pct"], -2.0)
+        self.assertEqual(env["open_gap"]["effective_source"], "premarket_baseline")
+        self.assertEqual(env["open_gap"]["baseline_pct"], -2.0)
         self.assertEqual(env["open_gap"]["model_advisory_pct"], 0.1)
         self.assertEqual(env["regime"], "aligned_bearish")
 

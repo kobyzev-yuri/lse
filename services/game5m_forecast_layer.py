@@ -28,12 +28,40 @@ def _sign(v: Optional[float], tau: float = 0.10) -> int:
     return 0
 
 
+def _resolve_effective_open_gap(
+    *,
+    baseline_pct: Optional[float],
+    ml_pct: Optional[float],
+) -> tuple[Optional[float], str]:
+    """Policy pick (GAME_5M_OPEN_GAP_FORECAST_POLICY); same logic as premarket web table."""
+    try:
+        from services.premarket_open_gap_forecast import pick_effective_open_gap_pct
+
+        eff, src, _pol = pick_effective_open_gap_pct(
+            baseline_open_gap_pct=baseline_pct,
+            ml_open_gap_pct=ml_pct,
+        )
+        if eff is not None:
+            return eff, src
+    except Exception:
+        pass
+    if baseline_pct is not None:
+        return baseline_pct, "premarket_baseline"
+    if ml_pct is not None:
+        return ml_pct, "ml_open_gap"
+    return None, "unavailable"
+
+
 def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
     gap = _f(d5.get("ticker_open_gap_predicted_pct"))
     gap_ml = _f(d5.get("ticker_open_gap_ml_advisory_pct"))
     gap_fact = _f(d5.get("ticker_open_gap_fact_pct"))
     pm_gap = _f(d5.get("premarket_gap_pct"))
-    effective_gap = pm_gap if pm_gap is not None else gap
+    ml_gap = gap_ml if gap_ml is not None else gap
+    effective_gap, effective_src = _resolve_effective_open_gap(
+        baseline_pct=pm_gap,
+        ml_pct=ml_gap,
+    )
     sector_gap = _f(d5.get("macro_predicted_sector_gap_pct"))
     h1 = _f(d5.get("multiday_lr_horizon_1d_pct_vs_spot"))
     h2 = _f(d5.get("multiday_lr_horizon_2d_pct_vs_spot"))
@@ -81,19 +109,22 @@ def build_game5m_forecast_envelope(d5: Dict[str, Any]) -> Dict[str, Any]:
     else:
         opportunity_reason = "no_gap_up"
 
-    ready = bool(gap is not None or pm_gap is not None or md_vals)
+    ready = bool(ml_gap is not None or pm_gap is not None or md_vals)
+    model_src = d5.get("ticker_open_gap_ml_advisory_source") or d5.get("ticker_open_gap_predicted_source")
     envelope = {
         "version": 1,
         "open_gap": {
             "predicted_pct": effective_gap,
             "effective_pct": effective_gap,
-            "model_advisory_pct": gap_ml if gap_ml is not None else gap,
+            "effective_source": effective_src,
+            "baseline_pct": pm_gap,
+            "model_advisory_pct": ml_gap,
             "fact_pct": gap_fact,
             "premarket_gap_pct": pm_gap,
             "observable_baseline_pct": pm_gap,
             "sector_predicted_pct": sector_gap,
-            "source": d5.get("ticker_open_gap_predicted_source"),
-            "model_advisory_source": d5.get("ticker_open_gap_ml_advisory_source"),
+            "source": effective_src,
+            "model_advisory_source": model_src,
             "model_version": d5.get("ticker_open_gap_model_version"),
             "confidence": confidence,
             "uncertainty_p80_pp": uncertainty,
@@ -131,7 +162,9 @@ def attach_game5m_forecast_layer(d5: Dict[str, Any]) -> None:
     d5["forecast_open_gap_pct"] = og.get("predicted_pct")
     d5["forecast_open_gap_fact_pct"] = og.get("fact_pct")
     d5["forecast_open_gap_confidence"] = og.get("confidence")
-    d5["forecast_open_gap_source"] = og.get("source")
+    d5["forecast_open_gap_source"] = og.get("effective_source") or og.get("source")
+    d5["forecast_open_gap_baseline_pct"] = og.get("baseline_pct")
+    d5["forecast_open_gap_ml_advisory_pct"] = og.get("model_advisory_pct")
     d5["forecast_open_gap_uncertainty_p80_pp"] = og.get("uncertainty_p80_pp")
     d5["forecast_horizons_pct"] = envelope.get("horizons_pct")
     d5["forecast_regime"] = envelope.get("regime")
