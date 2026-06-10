@@ -55,3 +55,20 @@
 Таким образом, решение о входе в первые 15 минут опирается на короткий импульс (10 мин), а не на отсутствие данных или на «пустой» 2ч-импульс.
 
 См. также единую таблицу фаз сессии и **open-guard** после 9:30 ET: **`docs/GAME_5M_CALCULATIONS_AND_REPORTING.md` §2.1** (`get_decision_5m`, `GAME_5M_NEAR_OPEN_*`).
+
+---
+
+## 5. Прогноз гэпа на open (gap forecast)
+
+**Сухой остаток:** в **PRE_MARKET** (до 9:30 ET) система оценивает **open gap того же торгового дня** — не следующего.
+
+| | |
+|---|---|
+| **Когда predict** | PRE_MARKET, до начала RTH; веб пересчитывает live при обновлении таблицы |
+| **На что predict** | `(open_9:30 / prev_close − 1) × 100` **сегодня** |
+| **Что на входе** | **текущий** premarket gap, макро/sector pred **сегодня**, тикер |
+| **Обучение** | история: PM-снимок **до open** → факт **open** **в тот же** `trade_date` |
+| **Baseline** | open ≈ текущий PM gap (часто точнее ML) |
+| **Cron** | Telegram + запись в `game5m_gap_forecast_daily`; после 9:30 — факт open для ML error |
+
+Подробнее: [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) §5, [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) §7. UI: вкладка «Премаркет 1m» (`/visualization?tab=premarket`).

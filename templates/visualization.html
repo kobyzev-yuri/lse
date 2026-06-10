@@ -63,26 +63,25 @@
 <div id="vizPanelPremarket" class="viz-tab-panel">
 <div class="card">
     <h2>Премаркет 1m</h2>
-    <p class="muted" style="margin-bottom:0.5rem;">Отдельно от 5m-сессии. В <strong>PRE_MARKET</strong> — live Yahoo; в <strong>RTH</strong> таблица из БД (<code>premarket_cron</code>), без опроса Yahoo. Торговля — вкладка 5m. <code>?tab=premarket&amp;ticker=SNDK</code></p>
+    <p class="muted" style="margin-bottom:0.5rem;">Отдельно от 5m-сессии. <strong>Сухой остаток:</strong> прогноз <strong>open gap того же дня</strong> до 9:30 ET в PRE_MARKET (с текущим PM), не «завтра». В <strong>PRE_MARKET</strong> — Yahoo live + пересчёт; в <strong>RTH</strong> — снимок из БД. <code>?tab=premarket&amp;ticker=SNDK</code></p>
     <details class="muted" style="font-size:0.82rem; margin-bottom:0.65rem;">
-        <summary style="cursor:pointer; color:#7dd3fc;">Что значат колонки таблицы</summary>
+        <summary style="cursor:pointer; color:#7dd3fc;">Что значат колонки, обучение ML и cron</summary>
+        <p style="margin:0.5rem 0;line-height:1.45;"><strong>Обучение:</strong> по истории «premarket gap + макро <em>до open</em> → факт open gap <em>в тот же день</em>». <strong>Predict:</strong> сегодня в PRE_MARKET — с <em>текущим</em> premarket gap и макро на open <em>сегодня</em>.</p>
         <dl style="margin:0.5rem 0 0 0; line-height:1.45;">
-            <dt style="color:#e2e8f0;">Prev close</dt>
-            <dd style="margin:0 0 0.4rem 0.5rem;">Закрытие последнего торгового дня (из <code>quotes</code> или Yahoo daily) — база для гэпа.</dd>
-            <dt style="color:#e2e8f0;">Premarket</dt>
-            <dd style="margin:0 0 0.4rem 0.5rem;">Последняя цена 1m в ленте prepost (как в Telegram <code>/premarket</code>).</dd>
-            <dt style="color:#e2e8f0;">Premarket gap</dt>
-            <dd style="margin:0 0 0.4rem 0.5rem;"><code>(Premarket / Prev close − 1) × 100</code> — фактический текущий гэп по последней цене премаркета, не ML.</dd>
-            <dt style="color:#e2e8f0;">ML gap forecast</dt>
-            <dd style="margin:0 0 0.4rem 0.5rem;"><code>pred_ticker_gap_pct</code> из <code>game5m_gap_forecast_daily</code> — наш прогноз гэпа к open; появляется после premarket_cron/модели.</dd>
-            <dt style="color:#e2e8f0;">RTH open gap</dt>
-            <dd style="margin:0 0 0.4rem 0.5rem;"><code>(RTH open / Prev close − 1) × 100</code> — фактический гэп на открытии после 9:30 ET; до начала сессии пусто.</dd>
-            <dt style="color:#e2e8f0;">ML error</dt>
-            <dd style="margin:0 0 0.4rem 0.5rem;"><code>open_gap_pct − pred_ticker_gap_pct</code> — ошибка прогноза против факта открытия; появляется вместе с фактическим open gap.</dd>
-            <dt style="color:#e2e8f0;">Min to open</dt>
-            <dd style="margin:0 0 0.4rem 0.5rem;">Минуты до 9:30 ET (актуально в фазе PRE_MARKET; в RTH обычно 0).</dd>
-            <dt style="color:#e2e8f0;">Last (ET)</dt>
-            <dd style="margin:0 0 0 0.5rem;">Время последней минуты в ленте Yahoo.</dd>
+            <dt style="color:#e2e8f0;">Cron (<code>premarket_cron</code>)</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;">2× утром (≈5:30 и 8:30 ET): Telegram-алерт, запись снимка в <code>game5m_gap_forecast_daily</code> для ML-истории. После 9:30 — <code>ingest_game5m_gap_forecast --phase open</code> фиксирует факт open и ML error. <strong>Не</strong> обновляет веб-таблицу — она live в PRE_MARKET.</dd>
+            <dt style="color:#e2e8f0;">Prev close / Premarket / Premarket gap</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;">Факт сейчас: Yahoo 1m prepost в PRE_MARKET; в RTH — из БД.</dd>
+            <dt style="color:#e2e8f0;">Baseline→open</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;">Наивный прогноз open: <strong>текущий premarket gap</strong> (лучший MAE на истории ~1.36 п.п.).</dd>
+            <dt style="color:#e2e8f0;">ML open</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;">Ridge-модель (<code>pooled_ridge_v2</code>): прогноз гэпа к 9:30 ET; пересчитывается live с текущим PM.</dd>
+            <dt style="color:#e2e8f0;">Effective→open</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;">Рабочий прогноз: policy <code>auto</code> — baseline, пока ML не обгоняет его на rolling MAE; иначе ML.</dd>
+            <dt style="color:#e2e8f0;">RTH open gap / ML error</dt>
+            <dd style="margin:0 0 0.4rem 0.5rem;">Факт open и ошибка ML после 9:30 ET.</dd>
+            <dt style="color:#e2e8f0;">Min to open / Last (ET)</dt>
+            <dd style="margin:0 0 0 0.5rem;">До открытия и время последней минуты Yahoo.</dd>
         </dl>
     </details>
     <p class="muted" style="font-size:0.82rem; margin-bottom:0.5rem;"><strong>Важно:</strong> тикер для графика выбирается в списке <em>ниже</em> (не в вкладке «5m»). По умолчанию «только таблица» — график пустой, пока не выберете тикер.</p>
@@ -1006,9 +1005,17 @@ function buildPremarketChartFromData(data, canvasEl, legendEl) {
         if (gap != null && Number.isFinite(parseFloat(gap))) {
             leg += ' · premarket gap ' + (parseFloat(gap) >= 0 ? '+' : '') + parseFloat(gap).toFixed(2) + '%';
         }
-        const predGap = data.pred_ticker_gap_pct;
+        const predGap = data.ml_open_gap_pct != null ? data.ml_open_gap_pct : data.pred_ticker_gap_pct;
         if (predGap != null && Number.isFinite(parseFloat(predGap))) {
-            leg += ' · ML gap ' + (parseFloat(predGap) >= 0 ? '+' : '') + parseFloat(predGap).toFixed(2) + '%';
+            leg += ' · ML open ' + (parseFloat(predGap) >= 0 ? '+' : '') + parseFloat(predGap).toFixed(2) + '%';
+        }
+        const baseGap = data.baseline_open_gap_pct;
+        if (baseGap != null && Number.isFinite(parseFloat(baseGap))) {
+            leg += ' · baseline→open ' + (parseFloat(baseGap) >= 0 ? '+' : '') + parseFloat(baseGap).toFixed(2) + '%';
+        }
+        const effGap = data.effective_open_gap_pct;
+        if (effGap != null && Number.isFinite(parseFloat(effGap))) {
+            leg += ' · effective→open ' + (parseFloat(effGap) >= 0 ? '+' : '') + parseFloat(effGap).toFixed(2) + '%';
         }
         const openGap = data.open_gap_pct;
         if (openGap != null && Number.isFinite(parseFloat(openGap))) {
@@ -1038,17 +1045,20 @@ function renderPremarketTable(payload) {
         wrap.innerHTML = '<p class="muted">Нет данных премаркета по тикерам (вне PRE_MARKET или Yahoo пустой).</p>';
         return;
     }
-    let html = '<table><thead><tr><th>Ticker</th><th>Prev close</th><th>Premarket</th><th>Premarket gap</th><th>ML gap forecast</th><th>RTH open gap</th><th>ML error</th><th>Min to open</th><th>Last (ET)</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Ticker</th><th>Prev close</th><th>Premarket</th><th>Premarket gap</th><th>Baseline→open</th><th>ML open</th><th>Effective→open</th><th>RTH open gap</th><th>ML error</th><th>Min to open</th><th>Last (ET)</th></tr></thead><tbody>';
     rows.forEach(function(r) {
         const pc = r.prev_close != null ? Number(r.prev_close).toFixed(2) : '—';
         const pl = r.premarket_last != null ? Number(r.premarket_last).toFixed(2) : '—';
         const g = r.premarket_gap_pct != null ? ((r.premarket_gap_pct >= 0 ? '+' : '') + Number(r.premarket_gap_pct).toFixed(2) + '%') : '—';
-        const pg = r.pred_ticker_gap_pct != null ? ((r.pred_ticker_gap_pct >= 0 ? '+' : '') + Number(r.pred_ticker_gap_pct).toFixed(2) + '%') : '—';
+        const bg = r.baseline_open_gap_pct != null ? ((r.baseline_open_gap_pct >= 0 ? '+' : '') + Number(r.baseline_open_gap_pct).toFixed(2) + '%') : '—';
+        const mlv = r.ml_open_gap_pct != null ? r.ml_open_gap_pct : r.pred_ticker_gap_pct;
+        const pg = mlv != null ? ((mlv >= 0 ? '+' : '') + Number(mlv).toFixed(2) + '%') : '—';
+        const eg = r.effective_open_gap_pct != null ? ((r.effective_open_gap_pct >= 0 ? '+' : '') + Number(r.effective_open_gap_pct).toFixed(2) + '%') : '—';
         const og = r.open_gap_pct != null ? ((r.open_gap_pct >= 0 ? '+' : '') + Number(r.open_gap_pct).toFixed(2) + '%') : '—';
         const pe = r.error_pred_ticker_vs_open_pct != null ? ((r.error_pred_ticker_vs_open_pct >= 0 ? '+' : '') + Number(r.error_pred_ticker_vs_open_pct).toFixed(2) + ' п.п.') : '—';
         const m = r.minutes_until_open != null ? String(r.minutes_until_open) : '—';
         const te = r.premarket_last_time_et ? String(r.premarket_last_time_et).slice(0, 16) : '—';
-        html += '<tr><td>' + r.ticker + '</td><td>' + pc + '</td><td>' + pl + '</td><td>' + g + '</td><td>' + pg + '</td><td>' + og + '</td><td>' + pe + '</td><td>' + m + '</td><td>' + te + '</td></tr>';
+        html += '<tr><td>' + r.ticker + '</td><td>' + pc + '</td><td>' + pl + '</td><td>' + g + '</td><td>' + bg + '</td><td>' + pg + '</td><td title="' + (r.effective_open_gap_source || '') + '">' + eg + '</td><td>' + og + '</td><td>' + pe + '</td><td>' + m + '</td><td>' + te + '</td></tr>';
     });
     html += '</tbody></table>';
     wrap.innerHTML = html;
@@ -1066,8 +1076,13 @@ async function loadPremarketTable() {
         if (phaseEl) {
             const ph = data.session_phase ? String(data.session_phase).replace(/_/g, ' ') : '';
             let note = ph ? ('Фаза рынка: ' + ph) : '';
-            if (data.yahoo_live === false) {
-                note += (note ? ' · ' : '') + 'таблица из БД (Yahoo live выкл. вне премаркета)';
+            if (data.yahoo_live) {
+                note += (note ? ' · ' : '') + 'Yahoo live + прогноз open пересчитывается';
+            } else if (data.yahoo_live === false) {
+                note += (note ? ' · ' : '') + 'таблица из БД (вне PRE_MARKET)';
+            }
+            if (data.cron_role_short) {
+                note += (note ? ' · ' : '') + String(data.cron_role_short);
             }
             if (data.cached) note += (note ? ' · ' : '') + 'кэш';
             phaseEl.textContent = note;

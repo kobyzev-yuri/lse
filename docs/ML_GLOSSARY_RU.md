@@ -64,7 +64,8 @@
 | **BMO** (Before Market Open) | отчёт до открытия рынка в день T |
 | **AMH / DURING** | отчёт в ходе сессии (during market hours) |
 | **AFTER_CLOSE** | отчёт после закрытия RTH (after hours) |
-| **gap / open gap** | разрыв между вчерашним close и сегодняшним open |
+| **gap / open gap** | разрыв между вчерашним close и **сегодняшним** RTH open (9:30 ET) |
+| **gap forecast (ML)** | predict open gap **того же дня** в PRE_MARKET по текущему PM + macro; обучение: PM→open внутри одного `trade_date`; не T+1 |
 | **fade** | «схлопывание» движения после гэпа (gap up fade) |
 | **follow-through** | продолжение движения после события |
 | **veto** | жёсткий запрет действия (downgrade BUY → HOLD) |

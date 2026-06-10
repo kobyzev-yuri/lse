@@ -37,7 +37,7 @@ class TestPremarketGapModel(unittest.TestCase):
             pred_sector_gap_pct=0.4,
         )
         self.assertIsNotNone(pred)
-        self.assertEqual(meta["model_version"], "pooled_ridge_v1")
+        self.assertEqual(meta["model_version"], "pooled_ridge_v2")
 
     def test_eval_requires_enough_rows(self):
         out = evaluate_pooled_gap_model_from_rows(self._rows()[:10], min_train_rows=20)

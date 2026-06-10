@@ -16,6 +16,7 @@ from services.premarket import NYSE_OPEN_TIME, NYSE_TZ, get_premarket_context, g
 logger = logging.getLogger(__name__)
 
 TABLE_CACHE_TTL_SEC = 120
+TABLE_CACHE_TTL_PREMARKET_SEC = 45
 CHART_CACHE_TTL_SEC = 90
 _YAHOO_MAX_WORKERS = 3
 _YAHOO_TICKER_TIMEOUT_SEC = 10
@@ -198,6 +199,8 @@ def _rows_from_gap_forecast_db(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
             "premarket_last_time_et": snapshot_time_et,
             "premarket_snapshot_valid": snapshot_valid,
             "source": "db",
+            "snapshot_ts_premarket": ts,
+            "ml_db_snapshot_ts": _snapshot_time_et_str(ts) if snapshot_valid else None,
         }
     return out
 
@@ -225,15 +228,71 @@ def _yahoo_context_row(ticker: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def _session_phase() -> Optional[str]:
+    try:
+        from services.market_session import get_market_session_context
+
+        return (get_market_session_context() or {}).get("session_phase")
+    except Exception:
+        return None
+
+
+def _macro_risk_cached() -> Optional[Dict[str, Any]]:
+    try:
+        from services.macro_premarket_risk import evaluate_macro_premarket_risk
+
+        return evaluate_macro_premarket_risk()
+    except Exception as e:
+        logger.debug("premarket macro risk: %s", e)
+        return None
+
+
+def _apply_live_open_gap_forecasts(
+    row: Dict[str, Any],
+    *,
+    macro_risk: Optional[Dict[str, Any]] = None,
+    db_snapshot_ts: Any = None,
+) -> Dict[str, Any]:
+    """Recalculate baseline / ML / effective open-gap forecasts from current premarket gap."""
+    if row.get("open_gap_pct") is not None:
+        return row
+    pm = row.get("premarket_gap_pct")
+    if pm is None:
+        return row
+    try:
+        from services.premarket_open_gap_forecast import build_open_gap_forecast_fields
+
+        fc = build_open_gap_forecast_fields(
+            str(row.get("ticker") or ""),
+            premarket_gap_pct=float(pm),
+            macro_risk=macro_risk,
+            pred_sector_gap_pct=row.get("pred_sector_gap_pct"),
+        )
+        out = dict(row)
+        out.update(fc)
+        if db_snapshot_ts is not None:
+            out["ml_db_snapshot_ts"] = db_snapshot_ts
+        return out
+    except Exception as e:
+        logger.debug("live open gap forecast %s: %s", row.get("ticker"), e)
+        return row
+
+
 def build_premarket_table_rows(
     tickers: List[str],
     *,
     yahoo_fallback: bool = True,
     yahoo_max_tickers: int = 8,
+    live_premarket: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Сводная таблица: сначала БД (premarket_cron), Yahoo только для пропусков (лимит).
+    Сводная таблица: БД (premarket_cron) + в PRE_MARKET live Yahoo и пересчёт open-прогнозов.
     """
+    phase = (_session_phase() or "").strip().upper()
+    if live_premarket is None:
+        live_premarket = phase == "PRE_MARKET"
+    macro = _macro_risk_cached() if live_premarket else None
+
     seen: set = set()
     ordered: List[str] = []
     for raw in tickers or []:
@@ -248,9 +307,34 @@ def build_premarket_table_rows(
     rows: List[Dict[str, Any]] = []
     missing: List[str] = []
 
+    live_yahoo: Dict[str, Dict[str, Any]] = {}
+    if live_premarket and ordered:
+        with ThreadPoolExecutor(max_workers=_YAHOO_MAX_WORKERS) as pool:
+            futs = {pool.submit(_yahoo_context_row, t): t for t in ordered}
+            for fut in as_completed(futs, timeout=_YAHOO_TICKER_TIMEOUT_SEC * len(ordered) + 10):
+                t = futs[fut]
+                try:
+                    yrow = fut.result(timeout=_YAHOO_TICKER_TIMEOUT_SEC)
+                except Exception as e:
+                    logger.debug("premarket live yahoo %s: %s", t, e)
+                    continue
+                if yrow:
+                    live_yahoo[t] = yrow
+
     for t in ordered:
         if t in db_map:
             row = dict(db_map[t])
+            db_ts = row.get("ml_db_snapshot_ts")
+            if live_premarket and t in live_yahoo:
+                live = live_yahoo[t]
+                row["prev_close"] = live.get("prev_close") if live.get("prev_close") is not None else row.get("prev_close")
+                row["premarket_last"] = live.get("premarket_last")
+                row["premarket_gap_pct"] = live.get("premarket_gap_pct")
+                row["minutes_until_open"] = live.get("minutes_until_open")
+                row["premarket_last_time_et"] = live.get("premarket_last_time_et")
+                row["premarket_price_source"] = "yahoo_live"
+                row["source"] = "db+yahoo_live"
+            row = _apply_live_open_gap_forecasts(row, macro_risk=macro, db_snapshot_ts=db_ts)
             if row.get("minutes_until_open") is None:
                 row["minutes_until_open"] = mins_global
             rows.append(row)
@@ -259,17 +343,14 @@ def build_premarket_table_rows(
 
     if missing and yahoo_fallback:
         todo = missing[: max(0, int(yahoo_max_tickers))]
-        with ThreadPoolExecutor(max_workers=_YAHOO_MAX_WORKERS) as pool:
-            futs = {pool.submit(_yahoo_context_row, t): t for t in todo}
-            for fut in as_completed(futs, timeout=_YAHOO_TICKER_TIMEOUT_SEC * len(todo) + 5):
-                t = futs[fut]
-                try:
-                    row = fut.result(timeout=_YAHOO_TICKER_TIMEOUT_SEC)
-                except Exception as e:
-                    logger.debug("premarket yahoo %s: %s", t, e)
-                    continue
-                if row:
-                    rows.append(row)
+        for t in todo:
+            row = live_yahoo.get(t) or _yahoo_context_row(t)
+            if not row:
+                continue
+            row = dict(row)
+            row["premarket_price_source"] = "yahoo_live"
+            row = _apply_live_open_gap_forecasts(row, macro_risk=macro)
+            rows.append(row)
 
     rows.sort(key=lambda r: str(r.get("ticker") or ""))
     return rows
@@ -278,11 +359,16 @@ def build_premarket_table_rows(
 def build_premarket_table_rows_cached(
     tickers: List[str],
     *,
-    ttl_sec: int = TABLE_CACHE_TTL_SEC,
+    ttl_sec: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     global _table_cache
 
+    phase = (_session_phase() or "").strip().upper()
+    if ttl_sec is None:
+        ttl_sec = TABLE_CACHE_TTL_PREMARKET_SEC if phase == "PRE_MARKET" else TABLE_CACHE_TTL_SEC
+
     key = ",".join(sorted({(t or "").strip().upper() for t in tickers if (t or "").strip()}))
+    key = f"{phase}|{key}"
     now = time.time()
     with _cache_lock:
         ts, k, rows = _table_cache
@@ -336,19 +422,35 @@ def build_premarket_chart_data(ticker: str) -> Dict[str, Any]:
         pass
 
     db_one = _rows_from_gap_forecast_db([sym]).get(sym)
+    phase = (_session_phase() or "").strip().upper()
+    macro = _macro_risk_cached() if phase == "PRE_MARKET" else None
     if db_one:
-        out["prev_close"] = db_one.get("prev_close")
-        out["premarket_last"] = db_one.get("premarket_last")
-        out["premarket_gap_pct"] = db_one.get("premarket_gap_pct")
-        out["pred_sector_gap_pct"] = db_one.get("pred_sector_gap_pct")
-        out["pred_ticker_gap_pct"] = db_one.get("pred_ticker_gap_pct")
-        out["pred_ticker_source"] = db_one.get("pred_ticker_source")
-        out["pred_ticker_model_version"] = db_one.get("pred_ticker_model_version")
-        out["rth_open_price"] = db_one.get("rth_open_price")
-        out["open_gap_pct"] = db_one.get("open_gap_pct")
-        out["source_open"] = db_one.get("source_open")
-        out["error_pred_ticker_vs_open_pct"] = db_one.get("error_pred_ticker_vs_open_pct")
-        out["premarket_last_time_et"] = db_one.get("premarket_last_time_et")
+        row = dict(db_one)
+        if phase == "PRE_MARKET":
+            live = _yahoo_context_row(sym)
+            if live and live.get("premarket_last") is not None:
+                row["prev_close"] = live.get("prev_close") if live.get("prev_close") is not None else row.get("prev_close")
+                row["premarket_last"] = live.get("premarket_last")
+                row["premarket_gap_pct"] = live.get("premarket_gap_pct")
+                row["premarket_last_time_et"] = live.get("premarket_last_time_et")
+                row["premarket_price_source"] = "yahoo_live"
+        row = _apply_live_open_gap_forecasts(row, macro_risk=macro, db_snapshot_ts=row.get("ml_db_snapshot_ts"))
+        out["prev_close"] = row.get("prev_close")
+        out["premarket_last"] = row.get("premarket_last")
+        out["premarket_gap_pct"] = row.get("premarket_gap_pct")
+        out["pred_sector_gap_pct"] = row.get("pred_sector_gap_pct")
+        out["pred_ticker_gap_pct"] = row.get("pred_ticker_gap_pct")
+        out["ml_open_gap_pct"] = row.get("ml_open_gap_pct")
+        out["baseline_open_gap_pct"] = row.get("baseline_open_gap_pct")
+        out["effective_open_gap_pct"] = row.get("effective_open_gap_pct")
+        out["effective_open_gap_source"] = row.get("effective_open_gap_source")
+        out["pred_ticker_source"] = row.get("pred_ticker_source")
+        out["pred_ticker_model_version"] = row.get("pred_ticker_model_version")
+        out["rth_open_price"] = row.get("rth_open_price")
+        out["open_gap_pct"] = row.get("open_gap_pct")
+        out["source_open"] = row.get("source_open")
+        out["error_pred_ticker_vs_open_pct"] = row.get("error_pred_ticker_vs_open_pct")
+        out["premarket_last_time_et"] = row.get("premarket_last_time_et")
         out["minutes_until_open"] = _minutes_until_open_global()
     else:
         pm_ctx = get_premarket_context(sym)

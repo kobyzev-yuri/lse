@@ -138,17 +138,54 @@ DECISION_STACK_PREMARKET_GAP_BASELINE_GATE_MODE=apply
 
 ## 5. ML Gap Forecast
 
-ML gap forecast отвечает на вопрос: “какой gap будет на RTH open?”
+**Сухой остаток:** гэп на **RTH open того же торгового дня** прогнозируется **до 9:30 ET**, в фазе **PRE_MARKET**, с учётом **текущего** premarket gap и макро. Это **не** прогноз open «завтра» и **не** overnight без премаркета. После open факт пишется в лог; ML error = `open_gap_pct − pred`.
 
-Источники:
+### Вопрос модели
 
-- pooled ridge;
-- ticker OLS;
+«Какой будет **open gap %** (open vs prev close) **сегодня** в 9:30 ET?»
+
+### Обучение (история в `game5m_gap_forecast_daily`)
+
+Одна строка = `(symbol, trade_date)`:
+
+| | Поле | Когда |
+|---|---|---|
+| **X** | `premarket_gap_pct`, `pred_sector_gap_pct`, premarket-фичи, dummy тикера | снимок **до** open **того же** `trade_date` |
+| **y** | `open_gap_pct` | **факт** на open **того же** `trade_date` |
+
+Модель учится: «утром PM был X, сектор Y → open оказался Z» — **внутри одного дня**, не T→T+1.
+
+### Predict (сегодня, в PRE_MARKET)
+
+На вход подаётся **сегодняшний** live premarket gap + **сегодняшний** sector/macro pred. Без PM pooled ridge не строит feature vector. Fallback OLS v2: макро-гэпы сегодня + blend с PM, если \|PM\| ≥ порога.
+
+Веб-таблица «Премаркет 1m» в PRE_MARKET пересчитывает прогноз при каждом обновлении (Yahoo live). Cron только пишет снимок в БД для Telegram и накопления истории.
+
+### Три колонки в UI (вкладка premarket)
+
+| Колонка | Смысл |
+|---|---|
+| **Baseline→open** | наивно: open ≈ текущий premarket gap |
+| **ML open** | pooled ridge v2 (PM + macro → open) |
+| **Effective→open** | policy `auto`: baseline, пока ML MAE ≥ baseline MAE на rolling метриках |
+
+### Источники ML
+
+- pooled ridge v2 (`GAME_5M_PREMARKET_GAP_POOLED_ENABLED`);
+- ticker OLS v2 (fallback);
 - sector proxy;
-- blend с premarket gap;
-- future models.
+- blend с premarket gap (OLS path).
 
-Текущий статус: **monitoring/caution**, не основной источник входа. Причина: выборка короткая, а observable baseline пока не хуже по практической стабильности.
+Текущий статус: **monitoring/caution**, не основной источник входа. На ~90d OOS naive PM→open (MAE ≈1.36 pp) **лучше** ridge (≈1.62 pp). Production observable baseline: `premarket_gap_baseline`.
+
+### Cron (роль)
+
+| Скрипт | Зачем |
+|---|---|
+| `premarket_cron.py` | Telegram, `record_premarket_gap_snapshots()` → БД |
+| `ingest_game5m_gap_forecast.py --phase open` | факт open + ML error после 9:30 |
+
+Cron **не** обновляет live-прогноз в веб-таблице в PRE_MARKET.
 
 ### Условие будущего переключения
 

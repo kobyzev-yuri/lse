@@ -9,10 +9,10 @@
 
 **Связанные артефакты:** `local/game5m_tuning_ledger.json` (controller/replay), `last_multiday_wf_game5m.json` (WF v3nm).
 
-**Ежедневный отчёт (cron + агент):**
+**Ежедневный отчёт (ручной запуск):**
 - Скрипт: `scripts/game5m_daily_session_review.py` → `last_game5m_daily_session_review.json`
-- Cron на VM: `scripts/cron_game5m_daily_session_review.sh` (будни 23:30 MSK)
-- Cursor Automation: post-RTH обновление этого лога + сверка с анализатором (`days=3`)
+- Cron на VM: **отключён** (10.06.2026)
+- Cursor Automation: **не используется**
 
 ---
 

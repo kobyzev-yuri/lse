@@ -382,32 +382,49 @@ Veto по `miss_or_guide_breakdown` — **только после** доказа
 
 ---
 
-## 7. Gap forecast (OLS, не CatBoost)
+## 7. Gap forecast (OLS ridge, не CatBoost)
+
+### Сухой остаток
+
+**Да:** гэп на **open того же дня** прогнозируется **до начала RTH (9:30 ET)**, в **PRE_MARKET**, с учётом **текущего** premarket gap (и макро).  
+**Нет:** это не прогноз open следующего календарного/торгового дня; не «вчера close → завтра open» без PM.
 
 ### Цель
 
-Предсказать **фактический open gap %** (open vs prev close) по сектору SMH и тикеру. Сравнивается с **observable baseline** `premarket_gap_pct` (последняя premarket цена до 09:30 ET). ML promotion только если beat baseline на OOS — см. [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) §5.
+Предсказать **фактический open gap %** `(RTH open / prev close − 1) × 100` для **текущего** `trade_date`. Сравнивается с **observable baseline** `premarket_gap_pct` (текущий PM gap как прогноз open). ML promotion только если beat baseline на OOS — см. [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) §5.
 
 ### Юнит наблюдения
 
-Строка **`game5m_gap_forecast_daily`**: `symbol`, `trade_date`, `open_gap_pct` (факт после open), premarket preds, sector proxy.
+Строка **`game5m_gap_forecast_daily`**: `symbol`, `trade_date`.
+
+| Фаза | Поля |
+|------|------|
+| PRE_MARKET (до 9:30) | `premarket_gap_pct`, `pred_sector_gap_pct`, `pred_ticker_gap_pct` — **predict** |
+| После open | `open_gap_pct` — **факт y**; `error_pred_ticker_vs_open_pct` |
+
+Обучение ridge: пары **X до open → y на open** по **одному** `trade_date` (не T→T+1).
 
 ### Накопление фактов
 
-- Ingest: `ingest_game5m_gap_forecast.py` (premarket + open phases)
-- Анализ / coef: `analyze_game5m_gap_forecast.py` → `last_gap_forecast_metrics.json`
-- L1 refresh: `run_gap_forecast_refresh.py`
+- Ingest premarket: `ingest_game5m_gap_forecast.py --phase premarket` / `premarket_cron` → снимок в БД
+- Ingest open: `--phase open` после 9:30 ET → факт + ошибки
+- Анализ: `analyze_game5m_gap_forecast.py` → `last_gap_forecast_metrics.json`
+- Train ridge: `train_premarket_gap_model.py`; L1 refresh: `run_gap_forecast_refresh.py`
 
-### Предикт
+### Predict (runtime)
 
-Sector OLS + per-ticker v2; не `.cbm`. Поля в карточке: `ticker_open_gap_predicted_pct`, `forecast_layer`.
+- **Вход:** `premarket_gap_pct` **сегодня** (live в веб / Yahoo в cron), `macro_predicted_sector_gap_pct` **сегодня**, symbol.
+- **Выход:** прогноз `open_gap_pct` **на open сегодня**.
+- **Effective:** `GAME_5M_OPEN_GAP_FORECAST_POLICY=auto` → baseline (PM), пока ML не обгоняет naive на rolling MAE.
+
+Sector OLS + pooled ridge v2 + per-ticker OLS fallback; не `.cbm`. Поля в карточке: `ticker_open_gap_predicted_pct`, `forecast_layer`; веб: `baseline_open_gap_pct`, `ml_open_gap_pct`, `effective_open_gap_pct`.
 
 ### Метрики L2
 
 | Метрика | Baseline (premarket naive) | ML ridge (prod) |
 |---------|---------------------------|-----------------|
-| MAE (pp) | ≈1.41 | не beat (caution) |
-| Sign agreement | ≈79% | — |
+| MAE (pp) | ≈1.36 (90d) | ≈1.62 (90d), caution |
+| Sign agreement | ≈80% | ≈70% |
 
 ### Использование
 

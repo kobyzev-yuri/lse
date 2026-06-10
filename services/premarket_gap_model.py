@@ -15,7 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-MODEL_VERSION = "pooled_ridge_v1"
+MODEL_VERSION = "pooled_ridge_v2"
 BASE_FEATURES = (
     "premarket_gap_pct",
     "pred_sector_gap_pct",
@@ -58,6 +58,17 @@ def _cfg_float(key: str, default: float) -> float:
         return default
 
 
+def _pm_feature_scale(artifact: Optional[Dict[str, Any]] = None) -> float:
+    if isinstance(artifact, dict) and artifact.get("pm_feature_scale") is not None:
+        try:
+            return max(0.1, float(artifact["pm_feature_scale"]))
+        except (TypeError, ValueError):
+            pass
+    if isinstance(artifact, dict) and (artifact.get("model_version") or "").startswith("pooled_ridge_v1"):
+        return 1.0
+    return _cfg_float("GAME_5M_PREMARKET_GAP_PM_FEATURE_SCALE", 2.5)
+
+
 def premarket_gap_model_path() -> Path:
     try:
         from config_loader import get_config_value
@@ -81,12 +92,14 @@ def _feature_vector(
     row: Dict[str, Any],
     *,
     symbols: Sequence[str] = (),
+    pm_scale: float = 1.0,
 ) -> Optional[np.ndarray]:
     pm = _to_float(row.get("premarket_gap_pct"))
     sec = _to_float(row.get("pred_sector_gap_pct"))
     if pm is None and sec is None:
         return None
-    pm_v = pm if pm is not None else 0.0
+    scale = max(0.1, float(pm_scale))
+    pm_v = (pm if pm is not None else 0.0) * scale
     sec_v = sec if sec is not None else 0.0
     pm_ret = _to_float(row.get("premarket_return_pct")) or 0.0
     pm_range = _to_float(row.get("premarket_range_pct")) or 0.0
@@ -110,14 +123,16 @@ def rows_to_training_matrix(
     rows: Iterable[Dict[str, Any]],
     *,
     min_symbol_rows: int = 3,
+    pm_scale: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[str], List[Dict[str, Any]]]:
+    scale = _pm_feature_scale() if pm_scale is None else max(0.1, float(pm_scale))
     clean: List[Dict[str, Any]] = []
     counts: Dict[str, int] = {}
     for r in rows:
         y = _to_float(r.get("open_gap_pct"))
         if y is None:
             continue
-        if _feature_vector(r) is None:
+        if _feature_vector(r, pm_scale=scale) is None:
             continue
         rr = dict(r)
         rr["_y"] = y
@@ -130,7 +145,7 @@ def rows_to_training_matrix(
     y_rows: List[float] = []
     used: List[Dict[str, Any]] = []
     for r in clean:
-        x = _feature_vector(r, symbols=symbols)
+        x = _feature_vector(r, symbols=symbols, pm_scale=scale)
         if x is None:
             continue
         X_rows.append(x)
@@ -176,7 +191,8 @@ def fit_pooled_gap_model(
 ) -> Dict[str, Any]:
     min_rows = int(min_rows if min_rows is not None else _cfg_int("GAME_5M_PREMARKET_GAP_MODEL_MIN_ROWS", 60))
     l2 = float(l2 if l2 is not None else _cfg_float("GAME_5M_PREMARKET_GAP_MODEL_L2", 5.0))
-    X, y, symbols, used = rows_to_training_matrix(rows)
+    pm_scale = _pm_feature_scale()
+    X, y, symbols, used = rows_to_training_matrix(rows, pm_scale=pm_scale)
     if len(y) < min_rows:
         return {
             "model_version": MODEL_VERSION,
@@ -188,6 +204,8 @@ def fit_pooled_gap_model(
     pred = _predict_matrix(X, weights)
     residuals = y - pred
     feature_names = ["intercept", *BASE_FEATURES, *[f"symbol:{s}" for s in symbols]]
+    baseline_pm = [float(r.get("premarket_gap_pct")) for r in used if _to_float(r.get("premarket_gap_pct")) is not None]
+    baseline_mae = float(np.mean(np.abs(y - np.array(baseline_pm)))) if baseline_pm else None
     return {
         "model_version": MODEL_VERSION,
         "ready": True,
@@ -197,6 +215,8 @@ def fit_pooled_gap_model(
         "feature_names": feature_names,
         "weights": [round(float(x), 8) for x in weights],
         "l2": l2,
+        "pm_feature_scale": pm_scale,
+        "metrics_train_baseline_mae_pp": round(baseline_mae, 4) if baseline_mae is not None else None,
         "metrics_train": _metrics(y, pred),
         "residual_abs_p50_pp": round(float(np.quantile(np.abs(residuals), 0.50)), 4),
         "residual_abs_p80_pp": round(float(np.quantile(np.abs(residuals), 0.80)), 4),
@@ -269,7 +289,8 @@ def predict_from_artifact(
         "premarket_gap_pct": premarket_gap_pct,
         "pred_sector_gap_pct": pred_sector_gap_pct,
     }
-    x = _feature_vector(row, symbols=[str(s).upper() for s in symbols])
+    scale = _pm_feature_scale(artifact)
+    x = _feature_vector(row, symbols=[str(s).upper() for s in symbols], pm_scale=scale)
     if x is None:
         return None, {"reason": "missing_features"}
     pred = float(_predict_matrix(np.vstack([x]), weights)[0])

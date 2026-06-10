@@ -2134,10 +2134,13 @@ async def get_premarket_table_api():
             None, functools.partial(build_premarket_table_rows_cached, tickers)
         )
         sess = get_market_session_context() or {}
+        phase = (sess.get("session_phase") or "").strip().upper()
         return _to_jsonable({
-            "session_phase": sess.get("session_phase"),
+            "session_phase": phase,
+            "yahoo_live": phase == "PRE_MARKET",
             "rows": rows,
             "cached": cached,
+            "cron_role_short": "Cron → БД/Telegram/ML-метрики; веб в PRE_MARKET — live Yahoo + пересчёт open",
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
