@@ -841,8 +841,17 @@ def _build_corr_html(corr, n_days: int, title: str = "Корреляции ло�
 <table><thead>{thead}</thead><tbody>{tbody}</tbody></table></body></html>"""
 
 
+def _premarket_pct_cell(v: Any) -> str:
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):+.2f}%"
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _build_premarket_html(rows: List[Dict[str, Any]]) -> str:
-    """HTML-отчёт премаркета: тикер, prev_close, premarket_last, gap%, min_to_open, last_time_et."""
+    """HTML-отчёт премаркета: цены + baseline / ML / effective open-gap."""
     trs = []
     for r in rows:
         ticker = html.escape(str(r.get("ticker", "—")))
@@ -851,21 +860,29 @@ def _build_premarket_html(rows: List[Dict[str, Any]]) -> str:
         last = r.get("premarket_last")
         last_s = f"{last:.2f}" if last is not None else "—"
         gap = r.get("premarket_gap_pct")
-        gap_s = f"{gap:+.2f}%" if gap is not None else "—"
+        gap_s = _premarket_pct_cell(gap)
         gap_cls = "positive" if (gap is not None and gap >= 0) else "negative" if gap is not None else ""
+        base_s = _premarket_pct_cell(r.get("baseline_open_gap_pct"))
+        ml_s = _premarket_pct_cell(r.get("ml_open_gap_pct"))
+        eff_s = _premarket_pct_cell(r.get("effective_open_gap_pct"))
+        open_s = _premarket_pct_cell(r.get("open_gap_pct"))
+        err = r.get("error_pred_ticker_vs_open_pct")
+        err_s = f"{float(err):+.2f} п.п." if err is not None else "—"
         mins = r.get("minutes_until_open")
         mins_s = f"{mins} мин" if mins is not None else "—"
         time_et = (r.get("premarket_last_time_et") or "—")[:16] if r.get("premarket_last_time_et") else "—"
         trs.append(
             f"<tr><td>{ticker}</td><td>{prev_s}</td><td>{last_s}</td>"
-            f'<td class="{gap_cls}">{gap_s}</td><td>{mins_s}</td><td>{html.escape(str(time_et))}</td></tr>'
+            f'<td class="{gap_cls}">{gap_s}</td><td>{base_s}</td><td>{ml_s}</td><td>{eff_s}</td>'
+            f"<td>{open_s}</td><td>{err_s}</td><td>{mins_s}</td><td>{html.escape(str(time_et))}</td></tr>"
         )
     body = "\n".join(trs)
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><title>Премаркет</title>
-<style>table{{border-collapse:collapse;width:100%}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}}</style>
-</head><body><h1>Премаркет (до открытия US 9:30 ET)</h1><p>Цена — последняя минута Yahoo (prepost). Даты/время — ET.</p>
-<table><thead><tr><th>Ticker</th><th>Prev Close</th><th>Premarket</th><th>Gap %</th><th>Min to open</th><th>Last time (ET)</th></tr></thead>
+<style>table{{border-collapse:collapse;width:100%;font-size:0.9em}} th,td{{padding:6px;text-align:left;border:1px solid #ddd}} th{{background:#f5f5f5}} .positive{{color:green}} .negative{{color:red}}</style>
+</head><body><h1>Премаркет (US 9:30 ET)</h1>
+<p>Цена — Yahoo prepost. <strong>Baseline→open</strong> = PM gap; <strong>ML open</strong> = ridge v2; <strong>Effective</strong> = policy auto (пока baseline, пока ML не обгоняет naive).</p>
+<table><thead><tr><th>Ticker</th><th>Prev Close</th><th>Premarket</th><th>PM gap</th><th>Baseline→open</th><th>ML open</th><th>Effective</th><th>RTH open</th><th>ML error</th><th>Min to open</th><th>Last (ET)</th></tr></thead>
 <tbody>{body}</tbody></table></body></html>"""
 
 
@@ -3457,6 +3474,7 @@ class LSETelegramBot:
         try:
             from services.market_session import get_market_session_context
             from services.premarket import get_premarket_context, get_premarket_ohlc
+            from services.premarket_chart import build_premarket_table_rows, is_preopen_live
             from services.ticker_groups import get_tickers_fast, get_tickers_for_portfolio_game
 
             ctx = get_market_session_context()
@@ -3472,60 +3490,53 @@ class LSETelegramBot:
             if not tickers:
                 await update.message.reply_text("📊 Нет тикеров для премаркета (TICKERS_FAST / портфельная игра).")
                 return
-            rows_data: List[Dict[str, Any]] = []
-            for ticker in tickers:
-                pm = get_premarket_context(ticker)
-                if pm.get("error"):
-                    continue
-                rows_data.append({
-                    "ticker": ticker,
-                    "prev_close": pm.get("prev_close"),
-                    "premarket_last": pm.get("premarket_last"),
-                    "premarket_gap_pct": pm.get("premarket_gap_pct"),
-                    "minutes_until_open": pm.get("minutes_until_open"),
-                    "premarket_last_time_et": pm.get("premarket_last_time_et"),
-                })
+            loop = asyncio.get_event_loop()
+            rows_data = await loop.run_in_executor(None, lambda: build_premarket_table_rows(tickers))
+            rows_data = [r for r in rows_data if r.get("premarket_last") is not None or r.get("premarket_gap_pct") is not None]
             if not rows_data:
                 await update.message.reply_text("📊 По выбранным тикерам нет данных премаркета (возможно, сейчас не премаркет или Yahoo не вернул данные).")
                 return
-            sep = "  "
-            w_t = 10
-            w_pc = 10
-            w_pm = 10
-            w_gap = 10
-            w_min = 10
-            w_time = 18
+            sep = " "
+            w_t = 6
+            w_pm = 8
+            w_base = 8
+            w_ml = 8
+            w_eff = 8
+            w_min = 4
 
             def _cell(s: str, w: int) -> str:
                 return str(s)[:w].ljust(w)
 
             header = (
-                _cell("Ticker", w_t) + sep + _cell("PrevClose", w_pc) + sep + _cell("Premarket", w_pm) + sep
-                + _cell("Gap %", w_gap) + sep + _cell("MinToOpen", w_min) + sep + "Last time (ET)"
+                _cell("Ticker", w_t) + sep + _cell("PMgap", w_pm) + sep + _cell("Base", w_base) + sep
+                + _cell("ML", w_ml) + sep + _cell("Eff", w_eff) + sep + _cell("Min", w_min)
             )
             lines_table = [header]
             for r in rows_data:
-                prev = r.get("prev_close")
-                prev_s = f"{prev:.2f}" if prev is not None else "—"
-                last = r.get("premarket_last")
-                last_s = f"{last:.2f}" if last is not None else "—"
-                gap = r.get("premarket_gap_pct")
-                gap_s = f"{gap:+.2f}%" if gap is not None else "—"
+                gap_s = _premarket_pct_cell(r.get("premarket_gap_pct"))
+                base_s = _premarket_pct_cell(r.get("baseline_open_gap_pct"))
+                ml_s = _premarket_pct_cell(r.get("ml_open_gap_pct"))
+                eff_s = _premarket_pct_cell(r.get("effective_open_gap_pct"))
                 mins = r.get("minutes_until_open")
                 mins_s = f"{mins}" if mins is not None else "—"
-                time_et = (r.get("premarket_last_time_et") or "—")[:18]
                 lines_table.append(
-                    _cell(str(r.get("ticker", "—")), w_t) + sep + _cell(prev_s, w_pc) + sep + _cell(last_s, w_pm) + sep
-                    + _cell(gap_s, w_gap) + sep + _cell(mins_s, w_min) + sep + time_et
+                    _cell(str(r.get("ticker", "—")), w_t) + sep + _cell(gap_s, w_pm) + sep + _cell(base_s, w_base) + sep
+                    + _cell(ml_s, w_ml) + sep + _cell(eff_s, w_eff) + sep + _cell(mins_s, w_min)
                 )
             table = "\n".join(lines_table)
             phase_display = (phase or "").replace("_", " ")
             phase_note = f" (сейчас: {phase_display})" if phase_display else ""
+            live_note = (
+                "До 9:30 ET: Yahoo live + пересчёт open.\n"
+                if is_preopen_live()
+                else "После open: снимок cron + факт RTH (см. HTML).\n"
+            )
             text_msg = (
                 f"📊 **Премаркет**{phase_note}\n"
-                "Цена — последняя минута Yahoo (prepost). Открытие US 9:30 ET.\n\n"
+                f"{live_note}"
+                "Base = PM→open · ML = ridge v2 · Eff = policy auto (пока base).\n\n"
                 f"```\n{table}\n```\n\n"
-                "📎 _HTML‑отчёт — в документе ниже (откройте в браузере)._"
+                "📎 _Полная таблица (цены, open, ML error) — HTML ниже._"
             )
             await update.message.reply_text(text_msg, parse_mode="Markdown")
             html_content = _build_premarket_html(rows_data)

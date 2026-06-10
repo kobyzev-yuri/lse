@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from services.premarket_open_gap_forecast import (
     build_open_gap_forecast_fields,
+    format_open_gap_forecast_compact,
     ml_beats_baseline_on_metrics,
     pick_effective_open_gap_pct,
 )
@@ -59,6 +60,23 @@ class TestPremarketOpenGapForecast(unittest.TestCase):
         self.assertEqual(out["ml_open_gap_pct"], 0.4)
         self.assertEqual(out["effective_open_gap_pct"], -5.69)
         self.assertEqual(out["effective_open_gap_source"], "premarket_baseline")
+
+
+    def test_format_compact_with_open_fact(self):
+        txt = format_open_gap_forecast_compact(
+            {
+                "baseline_open_gap_pct": -2.33,
+                "ml_open_gap_pct": -1.21,
+                "effective_open_gap_pct": -2.33,
+                "effective_open_gap_source": "premarket_baseline",
+            },
+            open_gap_pct=-1.03,
+        )
+        self.assertIn("base→open -2.33%", txt)
+        self.assertIn("ML -1.21%", txt)
+        self.assertIn("eff=base -2.33%", txt)
+        self.assertIn("open -1.03%", txt)
+        self.assertIn("ML err +0.18", txt)
 
 
 if __name__ == "__main__":

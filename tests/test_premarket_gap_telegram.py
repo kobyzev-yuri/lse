@@ -5,8 +5,8 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from services.macro_premarket_risk import (
-    format_sector_and_game5m_gap_lines,
     _format_game5m_ticker_gap_forecast_line,
+    format_sector_and_game5m_gap_lines,
 )
 
 
@@ -24,17 +24,18 @@ def test_format_sector_and_game5m_gap_lines():
             },
         ],
     }
+    tg_line = "• SNDK 120.50: PM +5.20%, base→open +5.20%, ML +0.37%, eff=base +5.20%"
     with patch(
-        "services.ticker_open_gap_predict.predict_ticker_open_gap_pct",
-        return_value=(0.366, "ticker_ols_v2"),
+        "services.premarket_open_gap_forecast.format_open_gap_forecast_telegram_line",
+        return_value=tg_line,
     ):
         lines = format_sector_and_game5m_gap_lines(macro)
     assert any("Сектор SMH" in ln and "-0.14" in ln for ln in lines)
-    assert any("SNDK" in ln and "прогноз +0.37%" in ln for ln in lines)
-    assert any("премаркет +5.20%" in ln for ln in lines)
+    assert any("SNDK" in ln and "base→open" in ln for ln in lines)
+    assert any("прогноз open" in ln for ln in lines)
 
 
-def test_game5m_line_sector_proxy_fallback():
+def test_game5m_line_uses_open_gap_formatter():
     macro = {
         "enabled": True,
         "macro_sector_proxy": "SMH",
@@ -42,12 +43,11 @@ def test_game5m_line_sector_proxy_fallback():
     }
     det = {"ticker": "NVDA", "gap_pct": 1.1, "premarket_last": 900.0}
     with patch(
-        "services.ticker_open_gap_predict.predict_ticker_open_gap_pct",
-        return_value=(-0.144, "sector_proxy"),
-    ):
+        "services.premarket_open_gap_forecast.format_open_gap_forecast_telegram_line",
+        return_value="• NVDA 900.00: PM +1.10%, base→open +1.10%, ML -0.14%, eff=base +1.10%",
+    ) as fmt:
         line = _format_game5m_ticker_gap_forecast_line(det, macro)
+        fmt.assert_called_once()
     assert line is not None
     assert "NVDA" in line
-    assert "прогноз -0.14%" in line
-    assert "прокси SMH" in line
-    assert "премаркет +1.10%" in line
+    assert "base→open" in line

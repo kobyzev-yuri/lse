@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -192,3 +192,69 @@ def build_open_gap_forecast_fields(
     if pred_sector_gap_pct is not None:
         out["pred_sector_gap_pct"] = round(float(pred_sector_gap_pct), 3)
     return out
+
+
+def format_open_gap_forecast_compact(
+    fc: Dict[str, Any],
+    *,
+    open_gap_pct: Optional[float] = None,
+) -> str:
+    """Краткая строка: baseline / ML / effective (+ факт open и ML error после 9:30)."""
+    parts: List[str] = []
+    base = fc.get("baseline_open_gap_pct")
+    ml = fc.get("ml_open_gap_pct")
+    eff = fc.get("effective_open_gap_pct")
+    if base is not None:
+        parts.append(f"base→open {float(base):+.2f}%")
+    if ml is not None:
+        parts.append(f"ML {float(ml):+.2f}%")
+    if eff is not None:
+        eff_tag = "eff"
+        if (fc.get("effective_open_gap_source") or "") == "premarket_baseline":
+            eff_tag = "eff=base"
+        parts.append(f"{eff_tag} {float(eff):+.2f}%")
+    if open_gap_pct is not None:
+        parts.append(f"open {float(open_gap_pct):+.2f}%")
+        if ml is not None:
+            try:
+                parts.append(f"ML err {float(open_gap_pct) - float(ml):+.2f}п.п.")
+            except (TypeError, ValueError):
+                pass
+    return ", ".join(parts)
+
+
+def format_open_gap_forecast_telegram_line(
+    ticker: str,
+    *,
+    premarket_gap_pct: Optional[float],
+    premarket_last: Optional[float] = None,
+    macro_risk: Optional[Dict[str, Any]] = None,
+    open_gap_pct: Optional[float] = None,
+    pred_sector_gap_pct: Optional[float] = None,
+) -> Optional[str]:
+    """Строка для Telegram/cron: PM + прогнозы open (baseline, ML, effective)."""
+    t = (ticker or "?").strip().upper()
+    if premarket_gap_pct is None and premarket_last is None:
+        return None
+    try:
+        fc = build_open_gap_forecast_fields(
+            t,
+            premarket_gap_pct=premarket_gap_pct,
+            macro_risk=macro_risk,
+            pred_sector_gap_pct=pred_sector_gap_pct,
+        )
+    except Exception as e:
+        logger.debug("telegram open gap line %s: %s", t, e)
+        return None
+    prefix = f"• {t}"
+    if premarket_last is not None:
+        prefix += f" {float(premarket_last):.2f}"
+    chunks: List[str] = []
+    if premarket_gap_pct is not None:
+        chunks.append(f"PM {float(premarket_gap_pct):+.2f}%")
+    fc_txt = format_open_gap_forecast_compact(fc, open_gap_pct=open_gap_pct)
+    if fc_txt:
+        chunks.append(fc_txt)
+    if not chunks:
+        return None
+    return f"{prefix}: " + ", ".join(chunks)

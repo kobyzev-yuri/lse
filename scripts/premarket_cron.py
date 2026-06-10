@@ -178,7 +178,7 @@ def main() -> None:
             gap_lines = format_sector_and_game5m_gap_lines(macro_gap)
             if gap_lines:
                 lines.append("")
-                lines.append("📐 <b>Гэп на open (прогноз)</b>")
+                lines.append("📐 <b>Прогноз open</b> (base / ML / eff, policy auto)")
                 for gl in gap_lines:
                     lines.append(html.escape(gl))
         except Exception as e_gap:

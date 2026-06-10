@@ -399,42 +399,28 @@ def apply_macro_to_entry_advice(
 
 
 def _format_game5m_ticker_gap_forecast_line(det: Dict[str, Any], macro: Dict[str, Any]) -> Optional[str]:
-    """Строка GAME_5m: прогноз гэпа на open (OLS тикер / прокси сектора) + факт премаркета."""
+    """Строка GAME_5m: PM + baseline / ML / effective (policy auto) на open."""
     t = (det.get("ticker") or "?").strip().upper()
     if det.get("error") and det.get("gap_pct") is None and det.get("premarket_last") is None:
         return f"• {t}: нет данных ({det.get('error')})"
-    pred: Optional[float] = None
-    src = ""
     try:
-        from services.ticker_open_gap_predict import predict_ticker_open_gap_pct
+        from services.premarket_open_gap_forecast import format_open_gap_forecast_telegram_line
 
-        pred, src = predict_ticker_open_gap_pct(t, macro_risk=macro)
+        line = format_open_gap_forecast_telegram_line(
+            t,
+            premarket_gap_pct=det.get("gap_pct"),
+            premarket_last=det.get("premarket_last"),
+            macro_risk=macro,
+            open_gap_pct=det.get("open_gap_pct"),
+        )
+        if line:
+            return line
     except Exception as e:
         logger.debug("game5m gap forecast line %s: %s", t, e)
-    parts: List[str] = []
-    if pred is not None:
-        src_lbl = {
-            "ticker_ols": "OLS тикер",
-            "ticker_ols_v2": "OLS v2",
-            "ticker_ols_v2_premarket_blend": "OLS v2+премаркет",
-            "sector_proxy": f"прокси {(macro.get('macro_sector_proxy') or 'SMH')}",
-        }.get(src or "", src or "")
-        label = f"прогноз {float(pred):+.2f}%"
-        if src_lbl:
-            label += f" ({src_lbl})"
-        parts.append(label)
-    fact = det.get("gap_pct")
-    if fact is not None:
-        parts.append(f"премаркет {float(fact):+.2f}%")
     last = det.get("premarket_last")
-    if not parts:
-        if last is not None:
-            return f"• {t}: {float(last):.2f} (гэп н/д)"
-        return None
-    prefix = f"• {t}"
     if last is not None:
-        prefix = f"• {t} {float(last):.2f}"
-    return f"{prefix}: " + ", ".join(parts)
+        return f"• {t}: {float(last):.2f} (гэп н/д)"
+    return None
 
 
 def format_sector_and_game5m_gap_lines(macro: Dict[str, Any]) -> List[str]:
@@ -450,7 +436,7 @@ def format_sector_and_game5m_gap_lines(macro: Dict[str, Any]) -> List[str]:
     if game_rows:
         if lines:
             lines.append("")
-        lines.append("GAME 5m — гэп на open:")
+        lines.append("GAME 5m — прогноз open (base / ML / eff):")
         for det in game_rows:
             row = _format_game5m_ticker_gap_forecast_line(det if isinstance(det, dict) else {}, macro)
             if row:
