@@ -204,8 +204,12 @@ def fit_pooled_gap_model(
     pred = _predict_matrix(X, weights)
     residuals = y - pred
     feature_names = ["intercept", *BASE_FEATURES, *[f"symbol:{s}" for s in symbols]]
-    baseline_pm = [float(r.get("premarket_gap_pct")) for r in used if _to_float(r.get("premarket_gap_pct")) is not None]
-    baseline_mae = float(np.mean(np.abs(y - np.array(baseline_pm)))) if baseline_pm else None
+    baseline_deltas = []
+    for i, r in enumerate(used):
+        pm = _to_float(r.get("premarket_gap_pct"))
+        if pm is not None:
+            baseline_deltas.append(abs(float(y[i]) - pm))
+    baseline_mae = float(np.mean(baseline_deltas)) if baseline_deltas else None
     return {
         "model_version": MODEL_VERSION,
         "ready": True,
