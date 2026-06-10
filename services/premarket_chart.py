@@ -293,6 +293,13 @@ def _apply_live_open_gap_forecasts(
         out.update(fc)
         if db_snapshot_ts is not None:
             out["ml_db_snapshot_ts"] = db_snapshot_ts
+        og = out.get("open_gap_pct")
+        ml = out.get("ml_open_gap_pct")
+        if og is not None and ml is not None:
+            try:
+                out["error_pred_ticker_vs_open_pct"] = round(float(og) - float(ml), 4)
+            except (TypeError, ValueError):
+                pass
         return out
     except Exception as e:
         logger.debug("live open gap forecast %s: %s", row.get("ticker"), e)

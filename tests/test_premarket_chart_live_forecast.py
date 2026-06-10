@@ -84,6 +84,7 @@ class TestPremarketChartLiveForecast(unittest.TestCase):
         self.assertEqual(r["baseline_open_gap_pct"], -6.0)
         self.assertEqual(r["effective_open_gap_pct"], -6.0)
         self.assertEqual(r["open_gap_pct"], -5.08)
+        self.assertAlmostEqual(r["error_pred_ticker_vs_open_pct"], -5.08 - (-5.2), places=3)
         fc_mock.assert_called_once()
 
 
