@@ -90,7 +90,7 @@
         <option value="">— только таблица (без графика) —</option>
     </select>
     <label class="muted" style="margin-left:0.75rem; font-size:0.9rem;">
-        <input type="checkbox" id="autoPremarketRefresh" style="vertical-align:middle;">
+        <input type="checkbox" id="autoPremarketRefresh" checked style="vertical-align:middle;">
         Обновлять каждые 5 мин (только эта вкладка видима)
     </label>
     <p id="premarketPhaseLine" class="muted" style="font-size:0.85rem; margin:0.5rem 0 0.35rem 0;"></p>
@@ -1064,10 +1064,12 @@ function renderPremarketTable(payload) {
     wrap.innerHTML = html;
 }
 
-async function loadPremarketTable() {
+async function loadPremarketTable(fresh) {
     const phaseEl = document.getElementById('premarketPhaseLine');
     try {
-        const res = await fetch('/api/premarket/table');
+        let url = '/api/premarket/table';
+        if (fresh) url += '?fresh=1';
+        const res = await fetch(url);
         const data = await res.json().catch(function() { return {}; });
         if (!res.ok) {
             if (phaseEl) phaseEl.textContent = data.detail || 'Ошибка таблицы';
@@ -1076,15 +1078,15 @@ async function loadPremarketTable() {
         if (phaseEl) {
             const ph = data.session_phase ? String(data.session_phase).replace(/_/g, ' ') : '';
             let note = ph ? ('Фаза рынка: ' + ph) : '';
-            if (data.yahoo_live) {
-                note += (note ? ' · ' : '') + 'Yahoo live + прогноз open пересчитывается';
-            } else if (data.yahoo_live === false) {
-                note += (note ? ' · ' : '') + 'таблица из БД (вне PRE_MARKET)';
+            if (data.preopen_live || data.yahoo_live) {
+                note += (note ? ' · ' : '') + 'до 9:30 ET: Yahoo live + пересчёт open (каждые 5 мин)';
+            } else {
+                note += (note ? ' · ' : '') + 'после open: снимок cron + факт RTH open';
             }
             if (data.cron_role_short) {
                 note += (note ? ' · ' : '') + String(data.cron_role_short);
             }
-            if (data.cached) note += (note ? ' · ' : '') + 'кэш';
+            if (data.cached && !fresh) note += (note ? ' · ' : '') + 'кэш';
             phaseEl.textContent = note;
         }
         renderPremarketTable(data);
@@ -1138,8 +1140,8 @@ async function loadPremarketChart() {
     }
 }
 
-async function loadPremarketAll() {
-    await loadPremarketTable();
+async function loadPremarketAll(fresh) {
+    await loadPremarketTable(!!fresh);
     await loadPremarketChart();
 }
 
@@ -1159,7 +1161,7 @@ function schedulePremarketAutoRefresh() {
             schedulePremarketAutoRefresh();
             return;
         }
-        await loadPremarketAll();
+        await loadPremarketAll(true);
         schedulePremarketAutoRefresh();
     }, PREMARKET_REFRESH_MS);
 }

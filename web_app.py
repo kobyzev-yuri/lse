@@ -2122,25 +2122,32 @@ def _premarket_ticker_universe() -> List[str]:
 
 
 @app.get("/api/premarket/table", response_class=JSONResponse)
-async def get_premarket_table_api():
+async def get_premarket_table_api(fresh: bool = False):
     """Сводка премаркета по тикерам (read-only, Yahoo)."""
     try:
         from services.market_session import get_market_session_context
-        from services.premarket_chart import build_premarket_table_rows_cached
+        from services.premarket_chart import build_premarket_table_rows_cached, is_preopen_live
 
         loop = asyncio.get_running_loop()
         tickers = _premarket_ticker_universe()
         rows, cached = await loop.run_in_executor(
-            None, functools.partial(build_premarket_table_rows_cached, tickers)
+            None,
+            functools.partial(build_premarket_table_rows_cached, tickers, skip_cache=fresh),
         )
         sess = get_market_session_context() or {}
         phase = (sess.get("session_phase") or "").strip().upper()
+        preopen = is_preopen_live()
         return _to_jsonable({
             "session_phase": phase,
-            "yahoo_live": phase == "PRE_MARKET",
+            "yahoo_live": preopen,
+            "preopen_live": preopen,
             "rows": rows,
             "cached": cached,
-            "cron_role_short": "Cron → БД/Telegram/ML-метрики; веб в PRE_MARKET — live Yahoo + пересчёт open",
+            "cron_role_short": (
+                "Cron → БД/Telegram/ML-метрики; до 9:30 ET — live Yahoo + пересчёт open"
+                if preopen
+                else "Cron → БД; факт open после 9:30 ET"
+            ),
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
