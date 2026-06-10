@@ -51,6 +51,8 @@
 
 `DECISION_STACK_OWN_FINALIZE=true` (default): CatBoost + multiday применяются в `apply_game5m_policy_gates()` **до** snapshot; результат попадает в legacy `technical_decision_effective`, который cron использует для входа.
 
+**Gap open forecast:** `forecast_layer` / `forecast_open_gap_pct` = **Effective** (`pick_effective_open_gap_pct`, policy `auto`). Вход по гэпу — контур **`premarket_gap_baseline`** (PM gap + пороги), не поле Effective. Подробнее: [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) §5.
+
 Реестр runtime: `services/ml_product_runtime.py`, CLI `scripts/print_ml_product_status.py`, отчёт [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md).
 
 ---

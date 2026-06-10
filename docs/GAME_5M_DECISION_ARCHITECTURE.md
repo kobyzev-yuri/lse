@@ -169,6 +169,23 @@ DECISION_STACK_PREMARKET_GAP_BASELINE_GATE_MODE=apply
 | **ML open** | pooled ridge v2 (PM + macro → open) |
 | **Effective→open** | policy `auto`: baseline, пока ML MAE ≥ baseline MAE на rolling метриках |
 
+Те же три колонки: веб `/visualization?tab=premarket`, Telegram `/premarket` и cron `premarket_cron` (блок «base / ML / eff»).
+
+### Effective vs вход в сделку (важно)
+
+**Сейчас по факту ориентир на naive (PM gap).** Пока ML не обгоняет naive на rolling MAE, **Effective = Baseline = `premarket_gap_pct`**.
+
+| Слой | Роль в продукте | Влияет на BUY/HOLD? |
+|------|-----------------|---------------------|
+| **Baseline→open** | наивный прогноз open % | нет (только отображение) |
+| **ML open** | ridge v2, advisory | нет (`gap_forecast` → telemetry) |
+| **Effective→open** | `pick_effective_open_gap_pct` (`GAME_5M_OPEN_GAP_FORECAST_POLICY=auto`) | **нет** — поле для «рабочего прогноза open» |
+| **`premarket_gap_baseline`** | пороги по **PM gap** + макро/multiday → caution/boost | **да** — production в legacy + decision_stack |
+
+**Почему Effective не подключён к входу отдельно:** вход уже использует **тот же PM gap** через `premarket_gap_baseline` (правила, не одно число). Подключать Effective сейчас = дубль без выигрыша. Когда policy `auto` переключится на ML, **прогноз open** (веб, Telegram, `forecast_layer` / `forecast_open_gap_pct`) сменится **сам**; для **входа** нужен отдельный promotion: readiness `production`, `DECISION_STACK_FORECAST_GATE_MODE=apply` (и при необходимости калибровка порогов под ML, не под PM).
+
+`forecast_layer` (`services/game5m_forecast_layer.py`) берёт **тот же** effective через `pick_effective_open_gap_pct` → `forecast_open_gap_pct` на карточке 5m. Gate по умолчанию: `DECISION_STACK_FORECAST_GATE_MODE=log_only`, readiness `caution`.
+
 ### Источники ML
 
 - pooled ridge v2 (`GAME_5M_PREMARKET_GAP_POOLED_ENABLED`);
@@ -205,15 +222,9 @@ DECISION_STACK_READINESS_GAP_FORECAST=production
 DECISION_STACK_FORECAST_GATE_MODE=apply
 ```
 
-Или включается отдельный source priority:
+Прогноз open (Effective / `forecast_open_gap_pct`) переключается policy `auto` **без смены кода**, когда rolling ML MAE < baseline MAE. Вход в сделку — **отдельный** шаг (readiness + gate apply + при необходимости `DECISION_STACK_RESOLVE_ENABLED=true`).
 
-```text
-effective_gap_signal =
-  ML, если ML production и лучше baseline
-  иначе premarket_gap_baseline
-```
-
-Важно: переключение должно быть конфигом/readiness, а не ручным переписыванием правил.
+Важно: переключение влияния на **торговлю** — только через readiness/gate, не ручным переписыванием правил.
 
 ---
 

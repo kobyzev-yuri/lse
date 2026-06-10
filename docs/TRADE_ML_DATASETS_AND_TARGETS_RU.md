@@ -417,7 +417,7 @@ Veto по `miss_or_guide_breakdown` — **только после** доказа
 - **Выход:** прогноз `open_gap_pct` **на open сегодня**.
 - **Effective:** `GAME_5M_OPEN_GAP_FORECAST_POLICY=auto` → baseline (PM), пока ML не обгоняет naive на rolling MAE.
 
-Sector OLS + pooled ridge v2 + per-ticker OLS fallback; не `.cbm`. Поля в карточке: `ticker_open_gap_predicted_pct`, `forecast_layer`; веб: `baseline_open_gap_pct`, `ml_open_gap_pct`, `effective_open_gap_pct`.
+Sector OLS + pooled ridge v2 + per-ticker OLS fallback; не `.cbm`. Поля: веб/Telegram — `baseline_open_gap_pct`, `ml_open_gap_pct`, `effective_open_gap_pct`; карточка 5m — `forecast_layer.open_gap`, `forecast_open_gap_pct` (= effective по policy `auto`).
 
 ### Метрики L2
 
@@ -428,9 +428,15 @@ Sector OLS + pooled ridge v2 + per-ticker OLS fallback; не `.cbm`. Поля в
 
 ### Использование
 
-- **Legacy:** `premarket_gap_baseline` (observable) — production в decision_stack; влияет на entry_advice
-- **Stack:** `gap_forecast` — caution / log_only; `forecast_layer` объединяет envelope
-- **Open-path:** `gf_*` признаки в open-path classifier (§8)
+| Куда | Что | Вход в сделку? |
+|------|-----|----------------|
+| Веб, Telegram, cron | Baseline / ML / Effective (policy `auto`) | нет — мониторинг и «рабочий прогноз open» |
+| Карточка 5m | `forecast_open_gap_pct` = Effective (`pick_effective_open_gap_pct`) | нет (`forecast_layer` gate `log_only`) |
+| Legacy + stack | `premarket_gap_baseline` — пороги по **PM gap** | **да** — caution/boost entry |
+| Stack | `gap_forecast` (сырой ML) | telemetry |
+| Open-path | `gf_*` признаки | §8, не блокирует cron |
+
+Пока Effective = Baseline (PM), **вход уже на naive** через `premarket_gap_baseline`; отдельно тянуть Effective в resolve не нужно. После promotion ML: policy переключит Effective и `forecast_open_gap_pct` автоматически; для входа — readiness `production` + gate `apply` (см. [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) §5).
 
 ---
 

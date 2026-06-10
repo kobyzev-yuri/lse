@@ -66,6 +66,8 @@
 | **AFTER_CLOSE** | отчёт после закрытия RTH (after hours) |
 | **gap / open gap** | разрыв между вчерашним close и **сегодняшним** RTH open (9:30 ET) |
 | **gap forecast (ML)** | predict open gap **того же дня** в PRE_MARKET по текущему PM + macro; обучение: PM→open внутри одного `trade_date`; не T+1 |
+| **baseline→open** | наивный прогноз open: open gap ≈ текущий `premarket_gap_pct` |
+| **effective→open** | рабочий прогноз open по policy `auto` (baseline, пока ML MAE ≥ naive; иначе ML); **не** гейт входа — вход через `premarket_gap_baseline` |
 | **fade** | «схлопывание» движения после гэпа (gap up fade) |
 | **follow-through** | продолжение движения после события |
 | **veto** | жёсткий запрет действия (downgrade BUY → HOLD) |

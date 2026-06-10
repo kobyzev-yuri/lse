@@ -69,6 +69,9 @@
 | **Что на входе** | **текущий** premarket gap, макро/sector pred **сегодня**, тикер |
 | **Обучение** | история: PM-снимок **до open** → факт **open** **в тот же** `trade_date` |
 | **Baseline** | open ≈ текущий PM gap (часто точнее ML) |
-| **Cron** | Telegram + запись в `game5m_gap_forecast_daily`; после 9:30 — факт open для ML error |
+| **ML open** | ridge v2; advisory |
+| **Effective** | policy `auto`: пока = Baseline; при beat ML на rolling MAE → ML |
+| **Вход в сделку** | **`premarket_gap_baseline`** (пороги по PM gap), не колонка Effective |
+| **Cron / Telegram** | `premarket_cron`, `/premarket` — цены + base/ML/eff; cron не live-обновляет веб |
 
-Подробнее: [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) §5, [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) §7. UI: вкладка «Премаркет 1m» (`/visualization?tab=premarket`).
+Подробнее: [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) §5, [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) §7. UI: `/visualization?tab=premarket`.
