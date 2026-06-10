@@ -1217,6 +1217,7 @@ TECHNICAL_SIGNAL_KEYS = (
     "ticker_open_gap_fact_pct", "ticker_open_gap_fact_basis", "ticker_open_gap_model_version",
     "ticker_open_gap_confidence", "ticker_open_gap_uncertainty_p80_pp", "ticker_open_gap_model_n_train",
     "forecast_layer", "forecast_open_gap_pct", "forecast_open_gap_fact_pct",
+    "forecast_open_gap_baseline_pct", "forecast_open_gap_ml_advisory_pct",
     "forecast_open_gap_confidence", "forecast_open_gap_source", "forecast_open_gap_uncertainty_p80_pp",
     "forecast_horizons_pct", "forecast_regime", "forecast_ready",
     "forecast_gap_up_opportunity", "forecast_gap_up_should_boost_entry",

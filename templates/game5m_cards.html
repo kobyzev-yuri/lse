@@ -119,6 +119,34 @@
             font-weight: 600;
         }
         .explain-details p { margin: 0.35rem 0 0; }
+        .head-badges { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+        .badge-session, .badge-prelim {
+            font-size: 0.68rem;
+            padding: 0.15rem 0.45rem;
+            border-radius: 999px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+        }
+        .badge-session { background: #1e3a5f; color: #93c5fd; }
+        .badge-session.pm { background: #422006; color: #fde047; }
+        .badge-prelim { background: #4c1d95; color: #ddd6fe; }
+        .decision-sub { font-size: 0.72rem; color: #94a3b8; margin-top: 0.15rem; }
+        .gate-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.4rem 0; }
+        .gate-chip {
+            font-size: 0.72rem;
+            padding: 0.2rem 0.45rem;
+            border-radius: 6px;
+            background: #0f172a;
+            border: 1px solid #475569;
+            color: #e2e8f0;
+        }
+        .gate-chip.warn { border-color: #ca8a04; color: #fde047; }
+        .checklist-line { font-size: 0.82rem; margin: 0.35rem 0; font-variant-numeric: tabular-nums; }
+        .checklist-line .ok { color: #86efac; }
+        .checklist-line .bad { color: #fca5a5; }
+        .regime-line { font-size: 0.78rem; color: #cbd5e1; margin: 0.25rem 0 0.35rem; }
+        .accent-row .value { font-weight: 600; }
         @media (min-width: 900px) {
             #cardsContainer {
                 display: grid;
@@ -190,146 +218,217 @@
             if (d === 'SELL') return 'decision-sell';
             return 'decision-hold';
         }
-        function renderForecastTable(c) {
+        function effectiveDecision(c) {
+            return c.decision_effective || c.technical_decision_effective || c.decision || '—';
+        }
+        function coreDecision(c) {
+            return c.technical_decision_core || c.decision || '—';
+        }
+        function sessionPhase(c) {
+            return String(c.session_phase || (c.market_session && c.market_session.session_phase) || '').trim();
+        }
+        function isPremarketPhase(c) {
+            var ph = sessionPhase(c);
+            return ph === 'PRE_MARKET' || ph === 'PREMARKET';
+        }
+        function sessionPhaseRu(c) {
+            var ph = sessionPhase(c);
+            if (ph === 'PRE_MARKET' || ph === 'PREMARKET') {
+                var mins = c.minutes_until_open;
+                return mins != null ? ('Премаркет · до open ' + mins + ' мин') : 'Премаркет';
+            }
+            if (ph === 'REGULAR') return 'RTH';
+            if (ph === 'AFTER_HOURS') return 'After hours';
+            if (ph === 'CLOSED') return 'Закрыто';
+            return ph || '';
+        }
+        function forecastRegimeRu(regime) {
+            var m = {
+                aligned_bullish: 'гэп и дневка согласны ↑',
+                aligned_bearish: 'гэп и дневка согласны ↓',
+                gap_fade_risk: 'риск fade гэпа',
+                gap_reversal_opportunity: 'возможность разворота после гэпа',
+                gap_driven: 'режим: гэп',
+                multiday_driven: 'режим: дневка',
+                neutral_or_unavailable: 'нейтрально'
+            };
+            return m[String(regime || '')] || regime || '';
+        }
+        function renderForecastCompact(c) {
             var fc = c.price_forecast_5m;
-            if (fc && Array.isArray(fc.horizons) && fc.horizons.length > 0) {
-                var rows = fc.horizons.map(function(h) {
-                    var label = h.minutes != null ? String(h.minutes) + 'м' : '—';
-                    function pctCell(v) {
-                        if (v == null || v === undefined) return '<td class="num">—</td>';
-                        var s = (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%';
-                        return '<td class="num">' + escapeHtml(s) + '</td>';
-                    }
-                    var pgt = h.p_price_gt_spot != null ? fmt(h.p_price_gt_spot, 3) : '—';
-                    return '<tr><td>' + escapeHtml(label) + '</td>' +
-                        pctCell(h.p10_pct_vs_spot) + pctCell(h.p50_pct_vs_spot) + pctCell(h.p90_pct_vs_spot) +
-                        '<td class="num">' + escapeHtml(pgt) + '</td></tr>';
-                }).join('');
-                return '<table class="forecast-table" role="table"><thead><tr>' +
-                    '<th>Горизонт</th><th>p10</th><th>p50</th><th>p90</th><th>P(&gt;spot)</th></tr></thead><tbody>' +
-                    rows + '</tbody></table>' +
-                    renderDetails('Как читать 30/60/120м прогноз', '<p><strong>p50</strong> — центральный прогноз к текущему spot; <strong>p10/p90</strong> — нижний/верхний сценарий распределения. <strong>P(&gt;spot)</strong> — вероятность, что цена на горизонте будет выше текущей. Это прогноз диапазона, а не готовый тейк.</p>');
-            }
-            if (c.price_forecast_5m_summary) {
-                return '<div class="forecast-fallback">' + escapeHtml(c.price_forecast_5m_summary) + '</div>';
-            }
-            return '';
-        }
-        function formatGapPctSigned(v, decimals) {
-            if (v == null || v === undefined || isNaN(Number(v))) return null;
-            var n = Number(v);
-            return (n >= 0 ? '+' : '') + fmt(n, decimals) + '%';
-        }
-        function tickerGapMacroSuffix(c) {
-            var pred = formatGapPctSigned(c.ticker_open_gap_predicted_pct, 2);
-            var fact = formatGapPctSigned(c.ticker_open_gap_fact_pct, 2);
-            if (!pred && !fact) return '';
-            var parts = [];
-            if (pred) parts.push('прогноз ' + pred);
-            if (fact) {
-                var basis = c.ticker_open_gap_fact_basis || '';
-                var sfx = basis === 'open_9_30_et' ? ' (open)' : (basis === 'premarket' ? ' (премаркет)' : '');
-                parts.push('факт ' + fact + sfx);
-            }
-            return '; гэп ' + escapeHtml(String(c.ticker || '')) + ': ' + parts.join(' · ');
-        }
-        function renderPremarketGapBlock(c) {
-            var pred = c.ticker_open_gap_predicted_pct;
-            var fact = c.ticker_open_gap_fact_pct;
-            if (pred == null && fact == null) {
+            if (!fc || !Array.isArray(fc.horizons) || !fc.horizons.length) {
+                if (c.price_forecast_5m_summary) {
+                    return '<div class="forecast-fallback">' + escapeHtml(c.price_forecast_5m_summary) + '</div>';
+                }
                 return '';
             }
-            var html = '<div class="block-title">Гэп на open (тикер)</div>';
-            if (pred != null && pred !== undefined && !isNaN(Number(pred))) {
-                var p = Number(pred);
-                var pCls = p >= 0 ? 'positive' : 'negative';
-                var src = (c.ticker_open_gap_predicted_source || '').toLowerCase();
-                var srcHint = src === 'pooled_ridge_v1' ? 'pooled ridge (PM + sector + тикер)'
-                    : (src === 'ticker_ols_v2_premarket_blend' ? 'OLS v2 + премаркет'
-                    : (src === 'ticker_ols_v2' || src === 'ticker_ols' ? 'OLS v2 по тикеру' : (src === 'sector_proxy' ? 'прокси SMH' : src)));
-                html += '<div class="row"><span class="label">Прогноз ML</span><span class="value ' + pCls + '" title="' + escapeHtml(srcHint) + '">' +
-                    (p >= 0 ? '+' : '') + fmt(p, 2) + '%</span></div>';
+            var compactRows = fc.horizons.map(function(h) {
+                var label = h.minutes != null ? String(h.minutes) + 'м' : '—';
+                var p50 = h.p50_pct_vs_spot;
+                var p50Str = '—';
+                if (p50 != null && p50 !== undefined && Number.isFinite(Number(p50))) {
+                    var p = Number(p50);
+                    p50Str = (p >= 0 ? '+' : '') + p.toFixed(2) + '%';
+                }
+                var pgt = h.p_price_gt_spot != null ? fmt(h.p_price_gt_spot, 3) : '—';
+                return '<tr><td>' + escapeHtml(label) + '</td><td class="num">' + escapeHtml(p50Str) + '</td><td class="num">' + escapeHtml(pgt) + '</td></tr>';
+            }).join('');
+            var fullRows = fc.horizons.map(function(h) {
+                var label = h.minutes != null ? String(h.minutes) + 'м' : '—';
+                function pctCell(v) {
+                    if (v == null || v === undefined) return '<td class="num">—</td>';
+                    var s = (Number(v) >= 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+                    return '<td class="num">' + escapeHtml(s) + '</td>';
+                }
+                var pgt = h.p_price_gt_spot != null ? fmt(h.p_price_gt_spot, 3) : '—';
+                return '<tr><td>' + escapeHtml(label) + '</td>' +
+                    pctCell(h.p10_pct_vs_spot) + pctCell(h.p50_pct_vs_spot) + pctCell(h.p90_pct_vs_spot) +
+                    '<td class="num">' + escapeHtml(pgt) + '</td></tr>';
+            }).join('');
+            return '<table class="forecast-table" role="table"><thead><tr>' +
+                '<th>Горизонт</th><th>p50</th><th>P(&gt;spot)</th></tr></thead><tbody>' + compactRows + '</tbody></table>' +
+                renderDetails('Полный прогноз 30/60/120м (p10/p90)',
+                    '<table class="forecast-table" role="table"><thead><tr><th>Горизонт</th><th>p10</th><th>p50</th><th>p90</th><th>P(&gt;spot)</th></tr></thead><tbody>' +
+                    fullRows + '</tbody></table><p><strong>p50</strong> — центральный сценарий; <strong>p10/p90</strong> — хвосты.</p>');
+        }
+        function gapModelSourceHint(src) {
+            src = String(src || '').toLowerCase();
+            if (src === 'pooled_ridge_v1' || src === 'pooled_ridge_v2') return 'pooled ridge (PM + sector + тикер)';
+            if (src === 'ticker_ols_v2_premarket_blend') return 'OLS v2 + премаркет';
+            if (src === 'ticker_ols_v2' || src === 'ticker_ols') return 'OLS v2 по тикеру';
+            if (src === 'sector_proxy') return 'прокси SMH';
+            return src || '';
+        }
+        function gapEffectiveSourceHint(src) {
+            src = String(src || '').toLowerCase();
+            if (src === 'premarket_baseline') return 'policy auto: baseline (PM), пока ML не обгоняет MAE';
+            if (src === 'ml_open_gap') return 'policy auto: ML open';
+            return gapModelSourceHint(src);
+        }
+        function renderGapPctRow(label, v, title, accent) {
+            if (v == null || v === undefined || isNaN(Number(v))) return '';
+            var n = Number(v);
+            var cls = n >= 0 ? 'positive' : 'negative';
+            var rowCls = accent ? 'row accent-row' : 'row';
+            var titleAttr = title ? ' title="' + escapeHtml(title) + '"' : '';
+            return '<div class="' + rowCls + '"><span class="label">' + escapeHtml(label) + '</span><span class="value ' + cls + '"' + titleAttr + '>' +
+                (n >= 0 ? '+' : '') + fmt(n, 2) + '%</span></div>';
+        }
+        function resolveCardOpenGapFields(c) {
+            var baseline = c.forecast_open_gap_baseline_pct;
+            if (baseline == null) baseline = c.ticker_open_gap_observable_baseline_pct;
+            if (baseline == null) baseline = c.premarket_gap_pct;
+            var ml = c.forecast_open_gap_ml_advisory_pct;
+            if (ml == null) ml = c.ticker_open_gap_ml_advisory_pct;
+            if (ml == null) ml = c.ticker_open_gap_predicted_pct;
+            var effective = c.forecast_open_gap_pct;
+            var fact = c.ticker_open_gap_fact_pct;
+            if (fact == null) fact = c.forecast_open_gap_fact_pct;
+            if (fact == null && !isPremarketPhase(c) && c.rth_open_gap_pct != null) fact = c.rth_open_gap_pct;
+            return {
+                baseline: baseline,
+                ml: ml,
+                effective: effective,
+                effSrc: c.forecast_open_gap_source || '',
+                mlSrc: c.ticker_open_gap_ml_advisory_source || c.ticker_open_gap_predicted_source || '',
+                fact: fact,
+                factBasis: c.ticker_open_gap_fact_basis || (fact != null && !isPremarketPhase(c) ? 'open_9_30_et' : '')
+            };
+        }
+        function renderSessionGapBlock(c) {
+            var g = resolveCardOpenGapFields(c);
+            if (g.baseline == null && g.ml == null && g.effective == null && g.fact == null) return '';
+            var pm = isPremarketPhase(c);
+            var html = '<div class="block-title">Гэп на open</div>';
+            if (pm) {
+                html += renderGapPctRow('Baseline→open', g.baseline, 'Naive baseline: PM-цена к вчерашнему close', false);
+                html += renderGapPctRow('ML open', g.ml, gapModelSourceHint(g.mlSrc), false);
+                html += renderGapPctRow('Effective→open', g.effective, gapEffectiveSourceHint(g.effSrc), true);
+            } else {
+                html += renderGapPctRow('Effective→open', g.effective, gapEffectiveSourceHint(g.effSrc), true);
+                if (g.fact != null && g.fact !== undefined && !isNaN(Number(g.fact))) {
+                    var factLbl = g.factBasis === 'premarket' ? 'Факт (премаркет)' : 'RTH open gap';
+                    html += renderGapPctRow(factLbl, g.fact, 'Реальный гэп первого RTH-бара 9:30 ET', false);
+                    if (g.ml != null && g.ml !== undefined && !isNaN(Number(g.ml))) {
+                        var err = Number(g.fact) - Number(g.ml);
+                        html += '<div class="row"><span class="label">ML error</span><span class="value muted" style="font-size:0.78rem;" title="Факт open минус ML open">' +
+                            (err >= 0 ? '+' : '') + fmt(err, 2) + ' п.п.</span></div>';
+                    }
+                }
+                var snapParts = [];
+                if (g.baseline != null) snapParts.push(renderGapPctRow('Baseline→open', g.baseline, '', false));
+                if (g.ml != null) snapParts.push(renderGapPctRow('ML open', g.ml, gapModelSourceHint(g.mlSrc), false));
+                if (snapParts.length) html += renderDetails('Утренний снимок (baseline / ML)', snapParts.join(''));
             }
-            var pmBase = c.ticker_open_gap_observable_baseline_pct != null ? c.ticker_open_gap_observable_baseline_pct : c.premarket_gap_pct;
-            if (pmBase != null && pmBase !== undefined && !isNaN(Number(pmBase))) {
-                var b = Number(pmBase);
-                var bCls = b >= 0 ? 'positive' : 'negative';
-                html += '<div class="row"><span class="label">Премаркет</span><span class="value ' + bCls + '" title="Naive baseline: последняя PM-цена к вчерашнему close (часто точнее ML)">' +
-                    (b >= 0 ? '+' : '') + fmt(b, 2) + '%</span></div>';
-            }
-            if (fact != null && fact !== undefined && !isNaN(Number(fact))) {
-                var f = Number(fact);
-                var fCls = f >= 0 ? 'positive' : 'negative';
-                var basis = c.ticker_open_gap_fact_basis || '';
-                var factLbl = basis === 'open_9_30_et' ? 'Факт (open 9:30 ET)' : (basis === 'premarket' ? 'Факт (премаркет)' : 'Факт');
-                html += '<div class="row"><span class="label">' + escapeHtml(factLbl) + '</span><span class="value ' + fCls + '">' +
-                    (f >= 0 ? '+' : '') + fmt(f, 2) + '%</span></div>';
-            }
-            html += renderDetails('Что значит гэп на open', '<p><strong>Прогноз ML</strong> — модель (pooled ridge или OLS) по премаркету и макро; записывается утром и не пересчитывается после open.</p><p><strong>Премаркет</strong> — naive baseline: PM-цена к вчерашнему close; на OOS часто ближе к факту open, чем ML.</p><p><strong>Факт</strong> — реальный гэп первого RTH-бара 9:30 ET.</p>');
+            var regime = forecastRegimeRu(c.forecast_regime);
+            if (regime) html += '<div class="regime-line">' + escapeHtml(regime) + '</div>';
             return html;
         }
-        function renderMultidayLrTable(c) {
+        function renderMultidayCompact(c) {
             var fc = c.log_return_multiday_forecast;
-            if (fc && fc.horizons && typeof fc.horizons === 'object') {
-                var keys = ['1', '2', '3'];
-                var rows = [];
-                for (var i = 0; i < keys.length; i++) {
-                    var h = fc.horizons[keys[i]];
-                    if (!h || typeof h !== 'object') continue;
-                    var pct = h.predicted_pct_vs_spot;
+            var hasFlat = c.multiday_lr_horizon_1d_pct_vs_spot != null || c.multiday_lr_horizon_2d_pct_vs_spot != null || c.multiday_lr_horizon_3d_pct_vs_spot != null;
+            if ((!fc || !fc.horizons) && !hasFlat) {
+                if (c.log_return_multiday_forecast_summary) {
+                    return '<div class="forecast-fallback">' + escapeHtml(c.log_return_multiday_forecast_summary) + '</div>';
+                }
+                return '';
+            }
+            var keys = ['1', '2', '3'];
+            var flatMap = { '1': c.multiday_lr_horizon_1d_pct_vs_spot, '2': c.multiday_lr_horizon_2d_pct_vs_spot, '3': c.multiday_lr_horizon_3d_pct_vs_spot };
+            var rows = [];
+            for (var i = 0; i < keys.length; i++) {
+                var k = keys[i];
+                var pct = flatMap[k];
+                if (pct == null && fc && fc.horizons && fc.horizons[k]) pct = fc.horizons[k].predicted_pct_vs_spot;
+                if (pct == null && pct !== 0) continue;
+                var pctStr = '—';
+                if (pct != null && Number.isFinite(Number(pct))) {
+                    var p = Number(pct);
+                    pctStr = (p >= 0 ? '+' : '') + p.toFixed(2) + '%';
+                }
+                rows.push('<tr><td>' + escapeHtml(k + ' торг. дн.') + '</td><td class="num">' + escapeHtml(pctStr) + '</td></tr>');
+            }
+            if (!rows.length) return '';
+            var biasLine = c.multiday_lr_bias ? '<div class="regime-line">bias: ' + escapeHtml(String(c.multiday_lr_bias)) + '</div>' : '';
+            var detailParts = [];
+            if (fc && fc.horizons) {
+                var logRows = keys.map(function(k) {
+                    var h = fc.horizons[k];
+                    if (!h) return '';
                     var predLog = h.predicted_log_ret;
-                    var pctStr = '—';
-                    if (pct != null && pct !== undefined && Number.isFinite(Number(pct))) {
-                        var p = Number(pct);
-                        pctStr = (p >= 0 ? '+' : '') + p.toFixed(2) + '%';
-                    }
                     var logStr = '—';
-                    if (predLog != null && predLog !== undefined && Number.isFinite(Number(predLog))) {
+                    if (predLog != null && Number.isFinite(Number(predLog))) {
                         var l = Number(predLog);
                         logStr = (l >= 0 ? '+' : '') + l.toFixed(4);
                     }
-                    rows.push('<tr><td>' + escapeHtml(keys[i] + ' торг. дн.') + '</td><td class="num">' + escapeHtml(pctStr) + '</td><td class="num" title="Прогноз суммарной log-return на этот горизонт">' + escapeHtml(logStr) + '</td></tr>');
-                }
-                if (rows.length) {
-                    var meta = [];
-                    if (c.multiday_lr_daily_close_source) {
-                        meta.push('дневка: ' + escapeHtml(String(c.multiday_lr_daily_close_source)));
-                    }
-                    if (fc.daily_last_date) meta.push('посл. день: ' + escapeHtml(String(fc.daily_last_date)));
-                    if (fc.premarket_db_used) meta.push('премаркет БД');
-                    if (fc.news_db_used) meta.push('news БД');
-                    if (fc.macro_calendar_db_used) meta.push('макро-календарь');
-                    if (fc.symbol_calendar_db_used) meta.push('earnings-календарь');
-                    if (fc.n_features != null && fc.n_features !== undefined) meta.push('фичей: ' + escapeHtml(String(fc.n_features)));
-                    var sub = meta.length ? '<div class="forecast-fallback" style="margin-top:0.2rem;">' + meta.join(' · ') + '</div>' : '';
-                    return '<p class="forecast-fallback muted" style="margin:0 0 0.35rem 0;font-size:0.78rem;">Прогноз одной ridge-модели к <strong>текущей цене</strong>: простой % и та же величина в log-return. Календарь/news/premarket ниже — входные фичи этой регрессии.</p>' +
-                        '<table class="forecast-table" role="table"><thead><tr>' +
-                        '<th>Горизонт</th><th>Ожидаемо к spot</th><th title="Прогноз суммарной log-return на горизонт">Прогноз log-ret</th></tr></thead><tbody>' +
-                        rows.join('') + '</tbody></table>' + sub +
-                        renderDetails('Как читать дневку и календарь', '<p><strong>Ожидаемо к spot</strong> — прогноз простого изменения цены на 1/2/3 торговых дня. <strong>Прогноз log-ret</strong> — та же доходность в log-пространстве, на котором обучается модель.</p><p><strong>Макро-календарь</strong>, <strong>earnings-календарь</strong>, <strong>news</strong> и <strong>premarket</strong> — входные признаки этой модели. У них нет отдельной собственной доходности в карточке; их вклад имеет смысл показывать отдельным сравнением “без фичи / с фичей”.</p>');
+                    return '<tr><td>' + escapeHtml(k + 'd') + '</td><td class="num">' + escapeHtml(logStr) + '</td></tr>';
+                }).filter(Boolean).join('');
+                if (logRows) {
+                    detailParts.push('<table class="forecast-table"><thead><tr><th>Горизонт</th><th>log-ret</th></tr></thead><tbody>' + logRows + '</tbody></table>');
                 }
             }
-            if (c.log_return_multiday_forecast_summary) {
-                return '<div class="forecast-fallback">' + escapeHtml(c.log_return_multiday_forecast_summary) + '</div>';
-            }
-            return '';
+            var meta = [];
+            if (c.multiday_lr_daily_close_source) meta.push('дневка: ' + escapeHtml(String(c.multiday_lr_daily_close_source)));
+            if (fc && fc.daily_last_date) meta.push('посл. день: ' + escapeHtml(String(fc.daily_last_date)));
+            if (meta.length) detailParts.push('<p class="muted">' + meta.join(' · ') + '</p>');
+            var details = detailParts.length ? renderDetails('Детали дневной модели', detailParts.join('')) : '';
+            return biasLine + '<table class="forecast-table" role="table"><thead><tr><th>Горизонт</th><th>К spot</th></tr></thead><tbody>' +
+                rows.join('') + '</tbody></table>' + details;
         }
         function renderDecisionVerdict(c) {
             var v = c.decision_verdict;
             if (!v || typeof v !== 'object') return '';
-            var reasons = Array.isArray(v.primary_reasons) ? v.primary_reasons.slice(0, 3) : [];
+            var reasons = Array.isArray(v.primary_reasons) ? v.primary_reasons.slice(0, 2) : [];
             var label = v.label || 'Hold';
-            var eff = v.effective_decision || c.technical_decision_effective || c.decision || '—';
+            var eff = v.effective_decision || effectiveDecision(c);
             var projected = v.projected_effective_if_resolve || c.decision_stack_projected_effective;
             var html = '<div class="verdict-block">';
-            html += '<div><span class="muted">Unified verdict</span> <span class="verdict-label">' + escapeHtml(label) + '</span>';
-            html += ' · effective <code>' + escapeHtml(eff) + '</code>';
+            html += '<div><span class="muted">Вердикт</span> <span class="verdict-label">' + escapeHtml(label) + '</span>';
+            html += ' · итог <code>' + escapeHtml(String(eff)) + '</code>';
             if (projected && projected !== eff) {
-                html += ' · shadow <code>' + escapeHtml(projected) + '</code>';
+                html += ' · тень <code>' + escapeHtml(String(projected)) + '</code>';
             }
-            if (v.resolve_divergence) {
-                html += ' <span class="negative">diff</span>';
-            }
+            if (v.resolve_divergence) html += ' <span class="negative">расхождение</span>';
             html += '</div>';
             if (reasons.length) {
                 html += '<div class="verdict-reason">' + reasons.map(escapeHtml).join('<br>') + '</div>';
@@ -337,102 +436,173 @@
             html += '</div>';
             return html;
         }
+        function renderGateChips(c) {
+            var chips = [];
+            if (c.open_guard_triggered) {
+                var og = 'Open guard';
+                if (c.open_guard_bar_range_pct != null) og += ' · бар ' + fmt(c.open_guard_bar_range_pct, 2) + '%';
+                if (c.open_guard_prev_decision && c.open_guard_next_decision) {
+                    og += ' · ' + c.open_guard_prev_decision + '→' + c.open_guard_next_decision;
+                }
+                chips.push('<span class="gate-chip warn">' + escapeHtml(og) + '</span>');
+            }
+            if (c.multiday_lr_entry_gate_applied || c.multiday_lr_entry_gate_would_hold) {
+                var mg = 'Multiday gate';
+                if (c.multiday_lr_entry_gate_status) mg += ' · ' + c.multiday_lr_entry_gate_status;
+                if (c.multiday_lr_entry_gate_note) mg += ' — ' + String(c.multiday_lr_entry_gate_note).slice(0, 80);
+                chips.push('<span class="gate-chip warn">' + escapeHtml(mg) + '</span>');
+            }
+            if (c.entry_quality_guard_triggered) {
+                var eq = 'Entry quality';
+                if (c.entry_quality_guard_reason) eq += ' · ' + String(c.entry_quality_guard_reason).slice(0, 60);
+                chips.push('<span class="gate-chip warn">' + escapeHtml(eq) + '</span>');
+            }
+            var core = coreDecision(c);
+            var effTech = c.technical_decision_effective;
+            if (c.catboost_signal_status && core && effTech && core !== effTech) {
+                var cb = 'CatBoost · ' + core + '→' + effTech;
+                if (c.catboost_entry_proba_good != null) cb += ' · P=' + fmt(c.catboost_entry_proba_good, 3);
+                chips.push('<span class="gate-chip">' + escapeHtml(cb) + '</span>');
+            }
+            if (!chips.length) return '';
+            return '<div class="gate-row">' + chips.join('') + '</div>';
+        }
+        function renderEntryBlock(c) {
+            var advice = c.entry_advice || '—';
+            var adviceCls = advice === 'ALLOW' ? 'positive' : (advice === 'AVOID' ? 'negative' : '');
+            var html = '<div class="block-title">Вход</div>';
+            html += '<div class="row"><span class="label">Совет</span><span class="value ' + adviceCls + '">' + escapeHtml(advice) + '</span></div>';
+            var localReason = (c.entry_advice_reason_local != null && String(c.entry_advice_reason_local).trim())
+                ? String(c.entry_advice_reason_local).trim() : '';
+            if (!localReason && c.entry_advice_reason && (!c.macro_risk_level || c.macro_risk_level === 'NEUTRAL')) {
+                localReason = String(c.entry_advice_reason).trim();
+            }
+            if (localReason && advice !== 'ALLOW') {
+                html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.78rem;">' + escapeHtml(localReason) + '</span></div>';
+            }
+            if (c.kb_news_impact) {
+                html += '<div class="row"><span class="label">Новости</span><span class="value muted" style="font-size:0.78rem;">' + escapeHtml(String(c.kb_news_impact)) + '</span></div>';
+            }
+            return html;
+        }
+        function renderChecklistCompact(c) {
+            var rr = c.risk_reward_ratio;
+            var ev = c.expected_value_pct;
+            if (rr == null && ev == null && !c.qwen_checklist_verdict) return '';
+            var rrOk = rr != null && rr >= 2.0;
+            var evOk = ev != null && ev > 0;
+            var parts = [];
+            if (rr != null) {
+                parts.push('R:R 1:' + fmt(rr, 1) + ' <span class="' + (rrOk ? 'ok' : 'bad') + '">' + (rrOk ? '✓' : '✗') + '</span>');
+            }
+            if (ev != null) {
+                parts.push('EV ' + (ev >= 0 ? '+' : '') + fmt(ev, 2) + '% <span class="' + (evOk ? 'ok' : 'bad') + '">' + (evOk ? '✓' : '✗') + '</span>');
+            }
+            var html = '<div class="checklist-line">' + parts.join(' · ') + '</div>';
+            if (c.qwen_checklist_verdict) {
+                html += renderDetails('Вывод чек-листа', '<p>' + escapeHtml(c.qwen_checklist_verdict) + '</p>');
+            }
+            return html;
+        }
+        function renderTradeBlock(c) {
+            var upside = c.estimated_upside_pct_day != null ? c.estimated_upside_pct_day : c.take_profit_pct;
+            var stopEnabled = c.stop_loss_enabled === true;
+            var html = '<div class="block-title">Сделка</div>';
+            html += '<div class="row"><span class="label">Цена</span><span class="value">' + fmt(c.price, 2) + '</span></div>';
+            if (c.suggested_take_profit_price != null) {
+                html += '<div class="row"><span class="label">Цель</span><span class="value positive">' + fmt(c.suggested_take_profit_price, 2) + '</span></div>';
+            }
+            if (upside != null) {
+                html += '<div class="row accent-row"><span class="label" title="Тейк после пола 4% и cap">Upside</span><span class="value positive">+' + fmt(upside, 1) + '%</span></div>';
+            }
+            if (c.estimated_downside_pct_day != null) {
+                html += '<div class="row"><span class="label" title="Оценка просадки">Downside</span><span class="value negative">−' + fmt(c.estimated_downside_pct_day, 1) + '%</span></div>';
+            }
+            if (stopEnabled && c.stop_loss_pct != null) {
+                html += '<div class="row"><span class="label">Стоп (правило)</span><span class="value negative">−' + fmt(c.stop_loss_pct, 1) + '%</span></div>';
+            }
+            html += renderChecklistCompact(c);
+            return html;
+        }
+        function renderIntradayBlock(c) {
+            var html = '<div class="block-title">Intraday</div>';
+            html += '<div class="row"><span class="label">RSI(5m)</span><span class="value">' + fmt(c.rsi_5m, 1) + '</span></div>';
+            var momLabel = (c.momentum_window_min != null && c.momentum_window_min > 0 && c.momentum_window_min < 120)
+                ? ('Импульс ' + c.momentum_window_min + 'м')
+                : 'Импульс 2ч';
+            html += '<div class="row"><span class="label">' + momLabel + '</span><span class="value">' + fmt(c.momentum_2h_pct, 2) + '%</span></div>';
+            if (c.pullback_from_high_pct != null) {
+                html += '<div class="row"><span class="label">Откат от хая</span><span class="value">' + fmt(c.pullback_from_high_pct, 2) + '%</span></div>';
+            }
+            if (c.volatility_5m_pct != null) {
+                html += '<div class="row"><span class="label">Vol 5m</span><span class="value">' + fmt(c.volatility_5m_pct, 2) + '%</span></div>';
+            }
+            return html;
+        }
+        function renderMacroBlock(c) {
+            if (!c.macro_risk_level || c.macro_risk_level === 'NEUTRAL') return '';
+            var macroLine = escapeHtml(String(c.macro_risk_level));
+            if (c.macro_equity_gap_bias) macroLine += ' · ' + escapeHtml(String(c.macro_equity_gap_bias));
+            var macroReasons = Array.isArray(c.macro_risk_reasons) ? c.macro_risk_reasons : [];
+            if (macroReasons.length) macroLine += ' — ' + escapeHtml(macroReasons.slice(0, 2).join('; '));
+            if (c.macro_predicted_sector_gap_pct != null && c.macro_sector_proxy) {
+                macroLine += '; сектор ' + escapeHtml(String(c.macro_sector_proxy)) + ' '
+                    + (Number(c.macro_predicted_sector_gap_pct) >= 0 ? '+' : '')
+                    + escapeHtml(String(c.macro_predicted_sector_gap_pct)) + '%';
+            }
+            return '<div class="block-title">Макро</div><div class="row"><span class="label">Риск</span><span class="value muted" style="font-size:0.85rem;">' + macroLine + '</span></div>';
+        }
+        function renderEntryStory(c) {
+            var parts = [];
+            if (c.entry_condition) parts.push('<p><strong>Условие:</strong> ' + escapeHtml(String(c.entry_condition)) + '</p>');
+            if (c.entry_intuition) parts.push('<p><strong>Интуиция:</strong> ' + escapeHtml(String(c.entry_intuition)) + '</p>');
+            if (c.reasoning) parts.push('<p>' + escapeHtml(String(c.reasoning).slice(0, 350)) + '</p>');
+            if (!parts.length) return '';
+            return renderDetails('Почему такой сигнал', parts.join(''));
+        }
         function renderCard(c) {
-            const isNoData = c.decision === 'NO_DATA';
-            const upside = c.estimated_upside_pct_day != null ? c.estimated_upside_pct_day : c.take_profit_pct;
-            const upsideRaw = c.estimated_upside_forecast_raw_pct;
-            const stopEnabled = c.stop_loss_enabled === true;
-            const downsideRisk = c.estimated_downside_pct_day;
-            const pullback = c.pullback_from_high_pct;
-            let html = '<div class="card-5m ' + decisionClass(c.decision) + '" data-ticker="' + escapeHtml(c.ticker) + '">';
-            html += '<div class="card-head"><span class="ticker">' + escapeHtml(c.ticker) + '</span><span class="decision">' + escapeHtml(c.decision || '—') + '</span></div>';
+            var isNoData = c.decision === 'NO_DATA';
+            var eff = effectiveDecision(c);
+            var core = coreDecision(c);
+            var html = '<div class="card-5m ' + decisionClass(eff) + '" data-ticker="' + escapeHtml(c.ticker) + '">';
+            html += '<div class="card-head"><div><span class="ticker">' + escapeHtml(c.ticker) + '</span>';
+            var sess = sessionPhaseRu(c);
+            if (sess) {
+                html += '<div class="head-badges" style="margin-top:0.25rem;">';
+                html += '<span class="badge-session' + (isPremarketPhase(c) ? ' pm' : '') + '">' + escapeHtml(sess) + '</span>';
+                if (c.is_preliminary) html += '<span class="badge-prelim">preliminary</span>';
+                html += '</div>';
+            }
+            html += '</div><span class="decision ' + escapeHtml(String(eff)) + '">' + escapeHtml(String(eff)) + '</span></div>';
+            if (core !== eff) {
+                html += '<div class="decision-sub">core: ' + escapeHtml(String(core)) + ' → effective: ' + escapeHtml(String(eff)) + '</div>';
+            }
             if (isNoData) {
                 html += '<p class="no-data">' + escapeHtml(c.reasoning || 'Нет данных') + '</p></div>';
                 return html;
             }
             html += renderDecisionVerdict(c);
-            if (c.catboost_signal_status) {
-                html += '<div class="block-title">CatBoost (осторожный фильтр входа)</div>';
-                html += '<div class="row"><span class="label">Статус / режим</span><span class="value">' +
-                    escapeHtml(String(c.catboost_signal_status || '—')) + ' · ' + escapeHtml(String(c.catboost_fusion_mode || '—')) +
-                    '</span></div>';
-                if (c.catboost_entry_proba_good != null) {
-                    html += '<div class="row"><span class="label">P(хороший исход)</span><span class="value">' + fmt(c.catboost_entry_proba_good, 3) + '</span></div>';
-                }
-                if (c.technical_decision_core && c.technical_decision_effective && c.technical_decision_core !== c.technical_decision_effective) {
-                    html += '<div class="row"><span class="label">Сигнал (core→effective)</span><span class="value">' +
-                        escapeHtml(String(c.technical_decision_core)) + ' → <strong>' + escapeHtml(String(c.technical_decision_effective)) + '</strong>' +
-                        '</span></div>';
-                }
-                if (c.catboost_fusion_note) {
-                    html += '<div class="row"><span class="label">Заметка</span><span class="value muted" style="font-size:0.85em;">' + escapeHtml(String(c.catboost_fusion_note)) + '</span></div>';
-                }
-            }
-            html += '<div class="row"><span class="label">Цена</span><span class="value">' + fmt(c.price, 2) + '</span></div>';
-            html += '<div class="row"><span class="label">RSI(5m)</span><span class="value">' + fmt(c.rsi_5m, 1) + '</span></div>';
-            var verdict = c.qwen_checklist_verdict || '';
-            if (verdict) {
-                var verdictClass = verdict.indexOf('Позитивно') === 0 ? 'positive' : (verdict.indexOf('Негативно') === 0 ? 'negative' : 'muted');
-                html += '<div class="row"><span class="label">Вывод Квена</span><span class="value ' + verdictClass + '" style="font-size:0.85em;">' + escapeHtml(verdict) + '</span></div>';
-            }
-            var momLabel = (c.momentum_window_min != null && c.momentum_window_min > 0 && c.momentum_window_min < 120)
-                ? ('Импульс за ' + c.momentum_window_min + ' мин')
-                : 'Импульс 2ч';
-            html += '<div class="row"><span class="label">' + momLabel + '</span><span class="value">' + fmt(c.momentum_2h_pct, 2) + '%</span></div>';
-            if (pullback != null) html += '<div class="row"><span class="label">Откат от хая</span><span class="value">' + fmt(pullback, 2) + '%</span></div>';
-            if (c.volatility_5m_pct != null) html += '<div class="row"><span class="label">Волатильность 5m</span><span class="value">' + fmt(c.volatility_5m_pct, 2) + '%</span></div>';
-            if (upside != null) {
-                html += '<div class="row"><span class="label" title="Эффективный тейк для игры (после пола мин. 4% и тикерного cap)">Upside день (цель)</span><span class="value positive">+' + fmt(upside, 1) + '%</span></div>';
-                if (upsideRaw != null && upsideRaw !== undefined && Math.abs(Number(upsideRaw) - Number(upside)) > 0.02) {
-                    html += '<div class="row"><span class="label" title="Смесь 60/120m (p50), cap по p90 и тикеру — до применения пола 4%">По прогнозу (до пола 4%)</span><span class="value positive">+' + fmt(upsideRaw, 1) + '%</span></div>';
-                }
-            }
-            if (downsideRisk != null) html += '<div class="row"><span class="label" title="Оценка возможной просадки вниз; больше по модулю (например 2.5% vs 1.3%) — больший риск. Знак «−» — направление, не «счёт осторожности».">Downside риск</span><span class="value negative">−' + fmt(downsideRisk, 1) + '%</span></div>';
-            if (c.prob_up != null && c.prob_down != null) html += '<div class="row"><span class="label">P(up/down)</span><span class="value">' + fmt(c.prob_up, 2) + '/' + fmt(c.prob_down, 2) + '</span></div>';
-            html += renderDetails('Тех. величины перед прогнозами', '<p><strong>RSI(5m)</strong>, <strong>импульс</strong>, <strong>откат от хая</strong> и <strong>волатильность 5m</strong> описывают текущий intraday-режим. <strong>Upside день</strong> — рабочая цель/тейк после правил игры, а <strong>по прогнозу до пола</strong> показывает сырой forecast до минимального тейка. <strong>Downside риск</strong> — оценка просадки, не вероятность.</p>');
-            var fcBlock = renderForecastTable(c);
+            html += renderGateChips(c);
+            html += renderEntryBlock(c);
+            html += renderTradeBlock(c);
+            html += renderSessionGapBlock(c);
+            html += renderIntradayBlock(c);
+            var fcBlock = renderForecastCompact(c);
             if (fcBlock) {
-                html += '<div class="block-title">Прогноз цены к spot (30/60/120 м, %)</div>';
+                html += '<div class="block-title">Прогноз 30/60/120м</div>';
                 html += fcBlock;
             }
-            var mlrBlock = renderMultidayLrTable(c);
+            var mlrBlock = renderMultidayCompact(c);
             if (mlrBlock) {
-                html += '<div class="block-title">Дневка — ожидаемый % к spot (1–3 торг. дня)</div>';
+                html += '<div class="block-title">Дневка 1–3 торг. дня</div>';
                 html += mlrBlock;
             } else if (c.multiday_lr_forecast_unavailable) {
-                html += '<div class="block-title">Дневка — ожидаемый % к spot (1–3 торг. дня)</div>';
-                var why = c.multiday_lr_forecast_error ? escapeHtml(String(c.multiday_lr_forecast_error)) : 'Нет прогноза (мало валидных дневных строк / Yahoo). См. логи контейнера: multiday_lr_forecast_none.';
+                html += '<div class="block-title">Дневка 1–3 торг. дня</div>';
+                var why = c.multiday_lr_forecast_error ? escapeHtml(String(c.multiday_lr_forecast_error)) : 'Нет прогноза (мало валидных дневных строк / Yahoo).';
                 html += '<div class="forecast-fallback muted">' + why + '</div>';
             }
-            var pmGapBlock = renderPremarketGapBlock(c);
-            if (pmGapBlock) html += pmGapBlock;
-            html += '<div class="row"><span class="label">Вход</span><span class="value">' + escapeHtml(c.entry_advice || '—') + '</span></div>';
-            var localEntryReason = (c.entry_advice_reason_local != null && String(c.entry_advice_reason_local).trim())
-                ? String(c.entry_advice_reason_local).trim()
-                : '';
-            if (!localEntryReason && c.entry_advice_reason && (!c.macro_risk_level || c.macro_risk_level === 'NEUTRAL')) {
-                localEntryReason = String(c.entry_advice_reason).trim();
-            }
-            if (localEntryReason && c.entry_advice !== 'ALLOW') {
-                html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.78rem;">' + escapeHtml(localEntryReason) + '</span></div>';
-            }
-            if (c.macro_risk_level && c.macro_risk_level !== 'NEUTRAL') {
-                var macroLine = escapeHtml(String(c.macro_risk_level));
-                if (c.macro_equity_gap_bias) macroLine += ' · ' + escapeHtml(String(c.macro_equity_gap_bias));
-                var macroReasons = Array.isArray(c.macro_risk_reasons) ? c.macro_risk_reasons : [];
-                if (macroReasons.length) {
-                    macroLine += ' — ' + escapeHtml(macroReasons.join('; '));
-                }
-                var gapMacro = tickerGapMacroSuffix(c);
-                if (gapMacro) {
-                    macroLine += gapMacro;
-                } else if (c.macro_predicted_sector_gap_pct != null && c.macro_sector_proxy) {
-                    macroLine += '; прогноз гэпа ' + escapeHtml(String(c.macro_sector_proxy)) + ' '
-                        + (Number(c.macro_predicted_sector_gap_pct) >= 0 ? '+' : '')
-                        + escapeHtml(String(c.macro_predicted_sector_gap_pct)) + '%';
-                }
-                html += '<div class="row"><span class="label">Макро</span><span class="value muted" style="font-size:0.85rem;">' + macroLine + '</span></div>';
-            }
+            html += renderMacroBlock(c);
+            html += renderEntryStory(c);
             if (LSE_WEB_LLM_ENABLED) {
                 html += '<a class="btn llm-btn" href="/api/game5m/card/' + encodeURIComponent(c.ticker) + '/llm.html" target="_blank" rel="noopener">Вывод LLM</a>';
             }
