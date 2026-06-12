@@ -31,7 +31,7 @@
     <p class="muted" style="margin-bottom:0.5rem;">Тикеры игры 5m (как в карточках). Список <strong>Все</strong> — график по каждому; выберите тикер или откройте ссылку <code>/visualization?ticker=SNDK</code> с карточки. Ось времени — US Eastern (NYSE/NASDAQ).</p>
     <label>Режим:</label>
     <select id="chart5mMode">
-        <option value="live" selected>Live (2 сессии: вчера + сегодня, auto)</option>
+        <option value="live" selected>Live (1 сессия: сегодня, auto)</option>
         <option value="history">History (DB/auto, выбор дней)</option>
     </select>
     <label>Дней:</label>
@@ -163,9 +163,9 @@ function syncChart5mControls() {
     const daysSel = document.getElementById('days5mSelect');
     if (!daysSel) return;
     if (mode === 'live') {
-        daysSel.value = '2';
+        daysSel.value = '1';
         daysSel.disabled = true;
-        daysSel.title = 'Live: 2 последние RTH-сессии (9:30–16:00 ET), источник auto (БД + Yahoo).';
+        daysSel.title = 'Live: текущая RTH-сессия (9:30–16:00 ET), источник auto (БД + Yahoo).';
     } else {
         daysSel.disabled = false;
         daysSel.title = '';
@@ -805,7 +805,7 @@ async function loadChart5mAll() {
     const mode = getChart5mMode();
     const source = 'auto';
     const daysSel = document.getElementById('days5mSelect');
-    const days = (mode === 'live') ? 2 : (parseInt(daysSel && daysSel.value ? daysSel.value : '1', 10) || 1);
+    const days = (mode === 'live') ? 1 : (parseInt(daysSel && daysSel.value ? daysSel.value : '1', 10) || 1);
     const container = document.getElementById('chart5mContainer');
     if (!container) return;
     if (!tickers.length) {
