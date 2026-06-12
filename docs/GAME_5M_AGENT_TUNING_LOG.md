@@ -9,10 +9,10 @@
 
 **Связанные артефакты:** `local/game5m_tuning_ledger.json` (controller/replay), `last_multiday_wf_game5m.json` (WF v3nm).
 
-**Ежедневный отчёт (ручной запуск):**
+**Ежедневный отчёт:**
 - Скрипт: `scripts/game5m_daily_session_review.py` → `last_game5m_daily_session_review.json`
-- Cron на VM: **отключён** (10.06.2026)
-- Cursor Automation: **не используется**
+- Cron на VM: **включён** `35 23 * * 1-5` → `scripts/cron_game5m_daily_session_review.sh` (с 12.06.2026)
+- В отчёте: late-buy cutoff из config (90 мин → MSK), EOD-flat `distance_to_take`, rolling gap PM vs ML 14/30d
 
 ---
 
@@ -81,17 +81,54 @@ GAME_5M_BLOCK_NEW_BUY_MINUTES_BEFORE_CLOSE=90
 - [ ] SNDK: при медвежьем multiday — нет нового long; premarket flat если гэп/ multiday.
 - [ ] Прогон `/api/analyzer?strategy=GAME_5M&days=3` — сравнить с этим логом.
 
-### Post-session review (заполнить после 10.06)
-
-_Пусто — обновить после сессии._
+### Post-session review (10.06)
 
 | Метрика | Baseline (08–09.06) | 10.06 | Вывод |
 |---------|---------------------|-------|-------|
-| TIME_EXIT n / avg PnL | 7 / ~−0.5% | | |
-| Поздние BUY (после 14:30 ET) | 4 (09.06) | | |
-| TIME_EXIT_EARLY avg PnL | −6.6% (14d) | | |
+| TIME_EXIT n / avg PnL | 4 / ~0% | 3 / **−0.54%** | EOD-flat всё ещё слабый |
+| Поздние BUY (≥21:30 MSK) | 4 (09.06) | **1** | P-01 начал работать |
+| TIME_EXIT_EARLY avg PnL | −8% (09.06) | **−2.88%** | улучшение |
 
-**Коррекция гипотез:** _заполнить._
+**Коррекция гипотез:** P-01 держать; P-02 отложено.
+
+### Post-session review (11.06)
+
+| Метрика | 10.06 | 11.06 | Вывод |
+|---------|-------|-------|-------|
+| closes | 4 | **7** | |
+| TIME_EXIT n / avg PnL | 3 / −0.54% | 6 / **+2.46%** | сильный бычий день |
+| TIME_EXIT_EARLY | 1 | **0** | ✓ |
+| Late BUY (cutoff 21:30) | 1 | **0** | P-01 подтверждён |
+| EOD near take (<1%) | — | **ASML** | наблюдать P-02 |
+
+---
+
+## Ops 2026-06-12 — ML + session review (деploy)
+
+### Применено на прод (config.env + cron + код)
+
+```env
+GAME_5M_TICKER_OPEN_GAP_PREMARKET_BLEND_WEIGHT=0.60
+GAME_5M_OPEN_GAP_FORECAST_BLEND_ML_WEIGHT=0.20
+ML_READINESS_GAME5M_MIN_VALID=80
+# GAME_5M_CATBOOST_ENABLED=false  — не менять (n_valid=49)
+```
+
+**Код:** rolling gap MAE 14/30/90d; policy `auto` → PM baseline пока ML не beat PM на 14d+30d; daily review + gap metrics.
+
+**Cron (`crontab/lse-docker.crontab`):**
+- `35 23 * * 1-5` — `cron_game5m_daily_session_review.sh`
+- `50 16 * * 1-5` — `analyze_game5m_gap_forecast.py --days 90`
+- `25 6 * * 0` — `run_multiday_wf_game5m.py`
+
+### Proposals (ML, 12.06)
+
+| ID | Изменение | Статус |
+|----|-----------|--------|
+| ML-12-01 | gap blend 0.45→0.60, effective=policy auto | **applied** |
+| ML-12-02 | entry CatBoost L3 | **deferred** (AUC 0.58, n_valid 49<80) |
+| ML-12-03 | multiday hold apply | **rejected** (would_defer<5) |
+| ML-12-04 | P-02 EOD_FLATTEN_ALWAYS=false | **deferred** |
 
 ---
 

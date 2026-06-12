@@ -239,7 +239,7 @@ def _blend_premarket(
     min_abs = _cfg_float("GAME_5M_TICKER_OPEN_GAP_PREMARKET_BLEND_MIN_ABS", 1.0)
     if abs(pm) < min_abs:
         return pred, False
-    w = _cfg_float("GAME_5M_TICKER_OPEN_GAP_PREMARKET_BLEND_WEIGHT", 0.45)
+    w = _cfg_float("GAME_5M_TICKER_OPEN_GAP_PREMARKET_BLEND_WEIGHT", 0.60)
     w = max(0.0, min(1.0, w))
     return round((1.0 - w) * pred + w * pm, 3), True
 

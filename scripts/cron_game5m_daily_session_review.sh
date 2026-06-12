@@ -8,9 +8,9 @@ LOG_DIR="${ROOT}/logs"
 mkdir -p "$LOG_DIR"
 echo "=== $(date -Is) game5m_daily_session_review ==="
 docker exec lse-bot python3 /app/scripts/game5m_daily_session_review.py
-# Optional: analyzer snapshot (HTTP, lightweight)
+# Lightweight analyzer snapshot (1 day — avoids 3d timeout on prod)
 if docker exec lse-bot test -f /app/scripts/snapshot_analyzer_report.py 2>/dev/null; then
   docker exec -e ANALYZER_SNAPSHOT_URL=http://127.0.0.1:8080/api/analyzer lse-bot \
-    python3 /app/scripts/snapshot_analyzer_report.py --days 3 --strategy GAME_5M \
+    python3 /app/scripts/snapshot_analyzer_report.py --days 1 --strategy GAME_5M \
       --out-dir /app/logs/ml/ml_data_quality --no-trade-details --quiet 2>/dev/null || true
 fi

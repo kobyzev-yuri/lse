@@ -87,6 +87,8 @@ def main() -> None:
         ensure_gap_forecast_table,
         fetch_gap_forecast_rows,
         pool_gap_forecast_metrics,
+        pool_gap_forecast_metrics_windows,
+        _ml_beats_baseline_mae,
     )
     from sqlalchemy import create_engine
     from config_loader import get_database_url
@@ -94,11 +96,16 @@ def main() -> None:
     eng = create_engine(get_database_url())
     ensure_gap_forecast_table(eng)
     proxy = (get_config_value("GAME_5M_MACRO_SECTOR_PROXY", "SMH") or "SMH").strip().upper()
-    rows = fetch_gap_forecast_rows(eng, days=args.days)
+    lookback = max(int(args.days), 90)
+    rows = fetch_gap_forecast_rows(eng, days=lookback)
     pooled = pool_gap_forecast_metrics(rows, sector_proxy=proxy)
+    rolling = pool_gap_forecast_metrics_windows(rows, sector_proxy=proxy, windows=(14, 30, 90))
 
-    print(f"=== Gap forecast log ({args.days}d) ===")
+    print(f"=== Gap forecast log ({lookback}d fetch, pooled all rows in window) ===")
     print(json.dumps(pooled, ensure_ascii=False, indent=2))
+    if rolling:
+        print("\n=== Rolling windows (PM vs ticker ML MAE) ===")
+        print(json.dumps(rolling, ensure_ascii=False, indent=2))
 
     n_complete = 0
     for key in ("sector", "ticker_v2", "game_sector_baseline", "premarket_baseline"):
@@ -111,9 +118,18 @@ def main() -> None:
         body = {
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "days": int(args.days),
+            "fetch_days": lookback,
             "sector_proxy": proxy,
             "n_complete": n_complete,
             "pooled": pooled,
+            "rolling": rolling,
+            "ml_beats_baseline_mae_pooled": _ml_beats_baseline_mae(pooled),
+            "recommended_effective_source": (
+                "ml_open_gap"
+                if rolling.get("14", {}).get("ml_beats_baseline_mae")
+                and rolling.get("30", {}).get("ml_beats_baseline_mae")
+                else "premarket_baseline"
+            ),
             "status": "ok" if n_complete > 0 else "insufficient_rows",
         }
         if args.suggest_coefs:

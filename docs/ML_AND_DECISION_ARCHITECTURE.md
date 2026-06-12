@@ -161,7 +161,15 @@ Train внутри скриптов **только по триггеру** (кр
 | 23:50 | `run_ml_train_readiness_cron.py` → JSONL + aggregate `ml_contours_status` |
 | 23:53 | `run_ml_data_quality_report.py` |
 
-### 5.5 Прочее (не ML train)
+### 5.5 GAME_5M ops (session + gap)
+
+| Cron MSK | Скрипт | Назначение |
+|----------|--------|------------|
+| пн–пт 16:50 | `analyze_game5m_gap_forecast.py --days 90` | rolling PM vs ML → `last_gap_forecast_metrics.json` |
+| пн–пт 23:35 | `cron_game5m_daily_session_review.sh` | post-RTH review + optional analyzer snapshot (1d) |
+| вс 06:25 | `run_multiday_wf_game5m.py` | walk-forward multiday OOS |
+
+### 5.6 Прочее (не ML train)
 
 | Cron | Скрипт |
 |------|--------|

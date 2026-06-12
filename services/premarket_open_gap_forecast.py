@@ -53,10 +53,9 @@ def load_gap_forecast_metrics(*, max_age_sec: float = 86400.0) -> Optional[Dict[
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        pooled = data.get("pooled") if isinstance(data, dict) else None
-        if isinstance(pooled, dict):
-            _METRICS_CACHE = (now, pooled)
-            return pooled
+        if isinstance(data, dict):
+            _METRICS_CACHE = (now, data)
+            return data
     except Exception as e:
         logger.debug("gap forecast metrics: %s", e)
     return None
@@ -75,12 +74,29 @@ def _mae_from_metrics_block(block: Any) -> Optional[float]:
 
 
 def ml_beats_baseline_on_metrics(metrics: Optional[Dict[str, Any]] = None) -> Optional[bool]:
-    """True if ticker ML MAE < naive premarket baseline MAE in last analyze run."""
+    """
+    True if ticker ML MAE < naive premarket baseline MAE.
+
+    Prefers rolling windows (14d AND 30d both beat) when present in metrics JSON;
+    otherwise falls back to top-level pooled block.
+    """
     m = metrics if metrics is not None else load_gap_forecast_metrics()
     if not m:
         return None
-    ml_mae = _mae_from_metrics_block(m.get("ticker_v2") or m.get("game_tickers_pooled"))
-    base_mae = _mae_from_metrics_block(m.get("premarket_baseline"))
+    rolling = m.get("rolling") if isinstance(m, dict) else None
+    if isinstance(rolling, dict) and rolling:
+        r14 = rolling.get("14") or rolling.get(14)
+        r30 = rolling.get("30") or rolling.get(30)
+        if isinstance(r14, dict) and isinstance(r30, dict):
+            b14 = r14.get("ml_beats_baseline_mae")
+            b30 = r30.get("ml_beats_baseline_mae")
+            if b14 is True and b30 is True:
+                return True
+            if b14 is False or b30 is False:
+                return False
+    pooled = m.get("pooled") if isinstance(m, dict) and isinstance(m.get("pooled"), dict) else m
+    ml_mae = _mae_from_metrics_block((pooled or {}).get("ticker_v2") or (pooled or {}).get("game_tickers_pooled"))
+    base_mae = _mae_from_metrics_block((pooled or {}).get("premarket_baseline"))
     if ml_mae is None or base_mae is None:
         return None
     return ml_mae < base_mae
@@ -163,14 +179,15 @@ def build_open_gap_forecast_fields(
             pred_sector_gap_pct = None
 
     metrics = load_gap_forecast_metrics()
+    pooled = metrics.get("pooled") if isinstance(metrics, dict) and isinstance(metrics.get("pooled"), dict) else metrics
     effective, eff_src, pol = pick_effective_open_gap_pct(
         baseline_open_gap_pct=baseline,
         ml_open_gap_pct=float(ml_open) if ml_open is not None else None,
         metrics=metrics,
     )
 
-    ml_mae = _mae_from_metrics_block((metrics or {}).get("ticker_v2"))
-    base_mae = _mae_from_metrics_block((metrics or {}).get("premarket_baseline"))
+    ml_mae = _mae_from_metrics_block((pooled or {}).get("ticker_v2"))
+    base_mae = _mae_from_metrics_block((pooled or {}).get("premarket_baseline"))
 
     out: Dict[str, Any] = {
         "baseline_open_gap_pct": baseline,
@@ -189,6 +206,9 @@ def build_open_gap_forecast_fields(
         out["gap_forecast_baseline_mae_pp"] = base_mae
     if ml_mae is not None and base_mae is not None:
         out["gap_forecast_ml_vs_baseline_mae_delta_pp"] = round(ml_mae - base_mae, 4)
+    rolling = metrics.get("rolling") if isinstance(metrics, dict) else None
+    if isinstance(rolling, dict) and rolling:
+        out["gap_forecast_rolling_mae"] = rolling
     if pred_sector_gap_pct is not None:
         out["pred_sector_gap_pct"] = round(float(pred_sector_gap_pct), 3)
     return out

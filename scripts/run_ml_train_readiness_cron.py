@@ -85,13 +85,26 @@ def _gate_game5m(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if auc is None or (isinstance(auc, (int, float)) and float(auc) < auc_min):
         reasons.append(f"auc_valid<{auc_min}")
     try:
+        nv_min = int((get_config_value("ML_READINESS_GAME5M_MIN_VALID") or "80").strip())
+    except (ValueError, TypeError):
+        nv_min = 80
+    nv = int(data.get("n_valid") or 0)
+    if nv < nv_min:
+        reasons.append(f"n_valid<{nv_min}")
+    try:
         nt_min = int((get_config_value("ML_READINESS_GAME5M_MIN_TRAIN") or "40").strip())
     except (ValueError, TypeError):
         nt_min = 40
     nt = int(data.get("n_train") or 0)
     if nt < nt_min:
         reasons.append(f"n_train<{nt_min}")
-    return {"ready": len(reasons) == 0, "reasons": reasons, "auc_valid": auc, "n_train": nt}
+    return {
+        "ready": len(reasons) == 0,
+        "reasons": reasons,
+        "auc_valid": auc,
+        "n_valid": nv,
+        "n_train": nt,
+    }
 
 
 def _gate_event_reaction(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:

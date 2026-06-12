@@ -63,7 +63,7 @@ CONTOUR_PRODUCT_SPECS: tuple[ContourProductSpec, ...] = (
         legacy_default="false",
         stack_contour_id="catboost_entry_5m",
         resolve_required=False,
-        notes="AUC≈0.50, gate ❌ — не включать на legacy до фазы C.",
+        notes="AUC gate + n_valid≥80 before legacy; currently shadow only (see ML_READINESS_GAME5M_*).",
     ),
     ContourProductSpec(
         contour_id="recovery",
@@ -75,7 +75,7 @@ CONTOUR_PRODUCT_SPECS: tuple[ContourProductSpec, ...] = (
         legacy_default="false",
         stack_contour_id="recovery_ml",
         resolve_required=False,
-        notes="D4a log-only; D4b defer. ENABLED=true = телеметрия, не defer выхода.",
+        notes="D4a telemetry only; latest AUC ~0.51 — D4b defer until arbiter go.",
     ),
     ContourProductSpec(
         contour_id="gap_forecast",
@@ -87,7 +87,7 @@ CONTOUR_PRODUCT_SPECS: tuple[ContourProductSpec, ...] = (
         legacy_default="—",
         stack_contour_id="gap_forecast",
         resolve_required=True,
-        notes="Observable premarket_gap_baseline на legacy; ML ridge — stack/caution, не beat naive.",
+        notes="PM baseline primary (policy=auto); ML ridge advisory until rolling 14d+30d beat PM.",
     ),
     ContourProductSpec(
         contour_id="event_reaction_regression",

@@ -71,6 +71,12 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 54 23 * * 1-5 flock -n /tmp/lse_recovery_d4a_stats.lock docker exec lse-bot python scripts/run_recovery_d4a_stats_cron.py >> /home/ai8049520/lse/logs/recovery_d4a_stats_cron.log 2>&1
 # Decision stack mirror telemetry (phase 3): weekly shadow diff, no RESOLVE gate.
 10 6 * * 0 flock -n /tmp/lse_decision_stack_mirror.lock docker exec lse-bot python scripts/report_decision_stack_mirror.py --days 14 --strategy ALL --json-out /app/logs/ml/ml_data_quality/last_decision_stack_mirror_report.json >> /home/ai8049520/lse/logs/decision_stack_mirror.log 2>&1
+# Multiday walk-forward OOS (GAME_5M tickers) — weekly before RTH.
+25 6 * * 0 flock -n /tmp/lse_multiday_wf.lock docker exec lse-bot python3 /app/scripts/run_multiday_wf_game5m.py >> /home/ai8049520/lse/logs/multiday_wf_game5m.log 2>&1
+# Post-RTH GAME_5M session review + gap rolling metrics (after US close ~23:30 MSK).
+35 23 * * 1-5 flock -n /tmp/lse_game5m_daily_review.lock /home/ai8049520/lse/scripts/cron_game5m_daily_session_review.sh >> /home/ai8049520/lse/logs/game5m_daily_review.log 2>&1
+# Gap forecast rolling metrics refresh (after open ingest; updates last_gap_forecast_metrics.json).
+50 16 * * 1-5 flock -n /tmp/lse_gap_analyze_daily.lock docker exec lse-bot python3 /app/scripts/analyze_game5m_gap_forecast.py --days 90 --json-metrics-out /app/logs/ml/ml_data_quality/last_gap_forecast_metrics.json >> /home/ai8049520/lse/logs/game5m_gap_forecast.log 2>&1
 
 # Premarket ML feature snapshots: script writes only during PRE_MARKET.
 10 12,14 * * 1-5 flock -n /tmp/lse_premarket_features.lock docker exec lse-bot python scripts/ingest_premarket_daily_features.py --ensure-table >> /home/ai8049520/lse/logs/premarket_features.log 2>&1

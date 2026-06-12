@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
@@ -548,3 +548,108 @@ def pool_gap_forecast_metrics(rows: Sequence[Dict[str, Any]], *, sector_proxy: s
             else None
         ),
     }
+
+
+def _coerce_trade_date(v: Any) -> Optional[date]:
+    if v is None:
+        return None
+    if isinstance(v, date) and not isinstance(v, datetime):
+        return v
+    if isinstance(v, datetime):
+        return v.date()
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _ml_beats_baseline_mae(pooled: Dict[str, Any]) -> Optional[bool]:
+    ml = pooled.get("ticker_v2") or pooled.get("game_tickers_pooled") or {}
+    pm = pooled.get("premarket_baseline") or {}
+    ml_mae = ml.get("mean_abs_error_pred_pp")
+    pm_mae = pm.get("mean_abs_error_pred_pp")
+    if ml_mae is None or pm_mae is None:
+        return None
+    return float(ml_mae) < float(pm_mae)
+
+
+def pool_gap_forecast_metrics_windows(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    sector_proxy: str = "SMH",
+    windows: Sequence[int] = (14, 30, 90),
+) -> Dict[str, Any]:
+    """Rolling pooled metrics per calendar window (trade_date anchor = max in rows)."""
+    dated: List[tuple[date, Dict[str, Any]]] = []
+    for r in rows:
+        td = _coerce_trade_date(r.get("trade_date"))
+        if td is not None:
+            dated.append((td, r))
+    if not dated:
+        return {}
+    max_d = max(td for td, _ in dated)
+    out: Dict[str, Any] = {}
+    for w in windows:
+        w = int(w)
+        cut = max_d - timedelta(days=w)
+        sub = [r for td, r in dated if td >= cut]
+        pooled = pool_gap_forecast_metrics(sub, sector_proxy=sector_proxy)
+        pm = pooled.get("premarket_baseline") or {}
+        ml = pooled.get("ticker_v2") or {}
+        out[str(w)] = {
+            "window_days": w,
+            "anchor_trade_date": max_d.isoformat(),
+            "n_rows": len(sub),
+            "premarket_mae_pp": pm.get("mean_abs_error_pred_pp"),
+            "ticker_ml_mae_pp": ml.get("mean_abs_error_pred_pp"),
+            "ml_beats_baseline_mae": _ml_beats_baseline_mae(pooled),
+            "premarket_sign_rate": pm.get("sign_agreement_rate"),
+            "ticker_ml_sign_rate": ml.get("sign_agreement_rate"),
+        }
+    return out
+
+
+def query_gap_rolling_mae_sql(engine, *, windows: Sequence[int] = (14, 30)) -> Dict[str, Any]:
+    """Lightweight rolling MAE from DB (for daily session review)."""
+    from sqlalchemy import text
+
+    out: Dict[str, Any] = {}
+    with engine.connect() as conn:
+        for w in windows:
+            w = int(w)
+            row = conn.execute(
+                text(
+                    """
+                    SELECT
+                      COUNT(*) AS n,
+                      ROUND(AVG(ABS(premarket_gap_pct - open_gap_pct))::numeric, 3) AS pm_mae,
+                      ROUND(AVG(ABS(pred_ticker_gap_pct - open_gap_pct))::numeric, 3) AS ml_mae,
+                      ROUND(AVG(
+                        CASE WHEN ABS(pred_ticker_gap_pct - open_gap_pct)
+                               < ABS(premarket_gap_pct - open_gap_pct)
+                             THEN 1 ELSE 0 END
+                      )::numeric, 3) AS ml_win_rate
+                    FROM game5m_gap_forecast_daily
+                    WHERE open_gap_pct IS NOT NULL
+                      AND premarket_gap_pct IS NOT NULL
+                      AND pred_ticker_gap_pct IS NOT NULL
+                      AND trade_date >= CURRENT_DATE - CAST(:days AS integer)
+                    """
+                ),
+                {"days": w},
+            ).mappings().first()
+            if not row:
+                continue
+            pm_mae = float(row["pm_mae"]) if row["pm_mae"] is not None else None
+            ml_mae = float(row["ml_mae"]) if row["ml_mae"] is not None else None
+            out[str(w)] = {
+                "window_days": w,
+                "n": int(row["n"] or 0),
+                "premarket_mae_pp": pm_mae,
+                "ticker_ml_mae_pp": ml_mae,
+                "ml_beats_baseline_mae": (
+                    ml_mae < pm_mae if pm_mae is not None and ml_mae is not None else None
+                ),
+                "ml_win_rate": float(row["ml_win_rate"]) if row["ml_win_rate"] is not None else None,
+            }
+    return out
