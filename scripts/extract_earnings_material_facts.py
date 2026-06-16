@@ -26,6 +26,7 @@ sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
 from services.earnings_event_date_match import (  # noqa: E402
+    DEFAULT_EVENT_DATE_TOLERANCE_DAYS,
     expand_event_date_keys,
     resolve_kb_id_for_earnings_event,
 )
@@ -286,6 +287,196 @@ def main() -> int:
         since=_parse_date(args.since),
         pending_event_keys=pending_keys,
     )
+    if args.new_events_only and pending_keys is not None:
+        if not rows:
+            logger.warning("No parsed earnings_material rows found")
+            return 0
+
+        # When extracting "new events only", we must extract for the *calendar KB event_date*
+        # (pending_keys), not for the *material event_date* coming from earnings_material.
+        # Otherwise date tolerance expansion causes us to only hit already-extracted KB rows.
+        tol_keys = expand_event_date_keys(pending_keys, tolerance_days=DEFAULT_EVENT_DATE_TOLERANCE_DAYS)
+        materials_by_sym_evdate: dict[tuple[str, date | None], list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            sym = str(row["symbol"]).upper()
+            ev = row.get("event_date")
+            if ev is not None and not isinstance(ev, date):
+                ev = _parse_date(str(ev))
+            if (sym, ev) in tol_keys:
+                materials_by_sym_evdate[(sym, ev)].append(row)
+
+        base_events = sorted(pending_keys, key=lambda x: (x[0], x[1] or date.min))
+        results: list[dict[str, Any]] = []
+        new_work_done = 0
+        balance_hit = False
+        event_limit = max(1, args.limit)
+
+        for symbol, kb_event_date in base_events:
+            if new_work_done >= event_limit:
+                break
+
+            # Collect materials from ±tolerance around the calendar event_date.
+            near_material_keys = expand_event_date_keys({(symbol, kb_event_date)}, tolerance_days=DEFAULT_EVENT_DATE_TOLERANCE_DAYS)
+            materials: list[dict[str, Any]] = []
+            for _sym, m_ev_date in near_material_keys:
+                materials.extend(materials_by_sym_evdate.get((_sym, m_ev_date), []))
+
+            fiscal_period = next((m.get("fiscal_period") for m in materials if m.get("fiscal_period")), None)
+            selected = select_materials_for_event(materials)
+            if not selected:
+                continue
+
+            kb_id_precheck = _resolve_kb_id(
+                engine,
+                symbol=symbol,
+                event_date=kb_event_date,
+                fallback=None,
+            )
+            needs_reextract = bool(
+                kb_id_precheck and _detail_needs_reextract(engine, kb_id_precheck)
+            )
+            if (
+                kb_id_precheck
+                and _detail_has_llm_extraction(engine, kb_id_precheck)
+                and not args.force_reextract
+                and not needs_reextract
+            ):
+                logger.info(
+                    "%s %s skip: LLM extraction already in earnings_event_detail",
+                    symbol,
+                    kb_event_date,
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "event_date": kb_event_date.isoformat() if kb_event_date else None,
+                        "status": "skipped",
+                        "reason": "llm_extraction_exists",
+                        "knowledge_base_id": kb_id_precheck,
+                    }
+                )
+                continue
+
+            if args.dry_run:
+                plan = plan_event_extraction_tokens(
+                    symbol=symbol,
+                    event_date=kb_event_date,
+                    fiscal_period=fiscal_period,
+                    materials=materials,
+                )
+                logger.info(
+                    "dry-run %s %s: materials=%s included=%s total_tok≈%s",
+                    symbol,
+                    kb_event_date,
+                    plan["materials_available"],
+                    plan["materials_included"],
+                    plan["total_tokens_est"],
+                )
+                results.append({"status": "dry_run", "token_plan": plan})
+                new_work_done += 1
+                continue
+
+            out = extract_event_facts_with_llm(
+                symbol=symbol,
+                event_date=kb_event_date,
+                fiscal_period=fiscal_period,
+                materials=materials,
+                dry_run=False,
+                model=args.model.strip() or None,
+            )
+            structured = out.get("structured")
+            usage = out.get("usage") or {}
+            logger.info(
+                "%s %s extract status=%s model=%s usage=%s",
+                symbol,
+                kb_event_date,
+                out.get("status"),
+                out.get("model"),
+                usage,
+            )
+            result_row = {
+                "symbol": symbol,
+                "event_date": kb_event_date.isoformat() if kb_event_date else None,
+                "status": out.get("status"),
+                "model": out.get("model"),
+                "usage": usage,
+                "token_plan": out.get("token_plan"),
+                "reason": out.get("reason"),
+            }
+            if out.get("status") == "insufficient_balance":
+                from services.proxyapi_balance import write_earnings_llm_balance_alert
+
+                write_earnings_llm_balance_alert(
+                    {
+                        "source": "extract_earnings_material_facts",
+                        "symbol": symbol,
+                        "event_date": result_row["event_date"],
+                        "message": out.get("reason"),
+                        "error_code": out.get("error_code"),
+                        "raw_error": out.get("raw_error"),
+                    },
+                    project_root=project_root,
+                )
+                logger.error(
+                    "ProxyAPI balance exhausted at %s %s — stopping extract batch (pending events remain)",
+                    symbol,
+                    kb_event_date,
+                )
+                results.append(result_row)
+                balance_hit = True
+                break
+
+            if structured and out.get("status") in ("ok", "parse_warning"):
+                kb_id = _resolve_kb_id(
+                    engine,
+                    symbol=symbol,
+                    event_date=kb_event_date,
+                    fallback=None,
+                )
+                if not kb_id:
+                    result_row["status"] = "skipped"
+                    result_row["reason"] = "knowledge_base_id not found"
+                    results.append(result_row)
+                    new_work_done += 1
+                    continue
+                detail = map_extraction_to_event_detail(structured)
+                extraction_meta = {
+                    "model": out.get("model"),
+                    "usage": usage,
+                    "included_material_ids": out.get("included_material_ids") or [],
+                    "extracted_at_utc": datetime.utcnow().isoformat() + "Z",
+                }
+                _upsert_event_detail(engine, kb_id=kb_id, payload=detail, extraction_meta=extraction_meta)
+                _mark_materials_extracted(engine, out.get("included_material_ids") or [], extraction_meta)
+                result_row["knowledge_base_id"] = kb_id
+                result_row["affected_tickers"] = detail.get("affected_tickers")
+            results.append(result_row)
+            new_work_done += 1
+
+        skipped = sum(1 for r in results if r.get("status") == "skipped")
+        total_tok = sum(int((r.get("token_plan") or {}).get("total_tokens_est") or 0) for r in results)
+        logger.info(
+            "Extract batch: new_work=%s skipped=%s results=%s sum_total_tokens_est≈%s",
+            new_work_done,
+            skipped,
+            len(results),
+            total_tok,
+        )
+        if not balance_hit:
+            from services.proxyapi_balance import clear_earnings_llm_balance_alert
+
+            clear_earnings_llm_balance_alert(project_root=project_root)
+
+        out_path = args.json_out.strip()
+        if not out_path and args.dry_run:
+            out_dir = project_root / "logs" / "earnings_materials"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = str(out_dir / "extract_token_plan.json")
+        if out_path:
+            Path(out_path).write_text(json.dumps(results, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            logger.info("Wrote %s", out_path)
+        return 0
+
     groups = _group_events(rows)
     if not groups:
         logger.warning("No parsed earnings_material rows found")
