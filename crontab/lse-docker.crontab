@@ -47,6 +47,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 36 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --include-all-symbols --limit 8000 >> /home/ai8049520/lse/logs/event_reaction_labeling.log 2>&1
 # Earnings intelligence layer: overwrite features on earnings universe (superset of quotes_regime_v1).
 37 23 * * 1-5 flock -n /tmp/lse_erd_earnings_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --only-features --force-features --include-earnings-universe --limit 800 >> /home/ai8049520/lse/logs/event_reaction_earnings_labeling.log 2>&1
+38 23 * * 1-5 flock -n /tmp/lse_erd_labeling_gaps.lock docker exec lse-bot python scripts/check_erd_labeling_gaps_cron.py --execute --telegram >> /home/ai8049520/lse/logs/erd_labeling_gaps.log 2>&1
 # GAME_5M ML datasets only (stuck + continuation CSV + JSONL). Train: dispatcher nightly 23:47.
 40 23 * * 1-5 flock -n /tmp/lse_game5m_daily_ml.lock docker exec lse-bot python scripts/run_daily_game5m_ml_pipeline.py >> /home/ai8049520/lse/logs/game5m_daily_ml_pipeline.log 2>&1
 # Open-path labels (before nightly ML refresh).
@@ -63,8 +64,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 5 6 * * 0 flock -n /tmp/lse_ml_refresh_weekly.lock docker exec -e ML_READINESS_TRAIN_MODE=full lse-bot python scripts/run_ml_refresh_dispatcher.py --slot weekly_full >> /home/ai8049520/lse/logs/ml_refresh_weekly.log 2>&1
 # Weekly earnings prod eval: полный end-to-end (materials + ERD + ML full + shadow).
 0 6 * * 0 flock -n /tmp/lse_earnings_prod_eval.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e EARNINGS_ML_REFRESH_APPLY_DATA=1 -e EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN=1 lse-bot python scripts/run_earnings_intelligence_prod_eval.py >> /home/ai8049520/lse/logs/earnings_prod_eval.log 2>&1
-# Quotes gaps for ERD (no_quotes backlog) — воскресенье перед prod_eval.
-30 5 * * 0 flock -n /tmp/lse_erd_seed_quotes.lock docker exec lse-bot python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0_expanded_baseline --include-all-dataset-symbols --days 450 --min-quote-span-days 120 >> /home/ai8049520/lse/logs/erd_seed_quotes.log 2>&1
+# Quotes gaps for ERD (no_quotes backlog) — воскресенье: deep backfill earnings universe.
+25 5 * * 0 flock -n /tmp/lse_erd_seed_quotes_weekly.lock docker exec lse-bot python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0_expanded_baseline --include-earnings-universe --all-symbols --days 450 >> /home/ai8049520/lse/logs/erd_seed_quotes.log 2>&1
 # Отчёт качества данных без LLM и без профилирования local/datasets/*.csv.
 53 23 * * 1-5 flock -n /tmp/lse_ml_data_quality_report.lock docker exec lse-bot python scripts/run_ml_data_quality_report.py --no-default-datasets --json-out /app/logs/ml/ml_data_quality/report_daily.json >> /home/ai8049520/lse/logs/ml_data_quality_report_cron.log 2>&1
 # Recovery D4a: накопление сводки τ×K по TIME_EXIT_EARLY (JSONL для go/no-go перед D4b).

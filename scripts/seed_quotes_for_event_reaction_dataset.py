@@ -55,6 +55,11 @@ def main() -> int:
         help="Не ограничивать символами из конфига (FAST+MEDIUM+LONG); все тикеры из event_reaction_dataset",
     )
     ap.add_argument(
+        "--include-earnings-universe",
+        action="store_true",
+        help="Universe = earnings intelligence equities; с --all-symbols — все тикеры allowlist",
+    )
+    ap.add_argument(
         "--min-quote-span-days",
         type=int,
         default=0,
@@ -70,10 +75,41 @@ def main() -> int:
     from update_prices import update_all_prices
 
     engine = get_engine()
+
+    if args.include_earnings_universe and args.all_symbols:
+        from services.earnings_intelligence_universe import get_event_reaction_symbol_allowlist
+
+        tickers = get_event_reaction_symbol_allowlist()
+        if args.limit and args.limit > 0:
+            tickers = tickers[: int(args.limit)]
+        if not tickers:
+            logger.info("Пустой earnings universe для seed quotes")
+            return 0
+        logger.info(
+            "Тикеров к обработке: %s (include_earnings_universe + all_symbols, days=%s)",
+            len(tickers),
+            args.days,
+        )
+        if args.dry_run:
+            for t in tickers:
+                logger.info("  %s", t)
+            return 0
+        update_all_prices(tickers=tickers, force_days_back=max(30, int(args.days)))
+        return 0
+
     lim_sql = ""
     params: dict = {"dv": args.dataset_version}
     cfg_filter = ""
-    if not args.include_all_dataset_symbols:
+    if args.include_earnings_universe:
+        from services.earnings_intelligence_universe import get_event_reaction_symbol_allowlist
+
+        eu_symbols = get_event_reaction_symbol_allowlist()
+        if not eu_symbols:
+            logger.error("Пустой earnings universe.")
+            return 1
+        cfg_filter = "AND UPPER(TRIM(e.symbol)) = ANY(:sym)"
+        params["sym"] = eu_symbols
+    elif not args.include_all_dataset_symbols:
         symbols = get_config_ticker_symbols_upper_unique()
         if not symbols:
             logger.error("Пустой список тикеров из конфига (TICKERS_FAST/MEDIUM/LONG).")

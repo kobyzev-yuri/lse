@@ -605,6 +605,28 @@ def gate_open_path_mvp_prerequisites(
     }
 
 
+def gate_labeling_gaps(labeling_gaps: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not labeling_gaps:
+        return {"ready": True, "reasons": [], "advisory_only": True}
+    th = labeling_gaps.get("thresholds") or {}
+    reasons: list[str] = []
+    nq = int(labeling_gaps.get("no_quotes") or 0)
+    ar = int(labeling_gaps.get("anchor_unresolved") or 0)
+    if nq > int(th.get("no_quotes_max") or 0):
+        reasons.append(f"no_quotes>{th.get('no_quotes_max')}")
+    if ar > int(th.get("anchor_unresolved_max") or 0):
+        reasons.append(f"anchor_unresolved>{th.get('anchor_unresolved_max')}")
+    return {
+        "ready": not reasons,
+        "reasons": reasons,
+        "no_quotes": nq,
+        "anchor_unresolved": ar,
+        "thresholds": th,
+        "over_threshold": bool(reasons),
+        "advisory_only": True,
+    }
+
+
 def build_earnings_intelligence_gates(
     snapshot: Dict[str, Any],
     *,
@@ -614,6 +636,7 @@ def build_earnings_intelligence_gates(
     shadow_report: Optional[Dict[str, Any]] = None,
     open_path_train_metrics: Optional[Dict[str, Any]] = None,
     open_path_shadow_report: Optional[Dict[str, Any]] = None,
+    labeling_gaps: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     g_sources = gate_sources(snapshot)
     g_features = gate_features(snapshot)
@@ -624,6 +647,7 @@ def build_earnings_intelligence_gates(
     g_peer_ds = gate_peer_spillover_dataset(snapshot)
     g_peer_model = gate_peer_spillover_regressor(peer_spillover_metrics)
     g_shadow = gate_trading_shadow(shadow_report)
+    g_labeling_gaps = gate_labeling_gaps(labeling_gaps)
     scenario_ready = bool(g_scenario_ds.get("ready")) and bool(g_scenario.get("ready"))
     grid_core = all(g.get("ready") for g in (g_sources, g_features, g_scenario_ds, g_scenario))
     peer_ready = bool(g_peer_ds.get("ready")) and bool(g_peer_model.get("ready"))
@@ -654,6 +678,7 @@ def build_earnings_intelligence_gates(
         "peer_spillover_dataset": g_peer_ds,
         "peer_spillover_regressor": g_peer_model,
         "trading_shadow": g_shadow,
+        "labeling_gaps": g_labeling_gaps,
         "earnings_autoprep": g_autoprep,
         "open_path_mvp_prerequisites": g_open_path,
         **open_path_gates,
@@ -702,6 +727,15 @@ def write_earnings_intelligence_readiness(
 
     open_path_train_data = _json_load(default_open_path_train_metrics_path(root))
     open_path_shadow_data = _json_load(default_open_path_shadow_path(root))
+    labeling_gaps: dict[str, Any] | None = None
+    try:
+        from services.erd_labeling_gaps import audit_erd_labeling_gaps, write_erd_labeling_gap_alert
+
+        labeling_gaps = audit_erd_labeling_gaps(engine, dataset_version=dataset_version)
+        write_erd_labeling_gap_alert(labeling_gaps, project_root=root)
+    except Exception as e_gaps:
+        logger.debug("labeling_gaps audit skipped: %s", e_gaps)
+
     gates = build_earnings_intelligence_gates(
         snap,
         scenario_metrics=scen_data,
@@ -710,12 +744,14 @@ def write_earnings_intelligence_readiness(
         shadow_report=shadow_data,
         open_path_train_metrics=open_path_train_data,
         open_path_shadow_report=open_path_shadow_data,
+        labeling_gaps=labeling_gaps,
     )
     bundle = {
         "readiness_version": "earnings_intelligence_v1",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "snapshot": snap,
         "gates": gates,
+        "labeling_gaps": labeling_gaps,
         "metrics_paths": {
             "scenario_classifier": str(scen_path),
             "regression": str(reg_path),

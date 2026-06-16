@@ -55,6 +55,119 @@ def _stats(engine) -> dict[str, Any]:
     return out
 
 
+def _kb_base_where(*, past_only: bool) -> list[str]:
+    where = [
+        "UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'",
+        "kb.ticker IS NOT NULL",
+        "TRIM(kb.ticker) != ''",
+        "LENGTH(TRIM(kb.ticker)) <= 16",
+    ]
+    if past_only:
+        where.append("kb.ts::date <= CURRENT_DATE")
+    return where
+
+
+def _kb_from_clause(*, dedup_kb: bool, past_only: bool) -> str:
+    """KB source: optional DISTINCT ON (ticker, event_date) to drop duplicate yfinance rows."""
+    where = _kb_base_where(past_only=past_only)
+    if not dedup_kb:
+        return f"FROM knowledge_base kb WHERE {' AND '.join(where)}"
+    return f"""
+        FROM (
+          SELECT DISTINCT ON (UPPER(TRIM(kb.ticker)), kb.ts::date)
+            kb.id,
+            kb.ticker,
+            kb.ts,
+            kb.event_type
+          FROM knowledge_base kb
+          WHERE {' AND '.join(where)}
+          ORDER BY
+            UPPER(TRIM(kb.ticker)),
+            kb.ts::date,
+            (CASE
+              WHEN COALESCE(kb.content, '') ILIKE '%yfinance%'
+                OR COALESCE(kb.link, '') ILIKE '%finance.yahoo%'
+              THEN 1 ELSE 0
+            END),
+            (CASE WHEN EXISTS (
+              SELECT 1 FROM earnings_event_detail ed WHERE ed.knowledge_base_id = kb.id
+            ) THEN 0 ELSE 1 END),
+            kb.id DESC
+        ) kb
+    """
+
+
+def _prune_stale_skeletons(
+    engine,
+    *,
+    dataset_version: str,
+    dry_run: bool,
+    symbol_allowlist: list[str] | None,
+) -> int:
+    """Drop kb_skeleton rows in the future or before first quote date (pre-IPO noise)."""
+    from sqlalchemy import bindparam, text
+
+    dv = (dataset_version or "v0").strip()
+    sym_filter = ""
+    params: dict = {"dv": dv}
+    if symbol_allowlist is not None:
+        if not symbol_allowlist:
+            return 0
+        sym_filter = "AND UPPER(TRIM(erd.symbol)) = ANY(:sym)"
+        params["sym"] = symbol_allowlist
+
+    count_sql = f"""
+        SELECT COUNT(*) FROM event_reaction_dataset erd
+        WHERE erd.dataset_version = :dv
+          AND erd.label_source = 'kb_skeleton'
+          {sym_filter}
+          AND (
+            erd.event_time_et::date > CURRENT_DATE
+            OR EXISTS (
+              SELECT 1
+              FROM quotes q
+              WHERE UPPER(TRIM(q.ticker)) = UPPER(TRIM(erd.symbol))
+              GROUP BY UPPER(TRIM(q.ticker))
+              HAVING MIN(q.date)::date > erd.event_time_et::date
+            )
+          )
+    """
+    delete_sql = f"""
+        DELETE FROM event_reaction_dataset erd
+        WHERE erd.dataset_version = :dv
+          AND erd.label_source = 'kb_skeleton'
+          {sym_filter}
+          AND (
+            erd.event_time_et::date > CURRENT_DATE
+            OR EXISTS (
+              SELECT 1
+              FROM quotes q
+              WHERE UPPER(TRIM(q.ticker)) = UPPER(TRIM(erd.symbol))
+              GROUP BY UPPER(TRIM(q.ticker))
+              HAVING MIN(q.date)::date > erd.event_time_et::date
+            )
+          )
+    """
+    count_stmt = text(count_sql)
+    delete_stmt = text(delete_sql)
+    if sym_filter:
+        count_stmt = count_stmt.bindparams(bindparam("sym", expanding=True))
+        delete_stmt = delete_stmt.bindparams(bindparam("sym", expanding=True))
+
+    with engine.connect() as conn:
+        n = int(conn.execute(count_stmt, params).scalar() or 0)
+    if n == 0:
+        logger.info("prune stale skeletons: nothing to remove (dataset_version=%s)", dv)
+        return 0
+    if dry_run:
+        logger.info("dry-run prune stale skeletons: would delete %s rows", n)
+        return 0
+    with engine.begin() as conn:
+        conn.execute(delete_stmt, params)
+    logger.info("prune stale skeletons: deleted %s rows (dataset_version=%s)", n, dv)
+    return 0
+
+
 def _backfill_from_kb(
     engine,
     *,
@@ -62,15 +175,11 @@ def _backfill_from_kb(
     dry_run: bool,
     symbol_allowlist: list[str] | None,
     kb_since: Any | None,
+    past_only: bool,
+    dedup_kb: bool,
 ) -> int:
     from sqlalchemy import bindparam, text
 
-    base_where = """
-        UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'
-          AND kb.ticker IS NOT NULL
-          AND TRIM(kb.ticker) != ''
-          AND LENGTH(TRIM(kb.ticker)) <= 16
-    """
     sym_filter = ""
     params: dict = {"dv": dataset_version}
     if symbol_allowlist is not None:
@@ -83,12 +192,18 @@ def _backfill_from_kb(
     else:
         logger.info("Фильтр по тикерам выключен (--include-all-kb-tickers): все подходящие тикеры KB")
 
+    if past_only:
+        logger.info("Фильтр: только прошедшие KB (kb.ts::date <= CURRENT_DATE)")
+    if dedup_kb:
+        logger.info("Фильтр: dedup KB по (ticker, event_date), prefer non-yfinance / earnings_event_detail")
+
     since_filter = ""
     if kb_since is not None:
         since_filter = "AND kb.ts >= :kb_since"
         params["kb_since"] = kb_since
         logger.info("Фильтр: только KB с kb.ts >= %s", kb_since)
 
+    kb_from = _kb_from_clause(dedup_kb=dedup_kb, past_only=past_only)
     insert_sql = f"""
         INSERT INTO event_reaction_dataset (
             knowledge_base_id, symbol, event_time_et, event_type,
@@ -103,8 +218,8 @@ def _backfill_from_kb(
             '{{}}'::jsonb,
             :dv AS dataset_version,
             'kb_skeleton'
-        FROM knowledge_base kb
-        WHERE {base_where}
+        {kb_from}
+        WHERE 1=1
         {sym_filter}
         {since_filter}
         ON CONFLICT (symbol, event_time_et, event_type, dataset_version) DO NOTHING
@@ -114,7 +229,7 @@ def _backfill_from_kb(
         stmt = stmt.bindparams(bindparam("sym", expanding=True))
 
     if dry_run:
-        count_q = f"SELECT COUNT(*) FROM knowledge_base kb WHERE {base_where} {sym_filter} {since_filter}"
+        count_q = f"SELECT COUNT(*) {kb_from} WHERE 1=1 {sym_filter} {since_filter}"
         count_stmt = text(count_q)
         if symbol_allowlist is not None:
             count_stmt = count_stmt.bindparams(bindparam("sym", expanding=True))
@@ -222,6 +337,31 @@ def main() -> int:
         default="",
         help="Только строки KB с kb.ts >= даты (ISO, напр. 2026-02-01). Пусто — из EVENT_REACTION_KB_SINCE в config или без фильтра",
     )
+    ap.add_argument(
+        "--past-only",
+        action="store_true",
+        help="Только KB с kb.ts::date <= CURRENT_DATE (default with --include-earnings-universe)",
+    )
+    ap.add_argument(
+        "--no-past-only",
+        action="store_true",
+        help="Отключить past-only даже с --include-earnings-universe",
+    )
+    ap.add_argument(
+        "--dedup-kb",
+        action="store_true",
+        help="Один KB row на (ticker, event_date); prefer non-yfinance (default with --include-earnings-universe)",
+    )
+    ap.add_argument(
+        "--no-dedup-kb",
+        action="store_true",
+        help="Отключить dedup KB",
+    )
+    ap.add_argument(
+        "--prune-stale-skeletons",
+        action="store_true",
+        help="Удалить kb_skeleton: future events и pre-IPO (до MIN(quotes.date))",
+    )
     args = ap.parse_args()
 
     from config_loader import get_config_value
@@ -262,13 +402,31 @@ def main() -> int:
             from services.ticker_groups import get_config_ticker_symbols_upper_unique
 
             allowlist = get_config_ticker_symbols_upper_unique()
-        return _backfill_from_kb(
+
+        earnings_defaults = bool(args.include_earnings_universe)
+        past_only = bool(args.past_only or (earnings_defaults and not args.no_past_only))
+        dedup_kb = bool(args.dedup_kb or (earnings_defaults and not args.no_dedup_kb))
+        prune_stale = bool(args.prune_stale_skeletons or earnings_defaults)
+
+        rc = _backfill_from_kb(
             engine,
             dataset_version=args.dataset_version.strip() or "v0",
             dry_run=bool(args.dry_run),
             symbol_allowlist=allowlist,
             kb_since=kb_since_dt,
+            past_only=past_only,
+            dedup_kb=dedup_kb,
         )
+        if rc != 0:
+            return rc
+        if prune_stale:
+            return _prune_stale_skeletons(
+                engine,
+                dataset_version=args.dataset_version.strip() or "v0",
+                dry_run=bool(args.dry_run),
+                symbol_allowlist=allowlist,
+            )
+        return 0
     logger.error("Укажите --stats, --prune-non-config или --from-kb-earnings")
     return 1
 

@@ -19,7 +19,7 @@ import re
 
 from config_loader import get_database_url
 
-# При отсутствии аргументов тикеров берём из конфига (FAST + MEDIUM + LONG), чтобы котировки и тех. признаки собирались по всем
+# При отсутствии аргументов тикеров берём из конфига (FAST + MEDIUM + LONG) ∪ earnings intelligence universe
 def get_tickers_from_config():
     """Список тикеров из config.env (TICKERS_FAST + MEDIUM + LONG) для загрузки quotes."""
     try:
@@ -27,6 +27,27 @@ def get_tickers_from_config():
         return get_all_ticker_groups()
     except Exception:
         return []
+
+
+def get_default_price_tickers(engine) -> list[str]:
+    """Union: config tickers, earnings intelligence universe, symbols already in quotes."""
+    from_config = get_tickers_from_config()
+    try:
+        from services.earnings_intelligence_universe import get_earnings_intelligence_universe
+
+        from_earnings = get_earnings_intelligence_universe(include_correlation_context=False)
+    except Exception:
+        from_earnings = []
+    from_db = get_tracked_tickers(engine)
+    seen: set[str] = set()
+    tickers: list[str] = []
+    for raw in from_config + from_earnings + from_db:
+        sym = str(raw or "").strip().upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        tickers.append(sym)
+    return tickers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -173,17 +194,13 @@ def update_all_prices(tickers=None, days_back=30, force_days_back=None):
     engine = create_engine(db_url)
 
     if tickers is None:
-        from_config = get_tickers_from_config()
-        from_db = get_tracked_tickers(engine)
-        seen = set()
-        tickers = []
-        for t in from_config + from_db:
-            if t and t not in seen:
-                seen.add(t)
-                tickers.append(t)
+        tickers = get_default_price_tickers(engine)
         if not tickers:
-            tickers = from_db
-        logger.info(f"📋 Тикеры для обновления ({len(tickers)}): из конфига (FAST+MEDIUM+LONG) и quotes: {', '.join(tickers)}")
+            tickers = get_tracked_tickers(engine)
+        logger.info(
+            "📋 Тикеры для обновления (%s): config + earnings universe + quotes",
+            len(tickers),
+        )
 
     if not tickers:
         logger.warning("⚠️ Нет тикеров для обновления (добавьте TICKERS_FAST/MEDIUM/LONG в config.env или укажите тикеры аргументом)")
