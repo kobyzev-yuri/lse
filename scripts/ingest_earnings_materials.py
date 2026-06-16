@@ -27,6 +27,7 @@ sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
 from services.earnings_event_date_match import expand_event_date_keys  # noqa: E402
+from services.earnings_material_ingest_skip import row_should_skip_ingest  # noqa: E402
 from services.earnings_material_parser import (  # noqa: E402
     fetch_url,
     parse_fetched_content,
@@ -93,7 +94,7 @@ def _load_rows(
         f"""
         SELECT
           id, symbol, event_date, fiscal_period, material_type,
-          source_name, source_url, title, parse_status, meta
+          source_name, source_url, title, parse_status, parse_error, meta
         FROM earnings_material
         WHERE {' AND '.join(where)}
         ORDER BY event_date DESC NULLS LAST, id ASC
@@ -162,6 +163,21 @@ def _process_row(
 
     if dry_run:
         return {"id": material_id, "dry_run": True, "url": url}
+
+    skip_reason = row_should_skip_ingest(row)
+    if skip_reason:
+        logger.info("material id=%s skipped: %s", material_id, skip_reason)
+        _update_row(
+            engine=get_engine(),
+            material_id=material_id,
+            local_path=None,
+            content_sha256=None,
+            content_text=None,
+            parse_status="skipped",
+            parse_error=skip_reason,
+            meta_patch={"ingest_skip": {"reason": skip_reason}},
+        )
+        return {"id": material_id, "parse_status": "skipped", "parse_error": skip_reason}
 
     fetched = fetch_url(url, timeout_sec=timeout_sec)
     parsed = parse_fetched_content(fetched)
@@ -304,8 +320,8 @@ def main() -> int:
             )
             results.append({"id": row.get("id"), "parse_status": "failed", "parse_error": str(e)})
 
-    ok = sum(1 for r in results if r.get("parse_status") in ("parsed", "downloaded"))
-    logger.info("Processed %s rows; parsed/downloaded=%s; details=%s", len(results), ok, results)
+    ok = sum(1 for r in results if r.get("parse_status") in ("parsed", "downloaded", "skipped"))
+    logger.info("Processed %s rows; parsed/downloaded/skipped=%s; details=%s", len(results), ok, results)
     return 0 if ok == len(results) else 1
 
 

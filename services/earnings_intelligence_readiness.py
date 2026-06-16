@@ -774,6 +774,12 @@ def write_earnings_intelligence_readiness(
     out_path = default_readiness_metrics_path(root)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    try:
+        from services.earnings_autoprep_gate_alert import maybe_notify_autoprep_gate_ready
+
+        maybe_notify_autoprep_gate_ready(gates, project_root=root)
+    except Exception as e_gate:
+        logger.debug("autoprep gate alert skipped: %s", e_gate)
     logger.info(
         "Wrote earnings intelligence readiness → %s grid=%s scenario=%s peer=%s",
         out_path,
