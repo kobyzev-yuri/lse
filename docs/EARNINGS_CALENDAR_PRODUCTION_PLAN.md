@@ -88,3 +88,25 @@ ssh ai8049520@104.154.205.58 "cd ~/lse && ./scripts/deploy_from_github.sh --forc
 ```
 
 См. также [EARNINGS_CALENDAR_URGENT_FIX_PLAN.md](./EARNINGS_CALENDAR_URGENT_FIX_PLAN.md) (история P0–P3).
+
+---
+
+## Напоминания (ops)
+
+### 2026-06-17 — anchor fallback после nightly labeling
+
+**Когда:** после прогона **23:43 MSK** `erd_earnings_label` (ожидать строку `Готово` в логе ~00:05 MSK 17.06 или утром).
+
+**Что проверить:**
+1. `event_reaction_earnings_labeling.log` — нет `Traceback` / `too many clients`
+2. В строке `Причины пропуска` — сколько `anchor_unresolved` (было **53** до fallback `5d02606`)
+3. Сравнить `updated` vs `skipped_empty` (было 472 / 87)
+
+**Команды на VM:**
+```bash
+tail -30 ~/lse/logs/event_reaction_earnings_labeling.log
+docker exec lse-bot python scripts/check_erd_labeling_gaps_cron.py --execute 2>&1 | tail -5
+```
+
+**Ожидание:** `anchor_unresolved` заметно ниже 53; `no_quotes` без изменений (~33) — отдельная тема (seed_quotes).
+
