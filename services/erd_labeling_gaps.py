@@ -72,7 +72,7 @@ def audit_erd_labeling_gaps(
         SELECT id, symbol, event_time_et, knowledge_base_id
         FROM event_reaction_dataset
         WHERE dataset_version = :dv
-          AND UPPER(TRIM(symbol)) = ANY(:symbols)
+          AND UPPER(TRIM(symbol)) IN :symbols
           AND COALESCE(outcomes_after, '{}'::jsonb) = '{}'::jsonb
         ORDER BY event_time_et DESC
         LIMIT :lim

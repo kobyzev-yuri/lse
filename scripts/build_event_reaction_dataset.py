@@ -123,12 +123,10 @@ def _prune_stale_skeletons(
           {sym_filter}
           AND (
             erd.event_time_et::date > CURRENT_DATE
-            OR EXISTS (
-              SELECT 1
+            OR erd.event_time_et::date < (
+              SELECT MIN(q.date)::date
               FROM quotes q
               WHERE UPPER(TRIM(q.ticker)) = UPPER(TRIM(erd.symbol))
-              GROUP BY UPPER(TRIM(q.ticker))
-              HAVING MIN(q.date)::date > erd.event_time_et::date
             )
           )
     """
@@ -139,12 +137,10 @@ def _prune_stale_skeletons(
           {sym_filter}
           AND (
             erd.event_time_et::date > CURRENT_DATE
-            OR EXISTS (
-              SELECT 1
+            OR erd.event_time_et::date < (
+              SELECT MIN(q.date)::date
               FROM quotes q
               WHERE UPPER(TRIM(q.ticker)) = UPPER(TRIM(erd.symbol))
-              GROUP BY UPPER(TRIM(q.ticker))
-              HAVING MIN(q.date)::date > erd.event_time_et::date
             )
           )
     """
