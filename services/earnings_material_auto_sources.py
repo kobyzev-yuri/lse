@@ -100,7 +100,10 @@ def sec_8k_filings_near_date(
     symbol: str,
     event_date: date,
     *,
-    window_days: int = 5,
+    # SEC 8-K filing dates around an "earnings event" can drift by weeks:
+    # e.g., CIEN earnings calendar date (2026-06-04) has nearest 8-K at 2026-05-07.
+    # A wider window increases material discovery coverage and unblocks LLM label accumulation.
+    window_days: int = 40,
 ) -> list[CatalogMaterial]:
     sym = symbol.strip().upper()
     cik = TICKER_CIK.get(sym)
@@ -242,7 +245,7 @@ def sec_8k_exhibit_materials_near_date(
     symbol: str,
     event_date: date,
     *,
-    window_days: int = 5,
+    window_days: int = 40,
 ) -> list[CatalogMaterial]:
     """Parse SEC 8-K filing index for exhibit .htm/.txt transcripts (not only primary 8-K body)."""
     sym = symbol.strip().upper()
