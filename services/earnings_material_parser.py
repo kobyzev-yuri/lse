@@ -10,6 +10,7 @@ import io
 import logging
 import os
 import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -115,6 +116,8 @@ def _guess_ext(content_type: str, url: str) -> str:
         return "pdf"
     if path.endswith(".html") or path.endswith(".htm") or path.endswith(".aspx"):
         return "html"
+    if path.endswith(".zip"):
+        return "zip"
     return "bin"
 
 
@@ -205,6 +208,38 @@ def extract_text_from_pdf(content: bytes) -> tuple[str, str | None]:
     return text, None
 
 
+def extract_text_from_zip(content: bytes) -> tuple[str, tuple[str, ...], str | None]:
+    """Unpack zip archives and extract text from embedded PDF/HTML files."""
+    texts: list[str] = []
+    links: list[str] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            for name in zf.namelist():
+                if name.endswith("/"):
+                    continue
+                low = name.lower()
+                try:
+                    data = zf.read(name)
+                except Exception:
+                    continue
+                if low.endswith(".pdf"):
+                    text, _err = extract_text_from_pdf(data)
+                    if text:
+                        texts.append(text)
+                elif low.endswith((".html", ".htm")):
+                    text, found_links = extract_text_from_html(data, base_url="")
+                    if text:
+                        texts.append(text)
+                    links.extend(found_links)
+    except Exception as exc:
+        return "", (), f"zip_extract_error:{exc.__class__.__name__}"
+
+    combined = normalize_text("\n\n".join(texts))
+    if len(combined) < MIN_PARSED_TEXT_CHARS:
+        return combined, tuple(dict.fromkeys(links)), f"short_text:{len(combined)}"
+    return combined, tuple(dict.fromkeys(links)), None
+
+
 def parse_fetched_content(fetch: FetchResult) -> ParseResult:
     digest = sha256_hex(fetch.content)
     ext = _guess_ext(fetch.content_type, fetch.final_url)
@@ -231,6 +266,19 @@ def parse_fetched_content(fetch: FetchResult) -> ParseResult:
         return ParseResult(
             text=text,
             method=method,
+            discovered_links=links,
+            content_type=fetch.content_type,
+            final_url=fetch.final_url,
+            content_sha256=digest,
+            raw_ext=ext,
+            parse_error=parse_error,
+        )
+
+    if "zip" in fetch.content_type or ext == "zip":
+        text, links, parse_error = extract_text_from_zip(fetch.content)
+        return ParseResult(
+            text=text,
+            method="zip_unpack",
             discovered_links=links,
             content_type=fetch.content_type,
             final_url=fetch.final_url,

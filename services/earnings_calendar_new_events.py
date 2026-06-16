@@ -7,12 +7,16 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from services.earnings_event_date_match import (
+    DEFAULT_EVENT_DATE_TOLERANCE_DAYS,
+    material_matches_kb_event_date_sql,
+)
+
 RICH_MATERIAL_TYPES: tuple[str, ...] = (
     "transcript",
     "third_party_transcript",
     "press_release",
 )
-
 
 def load_pending_calendar_events(
     engine: Engine,
@@ -20,6 +24,8 @@ def load_pending_calendar_events(
     since: date | None = None,
     symbols: set[str] | None = None,
     limit: int = 100,
+    past_only: bool = True,
+    tolerance_days: int = DEFAULT_EVENT_DATE_TOLERANCE_DAYS,
 ) -> list[dict[str, Any]]:
     """
     Calendar events without completed LLM extraction (materials pipeline still open).
@@ -27,11 +33,14 @@ def load_pending_calendar_events(
     Includes brand-new KB rows (zero earnings_material) and in-progress events
     (registered/failed/parsed but no extraction_meta yet).
     """
+    material_match = material_matches_kb_event_date_sql(tolerance_days=tolerance_days)
     where = ["UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'"]
     params: dict[str, Any] = {"limit": max(1, int(limit))}
     if since:
         where.append("kb.ts::date >= :since")
         params["since"] = since
+    if past_only:
+        where.append("kb.ts::date <= CURRENT_DATE")
     if symbols:
         where.append("UPPER(TRIM(kb.ticker)) = ANY(:symbols)")
         params["symbols"] = sorted(symbols)
@@ -54,8 +63,7 @@ def load_pending_calendar_events(
           NOT EXISTS (
             SELECT 1
             FROM earnings_material em
-            WHERE UPPER(TRIM(em.symbol)) = UPPER(TRIM(kb.ticker))
-              AND em.event_date = kb.ts::date
+            WHERE {material_match}
           ) AS is_brand_new,
           'pending_extract' AS pipeline_reason
         FROM knowledge_base kb
@@ -75,12 +83,15 @@ def load_events_missing_rich_materials(
     since: date | None = None,
     symbols: set[str] | None = None,
     limit: int = 100,
+    past_only: bool = True,
+    tolerance_days: int = DEFAULT_EVENT_DATE_TOLERANCE_DAYS,
 ) -> list[dict[str, Any]]:
     """
     KB earnings events with no transcript / third-party transcript / press release row.
 
     Catches thin-SEC-only registrations (Fool / exhibit 99.1 never synced).
     """
+    material_match = material_matches_kb_event_date_sql(tolerance_days=tolerance_days)
     where = ["UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'"]
     params: dict[str, Any] = {
         "limit": max(1, int(limit)),
@@ -89,16 +100,17 @@ def load_events_missing_rich_materials(
     if since:
         where.append("kb.ts::date >= :since")
         params["since"] = since
+    if past_only:
+        where.append("kb.ts::date <= CURRENT_DATE")
     if symbols:
         where.append("UPPER(TRIM(kb.ticker)) = ANY(:symbols)")
         params["symbols"] = sorted(symbols)
     where.append(
-        """
+        f"""
         NOT EXISTS (
           SELECT 1
           FROM earnings_material em
-          WHERE UPPER(TRIM(em.symbol)) = UPPER(TRIM(kb.ticker))
-            AND em.event_date = kb.ts::date
+          WHERE {material_match}
             AND em.material_type = ANY(:rich_types)
         )
         """
@@ -128,10 +140,26 @@ def load_materials_pipeline_calendar_events(
     since: date | None = None,
     symbols: set[str] | None = None,
     limit: int = 100,
+    past_only: bool = True,
+    tolerance_days: int = DEFAULT_EVENT_DATE_TOLERANCE_DAYS,
 ) -> list[dict[str, Any]]:
     """Pending extract + events missing transcript/PR (deduped by symbol, event_date)."""
-    pending = load_pending_calendar_events(engine, since=since, symbols=symbols, limit=limit)
-    enrich = load_events_missing_rich_materials(engine, since=since, symbols=symbols, limit=limit)
+    pending = load_pending_calendar_events(
+        engine,
+        since=since,
+        symbols=symbols,
+        limit=limit,
+        past_only=past_only,
+        tolerance_days=tolerance_days,
+    )
+    enrich = load_events_missing_rich_materials(
+        engine,
+        since=since,
+        symbols=symbols,
+        limit=limit,
+        past_only=past_only,
+        tolerance_days=tolerance_days,
+    )
     merged: dict[tuple[str, date], dict[str, Any]] = {}
     for ev in pending + enrich:
         sym = str(ev.get("symbol") or "").strip().upper()

@@ -109,7 +109,11 @@ def main() -> int:
         since_d = dt_parse.strptime(args.since.strip()[:10], "%Y-%m-%d").date()
         pending_count = len(
             load_materials_pipeline_calendar_events(
-                get_engine(), since=since_d, symbols=sym_set, limit=max(1, args.sync_limit)
+                get_engine(),
+                since=since_d,
+                symbols=sym_set,
+                limit=max(1, args.sync_limit),
+                past_only=True,
             )
         )
         logger.info("Materials pipeline calendar events: %s", pending_count)
@@ -162,7 +166,17 @@ def main() -> int:
         rc = _run(ingest_cmd)
         steps["materials_ingest"] = rc
         if rc != 0 and not args.dry_run:
-            logger.warning("materials_ingest exited %s — continuing extract", rc)
+            logger.warning("materials_ingest exited %s — running discover + continuing extract", rc)
+            discover_cmd = [
+                py,
+                "scripts/discover_earnings_material_sources.py",
+                "--since",
+                args.since,
+                "--symbols",
+                sym_csv,
+                "--register",
+            ]
+            steps["materials_discover"] = _run(discover_cmd)
 
         extract_cmd = [
             py,

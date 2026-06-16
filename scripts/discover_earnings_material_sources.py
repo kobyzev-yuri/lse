@@ -36,7 +36,7 @@ def _parse_date(s: str) -> date:
     return datetime.strptime(s.strip()[:10], "%Y-%m-%d").date()
 
 
-def _load_pending(engine, *, symbols: set[str] | None, since: date) -> list[tuple[str, date]]:
+def _load_pending(engine, *, symbols: set[str] | None, since: date, past_only: bool = True) -> list[tuple[str, date]]:
     from sqlalchemy import text
 
     where = [
@@ -44,6 +44,8 @@ def _load_pending(engine, *, symbols: set[str] | None, since: date) -> list[tupl
         "UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'",
     ]
     params: dict = {"since": since}
+    if past_only:
+        where.append("kb.ts::date <= CURRENT_DATE")
     if symbols:
         where.append("UPPER(TRIM(kb.ticker)) = ANY(:symbols)")
         params["symbols"] = sorted(symbols)
@@ -54,7 +56,7 @@ def _load_pending(engine, *, symbols: set[str] | None, since: date) -> list[tupl
         LEFT JOIN earnings_event_detail ed ON ed.knowledge_base_id = kb.id
         WHERE {' AND '.join(where)}
           AND (
-            ed.id IS NULL
+            ed.knowledge_base_id IS NULL
             OR jsonb_array_length(COALESCE(ed.guidance_summary->'scenario_hints', '[]'::jsonb)) = 0
           )
         ORDER BY kb.ts::date DESC, symbol

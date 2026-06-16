@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from config_loader import get_config_value
+from services.earnings_event_date_match import material_matches_kb_event_date_sql
 from services.earnings_intelligence_universe import get_earnings_intelligence_universe
 
 logger = logging.getLogger(__name__)
@@ -114,15 +115,18 @@ def collect_earnings_intelligence_readiness(
                     {"symbols": sym_set},
                 ).all()
             }
+            material_match = material_matches_kb_event_date_sql(
+                symbol_expr="UPPER(em.symbol)",
+                kb_symbol_expr="UPPER(TRIM(kb.ticker))",
+            )
             events_q = text(
-                """
+                f"""
                 SELECT
                   COUNT(*) AS events_total,
                   COUNT(*) FILTER (
                     WHERE EXISTS (
                       SELECT 1 FROM earnings_material em
-                      WHERE UPPER(em.symbol) = UPPER(TRIM(kb.ticker))
-                        AND em.event_date = kb.ts::date
+                      WHERE {material_match}
                         AND em.parse_status IN ('parsed', 'extracted')
                     )
                   ) AS events_with_materials,

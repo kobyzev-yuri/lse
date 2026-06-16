@@ -205,19 +205,9 @@ def _load_discovered_links(engine) -> list[dict]:
 
 
 def _find_kb_id(engine, symbol: str, event_date: date) -> int | None:
-    q = text(
-        """
-        SELECT id FROM knowledge_base
-        WHERE UPPER(TRIM(ticker)) = :symbol
-          AND ts::date = :event_date
-          AND UPPER(COALESCE(event_type, '')) LIKE '%EARNING%'
-        ORDER BY id DESC
-        LIMIT 1
-        """
-    )
-    with engine.connect() as conn:
-        row = conn.execute(q, {"symbol": symbol.upper(), "event_date": event_date}).first()
-    return int(row[0]) if row else None
+    from services.earnings_event_date_match import resolve_kb_id_for_earnings_event
+
+    return resolve_kb_id_for_earnings_event(engine, symbol=symbol, event_date=event_date)
 
 
 def _ensure_kb_for_event(

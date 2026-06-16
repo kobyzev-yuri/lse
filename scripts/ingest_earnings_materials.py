@@ -26,6 +26,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
+from services.earnings_event_date_match import expand_event_date_keys  # noqa: E402
 from services.earnings_material_parser import (  # noqa: E402
     fetch_url,
     parse_fetched_content,
@@ -79,7 +80,7 @@ def _load_rows(
         where.append("id = :material_id")
         params["material_id"] = int(material_id)
     if pending_event_keys is not None:
-        pairs = sorted(pending_event_keys)
+        pairs = sorted(expand_event_date_keys(pending_event_keys))
         where.append(
             "(UPPER(TRIM(symbol)), event_date) IN ("
             + ", ".join(f"(:sym_{i}, :dt_{i})" for i in range(len(pairs)))

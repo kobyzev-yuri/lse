@@ -25,6 +25,10 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from report_generator import get_engine  # noqa: E402
+from services.earnings_event_date_match import (  # noqa: E402
+    expand_event_date_keys,
+    resolve_kb_id_for_earnings_event,
+)
 from services.earnings_intelligence_universe import get_earnings_intelligence_universe  # noqa: E402
 from services.earnings_material_extractor import (  # noqa: E402
     extract_event_facts_with_llm,
@@ -65,7 +69,7 @@ def _load_materials(
     if pending_event_keys is not None:
         if not pending_event_keys:
             return []
-        pairs = sorted(pending_event_keys)
+        pairs = sorted(expand_event_date_keys(pending_event_keys))
         where.append(
             "(UPPER(TRIM(symbol)), event_date) IN ("
             + ", ".join(f"(:sym_{i}, :dt_{i})" for i in range(len(pairs)))
@@ -91,27 +95,14 @@ def _load_materials(
 
 
 def _resolve_kb_id(engine, *, symbol: str, event_date: date | None, fallback: int | None) -> int | None:
-    if fallback:
-        return int(fallback)
     if not event_date:
-        return None
-    q = text(
-        """
-        SELECT id
-        FROM knowledge_base
-        WHERE UPPER(TRIM(ticker)) = :symbol
-          AND ts::date = :event_date
-          AND UPPER(COALESCE(event_type, '')) LIKE '%EARNING%'
-        ORDER BY id DESC
-        LIMIT 1
-        """
+        return int(fallback) if fallback else None
+    return resolve_kb_id_for_earnings_event(
+        engine,
+        symbol=symbol,
+        event_date=event_date,
+        fallback=fallback,
     )
-    with engine.connect() as conn:
-        row = conn.execute(
-            q,
-            {"symbol": symbol.strip().upper(), "event_date": event_date},
-        ).first()
-    return int(row[0]) if row else None
 
 
 def _detail_has_llm_extraction(engine, kb_id: int) -> bool:
@@ -301,11 +292,10 @@ def main() -> int:
         return 0
 
     results: list[dict[str, Any]] = []
-    processed = 0
+    new_work_done = 0
     balance_hit = False
+    event_limit = max(1, args.limit)
     for (symbol, event_date), materials in sorted(groups.items(), key=lambda x: (x[0][0], x[0][1] or date.min)):
-        if processed >= max(1, args.limit):
-            break
         fiscal_period = next((m.get("fiscal_period") for m in materials if m.get("fiscal_period")), None)
         selected = select_materials_for_event(materials)
         if not selected:
@@ -336,8 +326,10 @@ def main() -> int:
                     "knowledge_base_id": kb_id_precheck,
                 }
             )
-            processed += 1
             continue
+
+        if new_work_done >= event_limit:
+            break
 
         if args.dry_run:
             plan = plan_event_extraction_tokens(
@@ -355,7 +347,7 @@ def main() -> int:
                 plan["total_tokens_est"],
             )
             results.append({"status": "dry_run", "token_plan": plan})
-            processed += 1
+            new_work_done += 1
             continue
 
         out = extract_event_facts_with_llm(
@@ -418,7 +410,7 @@ def main() -> int:
                 result_row["status"] = "skipped"
                 result_row["reason"] = "knowledge_base_id not found"
                 results.append(result_row)
-                processed += 1
+                new_work_done += 1
                 continue
             detail = map_extraction_to_event_detail(structured)
             extraction_meta = {
@@ -432,10 +424,17 @@ def main() -> int:
             result_row["knowledge_base_id"] = kb_id
             result_row["affected_tickers"] = detail.get("affected_tickers")
         results.append(result_row)
-        processed += 1
+        new_work_done += 1
 
+    skipped = sum(1 for r in results if r.get("status") == "skipped")
     total_tok = sum(int((r.get("token_plan") or {}).get("total_tokens_est") or 0) for r in results)
-    logger.info("Processed %s events; sum_total_tokens_est≈%s", processed, total_tok)
+    logger.info(
+        "Extract batch: new_work=%s skipped=%s results=%s sum_total_tokens_est≈%s",
+        new_work_done,
+        skipped,
+        len(results),
+        total_tok,
+    )
 
     if not balance_hit:
         from services.proxyapi_balance import clear_earnings_llm_balance_alert
