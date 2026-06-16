@@ -107,7 +107,7 @@ def main() -> int:
         if not eu_symbols:
             logger.error("Пустой earnings universe.")
             return 1
-        cfg_filter = "AND UPPER(TRIM(e.symbol)) = ANY(:sym)"
+        cfg_filter = "AND UPPER(TRIM(e.symbol)) IN :sym"
         params["sym"] = eu_symbols
     elif not args.include_all_dataset_symbols:
         symbols = get_config_ticker_symbols_upper_unique()

@@ -113,7 +113,7 @@ def _prune_stale_skeletons(
     if symbol_allowlist is not None:
         if not symbol_allowlist:
             return 0
-        sym_filter = "AND UPPER(TRIM(erd.symbol)) = ANY(:sym)"
+        sym_filter = "AND UPPER(TRIM(erd.symbol)) IN :sym"
         params["sym"] = symbol_allowlist
 
     count_sql = f"""
