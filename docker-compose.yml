@@ -40,8 +40,10 @@ services:
       - ./config.env:/app/config.env
       - ./config.secrets.env:/app/config.secrets.env
       - ./logs:/app/logs
+      - ./local:/app/local
     environment:
       TZ: Europe/Moscow
+      GAME5M_TUNING_LEDGER: /app/local/game5m_tuning_ledger.json
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-lse_pg_pass}@postgres:5432/lse_trading?options=-c%20timezone%3DEurope%2FMoscow
     depends_on:
       postgres:

@@ -15,6 +15,7 @@ local/models/*.meta.json
 local/*.risk.json
 # Снимки отчёта анализатора (cron)
 local/analyzer_snapshots/
+local/game5m_tuning_ledger.json
 risk_config/
 risk_limits.json
 risk_limits.env

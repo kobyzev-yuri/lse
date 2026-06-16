@@ -177,9 +177,25 @@ def _recent_replay_trades(
     }
 
 
-def _build_candidate_updates(trades: Sequence[ReplayTrade]) -> List[Dict[str, str]]:
+def _ticker_candidate_order(trades: Sequence[ReplayTrade]) -> List[str]:
+    counts: dict[str, int] = {}
+    for t in trades:
+        if t.ticker:
+            counts[t.ticker] = counts.get(t.ticker, 0) + 1
+    return sorted(counts.keys(), key=lambda k: (-counts[k], k))
+
+
+def _build_candidate_updates(
+    trades: Sequence[ReplayTrade],
+    *,
+    families: str = "all",
+    max_ticker_candidates: int = 8,
+) -> List[Dict[str, str]]:
     candidates: List[Dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
+    family = (families or "all").strip().lower()
+    include_global = family in ("all", "exit")
+    include_ticker = family in ("all", "ticker")
 
     def add(key: str, values: Iterable[str]) -> None:
         for val in values:
@@ -192,22 +208,21 @@ def _build_candidate_updates(trades: Sequence[ReplayTrade]) -> List[Dict[str, st
                 candidates.append({"env_key": key, "proposed": vr.proposed})
 
     base_take = coerce_float(get_config_value("GAME_5M_TAKE_PROFIT_PCT", "5.0")) or 5.0
-    add("GAME_5M_TAKE_PROFIT_PCT", _candidate_values(base_take, (-1.0, -0.5, 0.5, 1.0), min_value=1.5, max_value=8.0))
+    if include_global:
+        add("GAME_5M_TAKE_PROFIT_PCT", _candidate_values(base_take, (-1.0, -0.5, 0.5, 1.0), min_value=1.5, max_value=8.0))
+        base_factor = coerce_float(get_config_value("GAME_5M_TAKE_MOMENTUM_FACTOR", "1.0")) or 1.0
+        add("GAME_5M_TAKE_MOMENTUM_FACTOR", _candidate_values(base_factor, (-0.1, 0.1), min_value=0.3, max_value=2.0))
+        base_min = coerce_float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "2.0")) or 2.0
+        add("GAME_5M_TAKE_PROFIT_MIN_PCT", _candidate_values(base_min, (-1.0, -0.5, 0.5, 1.0), min_value=0.0, max_value=8.0))
+        base_days = coerce_float(get_config_value("GAME_5M_MAX_POSITION_DAYS", "2")) or 2.0
+        add("GAME_5M_MAX_POSITION_DAYS", _candidate_values(base_days, (-1.0, 1.0), min_value=1.0, max_value=7.0))
 
-    base_factor = coerce_float(get_config_value("GAME_5M_TAKE_MOMENTUM_FACTOR", "1.0")) or 1.0
-    add("GAME_5M_TAKE_MOMENTUM_FACTOR", _candidate_values(base_factor, (-0.1, 0.1), min_value=0.3, max_value=2.0))
-
-    base_min = coerce_float(get_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT", "2.0")) or 2.0
-    add("GAME_5M_TAKE_PROFIT_MIN_PCT", _candidate_values(base_min, (-1.0, -0.5, 0.5, 1.0), min_value=0.0, max_value=8.0))
-
-    base_days = coerce_float(get_config_value("GAME_5M_MAX_POSITION_DAYS", "2")) or 2.0
-    add("GAME_5M_MAX_POSITION_DAYS", _candidate_values(base_days, (-1.0, 1.0), min_value=1.0, max_value=7.0))
-
-    tickers = sorted({t.ticker for t in trades if t.ticker})
-    for ticker in tickers:
-        key = f"GAME_5M_TAKE_PROFIT_PCT_{ticker}"
-        current = coerce_float(get_config_value(key, "")) or base_take
-        add(key, _candidate_values(current, (-1.0, -0.5, 0.5, 1.0), min_value=1.5, max_value=8.0))
+    if include_ticker:
+        tickers = _ticker_candidate_order(trades)[: max(0, int(max_ticker_candidates))]
+        for ticker in tickers:
+            key = f"GAME_5M_TAKE_PROFIT_PCT_{ticker}"
+            current = coerce_float(get_config_value(key, "")) or base_take
+            add(key, _candidate_values(current, (-1.0, -0.5, 0.5, 1.0), min_value=1.5, max_value=8.0))
     return candidates
 
 
@@ -251,6 +266,8 @@ def build_game5m_replay_proposals(
     horizon_tail_days: int = 1,
     include_false_takes: bool = False,
     top_n: int = 12,
+    families: str = "all",
+    max_ticker_candidates: int = 8,
 ) -> Dict[str, Any]:
     trades, selection_meta = _recent_replay_trades(
         engine,
@@ -258,7 +275,11 @@ def build_game5m_replay_proposals(
         max_trades=max_trades,
         include_false_takes=include_false_takes,
     )
-    candidates = _build_candidate_updates(trades)
+    candidates = _build_candidate_updates(
+        trades,
+        families=families,
+        max_ticker_candidates=max_ticker_candidates,
+    )
     bars_by_trade_id: Dict[int, pd.DataFrame] = {}
     for trade in trades:
         try:
@@ -273,9 +294,12 @@ def build_game5m_replay_proposals(
             bars_by_trade_id[trade.trade_id] = pd.DataFrame()
 
     proposals: List[Dict[str, Any]] = []
-    for cand in candidates:
+    total_cands = len(candidates)
+    for idx, cand in enumerate(candidates, start=1):
         key = cand["env_key"]
         proposed = cand["proposed"]
+        if idx == 1 or idx % 4 == 0 or idx == total_cands:
+            logger.info("replay proposals %s/%s %s=%s", idx, total_cands, key, proposed)
         deltas: List[float] = []
         evidence: List[Dict[str, Any]] = []
         replayed = 0
@@ -344,6 +368,8 @@ def build_game5m_replay_proposals(
             "exchange": exchange,
             "horizon_tail_days": int(horizon_tail_days),
             "include_false_takes": bool(include_false_takes),
+            "families": families,
+            "max_ticker_candidates": int(max_ticker_candidates),
         },
         "selection": selection_meta,
         "candidate_count": len(candidates),

@@ -108,22 +108,18 @@ flowchart TB
 - есть доступ к **той же БД**, что и прод (закрытые сделки + 5m бары для реплея);
 - после серии закрытий (например конец недели), когда анализатор уже показал проблемную зону (тейк, max days, factor).
 
-Команда (read-only, пишет только ledger):
+Команда (read-only, пишет только ledger). **Для регулярного прогона** предпочтительно быстрый цикл (`--families exit`, ~5–10 мин):
 
 ```bash
-# из корня репо, venv с зависимостями проекта
-python scripts/game5m_tuning_controller.py propose --days 30 --max-trades 120 --top-n 12 --horizon-tail-days 1
+docker exec lse-bot python scripts/run_game5m_tuning_cycle.py propose \
+  --days 30 --max-trades 40 --top-n 8 --families exit
 ```
 
-Опции по смыслу:
-
-- `--include-false-takes` — только если осознанно хотите включить спорные тейки в расчёт.
-- `--ledger /path/to/game5m_tuning_ledger.json` — если не дефолт `local/game5m_tuning_ledger.json`.
-
-Docker (пример):
+Полный controller (дольше, с per-ticker caps):
 
 ```bash
-docker compose exec -T lse python3 scripts/game5m_tuning_controller.py propose --days 30 --max-trades 120 --top-n 12
+python scripts/game5m_tuning_controller.py propose --days 30 --max-trades 50 --top-n 12 \
+  --horizon-tail-days 1 --families all --max-ticker-candidates 4
 ```
 
 После `propose` в ledger появляется `latest_proposals` с полями `proposals[]` (`proposal_id`, `env_key`, `proposed`, `current`, `score`, `metrics`, `evidence`).
@@ -229,8 +225,24 @@ GAME_5M_CONTINUATION_TRAIL_MOMENTUM_SCALE=1.5
 | Частота | Действие |
 |---------|----------|
 | **Ежедневно** (cron) | `run_daily_game5m_ml_pipeline` — датасеты + entry CatBoost + JSONL. |
+| **Пн–Пт 23:40 MSK** | `scripts/cron_game5m_tuning.sh observe` — если есть `active_experiment`, пишет observation в ledger. |
+| **Вс 06:35 MSK** | `scripts/cron_game5m_tuning.sh propose` — replay proposals (`--families exit`, 40 сделок, top-8). |
 | **2–5× в неделю** | Пайплайн **A** (`/analyzer` или снимок): качество сделок, hanger v2, continuation gate, CatBoost backtest. |
 | **По инциденту** | Пайплайн **B** (focused) + при необходимости LLM. |
-| **0–2× в неделю** | `game5m_tuning_controller.py propose` — когда нужен ранжированный список **выходных** порогов по реплею; затем один `apply` + observe + снова анализатор. |
+| **После propose** | Один `apply` из Analyzer / controller → 1–3 сессии observe → review / rollback. |
 
-Если неделя прошла без `propose` — это нормально: инструмент вспомогательный, а не обязательный ежедневный шаг.
+Ledger хранится на хосте: `./local/game5m_tuning_ledger.json` (volume в `docker-compose.yml`, env `GAME5M_TUNING_LEDGER`).
+
+Быстрый ручной propose (без per-ticker сетки, ~5–10 мин):
+
+```bash
+docker exec lse-bot python scripts/run_game5m_tuning_cycle.py propose \
+  --days 30 --max-trades 40 --top-n 8 --families exit
+```
+
+Полный propose с per-ticker caps (дольше):
+
+```bash
+docker exec lse-bot python scripts/game5m_tuning_controller.py propose \
+  --days 30 --max-trades 50 --top-n 12 --families all --max-ticker-candidates 4
+```

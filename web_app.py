@@ -46,6 +46,13 @@ from config_loader import (
     is_editable_config_env_key,
 )
 from execution_agent import ExecutionAgent
+from services.game5m_tuning_ledger import (
+    closed_summary as game5m_closed_summary,
+    find_proposal as find_game5m_proposal,
+    ledger_path as game5m_tuning_ledger_path,
+    load_ledger as load_game5m_tuning_ledger,
+    save_ledger as save_game5m_tuning_ledger,
+)
 from services.game5m_tuning_policy import (
     apply_config_env_update,
     apply_game5m_update,
@@ -1216,78 +1223,19 @@ async def apply_analyzer_config(request: Request):
     )
 
 
-def _game5m_tuning_ledger_path() -> Path:
-    raw = (os.environ.get("GAME5M_TUNING_LEDGER") or "").strip()
-    if raw:
-        p = Path(raw).expanduser()
-        return p if p.is_absolute() else Path(__file__).resolve().parent / p
-    return Path(__file__).resolve().parent / "local" / "game5m_tuning_ledger.json"
-
-
-def _load_game5m_tuning_ledger() -> Dict[str, Any]:
-    p = _game5m_tuning_ledger_path()
-    try:
-        if not p.is_file():
-            return {}
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        logger.warning("Не удалось прочитать GAME_5M tuning ledger", exc_info=True)
-        return {}
-
-
-def _save_game5m_tuning_ledger(ledger: Dict[str, Any]) -> None:
-    p = _game5m_tuning_ledger_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    ledger["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
-    p.write_text(json.dumps(_to_jsonable(ledger), ensure_ascii=False, indent=2), encoding="utf-8")
-
-
 def _game5m_closed_summary(days: int) -> Dict[str, Any]:
-    closed = compute_closed_trade_pnls(load_trade_history(get_engine(), strategy_name="GAME_5M"))
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=max(1, int(days)))
-    rows = []
-    for t in closed:
-        ts = pd.Timestamp(getattr(t, "ts", None))
-        if ts.tzinfo is None:
-            ts = ts.tz_localize("Europe/Moscow", ambiguous=True).tz_convert("UTC")
-        else:
-            ts = ts.tz_convert("UTC")
-        if ts >= cutoff:
-            rows.append(t)
-    wins = sum(1 for t in rows if float(getattr(t, "log_return", 0.0) or 0.0) > 0)
-    total_lr = sum(float(getattr(t, "log_return", 0.0) or 0.0) for t in rows)
-    total_pnl = sum(float(getattr(t, "net_pnl", 0.0) or 0.0) for t in rows)
-    return {
-        "days": int(days),
-        "closed_trades": len(rows),
-        "wins": wins,
-        "losses": max(0, len(rows) - wins),
-        "win_rate_pct": round((wins / len(rows) * 100.0), 2) if rows else None,
-        "total_log_return": round(total_lr, 6),
-        "avg_log_return": round(total_lr / len(rows), 6) if rows else None,
-        "total_net_pnl": round(total_pnl, 2),
-        "avg_net_pnl": round(total_pnl / len(rows), 2) if rows else None,
-    }
-
-
-def _find_game5m_proposal(ledger: Dict[str, Any], proposal_id: str) -> Optional[Dict[str, Any]]:
-    latest = ledger.get("latest_proposals") if isinstance(ledger.get("latest_proposals"), dict) else {}
-    for p in latest.get("proposals") or []:
-        if isinstance(p, dict) and str(p.get("proposal_id")) == str(proposal_id):
-            return p
-    return None
+    return game5m_closed_summary(days)
 
 
 @app.get("/api/analyzer/tuning/status", response_class=JSONResponse)
 async def analyzer_tuning_status(top_n: int = 8):
     """GAME_5M tuning ledger status for Analyzer UI."""
-    ledger = _load_game5m_tuning_ledger()
+    ledger = load_game5m_tuning_ledger()
     latest = ledger.get("latest_proposals") if isinstance(ledger.get("latest_proposals"), dict) else {}
     return _to_jsonable(
         {
             "ok": True,
-            "ledger": str(_game5m_tuning_ledger_path()),
+            "ledger": str(game5m_tuning_ledger_path()),
             "reglement": GAME5M_TUNING_REGLEMENT,
             "active_experiment": ledger.get("active_experiment"),
             "latest_generated_at_utc": latest.get("generated_at_utc"),
@@ -1315,12 +1263,12 @@ async def analyzer_tuning_apply(request: Request):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Ожидается JSON object")
 
-    ledger = _load_game5m_tuning_ledger()
+    ledger = load_game5m_tuning_ledger()
     active = ledger.get("active_experiment") if isinstance(ledger.get("active_experiment"), dict) else None
     if active and active.get("status") == "pending_effect" and not bool(body.get("force")):
         raise HTTPException(status_code=409, detail="Уже есть active experiment pending_effect. Сначала observe/review или rollback.")
 
-    proposal = _find_game5m_proposal(ledger, str(body.get("proposal_id") or "")) if body.get("proposal_id") else None
+    proposal = find_game5m_proposal(ledger, str(body.get("proposal_id") or "")) if body.get("proposal_id") else None
     key = str(body.get("key") or (proposal or {}).get("env_key") or "").strip()
     value = str(body.get("value") if body.get("value") is not None else (proposal or {}).get("proposed") or "").strip()
     observe_days = max(1, min(int(body.get("observe_days") or 2), 30))
@@ -1347,10 +1295,10 @@ async def analyzer_tuning_apply(request: Request):
     }
     ledger["active_experiment"] = experiment
     ledger.setdefault("history", []).append(experiment)
-    _save_game5m_tuning_ledger(ledger)
+    save_game5m_tuning_ledger(ledger)
     if not ok:
         raise HTTPException(status_code=500, detail=record.get("status") or "write_failed")
-    return _to_jsonable({"ok": True, "ledger": str(_game5m_tuning_ledger_path()), "experiment": experiment})
+    return _to_jsonable({"ok": True, "ledger": str(game5m_tuning_ledger_path()), "experiment": experiment})
 
 
 @app.post("/api/analyzer/tuning/observe", response_class=JSONResponse)
@@ -1363,7 +1311,7 @@ async def analyzer_tuning_observe(request: Request):
     except Exception:
         body = {}
     body = body if isinstance(body, dict) else {}
-    ledger = _load_game5m_tuning_ledger()
+    ledger = load_game5m_tuning_ledger()
     active = ledger.get("active_experiment") if isinstance(ledger.get("active_experiment"), dict) else None
     if not active:
         raise HTTPException(status_code=404, detail="Нет active experiment")
@@ -1378,8 +1326,8 @@ async def analyzer_tuning_observe(request: Request):
         active["ready_at_utc"] = datetime.now(timezone.utc).isoformat()
     ledger["active_experiment"] = active
     ledger.setdefault("history", []).append({"type": "observation", "experiment_id": active.get("experiment_id"), **obs})
-    _save_game5m_tuning_ledger(ledger)
-    return _to_jsonable({"ok": True, "ledger": str(_game5m_tuning_ledger_path()), "active_experiment": active})
+    save_game5m_tuning_ledger(ledger)
+    return _to_jsonable({"ok": True, "ledger": str(game5m_tuning_ledger_path()), "active_experiment": active})
 
 
 @app.post("/api/analyzer/tuning/rollback", response_class=JSONResponse)
@@ -1387,7 +1335,7 @@ async def analyzer_tuning_rollback():
     """Rollback active GAME_5M experiment to old_value recorded in ledger."""
     if web_demo_mode():
         raise HTTPException(status_code=403, detail="WEB_DEMO_MODE: tuning disabled")
-    ledger = _load_game5m_tuning_ledger()
+    ledger = load_game5m_tuning_ledger()
     active = ledger.get("active_experiment") if isinstance(ledger.get("active_experiment"), dict) else None
     if not active:
         raise HTTPException(status_code=404, detail="Нет active experiment")
@@ -1407,10 +1355,10 @@ async def analyzer_tuning_rollback():
     active["rollback"] = rollback_record
     ledger["active_experiment"] = active
     ledger.setdefault("history", []).append(rollback_record)
-    _save_game5m_tuning_ledger(ledger)
+    save_game5m_tuning_ledger(ledger)
     if not ok:
         raise HTTPException(status_code=500, detail=record.get("status") or "rollback_failed")
-    return _to_jsonable({"ok": True, "ledger": str(_game5m_tuning_ledger_path()), "active_experiment": active})
+    return _to_jsonable({"ok": True, "ledger": str(game5m_tuning_ledger_path()), "active_experiment": active})
 
 
 @app.get("/trading")

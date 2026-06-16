@@ -124,7 +124,7 @@ flowchart LR
 | Сводка по закрытым | `services/trade_effectiveness_analyzer.py` | `/api/analyzer`, `/analyzer`: `summary`, hanger v2, continuation gate, CatBoost backtest, `practical_parameter_suggestions`, `time_exit_early_review` (5m OHLC + контрфакт; см. §3 выше), опц. LLM (`use_llm=1`). |
 | Снимок для офлайна | `scripts/snapshot_analyzer_report.py` | JSON в `local/analyzer_snapshots/`; при заданном `ANALYZER_SNAPSHOT_URL` — HTTP к уже поднятому вебу (удобно cron на хосте без pandas). |
 | Отчёт с LLM на хосте (VM + Docker) | `scripts/run_analyzer_docker.sh` | `docker exec lse-bot` → `export_analyzer_report.py`; по умолчанию 2 дня, LLM, JSON в `/tmp` на хосте. |
-| Реплей-кандидаты | `scripts/game5m_tuning_controller.py propose` | Вызывает `build_game5m_replay_proposals` → ранжированный список пар `env_key` / `proposed` + `proposal_id`; пишет в **`local/game5m_tuning_ledger.json`** (`latest_proposals`). Не дублирует ежедневный ML-конвейер. |
+| Реплей-кандидаты | `scripts/run_game5m_tuning_cycle.py propose` (cron, быстрый) или `game5m_tuning_controller.py propose` | `build_game5m_replay_proposals` → ledger `latest_proposals`. Общий файл: `services/game5m_tuning_ledger.py`, путь `GAME5M_TUNING_LEDGER` / volume `./local`. |
 | Применение | `apply` (CLI) или **`POST /api/analyzer/tuning/apply`** (веб) | Один ключ за раз; `observe` / **`tuning/observe`** фиксируют окно сделок; статус — **`GET .../tuning/status`**. |
 | Политика | `services/game5m_tuning_policy.py` | Общие проверки для веба и controller. |
 

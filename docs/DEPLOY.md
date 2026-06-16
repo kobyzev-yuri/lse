@@ -29,7 +29,26 @@
   python3 scripts/analyzer_autotune.py --days 5 --url http://127.0.0.1:8080/api/analyzer >> logs/autotune.log 2>&1
 ```
 
-**Проверка кода внутри контейнера** (не на хосте: каталога `/app/...` на VM нет, он только в образе):
+## GAME_5M replay tuning (propose / observe)
+
+Скрипты попадают в контейнер **только после** `docker compose build lse`. Если `run_game5m_tuning_cycle.py` не найден — нужен деплой образа, не только `git pull` на хосте.
+
+**Ledger** на хосте: `~/lse/local/game5m_tuning_ledger.json` (volume `./local:/app/local`, env `GAME5M_TUNING_LEDGER=/app/local/game5m_tuning_ledger.json`).
+
+Ручной быстрый propose (~5–10 мин):
+
+```bash
+docker exec lse-bot python scripts/run_game5m_tuning_cycle.py propose \
+  --days 30 --max-trades 40 --top-n 8 --families exit
+```
+
+Cron на хосте (см. `crontab/lse-docker.crontab`):
+
+- **Пн–Пт 23:40 MSK** — `scripts/cron_game5m_tuning.sh observe`
+- **Вс 06:35 MSK** — `scripts/cron_game5m_tuning.sh propose`
+
+Регламент: [GAME_5M_TUNING_REGLEMENT.md](GAME_5M_TUNING_REGLEMENT.md).
+ (не на хосте: каталога `/app/...` на VM нет, он только в образе):
 
 ```bash
 cd ~/lse   # каталог с docker-compose.yml
