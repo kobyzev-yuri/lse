@@ -37,6 +37,17 @@ def test_repeat_short_text_on_blocked_url():
     assert "ingest_skip" in reason
 
 
+def test_repeat_short_text_pdf_skipped():
+    reason = permanent_ingest_skip_reason(
+        symbol="ARM",
+        source_url="https://investors.arm.com/static-files/q1.pdf",
+        parse_status="failed",
+        parse_error="short_text:0",
+    )
+    assert reason is not None
+    assert "short_text_pdf" in reason
+
+
 def test_row_should_skip_ingest():
     row = {
         "symbol": "ARM",

@@ -248,6 +248,15 @@ def main() -> int:
     out_path = out_dir / "last_earnings_intelligence_autoprep.json"
     out_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     logger.info("Autoprep summary → %s gates=%s", out_path, readiness_summary)
+
+    if not args.dry_run:
+        try:
+            from services.earnings_autoprep_digest import maybe_send_autoprep_daily_digest
+
+            maybe_send_autoprep_daily_digest(summary, project_root=project_root)
+        except Exception as e:
+            logger.warning("Autoprep digest Telegram: %s", e)
+
     return 0
 
 

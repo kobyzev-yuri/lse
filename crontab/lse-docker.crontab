@@ -24,6 +24,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Earnings autoprep (полный цикл documents): KB yfinance → sync → ingest → LLM extract → readiness JSON.
 # ML train/spillover/shadow: run_earnings_ml_refresh ниже. Analyzer только прогресс готовности.
 15 */2 * * * flock -n /tmp/lse_earnings_autoprep.lock docker exec lse-bot python scripts/run_earnings_intelligence_autoprep.py >> /home/ai8049520/lse/logs/earnings_autoprep.log 2>&1
+# Phase C: Telegram brief after new LLM extraction (past earnings)
+0 9,18 * * 1-6 flock -n /tmp/lse_earnings_brief_notify.lock docker exec lse-bot python scripts/notify_earnings_post_event_brief.py >> /home/ai8049520/lse/logs/earnings_post_event_brief.log 2>&1
 # Unified ML refresh dispatcher (data-driven train trigger + ml_contours_status.json). See docs/ML_UNIFIED_RETRAIN_FRAMEWORK.md
 15 */6 * * * flock -n /tmp/lse_ml_refresh_dispatcher.lock docker exec lse-bot python scripts/run_ml_refresh_dispatcher.py >> /home/ai8049520/lse/logs/ml_refresh_dispatcher.log 2>&1
 # Earnings ML (legacy slot — optional; dispatcher covers */6 poll). Full train: 23:52 below.

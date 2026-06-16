@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 
 from services.event_reaction_labeling import (
+    align_event_date_to_quote_calendar,
     event_reaction_label_threshold_log,
     infer_final_label,
     resolve_event_anchors,
@@ -45,6 +46,25 @@ def test_bmo_peer_anchor_monday_before_tuesday_reaction():
     event_d = date(2026, 6, 3)
     peer_anchor = resolve_peer_outcome_anchor_date(event_d, "BEFORE_OPEN", dates)
     assert peer_anchor == date(2026, 6, 2)
+
+
+def test_weekend_calendar_date_bmo_aligns_to_monday():
+    # Earnings calendar Saturday → first trade day Monday; features Friday close.
+    dates = _weekdays("2026-06-01", 8)
+    event_d = date(2026, 6, 6)  # Saturday
+    aligned = align_event_date_to_quote_calendar(event_d, dates, phase="BEFORE_OPEN")
+    assert aligned == date(2026, 6, 8)  # Monday
+    anchors = resolve_event_anchors(event_d, "UNKNOWN", dates)
+    assert anchors is not None
+    assert anchors.earnings_market_phase == "BEFORE_OPEN"
+    assert anchors.features_as_of_date == date(2026, 6, 5)
+
+
+def test_weekend_amc_aligns_to_friday_close():
+    dates = _weekdays("2026-06-01", 5)
+    event_d = date(2026, 6, 6)  # Saturday AMC → Friday session
+    aligned = align_event_date_to_quote_calendar(event_d, dates, phase="AFTER_CLOSE")
+    assert aligned == date(2026, 6, 5)
 
 
 def test_vol_scaled_threshold_scales_with_volatility():

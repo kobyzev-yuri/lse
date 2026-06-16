@@ -494,6 +494,46 @@ def _index_of_trade_date(trade_dates: List[date], target: date) -> Optional[int]
     return None
 
 
+def _first_trading_day_on_or_after(d: date, trade_dates: List[date]) -> Optional[date]:
+    for td in trade_dates:
+        if td >= d:
+            return td
+    return None
+
+
+def _last_trading_day_on_or_before(d: date, trade_dates: List[date]) -> Optional[date]:
+    prev: Optional[date] = None
+    for td in trade_dates:
+        if td > d:
+            break
+        prev = td
+    return prev
+
+
+def align_event_date_to_quote_calendar(
+    event_d: date,
+    trade_dates: List[date],
+    *,
+    phase: str,
+) -> Optional[date]:
+    """
+    Map calendar earnings date onto the symbol's trading-day series.
+
+    BMO/UNKNOWN: first session on or after event (weekend report → Monday).
+    AFTER_CLOSE: last session on or before event (Friday AMC stays Friday).
+    """
+    if not trade_dates:
+        return None
+    if event_d in trade_dates:
+        return event_d
+    p = normalize_earnings_market_phase(phase)
+    if p == "UNKNOWN":
+        p = "BEFORE_OPEN"
+    if p == "AFTER_CLOSE":
+        return _last_trading_day_on_or_before(event_d, trade_dates)
+    return _first_trading_day_on_or_after(event_d, trade_dates)
+
+
 def _next_trading_day_after(d: date, trade_dates: List[date]) -> Optional[date]:
     for td in trade_dates:
         if td > d:
@@ -533,10 +573,22 @@ def resolve_peer_outcome_anchor_date(
     AMH on Tue → peer reacts Wed open → anchor Tue close.
     """
     phase = normalize_earnings_market_phase(timing)
-    react_d = _reaction_trading_day(event_d, phase, trade_dates)
+    if phase == "UNKNOWN":
+        phase = "BEFORE_OPEN"
+    aligned = align_event_date_to_quote_calendar(event_d, trade_dates, phase=phase)
+    if aligned is None:
+        return None
+    react_d = _reaction_trading_day(aligned, phase, trade_dates)
     if react_d is None:
         return None
-    return _prev_trading_day_strictly_before(react_d, trade_dates)
+    anchor = _prev_trading_day_strictly_before(react_d, trade_dates)
+    if anchor is not None:
+        return anchor
+    # Fallback: first bar in window — use same index as react if enough history exists elsewhere.
+    ri = _index_of_trade_date(trade_dates, react_d)
+    if ri is not None and ri > 0:
+        return trade_dates[ri - 1]
+    return None
 
 
 def resolve_event_anchors(
@@ -554,14 +606,20 @@ def resolve_event_anchors(
     if phase == "UNKNOWN":
         phase = "BEFORE_OPEN"
 
+    aligned_d = align_event_date_to_quote_calendar(event_d, trade_dates, phase=phase)
+    if aligned_d is None:
+        return None
+
     if phase == "AFTER_CLOSE":
-        feat_d = event_d if event_d in trade_dates else None
+        feat_d = aligned_d
         out_d = feat_d
     else:
-        feat_d = _prev_trading_day_strictly_before(event_d, trade_dates)
+        feat_d = _prev_trading_day_strictly_before(aligned_d, trade_dates)
         out_d = feat_d
 
     peer_anchor_d = resolve_peer_outcome_anchor_date(event_d, phase, trade_dates)
+    if peer_anchor_d is None and feat_d is not None:
+        peer_anchor_d = feat_d
     if feat_d is None or out_d is None or peer_anchor_d is None:
         return None
 

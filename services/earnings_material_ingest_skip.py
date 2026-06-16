@@ -45,6 +45,8 @@ def permanent_ingest_skip_reason(
 
     err = str(parse_error or "")
     if str(parse_status or "") == "failed" and err.startswith("short_text:"):
+        if url_l.endswith(".pdf") or ".pdf?" in url_l:
+            return f"ingest_skip:short_text_pdf:{sym or 'unknown'}"
         for sub in _GLOBAL_URL_SUBSTRINGS:
             if sub in url_l:
                 return f"ingest_skip:repeat_short_text:{sub}"
