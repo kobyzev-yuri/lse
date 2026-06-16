@@ -45,6 +45,11 @@ sys.path.insert(0, str(project_root))
 from config_loader import get_config_value
 from services.telegram_signal import get_signal_chat_ids, send_telegram_message
 
+# Паттерны, которые не считаем ошибками (шум yfinance при пустом ответе Yahoo)
+IGNORE_LINE_PATTERNS = [
+    re.compile(r"possibly delisted;\s*no price data found", re.IGNORECASE),
+]
+
 # Логи cron, которые смотрит watchdog (имена файлов относительно logs/)
 CRON_LOG_FILES = [
     "cron_update_prices.log",
@@ -58,6 +63,11 @@ CRON_LOG_FILES = [
     "add_sentiment_to_news.log",
     "analyze_event_outcomes.log",
     "cleanup_calendar_noise.log",
+    "event_reaction_earnings_labeling.log",
+    "event_reaction_labeling.log",
+    "event_reaction_outcomes.log",
+    "event_reaction_build.log",
+    "ml_refresh_nightly.log",
 ]
 
 # Свой лог watchdog — не сканируем его
@@ -75,6 +85,8 @@ ERROR_PATTERNS = [
     re.compile(r"\bSyntaxError\b"),
     re.compile(r"\bImportError\b"),
     re.compile(r"\bConnectionError\b"),
+    re.compile(r"\bOperationalError\b"),
+    re.compile(r"too many clients already", re.IGNORECASE),
     re.compile(r"exit\s+code\s+[1-9]\d*", re.IGNORECASE),
     re.compile(r"^\s*raise\s+\w+Error", re.IGNORECASE),
 ]
@@ -102,6 +114,9 @@ def tail_lines(path: Path, n: int) -> list[str]:
 
 def line_matches_error(line: str, include_warnings: bool) -> bool:
     """True, если строка похожа на ошибку."""
+    for pat in IGNORE_LINE_PATTERNS:
+        if pat.search(line):
+            return False
     for pat in ERROR_PATTERNS:
         if pat.search(line):
             return True

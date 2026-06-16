@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,6 +27,38 @@ from report_generator import get_engine
 from services.portfolio_ml_features import portfolio_ml_threshold_log
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LabelingDb:
+    """Reused SQL connection + quotes cache for batch ERD backfill (avoids connection storms)."""
+
+    engine: Any
+    _conn: Any = field(default=None, init=False, repr=False)
+    _quotes_cache: Dict[tuple, pd.DataFrame] = field(default_factory=dict, init=False, repr=False)
+
+    def connection(self):
+        if self._conn is None:
+            self._conn = self.engine.connect()
+        return self._conn
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def __enter__(self) -> "LabelingDb":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.close()
+
+    def quotes_window(self, symbol: str, *, date_min: date, date_max: date) -> pd.DataFrame:
+        sym = str(symbol or "").strip().upper()
+        key = (sym, date_min, date_max)
+        if key not in self._quotes_cache:
+            self._quotes_cache[key] = _load_quotes_df(self.connection(), sym, date_min, date_max)
+        return self._quotes_cache[key]
 
 FEATURE_BUILDER_VERSION_QUOTES = "quotes_mvp_1"
 FEATURE_BUILDER_VERSION_REGIME = "quotes_regime_v1"
@@ -265,13 +297,7 @@ def _empty_jsonb(val: Any) -> bool:
     return True
 
 
-def load_quotes_window(
-    symbol: str,
-    *,
-    date_min: date,
-    date_max: date,
-) -> pd.DataFrame:
-    sym = str(symbol or "").strip().upper()
+def _load_quotes_df(conn, sym: str, date_min: date, date_max: date) -> pd.DataFrame:
     q = text(
         """
         SELECT date::date AS d, open, high, low, close, volume, rsi, volatility_5
@@ -282,8 +308,7 @@ def load_quotes_window(
         ORDER BY date ASC
         """
     )
-    with get_engine().connect() as conn:
-        df = pd.read_sql(q, conn, params={"t": sym, "dmin": date_min, "dmax": date_max})
+    df = pd.read_sql(q, conn, params={"t": sym, "dmin": date_min, "dmax": date_max})
     if df.empty:
         return df
     df["d"] = pd.to_datetime(df["d"]).dt.date
@@ -291,6 +316,20 @@ def load_quotes_window(
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
+
+
+def load_quotes_window(
+    symbol: str,
+    *,
+    date_min: date,
+    date_max: date,
+    db: Optional[LabelingDb] = None,
+) -> pd.DataFrame:
+    sym = str(symbol or "").strip().upper()
+    if db is not None:
+        return db.quotes_window(sym, date_min=date_min, date_max=date_max)
+    with get_engine().connect() as conn:
+        return _load_quotes_df(conn, sym, date_min, date_max)
 
 
 def _find_as_of_index(dates: List[date], event_d: date) -> Optional[int]:
@@ -327,7 +366,7 @@ def _parse_json_field(raw: Any) -> Dict[str, Any]:
     return {}
 
 
-def load_market_regime_row(trade_date: date) -> Optional[Dict[str, Any]]:
+def load_market_regime_row(trade_date: date, *, db: Optional[LabelingDb] = None) -> Optional[Dict[str, Any]]:
     q = text(
         """
         SELECT trade_date, spy_close, ndx_close, dia_close, vix_close,
@@ -337,8 +376,11 @@ def load_market_regime_row(trade_date: date) -> Optional[Dict[str, Any]]:
         """
     )
     try:
-        with get_engine().connect() as conn:
-            row = conn.execute(q, {"d": trade_date}).fetchone()
+        if db is not None:
+            row = db.connection().execute(q, {"d": trade_date}).fetchone()
+        else:
+            with get_engine().connect() as conn:
+                row = conn.execute(q, {"d": trade_date}).fetchone()
     except Exception as e:
         logger.debug("market_regime_daily unavailable for %s: %s", trade_date, e)
         return None
@@ -562,6 +604,7 @@ def load_earnings_detail_for_event(
     event_d: date,
     *,
     knowledge_base_id: Optional[int] = None,
+    db: Optional[LabelingDb] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Load known earnings metadata for the symbol/event date.
@@ -580,8 +623,11 @@ def load_earnings_detail_for_event(
             """
         )
         try:
-            with get_engine().connect() as conn:
-                row = conn.execute(q_by_kb, {"kb_id": int(knowledge_base_id)}).fetchone()
+            if db is not None:
+                row = db.connection().execute(q_by_kb, {"kb_id": int(knowledge_base_id)}).fetchone()
+            else:
+                with get_engine().connect() as conn:
+                    row = conn.execute(q_by_kb, {"kb_id": int(knowledge_base_id)}).fetchone()
         except Exception as e:
             logger.debug("earnings_event_detail unavailable for kb=%s: %s", knowledge_base_id, e)
             row = None
@@ -608,8 +654,13 @@ def load_earnings_detail_for_event(
         """
     )
     try:
-        with get_engine().connect() as conn:
-            row = conn.execute(q, {"symbol": str(symbol or "").strip().upper(), "event_d": event_d}).fetchone()
+        if db is not None:
+            row = db.connection().execute(
+                q, {"symbol": str(symbol or "").strip().upper(), "event_d": event_d}
+            ).fetchone()
+        else:
+            with get_engine().connect() as conn:
+                row = conn.execute(q, {"symbol": str(symbol or "").strip().upper(), "event_d": event_d}).fetchone()
     except Exception as e:
         logger.debug("earnings_event_detail unavailable for %s %s: %s", symbol, event_d, e)
         return None
@@ -657,7 +708,9 @@ def enrich_features_with_earnings_detail(
     return out
 
 
-def load_peer_graph_targets(source_symbol: str, *, limit: int = 12) -> list[tuple[str, float]]:
+def load_peer_graph_targets(
+    source_symbol: str, *, limit: int = 12, db: Optional[LabelingDb] = None
+) -> list[tuple[str, float]]:
     sym = str(source_symbol or "").strip().upper()
     if not sym:
         return []
@@ -671,8 +724,12 @@ def load_peer_graph_targets(source_symbol: str, *, limit: int = 12) -> list[tupl
         """
     )
     try:
-        with get_engine().connect() as conn:
-            rows = conn.execute(q, {"source": sym, "limit": int(limit)}).all()
+        params = {"source": sym, "limit": int(limit)}
+        if db is not None:
+            rows = db.connection().execute(q, params).all()
+        else:
+            with get_engine().connect() as conn:
+                rows = conn.execute(q, params).all()
     except Exception as e:
         logger.debug("peer_graph_edge unavailable for %s: %s", sym, e)
         return []
@@ -706,12 +763,13 @@ def enrich_features_with_peer_momentum(
     as_of_d: date,
     peer_targets: list[tuple[str, float]],
     max_peers: int = 8,
+    db: Optional[LabelingDb] = None,
 ) -> Dict[str, Any]:
     out = dict(base)
     rets: list[float] = []
     d_min = as_of_d - timedelta(days=400)
     for sym, _w in peer_targets[: max(1, int(max_peers))]:
-        df = load_quotes_window(sym, date_min=d_min, date_max=as_of_d)
+        df = load_quotes_window(sym, date_min=d_min, date_max=as_of_d, db=db)
         if df.empty:
             continue
         dates = list(df["d"])
@@ -736,6 +794,7 @@ def build_features_before(
     feature_builder_version: Optional[str] = None,
     symbol: str = "",
     knowledge_base_id: Optional[int] = None,
+    db: Optional[LabelingDb] = None,
 ) -> Dict[str, Any]:
     closes = df["close"].to_numpy(dtype=float)
     dates = list(df["d"])
@@ -770,7 +829,7 @@ def build_features_before(
 
     if fbv in (FEATURE_BUILDER_VERSION_REGIME, FEATURE_BUILDER_VERSION_EARNINGS):
         as_of_d = dates[i]
-        regime = load_market_regime_row(as_of_d)
+        regime = load_market_regime_row(as_of_d, db=db)
         out = enrich_features_with_market_regime(out, regime)
     if fbv == FEATURE_BUILDER_VERSION_EARNINGS:
         sym_u = str(symbol or df.attrs.get("symbol") or "").strip().upper()
@@ -778,14 +837,16 @@ def build_features_before(
             sym_u,
             event_d,
             knowledge_base_id=knowledge_base_id,
+            db=db,
         )
         out = enrich_features_with_earnings_detail(out, detail)
-        peer_edges = load_peer_graph_targets(sym_u)
+        peer_edges = load_peer_graph_targets(sym_u, db=db)
         out = enrich_features_with_peer_graph(out, source_symbol=sym_u)
         out = enrich_features_with_peer_momentum(
             out,
             as_of_d=dates[i],
             peer_targets=peer_edges,
+            db=db,
         )
     return out
 
@@ -842,6 +903,7 @@ def compute_row_labeling(
     feature_builder_version: Optional[str] = None,
     horizons: Tuple[int, ...] = (1, 5, 20),
     min_past_bars: int = 20,
+    db: Optional[LabelingDb] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[str], str]:
     """
     Возвращает (features_before, outcomes_after, final_label, skip_reason).
@@ -854,7 +916,7 @@ def compute_row_labeling(
 
     d_min = event_d - timedelta(days=400)
     d_max = event_d + timedelta(days=120)
-    df = load_quotes_window(symbol, date_min=d_min, date_max=d_max)
+    df = load_quotes_window(symbol, date_min=d_min, date_max=d_max, db=db)
     if df.empty:
         return None, None, None, "no_quotes"
     df.attrs["symbol"] = str(symbol or "").strip().upper()
@@ -864,6 +926,7 @@ def compute_row_labeling(
         symbol,
         event_d,
         knowledge_base_id=knowledge_base_id,
+        db=db,
     )
     phase = parse_earnings_market_phase_from_detail(detail)
     anchors = resolve_event_anchors(event_d, phase, dates)
@@ -882,6 +945,7 @@ def compute_row_labeling(
         feature_builder_version=fbv,
         symbol=symbol,
         knowledge_base_id=knowledge_base_id,
+        db=db,
     )
     feats["earnings_market_phase"] = anchors.earnings_market_phase
     feats["outcome_anchor_trade_date"] = str(anchors.outcome_anchor_date)
@@ -923,6 +987,7 @@ def labeling_updates_for_row(
     force_features: bool,
     force_outcomes: bool,
     horizons: Tuple[int, ...] = (1, 5, 20),
+    db: Optional[LabelingDb] = None,
 ) -> Tuple[Dict[str, Any], str]:
     """
     Возвращает (поля для SET в UPDATE, note).
@@ -949,6 +1014,7 @@ def labeling_updates_for_row(
         row.get("event_time_et"),
         knowledge_base_id=kb_id,
         horizons=horizons,
+        db=db,
     )
     out: Dict[str, Any] = {}
     notes: List[str] = []

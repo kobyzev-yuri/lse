@@ -145,7 +145,7 @@ def main() -> int:
     from sqlalchemy import bindparam, text
 
     from report_generator import get_engine
-    from services.event_reaction_labeling import json_dumps_obj, labeling_updates_for_row
+    from services.event_reaction_labeling import LabelingDb, json_dumps_obj, labeling_updates_for_row
     from services.ticker_groups import get_config_ticker_symbols_upper_unique
 
     engine = get_engine()
@@ -213,36 +213,38 @@ def main() -> int:
     partial_notes = 0
     skip_reasons: Counter[str] = Counter()
 
-    for r in rows:
-        d = _row_from_db(r)
-        rid = int(d["id"])
-        upd, note = labeling_updates_for_row(
-            d,
-            do_features=do_features,
-            do_outcomes=do_outcomes,
-            force_features=args.force_features,
-            force_outcomes=args.force_outcomes,
-            horizons=horizons,
-        )
-        if not upd:
-            skipped += 1
-            reason_key = (note or "unknown").strip() or "unknown"
-            skip_reasons[reason_key] += 1
-            if args.verbose:
-                logger.info("skip id=%s symbol=%s note=%s", rid, d.get("symbol"), note)
-            else:
-                logger.debug("skip id=%s note=%s", rid, note)
-            continue
-        if note:
-            partial_notes += 1
-            logger.warning("id=%s partial/warn: %s keys=%s", rid, note, list(upd.keys()))
-        if args.dry_run:
-            logger.info("dry-run id=%s keys=%s", rid, list(upd.keys()))
+    with LabelingDb(engine) as ldb:
+        for r in rows:
+            d = _row_from_db(r)
+            rid = int(d["id"])
+            upd, note = labeling_updates_for_row(
+                d,
+                do_features=do_features,
+                do_outcomes=do_outcomes,
+                force_features=args.force_features,
+                force_outcomes=args.force_outcomes,
+                horizons=horizons,
+                db=ldb,
+            )
+            if not upd:
+                skipped += 1
+                reason_key = (note or "unknown").strip() or "unknown"
+                skip_reasons[reason_key] += 1
+                if args.verbose:
+                    logger.info("skip id=%s symbol=%s note=%s", rid, d.get("symbol"), note)
+                else:
+                    logger.debug("skip id=%s note=%s", rid, note)
+                continue
+            if note:
+                partial_notes += 1
+                logger.warning("id=%s partial/warn: %s keys=%s", rid, note, list(upd.keys()))
+            if args.dry_run:
+                logger.info("dry-run id=%s keys=%s", rid, list(upd.keys()))
+                updated += 1
+                continue
+            with engine.begin() as conn:
+                _apply_update(conn, rid, upd, json_dumps_obj)
             updated += 1
-            continue
-        with engine.begin() as conn:
-            _apply_update(conn, rid, upd, json_dumps_obj)
-        updated += 1
 
     logger.info(
         "Готово: candidates=%s updated/would=%s skipped_empty=%s partial_warnings=%s dry_run=%s",

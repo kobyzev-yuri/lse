@@ -44,19 +44,19 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Event / earnings reaction dataset: скелет из KB → разметка из daily quotes (до GAME_5M ML).
 # Product advisory model uses expanded history: v0_expanded_baseline + quotes_regime_v1.
 33 23 * * 1-5 flock -n /tmp/lse_erd_build.lock docker exec lse-bot python scripts/build_event_reaction_dataset.py --from-kb-earnings --dataset-version v0_expanded_baseline --include-earnings-universe >> /home/ai8049520/lse/logs/event_reaction_build.log 2>&1
-34 23 * * 1-5 flock -n /tmp/lse_erd_outcomes.lock docker exec lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --only-outcomes --force-outcomes --include-earnings-universe --limit 800 >> /home/ai8049520/lse/logs/event_reaction_outcomes.log 2>&1
-36 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --include-all-symbols --limit 8000 >> /home/ai8049520/lse/logs/event_reaction_labeling.log 2>&1
+35 23 * * 1-5 flock -n /tmp/lse_erd_outcomes.lock docker exec lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --only-outcomes --force-outcomes --include-earnings-universe --limit 800 >> /home/ai8049520/lse/logs/event_reaction_outcomes.log 2>&1
+39 23 * * 1-5 flock -n /tmp/lse_erd_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --include-all-symbols --limit 8000 >> /home/ai8049520/lse/logs/event_reaction_labeling.log 2>&1
 # Earnings intelligence layer: overwrite features on earnings universe (superset of quotes_regime_v1).
-37 23 * * 1-5 flock -n /tmp/lse_erd_earnings_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --only-features --force-features --include-earnings-universe --limit 800 >> /home/ai8049520/lse/logs/event_reaction_earnings_labeling.log 2>&1
-38 23 * * 1-5 flock -n /tmp/lse_erd_labeling_gaps.lock docker exec lse-bot python scripts/check_erd_labeling_gaps_cron.py --execute --telegram >> /home/ai8049520/lse/logs/erd_labeling_gaps.log 2>&1
+43 23 * * 1-5 flock -n /tmp/lse_erd_earnings_label.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --only-features --force-features --include-earnings-universe --limit 800 >> /home/ai8049520/lse/logs/event_reaction_earnings_labeling.log 2>&1
+45 23 * * 1-5 flock -n /tmp/lse_erd_labeling_gaps.lock docker exec lse-bot python scripts/check_erd_labeling_gaps_cron.py --execute --telegram >> /home/ai8049520/lse/logs/erd_labeling_gaps.log 2>&1
 # GAME_5M ML datasets only (stuck + continuation CSV + JSONL). Train: dispatcher nightly 23:47.
-40 23 * * 1-5 flock -n /tmp/lse_game5m_daily_ml.lock docker exec lse-bot python scripts/run_daily_game5m_ml_pipeline.py >> /home/ai8049520/lse/logs/game5m_daily_ml_pipeline.log 2>&1
+48 23 * * 1-5 flock -n /tmp/lse_game5m_daily_ml.lock docker exec lse-bot python scripts/run_daily_game5m_ml_pipeline.py >> /home/ai8049520/lse/logs/game5m_daily_ml_pipeline.log 2>&1
 # Open-path labels (before nightly ML refresh).
-45 23 * * 1-5 flock -n /tmp/lse_open_path_labels.lock docker exec lse-bot python scripts/label_open_path_scenarios.py --ensure-table >> /home/ai8049520/lse/logs/open_path_labels.log 2>&1
+52 23 * * 1-5 flock -n /tmp/lse_open_path_labels.lock docker exec lse-bot python scripts/label_open_path_scenarios.py --ensure-table >> /home/ai8049520/lse/logs/open_path_labels.log 2>&1
 # Unified ML nightly refresh: game5m_entry, open_path, event_reaction, earnings_grid, portfolio. See docs/ML_AND_DECISION_ARCHITECTURE.md §5.3
-47 23 * * 1-5 flock -n /tmp/lse_ml_refresh_nightly.lock docker exec -e ML_READINESS_TRAIN_MODE=full lse-bot python scripts/run_ml_refresh_dispatcher.py --slot nightly >> /home/ai8049520/lse/logs/ml_refresh_nightly.log 2>&1
+55 23 * * 1-5 flock -n /tmp/lse_ml_refresh_nightly.lock docker exec -e ML_READINESS_TRAIN_MODE=full lse-bot python scripts/run_ml_refresh_dispatcher.py --slot nightly >> /home/ai8049520/lse/logs/ml_refresh_nightly.log 2>&1
 # ML train readiness (dry-run gates): after nightly refresh. -e включает event + earnings в overall.
-50 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0 -e ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
+58 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0 -e ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
 # Legacy per-contour nightly (replaced by dispatcher --slot nightly 23:47):
 # 46 open_path | 51 event_reaction --full | 52 earnings_grid --full
 # Open-path */6 poll — via run_ml_refresh_dispatcher.py (15 */6)

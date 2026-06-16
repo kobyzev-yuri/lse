@@ -45,6 +45,9 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    # yfinance пишет «possibly delisted» на ERROR при пустом ответе Yahoo — не засорять watchdog.
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
     try:
         from services.market_session import get_market_session_context
         from services.premarket import get_premarket_context

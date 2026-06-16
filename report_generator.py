@@ -131,9 +131,21 @@ class OpenPosition:
     buy_leg_count: int = 1  # число BUY подряд в текущей открытой позиции (до полного SELL)
 
 
+_engine = None
+
+
 def get_engine():
-    db_url = get_database_url()
-    return create_engine(db_url)
+    """Shared SQLAlchemy engine (one pool per process)."""
+    global _engine
+    if _engine is None:
+        _engine = create_engine(
+            get_database_url(),
+            pool_pre_ping=True,
+            pool_size=3,
+            max_overflow=5,
+            pool_recycle=3600,
+        )
+    return _engine
 
 
 def load_trade_history(engine, strategy_name: Optional[str] = None) -> pd.DataFrame:
