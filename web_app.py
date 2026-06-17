@@ -780,6 +780,31 @@ async def get_analyzer_trust(refresh: bool = False):
         raise HTTPException(status_code=500, detail=f"trust arbiter: {e!s}")
 
 
+@app.get("/api/analyzer/weekly-tactic-review", response_class=JSONResponse)
+async def api_analyzer_weekly_tactic_review(days: int = 7, refresh: bool = False):
+    """Weekly GAME_5M tactic scorecard (bundle, hold-to-gap, experiment observe)."""
+    from services.weekly_game5m_tactic_review import (
+        build_weekly_game5m_tactic_review,
+        default_weekly_review_path,
+    )
+    from services.trade_effectiveness_analyzer import _load_weekly_game5m_tactic_review_artifact
+
+    def _run() -> Dict[str, Any]:
+        if refresh:
+            return build_weekly_game5m_tactic_review(days=max(1, min(days, 30)))
+        artifact = _load_weekly_game5m_tactic_review_artifact(days=days)
+        if artifact.get("status") != "artifact":
+            return build_weekly_game5m_tactic_review(days=max(1, min(days, 30)))
+        artifact["artifact_path"] = str(default_weekly_review_path())
+        return artifact
+
+    try:
+        return _to_jsonable(await asyncio.to_thread(_run))
+    except Exception as e:
+        logger.exception("api_analyzer_weekly_tactic_review failed")
+        raise HTTPException(status_code=500, detail=f"weekly tactic review: {e!s}")
+
+
 @app.get("/api/decision-stack/earnings-trust-monitor", response_class=JSONResponse)
 async def api_decision_stack_earnings_trust_monitor(days: int = 14, limit: int = 40):
     """Watchlist post-mortem тикеров и влияние earnings_trust на projected resolve."""

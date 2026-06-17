@@ -150,6 +150,12 @@
     <div id="earningsTrustGateBlock" class="dashboard-text">—</div>
 </div>
 
+<div class="card analyzer-game5m-only" style="border: 1px solid rgba(96, 165, 250, 0.45);">
+    <h2>Weekly tactic scorecard <code>weekly_game5m_tactic_review</code></h2>
+    <p class="muted" style="font-size:0.9rem;">Еженедельный отчёт: active bundle, hold-to-gap, mirror diff, experiment observe, срез по <code>active_bundle_id</code>. Cron вс 06:40 MSK.</p>
+    <div id="weeklyTacticReviewBlock" class="dashboard-text">—</div>
+</div>
+
 <div class="card analyzer-game5m-only" style="border: 1px solid rgba(52, 211, 153, 0.45);">
     <h2>Hold → gap open <code>hold_to_gap_counterfactual</code></h2>
     <p class="muted" style="font-size:0.9rem;">Факт vs продажа на open d+1/d+2/d+3; multiday на входе/выходе; симуляция <code>EOD_FLATTEN_ALWAYS=false</code> и <code>hold_gate apply</code>.</p>
@@ -2105,6 +2111,57 @@ function renderEarningsTrustGateBlock(data) {
     el.innerHTML = html;
 }
 
+function renderWeeklyTacticReviewBlock(data) {
+    const el = document.getElementById('weeklyTacticReviewBlock');
+    if (!el) return;
+    const w = data.weekly_game5m_tactic_review || {};
+    if (w.mode !== 'weekly_game5m_tactic_review') {
+        el.innerHTML = '<span class="muted">Нет weekly scorecard (запустите cron или API refresh=1).</span>';
+        return;
+    }
+    if (w.status === 'missing_artifact') {
+        el.innerHTML = '<span class="muted">' + esc(w.note_ru || 'Артефакт не найден.') + '</span>';
+        return;
+    }
+    const act = w.active_tactic || {};
+    const exp = w.experiment_review || {};
+    const h = w.hold_to_gap_counterfactual || {};
+    let html = '<p style="margin:0 0 0.45rem 0;">Окно: <strong>' + esc(w.period_days || '—') +
+        'd</strong> · сделок: <strong>' + esc(w.closed_trades || 0) + '</strong>';
+    if (act.active_bundle_id) {
+        html += ' · bundle: <code>' + esc(act.active_bundle_id) + '</code>';
+    }
+    if (exp.active && exp.status) {
+        html += ' · experiment: <code>' + esc(exp.status) + '</code>';
+    }
+    html += '</p>';
+    if (h.avg_delta_d1_vs_actual != null) {
+        html += '<p class="muted" style="font-size:0.85rem;margin:0 0 0.45rem 0;">hold-to-gap avg Δd1: <strong>' +
+            esc(h.avg_delta_d1_vs_actual) + '</strong> pp · policy better: <strong>' +
+            esc(h.simulated_policy_better_count || 0) + '</strong></p>';
+    }
+    const bundles = Array.isArray(w.trades_by_bundle) ? w.trades_by_bundle : [];
+    if (bundles.length) {
+        html += '<table class="forecast-table" role="table"><thead><tr><th>Bundle</th><th>n</th><th>avg %</th><th>wins</th></tr></thead><tbody>';
+        bundles.forEach(function (r) {
+            html += '<tr><td><code>' + esc(r.bundle_key || r.active_bundle_id || '—') + '</code></td>' +
+                '<td class="num">' + esc(r.n) + '</td><td class="num">' + esc(r.avg_realized_pct) +
+                '</td><td class="num">' + esc(r.wins) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    const recs = Array.isArray(w.recommendations_ru) ? w.recommendations_ru : [];
+    if (recs.length) {
+        html += '<ul style="margin:0.55rem 0 0 1.1rem;padding:0;font-size:0.88rem;">';
+        recs.forEach(function (t) { html += '<li>' + esc(t) + '</li>'; });
+        html += '</ul>';
+    }
+    if (w.generated_at_utc) {
+        html += '<p class="muted" style="font-size:0.78rem;margin:0.45rem 0 0 0;">generated: ' + esc(w.generated_at_utc) + '</p>';
+    }
+    el.innerHTML = html;
+}
+
 function renderHoldToGapBlock(data) {
     const el = document.getElementById('holdToGapBlock');
     if (!el) return;
@@ -2279,6 +2336,7 @@ async function runAnalyzer() {
         renderPortfolioBlocks(data);
         renderDecisionStackShadowBlock(data);
         renderEarningsTrustGateBlock(data);
+        renderWeeklyTacticReviewBlock(data);
         renderHoldToGapBlock(data);
         renderCatboostFusionBlock(data);
         renderCatboostBlock(data);

@@ -92,6 +92,11 @@ FULL_ENTRY_KEYS = (
     "exit_5m_high",
     "exit_5m_low",
     "exit_5m_close",
+    # Активный bundle/experiment из game5m_tuning_ledger на момент BUY
+    "active_bundle_id",
+    "active_experiment_id",
+    "active_tactic_kind",
+    "active_experiment_status",
 ) + CORRELATION_CB_FEATURE_KEYS
 # session_phase берём из market_session
 SESSION_PHASE_KEY = "session_phase"
@@ -147,6 +152,9 @@ def build_full_entry_context(
             v = correlation_entry_features.get(k)
             if v is not None and isinstance(v, (int, float)):
                 out[k] = float(v)
+    from services.game5m_active_tactic import enrich_context_with_active_tactic
+
+    out = enrich_context_with_active_tactic(out, at_exit=False)
     return {k: v for k, v in out.items() if v is not None}
 
 

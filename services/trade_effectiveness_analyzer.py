@@ -193,6 +193,10 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Контрфакт GAME_5M: фактический выход vs продажа на open d+1/d+2/d+3; multiday на входе/выходе; "
         "симуляция EOD_FLATTEN_ALWAYS=false и hold_gate apply. См. scripts/backtest_hold_to_gap_game5m.py."
     ),
+    "weekly_game5m_tactic_review": (
+        "Еженедельный scorecard тактики GAME_5M: active bundle, hold-to-gap, mirror diff, experiment observe, "
+        "срез по active_bundle_id. Артефакт: last_weekly_game5m_tactic_review.json."
+    ),
     "portfolio_exit_policy_review": (
         "Разбор выходов портфельной игры: take_profit на BUY, portfolio_effective_take_pct_at_entry, сигналы TAKE_PROFIT / trailing; "
         "сводка по exit_signal и ранние тейки с крупным missed_upside (5m-окно)."
@@ -784,6 +788,39 @@ def _build_hold_to_gap_block(
         )
     except Exception as e:
         return {"mode": "error", "note": str(e)[:240]}
+
+
+def _load_weekly_game5m_tactic_review_artifact(*, days: int = 7) -> Dict[str, Any]:
+    """Read last weekly tactic review JSON if present; otherwise hint to run cron script."""
+    from pathlib import Path
+
+    from services.weekly_game5m_tactic_review import default_weekly_review_path
+
+    p = default_weekly_review_path()
+    if not p.is_file():
+        return {
+            "mode": "weekly_game5m_tactic_review",
+            "status": "missing_artifact",
+            "artifact_path": str(p),
+            "note_ru": "Запустите scripts/weekly_game5m_tactic_review.py (cron вс 06:40 MSK).",
+            "period_days_requested": days,
+        }
+    try:
+        import json
+
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("artifact is not a dict")
+        data["status"] = "artifact"
+        data["artifact_path"] = str(p)
+        return data
+    except Exception as e:
+        return {
+            "mode": "weekly_game5m_tactic_review",
+            "status": "error",
+            "artifact_path": str(p),
+            "note": str(e)[:200],
+        }
 
 
 def _trust_level_game5m_catboost(meta: Optional[Dict[str, Any]], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3488,6 +3525,7 @@ def _compact_report_for_llm(payload: Dict[str, Any]) -> Dict[str, Any]:
         "decision_stack_shadow_diff": payload.get("decision_stack_shadow_diff"),
         "earnings_trust_gate_monitor": payload.get("earnings_trust_gate_monitor"),
         "hold_to_gap_counterfactual": payload.get("hold_to_gap_counterfactual"),
+        "weekly_game5m_tactic_review": payload.get("weekly_game5m_tactic_review"),
         "time_exit_early_review": te_slim or None,
         "time_exit_early_action_summary": payload.get("time_exit_early_action_summary"),
         "game5m_catboost_status": payload.get("game5m_catboost_status"),
@@ -6138,6 +6176,7 @@ def analyze_trade_effectiveness(
             "decision_stack_shadow_diff": _build_decision_stack_shadow_diff(strategy, [], []),
             "earnings_trust_gate_monitor": build_earnings_trust_gate_monitor([], limit=30),
             "hold_to_gap_counterfactual": _build_hold_to_gap_block([], [], {}, days=days),
+            "weekly_game5m_tactic_review": _load_weekly_game5m_tactic_review_artifact(days=days),
         }
         _attach_portfolio_analyzer_blocks(empty_payload, strategy=strategy, closed=[], effects=[])
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
@@ -6299,9 +6338,14 @@ def analyze_trade_effectiveness(
             build_earnings_trust_gate_monitor(closed, limit=30) if want_g5m else _section_skip("earnings_trust")
         ),
         "hold_to_gap_counterfactual": (
-            __build_hold_to_gap_block(closed, effects, cache, days=days)
+            _build_hold_to_gap_block(closed, effects, cache, days=days)
             if want_g5m
             else _section_skip("hold_to_gap")
+        ),
+        "weekly_game5m_tactic_review": (
+            _load_weekly_game5m_tactic_review_artifact(days=days)
+            if want_g5m
+            else _section_skip("weekly_tactic")
         ),
         "game5m_recovery_model_status": game5m_recovery_model_status,
         "recovery_scenario_backtest": recovery_scenario,

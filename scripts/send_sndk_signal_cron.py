@@ -841,6 +841,16 @@ def process_ticker(
                             return False
                     except Exception as e_md:
                         logger.debug("multiday hold gate %s: %s", ticker, e_md)
+                try:
+                    from services.game5m_active_tactic import enrich_context_with_active_tactic
+
+                    close_ctx_enriched = enrich_context_with_active_tactic(
+                        close_ctx_enriched,
+                        entry_ctx=entry_ctx_db,
+                        at_exit=True,
+                    )
+                except Exception as e_tac:
+                    logger.debug("active tactic stamp on SELL %s: %s", ticker, e_tac)
                 close_narrative_ctx = close_ctx_enriched
                 close_position(
                     ticker, exit_price, exit_type, position=open_pos,
@@ -1278,6 +1288,16 @@ def main():
                         "reason": flat_reason,
                         "premarket_gap_pct": gap_pm,
                     }
+                    try:
+                        from services.game5m_active_tactic import enrich_context_with_active_tactic
+
+                        close_ctx_enriched_pm = enrich_context_with_active_tactic(
+                            close_ctx_enriched_pm,
+                            entry_ctx=entry_ctx_pm,
+                            at_exit=True,
+                        )
+                    except Exception as e_tac_pm:
+                        logger.debug("active tactic stamp on premarket SELL %s: %s", ticker, e_tac_pm)
                     if close_position(
                         ticker,
                         exit_price_pm,
