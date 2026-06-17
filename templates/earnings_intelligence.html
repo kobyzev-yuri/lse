@@ -523,7 +523,7 @@ function showView(name, opts = {}) {
     currentView = name;
     document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === name));
     document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
-    if (name === 'graph' && !graphData) loadGraph();
+    if (name === 'graph') loadGraph();
     if (name === 'pipeline') loadPipeline();
     if (name === 'shadow') loadShadow(false);
     if (needsEventView(name)) reloadActiveView();
