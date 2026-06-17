@@ -1,6 +1,8 @@
 """Tests for earnings post-mortem aggregation."""
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from services.earnings_event_postmortem import (
     _fact_was_bad,
     aggregate_earnings_trust_metrics,
@@ -49,6 +51,38 @@ def test_aggregate_earnings_trust_metrics_sign_accuracy():
     assert fq["block_precision"] == 1.0
     assert "gap_up" in agg["by_scenario_class"]
     assert agg["by_scenario_class"]["gap_up"]["n"] == 2
+    assert agg["degradation"]["hit_90d"] == 1.0
+
+
+def test_aggregate_degradation_detects_drop():
+    old = date.today() - timedelta(days=60)
+    recent = date.today() - timedelta(days=5)
+    rows = []
+    for i in range(8):
+        rows.append(
+            {
+                "event_date": old.isoformat(),
+                "context": {"scenario_class": "gap_up"},
+                "models": {"scenario_sign": {"hit": True}},
+                "fusion": {},
+                "fusion_outcome": {},
+            }
+        )
+    for i in range(4):
+        rows.append(
+            {
+                "event_date": recent.isoformat(),
+                "context": {"scenario_class": "gap_up"},
+                "models": {"scenario_sign": {"hit": False}},
+                "fusion": {},
+                "fusion_outcome": {},
+            }
+        )
+    agg = aggregate_earnings_trust_metrics(rows, window_days=365, context_bucket_min=2)
+    assert agg["degradation"]["hit_14d"] == 0.0
+    assert agg["degradation"]["hit_90d"] is not None
+    assert agg["degradation"]["hit_90d"] > agg["degradation"]["hit_14d"]
+    assert agg["degradation"]["degrading"] is True
 
 
 def test_fact_was_bad_large_miss():

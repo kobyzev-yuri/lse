@@ -124,6 +124,7 @@ def default_readiness(contour_id: str) -> str:
         "event_reaction",
         "recovery_ml",
         "cluster_context",
+        "earnings_trust",
     }
     if contour_id in prod:
         return READINESS_PRODUCTION

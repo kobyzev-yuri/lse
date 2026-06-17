@@ -183,6 +183,30 @@ class TestDecisionStackGame5m(unittest.TestCase):
         self.assertEqual(sig["action"], "downgrade")
         self.assertTrue(sig["should_take_watch"])
 
+    def test_earnings_trust_contribution_shadow(self):
+        from unittest.mock import patch
+
+        sample = {
+            "active": True,
+            "runtime_role": "source",
+            "strength": -0.4,
+            "would_downgrade": True,
+            "detail_ru": "ORCL test",
+            "event_date": "2026-06-10",
+            "source_symbol": "ORCL",
+            "trust_labels": {},
+        }
+        d5 = {"technical_decision_core": "BUY", "ticker": "ORCL"}
+        with patch(
+            "services.earnings_trust_runtime.build_earnings_trust_runtime",
+            return_value=sample,
+        ):
+            contribs = collect_game5m_contributions(d5, ticker="ORCL")
+        et = next(c for c in contribs if c["contour_id"] == "earnings_trust")
+        self.assertEqual(et["action"], "telemetry")
+        self.assertEqual(et["role"], "advisory_postmortem")
+        self.assertLess(float(et["strength"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -417,11 +417,43 @@ def aggregate_earnings_trust_metrics(
     def _acc(h: int, t: int) -> float | None:
         return round(h / t, 4) if t else None
 
+    def _scenario_hit_rate(window_days: int) -> float | None:
+        w_cut = date.today() - timedelta(days=max(1, window_days))
+        hits = total = 0
+        for row in rows:
+            ev_s = str(row.get("event_date") or "")[:10]
+            try:
+                ev_d = date.fromisoformat(ev_s)
+            except ValueError:
+                continue
+            if ev_d < w_cut:
+                continue
+            sign_hit = (row.get("models") or {}).get("scenario_sign", {}).get("hit")
+            if sign_hit is None:
+                continue
+            total += 1
+            if sign_hit:
+                hits += 1
+        return _acc(hits, total)
+
+    hit_14d = _scenario_hit_rate(14)
+    hit_90d = _scenario_hit_rate(90)
+    degrading = (
+        hit_14d is not None
+        and hit_90d is not None
+        and hit_14d < hit_90d - 0.1
+    )
+
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "rolling_window_days": window_days,
         "context_bucket_min": min_n,
         "n_events_in_window": len(recent),
+        "degradation": {
+            "hit_14d": hit_14d,
+            "hit_90d": hit_90d,
+            "degrading": degrading,
+        },
         "contours": {
             "earnings_scenario": {
                 "n_matured": scen_total,

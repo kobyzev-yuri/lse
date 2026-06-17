@@ -435,6 +435,63 @@ def _collect_news_fusion_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, 
     )
 
 
+def _collect_earnings_trust_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    ticker = str(d5.get("ticker") or "").strip().upper()
+    if not ticker:
+        return None
+    try:
+        from services.earnings_trust_runtime import (
+            build_earnings_trust_runtime,
+            earnings_trust_gate_mode,
+        )
+
+        runtime = build_earnings_trust_runtime(ticker)
+    except Exception as e:
+        logger.debug("earnings_trust runtime %s: %s", ticker, e)
+        return None
+    if not runtime.get("active"):
+        return None
+
+    gm = earnings_trust_gate_mode()
+    readiness = stack_readiness("earnings_trust")
+    cid = "earnings_trust"
+    strength = float(runtime.get("strength") or 0.0)
+    would_down = bool(runtime.get("would_downgrade"))
+    action = "telemetry"
+    if gm == "apply" and would_down:
+        action = "downgrade"
+    elif gm == "apply" and strength > 0.2:
+        action = "boost"
+
+    role = str(runtime.get("runtime_role") or "source")
+    trust_mult = trust_score_for_contour(
+        "peer_spillover" if role == "peer" else "earnings_scenario"
+    )
+
+    return make_contribution(
+        contour_id=cid,
+        role="advisory_postmortem",
+        readiness=readiness,
+        strength=max(-1.0, min(1.0, strength)),
+        weight=round(weight_for_readiness(readiness) * trust_mult, 4),
+        action=action,
+        detail=str(runtime.get("detail_ru") or ""),
+        metrics={
+            "gate_mode": gm,
+            "runtime_role": role,
+            "source_symbol": runtime.get("source_symbol"),
+            "event_date": runtime.get("event_date"),
+            "would_downgrade": would_down,
+            "trust_score": trust_mult,
+            "trust_labels": runtime.get("trust_labels"),
+            "fusion": runtime.get("fusion"),
+            "fusion_outcome": runtime.get("fusion_outcome"),
+            "rolling_degradation": runtime.get("rolling_degradation"),
+            "postmortem_version": runtime.get("postmortem_version"),
+        },
+    )
+
+
 def collect_game5m_contributions(d5: Dict[str, Any], *, ticker: str = "") -> List[Dict[str, Any]]:
     """Собирает все известные контуры из полей d5 (после finalize)."""
     out: List[Dict[str, Any]] = []
@@ -450,6 +507,7 @@ def collect_game5m_contributions(d5: Dict[str, Any], *, ticker: str = "") -> Lis
         _collect_news_fusion_contribution,
         _collect_catboost_contribution,
         _collect_multiday_contribution,
+        _collect_earnings_trust_contribution,
     )
     for fn in collectors:
         try:

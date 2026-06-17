@@ -266,6 +266,8 @@ def _contour_from_earnings_metrics(
     t_data = _t_data(n_matured, n_min)
     t_model = _t_model_from_readiness(contour_id)
     t_ctx = _t_ctx_from_earnings_trust(earnings_trust)
+    if earnings_trust.get("degradation", {}).get("degrading"):
+        t_ctx = min(t_ctx, 0.45)
     trust_score, components = _compute_trust_score(
         t_data=t_data,
         t_model=t_model,
@@ -517,6 +519,11 @@ def build_unified_trust_arbiter(
             r = stack_readiness(cid)
             base_w = weight_for_readiness(r)
             weights[cid] = round(base_w * float(c.get("trust_score") or 0), 4)
+
+    es = weights.get("earnings_scenario", 0.0)
+    ps = weights.get("peer_spillover", 0.0)
+    if es or ps:
+        weights["earnings_trust"] = round(min(float(es or 0), float(ps or 1)) * 0.85, 4)
 
     recent = earnings_trust.get("recent_events") or []
     latest_event = None
