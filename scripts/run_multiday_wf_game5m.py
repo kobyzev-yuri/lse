@@ -84,6 +84,14 @@ def main() -> int:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(str(OUT_PATH))
+    try:
+        from pathlib import Path
+
+        from services.unified_trust_arbiter import write_unified_trust_arbiter
+
+        write_unified_trust_arbiter(project_root=Path(__file__).resolve().parents[1], report=None)
+    except Exception as exc:
+        print(f"trust arbiter refresh skipped: {exc}", file=sys.stderr)
     return 0
 
 

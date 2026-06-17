@@ -187,6 +187,12 @@
 </div>
 </div>
 
+<div class="card analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(244, 114, 182, 0.45);">
+    <h2>Trust Arbiter L2.5 <code>unified_trust_arbiter</code></h2>
+    <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Единая шкала доверия: L2 gates + post-mortem T_hit + weekly multiday WF + fusion block precision. Веса для <code>decision_stack</code> — <code>decision_stack_weights</code>.</p>
+    <div id="unifiedTrustArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
+</div>
+
 <div class="card analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(167, 139, 250, 0.35);">
     <h2>Арбитр готовности ML <code>ml_production_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">При <strong>PORTFOLIO</strong> — только портфельный CatBoost и гейт <code>ML_READINESS_PORTFOLIO_RMSE_MAX</code>; при <strong>GAME_5M</strong> — multiday, entry CatBoost, recovery. Не меняет <code>config.env</code>.</p>
@@ -1442,6 +1448,44 @@ function renderGapForecastArbiterBlock(data) {
     el.textContent = 'Итог: ' + ov + '\n\n' + body;
 }
 
+function renderUnifiedTrustArbiterBlock(data) {
+    const el = document.getElementById('unifiedTrustArbiterBlock');
+    if (!el) return;
+    const a = data.unified_trust_arbiter || {};
+    if (a.mode === 'skipped' || (!a.surfaces && !a.operator_digest_ru)) {
+        el.textContent = a.note ? String(a.note) : '—';
+        return;
+    }
+    const lines = [];
+    if (a.summary_ru) lines.push('Итог: ' + String(a.summary_ru));
+    if (a.multiday_lr_source) lines.push('Multiday source: ' + String(a.multiday_lr_source));
+    lines.push('');
+    if (a.operator_digest_ru) {
+        lines.push(String(a.operator_digest_ru));
+    } else {
+        const surfaces = a.surfaces || {};
+        Object.keys(surfaces).forEach(function (sk) {
+            const s = surfaces[sk];
+            lines.push(sk + ' (' + (s.overall_trust || '?') + ')');
+            (s.contours || []).forEach(function (c) {
+                lines.push('  ' + c.contour_id + '  ' + c.trust_label + '  ' + (c.trust_score != null ? c.trust_score.toFixed(2) : '?') +
+                    '  ' + (c.recommended_gate_mode || ''));
+            });
+            const ctx = s.context_slices;
+            if (ctx && (ctx.by_alignment || ctx.fusion_quality)) {
+                lines.push('  context: fusion_precision=' + (ctx.fusion_quality && ctx.fusion_quality.block_precision != null ? ctx.fusion_quality.block_precision : '—'));
+            }
+            lines.push('');
+        });
+    }
+    const w = a.decision_stack_weights || {};
+    const wKeys = Object.keys(w);
+    if (wKeys.length) {
+        lines.push('decision_stack_weights: ' + wKeys.map(function (k) { return k + '=' + w[k]; }).join(', '));
+    }
+    el.textContent = lines.join('\n').trim() || '—';
+}
+
 function renderMlArbiterBlock(data) {
     const el = document.getElementById('mlArbiterBlock');
     if (!el) {
@@ -2073,6 +2117,7 @@ async function runAnalyzer() {
         renderMultidayLrBlock(data);
         renderMultidayGatesArbiterBlock(data);
         renderGapForecastArbiterBlock(data);
+        renderUnifiedTrustArbiterBlock(data);
         renderMlArbiterBlock(data);
         renderHangerV2Block(data);
         renderHangerTuneJsonBlock(data);

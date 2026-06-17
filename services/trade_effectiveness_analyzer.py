@@ -140,6 +140,10 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Сводный вердикт готовности ML к продакшену: multiday ridge OOS, CatBoost entry, портфельный CatBoost (meta RMSE), "
         "recovery .cbm. Поля overall_verdict, verdicts, conclusion_ru — ориентир для оператора; не меняют config."
     ),
+    "unified_trust_arbiter": (
+        "L2.5 Trust Index: единая шкала доверия по контурам (GAME_5M, PORTFOLIO, EARNINGS) из L2 gates, shadow/post-mortem "
+        "T_hit, weekly multiday WF и fusion block precision. decision_stack_weights — веса для stack."
+    ),
     "product_ideas_arbiter": (
         "Вердикт по продуктовым идеям песочницы (макро VIX/Forex, прогноз гэпа сектора, defer early exit): "
         "сравнение PnL по macro_risk_level / entry_advice на закрытых сделках. "
@@ -6037,6 +6041,7 @@ def _attach_multiday_lr_and_ml_arbiter(
         payload["multiday_lr_gates_arbiter"] = dict(_ANALYZER_LIGHT_SKIP)
         payload["game5m_gap_forecast_arbiter"] = dict(_ANALYZER_LIGHT_SKIP)
         payload["ml_production_arbiter"] = dict(_ANALYZER_LIGHT_SKIP)
+        payload["unified_trust_arbiter"] = dict(_ANALYZER_LIGHT_SKIP)
         payload["product_ideas_arbiter"] = dict(_ANALYZER_LIGHT_SKIP)
         return
     eng = _analyzer_engine_safe()
@@ -6051,6 +6056,13 @@ def _attach_multiday_lr_and_ml_arbiter(
         payload, strategy=strategy, engine=eng, days=win
     )
     payload["ml_production_arbiter"] = build_ml_production_arbiter(payload, strategy=strategy)
+    from pathlib import Path
+    from services.unified_trust_arbiter import build_unified_trust_arbiter
+
+    payload["unified_trust_arbiter"] = build_unified_trust_arbiter(
+        project_root=Path(__file__).resolve().parents[1],
+        report=payload,
+    )
     payload["product_ideas_arbiter"] = build_product_ideas_arbiter(
         payload, effects=effects, closed_trades=closed_trades
     )

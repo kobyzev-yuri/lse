@@ -97,6 +97,63 @@ def _load_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+def load_multiday_wf_artifact(project_root: Path | None = None) -> dict[str, Any]:
+    """Weekly cron artifact: last_multiday_wf_game5m.json."""
+    q_dir = _ml_data_quality_dir(project_root)
+    return _load_json(q_dir / "last_multiday_wf_game5m.json")
+
+
+def multiday_lr_reality_from_wf_artifact(wf: dict[str, Any]) -> dict[str, Any]:
+    """Map WF JSON to multiday_lr_reality_check-like block for trust arbiter."""
+    if not wf:
+        return {}
+    pooled_raw = wf.get("v3nm_pooled") or wf.get("v2_pooled") or {}
+    pooled_by_horizon: dict[str, Any] = {}
+    for h in (1, 2, 3):
+        b = pooled_raw.get(str(h)) if isinstance(pooled_raw, dict) else {}
+        if not isinstance(b, dict):
+            b = {}
+        pooled_by_horizon[str(h)] = {
+            "mean_rmse_oos_log_across_tickers": b.get("mean_rmse_oos_log_across_tickers") or b.get("rmse_log"),
+            "mean_sign_accuracy": b.get("mean_sign_accuracy") or b.get("sign_accuracy") or b.get("sign"),
+            "n_points_sum": b.get("n_points_sum") or b.get("n"),
+        }
+    if not any((pooled_by_horizon.get(str(h)) or {}).get("n_points_sum") for h in (1, 2, 3)):
+        return {}
+    return {
+        "mode": "ok",
+        "source": "last_multiday_wf_game5m.json",
+        "generated_at_utc": wf.get("generated_at_utc"),
+        "walkforward_production_verdict": wf.get("verdict"),
+        "walkforward_verdict_rationale_ru": wf.get("rationale_ru"),
+        "pooled_by_horizon": pooled_by_horizon,
+        "active_feature_set": wf.get("live_feature_set"),
+    }
+
+
+def resolve_multiday_lr_reality_check(
+    report: dict[str, Any] | None,
+    *,
+    project_root: Path | None = None,
+) -> dict[str, Any]:
+    """Prefer live analyzer report; fallback to weekly WF artifact."""
+    mlr = (report or {}).get("multiday_lr_reality_check") or {}
+    if mlr.get("mode") == "ok":
+        return mlr
+    converted = multiday_lr_reality_from_wf_artifact(load_multiday_wf_artifact(project_root))
+    if converted.get("mode") == "ok":
+        return converted
+    return mlr
+
+
+def _t_ctx_from_earnings_trust(earnings_trust: dict[str, Any]) -> float:
+    fq = earnings_trust.get("fusion_quality") or {}
+    prec = fq.get("block_precision")
+    if prec is not None:
+        return min(1.0, max(0.2, float(prec)))
+    return 0.5
+
+
 def _latest_ml_train_readiness(project_root: Path | None) -> dict[str, Any]:
     paths = (
         Path("/app/logs/ml/logs/ml_train_readiness.jsonl"),
@@ -208,11 +265,12 @@ def _contour_from_earnings_metrics(
     n_min = int(spec["n_min"])
     t_data = _t_data(n_matured, n_min)
     t_model = _t_model_from_readiness(contour_id)
+    t_ctx = _t_ctx_from_earnings_trust(earnings_trust)
     trust_score, components = _compute_trust_score(
         t_data=t_data,
         t_model=t_model,
         t_hit=float(t_hit) if t_hit is not None else None,
-        t_ctx=0.5,
+        t_ctx=t_ctx,
         weights=tuple(spec["weights"]),
         n_matured=n_matured,
         n_min=n_min,
@@ -261,6 +319,7 @@ def _contour_from_multiday(spec: dict[str, Any], mlr: dict[str, Any]) -> dict[st
         **components,
         "recommended_gate_mode": gate,
         "n_matured": n_pts,
+        "multiday_source": mlr.get("source") or "analyzer_report",
         "conclusion_ru": f"Multiday ridge: WF {wf_verdict}, sign 1d {_pct(t_hit)}, {gate}",
     }
 
@@ -417,7 +476,7 @@ def build_unified_trust_arbiter(
     earnings_trust = _load_json(q_dir / "last_earnings_trust_metrics.json")
     readiness = _latest_ml_train_readiness(root)
     gap_metrics = load_gap_forecast_metrics()
-    mlr = (report or {}).get("multiday_lr_reality_check") or {}
+    mlr = resolve_multiday_lr_reality_check(report, project_root=root)
 
     surfaces: dict[str, Any] = {}
     game_contours: list[dict[str, Any]] = []
@@ -444,6 +503,11 @@ def build_unified_trust_arbiter(
     surfaces["EARNINGS"] = {
         "overall_trust": earn_contours[0]["trust_label"],
         "contours": earn_contours,
+        "context_slices": {
+            "by_scenario_class": earnings_trust.get("by_scenario_class") or {},
+            "by_alignment": earnings_trust.get("by_alignment") or {},
+            "fusion_quality": earnings_trust.get("fusion_quality") or {},
+        },
     }
 
     weights: dict[str, float] = {}
@@ -479,6 +543,7 @@ def build_unified_trust_arbiter(
     arbiter = {
         "arbiter_version": ARBITER_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "multiday_lr_source": mlr.get("source") or ("analyzer_report" if mlr.get("mode") == "ok" else "fallback"),
         "surfaces": surfaces,
         "operator_digest_ru": "",
         "decision_stack_weights": weights,

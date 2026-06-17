@@ -744,6 +744,38 @@ async def get_analyzer(
         raise HTTPException(status_code=500, detail=f"Ошибка анализатора: {e!s}")
 
 
+@app.get("/api/analyzer/trust", response_class=JSONResponse)
+async def get_analyzer_trust(refresh: bool = False):
+    """Unified Trust Arbiter artifact (L2.5) — from file or fresh build."""
+    from pathlib import Path
+
+    from services.unified_trust_arbiter import (
+        build_unified_trust_arbiter,
+        default_trust_arbiter_path,
+        write_unified_trust_arbiter,
+    )
+
+    root = Path(__file__).resolve().parent
+
+    def _run():
+        if refresh:
+            return write_unified_trust_arbiter(project_root=root)
+        path = default_trust_arbiter_path(root)
+        if path.is_file():
+            import json
+
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data["_source"] = "artifact"
+                return data
+        return build_unified_trust_arbiter(project_root=root)
+
+    try:
+        return _to_jsonable(await asyncio.to_thread(_run))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"trust arbiter: {e!s}")
+
+
 def _ml_runtime_snapshot_for_ui() -> Dict[str, Any]:
     """
     Флаги из config.env для анализатора: участвует ли модель в рантайме vs только dry-run метрики.

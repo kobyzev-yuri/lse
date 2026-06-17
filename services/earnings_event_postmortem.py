@@ -18,8 +18,94 @@ from services.event_reaction_catboost_signal import predict_event_reaction_from_
 from services.event_reaction_labeling import FEATURE_BUILDER_VERSION_EARNINGS, timing_from_features_before
 from services.peer_spillover_signal import predict_peer_spillover
 
-POSTMORTEM_VERSION = "earnings_postmortem_v1"
+POSTMORTEM_VERSION = "earnings_postmortem_v2"
 ROLLING_WINDOW_DAYS = 90
+CONTEXT_BUCKET_MIN = 15
+
+
+def _cfg_int(key: str, default: int) -> int:
+    try:
+        return int((get_config_value(key) or str(default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _fact_was_bad(
+    *,
+    fact_5d: float,
+    sign_hit: bool | None,
+    rmse_bucket: str | None,
+    threshold_log: float,
+) -> bool:
+    if rmse_bucket == "miss_large":
+        return True
+    if sign_hit is False and abs(fact_5d) > threshold_log:
+        return True
+    return fact_5d < -threshold_log * 2
+
+
+def _aggregate_bucket(
+    buckets: dict[str, dict[str, int]],
+    key: str,
+    *,
+    sign_hit: bool | None = None,
+    would_block: bool | None = None,
+    fact_bad: bool | None = None,
+    block_correct: bool | None = None,
+) -> None:
+    if not key:
+        return
+    b = buckets.setdefault(
+        key,
+        {
+            "n": 0,
+            "sign_hits": 0,
+            "sign_total": 0,
+            "blocked": 0,
+            "blocked_total": 0,
+            "fact_bad": 0,
+            "block_correct": 0,
+            "block_correct_total": 0,
+        },
+    )
+    b["n"] += 1
+    if sign_hit is not None:
+        b["sign_total"] += 1
+        if sign_hit:
+            b["sign_hits"] += 1
+    if would_block is not None:
+        b["blocked_total"] += 1
+        if would_block:
+            b["blocked"] += 1
+    if fact_bad:
+        b["fact_bad"] += 1
+    if block_correct is not None:
+        b["block_correct_total"] += 1
+        if block_correct:
+            b["block_correct"] += 1
+
+
+def _finalize_buckets(raw: dict[str, dict[str, int]], *, min_n: int) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, b in raw.items():
+        n = int(b.get("n") or 0)
+        if n < min_n:
+            continue
+        sign_total = int(b.get("sign_total") or 0)
+        sign_hits = int(b.get("sign_hits") or 0)
+        blocked_total = int(b.get("blocked_total") or 0)
+        blocked = int(b.get("blocked") or 0)
+        block_correct_total = int(b.get("block_correct_total") or 0)
+        block_correct = int(b.get("block_correct") or 0)
+        out[key] = {
+            "n": n,
+            "sign_accuracy": round(sign_hits / sign_total, 4) if sign_total else None,
+            "T_hit": round(sign_hits / sign_total, 4) if sign_total else None,
+            "blocked_rate": round(blocked / blocked_total, 4) if blocked_total else None,
+            "block_precision": round(block_correct / block_correct_total, 4) if block_correct_total else None,
+            "fact_bad_rate": round(int(b.get("fact_bad") or 0) / n, 4) if n else None,
+        }
+    return out
 
 
 def _cfg_float(key: str, default: float) -> float:
@@ -198,17 +284,32 @@ def build_event_postmortem_row(
         threshold_log=thr,
     )
     would_block = advisory.get("conviction") == "low" or advisory.get("alignment") == "conflict"
+    rmse_bucket = _rmse_bucket(reg_pred_f, fact_5d, threshold_log=thr)
+    fact_bad = _fact_was_bad(
+        fact_5d=fact_5d,
+        sign_hit=sign_hit,
+        rmse_bucket=rmse_bucket,
+        threshold_log=thr,
+    )
+    block_correct: bool | None = None
+    if would_block is not None:
+        block_correct = (would_block and fact_bad) or (not would_block and not fact_bad)
 
     return {
         "postmortem_version": POSTMORTEM_VERSION,
         "symbol": sym,
         "event_date": ev_d.isoformat(),
+        "context": {
+            "role": "source",
+            "scenario_class": str(pred_scenario) if pred_scenario else None,
+            "alignment": advisory.get("alignment"),
+        },
         "models": {
             "regression_5d": {
                 "pred": round(reg_pred_f, 6) if reg_pred_f is not None else None,
                 "fact": round(fact_5d, 6),
                 "sign_hit": sign_hit,
-                "rmse_bucket": _rmse_bucket(reg_pred_f, fact_5d, threshold_log=thr),
+                "rmse_bucket": rmse_bucket,
             },
             "scenario_sign": {
                 "pred_sign": pred_sign if pred_sign else None,
@@ -224,6 +325,10 @@ def build_event_postmortem_row(
             "conviction": advisory.get("conviction"),
             "would_have_blocked": would_block,
         },
+        "fusion_outcome": {
+            "fact_was_bad": fact_bad,
+            "block_was_correct": block_correct,
+        },
     }
 
 
@@ -231,14 +336,21 @@ def aggregate_earnings_trust_metrics(
     rows: list[dict[str, Any]],
     *,
     window_days: int = ROLLING_WINDOW_DAYS,
+    context_bucket_min: int | None = None,
 ) -> dict[str, Any]:
-    """Rolling T_hit aggregates for earnings contours."""
+    """Rolling T_hit aggregates for earnings contours + context slices."""
+    min_n = context_bucket_min if context_bucket_min is not None else _cfg_int(
+        "EARNINGS_TRUST_CONTEXT_BUCKET_MIN", CONTEXT_BUCKET_MIN
+    )
     cutoff = date.today() - timedelta(days=max(1, window_days))
     recent: list[dict[str, Any]] = []
     scen_hits = scen_total = 0
     reg_hits = reg_total = 0
     peer_hits = peer_total = 0
     blocked = blocked_total = 0
+    fusion_bad = fusion_block_correct = fusion_block_total = 0
+    by_scenario: dict[str, dict[str, int]] = {}
+    by_alignment: dict[str, dict[str, int]] = {}
 
     for row in rows:
         ev_s = str(row.get("event_date") or "")[:10]
@@ -251,9 +363,10 @@ def aggregate_earnings_trust_metrics(
         recent.append(row)
         models = row.get("models") or {}
         scen = models.get("scenario_sign") or {}
-        if scen.get("hit") is not None:
+        sign_hit = scen.get("hit")
+        if sign_hit is not None:
             scen_total += 1
-            if scen.get("hit"):
+            if sign_hit:
                 scen_hits += 1
         reg = models.get("regression_5d") or {}
         if reg.get("sign_hit") is not None:
@@ -266,10 +379,40 @@ def aggregate_earnings_trust_metrics(
                 if peer.get("sign_hit"):
                     peer_hits += 1
         fusion = row.get("fusion") or {}
-        if fusion.get("would_have_blocked") is not None:
+        fusion_out = row.get("fusion_outcome") or {}
+        would_block = fusion.get("would_have_blocked")
+        if would_block is not None:
             blocked_total += 1
-            if fusion.get("would_have_blocked"):
+            if would_block:
                 blocked += 1
+        fact_bad = bool(fusion_out.get("fact_was_bad"))
+        if fact_bad:
+            fusion_bad += 1
+        block_correct = fusion_out.get("block_was_correct")
+        if block_correct is not None:
+            fusion_block_total += 1
+            if block_correct:
+                fusion_block_correct += 1
+
+        ctx = row.get("context") or {}
+        scen_key = str(ctx.get("scenario_class") or scen.get("predicted_scenario") or "").strip()
+        align_key = str(ctx.get("alignment") or fusion.get("alignment") or "").strip()
+        _aggregate_bucket(
+            by_scenario,
+            scen_key,
+            sign_hit=sign_hit if isinstance(sign_hit, bool) else None,
+            would_block=would_block if isinstance(would_block, bool) else None,
+            fact_bad=fact_bad,
+            block_correct=block_correct if isinstance(block_correct, bool) else None,
+        )
+        _aggregate_bucket(
+            by_alignment,
+            align_key,
+            sign_hit=sign_hit if isinstance(sign_hit, bool) else None,
+            would_block=would_block if isinstance(would_block, bool) else None,
+            fact_bad=fact_bad,
+            block_correct=block_correct if isinstance(block_correct, bool) else None,
+        )
 
     def _acc(h: int, t: int) -> float | None:
         return round(h / t, 4) if t else None
@@ -277,6 +420,7 @@ def aggregate_earnings_trust_metrics(
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "rolling_window_days": window_days,
+        "context_bucket_min": min_n,
         "n_events_in_window": len(recent),
         "contours": {
             "earnings_scenario": {
@@ -296,6 +440,14 @@ def aggregate_earnings_trust_metrics(
             },
         },
         "fusion_blocked_rate": round(blocked / blocked_total, 4) if blocked_total else None,
+        "fusion_quality": {
+            "n": len(recent),
+            "fact_bad_rate": _acc(fusion_bad, len(recent)),
+            "block_precision": _acc(fusion_block_correct, fusion_block_total),
+            "blocked_rate": round(blocked / blocked_total, 4) if blocked_total else None,
+        },
+        "by_scenario_class": _finalize_buckets(by_scenario, min_n=min_n),
+        "by_alignment": _finalize_buckets(by_alignment, min_n=min_n),
         "recent_events": sorted(recent, key=lambda r: r.get("event_date") or "", reverse=True)[:5],
     }
 
