@@ -2791,6 +2791,11 @@ class LSETelegramBot:
             get_event_brief_payload,
             list_intelligence_events,
         )
+        from services.earnings_event_freshness import (
+            calendar_since_date,
+            is_telegram_eligible_event,
+            telegram_max_event_age_days,
+        )
 
         args = context.args or []
         loop = asyncio.get_event_loop()
@@ -2799,7 +2804,11 @@ class LSETelegramBot:
             try:
                 data = await loop.run_in_executor(
                     None,
-                    lambda: list_intelligence_events(get_engine(), since=date_cls(2026, 1, 1), limit=40),
+                    lambda: list_intelligence_events(
+                        get_engine(),
+                        since=calendar_since_date(),
+                        limit=40,
+                    ),
                 )
             except Exception as e:
                 logger.exception("earnings list")
@@ -2809,15 +2818,23 @@ class LSETelegramBot:
             lines = [
                 "📊 *Earnings Intelligence*",
                 f"Universe: {s.get('universe_size', 0)} · materials: {s.get('symbols_with_materials', 0)} · LLM: {s.get('with_llm', 0)}",
+                f"Окно: последние {telegram_max_event_age_days()} дн. после отчёта",
                 "",
                 "Recent (materials / LLM):",
             ]
-            for ev in (data.get("events") or [])[:15]:
+            shown = 0
+            for ev in (data.get("events") or []):
+                if ev.get("telegram_eligible") is False:
+                    continue
                 flag = "✅" if ev.get("has_llm") else ("📄" if ev.get("has_materials") else "⏳")
+                latest = " · latest" if ev.get("is_latest_for_symbol") else ""
                 lines.append(
                     f"{flag} `{ev.get('symbol')}` {ev.get('event_date')} "
-                    f"{ev.get('management_tone') or '—'} · {ev.get('top_scenario') or '—'}"
+                    f"{ev.get('management_tone') or '—'} · {ev.get('top_scenario') or '—'}{latest}"
                 )
+                shown += 1
+                if shown >= 15:
+                    break
             miss = s.get("symbols_without_materials") or []
             if miss:
                 lines.append("")
@@ -2837,11 +2854,28 @@ class LSETelegramBot:
                 await update.message.reply_text("❌ Дата: YYYY-MM-DD\nПример: `/earnings NVDA 2026-05-20`", parse_mode="Markdown")
                 return
         await update.message.reply_text(f"📥 Event Brief {sym}…")
+        if ev_d is not None and not is_telegram_eligible_event(ev_d):
+            await update.message.reply_text(
+                f"⏳ {sym} {ev_d.isoformat()}: срок отчёта для Telegram истёк "
+                f"(>{telegram_max_event_age_days()} дн.). Смотрите в web /earnings."
+            )
+            return
         try:
             brief = await loop.run_in_executor(
                 None,
                 lambda: get_event_brief_payload(get_engine(), symbol=sym, event_date=ev_d),
             )
+            brief_ev = brief.get("event_date")
+            try:
+                brief_d = date_cls.fromisoformat(str(brief_ev)[:10]) if brief_ev else None
+            except ValueError:
+                brief_d = None
+            if brief_d is not None and not is_telegram_eligible_event(brief_d):
+                await update.message.reply_text(
+                    f"⏳ {sym} {brief_d.isoformat()}: срок отчёта для Telegram истёк "
+                    f"(>{telegram_max_event_age_days()} дн.). Смотрите в web /earnings."
+                )
+                return
             text = format_brief_telegram(brief)
         except Exception as e:
             logger.exception("earnings brief")

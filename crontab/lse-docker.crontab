@@ -26,6 +26,10 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 15 */2 * * * flock -n /tmp/lse_earnings_autoprep.lock docker exec lse-bot python scripts/run_earnings_intelligence_autoprep.py >> /home/ai8049520/lse/logs/earnings_autoprep.log 2>&1
 # Phase C: Telegram brief after new LLM extraction (past earnings)
 0 9,18 * * 1-6 flock -n /tmp/lse_earnings_brief_notify.lock docker exec lse-bot python scripts/notify_earnings_post_event_brief.py >> /home/ai8049520/lse/logs/earnings_post_event_brief.log 2>&1
+# Trust Arbiter: morning digest 09:05 MSK (06:05 UTC) — LSE Trust operator screen
+5 6 * * 1-6 flock -n /tmp/lse_trust_digest.lock docker exec lse-bot python scripts/notify_trust_digest.py --refresh >> /home/ai8049520/lse/logs/trust_digest.log 2>&1
+# Earnings post-mortem + trust metrics (after quotes/outcomes; complements shadow in ml refresh)
+10 0 * * 2-6 flock -n /tmp/lse_earnings_postmortem.lock docker exec lse-bot python scripts/run_earnings_postmortem_cron.py >> /home/ai8049520/lse/logs/earnings_postmortem.log 2>&1
 # Unified ML refresh dispatcher (data-driven train trigger + ml_contours_status.json). See docs/ML_UNIFIED_RETRAIN_FRAMEWORK.md
 15 */6 * * * flock -n /tmp/lse_ml_refresh_dispatcher.lock docker exec lse-bot python scripts/run_ml_refresh_dispatcher.py >> /home/ai8049520/lse/logs/ml_refresh_dispatcher.log 2>&1
 # Earnings ML (legacy slot — optional; dispatcher covers */6 poll). Full train: 23:52 below.

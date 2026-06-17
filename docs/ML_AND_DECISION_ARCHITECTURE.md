@@ -191,6 +191,7 @@ Train внутри скриптов **только по триггеру** (кр
 | 1 | L1 train стабилен, артефакт `.cbm` / JSON на месте | `last_*_train_metrics.json` |
 | 2 | L2 gate `ready=true` | `ml_train_readiness.jsonl` или `last_*_readiness.json` |
 | 3 | L2 фаза C: analyzer OOS / shadow | `ml_production_arbiter`, shadow reports |
+| 3b | **L2.5 Trust** (историческая правота) | [DECISION_TRUST_ARBITER.md](DECISION_TRUST_ARBITER.md) — post-mortem, `trust_score` |
 | 4 | L3 `DECISION_STACK_READINESS_<CONTOUR>=production` (или override) | `decision_snapshot` |
 | 5 | L3 gate mode `apply` | `DECISION_STACK_*_GATE_MODE=apply` |
 | 6 | Runtime flag | `*_ENABLED=true` |

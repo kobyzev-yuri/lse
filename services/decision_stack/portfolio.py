@@ -14,8 +14,10 @@ from services.decision_stack._types import (
     _utc_now_iso,
     decision_strength_from_signal,
     gate_mode,
+    effective_stack_weight,
     make_contribution,
     stack_readiness,
+    trust_score_for_contour,
     weight_for_readiness,
 )
 
@@ -82,13 +84,14 @@ def collect_portfolio_contributions(
         action = "telemetry"
         if would_veto and gm == "apply" and readiness == READINESS_PRODUCTION:
             action = "veto"
+        cid = "portfolio_catboost"
         out.append(
             make_contribution(
-                contour_id="portfolio_catboost",
+                contour_id=cid,
                 role="policy_gate",
                 readiness=readiness,
                 strength=max(-1.0, min(1.0, strength)),
-                weight=weight_for_readiness(readiness),
+                weight=effective_stack_weight(cid, readiness),
                 action=action,
                 detail=pm.get("portfolio_ml_note") or f"score={score}, status={status}",
                 metrics={
@@ -98,6 +101,7 @@ def collect_portfolio_contributions(
                     "gate_mode": gm,
                     "min_score": min_score,
                     "would_veto": would_veto,
+                    "trust_score": trust_score_for_contour(cid),
                 },
             )
         )
@@ -124,13 +128,14 @@ def collect_portfolio_contributions(
         action = "telemetry"
         if would_veto and gm == "apply" and readiness == READINESS_PRODUCTION:
             action = "veto"
+        cid = "event_reaction"
         out.append(
             make_contribution(
-                contour_id="event_reaction",
+                contour_id=cid,
                 role="policy_gate",
                 readiness=readiness,
                 strength=max(-1.0, min(1.0, strength)),
-                weight=weight_for_readiness(readiness),
+                weight=effective_stack_weight(cid, readiness),
                 action=action,
                 detail=er.get("event_reaction_ml_note") or f"event_score={er_score}, status={er_status}",
                 metrics={
@@ -143,6 +148,7 @@ def collect_portfolio_contributions(
                     "gate_mode": gm,
                     "min_score": min_score,
                     "would_veto": would_veto,
+                    "trust_score": trust_score_for_contour(cid),
                 },
             )
         )

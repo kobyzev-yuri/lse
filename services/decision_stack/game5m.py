@@ -22,8 +22,10 @@ from services.decision_stack._types import (
     _utc_now_iso,
     decision_strength_from_signal,
     gate_mode,
+    effective_stack_weight,
     make_contribution,
     stack_readiness,
+    trust_score_for_contour,
     weight_for_readiness,
 )
 
@@ -175,17 +177,19 @@ def _collect_gap_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     except (TypeError, ValueError):
         return None
     readiness = stack_readiness("gap_forecast")
+    cid = "gap_forecast"
     return make_contribution(
-        contour_id="gap_forecast",
+        contour_id=cid,
         role="model_eval",
         readiness=readiness,
         strength=max(-1.0, min(1.0, p / 3.0)),
-        weight=weight_for_readiness(readiness),
+        weight=effective_stack_weight(cid, readiness),
         action="telemetry",
         detail=f"pred_open_gap={p:+.2f}% ({d5.get('ticker_open_gap_predicted_source')})",
         metrics={
             "ticker_open_gap_predicted_pct": p,
             "ticker_open_gap_predicted_source": d5.get("ticker_open_gap_predicted_source"),
+            "trust_score": trust_score_for_contour(cid),
         },
     )
 
@@ -328,12 +332,13 @@ def _collect_catboost_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
         action = "downgrade"
     elif stack_gm != "none" and would_down:
         action = "telemetry"
+    cid = "catboost_entry_5m"
     return make_contribution(
-        contour_id="catboost_entry_5m",
+        contour_id=cid,
         role="policy_gate",
         readiness=readiness,
         strength=(float(p) - 0.5) * 2 if p is not None else 0.0,
-        weight=weight_for_readiness(readiness),
+        weight=effective_stack_weight(cid, readiness),
         action=action,
         detail=d5.get("catboost_fusion_note") or f"P={p}, fusion={fusion_mode}",
         metrics={
@@ -342,6 +347,7 @@ def _collect_catboost_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
             "catboost_signal_status": d5.get("catboost_signal_status"),
             "gate_mode": stack_gm,
             "would_downgrade": would_down,
+            "trust_score": trust_score_for_contour(cid),
         },
     )
 
@@ -366,12 +372,13 @@ def _collect_multiday_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
             strength = max(-1.0, min(1.0, float(h1) / 2.0))
         except (TypeError, ValueError):
             pass
+    cid = "multiday_lr"
     return make_contribution(
-        contour_id="multiday_lr",
+        contour_id=cid,
         role="policy_gate",
         readiness=readiness,
         strength=strength,
-        weight=weight_for_readiness(readiness),
+        weight=effective_stack_weight(cid, readiness),
         action=action,
         detail=gate.get("note") or f"mode={mode}, would_hold={would}",
         metrics={
@@ -380,6 +387,7 @@ def _collect_multiday_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
             "horizons_pct": gate.get("horizons_pct"),
             "stack_gate_mode": stack_gm,
             "applied_legacy": bool(d5.get("multiday_lr_entry_gate_applied")),
+            "trust_score": trust_score_for_contour(cid),
         },
     )
 

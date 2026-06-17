@@ -67,6 +67,8 @@
         tr.event-row { cursor: pointer; }
         tr.event-row:hover td { background: #1e293b; }
         tr.event-row.selected td { background: #1e3a5f !important; }
+        tr.event-row.freshest td { box-shadow: inset 3px 0 0 #22c55e; }
+        tr.event-row.stale td { opacity: 0.72; }
         tr.shadow-row.selected td { background: #1e3a5f !important; }
 
         .badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
@@ -122,7 +124,7 @@
 <details class="help-panel">
     <summary>Как устроен экран · <a href="/earnings/guide" style="color:#93c5fd">полное руководство</a></summary>
     <ul>
-        <li><strong>Календарь</strong> — выберите строку: задаётся активный тикер и дата отчёта.</li>
+        <li><strong>Календарь</strong> — фильтр периода (по умолчанию 30д), клик по строке; самый свежий отчёт подсвечивается и выбирается автоматически.</li>
         <li><strong>Обзор / ML прогноз / Пиры</strong> — три среза <em>одного</em> события; без выбора недоступны.</li>
         <li><strong>Peer graph / Качество ML / ML pipeline</strong> — справочник и мониторинг; не привязаны к одному отчёту.</li>
         <li>LLM scenario — из transcript/8-K; ML scenario — CatBoost classifier. Регрессия 5d — отдельный слой на вкладке ML прогноз.</li>
@@ -166,6 +168,13 @@
 <div id="view-calendar" class="view active">
     <p class="view-lead"><strong>Календарь</strong> — клик по строке выбирает событие и открывает «Обзор». Фильтры universe; подсветка — текущий выбор.</p>
     <div class="toolbar">
+        <span class="muted" style="font-size:0.78rem;margin-right:0.25rem">Период:</span>
+        <button class="btn" data-date-window="14">14д</button>
+        <button class="btn active" data-date-window="30">30д</button>
+        <button class="btn" data-date-window="90">90д</button>
+        <button class="btn" data-date-window="ytd">YTD</button>
+        <button class="btn" data-date-window="all">Всё</button>
+        <span class="nav-sep">|</span>
         <button class="btn active" data-filter="all">Все</button>
         <button class="btn" data-filter="GAME_5M">GAME_5M</button>
         <button class="btn" data-filter="portfolio">Portfolio</button>
@@ -365,7 +374,8 @@ const peerSpilloverMlSummary = (mlArr, outcomes) => {
     return `<span class="muted">ML spillover (pilot): graph ${graphN} pred${affShown ? ` · ${affShown} affected w/ fact` : ''} · Sign = sanity check</span>`;
 };
 
-let allEvents = [], currentFilter = 'all', graphData = null, currentView = 'calendar';
+let allEvents = [], currentFilter = 'all', currentDateWindow = '30', graphData = null, currentView = 'calendar';
+let defaultActiveEvent = null;
 let activeBrief = null;
 const EI_CTX_KEY = 'earnings_intelligence_ctx_v2';
 let eiContext = { symbol: '', eventDate: '' };
@@ -576,15 +586,33 @@ async function ensureBrief() {
     return b;
 }
 
+function sinceParamForWindow(win) {
+    const today = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    if (win === 'all') return '';
+    if (win === 'ytd') return `${today.getFullYear()}-01-01`;
+    const days = parseInt(win, 10);
+    if (!Number.isFinite(days) || days < 1) return '';
+    const d = new Date(today);
+    d.setDate(d.getDate() - (days - 1));
+    return iso(d);
+}
+
 async function loadList() {
+    const since = sinceParamForWindow(currentDateWindow);
+    const url = since
+        ? `/api/earnings/intelligence?since=${encodeURIComponent(since)}&limit=120`
+        : '/api/earnings/intelligence?since=2020-01-01&limit=200';
     const [res, gRes] = await Promise.all([
-        fetch('/api/earnings/intelligence?since=2026-01-01&limit=80'),
+        fetch(url),
         fetch('/api/earnings/peer-graph'),
     ]);
     if (!res.ok) throw new Error(await res.text());
     if (gRes.ok) graphData = await gRes.json();
     const data = await res.json();
     allEvents = data.events || [];
+    defaultActiveEvent = data.default_active_event || null;
     document.getElementById('summaryBox').innerHTML = `
         <div class="stat"><div class="n">${data.summary.universe_size}</div><div class="l">Universe</div></div>
         <div class="stat"><div class="n">${data.summary.symbols_with_materials}</div><div class="l">Materials</div></div>
@@ -605,11 +633,16 @@ function applyFilter() {
     else if (currentFilter === 'portfolio') ev = ev.filter(e => (e.group || '').includes('portfolio'));
     const selSym = eiContext.symbol;
     const selDate = eiContext.eventDate;
+    const globalFresh = defaultActiveEvent || null;
     document.getElementById('eventsBody').innerHTML = ev.map(ev => {
         const selected = selSym && ev.symbol === selSym && ev.event_date === selDate;
+        const freshest = globalFresh && ev.symbol === globalFresh.symbol && ev.event_date === globalFresh.event_date;
+        const stale = ev.days_since_event != null && ev.days_since_event > 21;
+        const latestBadge = ev.is_latest_for_symbol ? ' <span class="badge ok" title="Последний отчёт тикера">latest</span>' : '';
+        const freshBadge = freshest ? ' <span class="badge ok" title="Самый свежий в списке">актуальный</span>' : '';
         return `
-        <tr class="event-row${selected ? ' selected' : ''}" data-sym="${ev.symbol}" data-date="${ev.event_date||''}">
-            <td><strong>${ev.symbol}</strong></td><td>${ev.event_date||'—'}</td><td>${groupBadges(ev.group)}</td>
+        <tr class="event-row${selected ? ' selected' : ''}${freshest ? ' freshest' : ''}${stale ? ' stale' : ''}" data-sym="${ev.symbol}" data-date="${ev.event_date||''}">
+            <td><strong>${ev.symbol}</strong>${latestBadge}${freshBadge}</td><td>${ev.event_date||'—'}</td><td>${groupBadges(ev.group)}</td>
             <td>${badgeMat(ev)}</td><td>${badgeLlm(ev)}</td><td>${ev.management_tone||'—'}</td>
             <td><code title="LLM">${esc(ev.llm_scenario || ev.top_scenario || '—')}</code></td>
             <td>${fmtMlScenario(ev)}</td>
@@ -858,6 +891,12 @@ document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('
     document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active'); currentFilter = btn.dataset.filter; applyFilter();
 }));
+document.querySelectorAll('[data-date-window]').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-date-window]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentDateWindow = btn.dataset.dateWindow;
+    loadList().catch(e => alert(e.message));
+}));
 document.querySelectorAll('[data-goto]').forEach(btn => btn.addEventListener('click', () => showView(btn.dataset.goto)));
 document.getElementById('refreshBtn').addEventListener('click', () => loadList().catch(e => alert(e.message)));
 document.getElementById('loadShadowBtn').addEventListener('click', () => loadShadow(false));
@@ -875,9 +914,6 @@ document.getElementById('ctxEventDate')?.addEventListener('change', () => {
 loadEiContextFromStorage();
 
 loadList().then(() => {
-    if (eiContext.symbol) {
-        setActiveEvent(eiContext.symbol, eiContext.eventDate, { refreshTable: true, reload: false });
-    }
     const p = new URLSearchParams(location.search);
     const sym = (p.get('symbol') || '').toUpperCase();
     const evd = p.get('event_date') || '';
@@ -885,6 +921,10 @@ loadList().then(() => {
     const tab = tabMap[(p.get('tab') || 'overview').toLowerCase()] || 'overview';
     if (sym) {
         setActiveEvent(sym, evd, { navigate: tab, reload: true });
+    } else if (eiContext.symbol) {
+        setActiveEvent(eiContext.symbol, eiContext.eventDate, { refreshTable: true, reload: false });
+    } else if (defaultActiveEvent && defaultActiveEvent.symbol) {
+        setActiveEvent(defaultActiveEvent.symbol, defaultActiveEvent.event_date, { refreshTable: true, reload: false });
     } else if (tab !== 'calendar') {
         showView(tab);
     }

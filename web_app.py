@@ -900,23 +900,41 @@ async def api_ml_event_reaction(ticker: str, event_date: str = ""):
 
 
 @app.get("/api/earnings/intelligence", response_class=JSONResponse)
-async def api_earnings_intelligence(since: str = "2026-01-01", limit: int = 80):
+async def api_earnings_intelligence(since: str = "", until: str = "", limit: int = 80):
     """Список KB earnings по universe с флагами materials / LLM / brief."""
     from datetime import date as date_cls
+    from services.earnings_event_freshness import calendar_since_date, ui_calendar_window_days
     from services.earnings_intelligence_api import list_intelligence_events
 
-    since_d = None
+    since_d = calendar_since_date() if not since.strip() else None
     if since.strip():
         try:
             since_d = date_cls.fromisoformat(since.strip()[:10])
         except ValueError:
             raise HTTPException(status_code=400, detail="since must be YYYY-MM-DD")
+    until_d = None
+    if until.strip():
+        try:
+            until_d = date_cls.fromisoformat(until.strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
 
     def _run():
-        return list_intelligence_events(get_engine(), since=since_d, limit=min(max(1, limit), 200))
+        return list_intelligence_events(
+            get_engine(),
+            since=since_d,
+            until=until_d,
+            limit=min(max(1, limit), 200),
+        )
 
     try:
-        return _to_jsonable(await asyncio.to_thread(_run))
+        payload = await asyncio.to_thread(_run)
+        payload["query"] = {
+            "since": since_d.isoformat() if since_d else None,
+            "until": until_d.isoformat() if until_d else None,
+            "default_window_days": ui_calendar_window_days(),
+        }
+        return _to_jsonable(payload)
     except Exception as e:
         logger.exception("api_earnings_intelligence failed")
         raise HTTPException(status_code=500, detail=f"earnings intelligence: {e!s}")

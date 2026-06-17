@@ -1,0 +1,502 @@
+"""Unified Trust Arbiter (L2.5): one trust scale for operator Telegram and decision_stack."""
+from __future__ import annotations
+
+import json
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from services.decision_stack._types import readiness_from_latest_report, stack_readiness, weight_for_readiness
+from services.earnings_event_freshness import is_telegram_eligible_event
+from services.premarket_open_gap_forecast import load_gap_forecast_metrics
+
+ARBITER_VERSION = "trust_v1"
+
+# n_min and T_hit apply thresholds from docs/DECISION_TRUST_ARBITER.md §3
+CONTOUR_TRUST_SPECS: dict[str, dict[str, Any]] = {
+    "multiday_lr": {
+        "surface": "GAME_5M",
+        "display": "multiday_lr",
+        "n_min": 200,
+        "apply_t_hit": 0.52,
+        "weights": (0.15, 0.25, 0.45, 0.15),
+        "gate_key": "DECISION_STACK_MULTIDAY_LR_GATE_MODE",
+    },
+    "catboost_entry_5m": {
+        "surface": "GAME_5M",
+        "display": "catboost_entry",
+        "n_min": 80,
+        "apply_t_hit": 0.55,
+        "weights": (0.2, 0.35, 0.35, 0.1),
+        "gate_key": "DECISION_STACK_CATBOOST_ENTRY_5M_GATE_MODE",
+    },
+    "gap_forecast": {
+        "surface": "GAME_5M",
+        "display": "gap_forecast",
+        "n_min": 30,
+        "apply_t_hit": 0.50,
+        "weights": (0.2, 0.3, 0.35, 0.15),
+        "gate_key": "DECISION_STACK_GAP_FORECAST_GATE_MODE",
+    },
+    "recovery_ml": {
+        "surface": "GAME_5M",
+        "display": "recovery_ml",
+        "n_min": 50,
+        "apply_t_hit": 0.55,
+        "weights": (0.2, 0.3, 0.35, 0.15),
+    },
+    "portfolio_catboost": {
+        "surface": "PORTFOLIO",
+        "display": "portfolio_cb",
+        "n_min": 40,
+        "apply_t_hit": 0.55,
+        "weights": (0.15, 0.45, 0.3, 0.1),
+    },
+    "event_reaction": {
+        "surface": "EARNINGS",
+        "display": "regression 5d",
+        "n_min": 50,
+        "apply_t_hit": 0.55,
+        "weights": (0.2, 0.25, 0.4, 0.15),
+    },
+    "earnings_scenario": {
+        "surface": "EARNINGS",
+        "display": "scenario shadow",
+        "n_min": 50,
+        "apply_t_hit": 0.60,
+        "weights": (0.15, 0.25, 0.45, 0.15),
+    },
+    "peer_spillover": {
+        "surface": "EARNINGS",
+        "display": "peer spillover",
+        "n_min": 80,
+        "apply_t_hit": 0.55,
+        "weights": (0.2, 0.2, 0.45, 0.15),
+    },
+}
+
+
+def _ml_data_quality_dir(project_root: Path | None = None) -> Path:
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml/ml_data_quality")
+    root = project_root or Path(__file__).resolve().parents[1]
+    return root / "local" / "logs" / "ml_data_quality"
+
+
+def default_trust_arbiter_path(project_root: Path | None = None) -> Path:
+    return _ml_data_quality_dir(project_root) / "last_unified_trust_arbiter.json"
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _latest_ml_train_readiness(project_root: Path | None) -> dict[str, Any]:
+    paths = (
+        Path("/app/logs/ml/logs/ml_train_readiness.jsonl"),
+        (project_root or Path(__file__).resolve().parents[1]) / "local" / "logs" / "ml_train_readiness.jsonl",
+    )
+    for p in paths:
+        if not p.is_file():
+            continue
+        try:
+            last = ""
+            with p.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if s:
+                        last = s
+            if last:
+                row = json.loads(last)
+                return row if isinstance(row, dict) else {}
+        except Exception:
+            continue
+    return {}
+
+
+def trust_label_from_score(score: float) -> str:
+    if score >= 0.75:
+        return "high"
+    if score >= 0.45:
+        return "medium"
+    if score >= 0.25:
+        return "low"
+    return "insufficient"
+
+
+def recommended_gate_mode(trust_label: str, *, l2_ready: bool | None) -> str:
+    if trust_label == "insufficient":
+        return "none"
+    if trust_label == "low":
+        return "log_only"
+    if trust_label == "medium":
+        return "caution" if l2_ready else "log_only"
+    if trust_label == "high" and l2_ready:
+        return "apply"
+    return "log_only"
+
+
+def _t_model_from_readiness(contour_id: str) -> float:
+    r = readiness_from_latest_report(contour_id) or stack_readiness(contour_id)
+    if r == "production":
+        return 0.85
+    if r == "caution":
+        return 0.55
+    return 0.25
+
+
+def _t_data(n_matured: int, n_min: int) -> float:
+    if n_min <= 0:
+        return 0.0
+    return min(1.0, n_matured / n_min)
+
+
+def _compute_trust_score(
+    *,
+    t_data: float,
+    t_model: float,
+    t_hit: float | None,
+    t_ctx: float,
+    weights: tuple[float, float, float, float],
+    n_matured: int,
+    n_min: int,
+) -> tuple[float, dict[str, Any]]:
+    w_d, w_m, w_h, w_c = weights
+    hit_insufficient = n_matured < n_min or t_hit is None
+    t_hit_eff = 0.35 if hit_insufficient else float(t_hit)
+    score = w_d * t_data + w_m * t_model + w_h * t_hit_eff + w_c * t_ctx
+    if hit_insufficient and score > 0.74:
+        score = 0.74
+    components = {
+        "T_data": round(t_data, 4),
+        "T_model": round(t_model, 4),
+        "T_hit": round(t_hit_eff, 4) if t_hit is not None else None,
+        "T_ctx": round(t_ctx, 4),
+        "T_hit_insufficient": hit_insufficient,
+    }
+    return round(score, 4), components
+
+
+def _pct(x: float | None) -> str:
+    if x is None:
+        return "—"
+    return f"{100.0 * float(x):.0f}%"
+
+
+def _contour_from_earnings_metrics(
+    contour_id: str,
+    spec: dict[str, Any],
+    earnings_trust: dict[str, Any],
+    shadow: dict[str, Any],
+) -> dict[str, Any]:
+    contours = earnings_trust.get("contours") or {}
+    block = contours.get(contour_id) or {}
+    n_matured = int(block.get("n_matured") or 0)
+    if contour_id == "earnings_scenario" and n_matured == 0:
+        agg = shadow.get("aggregate") or {}
+        n_matured = int(agg.get("n_sign_scored") or agg.get("n_matured") or 0)
+        t_hit = agg.get("sign_accuracy")
+    else:
+        t_hit = block.get("T_hit") or block.get("sign_accuracy")
+
+    n_min = int(spec["n_min"])
+    t_data = _t_data(n_matured, n_min)
+    t_model = _t_model_from_readiness(contour_id)
+    trust_score, components = _compute_trust_score(
+        t_data=t_data,
+        t_model=t_model,
+        t_hit=float(t_hit) if t_hit is not None else None,
+        t_ctx=0.5,
+        weights=tuple(spec["weights"]),
+        n_matured=n_matured,
+        n_min=n_min,
+    )
+    label = trust_label_from_score(trust_score)
+    l2_ready = readiness_from_latest_report(contour_id) == "production"
+    gate = recommended_gate_mode(label, l2_ready=l2_ready)
+    hit_note = f"n={n_matured} sign {_pct(t_hit)}" if t_hit is not None else f"n={n_matured} scored"
+    return {
+        "contour_id": contour_id,
+        "trust_score": trust_score,
+        "trust_label": label,
+        **components,
+        "recommended_gate_mode": gate,
+        "n_matured": n_matured,
+        "conclusion_ru": f"{spec['display']}: {label} {trust_score:.2f}, {gate}, {hit_note}",
+    }
+
+
+def _contour_from_multiday(spec: dict[str, Any], mlr: dict[str, Any]) -> dict[str, Any]:
+    ph = mlr.get("pooled_by_horizon") or {}
+    b1 = ph.get("1") if isinstance(ph, dict) else {}
+    n_pts = int((b1 or {}).get("n_points_sum") or 0) if isinstance(b1, dict) else 0
+    sign_acc = (b1 or {}).get("mean_sign_accuracy") if isinstance(b1, dict) else None
+    wf_verdict = str(mlr.get("walkforward_production_verdict") or "caution")
+    n_min = int(spec["n_min"])
+    t_data = _t_data(n_pts, n_min)
+    t_model = 0.85 if wf_verdict == "ready" else 0.55 if wf_verdict == "caution" else 0.3
+    t_hit = float(sign_acc) if sign_acc is not None else None
+    trust_score, components = _compute_trust_score(
+        t_data=t_data,
+        t_model=t_model,
+        t_hit=t_hit,
+        t_ctx=0.5,
+        weights=tuple(spec["weights"]),
+        n_matured=n_pts,
+        n_min=n_min,
+    )
+    label = trust_label_from_score(trust_score)
+    l2_ready = wf_verdict == "ready"
+    gate = recommended_gate_mode(label, l2_ready=l2_ready)
+    return {
+        "contour_id": "multiday_lr",
+        "trust_score": trust_score,
+        "trust_label": label,
+        **components,
+        "recommended_gate_mode": gate,
+        "n_matured": n_pts,
+        "conclusion_ru": f"Multiday ridge: WF {wf_verdict}, sign 1d {_pct(t_hit)}, {gate}",
+    }
+
+
+def _contour_from_gap_forecast(spec: dict[str, Any], gap_metrics: dict[str, Any] | None) -> dict[str, Any]:
+    gm = gap_metrics or {}
+    beat = gm.get("ml_beats_baseline_pct_days") or gm.get("beat_baseline_share")
+    n_days = int(gm.get("n_days") or gm.get("rolling_n_days") or 0)
+    n_min = int(spec["n_min"])
+    t_data = _t_data(n_days, n_min)
+    t_model = 0.55 if gm.get("gate_ready") else 0.4
+    t_hit = float(beat) if beat is not None else None
+    trust_score, components = _compute_trust_score(
+        t_data=t_data,
+        t_model=t_model,
+        t_hit=t_hit,
+        t_ctx=0.45,
+        weights=tuple(spec["weights"]),
+        n_matured=n_days,
+        n_min=n_min,
+    )
+    label = trust_label_from_score(trust_score)
+    gate = recommended_gate_mode(label, l2_ready=bool(gm.get("gate_ready")))
+    note = "PM baseline лучше ML" if t_hit is not None and t_hit < 0.5 else f"beat baseline {_pct(t_hit)}"
+    return {
+        "contour_id": "gap_forecast",
+        "trust_score": trust_score,
+        "trust_label": label,
+        **components,
+        "recommended_gate_mode": gate,
+        "n_matured": n_days,
+        "conclusion_ru": f"Gap forecast: {label} {trust_score:.2f}, {gate}, {note}",
+    }
+
+
+def _contour_from_ml_readiness(contour_id: str, spec: dict[str, Any], readiness: dict[str, Any]) -> dict[str, Any]:
+    aliases = {
+        "catboost_entry_5m": ("game5m", "entry_catboost"),
+        "portfolio_catboost": ("portfolio",),
+        "recovery_ml": ("recovery",),
+        "event_reaction": ("event_reaction",),
+    }
+    block: dict[str, Any] = {}
+    for key in aliases.get(contour_id, (contour_id,)):
+        raw = readiness.get(key)
+        if isinstance(raw, dict):
+            block = raw
+            break
+    gate = block.get("gate") if isinstance(block.get("gate"), dict) else block
+    n_train = int(gate.get("n_train") or gate.get("n") or 0) if isinstance(gate, dict) else 0
+    auc = gate.get("auc_valid") or gate.get("auc") if isinstance(gate, dict) else None
+    n_min = int(spec["n_min"])
+    t_data = _t_data(n_train, n_min)
+    t_model = 0.85 if isinstance(gate, dict) and gate.get("ready") is True else 0.5
+    t_hit = float(auc) if auc is not None and contour_id == "catboost_entry_5m" else None
+    trust_score, components = _compute_trust_score(
+        t_data=t_data,
+        t_model=t_model,
+        t_hit=t_hit,
+        t_ctx=0.5,
+        weights=tuple(spec["weights"]),
+        n_matured=n_train,
+        n_min=n_min,
+    )
+    label = trust_label_from_score(trust_score)
+    l2_ready = isinstance(gate, dict) and gate.get("ready") is True
+    gate_mode = recommended_gate_mode(label, l2_ready=l2_ready)
+    auc_note = f"AUC {float(auc):.2f}" if auc is not None else f"n={n_train}"
+    return {
+        "contour_id": contour_id,
+        "trust_score": trust_score,
+        "trust_label": label,
+        **components,
+        "recommended_gate_mode": gate_mode,
+        "n_matured": n_train,
+        "conclusion_ru": f"{spec['display']}: {label} {trust_score:.2f}, {gate_mode}, {auc_note}",
+    }
+
+
+def format_operator_digest_ru(arbiter: dict[str, Any]) -> str:
+    today = date.today().isoformat()
+    lines = [f"LSE Trust · {today}", ""]
+    surfaces = arbiter.get("surfaces") or {}
+
+    game = surfaces.get("GAME_5M") or {}
+    if game:
+        lines.append("GAME_5M (торгуем)")
+        for c in game.get("contours") or []:
+            lines.append(
+                f"  {c.get('contour_id', '?'):16} {c.get('trust_label', '?'):11} "
+                f"{c.get('trust_score', 0):.2f}  {c.get('recommended_gate_mode', '?')}"
+            )
+        lines.append("")
+
+    pf = surfaces.get("PORTFOLIO") or {}
+    if pf:
+        lines.append("PORTFOLIO")
+        for c in pf.get("contours") or []:
+            lines.append(
+                f"  {c.get('contour_id', '?'):16} {c.get('trust_label', '?'):11} "
+                f"{c.get('trust_score', 0):.2f}  {c.get('recommended_gate_mode', '?')}"
+            )
+        lines.append("")
+
+    earn = surfaces.get("EARNINGS") or {}
+    if earn:
+        lines.append("EARNINGS (advisory, не блокирует бот)")
+        for c in earn.get("contours") or []:
+            display = CONTOUR_TRUST_SPECS.get(str(c.get("contour_id")), {}).get("display", c.get("contour_id"))
+            lines.append(
+                f"  {display:16} {c.get('trust_label', '?'):11} "
+                f"{c.get('trust_score', 0):.2f}  {c.get('recommended_gate_mode', '?')}"
+            )
+        lines.append("")
+
+    ev = arbiter.get("latest_event_postmortem")
+    if isinstance(ev, dict) and ev.get("symbol"):
+        ev_d_raw = str(ev.get("event_date") or "")[:10]
+        try:
+            ev_d = date.fromisoformat(ev_d_raw)
+        except ValueError:
+            ev_d = None
+        if not is_telegram_eligible_event(ev_d):
+            ev = None
+    if isinstance(ev, dict) and ev.get("symbol"):
+        sym = ev.get("symbol")
+        ev_d = ev.get("event_date")
+        scen = (ev.get("models") or {}).get("scenario_sign") or {}
+        reg = (ev.get("models") or {}).get("regression_5d") or {}
+        fusion = ev.get("fusion") or {}
+        hit = "✓" if scen.get("hit") else "✗"
+        fact = reg.get("fact")
+        fact_pct = f"{100.0 * float(fact):+.1f}%" if fact is not None else "—"
+        lines.append("Событие (последнее созревшее)")
+        lines.append(
+            f"  {sym} {ev_d}: scenario sign {hit} fact {fact_pct} · "
+            f"fusion {fusion.get('conviction')} conv"
+        )
+        lines.append("")
+
+    summary = arbiter.get("summary_ru") or "См. контуры выше."
+    lines.append(f"Итог: {summary}")
+    return "\n".join(lines)
+
+
+def build_unified_trust_arbiter(
+    *,
+    project_root: Path | None = None,
+    report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    root = project_root or Path(__file__).resolve().parents[1]
+    q_dir = _ml_data_quality_dir(root)
+    shadow = _load_json(q_dir / "last_earnings_scenario_shadow.json")
+    earnings_trust = _load_json(q_dir / "last_earnings_trust_metrics.json")
+    readiness = _latest_ml_train_readiness(root)
+    gap_metrics = load_gap_forecast_metrics()
+    mlr = (report or {}).get("multiday_lr_reality_check") or {}
+
+    surfaces: dict[str, Any] = {}
+    game_contours: list[dict[str, Any]] = []
+    if mlr.get("mode") == "ok":
+        game_contours.append(_contour_from_multiday(CONTOUR_TRUST_SPECS["multiday_lr"], mlr))
+    else:
+        game_contours.append(_contour_from_ml_readiness("multiday_lr", CONTOUR_TRUST_SPECS["multiday_lr"], readiness))
+    game_contours.append(_contour_from_ml_readiness("catboost_entry_5m", CONTOUR_TRUST_SPECS["catboost_entry_5m"], readiness))
+    game_contours.append(_contour_from_gap_forecast(CONTOUR_TRUST_SPECS["gap_forecast"], gap_metrics))
+    multiday_c = game_contours[0]
+    surfaces["GAME_5M"] = {
+        "overall_trust": multiday_c["trust_label"],
+        "contours": game_contours,
+    }
+
+    pf_contours = [_contour_from_ml_readiness("portfolio_catboost", CONTOUR_TRUST_SPECS["portfolio_catboost"], readiness)]
+    surfaces["PORTFOLIO"] = {"overall_trust": pf_contours[0]["trust_label"], "contours": pf_contours}
+
+    earn_contours = [
+        _contour_from_earnings_metrics("earnings_scenario", CONTOUR_TRUST_SPECS["earnings_scenario"], earnings_trust, shadow),
+        _contour_from_earnings_metrics("event_reaction", CONTOUR_TRUST_SPECS["event_reaction"], earnings_trust, shadow),
+        _contour_from_earnings_metrics("peer_spillover", CONTOUR_TRUST_SPECS["peer_spillover"], earnings_trust, shadow),
+    ]
+    surfaces["EARNINGS"] = {
+        "overall_trust": earn_contours[0]["trust_label"],
+        "contours": earn_contours,
+    }
+
+    weights: dict[str, float] = {}
+    for surface in surfaces.values():
+        for c in surface.get("contours") or []:
+            cid = str(c.get("contour_id") or "")
+            r = stack_readiness(cid)
+            base_w = weight_for_readiness(r)
+            weights[cid] = round(base_w * float(c.get("trust_score") or 0), 4)
+
+    recent = earnings_trust.get("recent_events") or []
+    latest_event = None
+    for row in recent:
+        if not isinstance(row, dict):
+            continue
+        raw = str(row.get("event_date") or "")[:10]
+        try:
+            ev_d = date.fromisoformat(raw)
+        except ValueError:
+            continue
+        if is_telegram_eligible_event(ev_d):
+            latest_event = row
+            break
+
+    multiday = next((c for c in game_contours if c.get("contour_id") == "multiday_lr"), {})
+    summary_ru = (
+        f"торговать по GAME_5M multiday ({multiday.get('trust_label', '?')}); "
+        "earnings — только контекст"
+    )
+    if isinstance(latest_event, dict) and latest_event.get("fusion", {}).get("would_have_blocked"):
+        summary_ru += f"; {latest_event.get('symbol')} — осторожность"
+
+    arbiter = {
+        "arbiter_version": ARBITER_VERSION,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "surfaces": surfaces,
+        "operator_digest_ru": "",
+        "decision_stack_weights": weights,
+        "latest_event_postmortem": latest_event,
+        "summary_ru": summary_ru,
+    }
+    arbiter["operator_digest_ru"] = format_operator_digest_ru(arbiter)
+    return arbiter
+
+
+def write_unified_trust_arbiter(
+    *,
+    project_root: Path | None = None,
+    report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    arbiter = build_unified_trust_arbiter(project_root=project_root, report=report)
+    out = default_trust_arbiter_path(project_root)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(arbiter, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    arbiter["path"] = str(out)
+    return arbiter

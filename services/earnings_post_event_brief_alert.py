@@ -13,6 +13,7 @@ from sqlalchemy.engine import Engine
 
 from config_loader import get_config_value
 from services.earnings_event_brief import build_event_brief
+from services.earnings_event_freshness import is_telegram_eligible_event, telegram_max_event_age_days
 from services.telegram_signal import get_signal_chat_ids, send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -62,8 +63,10 @@ def load_recent_extracted_events(
     *,
     lookback_days: int = 3,
     limit: int = 30,
+    max_event_age_days: int | None = None,
 ) -> list[dict[str, Any]]:
     since = datetime.now(timezone.utc) - timedelta(days=max(1, int(lookback_days)))
+    max_age = max_event_age_days if max_event_age_days is not None else telegram_max_event_age_days()
     q = text(
         """
         SELECT
@@ -74,6 +77,7 @@ def load_recent_extracted_events(
         JOIN knowledge_base kb ON kb.id = ed.knowledge_base_id
         WHERE UPPER(COALESCE(kb.event_type, '')) LIKE '%EARNING%'
           AND kb.ts::date <= CURRENT_DATE
+          AND kb.ts::date >= CURRENT_DATE - CAST(:max_age_days AS int)
           AND ed.guidance_summary ? 'extraction_meta'
           AND ed.updated_at >= :since
         ORDER BY ed.updated_at DESC
@@ -81,7 +85,10 @@ def load_recent_extracted_events(
         """
     )
     with engine.connect() as conn:
-        rows = conn.execute(q, {"since": since, "lim": max(1, int(limit))}).mappings().all()
+        rows = conn.execute(
+            q,
+            {"since": since, "lim": max(1, int(limit)), "max_age_days": max_age},
+        ).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -151,6 +158,8 @@ def notify_new_post_event_briefs(
             continue
         h = _event_hash(sym, event_date)
         if h in sent_set:
+            continue
+        if not is_telegram_eligible_event(event_date):
             continue
         candidates += 1
         brief = build_event_brief(engine, symbol=sym, event_date=event_date)

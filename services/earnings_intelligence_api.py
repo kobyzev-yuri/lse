@@ -16,6 +16,7 @@ from services.earnings_event_brief import (
     load_peer_edges,
     load_peer_spillover_outcomes,
 )
+from services.earnings_event_freshness import enrich_event_freshness, pick_default_active_event
 from services.earnings_intelligence_universe import get_earnings_intelligence_universe
 from services.earnings_scenario_signal import predict_scenario_from_features
 from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_game_5m
@@ -163,10 +164,17 @@ def list_intelligence_events(
         )
 
     missing = [s for s in sym_set if s not in covered_symbols]
+    events = enrich_event_freshness(events)
+    default_active = pick_default_active_event(events)
     return {
         "generated_at_utc": datetime.utcnow().isoformat() + "Z",
         "universe": sym_set,
         "events": events,
+        "default_active_event": (
+            {"symbol": default_active[0], "event_date": default_active[1]}
+            if default_active
+            else None
+        ),
         "summary": {
             "universe_size": len(sym_set),
             "events_listed": len(events),

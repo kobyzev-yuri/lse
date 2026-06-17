@@ -204,3 +204,44 @@ def weight_for_readiness(readiness: str) -> float:
     if readiness == READINESS_CAUTION:
         return 0.35
     return 0.0
+
+
+@lru_cache(maxsize=1)
+def _latest_trust_arbiter_weights() -> Dict[str, float]:
+    paths = (
+        Path("/app/logs/ml/ml_data_quality/last_unified_trust_arbiter.json"),
+        Path(__file__).resolve().parents[2] / "local" / "logs" / "ml_data_quality" / "last_unified_trust_arbiter.json",
+    )
+    for p in paths:
+        try:
+            if not p.is_file():
+                continue
+            data = json.loads(p.read_text(encoding="utf-8"))
+            weights = data.get("decision_stack_weights")
+            if isinstance(weights, dict):
+                return {str(k): float(v) for k, v in weights.items()}
+        except Exception:
+            continue
+    return {}
+
+
+def trust_score_for_contour(contour_id: str) -> float:
+    """L2.5 trust multiplier from last unified arbiter (1.0 if artifact missing)."""
+    weights = _latest_trust_arbiter_weights()
+    if not weights:
+        return 1.0
+    base = weight_for_readiness(stack_readiness(contour_id))
+    if base <= 0:
+        return 0.0
+    w = weights.get(contour_id)
+    if w is None:
+        return 1.0
+    return min(1.0, max(0.0, float(w) / base))
+
+
+def effective_stack_weight(contour_id: str, readiness: str) -> float:
+    """weight_for_readiness × trust_score (L3 stack)."""
+    base = weight_for_readiness(readiness)
+    if base <= 0:
+        return 0.0
+    return round(base * trust_score_for_contour(contour_id), 4)

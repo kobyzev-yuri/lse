@@ -285,6 +285,8 @@ def main() -> int:
                 scenario_metrics_path=scenario_metrics_path,
                 peer_spillover_metrics_path=peer_spillover_metrics_path,
             )
+            postmortem_cmd = [py, "scripts/run_earnings_postmortem_cron.py"]
+            _run(postmortem_cmd)
 
     finalize_contour_refresh(
         project_root,
