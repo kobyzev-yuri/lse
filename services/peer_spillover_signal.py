@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config_loader import get_config_value
-from services.event_reaction_labeling import FEATURE_BUILDER_VERSION_EARNINGS
+from services.event_reaction_labeling import (
+    FEATURE_BUILDER_VERSION_EARNINGS,
+    timing_from_features_before,
+)
 from services.peer_spillover_dataset import (
     peer_spillover_categorical_features,
     peer_spillover_feature_names,
@@ -116,6 +119,7 @@ def predict_peer_spillover(
         "source_symbol": src,
         "peer_ticker": peer,
         "relation_type": str(relation_type or "unknown"),
+        "source_market_phase": timing_from_features_before(features_before),
     }
     for k in feature_names:
         if k in peer_spillover_categorical_features() or k == "edge_weight":
