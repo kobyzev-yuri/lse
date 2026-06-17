@@ -31,8 +31,9 @@
         .focus-title { font-size: 1.05rem; font-weight: 700; color: #f1f5f9; }
         .focus-meta { font-size: 0.78rem; color: #94a3b8; flex: 1; min-width: 8rem; }
         .focus-pickers { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
-        select, .ticker-input { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 0.35rem 0.5rem; font-size: 0.85rem; }
+        select, .ticker-input { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 0.35rem 0.5rem; font-size: 0.85rem; min-width: 5.5rem; }
         .ticker-input { width: 5.5rem; min-width: 4rem; text-transform: uppercase; }
+        #ctxEventDate { min-width: 11rem; }
 
         /* Navigation */
         .ei-nav { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; align-items: center; }
@@ -125,7 +126,8 @@
     <summary>Как устроен экран · <a href="/earnings/guide" style="color:#93c5fd">полное руководство</a></summary>
     <ul>
         <li><strong>Календарь</strong> — фильтр периода (по умолчанию 30д), клик по строке; самый свежий отчёт подсвечивается и выбирается автоматически.</li>
-        <li><strong>Обзор / ML прогноз / Пиры</strong> — три среза <em>одного</em> события; без выбора недоступны.</li>
+        <li><strong>Обзор / ML прогноз / Пиры / Post-mortem</strong> — четыре среза <em>одного</em> события; без выбора недоступны.</li>
+        <li><strong>Post-mortem</strong> — после созревания 5d: pred vs fact по regression, scenario, peer spillover, fusion; расшифровки внизу вкладки.</li>
         <li><strong>Peer graph / Качество ML / ML pipeline</strong> — справочник и мониторинг; не привязаны к одному отчёту.</li>
         <li>LLM scenario — из transcript/8-K; ML scenario — CatBoost classifier. Регрессия 5d — отдельный слой на вкладке ML прогноз.</li>
     </ul>
@@ -138,8 +140,10 @@
     <div class="focus-row">
         <span class="focus-label">Событие</span>
         <div class="focus-pickers">
-            <input id="ctxSymbol" class="ticker-input" list="eiTickerList" autocomplete="off" placeholder="Тикер">
-            <select id="ctxEventDate" title="Дата отчёта"></select>
+            <select id="ctxSymbol" title="Тикер из universe earnings">
+                <option value="">— тикер —</option>
+            </select>
+            <select id="ctxEventDate" title="Дата отчёта для выбранного тикера"></select>
         </div>
         <span id="focusTitle" class="focus-title muted">не выбрано</span>
         <span id="focusMeta" class="focus-meta"></span>
@@ -154,6 +158,7 @@
         <button class="btn" data-view="overview" data-needs-event>Обзор</button>
         <button class="btn" data-view="ml" data-needs-event>ML прогноз</button>
         <button class="btn" data-view="peers" data-needs-event>Пиры</button>
+        <button class="btn" data-view="postmortem" data-needs-event>Post-mortem</button>
     </div>
     <span class="nav-sep">|</span>
     <div class="ei-nav-group">
@@ -217,6 +222,16 @@
         <button type="button" class="btn" data-goto="calendar">Выбрать в календаре</button>
     </div>
     <div id="peersContent"></div>
+</div>
+
+<!-- Post-mortem: pred vs fact после созревания 5d -->
+<div id="view-postmortem" class="view">
+    <p class="view-lead"><strong>Post-mortem</strong> — разбор созревшего отчёта: что предсказала каждая модель и что вышло по факту 5d. Используется Trust Arbiter (T_hit).</p>
+    <div id="postmortemEmpty" class="empty-state" hidden>
+        <p>Выберите тикер и дату отчёта в фокус-баре или календаре.</p>
+        <button type="button" class="btn" data-goto="calendar">Открыть календарь</button>
+    </div>
+    <div id="postmortemContent"></div>
 </div>
 
 <!-- Peer graph -->
@@ -374,7 +389,7 @@ const peerSpilloverMlSummary = (mlArr, outcomes) => {
     return `<span class="muted">ML spillover (pilot): graph ${graphN} pred${affShown ? ` · ${affShown} affected w/ fact` : ''} · Sign = sanity check</span>`;
 };
 
-let allEvents = [], currentFilter = 'all', currentDateWindow = '30', graphData = null, currentView = 'calendar';
+let allEvents = [], universeTickers = [], symbolDatesCache = {}, currentFilter = 'all', currentDateWindow = '30', graphData = null, currentView = 'calendar';
 let defaultActiveEvent = null;
 let activeBrief = null;
 const EI_CTX_KEY = 'earnings_intelligence_ctx_v2';
@@ -401,19 +416,49 @@ function saveEiContext() {
 }
 
 function eventDatesForSymbol(sym) {
+    const cached = symbolDatesCache[sym];
+    if (Array.isArray(cached) && cached.length) return [...cached];
     return [...new Set(
         allEvents.filter(e => e.symbol === sym && e.event_date).map(e => e.event_date)
     )].sort().reverse();
+}
+
+async function fetchSymbolEventDates(sym) {
+    const s = String(sym || '').trim().toUpperCase();
+    if (!s) return [];
+    if (Array.isArray(symbolDatesCache[s]) && symbolDatesCache[s].length) {
+        return symbolDatesCache[s];
+    }
+    const res = await fetch(`/api/earnings/intelligence?since=2020-01-01&symbols=${encodeURIComponent(s)}&limit=80`);
+    if (!res.ok) return eventDatesForSymbol(s);
+    const data = await res.json();
+    const dates = [...new Set((data.events || []).map(e => e.event_date).filter(Boolean))].sort().reverse();
+    if (dates.length) symbolDatesCache[s] = dates;
+    return dates.length ? dates : eventDatesForSymbol(s);
+}
+
+function fillSymbolSelect(preferred) {
+    const sel = document.getElementById('ctxSymbol');
+    if (!sel) return;
+    const tickers = universeTickers.length ? universeTickers : eiTickers();
+    const prev = preferred || sel.value || '';
+    sel.innerHTML = '<option value="">— тикер —</option>'
+        + tickers.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    if (prev && tickers.includes(prev)) sel.value = prev;
 }
 
 function fillDateSelect(sel, sym, preferred) {
     if (!sel) return;
     const dates = eventDatesForSymbol(sym);
     if (!dates.length) {
-        sel.innerHTML = '<option value="">— нет дат —</option>';
+        sel.innerHTML = '<option value="">— нет отчётов —</option>';
         return;
     }
-    sel.innerHTML = dates.map(d => `<option value="${d}">${d}</option>`).join('');
+    sel.innerHTML = dates.map(d => {
+        const ev = allEvents.find(e => e.symbol === sym && e.event_date === d);
+        const latest = ev && ev.is_latest_for_symbol ? ' · latest' : '';
+        return `<option value="${esc(d)}">${esc(sym)} · ${esc(d)}${latest}</option>`;
+    }).join('');
     if (preferred && dates.includes(preferred)) sel.value = preferred;
     else sel.value = dates[0];
 }
@@ -454,11 +499,19 @@ function setActiveEvent(sym, eventDate, opts = {}) {
         const dates = eventDatesForSymbol(s);
         eiContext.eventDate = dates.length ? dates[0] : '';
     }
+    fillSymbolSelect(s);
     const ctxSym = document.getElementById('ctxSymbol');
     const ctxDate = document.getElementById('ctxEventDate');
     if (ctxSym) ctxSym.value = s;
-    fillDateSelect(ctxDate, s, eiContext.eventDate);
-    if (ctxDate && eiContext.eventDate) ctxDate.value = eiContext.eventDate;
+    const applyDates = () => {
+        fillDateSelect(ctxDate, s, eiContext.eventDate);
+        if (ctxDate && eiContext.eventDate) ctxDate.value = eiContext.eventDate;
+    };
+    if (!eventDatesForSymbol(s).length) {
+        fetchSymbolEventDates(s).then(applyDates);
+    } else {
+        applyDates();
+    }
     saveEiContext();
     updateFocusBar();
     activeBrief = null;
@@ -510,7 +563,7 @@ function updateFocusBar() {
 }
 
 function needsEventView(name) {
-    return ['overview', 'ml', 'peers'].includes(name);
+    return ['overview', 'ml', 'peers', 'postmortem'].includes(name);
 }
 
 function updateNavState() {
@@ -548,10 +601,11 @@ function reloadActiveView() {
     if (currentView === 'overview') loadOverview();
     else if (currentView === 'ml') loadMlAdvisory();
     else if (currentView === 'peers') loadPeers();
+    else if (currentView === 'postmortem') loadPostmortem();
 }
 
 function toggleEmptyStates(show) {
-    ['overview', 'ml', 'peers'].forEach(v => {
+    ['overview', 'ml', 'peers', 'postmortem'].forEach(v => {
         const empty = document.getElementById(v + 'Empty');
         const content = document.getElementById(v === 'overview' ? 'overviewContent' : v + 'Content');
         if (empty) empty.hidden = !show;
@@ -612,6 +666,7 @@ async function loadList() {
     if (gRes.ok) graphData = await gRes.json();
     const data = await res.json();
     allEvents = data.events || [];
+    universeTickers = (data.universe || []).slice().sort();
     defaultActiveEvent = data.default_active_event || null;
     document.getElementById('summaryBox').innerHTML = `
         <div class="stat"><div class="n">${data.summary.universe_size}</div><div class="l">Universe</div></div>
@@ -622,6 +677,7 @@ async function loadList() {
     document.getElementById('missingList').textContent = miss.length ? `Без материалов: ${miss.join(', ')}` : '';
     applyFilter();
     document.getElementById('updatedAt').textContent = new Date().toLocaleTimeString();
+    fillSymbolSelect(eiContext.symbol || '');
     refreshTickerList();
     updateFocusBar();
     updateNavState();
@@ -779,6 +835,89 @@ async function loadPeers() {
     }
 }
 
+const fmtPredCol = (v) => {
+    if (v == null || v === '') return '—';
+    if (typeof v === 'number' && Number.isFinite(v)) return fmtPct(v);
+    return esc(String(v));
+};
+
+const verdictClass = (v) => {
+    const s = String(v || '');
+    if (s.includes('✓') || s.includes('оправдана') || s.includes('было ок')) return 'pos';
+    if (s.includes('✗') || s.includes('ложная') || s.includes('пропустили') || s.includes('крупный')) return 'neg';
+    return 'muted';
+};
+
+function renderPostmortemGlossary(glossary) {
+    if (!glossary || typeof glossary !== 'object') return '';
+    return '<dl class="shadow-legend">' + Object.entries(glossary).map(([k, v]) =>
+        `<dt><code>${esc(k)}</code></dt><dd>${esc(v)}</dd>`
+    ).join('') + '</dl>';
+}
+
+function renderTrustRolling(rolling) {
+    if (!rolling || typeof rolling !== 'object') return '';
+    const fq = rolling.fusion_quality || {};
+    const parts = [];
+    if (rolling.n_events_in_window != null) {
+        parts.push(`окно ${rolling.n_events_in_window} событий`);
+    }
+    if (fq.block_precision != null) {
+        parts.push(`fusion block precision ${(Number(fq.block_precision) * 100).toFixed(0)}%`);
+    }
+    return parts.length ? `<p class="muted" style="margin-bottom:0.65rem">Rolling trust: ${parts.join(' · ')}</p>` : '';
+}
+
+async function loadPostmortem() {
+    const box = document.getElementById('postmortemContent');
+    box.innerHTML = '<span class="muted">Загрузка post-mortem…</span>';
+    const sym = eiContext.symbol;
+    const evd = eiContext.eventDate;
+    try {
+        const res = await fetch(`/api/earnings/postmortem/${encodeURIComponent(sym)}?event_date=${encodeURIComponent(evd)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || res.statusText || 'ошибка API');
+        if (data.status === 'immature') {
+            box.innerHTML = `
+                <h2 class="view-title">${esc(sym)} · ${esc(evd)}</h2>
+                <div class="empty-state" style="margin-top:0.5rem">
+                    <p>${esc(data.reason_ru || '5d ещё не созрел')}</p>
+                </div>
+                ${renderPostmortemGlossary(data.glossary)}`;
+            return;
+        }
+        const rows = Array.isArray(data.table_rows) ? data.table_rows : [];
+        const ctx = data.context || {};
+        box.innerHTML = `
+            <h2 class="view-title">${esc(sym)} · ${esc(evd)} · post-mortem</h2>
+            <p class="muted" style="margin-bottom:0.5rem">
+                Сценарий <code>${esc(ctx.scenario_class || '—')}</code>
+                · alignment <code>${esc(ctx.alignment || '—')}</code>
+                · версия <code>${esc(data.postmortem_version || '—')}</code>
+            </p>
+            ${renderTrustRolling(data.rolling)}
+            <table class="peer-table" style="margin-bottom:0.75rem">
+                <thead><tr>
+                    <th>Модель</th><th>Тикер</th><th>Прогноз</th><th>Факт 5d</th><th>Вердикт</th>
+                </tr></thead>
+                <tbody>${rows.length ? rows.map(r => `<tr>
+                    <td>${esc(r.model)}</td>
+                    <td><strong>${esc(r.tickers)}</strong></td>
+                    <td>${fmtPredCol(r.prediction)}</td>
+                    <td>${fmtPredCol(r.fact_5d)}</td>
+                    <td class="${verdictClass(r.verdict_ru)}">${esc(r.verdict_ru || '—')}</td>
+                </tr>`).join('') : '<tr><td colspan="5" class="muted">Нет строк</td></tr>'}
+                </tbody>
+            </table>
+            <details open>
+                <summary style="cursor:pointer;color:#93c5fd;font-weight:600">Расшифровка вердиктов</summary>
+                ${renderPostmortemGlossary(data.glossary)}
+            </details>`;
+    } catch (err) {
+        box.innerHTML = `<span class="err">${esc(err.message || String(err))}</span>`;
+    }
+}
+
 async function loadGraph() {
     if (!graphData) {
         const res = await fetch('/api/earnings/peer-graph');
@@ -879,10 +1018,21 @@ async function loadPipeline() {
 
 function onCtxSymbolChange() {
     const sym = getTickerInput();
-    fillDateSelect(document.getElementById('ctxEventDate'), sym, null);
-    readContextFromBar();
-    activeBrief = null;
-    if (hasActiveEvent() && needsEventView(currentView)) reloadActiveView();
+    if (!sym) {
+        document.getElementById('ctxEventDate').innerHTML = '<option value="">—</option>';
+        readContextFromBar();
+        return;
+    }
+    fetchSymbolEventDates(sym).then((dates) => {
+        if (dates.length) symbolDatesCache[sym] = dates;
+        fillDateSelect(document.getElementById('ctxEventDate'), sym, null);
+        readContextFromBar();
+        activeBrief = null;
+        if (hasActiveEvent() && needsEventView(currentView)) reloadActiveView();
+    }).catch(() => {
+        fillDateSelect(document.getElementById('ctxEventDate'), sym, null);
+        readContextFromBar();
+    });
 }
 
 document.getElementById('eventsBody').addEventListener('click', onCalendarRowClick);
@@ -904,7 +1054,6 @@ document.getElementById('refreshShadowBtn').addEventListener('click', () => load
 document.getElementById('shadowFilterActive').addEventListener('change', renderShadow);
 document.getElementById('focusClearBtn').addEventListener('click', clearActiveEvent);
 document.getElementById('ctxSymbol')?.addEventListener('change', onCtxSymbolChange);
-document.getElementById('ctxSymbol')?.addEventListener('blur', onCtxSymbolChange);
 document.getElementById('ctxEventDate')?.addEventListener('change', () => {
     readContextFromBar();
     activeBrief = null;
@@ -917,7 +1066,7 @@ loadList().then(() => {
     const p = new URLSearchParams(location.search);
     const sym = (p.get('symbol') || '').toUpperCase();
     const evd = p.get('event_date') || '';
-    const tabMap = { brief: 'overview', fusion: 'ml', spillover: 'peers', overview: 'overview', ml: 'ml', peers: 'peers', calendar: 'calendar', graph: 'graph', shadow: 'shadow', pipeline: 'pipeline' };
+    const tabMap = { brief: 'overview', fusion: 'ml', spillover: 'peers', postmortem: 'postmortem', overview: 'overview', ml: 'ml', peers: 'peers', calendar: 'calendar', graph: 'graph', shadow: 'shadow', pipeline: 'pipeline' };
     const tab = tabMap[(p.get('tab') || 'overview').toLowerCase()] || 'overview';
     if (sym) {
         setActiveEvent(sym, evd, { navigate: tab, reload: true });

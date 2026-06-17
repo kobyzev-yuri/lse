@@ -58,3 +58,28 @@ def test_fact_was_bad_large_miss():
         rmse_bucket="miss_large",
         threshold_log=0.004,
     )
+
+
+def test_format_postmortem_table_rows_verdicts():
+    from services.earnings_event_postmortem import format_postmortem_table_rows
+
+    row = {
+        "symbol": "ORCL",
+        "models": {
+            "regression_5d": {"pred": 0.01, "fact": -0.05, "sign_hit": False, "rmse_bucket": "miss_large"},
+            "scenario_sign": {
+                "predicted_scenario": "gap_up",
+                "pred_sign": 1,
+                "fact": -0.05,
+                "hit": False,
+                "class_hit": True,
+            },
+            "peer_spillover": [{"peer": "NVDA", "pred": 0.02, "fact_5d": 0.01, "sign_hit": True}],
+        },
+        "fusion": {"would_have_blocked": True, "alignment": "conflict", "conviction": "low"},
+        "fusion_outcome": {"fact_was_bad": True, "block_was_correct": True},
+    }
+    lines = format_postmortem_table_rows(row)
+    assert any(l["model"] == "Regression 5d" for l in lines)
+    assert any("знак ✗" in l["verdict_ru"] for l in lines)
+    assert any(l["tickers"] == "NVDA" for l in lines)

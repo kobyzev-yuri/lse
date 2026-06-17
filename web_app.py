@@ -936,7 +936,12 @@ async def api_ml_event_reaction(ticker: str, event_date: str = ""):
 
 
 @app.get("/api/earnings/intelligence", response_class=JSONResponse)
-async def api_earnings_intelligence(since: str = "", until: str = "", limit: int = 80):
+async def api_earnings_intelligence(
+    since: str = "",
+    until: str = "",
+    limit: int = 80,
+    symbols: str = "",
+):
     """Список KB earnings по universe с флагами materials / LLM / brief."""
     from datetime import date as date_cls
     from services.earnings_event_freshness import calendar_since_date, ui_calendar_window_days
@@ -954,12 +959,14 @@ async def api_earnings_intelligence(since: str = "", until: str = "", limit: int
             until_d = date_cls.fromisoformat(until.strip()[:10])
         except ValueError:
             raise HTTPException(status_code=400, detail="until must be YYYY-MM-DD")
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols.strip() else None
 
     def _run():
         return list_intelligence_events(
             get_engine(),
             since=since_d,
             until=until_d,
+            symbols=sym_list,
             limit=min(max(1, limit), 200),
         )
 
@@ -1097,6 +1104,45 @@ async def api_earnings_fusion(symbol: str, event_date: str = ""):
     except Exception as e:
         logger.exception("api_earnings_fusion failed for %s", sym)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/earnings/postmortem/{symbol}", response_class=JSONResponse)
+async def api_earnings_postmortem(symbol: str, event_date: str = ""):
+    """Post-mortem разбор созревшего earnings-события (pred vs fact 5d)."""
+    from datetime import date as date_cls
+    from services.earnings_event_postmortem import get_event_postmortem_payload
+    from services.earnings_intelligence_api import get_event_brief_payload
+
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol required")
+    ev_d = None
+    if event_date.strip():
+        try:
+            ev_d = date_cls.fromisoformat(event_date.strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="event_date must be YYYY-MM-DD")
+    if ev_d is None:
+        brief_probe = await asyncio.to_thread(
+            get_event_brief_payload, get_engine(), symbol=sym, event_date=None
+        )
+        ev_raw = brief_probe.get("event_date")
+        if ev_raw:
+            try:
+                ev_d = date_cls.fromisoformat(str(ev_raw)[:10])
+            except ValueError:
+                ev_d = None
+    if ev_d is None:
+        raise HTTPException(status_code=404, detail="event_date not found for symbol")
+
+    try:
+        payload = await asyncio.to_thread(
+            get_event_postmortem_payload, get_engine(), symbol=sym, event_date=ev_d
+        )
+        return _to_jsonable(payload)
+    except Exception as e:
+        logger.exception("api_earnings_postmortem failed for %s", sym)
+        raise HTTPException(status_code=500, detail=f"earnings postmortem: {e!s}")
 
 
 @app.get("/earnings", response_class=HTMLResponse)

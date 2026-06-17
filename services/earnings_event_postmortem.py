@@ -493,3 +493,252 @@ def refresh_earnings_postmortem(
         "metrics_path": str(metrics_path),
         "metrics": metrics,
     }
+
+
+def load_postmortem_rows(project_root: Path | None = None) -> list[dict[str, Any]]:
+    path = default_postmortem_rows_path(project_root)
+    if not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                rows.append(obj)
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def load_trust_metrics(project_root: Path | None = None) -> dict[str, Any]:
+    path = default_trust_metrics_path(project_root)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sign_label(sign: Any) -> str:
+    try:
+        s = int(sign)
+    except (TypeError, ValueError):
+        return "—"
+    if s > 0:
+        return "↑ рост"
+    if s < 0:
+        return "↓ падение"
+    return "флэт"
+
+
+def _verdict_sign(hit: bool | None) -> str:
+    if hit is True:
+        return "знак ✓"
+    if hit is False:
+        return "знак ✗"
+    return "знак —"
+
+
+def _verdict_class(hit: bool | None) -> str:
+    if hit is True:
+        return "класс ✓"
+    if hit is False:
+        return "класс ✗"
+    return "класс —"
+
+
+def _verdict_rmse(bucket: str | None) -> str:
+    mapping = {
+        "hit": "величина ✓ (в пороге)",
+        "miss_small": "промах небольшой",
+        "miss_large": "промах крупный",
+    }
+    return mapping.get(str(bucket or "").strip(), "—")
+
+
+def _verdict_fusion(row: dict[str, Any]) -> str:
+    fusion = row.get("fusion") if isinstance(row.get("fusion"), dict) else {}
+    outcome = row.get("fusion_outcome") if isinstance(row.get("fusion_outcome"), dict) else {}
+    blocked = fusion.get("would_have_blocked")
+    correct = outcome.get("block_was_correct")
+    if blocked is True and correct is True:
+        return "блокировка оправдана"
+    if blocked is True and correct is False:
+        return "блокировка ложная"
+    if blocked is False and correct is True:
+        return "торговать было ок"
+    if blocked is False and correct is False:
+        return "пропустили риск"
+    if blocked is True:
+        return "низкая conviction / conflict"
+    return "допуск к сделке"
+
+
+def format_postmortem_table_rows(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """Human-readable lines for UI table (model / tickers / pred / fact / verdict)."""
+    sym = str(row.get("symbol") or "").upper()
+    models = row.get("models") if isinstance(row.get("models"), dict) else {}
+    lines: list[dict[str, Any]] = []
+
+    reg = models.get("regression_5d") or {}
+    if reg:
+        parts = [_verdict_sign(reg.get("sign_hit")), _verdict_rmse(reg.get("rmse_bucket"))]
+        lines.append(
+            {
+                "model": "Regression 5d",
+                "tickers": sym,
+                "prediction": reg.get("pred"),
+                "fact_5d": reg.get("fact"),
+                "verdict_ru": " · ".join(p for p in parts if p and p != "—"),
+                "verdict_short": _verdict_sign(reg.get("sign_hit")),
+            }
+        )
+
+    scen = models.get("scenario_sign") or {}
+    if scen:
+        pred_sc = scen.get("predicted_scenario") or "—"
+        pred_sign = scen.get("pred_sign")
+        parts = [_verdict_sign(scen.get("hit")), _verdict_class(scen.get("class_hit"))]
+        lines.append(
+            {
+                "model": "Scenario classifier",
+                "tickers": sym,
+                "prediction": f"{pred_sc} ({_sign_label(pred_sign)})",
+                "fact_5d": scen.get("fact"),
+                "verdict_ru": " · ".join(p for p in parts if p and p != "—"),
+                "verdict_short": _verdict_sign(scen.get("hit")),
+            }
+        )
+
+    for peer in models.get("peer_spillover") or []:
+        if not isinstance(peer, dict):
+            continue
+        peer_sym = str(peer.get("peer") or "").upper() or "—"
+        fact = peer.get("fact_5d")
+        lines.append(
+            {
+                "model": "Peer spillover ML",
+                "tickers": peer_sym,
+                "prediction": peer.get("pred"),
+                "fact_5d": fact,
+                "verdict_ru": _verdict_sign(peer.get("sign_hit")) if fact is not None else "5d ещё нет",
+                "verdict_short": _verdict_sign(peer.get("sign_hit")),
+            }
+        )
+
+    fusion = row.get("fusion") if isinstance(row.get("fusion"), dict) else {}
+    if fusion:
+        align = fusion.get("alignment") or "—"
+        conv = fusion.get("conviction") or "—"
+        lines.append(
+            {
+                "model": "Fusion advisory",
+                "tickers": sym,
+                "prediction": f"{conv} · {align}",
+                "fact_5d": None,
+                "verdict_ru": _verdict_fusion(row),
+                "verdict_short": "block" if fusion.get("would_have_blocked") else "allow",
+            }
+        )
+    return lines
+
+
+def find_postmortem_row(
+    rows: list[dict[str, Any]],
+    *,
+    symbol: str,
+    event_date: str,
+) -> dict[str, Any] | None:
+    sym = str(symbol or "").strip().upper()
+    ev = str(event_date or "").strip()[:10]
+    if not sym or not ev:
+        return None
+    for row in rows:
+        if str(row.get("symbol") or "").upper() == sym and str(row.get("event_date") or "")[:10] == ev:
+            return row
+    return None
+
+
+def get_event_postmortem_payload(
+    engine: Engine,
+    *,
+    symbol: str,
+    event_date: date,
+    project_root: Path | None = None,
+    dataset_version: str = "v0_expanded_baseline",
+    feature_builder_version: str = FEATURE_BUILDER_VERSION_EARNINGS,
+    since: str = "2026-01-01",
+) -> dict[str, Any]:
+    """Post-mortem for one earnings event (matured 5d only)."""
+    sym = str(symbol or "").strip().upper()
+    ev_iso = event_date.isoformat()
+    cached = find_postmortem_row(load_postmortem_rows(project_root), symbol=sym, event_date=ev_iso)
+    row = cached
+    if row is None:
+        matured = _load_matured_rows(
+            engine,
+            dataset_version=dataset_version,
+            feature_builder_version=feature_builder_version,
+            since=since,
+        )
+        for raw in matured:
+            if str(raw.get("symbol") or "").upper() != sym:
+                continue
+            raw_d = raw.get("event_date")
+            if isinstance(raw_d, str):
+                raw_d = date.fromisoformat(raw_d[:10])
+            if raw_d != event_date:
+                continue
+            row = build_event_postmortem_row(
+                engine,
+                raw,
+                feature_builder_version=feature_builder_version,
+            )
+            break
+
+    trust_metrics = load_trust_metrics(project_root)
+    glossary = {
+        "sign_hit": "Совпадение знака: прогноз и факт 5d в одну сторону (рост/падение).",
+        "class_hit": "Совпадение класса сценария с LLM-меткой (final_label).",
+        "rmse_bucket": "Точность величины regression 5d: hit / miss_small / miss_large.",
+        "fusion_block": "Fusion с низкой conviction или conflict → сделку бы не открывали.",
+        "immature": "Post-mortem появляется после созревания forward 5d (~5 торг. дней после отчёта).",
+    }
+
+    if row is None:
+        return {
+            "status": "immature",
+            "symbol": sym,
+            "event_date": ev_iso,
+            "reason_ru": "5d forward return ещё не созрел — post-mortem будет после ~5 торг. дней.",
+            "glossary": glossary,
+            "trust_metrics_summary": trust_metrics.get("contours"),
+            "table_rows": [],
+        }
+
+    table_rows = format_postmortem_table_rows(row)
+    ctx = row.get("context") if isinstance(row.get("context"), dict) else {}
+    return {
+        "status": "ok",
+        "symbol": sym,
+        "event_date": ev_iso,
+        "postmortem_version": row.get("postmortem_version"),
+        "context": ctx,
+        "models": row.get("models"),
+        "fusion": row.get("fusion"),
+        "fusion_outcome": row.get("fusion_outcome"),
+        "table_rows": table_rows,
+        "glossary": glossary,
+        "trust_metrics_summary": trust_metrics.get("contours"),
+        "rolling": {
+            "n_events_in_window": trust_metrics.get("n_events_in_window"),
+            "by_scenario_class": trust_metrics.get("by_scenario_class"),
+            "by_alignment": trust_metrics.get("by_alignment"),
+            "fusion_quality": trust_metrics.get("fusion_quality"),
+        },
+    }
