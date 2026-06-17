@@ -55,11 +55,15 @@ from services.game5m_tuning_ledger import (
 )
 from services.game5m_tuning_policy import (
     apply_config_env_update,
+    apply_game5m_bundle,
     apply_game5m_update,
     current_config_value,
+    rollback_game5m_experiment_applied,
     validate_config_env_update,
+    validate_game5m_bundle,
     validate_game5m_update,
 )
+from services.game5m_tuning_bundles import list_bundles as list_game5m_tuning_bundles
 from services.ticker_groups import get_tickers_fast
 from news_importer import add_news, get_news_sources_stats
 from services.sql_console import (
@@ -1292,6 +1296,7 @@ async def analyzer_tuning_status(top_n: int = 8):
             "latest_selection": latest.get("selection"),
             "latest_proposal_count": len(latest.get("proposals") or []),
             "top_proposals": (latest.get("proposals") or [])[: max(1, min(int(top_n), 20))],
+            "bundles": list_game5m_tuning_bundles(),
             "current_values": {
                 "GAME_5M_TAKE_PROFIT_MIN_PCT": current_config_value("GAME_5M_TAKE_PROFIT_MIN_PCT"),
                 "GAME_5M_TAKE_PROFIT_PCT": current_config_value("GAME_5M_TAKE_PROFIT_PCT"),
@@ -1351,6 +1356,61 @@ async def analyzer_tuning_apply(request: Request):
     return _to_jsonable({"ok": True, "ledger": str(game5m_tuning_ledger_path()), "experiment": experiment})
 
 
+@app.post("/api/analyzer/tuning/apply-bundle", response_class=JSONResponse)
+async def analyzer_tuning_apply_bundle(request: Request):
+    """Apply a predefined multi-parameter GAME_5M bundle through shared guardrails."""
+    if web_demo_mode():
+        raise HTTPException(status_code=403, detail="WEB_DEMO_MODE: tuning disabled")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Ожидается JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Ожидается JSON object")
+
+    bundle_id = str(body.get("bundle_id") or "").strip()
+    if not bundle_id:
+        raise HTTPException(status_code=400, detail="Нужен bundle_id")
+
+    ledger = load_game5m_tuning_ledger()
+    active = ledger.get("active_experiment") if isinstance(ledger.get("active_experiment"), dict) else None
+    if active and active.get("status") == "pending_effect" and not bool(body.get("force")):
+        raise HTTPException(status_code=409, detail="Уже есть active experiment pending_effect. Сначала observe/review или rollback.")
+
+    observe_days = max(1, min(int(body.get("observe_days") or 5), 30))
+    dry_run = bool(body.get("dry_run"))
+    relaxed = bool(body.get("relaxed"))
+
+    ok_val, reason, _vals = validate_game5m_bundle(bundle_id, enforce_step_limits=not relaxed)
+    if not ok_val:
+        raise HTTPException(status_code=400, detail=f"Guardrails rejected bundle: {reason}")
+
+    baseline = _game5m_closed_summary(observe_days)
+    ok, applied = apply_game5m_bundle(
+        bundle_id,
+        source="web_api_analyzer_tuning_apply_bundle",
+        dry_run=dry_run,
+        enforce_step_limits=not relaxed,
+    )
+    experiment = {
+        "experiment_id": f"bundle:{bundle_id}@{datetime.now(timezone.utc).isoformat()}",
+        "kind": "bundle",
+        "bundle_id": bundle_id,
+        "status": "dry_run" if dry_run else ("pending_effect" if ok else "failed"),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "applied": applied,
+        "baseline_summary": baseline,
+        "observe_days": observe_days,
+        "observations": [],
+    }
+    ledger["active_experiment"] = experiment
+    ledger.setdefault("history", []).append(experiment)
+    save_game5m_tuning_ledger(ledger)
+    if not ok:
+        raise HTTPException(status_code=500, detail=applied.get("status") or "write_failed")
+    return _to_jsonable({"ok": True, "ledger": str(game5m_tuning_ledger_path()), "experiment": experiment})
+
+
 @app.post("/api/analyzer/tuning/observe", response_class=JSONResponse)
 async def analyzer_tuning_observe(request: Request):
     """Attach current post-apply observation to active GAME_5M tuning experiment."""
@@ -1390,16 +1450,17 @@ async def analyzer_tuning_rollback():
     if not active:
         raise HTTPException(status_code=404, detail="Нет active experiment")
     applied = active.get("applied") if isinstance(active.get("applied"), dict) else {}
-    key = str(applied.get("env_key") or "").strip()
-    old_value = applied.get("old_value")
-    if not key or old_value is None:
-        raise HTTPException(status_code=400, detail="В ledger нет old_value для rollback")
-    ok, record = apply_game5m_update(key, old_value, source="web_api_analyzer_tuning_rollback")
+    ok, rollback_payload = rollback_game5m_experiment_applied(
+        applied,
+        source="web_api_analyzer_tuning_rollback",
+    )
+    if not ok and rollback_payload == {"status": "missing_rollback_target"}:
+        raise HTTPException(status_code=400, detail="В ledger нет old_value/records для rollback")
     rollback_record = {
         "type": "rollback",
         "at_utc": datetime.now(timezone.utc).isoformat(),
         "experiment_id": active.get("experiment_id"),
-        "rollback": record,
+        "rollback": rollback_payload,
     }
     active["status"] = "rolled_back" if ok else "rollback_failed"
     active["rollback"] = rollback_record

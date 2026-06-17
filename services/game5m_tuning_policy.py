@@ -192,6 +192,9 @@ def validate_game5m_update(
     if proposed_s.lower() in ("true", "false", "1", "0", "yes", "no"):
         return ValidationResult(True, "ok", key, proposed_s, current_s)
 
+    if key.endswith("_GATE_MODE") and proposed_s.lower() in ("none", "log_only", "apply"):
+        return ValidationResult(True, "ok", key, proposed_s, current_s)
+
     proposed_f = coerce_float(proposed_s)
     if proposed_f is None:
         return ValidationResult(False, "non_numeric_value", key, proposed_s, current_s)
@@ -274,4 +277,117 @@ def apply_game5m_update(
         return True, record
     ok = update_config_key(validation.key, validation.proposed)
     record["status"] = "applied" if ok else "write_failed"
+    return ok, record
+
+
+def validate_game5m_bundle(
+    bundle_id: str,
+    *,
+    enforce_step_limits: bool = False,
+) -> Tuple[bool, str, list]:
+    from services.game5m_tuning_bundles import get_bundle
+
+    try:
+        bundle = get_bundle(bundle_id)
+    except KeyError as e:
+        return False, str(e), []
+    results: list = []
+    for key, proposed in bundle.changes.items():
+        vr = validate_game5m_update(key, proposed, enforce_step_limits=enforce_step_limits)
+        results.append(vr)
+        if not vr.ok:
+            return False, vr.reason, results
+    return True, "ok", results
+
+
+def apply_game5m_bundle(
+    bundle_id: str,
+    *,
+    source: str = "unknown",
+    dry_run: bool = False,
+    enforce_step_limits: bool = False,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Apply coordinated multi-key bundle; all keys validated before any write."""
+    from services.game5m_tuning_bundles import get_bundle
+
+    bundle = get_bundle(bundle_id)
+    ok_all, reason, _validations = validate_game5m_bundle(
+        bundle_id,
+        enforce_step_limits=enforce_step_limits,
+    )
+    payload: Dict[str, Any] = {
+        "bundle_id": bundle.bundle_id,
+        "description_ru": bundle.description_ru,
+        "dry_run": bool(dry_run),
+        "validation_ok": ok_all,
+        "validation_reason": reason,
+        "records": [],
+        "status": "rejected" if not ok_all else "pending",
+    }
+    if not ok_all:
+        return False, payload
+
+    records: list = []
+    for key, proposed in bundle.changes.items():
+        rec_ok, record = apply_game5m_update(
+            key,
+            proposed,
+            source=source,
+            dry_run=dry_run,
+            enforce_step_limits=enforce_step_limits,
+        )
+        records.append(record)
+        if not rec_ok:
+            payload["records"] = records
+            payload["status"] = "partial_failed"
+            return False, payload
+
+    payload["records"] = records
+    payload["status"] = "dry_run" if dry_run else "applied"
+    return True, payload
+
+
+def rollback_game5m_bundle_applied(
+    applied_payload: Dict[str, Any],
+    *,
+    source: str,
+) -> Tuple[bool, list]:
+    """Restore old values from bundle apply records (reverse order)."""
+    records = applied_payload.get("records") if isinstance(applied_payload.get("records"), list) else []
+    out: list = []
+    ok_all = True
+    for rec in reversed(records):
+        if not isinstance(rec, dict):
+            continue
+        key = str(rec.get("env_key") or "").strip()
+        old = rec.get("old_value")
+        if not key or old is None:
+            continue
+        ok = update_config_key(key, normalize_value(old))
+        out.append(
+            {
+                "env_key": key,
+                "old_value": rec.get("new_value"),
+                "new_value": old,
+                "source": source,
+                "status": "rolled_back" if ok else "write_failed",
+            }
+        )
+        ok_all = ok_all and ok
+    return ok_all, out
+
+
+def rollback_game5m_experiment_applied(
+    applied: Dict[str, Any],
+    *,
+    source: str,
+) -> Tuple[bool, Any]:
+    """Rollback single-key or bundle experiment from ledger `applied` payload."""
+    if isinstance(applied.get("records"), list) and applied.get("bundle_id"):
+        return rollback_game5m_bundle_applied(applied, source=source)
+    key = str(applied.get("env_key") or "").strip()
+    old_value = applied.get("old_value")
+    if not key or old_value is None:
+        return False, {"status": "missing_rollback_target"}
+    ok, record = apply_game5m_update(key, old_value, source=source, enforce_step_limits=False)
     return ok, record

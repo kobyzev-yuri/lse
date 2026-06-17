@@ -40,6 +40,31 @@ class TestEodFlatten(unittest.TestCase):
         self.assertTrue(flat)
         self.assertEqual(detail, "overnight_eod_flat")
 
+    def test_selective_no_flat_on_bullish_multiday(self):
+        env = {
+            "GAME_5M_EOD_FLATTEN_ENABLED": "true",
+            "GAME_5M_EOD_FLATTEN_ALWAYS": "false",
+            "GAME_5M_EOD_FLATTEN_MINUTES_BEFORE_CLOSE": "30",
+            "GAME_5M_MULTIDAY_OVERNIGHT_GATE_MODE": "apply",
+            "GAME_5M_EOD_FLATTEN_ALLOW_HOLD_ON_BULLISH_MULTIDAY": "true",
+            "GAME_5M_MULTIDAY_HOLD_TAU_PCT": "0.20",
+            "GAME_5M_MULTIDAY_HOLD_POSITIVE_HORIZONS_MIN": "2",
+        }
+        d5 = {
+            "multiday_lr_horizon_1d_pct_vs_spot": 0.4,
+            "multiday_lr_horizon_2d_pct_vs_spot": 0.3,
+            "multiday_lr_horizon_3d_pct_vs_spot": 0.2,
+        }
+        with patch.dict(os.environ, env, clear=False):
+            flat, detail = should_eod_flatten_position(
+                d5=d5,
+                market_session_ctx={"session_phase": "REGULAR", "minutes_until_close": 15},
+                current_decision="BUY",
+                pnl_current_pct=0.5,
+            )
+        self.assertFalse(flat)
+        self.assertEqual(detail, "")
+
 
 class TestBlockNewBuy(unittest.TestCase):
     def test_near_close(self):

@@ -1,0 +1,64 @@
+"""Predefined multi-parameter GAME_5M tuning bundles (coordinated policy changes)."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class Game5mTuningBundle:
+    bundle_id: str
+    description_ru: str
+    changes: dict[str, str]
+    observe_days_default: int = 5
+    rationale_ru: str = ""
+
+
+# Session 2026-06-16: blind EOD flat cut bullish multiday positions; early_derisk ignored hold gate.
+OVERNIGHT_MULTIDAY_V1 = Game5mTuningBundle(
+    bundle_id="overnight_multiday_v1",
+    description_ru="Multiday-driven overnight: без blind EOD flat, selective overnight + hold gate apply",
+    rationale_ru=(
+        "EOD_FLATTEN_ALWAYS обнулял multiday 1–3d; hold_gate был log_only. "
+        "Пакет: flat только при медвежьем multiday / premarket gap; "
+        "early_derisk откладывается при 2+ бычьих горизонтах (до −4%)."
+    ),
+    observe_days_default=5,
+    changes={
+        "GAME_5M_EOD_FLATTEN_ALWAYS": "false",
+        "GAME_5M_EOD_FLATTEN_ENABLED": "true",
+        "GAME_5M_EOD_FLATTEN_ALLOW_STRONG_BUY_HOLD": "true",
+        "GAME_5M_EOD_FLATTEN_ALLOW_HOLD_ON_BULLISH_MULTIDAY": "true",
+        "GAME_5M_MULTIDAY_OVERNIGHT_GATE_MODE": "apply",
+        "GAME_5M_MULTIDAY_HOLD_GATE_MODE": "apply",
+        "GAME_5M_MULTIDAY_HOLD_TAU_PCT": "0.20",
+        "GAME_5M_MULTIDAY_HOLD_POSITIVE_HORIZONS_MIN": "2",
+        "GAME_5M_MULTIDAY_HOLD_MAX_LOSS_PCT": "-4.0",
+        "GAME_5M_PREMARKET_AUTO_FLAT_ENABLED": "true",
+        "GAME_5M_PREMARKET_AUTO_FLAT_USE_MULTIDAY": "true",
+    },
+)
+
+BUNDLES: dict[str, Game5mTuningBundle] = {
+    OVERNIGHT_MULTIDAY_V1.bundle_id: OVERNIGHT_MULTIDAY_V1,
+}
+
+
+def get_bundle(bundle_id: str) -> Game5mTuningBundle:
+    bid = str(bundle_id or "").strip()
+    if bid not in BUNDLES:
+        raise KeyError(f"unknown bundle_id: {bid}")
+    return BUNDLES[bid]
+
+
+def list_bundles() -> list[dict[str, Any]]:
+    return [
+        {
+            "bundle_id": b.bundle_id,
+            "description_ru": b.description_ru,
+            "rationale_ru": b.rationale_ru,
+            "observe_days_default": b.observe_days_default,
+            "keys": sorted(b.changes.keys()),
+        }
+        for b in BUNDLES.values()
+    ]

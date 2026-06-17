@@ -790,7 +790,7 @@ def process_ticker(
                             outcome_lines.append("recovery_ml_defer_time_exit_early")
                             return False
                     try:
-                        from services.multiday_lr_gate import evaluate_multiday_hold_gate
+                        from services.multiday_lr_gate import evaluate_multiday_hold_gate, hold_gate_should_defer_exit
 
                         entry_f = open_pos.get("entry_price")
                         pnl_pct = None
@@ -811,17 +811,17 @@ def process_ticker(
                             md_hold.get("exit_detail"),
                             md_hold.get("note") or md_hold.get("skip_reason"),
                         )
-                        if (
-                            md_hold.get("mode") == "apply"
-                            and md_hold.get("status") == "ok"
-                            and md_hold.get("would_defer_exit")
-                        ):
-                            md_hold["applied"] = False
-                            md_hold["skip_reason_apply"] = "hold_gate_apply_not_implemented_use_log_only_first"
-                            logger.warning(
-                                "[5m] %s: GAME_5M_MULTIDAY_HOLD_GATE_MODE=apply пока не откладывает выход — используйте log_only",
+                        if hold_gate_should_defer_exit(md_hold):
+                            md_hold["applied"] = True
+                            md_hold["skip_reason_apply"] = None
+                            logger.info(
+                                "[5m] %s: MULTIDAY_HOLD_GATE defer %s — %s",
                                 ticker,
+                                exit_detail or exit_type,
+                                md_hold.get("note"),
                             )
+                            outcome_lines.append("multiday_hold_gate_defer")
+                            return False
                     except Exception as e_md:
                         logger.debug("multiday hold gate %s: %s", ticker, e_md)
                 close_narrative_ctx = close_ctx_enriched

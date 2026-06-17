@@ -155,6 +155,10 @@ def should_eod_flatten_position(
     if pnl_current_pct is not None and float(pnl_current_pct) <= max_loss_hold:
         return True, "overnight_eod_flat_loss"
 
+    ok_exc, _ = _multiday_bullish_hold_exception(d5)
+    if ok_exc:
+        return False, ""
+
     if dec not in ("STRONG_BUY",):
         return True, "overnight_eod_flat_weak_signal"
 

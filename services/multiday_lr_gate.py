@@ -256,6 +256,15 @@ def evaluate_multiday_hold_gate(
     return base
 
 
+def hold_gate_should_defer_exit(gate: dict[str, Any]) -> bool:
+    """True when hold gate is in apply mode and would defer TIME_EXIT_EARLY."""
+    return (
+        str(gate.get("mode") or "").strip().lower() == "apply"
+        and gate.get("status") == "ok"
+        and gate.get("would_defer_exit") is True
+    )
+
+
 def finalize_technical_decision_with_multiday(out: Dict[str, Any]) -> None:
     """
     После CatBoost fusion: запись телеметрии и опционально HOLD по multiday (mode=apply).

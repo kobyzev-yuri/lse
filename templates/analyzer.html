@@ -96,7 +96,7 @@
 
 <div class="card analyzer-game5m-only analyzer-tuning-only" style="border: 1px solid rgba(34,197,94,0.35);">
     <h2>GAME_5M tuning: регламент и live-эксперимент</h2>
-    <p class="muted" style="font-size:0.9rem;">Один параметр за раз: apply → наблюдение → review/rollback. Данные берутся из <code>local/game5m_tuning_ledger.json</code>, изменения проходят через общие guardrails.</p>
+    <p class="muted" style="font-size:0.9rem;">Пакеты параметров (bundle) для согласованных политик; либо один ключ: apply → наблюдение → review/rollback. Ledger: <code>local/game5m_tuning_ledger.json</code>.</p>
     <div id="tuningStatus" class="dashboard-text">Загрузка tuning status...</div>
     <details style="margin-top:0.65rem;">
         <summary style="cursor:pointer; color:#e2e8f0; font-weight:600;">Регламент</summary>
@@ -124,8 +124,10 @@
         <button id="tuningRefreshBtn" type="button">Обновить статус</button>
         <button id="tuningObserveBtn" type="button">Observe</button>
         <button id="tuningApplyBtn" type="button">Apply один параметр</button>
+        <button id="tuningApplyBundleBtn" type="button" style="background:#14532d;">Apply bundle</button>
         <button id="tuningRollbackBtn" type="button" style="background:#7f1d1d;">Rollback active</button>
     </div>
+    <div id="tuningBundles" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
     <div id="tuningActionStatus" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
     <div id="tuningTopProposals" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
 </div>
@@ -1076,9 +1078,18 @@ function renderTuningStatus(data) {
     html += '<code>MAX_DAYS=' + esc(current.GAME_5M_MAX_POSITION_DAYS != null ? current.GAME_5M_MAX_POSITION_DAYS : '—') + '</code><br>';
     if (active) {
         const applied = active.applied || {};
-        html += 'Active: <strong>' + esc(active.status || '—') + '</strong> · ';
-        html += '<code>' + esc(applied.env_key || '—') + '=' + esc(applied.new_value || '—') + '</code> ';
-        html += '(old <code>' + esc(applied.old_value != null ? applied.old_value : '—') + '</code>)<br>';
+        html += 'Active: <strong>' + esc(active.status || '—') + '</strong>';
+        if (active.kind === 'bundle' || applied.bundle_id) {
+            html += ' · bundle <code>' + esc(active.bundle_id || applied.bundle_id || '—') + '</code>';
+            const recs = Array.isArray(applied.records) ? applied.records : [];
+            if (recs.length) {
+                html += ' (' + recs.length + ' keys)';
+            }
+        } else {
+            html += ' · <code>' + esc(applied.env_key || '—') + '=' + esc(applied.new_value || '—') + '</code> ';
+            html += '(old <code>' + esc(applied.old_value != null ? applied.old_value : '—') + '</code>)';
+        }
+        html += '<br>';
         html += 'Start UTC: <code>' + esc(active.created_at_utc || '—') + '</code><br>';
         html += 'Baseline: ' + fmtSummary(active.baseline_summary) + '<br>';
         const obs = Array.isArray(active.observations) ? active.observations : [];
@@ -1089,9 +1100,30 @@ function renderTuningStatus(data) {
             html += '<span class="muted">Observations пока нет.</span>';
         }
     } else {
-        html += '<span class="muted">Active experiment отсутствует. Можно применить один параметр.</span>';
+        html += '<span class="muted">Active experiment отсутствует. Можно применить bundle или один параметр.</span>';
     }
     statusEl.innerHTML = html;
+
+    const bundles = data && Array.isArray(data.bundles) ? data.bundles : [];
+    const bundlesEl = document.getElementById('tuningBundles');
+    if (bundlesEl) {
+        if (bundles.length) {
+            let bhtml = '<strong>Пакеты (bundles)</strong><br>';
+            bhtml += bundles.map(function (b) {
+                return '• <code>' + esc(b.bundle_id) + '</code> — ' + esc(b.description_ru || '') +
+                    ' <span class="muted">(' + esc((b.keys || []).length) + ' keys, observe ' + esc(b.observe_days_default || 5) + 'd)</span>' +
+                    ' <button type="button" data-bundle-id="' + esc(b.bundle_id) + '" class="tuningApplyBundleItemBtn" style="padding:0.15rem 0.4rem;margin-left:0.35rem;">Apply</button>';
+            }).join('<br>');
+            bundlesEl.innerHTML = bhtml;
+            document.querySelectorAll('.tuningApplyBundleItemBtn').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    applyTuningBundle(btn.getAttribute('data-bundle-id'));
+                });
+            });
+        } else {
+            bundlesEl.innerHTML = '<span class="muted">Bundles не зарегистрированы.</span>';
+        }
+    }
 
     const rules = data && data.reglement && Array.isArray(data.reglement.rules) ? data.reglement.rules : [];
     regEl.innerHTML = rules.length ? rules.map(function (r) { return '• ' + esc(r); }).join('<br>') : '—';
@@ -1168,6 +1200,29 @@ async function applyTuningProposal(proposalId) {
         await loadTuningStatus();
     } catch (e) {
         actionEl.innerHTML = '<span class="text-danger">Ошибка apply: ' + esc(e.message || e) + '</span>';
+    }
+}
+
+async function applyTuningBundle(bundleId) {
+    const actionEl = document.getElementById('tuningActionStatus');
+    const bid = bundleId || document.getElementById('tuningBundleId')?.value || 'overnight_multiday_v1';
+    if (!bid) {
+        return;
+    }
+    if (!confirm('Применить bundle ' + bid + ' (' + (lastTuningStatus.bundles || []).find(function (b) { return b.bundle_id === bid; })?.keys?.length || '?') + ' keys)?')) {
+        return;
+    }
+    actionEl.textContent = 'Применение bundle...';
+    try {
+        await postTuning('/api/analyzer/tuning/apply-bundle', {
+            bundle_id: bid,
+            observe_days: Number(document.getElementById('tuningObserveDays').value || 5),
+            relaxed: true,
+        });
+        actionEl.textContent = 'Bundle применен.';
+        await loadTuningStatus();
+    } catch (e) {
+        actionEl.innerHTML = '<span class="text-danger">Ошибка apply bundle: ' + esc(e.message || e) + '</span>';
     }
 }
 
@@ -2249,6 +2304,9 @@ document.getElementById('mlDataQualityForceRefresh').addEventListener('click', f
 document.getElementById('tuningRefreshBtn').addEventListener('click', loadTuningStatus);
 document.getElementById('tuningObserveBtn').addEventListener('click', observeTuningExperiment);
 document.getElementById('tuningApplyBtn').addEventListener('click', applyTuningKeyValue);
+document.getElementById('tuningApplyBundleBtn').addEventListener('click', function () {
+    applyTuningBundle('overnight_multiday_v1');
+});
 document.getElementById('tuningRollbackBtn').addEventListener('click', rollbackTuningExperiment);
 updateAnalyzerJsonLinks();
 applyAnalyzerStrategyVisibility();

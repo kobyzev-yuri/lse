@@ -21,7 +21,15 @@ sys.path.insert(0, str(project_root))
 from report_generator import get_engine  # noqa: E402
 from services.game5m_replay_proposals import build_game5m_replay_proposals  # noqa: E402
 from services.game5m_tuning_ledger import closed_summary, find_proposal, ledger_path, load_ledger, save_ledger  # noqa: E402
-from services.game5m_tuning_policy import apply_game5m_update, current_config_value, validate_game5m_update  # noqa: E402
+from services.game5m_tuning_policy import (
+    apply_game5m_bundle,
+    apply_game5m_update,
+    current_config_value,
+    rollback_game5m_experiment_applied,
+    validate_game5m_bundle,
+    validate_game5m_update,
+)
+from services.game5m_tuning_bundles import get_bundle, list_bundles
 
 
 DEFAULT_LEDGER = ""
@@ -149,6 +157,69 @@ def cmd_apply(args: argparse.Namespace) -> None:
         sys.exit(5)
 
 
+def cmd_apply_bundle(args: argparse.Namespace) -> None:
+    ledger_raw = (args.ledger or "").strip()
+    ledger = _load_json(ledger_raw)
+    active = ledger.get("active_experiment") if isinstance(ledger.get("active_experiment"), dict) else None
+    if active and active.get("status") == "pending_effect" and not args.force:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "active_experiment_pending",
+                    "active_experiment": active,
+                    "hint": "Use observe/review first, or --force if you intentionally override.",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        sys.exit(3)
+
+    bundle_id = str(args.bundle_id or "").strip()
+    try:
+        bundle = get_bundle(bundle_id)
+    except KeyError as e:
+        print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
+        sys.exit(2)
+
+    observe_days = int(args.observe_days or bundle.observe_days_default)
+    ok_val, reason, _vals = validate_game5m_bundle(bundle_id, enforce_step_limits=not args.relaxed)
+    if not ok_val:
+        print(json.dumps({"ok": False, "validation_reason": reason}, ensure_ascii=False, indent=2))
+        sys.exit(4)
+
+    baseline = _closed_summary(observe_days)
+    ok, applied = apply_game5m_bundle(
+        bundle_id,
+        source="game5m_tuning_controller",
+        dry_run=args.dry_run,
+        enforce_step_limits=not args.relaxed,
+    )
+    experiment = {
+        "experiment_id": f"bundle:{bundle_id}@{_utc_now()}",
+        "kind": "bundle",
+        "bundle_id": bundle_id,
+        "status": "dry_run" if args.dry_run else ("pending_effect" if ok else "failed"),
+        "created_at_utc": _utc_now(),
+        "applied": applied,
+        "baseline_summary": baseline,
+        "observe_days": observe_days,
+        "observations": [],
+    }
+    ledger["active_experiment"] = experiment
+    ledger.setdefault("history", []).append(experiment)
+    ledger["updated_at_utc"] = _utc_now()
+    _save_json(ledger_raw, ledger)
+    print(json.dumps({"ok": ok, "ledger": _ledger_display(ledger_raw), "experiment": experiment}, ensure_ascii=False, indent=2))
+    if not ok:
+        sys.exit(5)
+
+
+def cmd_list_bundles(_args: argparse.Namespace) -> None:
+    print(json.dumps({"ok": True, "bundles": list_bundles()}, ensure_ascii=False, indent=2))
+
+
 def cmd_observe(args: argparse.Namespace) -> None:
     ledger_raw = (args.ledger or "").strip()
     ledger = _load_json(ledger_raw)
@@ -201,6 +272,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.add_argument("--relaxed", action="store_true", help="Disable step-size limits, keep editable/key validation")
     p.set_defaults(func=cmd_apply)
+
+    p = sub.add_parser("apply-bundle", help="Apply predefined multi-parameter bundle")
+    p.add_argument("--bundle-id", default="overnight_multiday_v1")
+    p.add_argument("--observe-days", type=int, default=0)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--relaxed", action="store_true", help="Disable step-size limits for bundle keys")
+    p.set_defaults(func=cmd_apply_bundle)
+
+    p = sub.add_parser("list-bundles", help="List registered tuning bundles")
+    p.set_defaults(func=cmd_list_bundles)
 
     p = sub.add_parser("observe", help="Attach post-apply observation to active experiment")
     p.add_argument("--days", type=int, default=0)
