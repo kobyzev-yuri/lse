@@ -307,3 +307,18 @@ def finalize_technical_decision_with_multiday(out: Dict[str, Any]) -> None:
             out.get("ticker") or "?",
             gate.get("note"),
         )
+
+
+def build_multiday_trade_context_snapshot(d5: Dict[str, Any]) -> Dict[str, Any]:
+    """Компактный снимок multiday для context_json (BUY/SELL)."""
+    pcts = _horizon_pcts(d5)
+    return {
+        "horizons_pct": {k: v for k, v in pcts.items() if v is not None},
+        "bias": d5.get("multiday_lr_bias"),
+        "daily_last_date": d5.get("multiday_lr_daily_last_date"),
+        "method": d5.get("multiday_lr_method"),
+        "forecast_unavailable": bool(d5.get("multiday_lr_forecast_unavailable")),
+        "forecast_error": d5.get("multiday_lr_forecast_error"),
+        "entry_gate_mode": d5.get("multiday_lr_entry_gate_mode"),
+        "entry_gate_would_hold": d5.get("multiday_lr_entry_gate_would_hold"),
+    }

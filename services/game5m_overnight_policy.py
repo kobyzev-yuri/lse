@@ -291,3 +291,44 @@ def try_overnight_policy_exit(
             return True, "TIME_EXIT", "overnight_premarket_flat"
 
     return False, "", ""
+
+
+def build_eod_gate_snapshot(
+    *,
+    d5: Optional[Dict[str, Any]],
+    market_session_ctx: Optional[Dict[str, Any]],
+    current_decision: str,
+    pnl_current_pct: Optional[float],
+) -> Dict[str, Any]:
+    """Снимок EOD-политики для SELL context_json (бэктест / аудит)."""
+    from config_loader import get_config_value
+    from services.multiday_lr_gate import _horizon_pcts, build_multiday_trade_context_snapshot
+
+    flat, detail = should_eod_flatten_position(
+        d5=d5,
+        market_session_ctx=market_session_ctx,
+        current_decision=current_decision,
+        pnl_current_pct=pnl_current_pct,
+    )
+    ok_exc, exc_reason = _multiday_bullish_hold_exception(d5)
+    risk = evaluate_multiday_overnight_risk(d5)
+    md = build_multiday_trade_context_snapshot(d5) if isinstance(d5, dict) else {}
+    return {
+        "would_flatten": bool(flat),
+        "exit_detail": detail or None,
+        "bullish_hold_exception": bool(ok_exc),
+        "bullish_hold_reason": exc_reason,
+        "overnight_risk": risk,
+        "horizons_pct": md.get("horizons_pct") or (_horizon_pcts(d5) if isinstance(d5, dict) else {}),
+        "config": {
+            "eod_flatten_enabled": _cfg_bool("GAME_5M_EOD_FLATTEN_ENABLED", False),
+            "eod_flatten_always": _cfg_bool("GAME_5M_EOD_FLATTEN_ALWAYS", True),
+            "allow_hold_on_bullish_multiday": _cfg_bool(
+                "GAME_5M_EOD_FLATTEN_ALLOW_HOLD_ON_BULLISH_MULTIDAY", False
+            ),
+            "allow_strong_buy_hold": _cfg_bool("GAME_5M_EOD_FLATTEN_ALLOW_STRONG_BUY_HOLD", False),
+            "multiday_overnight_gate_mode": (
+                get_config_value("GAME_5M_MULTIDAY_OVERNIGHT_GATE_MODE", "none") or "none"
+            ),
+        },
+    }

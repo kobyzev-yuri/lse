@@ -189,6 +189,10 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Watchlist тикеров с активным earnings post-mortem и влияние контура earnings_trust на projected resolve "
         "(DECISION_STACK_EARNINGS_TRUST_GATE_MODE=apply). Live — только при DECISION_STACK_RESOLVE_ENABLED=true."
     ),
+    "hold_to_gap_counterfactual": (
+        "Контрфакт GAME_5M: фактический выход vs продажа на open d+1/d+2/d+3; multiday на входе/выходе; "
+        "симуляция EOD_FLATTEN_ALWAYS=false и hold_gate apply. См. scripts/backtest_hold_to_gap_game5m.py."
+    ),
     "portfolio_exit_policy_review": (
         "Разбор выходов портфельной игры: take_profit на BUY, portfolio_effective_take_pct_at_entry, сигналы TAKE_PROFIT / trailing; "
         "сводка по exit_signal и ранние тейки с крупным missed_upside (5m-окно)."
@@ -755,6 +759,31 @@ def _build_decision_stack_shadow_diff(
         "by_game": by_game,
         "recent_divergences": rows,
     }
+
+
+def _build_hold_to_gap_block(
+    closed: List[Any],
+    effects: List[TradeEffect],
+    ohlc_cache: Dict[str, Optional[pd.DataFrame]],
+    *,
+    days: int,
+    limit: int = 40,
+) -> Dict[str, Any]:
+    try:
+        from report_generator import get_engine
+        from services.game5m_hold_to_gap_backtest import build_hold_to_gap_backtest
+
+        eng = get_engine()
+        return build_hold_to_gap_backtest(
+            closed,
+            effects,
+            ohlc_cache,
+            engine=eng,
+            limit=limit,
+            cost_bps_roundtrip=12.0,
+        )
+    except Exception as e:
+        return {"mode": "error", "note": str(e)[:240]}
 
 
 def _trust_level_game5m_catboost(meta: Optional[Dict[str, Any]], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3458,6 +3487,7 @@ def _compact_report_for_llm(payload: Dict[str, Any]) -> Dict[str, Any]:
         "entry_underperformance_review": payload.get("entry_underperformance_review"),
         "decision_stack_shadow_diff": payload.get("decision_stack_shadow_diff"),
         "earnings_trust_gate_monitor": payload.get("earnings_trust_gate_monitor"),
+        "hold_to_gap_counterfactual": payload.get("hold_to_gap_counterfactual"),
         "time_exit_early_review": te_slim or None,
         "time_exit_early_action_summary": payload.get("time_exit_early_action_summary"),
         "game5m_catboost_status": payload.get("game5m_catboost_status"),
@@ -6107,6 +6137,7 @@ def analyze_trade_effectiveness(
             "game5m_catboost_fusion_entry_review": _build_game5m_catboost_fusion_entry_review(strategy, [], []),
             "decision_stack_shadow_diff": _build_decision_stack_shadow_diff(strategy, [], []),
             "earnings_trust_gate_monitor": build_earnings_trust_gate_monitor([], limit=30),
+            "hold_to_gap_counterfactual": _build_hold_to_gap_block([], [], {}, days=days),
         }
         _attach_portfolio_analyzer_blocks(empty_payload, strategy=strategy, closed=[], effects=[])
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
@@ -6266,6 +6297,11 @@ def analyze_trade_effectiveness(
         "decision_stack_shadow_diff": _build_decision_stack_shadow_diff(strategy, closed, effects),
         "earnings_trust_gate_monitor": (
             build_earnings_trust_gate_monitor(closed, limit=30) if want_g5m else _section_skip("earnings_trust")
+        ),
+        "hold_to_gap_counterfactual": (
+            __build_hold_to_gap_block(closed, effects, cache, days=days)
+            if want_g5m
+            else _section_skip("hold_to_gap")
         ),
         "game5m_recovery_model_status": game5m_recovery_model_status,
         "recovery_scenario_backtest": recovery_scenario,

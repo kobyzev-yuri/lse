@@ -150,6 +150,12 @@
     <div id="earningsTrustGateBlock" class="dashboard-text">—</div>
 </div>
 
+<div class="card analyzer-game5m-only" style="border: 1px solid rgba(52, 211, 153, 0.45);">
+    <h2>Hold → gap open <code>hold_to_gap_counterfactual</code></h2>
+    <p class="muted" style="font-size:0.9rem;">Факт vs продажа на open d+1/d+2/d+3; multiday на входе/выходе; симуляция <code>EOD_FLATTEN_ALWAYS=false</code> и <code>hold_gate apply</code>.</p>
+    <div id="holdToGapBlock" class="dashboard-text">—</div>
+</div>
+
 <div class="card analyzer-portfolio-only" style="display:none; border: 1px solid rgba(244, 114, 182, 0.4);">
     <h2>Portfolio: CatBoost, вход и выходы</h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">
@@ -2099,6 +2105,53 @@ function renderEarningsTrustGateBlock(data) {
     el.innerHTML = html;
 }
 
+function renderHoldToGapBlock(data) {
+    const el = document.getElementById('holdToGapBlock');
+    if (!el) return;
+    const h = data.hold_to_gap_counterfactual || {};
+    if (h.mode !== 'hold_to_gap_counterfactual') {
+        el.innerHTML = '<span class="muted">Нет данных hold-to-gap.</span>';
+        return;
+    }
+    const cfg = h.config_snapshot || {};
+    let html = '<p style="margin:0 0 0.45rem 0;">Сделок: <strong>' + esc(h.trades_analyzed || 0) +
+        '</strong> · EOD-flat: <strong>' + esc(h.eod_flat_trades || 0) +
+        '</strong> · early: <strong>' + esc(h.time_exit_early_trades || 0) +
+        '</strong> · avg Δd1: <strong>' + esc(h.avg_delta_d1_vs_actual != null ? h.avg_delta_d1_vs_actual : '—') +
+        '</strong> pp</p>';
+    if (cfg.note_ru) {
+        html += '<p class="muted" style="font-size:0.85rem;margin:0 0 0.55rem 0;">' + esc(cfg.note_ru) + '</p>';
+    }
+    const byT = Array.isArray(h.by_ticker) ? h.by_ticker : [];
+    if (byT.length) {
+        html += '<table class="forecast-table" role="table"><thead><tr><th>Тикер</th><th>n</th><th>avg факт</th><th>avg Δd1</th><th>missed d1</th></tr></thead><tbody>';
+        byT.forEach(function (r) {
+            html += '<tr><td><strong>' + esc(r.ticker) + '</strong></td><td class="num">' + esc(r.n) +
+                '</td><td class="num">' + esc(r.avg_actual_pct) + '</td><td class="num">' + esc(r.avg_delta_d1_vs_actual) +
+                '</td><td class="num">' + esc(r.missed_d1_count) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    const rows = Array.isArray(h.rows) ? h.rows.slice(0, 12) : [];
+    if (rows.length) {
+        html += '<p style="margin:0.75rem 0 0.35rem 0;font-weight:600;color:#e2e8f0;">Топ по Δd1 open vs факт</p>';
+        html += '<table class="forecast-table" role="table"><thead><tr><th>Trade</th><th>Выход</th><th>Факт</th><th>d1 open</th><th>Δ</th><th>multiday exit</th><th>policy</th></tr></thead><tbody>';
+        rows.forEach(function (r) {
+            const md = r.multiday_at_exit || {};
+            const mdStr = ['1d','2d','3d'].map(function (k) { return k + '=' + (md[k] != null ? md[k] : '—'); }).join(' ');
+            html += '<tr><td><code>#' + esc(r.trade_id) + '</code> ' + esc(r.ticker) + '</td>' +
+                '<td class="muted" style="font-size:0.8rem;">' + esc((r.exit_detail || r.exit_signal || '').slice(0, 28)) + '</td>' +
+                '<td class="num">' + esc(r.actual_pct) + '</td>' +
+                '<td class="num">' + esc(r.alt_d1_open_pct != null ? r.alt_d1_open_pct : '—') + '</td>' +
+                '<td class="num">' + esc(r.delta_d1_vs_actual != null ? r.delta_d1_vs_actual : '—') + '</td>' +
+                '<td class="muted" style="font-size:0.78rem;">' + esc(mdStr) + '</td>' +
+                '<td class="muted" style="font-size:0.78rem;">' + esc(r.simulated_policy || '—') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    el.innerHTML = html;
+}
+
 async function fetchAnalyzerApi(useLlm, timeoutMs) {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
@@ -2226,6 +2279,7 @@ async function runAnalyzer() {
         renderPortfolioBlocks(data);
         renderDecisionStackShadowBlock(data);
         renderEarningsTrustGateBlock(data);
+        renderHoldToGapBlock(data);
         renderCatboostFusionBlock(data);
         renderCatboostBlock(data);
         renderMultidayLrBlock(data);

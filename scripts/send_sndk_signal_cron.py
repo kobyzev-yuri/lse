@@ -748,6 +748,23 @@ def process_ticker(
                     close_ctx_enriched["position_state_v2"] = position_state_v2
                 if continuation_gate is not None:
                     close_ctx_enriched["continuation_gate"] = continuation_gate
+                try:
+                    from services.multiday_lr_gate import build_multiday_trade_context_snapshot
+                    from services.game5m_overnight_policy import build_eod_gate_snapshot
+
+                    close_ctx_enriched["multiday_lr_at_exit"] = build_multiday_trade_context_snapshot(d5)
+                    entry_f = open_pos.get("entry_price")
+                    pnl_pct_ctx = None
+                    if isinstance(entry_f, (int, float)) and entry_f and price_for_check:
+                        pnl_pct_ctx = (float(price_for_check) / float(entry_f) - 1.0) * 100.0
+                    close_ctx_enriched["multiday_eod_gate"] = build_eod_gate_snapshot(
+                        d5=d5,
+                        market_session_ctx=d5.get("market_session") if isinstance(d5.get("market_session"), dict) else None,
+                        current_decision=str(d5.get("decision") or d5.get("technical_decision_core") or ""),
+                        pnl_current_pct=pnl_pct_ctx,
+                    )
+                except Exception as e_md_snap:
+                    logger.debug("multiday exit snapshot %s: %s", ticker, e_md_snap)
                 if exit_type == "TIME_EXIT_EARLY":
                     rec_gate = _game5m_recovery_live_gate_time_exit_early(
                         ticker=ticker,
