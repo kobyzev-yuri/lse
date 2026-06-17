@@ -755,6 +755,8 @@ def get_event_postmortem_payload(
 
     table_rows = format_postmortem_table_rows(row)
     ctx = row.get("context") if isinstance(row.get("context"), dict) else {}
+    from services.decision_stack.earnings_trust_monitor import runtime_gate_summary_for_ticker
+
     return {
         "status": "ok",
         "symbol": sym,
@@ -767,6 +769,7 @@ def get_event_postmortem_payload(
         "table_rows": table_rows,
         "glossary": glossary,
         "trust_metrics_summary": trust_metrics.get("contours"),
+        "decision_stack_gate": runtime_gate_summary_for_ticker(sym, project_root=project_root),
         "rolling": {
             "n_events_in_window": trust_metrics.get("n_events_in_window"),
             "by_scenario_class": trust_metrics.get("by_scenario_class"),

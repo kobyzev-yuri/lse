@@ -25,6 +25,7 @@ GAME5M_VETO_ORDER = (
     "gap_forecast",
     "catboost_entry_5m",
     "multiday_lr",
+    "earnings_trust",
 )
 
 PORTFOLIO_VETO_ORDER = (

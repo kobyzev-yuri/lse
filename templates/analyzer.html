@@ -144,6 +144,12 @@
     <div id="decisionStackShadowBlock" class="dashboard-text">—</div>
 </div>
 
+<div class="card analyzer-game5m-only" style="border: 1px solid rgba(251, 191, 36, 0.45);">
+    <h2>Earnings trust gate <code>earnings_trust_gate_monitor</code></h2>
+    <p class="muted" style="font-size:0.9rem;">Post-mortem → контур <code>earnings_trust</code> в decision_stack. При <code>gate_mode=apply</code> projected resolve может понизить BUY→HOLD; live — только с <code>DECISION_STACK_RESOLVE_ENABLED=true</code>.</p>
+    <div id="earningsTrustGateBlock" class="dashboard-text">—</div>
+</div>
+
 <div class="card analyzer-portfolio-only" style="display:none; border: 1px solid rgba(244, 114, 182, 0.4);">
     <h2>Portfolio: CatBoost, вход и выходы</h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">
@@ -2041,6 +2047,58 @@ function renderDecisionStackShadowBlock(data) {
     el.innerHTML = html;
 }
 
+function renderEarningsTrustGateBlock(data) {
+    const el = document.getElementById('earningsTrustGateBlock');
+    if (!el) return;
+    const m = data.earnings_trust_gate_monitor || {};
+    if (m.mode !== 'earnings_trust_gate_monitor') {
+        el.innerHTML = '<span class="muted">Нет данных earnings trust monitor.</span>';
+        return;
+    }
+    const gm = m.gate_mode || 'log_only';
+    const resolveOn = m.resolve_enabled === true;
+    let html = '<p style="margin:0 0 0.45rem 0;">gate <code>' + esc(gm) + '</code> · resolve <code>' +
+        esc(resolveOn ? 'on' : 'off') + '</code> · watchlist <strong>' + esc(m.watchlist_count || 0) +
+        '</strong> · сделок с контуром <strong>' + esc(m.trades_with_earnings_trust || 0) +
+        '</strong> · изменили projected <strong>' + esc(m.trades_earnings_trust_changed_projected || 0) + '</strong></p>';
+    if (m.ops_hint_ru) {
+        html += '<p class="muted" style="font-size:0.85rem;margin:0 0 0.55rem 0;">' + esc(m.ops_hint_ru) + '</p>';
+    }
+    const watch = Array.isArray(m.watchlist) ? m.watchlist : [];
+    if (watch.length) {
+        html += '<table class="forecast-table" role="table"><thead><tr><th>Тикер</th><th>Роль</th><th>Action</th><th>Strength</th><th>Событие</th><th>Если core=BUY</th></tr></thead><tbody>';
+        watch.forEach(function (w) {
+            const shadow = w.shadow_if_core_bull || '—';
+            const cls = w.action === 'downgrade' && gm === 'apply' ? 'negative' : '';
+            html += '<tr><td><strong>' + esc(w.ticker || '—') + '</strong></td>' +
+                '<td>' + esc(w.runtime_role || '—') + '</td>' +
+                '<td class="' + cls + '"><code>' + esc(w.action || '—') + '</code></td>' +
+                '<td class="num">' + esc(w.strength != null ? w.strength : '—') + '</td>' +
+                '<td>' + esc(w.source_symbol || w.ticker || '—') + ' ' + esc(w.event_date || '') + '</td>' +
+                '<td><code>' + esc(shadow) + '</code></td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    const trades = Array.isArray(m.recent_trade_impacts) ? m.recent_trade_impacts : [];
+    if (trades.length) {
+        html += '<p style="margin:0.75rem 0 0.35rem 0;font-weight:600;color:#e2e8f0;">Последние сделки с earnings_trust</p>';
+        html += '<table class="forecast-table" role="table"><thead><tr><th>Trade</th><th>Legacy→Proj</th><th>Action</th><th>Изменил projected</th><th>Деталь</th></tr></thead><tbody>';
+        trades.forEach(function (r) {
+            const changed = r.changed_projected_resolve ? 'да' : 'нет';
+            const leg = (r.legacy_effective || '—') + '→' + (r.projected_effective || '—');
+            html += '<tr><td><code>#' + esc(r.trade_id || '—') + '</code> ' + esc(r.ticker || '') + '</td>' +
+                '<td><code>' + esc(leg) + '</code></td>' +
+                '<td><code>' + esc(r.action || '—') + '</code></td>' +
+                '<td>' + esc(changed) + '</td>' +
+                '<td class="muted" style="font-size:0.82rem;">' + esc(r.detail || '—') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    } else if (!watch.length) {
+        html += '<p class="muted" style="margin:0;">Нет активных post-mortem в окне или сделок с контуром.</p>';
+    }
+    el.innerHTML = html;
+}
+
 async function fetchAnalyzerApi(useLlm, timeoutMs) {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
@@ -2167,6 +2225,7 @@ async function runAnalyzer() {
             : '';
         renderPortfolioBlocks(data);
         renderDecisionStackShadowBlock(data);
+        renderEarningsTrustGateBlock(data);
         renderCatboostFusionBlock(data);
         renderCatboostBlock(data);
         renderMultidayLrBlock(data);

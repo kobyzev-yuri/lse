@@ -12,6 +12,7 @@ from services.decision_stack.game5m import (
     collect_game5m_contributions,
     finalize_game5m_decision_stack,
     resolve_game5m_technical,
+    summarize_earnings_trust_impact,
 )
 from services.decision_stack.game5m_policy import apply_game5m_policy_gates
 from services.premarket_gap_baseline import evaluate_premarket_gap_baseline
@@ -206,6 +207,50 @@ class TestDecisionStackGame5m(unittest.TestCase):
         self.assertEqual(et["action"], "telemetry")
         self.assertEqual(et["role"], "advisory_postmortem")
         self.assertLess(float(et["strength"]), 0)
+
+    def test_earnings_trust_resolve_downgrade_apply(self):
+        sample = {
+            "active": True,
+            "runtime_role": "source",
+            "strength": -0.4,
+            "would_downgrade": True,
+            "detail_ru": "ORCL test",
+            "event_date": "2026-06-10",
+            "source_symbol": "ORCL",
+            "trust_labels": {},
+        }
+        d5 = {
+            "technical_decision_core": "BUY",
+            "technical_decision_effective": "BUY",
+            "ticker": "ORCL",
+            "entry_advice": "ALLOW",
+            "kb_news_impact": "нейтрально",
+        }
+        env = {
+            "DECISION_STACK_EARNINGS_TRUST_GATE_MODE": "apply",
+            "DECISION_STACK_ENTRY_ADVICE_GATE_MODE": "none",
+            "DECISION_STACK_MACRO_GATE_MODE": "none",
+            "DECISION_STACK_CATBOOST_GATE_MODE": "none",
+            "DECISION_STACK_MULTIDAY_GATE_MODE": "none",
+            "DECISION_STACK_NEWS_FUSION_GATE_MODE": "none",
+        }
+        with patch(
+            "services.earnings_trust_runtime.build_earnings_trust_runtime",
+            return_value=sample,
+        ), patch("config_loader.get_config_value", side_effect=lambda k, d=None: env.get(k, d)):
+            snap = build_game5m_decision_snapshot(d5, ticker="ORCL")
+        self.assertEqual(snap["projected_effective_if_resolve"], "HOLD")
+        self.assertEqual(snap["effective_decision"], "BUY")
+        et = snap["earnings_trust_impact"]
+        self.assertTrue(et.get("active"))
+        self.assertTrue(et.get("shadow_would_hold_if_core_bull"))
+        self.assertTrue(et.get("changed_projected_resolve"))
+        et_c = next(c for c in snap["contributions"] if c["contour_id"] == "earnings_trust")
+        self.assertEqual(et_c["action"], "downgrade")
+
+    def test_summarize_earnings_trust_impact_inactive(self):
+        out = summarize_earnings_trust_impact([], core="BUY", legacy_eff="BUY", projected="BUY")
+        self.assertFalse(out.get("active"))
 
 
 if __name__ == "__main__":

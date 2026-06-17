@@ -464,6 +464,18 @@
                 if (c.catboost_entry_proba_good != null) cb += ' · P=' + fmt(c.catboost_entry_proba_good, 3);
                 chips.push('<span class="gate-chip">' + escapeHtml(cb) + '</span>');
             }
+            var snap = c.decision_snapshot;
+            var eti = snap && snap.earnings_trust_impact;
+            if (eti && eti.active) {
+                var et = 'Earnings trust';
+                if (eti.runtime_role) et += ' · ' + eti.runtime_role;
+                if (eti.action) et += ' · ' + eti.action;
+                if (eti.strength != null) et += ' · s=' + fmt(eti.strength, 2);
+                if (eti.changed_projected_resolve) et += ' · projected→HOLD';
+                else if (eti.shadow_would_hold_if_core_bull) et += ' · shadow HOLD';
+                var etCls = (eti.action === 'downgrade' && eti.gate_mode === 'apply') ? ' warn' : '';
+                chips.push('<span class="gate-chip' + etCls + '">' + escapeHtml(et) + '</span>');
+            }
             if (!chips.length) return '';
             return '<div class="gate-row">' + chips.join('') + '</div>';
         }

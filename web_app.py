@@ -780,6 +780,29 @@ async def get_analyzer_trust(refresh: bool = False):
         raise HTTPException(status_code=500, detail=f"trust arbiter: {e!s}")
 
 
+@app.get("/api/decision-stack/earnings-trust-monitor", response_class=JSONResponse)
+async def api_decision_stack_earnings_trust_monitor(days: int = 14, limit: int = 40):
+    """Watchlist post-mortem тикеров и влияние earnings_trust на projected resolve."""
+    from services.decision_stack.earnings_trust_monitor import build_earnings_trust_gate_monitor
+    from services.trade_effectiveness_analyzer import _estimate_trade_effects, _load_closed_trades
+
+    try:
+        closed = await asyncio.to_thread(_load_closed_trades, max(1, min(days, 90)), "GAME_5M")
+        effects = await asyncio.to_thread(_estimate_trade_effects, closed, {})
+        monitor = await asyncio.to_thread(
+            build_earnings_trust_gate_monitor,
+            closed,
+            limit=max(5, min(limit, 100)),
+        )
+        monitor["days_scanned"] = days
+        monitor["closed_trades_scanned"] = len(closed)
+        monitor["trade_effects_count"] = len(effects)
+        return _to_jsonable(monitor)
+    except Exception as e:
+        logger.exception("api_decision_stack_earnings_trust_monitor failed")
+        raise HTTPException(status_code=500, detail=f"earnings trust monitor: {e!s}")
+
+
 def _ml_runtime_snapshot_for_ui() -> Dict[str, Any]:
     """
     Флаги из config.env для анализатора: участвует ли модель в рантайме vs только dry-run метрики.

@@ -888,8 +888,28 @@ async function loadPostmortem() {
         }
         const rows = Array.isArray(data.table_rows) ? data.table_rows : [];
         const ctx = data.context || {};
+        const gate = data.decision_stack_gate || {};
+        let gateHtml = '';
+        if (gate.active) {
+            const gateCls = gate.action === 'downgrade' && gate.gate_mode === 'apply' ? 'err' : 'muted';
+            gateHtml = `
+            <div class="card-inline" style="margin:0.65rem 0;padding:0.65rem 0.85rem;border:1px solid rgba(251,191,36,0.35);border-radius:8px;background:rgba(30,41,59,0.45)">
+                <div style="font-weight:600;color:#fde68a;margin-bottom:0.35rem">Decision stack · earnings_trust</div>
+                <p class="${gateCls}" style="margin:0 0 0.35rem 0">
+                    gate <code>${esc(gate.gate_mode || '—')}</code>
+                    · resolve <code>${esc(gate.resolve_enabled ? 'on' : 'off')}</code>
+                    · action <code>${esc(gate.action || '—')}</code>
+                    · strength <code>${esc(gate.strength != null ? gate.strength : '—')}</code>
+                </p>
+                <p class="muted" style="margin:0 0 0.35rem 0;font-size:0.86rem">${esc(gate.detail_ru || '')}</p>
+                <p class="muted" style="margin:0;font-size:0.84rem">${esc(gate.monitor_note_ru || '')}</p>
+            </div>`;
+        } else if (gate.reason) {
+            gateHtml = `<p class="muted" style="margin:0.65rem 0">Decision stack gate: ${esc(gate.reason)}</p>`;
+        }
         box.innerHTML = `
             <h2 class="view-title">${esc(sym)} · ${esc(evd)} · post-mortem</h2>
+            ${gateHtml}
             <p class="muted" style="margin-bottom:0.5rem">
                 Сценарий <code>${esc(ctx.scenario_class || '—')}</code>
                 · alignment <code>${esc(ctx.alignment || '—')}</code>

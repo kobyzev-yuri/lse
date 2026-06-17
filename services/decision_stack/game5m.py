@@ -528,6 +528,56 @@ def _detect_conflicts(contributions: List[Dict[str, Any]], core: str) -> List[st
     return conflicts
 
 
+def summarize_earnings_trust_impact(
+    contributions: List[Dict[str, Any]],
+    *,
+    core: str,
+    legacy_eff: str,
+    projected: str,
+) -> Dict[str, Any]:
+    """Компактный блок для мониторинга влияния earnings_trust на resolve (shadow/live)."""
+    et = next((c for c in contributions if c.get("contour_id") == "earnings_trust"), None)
+    if not et:
+        return {"active": False}
+
+    metrics = et.get("metrics") if isinstance(et.get("metrics"), dict) else {}
+    action = str(et.get("action") or "telemetry")
+    gm = str(metrics.get("gate_mode") or "log_only")
+    resolve_on = _cfg_bool("DECISION_STACK_RESOLVE_ENABLED", False)
+    core_u = str(core or "HOLD").upper()
+    legacy_u = str(legacy_eff or core_u).upper()
+    projected_u = str(projected or legacy_u).upper()
+    bull_core = core_u in ("BUY", "STRONG_BUY")
+    would_apply_down = gm == "apply" and action == "downgrade" and bull_core
+    et_caused_projected = (
+        action in ("veto", "downgrade")
+        and gm == "apply"
+        and legacy_u in ("BUY", "STRONG_BUY")
+        and projected_u == "HOLD"
+    )
+
+    return {
+        "active": True,
+        "gate_mode": gm,
+        "resolve_enabled": resolve_on,
+        "action": action,
+        "strength": et.get("strength"),
+        "weight": et.get("weight"),
+        "detail": et.get("detail"),
+        "runtime_role": metrics.get("runtime_role"),
+        "source_symbol": metrics.get("source_symbol"),
+        "event_date": metrics.get("event_date"),
+        "would_downgrade": bool(metrics.get("would_downgrade")),
+        "trust_labels": metrics.get("trust_labels"),
+        "shadow_would_hold_if_core_bull": would_apply_down,
+        "live_would_hold_if_core_bull": would_apply_down and resolve_on,
+        "changed_projected_resolve": et_caused_projected,
+        "core_decision": core_u,
+        "legacy_effective": legacy_u,
+        "projected_effective": projected_u,
+    }
+
+
 def _apply_contribution_to_effective(effective: str, c: Dict[str, Any]) -> str:
     if effective not in ("BUY", "STRONG_BUY"):
         return effective
@@ -564,6 +614,10 @@ def resolve_game5m_technical(
             gm = gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply")
         if cid == "forecast_layer" and not gm:
             gm = gate_mode("DECISION_STACK_FORECAST_GATE_MODE", "log_only")
+        if cid == "earnings_trust" and not gm:
+            from services.earnings_trust_runtime import earnings_trust_gate_mode
+
+            gm = earnings_trust_gate_mode()
         if cid == "session":
             gm = "apply"
         if gm in (None, "", "none", "log_only"):
@@ -624,6 +678,9 @@ def build_game5m_decision_snapshot(
         mode = "mirror_legacy"
     conflicts = _detect_conflicts(contributions, core)
     diverged = projected != legacy_eff
+    et_impact = summarize_earnings_trust_impact(
+        contributions, core=core, legacy_eff=legacy_eff, projected=projected
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "game": "GAME_5M",
@@ -636,6 +693,7 @@ def build_game5m_decision_snapshot(
         "resolve_divergence": diverged,
         "contributions": contributions,
         "conflicts": conflicts,
+        "earnings_trust_impact": et_impact,
         "gate_modes": {
             "entry_advice": gate_mode("DECISION_STACK_ENTRY_ADVICE_GATE_MODE", "log_only"),
             "macro": gate_mode("DECISION_STACK_MACRO_GATE_MODE", "log_only"),
@@ -644,6 +702,7 @@ def build_game5m_decision_snapshot(
             "forecast": gate_mode("DECISION_STACK_FORECAST_GATE_MODE", "log_only"),
             "catboost": gate_mode("DECISION_STACK_CATBOOST_GATE_MODE", "apply"),
             "multiday": gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply"),
+            "earnings_trust": gate_mode("DECISION_STACK_EARNINGS_TRUST_GATE_MODE", "log_only"),
         },
         "llm_eligible": [
             "news_fusion",

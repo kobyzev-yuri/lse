@@ -13,8 +13,8 @@ import numpy as np
 import pandas as pd
 
 from report_generator import get_engine, load_trade_history, compute_closed_trade_pnls
-from services.recommend_5m import fetch_5m_ohlc
 from services.deal_params_5m import normalize_entry_context
+from services.recommend_5m import fetch_5m_ohlc
 from services.analyzer_ml_arbiter import (
     build_ml_production_arbiter,
     build_game5m_gap_forecast_arbiter,
@@ -22,6 +22,7 @@ from services.analyzer_ml_arbiter import (
     build_multiday_lr_reality_check,
 )
 from services.analyzer_product_ideas_arbiter import build_product_ideas_arbiter
+from services.decision_stack.earnings_trust_monitor import build_earnings_trust_gate_monitor
 from config_loader import get_config_value, load_config, is_editable_config_env_key
 
 # Дольше — считаем позицию «подвисшей» для пристрастного разбора порогов входа vs выхода.
@@ -183,6 +184,10 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
     "decision_stack_shadow_diff": (
         "Последние закрытые сделки, где сохранённый decision_snapshot имел projected_effective_if_resolve, "
         "отличающийся от legacy effective. Это shadow/report-only контроль перед включением resolve/apply."
+    ),
+    "earnings_trust_gate_monitor": (
+        "Watchlist тикеров с активным earnings post-mortem и влияние контура earnings_trust на projected resolve "
+        "(DECISION_STACK_EARNINGS_TRUST_GATE_MODE=apply). Live — только при DECISION_STACK_RESOLVE_ENABLED=true."
     ),
     "portfolio_exit_policy_review": (
         "Разбор выходов портфельной игры: take_profit на BUY, portfolio_effective_take_pct_at_entry, сигналы TAKE_PROFIT / trailing; "
@@ -717,6 +722,7 @@ def _build_decision_stack_shadow_diff(
         divergences += 1
         contrib = snap.get("contributions") if isinstance(snap.get("contributions"), list) else []
         blockers = [c for c in contrib if c.get("action") in ("veto", "downgrade")]
+        et_block = next((c for c in blockers if c.get("contour_id") == "earnings_trust"), None)
         top = blockers or sorted(contrib, key=lambda c: -abs(float(c.get("strength") or 0.0)))
         eff = by_effect.get(tid)
         rows.append(
@@ -729,6 +735,8 @@ def _build_decision_stack_shadow_diff(
                 "projected_effective_if_resolve": projected,
                 "actual_effective": snap.get("effective_decision"),
                 "resolve_mode": snap.get("resolve_mode"),
+                "earnings_trust_involved": et_block is not None,
+                "earnings_trust_action": (et_block or {}).get("action"),
                 "realized_pct": round(float(eff.realized_pct), 4) if eff else None,
                 "primary_reasons": [
                     f"{c.get('contour_id')}: {c.get('detail')}"
@@ -3449,6 +3457,7 @@ def _compact_report_for_llm(payload: Dict[str, Any]) -> Dict[str, Any]:
         "game_5m_config_hints": (payload.get("game_5m_config_hints") or [])[:10],
         "entry_underperformance_review": payload.get("entry_underperformance_review"),
         "decision_stack_shadow_diff": payload.get("decision_stack_shadow_diff"),
+        "earnings_trust_gate_monitor": payload.get("earnings_trust_gate_monitor"),
         "time_exit_early_review": te_slim or None,
         "time_exit_early_action_summary": payload.get("time_exit_early_action_summary"),
         "game5m_catboost_status": payload.get("game5m_catboost_status"),
@@ -6097,6 +6106,7 @@ def analyze_trade_effectiveness(
             "catboost_entry_backtest": _build_catboost_entry_backtest(strategy, [], []),
             "game5m_catboost_fusion_entry_review": _build_game5m_catboost_fusion_entry_review(strategy, [], []),
             "decision_stack_shadow_diff": _build_decision_stack_shadow_diff(strategy, [], []),
+            "earnings_trust_gate_monitor": build_earnings_trust_gate_monitor([], limit=30),
         }
         _attach_portfolio_analyzer_blocks(empty_payload, strategy=strategy, closed=[], effects=[])
         if (strategy or "").strip().upper() in ("GAME_5M", "ALL"):
@@ -6254,6 +6264,9 @@ def analyze_trade_effectiveness(
         "game5m_catboost_fusion_entry_review": catboost_fusion_entry_review,
         "game5m_catboost_status": game5m_catboost_status,
         "decision_stack_shadow_diff": _build_decision_stack_shadow_diff(strategy, closed, effects),
+        "earnings_trust_gate_monitor": (
+            build_earnings_trust_gate_monitor(closed, limit=30) if want_g5m else _section_skip("earnings_trust")
+        ),
         "game5m_recovery_model_status": game5m_recovery_model_status,
         "recovery_scenario_backtest": recovery_scenario,
         "time_exit_early_review": te_review,
