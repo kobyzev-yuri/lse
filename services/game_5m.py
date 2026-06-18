@@ -1594,6 +1594,7 @@ def _try_stale_reversal_exit(
     current_decision: str,
     age: timedelta,
     simulation_time: Optional[datetime] = None,
+    d5_context: Optional[dict] = None,
 ) -> Tuple[bool, str, str]:
     """TIME_EXIT_EARLY / stale_reversal, если включено и условия выполнены."""
     stale_params = _game_5m_stale_reversal_exit_params(open_position.get("ticker"))
@@ -1627,6 +1628,23 @@ def _try_stale_reversal_exit(
         float(stale_params["momentum_below"]),
         decision_norm or "—",
     )
+    try:
+        from services.multiday_lr_gate import should_skip_early_exit_for_bullish_multiday
+
+        skip, gate = should_skip_early_exit_for_bullish_multiday(
+            d5_context,
+            exit_detail="stale_reversal",
+            pnl_current_pct=pnl_current_pct,
+        )
+        if skip:
+            _stale_log(
+                "GAME_5M %s: stale/reversal пропущен — бычий multiday (%s)",
+                open_position.get("ticker", "?"),
+                gate.get("note") or gate.get("reason"),
+            )
+            return False, "", ""
+    except Exception:
+        pass
     return True, "TIME_EXIT_EARLY", "stale_reversal"
 
 
@@ -1638,6 +1656,7 @@ def _try_early_derisk_exit(
     momentum_2h_pct: Optional[float],
     current_decision: str,
     age: timedelta,
+    d5_context: Optional[dict] = None,
 ) -> Tuple[bool, str, str]:
     """TIME_EXIT_EARLY / early_derisk при просадке и слабом импульсе (если включено в config)."""
     try:
@@ -1681,6 +1700,23 @@ def _try_early_derisk_exit(
         "—" if momentum_2h_pct is None else f"{float(momentum_2h_pct):+.2f}%",
         current_decision,
     )
+    try:
+        from services.multiday_lr_gate import should_skip_early_exit_for_bullish_multiday
+
+        skip, gate = should_skip_early_exit_for_bullish_multiday(
+            d5_context,
+            exit_detail="early_derisk",
+            pnl_current_pct=pnl_current_pct,
+        )
+        if skip:
+            logger.info(
+                "GAME_5M %s: early de-risk пропущен — бычий multiday (%s)",
+                open_position.get("ticker", "?"),
+                gate.get("note") or gate.get("reason"),
+            )
+            return False, "", ""
+    except Exception:
+        pass
     return True, "TIME_EXIT_EARLY", "early_derisk"
 
 
@@ -1776,6 +1812,7 @@ def should_close_position(
                 current_decision=current_decision,
                 age=age_for_risk,
                 simulation_time=simulation_time,
+                d5_context=d5_context,
             )
             if stale_hit:
                 return True, stale_sig, stale_det
@@ -1786,6 +1823,7 @@ def should_close_position(
                 momentum_2h_pct=momentum_2h_pct,
                 current_decision=current_decision,
                 age=age_for_risk,
+                d5_context=d5_context,
             )
             if derisk_hit:
                 return True, derisk_sig, derisk_det
@@ -1902,6 +1940,7 @@ def should_close_position(
             current_decision=current_decision,
             age=age,
             simulation_time=simulation_time,
+            d5_context=d5_context,
         )
         if stale_hit:
             return True, stale_sig, stale_det
@@ -1927,6 +1966,7 @@ def should_close_position(
             momentum_2h_pct=momentum_2h_pct,
             current_decision=current_decision,
             age=age,
+            d5_context=d5_context,
         )
         if derisk_hit:
             return True, derisk_sig, derisk_det

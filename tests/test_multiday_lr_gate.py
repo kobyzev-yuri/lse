@@ -11,6 +11,7 @@ from services.multiday_lr_gate import (
     evaluate_multiday_hold_gate,
     evaluate_multiday_overnight_gate,
     finalize_technical_decision_with_multiday,
+    should_skip_early_exit_for_bullish_multiday,
 )
 
 
@@ -91,6 +92,25 @@ class TestMultidayHoldGate(unittest.TestCase):
         with patch.dict(os.environ, env, clear=False):
             g = evaluate_multiday_hold_gate(d5, exit_detail="stale_reversal")
         self.assertIn("exit_detail_not_allowed", g.get("skip_reason", ""))
+
+    def test_skip_early_exit_apply_bullish(self):
+        env = {
+            "GAME_5M_MULTIDAY_HOLD_GATE_MODE": "apply",
+            "GAME_5M_MULTIDAY_HOLD_TAU_PCT": "0.20",
+            "GAME_5M_MULTIDAY_HOLD_POSITIVE_HORIZONS_MIN": "2",
+            "GAME_5M_MULTIDAY_HOLD_EXIT_DETAILS": "early_derisk,stale_reversal",
+        }
+        d5 = {
+            "multiday_lr_horizon_1d_pct_vs_spot": 0.5,
+            "multiday_lr_horizon_2d_pct_vs_spot": 0.4,
+            "multiday_lr_horizon_3d_pct_vs_spot": 0.1,
+        }
+        with patch.dict(os.environ, env, clear=False):
+            skip, gate = should_skip_early_exit_for_bullish_multiday(
+                d5, exit_detail="early_derisk", pnl_current_pct=-1.5
+            )
+        self.assertTrue(skip)
+        self.assertTrue(gate.get("would_defer_exit"))
 
 
 if __name__ == "__main__":

@@ -195,6 +195,9 @@ def _simulate_current_eod_would_flatten(
     if allow_strong and dec == "STRONG_BUY" and _bullish_horizons(exit_pcts, tau=tau, pos_min=pos_min):
         return False, "hold_strong_buy_bullish"
     if _bullish_horizons(exit_pcts, tau=tau, pos_min=pos_min):
+        deep_loss = float(get_config_value("GAME_5M_MULTIDAY_HOLD_MAX_LOSS_PCT", "-4.0") or -4.0)
+        if pnl_current_pct is not None and float(pnl_current_pct) <= deep_loss:
+            return True, "overnight_eod_flat_loss_deep"
         return False, "hold_bullish_multiday"
     max_loss = float(get_config_value("GAME_5M_EOD_FLATTEN_MAX_LOSS_TO_FORCE_PCT", "-0.5") or -0.5)
     if pnl_current_pct is not None and float(pnl_current_pct) <= max_loss:

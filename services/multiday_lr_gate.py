@@ -265,6 +265,44 @@ def hold_gate_should_defer_exit(gate: dict[str, Any]) -> bool:
     )
 
 
+def bullish_multiday_horizons_met(d5: Optional[Dict[str, Any]]) -> Tuple[bool, Dict[str, Any]]:
+    """2+ горизонта multiday выше τ — бычий тренд для hold/skip early exit."""
+    tau = _env_float("GAME_5M_MULTIDAY_HOLD_TAU_PCT", 0.20)
+    pos_min = max(1, min(3, _env_int("GAME_5M_MULTIDAY_HOLD_POSITIVE_HORIZONS_MIN", 2)))
+    meta: Dict[str, Any] = {"tau_pos_pct": tau, "positive_horizons_min": pos_min, "horizons_pct": {}}
+    if not isinstance(d5, dict) or not _forecast_ok(d5):
+        meta["reason"] = "forecast_unavailable"
+        return False, meta
+    pcts = _horizon_pcts(d5)
+    meta["horizons_pct"] = {k: v for k, v in pcts.items() if v is not None}
+    positives = sum(
+        1 for k in ("1d", "2d", "3d") if pcts.get(k) is not None and float(pcts[k]) > tau
+    )
+    meta["positive_horizons"] = positives
+    ok = positives >= pos_min
+    meta["reason"] = f"bullish_horizons_{positives}>={pos_min}" if ok else f"not_bullish_{positives}<{pos_min}"
+    return ok, meta
+
+
+def should_skip_early_exit_for_bullish_multiday(
+    d5: Optional[Dict[str, Any]],
+    *,
+    exit_detail: str,
+    pnl_current_pct: Optional[float],
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Не включать TIME_EXIT_EARLY (early_derisk / stale_reversal), если hold gate apply
+    отложил бы выход при бычьем multiday.
+    """
+    gate = evaluate_multiday_hold_gate(
+        d5 if isinstance(d5, dict) else {},
+        exit_detail=exit_detail,
+        pnl_current_pct=pnl_current_pct,
+    )
+    skip = hold_gate_should_defer_exit(gate)
+    return skip, gate
+
+
 def finalize_technical_decision_with_multiday(out: Dict[str, Any]) -> None:
     """
     После CatBoost fusion: запись телеметрии и опционально HOLD по multiday (mode=apply).

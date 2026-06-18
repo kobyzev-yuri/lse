@@ -151,13 +151,17 @@ def should_eod_flatten_position(
     if risk.get("would_avoid_overnight"):
         return True, "overnight_eod_flat_multiday"
 
+    ok_exc, exc_reason = _multiday_bullish_hold_exception(d5)
+    if ok_exc:
+        # Бычий multiday: шанс на overnight / d+1 open; глубокий стоп как у hold_gate.
+        deep_loss = _cfg_float("GAME_5M_MULTIDAY_HOLD_MAX_LOSS_PCT", -4.0)
+        if pnl_current_pct is not None and float(pnl_current_pct) <= deep_loss:
+            return True, "overnight_eod_flat_loss_deep"
+        return False, ""
+
     max_loss_hold = _cfg_float("GAME_5M_EOD_FLATTEN_MAX_LOSS_TO_FORCE_PCT", -0.5)
     if pnl_current_pct is not None and float(pnl_current_pct) <= max_loss_hold:
         return True, "overnight_eod_flat_loss"
-
-    ok_exc, _ = _multiday_bullish_hold_exception(d5)
-    if ok_exc:
-        return False, ""
 
     if dec not in ("STRONG_BUY",):
         return True, "overnight_eod_flat_weak_signal"
