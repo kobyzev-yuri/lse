@@ -402,13 +402,13 @@ def _contour_from_ml_readiness(contour_id: str, spec: dict[str, Any], readiness:
 
 
 def _data_volume_ru(n_matured: int, n_min: int, *, unit: str = "") -> str:
-    suffix = f" {unit}".strip() if unit else ""
+    unit_s = f" {unit}".strip()
     if n_min <= 0:
         return ""
     if n_matured >= n_min:
-        return f"Данных достаточно: {n_matured}/{n_min}{suffix} ✓"
+        return f"Данных достаточно: {n_matured}/{n_min}{unit_s} ✓"
     need = max(0, n_min - n_matured)
-    return f"Мало данных: {n_matured}/{n_min}{suffix} — нужно ещё ≥{need} (порог {n_min})"
+    return f"Мало данных: {n_matured}/{n_min}{unit_s} — нужно ещё ≥{need} (порог {n_min})"
 
 
 def _gate_mode_ru(gate: str) -> str:
@@ -475,8 +475,17 @@ def _contour_metric_ru(contour: dict[str, Any], spec: dict[str, Any]) -> str:
     apply_t = spec.get("apply_t_hit")
 
     if cid == "multiday_lr":
-        parts = [p.strip() for p in conclusion.split(",") if p.strip()]
-        metric = ", ".join(p for p in parts if "sign 1d" in p or p.startswith("WF "))
+        wf_part = ""
+        if "WF ready" in conclusion:
+            wf_part = "WF ready"
+        elif "WF caution" in conclusion:
+            wf_part = "WF caution"
+        sign_part = ""
+        for p in conclusion.split(","):
+            if "sign 1d" in p:
+                sign_part = p.strip()
+                break
+        metric = ", ".join(x for x in (wf_part, sign_part) if x)
         if apply_t is not None and metric:
             metric += f" (порог apply sign ≥{_pct(apply_t)})"
         return metric or conclusion.split(":", 1)[-1].strip()
