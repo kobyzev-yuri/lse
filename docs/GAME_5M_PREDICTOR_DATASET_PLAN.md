@@ -207,8 +207,8 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 - [x] 1.1 build dataset script
 - [x] 1.2–1.3 labels + negatives
 - [x] 1.4 train v2
-- [ ] 1.5 analyzer blocks
-- [ ] 1.6 log_only telemetry
+- [x] 1.5 analyzer blocks
+- [x] 1.6 log_only telemetry
 - [ ] 1.7 trust arbiter
 - [ ] 1.8 apply sign-off
 

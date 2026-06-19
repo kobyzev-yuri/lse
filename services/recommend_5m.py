@@ -1225,6 +1225,7 @@ TECHNICAL_SIGNAL_KEYS = (
     "is_preliminary",
     # CatBoost (опционально); итог для входа/LLM — technical_decision_effective
     "catboost_entry_proba_good", "catboost_signal_status", "catboost_signal_note",
+    "catboost_entry_proba_good_v2", "catboost_bar_v2_signal_status", "catboost_bar_v2_signal_note",
     "technical_decision_core", "technical_decision_effective",
     "catboost_fusion_mode", "catboost_fusion_note",
     "entry_quality_guard_triggered", "entry_quality_guard_reason", "entry_quality_guard_prev_decision",
@@ -2776,6 +2777,13 @@ def get_decision_5m(
     else:
         out["entry_condition"] = None
         out["entry_intuition"] = None
+
+    try:
+        from services.catboost_5m_signal import attach_catboost_bar_v2_signal
+
+        attach_catboost_bar_v2_signal(out, ticker)
+    except Exception as e:
+        logger.warning("attach_catboost_bar_v2_signal(%s): %s", ticker, e)
 
     try:
         from services.decision_stack import finalize_game5m_decision_stack

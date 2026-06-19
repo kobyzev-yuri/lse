@@ -283,6 +283,109 @@ def predict_entry_favorability_from_saved_context(ticker: str, entry_context: An
     return out
 
 
+def _default_bar_v2_model_path() -> str:
+    from config_loader import get_config_value
+
+    model_path = (get_config_value("GAME_5M_CATBOOST_V2_MODEL_PATH", "") or "").strip()
+    if model_path:
+        return model_path
+    if Path("/app/logs").exists():
+        return "/app/logs/ml/models/game5m_entry_catboost_v2.cbm"
+    return str(Path(__file__).resolve().parents[1] / "local" / "models" / "game5m_entry_catboost_v2.cbm")
+
+
+def _bar_v2_log_enabled() -> bool:
+    from config_loader import get_config_value
+
+    raw = (get_config_value("GAME_5M_CATBOOST_BAR_V2_LOG_ENABLED", "true") or "true").strip().lower()
+    return raw in ("1", "true", "yes")
+
+
+def build_catboost_bar_v2_feature_row(ticker: str, d5: Dict[str, Any]) -> Tuple[List[str], List[Any]]:
+    """Feature row for bar-level entry v2 (subset of live 5m payload)."""
+    from services.game5m_entry_bar_dataset import get_bar_train_feature_schema, row_from_bar_dataset_dict
+
+    high_5d = _safe_float(d5.get("high_5d"), 0.0)
+    low_5d = _safe_float(d5.get("low_5d"), 0.0)
+    price = _safe_float(d5.get("price"), 0.0)
+    if high_5d > low_5d and price > 0:
+        price_to_low5d_ratio = (price - low_5d) / (high_5d - low_5d)
+    else:
+        price_to_low5d_ratio = 0.5
+    row_dict = {
+        "ticker": ticker,
+        "rsi_5m": d5.get("rsi_5m"),
+        "momentum_2h_pct": d5.get("momentum_2h_pct"),
+        "momentum_rth_today_pct": d5.get("momentum_rth_today_pct"),
+        "volatility_5m_pct": d5.get("volatility_5m_pct"),
+        "pullback_from_high_pct": d5.get("pullback_from_high_pct"),
+        "bars_count": d5.get("bars_count"),
+        "momentum_rth_today_bars": d5.get("momentum_rth_today_bars"),
+        "price_to_low5d_ratio": price_to_low5d_ratio,
+    }
+    colnames, _ = get_bar_train_feature_schema()
+    return colnames, row_from_bar_dataset_dict(row_dict, ticker)
+
+
+def _catboost_bar_v2_runtime_guards() -> Tuple[str, str, Optional[str], Optional[Tuple[Any, Dict[str, Any]]]]:
+    """Shadow v2 path: does not require GAME_5M_CATBOOST_ENABLED."""
+    if not _bar_v2_log_enabled():
+        return "disabled", "Bar v2 log_only выключен (GAME_5M_CATBOOST_BAR_V2_LOG_ENABLED).", None, None
+
+    try:
+        import catboost  # noqa: F401
+    except ImportError:
+        return "no_package", "Пакет catboost не установлен (pip install catboost).", None, None
+
+    model_path = _default_bar_v2_model_path()
+    if not os.path.isfile(model_path):
+        return "no_model_file", f"Нет файла bar v2 модели: {model_path}", model_path, None
+
+    try:
+        try:
+            mtime = os.path.getmtime(model_path)
+        except OSError:
+            mtime = 0.0
+        bundle = _load_model_bundle(model_path, mtime)
+    except Exception as e:
+        logger.warning("CatBoost bar v2 load %s: %s", model_path, e)
+        return "load_error", f"Ошибка загрузки bar v2 модели: {e}", model_path, None
+
+    return "ready", "", model_path, bundle
+
+
+def attach_catboost_bar_v2_signal(out: Dict[str, Any], ticker: str) -> None:
+    """
+    Shadow telemetry for bar-level entry CatBoost v2 (log_only; never changes decision/fusion).
+    """
+    out.setdefault("catboost_bar_v2_signal_status", "skipped")
+    out.setdefault("catboost_bar_v2_signal_note", "")
+    out.setdefault("catboost_entry_proba_good_v2", None)
+
+    st_g, note_g, _mp, bundle = _catboost_bar_v2_runtime_guards()
+    if st_g != "ready" or bundle is None:
+        out["catboost_bar_v2_signal_status"] = st_g
+        out["catboost_bar_v2_signal_note"] = note_g
+        return
+
+    model, meta = bundle
+    try:
+        colnames, row = build_catboost_bar_v2_feature_row(ticker, out)
+        p_st, p_good, p_note = _catboost_predict_proba_row(model, meta, colnames, row)
+        out["catboost_bar_v2_signal_status"] = p_st
+        out["catboost_entry_proba_good_v2"] = p_good
+        if p_st != "ok":
+            out["catboost_bar_v2_signal_note"] = p_note
+            return
+        out["catboost_bar_v2_signal_note"] = (
+            f"CatBoost bar v2 (shadow): P(upper barrier first)≈{p_good:.2f} — log_only, правила входа не меняются."
+        )
+    except Exception as e:
+        logger.warning("CatBoost bar v2 predict: %s", e)
+        out["catboost_bar_v2_signal_status"] = "predict_error"
+        out["catboost_bar_v2_signal_note"] = str(e)
+
+
 def attach_catboost_signal(out: Dict[str, Any], ticker: str) -> None:
     """
     Добавляет в out поля catboost_*; не бросает исключений наружу.

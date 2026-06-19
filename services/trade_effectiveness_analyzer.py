@@ -209,6 +209,14 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Статус CatBoost entry (GAME_5M): trained_at/n_train/n_valid/AUC, исключения (например false_take_profit_by_session_high), "
         "и оценка trust_level. Используется для понимания, насколько аккуратно применять ML-слияние (BUY→HOLD) и как интерпретировать P."
     ),
+    "game5m_entry_bar_dataset_stats": (
+        "Bar-level entry dataset (triple barrier): объём, баланс tb_label/y_entry_good из build_game5m_entry_bar_dataset.py. "
+        "Источник: GAME_5M_ENTRY_BAR_DATASET_STATS_PATH или /app/logs/ml/datasets/game5m_entry_bar_dataset_stats.json."
+    ),
+    "game5m_entry_model_v2_status": (
+        "CatBoost entry bar v2 (shadow): путь GAME_5M_CATBOOST_V2_MODEL_PATH, meta/train metrics, AUC vs порог promotion 0.55. "
+        "Не влияет на prod v1; log_only telemetry — catboost_entry_proba_good_v2."
+    ),
     "time_exit_early_review": (
         "Контрфакт для TIME_EXIT_EARLY: что было бы с ценой после фактического выхода. "
         "Считаем post-exit MFE/MAE по 5m OHLC на горизонте 1 часа (и опционально до конца дня) относительно цены выхода, "
@@ -968,6 +976,150 @@ def _build_game5m_catboost_status() -> Dict[str, Any]:
             if isinstance(meta, dict)
             else None,
             **trust,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _default_entry_bar_dataset_stats_path() -> Path:
+    raw = (get_config_value("GAME_5M_ENTRY_BAR_DATASET_STATS_PATH", "") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml/datasets/game5m_entry_bar_dataset_stats.json")
+    return Path(__file__).resolve().parents[1] / "local" / "datasets" / "game5m_entry_bar_dataset_stats.json"
+
+
+def _default_entry_bar_v2_train_metrics_path() -> Path:
+    raw = (get_config_value("GAME_5M_ENTRY_BAR_V2_TRAIN_METRICS_PATH", "") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml/datasets/game5m_entry_bar_v2_train.json")
+    return Path(__file__).resolve().parents[1] / "local" / "datasets" / "game5m_entry_bar_v2_train.json"
+
+
+def _trust_level_game5m_entry_bar_v2(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(meta, dict):
+        return {"entry_bar_v2_trust_level": "unknown", "entry_bar_v2_trust_reason": "Нет meta.json bar v2."}
+    try:
+        auc_f = float(meta.get("auc_valid")) if meta.get("auc_valid") is not None else None
+        nv = int(meta.get("n_valid")) if meta.get("n_valid") is not None else None
+    except (TypeError, ValueError):
+        auc_f = None
+        nv = None
+    if auc_f is None or nv is None:
+        return {"entry_bar_v2_trust_level": "unknown", "entry_bar_v2_trust_reason": "В meta нет auc_valid/n_valid."}
+    if nv < 80:
+        return {
+            "entry_bar_v2_trust_level": "low",
+            "entry_bar_v2_trust_reason": f"n_valid={nv} < 80; только shadow/log_only.",
+        }
+    if auc_f < 0.55:
+        return {
+            "entry_bar_v2_trust_level": "low",
+            "entry_bar_v2_trust_reason": f"AUC={auc_f:.3f} < 0.55 (promotion gate); prod v1 без изменений.",
+        }
+    if auc_f < 0.58:
+        return {
+            "entry_bar_v2_trust_level": "medium",
+            "entry_bar_v2_trust_reason": f"AUC={auc_f:.3f} при n_valid={nv}; можно расширять telemetry, fusion ещё рано.",
+        }
+    return {
+        "entry_bar_v2_trust_level": "high",
+        "entry_bar_v2_trust_reason": f"AUC={auc_f:.3f} при n_valid={nv}; кандидат на promotion review.",
+    }
+
+
+def _build_game5m_entry_bar_dataset_stats() -> Dict[str, Any]:
+    try:
+        from services.game5m_entry_bar_dataset import ENTRY_BAR_ML_SCHEMA_VERSION
+
+        stats_path = _default_entry_bar_dataset_stats_path()
+        csv_path = stats_path.with_name("game5m_entry_bar_dataset.csv")
+        try:
+            min_rows = int((get_config_value("GAME_5M_ENTRY_BAR_MIN_ROWS", "5000") or "5000").strip())
+        except (ValueError, TypeError):
+            min_rows = 5000
+        if not stats_path.is_file():
+            return {
+                "skip_reason": "no_stats_file",
+                "stats_path": str(stats_path),
+                "csv_path": str(csv_path),
+                "schema_version": ENTRY_BAR_ML_SCHEMA_VERSION,
+                "min_rows_config": min_rows,
+                "note": "Запустите scripts/build_game5m_entry_bar_dataset.py --summary-json …",
+            }
+        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+        if not isinstance(stats, dict):
+            stats = {"raw": stats}
+        n_rows = int(stats.get("n_rows") or 0)
+        out = {
+            **stats,
+            "stats_path": str(stats_path),
+            "csv_path": str(csv_path),
+            "csv_exists": csv_path.is_file(),
+            "schema_version": ENTRY_BAR_ML_SCHEMA_VERSION,
+            "min_rows_config": min_rows,
+            "meets_min_rows": n_rows >= min_rows,
+        }
+        if csv_path.is_file():
+            out["csv_size_bytes"] = csv_path.stat().st_size
+        return out
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _build_game5m_entry_model_v2_status() -> Dict[str, Any]:
+    try:
+        from services.catboost_5m_signal import _default_bar_v2_model_path
+
+        log_enabled = (get_config_value("GAME_5M_CATBOOST_BAR_V2_LOG_ENABLED", "true") or "true").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        model_path = _default_bar_v2_model_path()
+        meta_path = str(Path(model_path).with_suffix(".meta.json"))
+        train_metrics_path = _default_entry_bar_v2_train_metrics_path()
+        meta = None
+        if Path(meta_path).is_file():
+            try:
+                meta = json.loads(Path(meta_path).read_text(encoding="utf-8"))
+            except Exception:
+                meta = None
+        train_metrics = None
+        if train_metrics_path.is_file():
+            try:
+                train_metrics = json.loads(train_metrics_path.read_text(encoding="utf-8"))
+            except Exception:
+                train_metrics = None
+        trust = _trust_level_game5m_entry_bar_v2(meta if isinstance(meta, dict) else train_metrics)
+        return {
+            "log_only_enabled_config": bool(log_enabled),
+            "prod_v1_unchanged": True,
+            "promotion_auc_min": 0.55,
+            "model_path": model_path,
+            "meta_path": meta_path,
+            "train_metrics_path": str(train_metrics_path),
+            "model_file_exists": Path(model_path).is_file(),
+            "meta_file_exists": Path(meta_path).is_file(),
+            "train_metrics_exists": train_metrics_path.is_file(),
+            "meta_summary": {
+                "trained_at": (meta or {}).get("trained_at"),
+                "n_train": (meta or {}).get("n_train"),
+                "n_valid": (meta or {}).get("n_valid"),
+                "n_total": (meta or {}).get("n_total"),
+                "label": (meta or {}).get("label"),
+                "dataset": (meta or {}).get("dataset"),
+                "auc_valid": (meta or {}).get("auc_valid"),
+                "bar_csv": (meta or {}).get("bar_csv"),
+            }
+            if isinstance(meta, dict)
+            else None,
+            "last_train_metrics": train_metrics if isinstance(train_metrics, dict) else None,
+            **trust,
+            "note": "Shadow contour: catboost_entry_proba_good_v2 в context_json; fusion/apply только после sign-off.",
         }
     except Exception as e:
         return {"error": str(e)}
@@ -6280,10 +6432,14 @@ def analyze_trade_effectiveness(
         catboost_entry_backtest = _build_catboost_entry_backtest(strategy, closed, effects)
         catboost_fusion_entry_review = _build_game5m_catboost_fusion_entry_review(strategy, closed, effects)
         game5m_catboost_status = _build_game5m_catboost_status()
+        game5m_entry_bar_dataset_stats = _build_game5m_entry_bar_dataset_stats()
+        game5m_entry_model_v2_status = _build_game5m_entry_model_v2_status()
     else:
         catboost_entry_backtest = _section_skip("catboost")
         catboost_fusion_entry_review = _section_skip("catboost")
         game5m_catboost_status = _section_skip("catboost")
+        game5m_entry_bar_dataset_stats = _section_skip("catboost")
+        game5m_entry_model_v2_status = _section_skip("catboost")
     if _section_want(secs, "game5m_extra") and want_g5m:
         hanger_v2_review = _build_hanger_v2_review(effects)
         game5m_recovery_model_status = _build_game5m_recovery_model_status()
@@ -6333,6 +6489,8 @@ def analyze_trade_effectiveness(
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_catboost_fusion_entry_review": catboost_fusion_entry_review,
         "game5m_catboost_status": game5m_catboost_status,
+        "game5m_entry_bar_dataset_stats": game5m_entry_bar_dataset_stats,
+        "game5m_entry_model_v2_status": game5m_entry_model_v2_status,
         "decision_stack_shadow_diff": _build_decision_stack_shadow_diff(strategy, closed, effects),
         "earnings_trust_gate_monitor": (
             build_earnings_trust_gate_monitor(closed, limit=30) if want_g5m else _section_skip("earnings_trust")
@@ -6532,6 +6690,8 @@ def analyze_trade_effectiveness_focused(
         "catboost_entry_backtest": catboost_entry_backtest,
         "game5m_catboost_fusion_entry_review": catboost_fusion_entry_review,
         "game5m_catboost_status": _build_game5m_catboost_status(),
+        "game5m_entry_bar_dataset_stats": _build_game5m_entry_bar_dataset_stats(),
+        "game5m_entry_model_v2_status": _build_game5m_entry_model_v2_status(),
         "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
         "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
         "time_exit_early_review": te_review_f,

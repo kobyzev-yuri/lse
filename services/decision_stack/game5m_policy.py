@@ -54,6 +54,13 @@ def apply_game5m_policy_gates(d5: Dict[str, Any], ticker: str) -> None:
     except Exception as e:
         logger.warning("decision_stack multiday %s: %s", t, e)
 
+    try:
+        from services.catboost_5m_signal import attach_catboost_bar_v2_signal
+
+        attach_catboost_bar_v2_signal(d5, t)
+    except Exception as e:
+        logger.warning("decision_stack catboost bar v2 %s: %s", t, e)
+
 
 def stack_own_finalize_enabled() -> bool:
     """Фаза 3: ML-гейты только внутри decision_stack (по умолчанию true)."""
