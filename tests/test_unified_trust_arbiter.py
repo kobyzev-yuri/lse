@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from services.unified_trust_arbiter import (
+    _contour_digest_lines,
+    _data_volume_ru,
     build_unified_trust_arbiter,
     format_operator_digest_ru,
     multiday_lr_reality_from_wf_artifact,
@@ -69,3 +71,30 @@ def test_format_operator_digest_includes_surfaces():
     assert "GAME_5M" in text
     assert "EARNINGS" in text
     assert "Итог:" in text
+    assert "• " in text
+    assert "Док: docs/GAME_5M_DECISION_ARCHITECTURE.md" in text
+
+
+def test_data_volume_ru_shows_shortfall():
+    assert "Мало данных" in _data_volume_ru(44, 50, unit="событий")
+    assert "≥6" in _data_volume_ru(44, 50, unit="событий")
+    assert "✓" in _data_volume_ru(80, 80, unit="сделок")
+
+
+def test_contour_digest_lines_human_readable():
+    lines = _contour_digest_lines(
+        {
+            "contour_id": "catboost_entry_5m",
+            "trust_label": "medium",
+            "trust_score": 0.61,
+            "recommended_gate_mode": "log_only",
+            "n_matured": 49,
+            "T_hit": 0.52,
+            "T_hit_insufficient": True,
+            "conclusion_ru": "catboost_entry: medium 0.61, log_only, AUC 0.52",
+        }
+    )
+    joined = "\n".join(lines)
+    assert "CatBoost вход" in joined
+    assert "49/80" in joined
+    assert "telemetry" in joined

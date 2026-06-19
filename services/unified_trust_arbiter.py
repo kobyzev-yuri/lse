@@ -401,6 +401,141 @@ def _contour_from_ml_readiness(contour_id: str, spec: dict[str, Any], readiness:
     }
 
 
+def _data_volume_ru(n_matured: int, n_min: int, *, unit: str = "") -> str:
+    suffix = f" {unit}".strip() if unit else ""
+    if n_min <= 0:
+        return ""
+    if n_matured >= n_min:
+        return f"Данных достаточно: {n_matured}/{n_min}{suffix} ✓"
+    need = max(0, n_min - n_matured)
+    return f"Мало данных: {n_matured}/{n_min}{suffix} — нужно ещё ≥{need} (порог {n_min})"
+
+
+def _gate_mode_ru(gate: str) -> str:
+    mapping = {
+        "apply": "влияет на решение",
+        "caution": "опираемся, но без максимума доверия",
+        "log_only": "только telemetry — на сделки не меняет",
+        "none": "выключен",
+    }
+    return mapping.get(str(gate or "").strip(), str(gate or "?"))
+
+
+_CONTOUR_DIGEST_META: dict[str, dict[str, str]] = {
+    "multiday_lr": {
+        "title": "Multiday ridge",
+        "role": "главный ML-фильтр 1–3d (вход и multiday hold)",
+        "unit": "point-days",
+        "apply_note": "На prod legacy: entry/hold apply.",
+    },
+    "catboost_entry_5m": {
+        "title": "CatBoost вход 5m",
+        "role": "фильтр «входить в эту 5m-сделку или нет»",
+        "unit": "сделок с context",
+        "apply_note": "Для apply: high trust + ≥80 сделок + AUC ≥0.55.",
+    },
+    "gap_forecast": {
+        "title": "Gap forecast",
+        "role": "ML-прогноз open gap vs premarket baseline",
+        "unit": "дней rolling",
+        "apply_note": "Вход по premarket_gap_baseline, не по ML.",
+    },
+    "portfolio_catboost": {
+        "title": "Portfolio CatBoost",
+        "role": "ML по закрытым сделкам портфеля",
+        "unit": "сделок",
+        "apply_note": "",
+    },
+    "earnings_scenario": {
+        "title": "Scenario shadow",
+        "role": "знак сценария earnings (advisory)",
+        "unit": "событий 5d",
+        "apply_note": "Не блокирует GAME_5M.",
+    },
+    "event_reaction": {
+        "title": "Regression 5d",
+        "role": "регрессия реакции на earnings",
+        "unit": "событий 5d",
+        "apply_note": "Не блокирует GAME_5M.",
+    },
+    "peer_spillover": {
+        "title": "Peer spillover",
+        "role": "перенос сигнала на peer-тикеры",
+        "unit": "пар event×peer",
+        "apply_note": "Не блокирует GAME_5M.",
+    },
+}
+
+
+def _contour_metric_ru(contour: dict[str, Any], spec: dict[str, Any]) -> str:
+    cid = str(contour.get("contour_id") or "")
+    conclusion = str(contour.get("conclusion_ru") or "")
+    t_hit_insufficient = bool(contour.get("T_hit_insufficient"))
+    t_hit = contour.get("T_hit")
+    apply_t = spec.get("apply_t_hit")
+
+    if cid == "multiday_lr":
+        parts = [p.strip() for p in conclusion.split(",") if p.strip()]
+        metric = ", ".join(p for p in parts if "sign 1d" in p or p.startswith("WF "))
+        if apply_t is not None and metric:
+            metric += f" (порог apply sign ≥{_pct(apply_t)})"
+        return metric or conclusion.split(":", 1)[-1].strip()
+
+    if cid == "gap_forecast":
+        if "PM baseline" in conclusion:
+            base = "PM baseline точнее ML"
+        elif t_hit is not None and not t_hit_insufficient:
+            base = f"ML лучше PM в {_pct(t_hit)} дней"
+        else:
+            base = "нет rolling beat-baseline"
+        if apply_t is not None:
+            base += f" (нужно >{_pct(apply_t)} дней)"
+        return base
+
+    if cid == "catboost_entry_5m":
+        if t_hit is not None and not t_hit_insufficient:
+            base = f"AUC valid {float(t_hit):.2f}"
+            if apply_t is not None:
+                base += f" (порог apply ≥{float(apply_t):.2f})"
+            return base
+        return "AUC ещё нестабилен"
+
+    if t_hit is not None and not t_hit_insufficient:
+        base = f"sign/метрика {_pct(t_hit)}"
+        if apply_t is not None:
+            base += f" (порог apply ≥{_pct(apply_t)})"
+        return base
+    return ""
+
+
+def _contour_digest_lines(contour: dict[str, Any]) -> list[str]:
+    cid = str(contour.get("contour_id") or "?")
+    spec = CONTOUR_TRUST_SPECS.get(cid, {})
+    meta = _CONTOUR_DIGEST_META.get(cid, {})
+    title = meta.get("title") or spec.get("display") or cid
+    label = str(contour.get("trust_label") or "?")
+    score = float(contour.get("trust_score") or 0)
+    gate = str(contour.get("recommended_gate_mode") or "?")
+    n_matured = int(contour.get("n_matured") or 0)
+    n_min = int(spec.get("n_min") or 0)
+
+    lines = [f"• {title} — {label} {score:.2f}, {gate}"]
+    role = meta.get("role")
+    if role:
+        lines.append(f"  {role}.")
+    metric = _contour_metric_ru(contour, spec)
+    if metric:
+        lines.append(f"  {metric}.")
+    lines.append(f"  {_gate_mode_ru(gate)}.")
+    vol = _data_volume_ru(n_matured, n_min, unit=str(meta.get("unit") or ""))
+    if vol:
+        lines.append(f"  {vol}.")
+    apply_note = meta.get("apply_note")
+    if apply_note:
+        lines.append(f"  {apply_note}")
+    return lines
+
+
 def format_operator_digest_ru(arbiter: dict[str, Any]) -> str:
     today = date.today().isoformat()
     lines = [f"LSE Trust · {today}", ""]
@@ -408,34 +543,27 @@ def format_operator_digest_ru(arbiter: dict[str, Any]) -> str:
 
     game = surfaces.get("GAME_5M") or {}
     if game:
-        lines.append("GAME_5M (торгуем)")
-        for c in game.get("contours") or []:
-            lines.append(
-                f"  {c.get('contour_id', '?'):16} {c.get('trust_label', '?'):11} "
-                f"{c.get('trust_score', 0):.2f}  {c.get('recommended_gate_mode', '?')}"
-            )
+        lines.append("GAME_5M — здесь реальные сделки")
         lines.append("")
+        for c in game.get("contours") or []:
+            lines.extend(_contour_digest_lines(c))
+            lines.append("")
 
     pf = surfaces.get("PORTFOLIO") or {}
     if pf:
-        lines.append("PORTFOLIO")
-        for c in pf.get("contours") or []:
-            lines.append(
-                f"  {c.get('contour_id', '?'):16} {c.get('trust_label', '?'):11} "
-                f"{c.get('trust_score', 0):.2f}  {c.get('recommended_gate_mode', '?')}"
-            )
+        lines.append("PORTFOLIO — отдельная игра")
         lines.append("")
+        for c in pf.get("contours") or []:
+            lines.extend(_contour_digest_lines(c))
+            lines.append("")
 
     earn = surfaces.get("EARNINGS") or {}
     if earn:
-        lines.append("EARNINGS (advisory, не блокирует бот)")
-        for c in earn.get("contours") or []:
-            display = CONTOUR_TRUST_SPECS.get(str(c.get("contour_id")), {}).get("display", c.get("contour_id"))
-            lines.append(
-                f"  {display:16} {c.get('trust_label', '?'):11} "
-                f"{c.get('trust_score', 0):.2f}  {c.get('recommended_gate_mode', '?')}"
-            )
+        lines.append("EARNINGS — advisory, бот не блокирует")
         lines.append("")
+        for c in earn.get("contours") or []:
+            lines.extend(_contour_digest_lines(c))
+            lines.append("")
 
     ev = arbiter.get("latest_event_postmortem")
     if isinstance(ev, dict) and ev.get("symbol"):
@@ -455,15 +583,15 @@ def format_operator_digest_ru(arbiter: dict[str, Any]) -> str:
         hit = "✓" if scen.get("hit") else "✗"
         fact = reg.get("fact")
         fact_pct = f"{100.0 * float(fact):+.1f}%" if fact is not None else "—"
-        lines.append("Событие (последнее созревшее)")
+        lines.append("Последнее созревшее earnings-событие")
         lines.append(
-            f"  {sym} {ev_d}: scenario sign {hit} fact {fact_pct} · "
-            f"fusion {fusion.get('conviction')} conv"
+            f"  {sym} {ev_d}: scenario sign {hit}, fact {fact_pct}, fusion {fusion.get('conviction')}"
         )
         lines.append("")
 
     summary = arbiter.get("summary_ru") or "См. контуры выше."
     lines.append(f"Итог: {summary}")
+    lines.append("Док: docs/GAME_5M_DECISION_ARCHITECTURE.md")
     return "\n".join(lines)
 
 
