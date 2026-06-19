@@ -53,14 +53,41 @@ def _save_sent_day(path: Path, d: date) -> None:
 def format_autoprep_digest_message(summary: dict[str, Any]) -> str:
     steps = summary.get("steps") or {}
     readiness = summary.get("readiness") or {}
+    autoprep = readiness.get("earnings_autoprep") if isinstance(readiness.get("earnings_autoprep"), dict) else {}
     pending = summary.get("pending_calendar_events")
-    lines = [
-        "Earnings autoprep digest",
-        f"pending_calendar={pending}",
-        f"steps: sync={steps.get('materials_sync')} ingest={steps.get('materials_ingest')} extract={steps.get('materials_extract')}",
-        f"grid={readiness.get('overall_grid_ready')} peer={readiness.get('overall_peer_spillover_ready')}",
-        f"autoprep_ready={readiness.get('overall_earnings_autoprep_ready')}",
-    ]
+    today = datetime.now(timezone.utc).date().isoformat()
+    lines = [f"Earnings autoprep · {today}", ""]
+
+    if pending == 0:
+        lines.append("Материалы: pending=0 — transcript/PR на месте")
+    elif pending is not None:
+        lines.append(
+            f"Материалы: pending={pending} — нет rich-источника (transcript/PR) ±1д от даты KB"
+        )
+    else:
+        lines.append("Материалы: pending=—")
+
+    if readiness.get("overall_earnings_autoprep_ready"):
+        lines.append("Autoprep gate: OPEN ✅")
+    else:
+        reasons = [str(r) for r in (autoprep.get("reasons") or []) if r][:2]
+        hint = "; ".join(reasons) if reasons else "см. analyzer"
+        n_labels = autoprep.get("llm_scenario_labels")
+        n_shadow = autoprep.get("shadow_n_matured")
+        stats = ""
+        if n_labels is not None and n_shadow is not None:
+            stats = f" (labels {n_labels}/40, shadow {n_shadow}/50)"
+        lines.append(f"Autoprep gate: false — {hint}{stats}")
+
+    lines.append(
+        f"Grid={readiness.get('overall_grid_ready')} · Peer={readiness.get('overall_peer_spillover_ready')}"
+    )
+    lines.append(
+        "Cron steps: "
+        f"sync={steps.get('materials_sync')} "
+        f"ingest={steps.get('materials_ingest')} "
+        f"extract={steps.get('materials_extract')}"
+    )
     bal = summary.get("llm_balance_alert")
     if isinstance(bal, dict) and bal.get("active"):
         lines.append(f"ProxyAPI alert: {bal.get('message') or 'low balance'}")

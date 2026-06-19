@@ -254,6 +254,7 @@ def main() -> int:
             "sources_ready": (gates.get("sources") or {}).get("ready"),
             "features_ready": (gates.get("features") or {}).get("ready"),
             "scenario_labels_ready": (gates.get("scenario_labels") or {}).get("ready"),
+            "earnings_autoprep": gates.get("earnings_autoprep") or {},
         }
         steps["readiness_snapshot"] = 0
 
