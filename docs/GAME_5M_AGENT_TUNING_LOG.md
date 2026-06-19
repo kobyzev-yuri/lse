@@ -16,6 +16,18 @@
 
 ---
 
+## Сессия 2026-06-19 — entry bar v2 (shadow, без prod apply)
+
+**ML roadmap:** [GAME_5M_PREDICTOR_DATASET_PLAN.md](GAME_5M_PREDICTOR_DATASET_PLAN.md) §13–14.
+
+**Факт на prod после deploy (`1922890`, `2a38338`):**
+- Bar dataset 9625 rows, CatBoost v2 AUC(valid)=**0.5495** (порог promotion 0.55 — **не пройден**).
+- `catboost_entry_proba_good_v2` — **log_only**; v1 trade CatBoost и fusion **без изменений**.
+
+**На завтра (P0):** 1.7 trust arbiter digest; weekly retrain hook (фаза 5). **P1:** continuation ML 2.1–2.3. **Не делать:** 1.8 apply до AUC≥0.55 + ~2 нед telemetry.
+
+---
+
 ## Сессия 2026-06-10 (US RTH, ещё не открылась)
 
 **Состояние на утро MSK (pre-market probe ~10:45 UTC):**

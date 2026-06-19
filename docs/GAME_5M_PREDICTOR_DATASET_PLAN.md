@@ -233,4 +233,47 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 
 ---
 
+## 13. Handoff — сессия 2026-06-19 (prod)
+
+**Сделано сегодня (фаза 1, shadow):**
+
+| Артефакт | Статус |
+|----------|--------|
+| `game5m_triple_barrier.py` + tests | ✅ |
+| `build_game5m_entry_bar_dataset.py` | ✅ prod: 9625 rows / 8 tickers / 90d |
+| `train_game5m_catboost.py --dataset bar` | ✅ AUC(valid) **0.5495**, n_valid=1925 |
+| Analyzer `game5m_entry_bar_dataset_stats`, `game5m_entry_model_v2_status` | ✅ |
+| log_only `catboost_entry_proba_good_v2` в cron | ✅ prod v1 без изменений |
+| Commits | `1922890`, `2a38338` |
+
+**Prod paths:** `/app/logs/ml/datasets/game5m_entry_bar_dataset.csv`, `…_stats.json`, `…_v2_train.json`, `/app/logs/ml/models/game5m_entry_catboost_v2.cbm`.
+
+**Блокер promotion (1.8):** AUC valid **< 0.55** + нужны **~2 нед** telemetry в `context_json` (v2 уже пишется). До этого **не** трогаем fusion / `GAME_5M_CATBOOST_ENABLED` под bar.
+
+---
+
+## 14. План на следующую сессию (приоритет)
+
+### P0 — не ждём 0.55
+
+1. **1.7 trust arbiter** — human line в unified/LSE Trust digest: contour `catboost_entry_bar_v2`, trust **low**, AUC 0.5495, n_valid 1925, mode **shadow/log_only**.
+2. **Фаза 5 (частично)** — weekly hook: build bar dataset + retrain v2 (cron или slot в `run_ml_refresh_dispatcher`); строка в `ml_train_readiness.jsonl`.
+
+### P1 — параллельный трек (тоже без apply)
+
+3. **Фаза 2.1–2.2** — `CONTINUATION_ML_SCHEMA` + `train_game5m_continuation_catboost.py` (офлайн).
+4. **Фаза 2.3** — analyzer `game5m_continuation_model_status` (shadow).
+
+### P2 — опционально
+
+5. **0.4** oracle ceiling (`game5m_oracle_exit_ceiling`) — offline % captured vs RTH oracle.
+6. Пересмотр TB-порогов / neg_ratio только если после weekly retrain AUC снова < 0.55.
+
+### Явно не делать до sign-off
+
+- **1.8 apply** — fusion, переключение dataset version, влияние v2 на вход.
+- Отключать или подменять prod CatBoost v1 (trade-based).
+
+---
+
 *Обновлять этот файл при закрытии пунктов; крупные решения (barrier %, promotion) — строка в [GAME_5M_AGENT_TUNING_LOG.md](GAME_5M_AGENT_TUNING_LOG.md).*
