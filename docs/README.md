@@ -26,6 +26,7 @@
 | L2 gates, data-quality API | [ML_DATA_QUALITY_PIPELINE.md](ML_DATA_QUALITY_PIPELINE.md) |
 | L3 GAME_5M алгоритм | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) |
 | Датасеты, метки, метрики, complementarity, единая точка решения | [TRADE_ML_DATASETS_AND_TARGETS_RU.md](TRADE_ML_DATASETS_AND_TARGETS_RU.md) |
+| **Bar-level + triple barrier + continuation (roadmap предикторов)** | [GAME_5M_PREDICTOR_DATASET_PLAN.md](GAME_5M_PREDICTOR_DATASET_PLAN.md) |
 
 ## Портфельная игра
 
@@ -51,6 +52,7 @@
 | JSON сделки, `context_json` | [GAME_5M_DEAL_PARAMS_JSON.md](GAME_5M_DEAL_PARAMS_JSON.md) |
 | CatBoost на входе, fusion, **метрики после каждого обучения** | [ML_GAME5M_CATBOOST.md](ML_GAME5M_CATBOOST.md), [GAME_5M_CATBOOST_FUSION.md](GAME_5M_CATBOOST_FUSION.md) |
 | **Multiday ridge** (лог-доходность 1–3 торг. дня, калибровка, скрипт train) | [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md) |
+| **Roadmap датасетов** (bar-level, triple barrier, continuation ML) | [GAME_5M_PREDICTOR_DATASET_PLAN.md](GAME_5M_PREDICTOR_DATASET_PLAN.md) |
 | **Decision stack rollout** (механика snapshot/gates; концепция решения вынесена выше) | [DECISION_STACK_ROLLOUT_PLAN.md](DECISION_STACK_ROLLOUT_PLAN.md) |
 | Отчёт анализатора, LLM, снимки, автотюн | [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md) |
 | Регламент tuning + **replay proposals** (график, ledger, apply) | [GAME_5M_TUNING_REGLEMENT.md](GAME_5M_TUNING_REGLEMENT.md) |

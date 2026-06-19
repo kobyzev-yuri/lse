@@ -6,8 +6,9 @@
 
   pip install -r requirements-catboost.txt
   python scripts/train_game5m_catboost.py [--dry-run] [--min-rows 80] [--json-metrics-out metrics.json]
+  python scripts/train_game5m_catboost.py --dataset bar --bar-csv local/datasets/game5m_entry_bar_dataset.csv
 
-См. docs/ML_GAME5M_CATBOOST.md
+См. docs/ML_GAME5M_CATBOOST.md, docs/GAME_5M_PREDICTOR_DATASET_PLAN.md
 """
 from __future__ import annotations
 
@@ -100,6 +101,173 @@ def _is_incorrect_0925_open_boundary_exit(trade_pnl: Any) -> bool:
         return False
     return True
 
+
+def _write_metrics_json(path_str: str, payload: dict[str, Any]) -> None:
+    ps = (path_str or "").strip()
+    if not ps:
+        return
+    outp = Path(ps).expanduser()
+    outp.parent.mkdir(parents=True, exist_ok=True)
+    with open(outp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _train_bar_dataset(args: argparse.Namespace) -> int:
+    """Train entry CatBoost v2 from bar-level CSV (shadow path; prod v1 unchanged)."""
+    import csv
+
+    try:
+        from catboost import CatBoostClassifier, Pool
+    except ImportError:
+        logger.error("Установите catboost: pip install -r requirements-catboost.txt")
+        return 1
+
+    from config_loader import get_config_value
+    from services.game5m_entry_bar_dataset import get_bar_train_feature_schema, row_from_bar_dataset_dict
+
+    csv_path = (args.bar_csv or "").strip()
+    if not csv_path:
+        logger.error("--bar-csv required for --dataset bar")
+        return 1
+    path = Path(csv_path).expanduser()
+    if not path.is_file():
+        logger.error("bar CSV not found: %s", path)
+        return 1
+
+    out_arg = (args.out or "").strip()
+    cfg_v2 = (get_config_value("GAME_5M_CATBOOST_V2_MODEL_PATH", "") or "").strip()
+    if out_arg:
+        out_final = out_arg
+    elif cfg_v2:
+        out_final = cfg_v2
+    else:
+        out_final = (
+            "/app/logs/ml/models/game5m_entry_catboost_v2.cbm"
+            if Path("/app/logs").exists()
+            else str(project_root / "local" / "models" / "game5m_entry_catboost_v2.cbm")
+        )
+
+    min_rows = args.min_rows
+    if min_rows is None:
+        try:
+            min_rows = int((get_config_value("GAME_5M_CATBOOST_MIN_TRAIN_ROWS", "60") or "60").strip())
+        except (ValueError, TypeError):
+            min_rows = 60
+    min_rows = max(20, min_rows)
+
+    rows: list[list] = []
+    labels: list[int] = []
+    meta_rows: list[tuple] = []
+
+    with open(path, newline="", encoding="utf-8") as f:
+        for raw in csv.DictReader(f):
+            if str(raw.get("tb_label") or "") == "insufficient_data":
+                continue
+            try:
+                row = row_from_bar_dataset_dict(raw)
+            except Exception as e:
+                logger.debug("skip bar row: %s", e)
+                continue
+            if not row[0]:
+                continue
+            y = int(float(raw.get("y_entry_good") or 0))
+            rows.append(row)
+            labels.append(1 if y else 0)
+            meta_rows.append((raw.get("bar_ts_et") or "", row[0]))
+
+    n_total = len(rows)
+    pos = sum(labels)
+    logger.info("Bar dataset %s: rows=%s (y=1: %s, y=0: %s)", path, n_total, pos, n_total - pos)
+
+    if n_total < min_rows:
+        logger.warning("Строк меньше порога %s — v2 модель не пишем.", min_rows)
+        _write_metrics_json(
+            args.json_metrics_out,
+            {
+                "script": "train_game5m_catboost",
+                "dataset": "bar",
+                "status": "insufficient_rows",
+                "trained_at": datetime.now(timezone.utc).isoformat(),
+                "n_total": n_total,
+                "y_pos": pos,
+                "min_train_rows_config": min_rows,
+                "bar_csv": str(path),
+            },
+        )
+        return 2
+
+    order = sorted(range(n_total), key=lambda i: (meta_rows[i][0] is not None, meta_rows[i][0]))
+    rows = [rows[i] for i in order]
+    labels = [labels[i] for i in order]
+
+    n_valid = max(1, int(n_total * float(args.valid_ratio)))
+    n_train = n_total - n_valid
+    if n_train < 10:
+        n_train = max(10, n_total // 2)
+        n_valid = n_total - n_train
+
+    feature_names, cat_features = get_bar_train_feature_schema()
+    train_pool = Pool(rows[:n_train], label=labels[:n_train], cat_features=cat_features, feature_names=feature_names)
+    valid_pool = Pool(rows[n_train:], label=labels[n_train:], cat_features=cat_features, feature_names=feature_names)
+
+    model = CatBoostClassifier(
+        iterations=300,
+        learning_rate=0.05,
+        depth=6,
+        loss_function="Logloss",
+        eval_metric="AUC",
+        random_seed=42,
+        verbose=False,
+        early_stopping_rounds=40,
+    )
+    model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
+
+    try:
+        from sklearn.metrics import roc_auc_score
+
+        proba = model.predict_proba(rows[n_train:])[:, 1]
+        valid_y = labels[n_train:]
+        auc = roc_auc_score(valid_y, proba) if len(set(valid_y)) > 1 else float("nan")
+    except Exception:
+        auc = float("nan")
+    logger.info("Bar v2 Train=%s Valid=%s AUC(valid)≈%s", n_train, n_valid, auc if auc == auc else "n/a")
+
+    out_path = Path(out_final)
+    meta_path = out_path.with_suffix(".meta.json")
+    meta = {
+        "script": "train_game5m_catboost",
+        "dataset": "bar",
+        "status": "ok",
+        "dry_run": bool(args.dry_run),
+        "feature_names": feature_names,
+        "cat_feature_indices": cat_features,
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "n_train": n_train,
+        "n_valid": n_valid,
+        "n_total": n_total,
+        "y_pos": pos,
+        "label": "y_entry_good",
+        "min_train_rows_config": min_rows,
+        "auc_valid": round(auc, 4) if auc == auc else None,
+        "bar_csv": str(path),
+        "out_model_path": str(out_path),
+        "promotion_note": "Shadow only until AUC valid >= 0.55 and trust sign-off; prod uses dataset=trade v1",
+    }
+    _write_metrics_json(args.json_metrics_out, meta)
+
+    if args.dry_run:
+        logger.info("Dry-run: не записываем v2 %s", out_path)
+        return 0
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    model.save_model(str(out_path))
+    meta_save = {k: v for k, v in meta.items() if k not in ("script", "status", "dry_run", "out_model_path")}
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta_save, f, ensure_ascii=False, indent=2)
+    logger.info("Сохранено v2: %s и %s", out_path, meta_path)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train CatBoost on GAME_5M closed trades")
     parser.add_argument("--min-rows", type=int, default=None, help="Override GAME_5M_CATBOOST_MIN_TRAIN_ROWS")
@@ -121,18 +289,24 @@ def main() -> int:
         "--label",
         choices=("net_pnl_pos", "log_return_pos"),
         default="net_pnl_pos",
-        help="Binary label: net_pnl>0 or log_return>0",
+        help="Binary label for --dataset trade: net_pnl>0 or log_return>0",
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=("trade", "bar"),
+        default="trade",
+        help="trade=closed trades v1 (prod default); bar=entry bar CSV v2 shadow",
+    )
+    parser.add_argument(
+        "--bar-csv",
+        type=str,
+        default="",
+        help="Input CSV from build_game5m_entry_bar_dataset.py (required for --dataset bar)",
     )
     args = parser.parse_args()
 
-    def _write_metrics_json(path_str: str, payload: dict[str, Any]) -> None:
-        ps = (path_str or "").strip()
-        if not ps:
-            return
-        outp = Path(ps).expanduser()
-        outp.parent.mkdir(parents=True, exist_ok=True)
-        with open(outp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+    if args.dataset == "bar":
+        return _train_bar_dataset(args)
 
     try:
         from catboost import CatBoostClassifier, Pool
@@ -292,6 +466,7 @@ def main() -> int:
 
     meta = {
         "script": "train_game5m_catboost",
+        "dataset": "trade",
         "status": "ok",
         "dry_run": bool(args.dry_run),
         "feature_names": feature_names,

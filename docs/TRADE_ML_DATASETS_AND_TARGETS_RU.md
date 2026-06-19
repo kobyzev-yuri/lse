@@ -12,6 +12,7 @@
 | Dual-track legacy + stack, prod-статус | [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md) |
 | Канон L1–L3, cron | [ML_AND_DECISION_ARCHITECTURE.md](ML_AND_DECISION_ARCHITECTURE.md) |
 | Алгоритм GAME_5M, contributions | [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) |
+| Roadmap датасетов (bar-level, triple barrier, continuation) | [GAME_5M_PREDICTOR_DATASET_PLAN.md](GAME_5M_PREDICTOR_DATASET_PLAN.md) |
 | Earnings UI, Fusion | [earnings-event-agent-lse/EARNINGS_UI_GUIDE.md](earnings-event-agent-lse/EARNINGS_UI_GUIDE.md) |
 
 **L1 retrain:** [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md). Runtime-реестр: `services/ml_product_runtime.py`.
