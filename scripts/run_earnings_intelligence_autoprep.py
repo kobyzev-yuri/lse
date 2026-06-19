@@ -19,7 +19,7 @@ import json
 import logging
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 project_root = Path(__file__).resolve().parent.parent
@@ -124,6 +124,7 @@ def main() -> int:
             steps["materials_extract"] = 0
 
     run_materials = (not new_events_only) or pending_count != 0 or args.dry_run
+    enriched_keys: list[tuple[str, date]] = []
     if run_materials:
         sync_cmd = [
             py,
@@ -147,6 +148,26 @@ def main() -> int:
         steps["materials_sync"] = rc
         if rc != 0 and not args.dry_run:
             return rc
+
+        if not args.dry_run:
+            from datetime import datetime as dt_parse
+
+            from report_generator import get_engine
+            from services.earnings_missing_rich_enrich import enrich_missing_rich_materials
+
+            since_d = dt_parse.strptime(args.since.strip()[:10], "%Y-%m-%d").date()
+            enrich_summary = enrich_missing_rich_materials(
+                get_engine(),
+                since=since_d,
+                symbols=sym_set,
+                limit=max(1, args.sync_limit),
+                include_fool=not args.no_auto_fool,
+            )
+            steps["missing_rich_enrich"] = 0
+            logger.info("Missing-rich enrich: %s", enrich_summary)
+            enriched_keys = enrich_summary.get("enriched_keys") or []
+        else:
+            enriched_keys = []
 
         ingest_cmd = [
             py,
@@ -204,6 +225,19 @@ def main() -> int:
             )
         elif rc != 0 and not args.dry_run:
             logger.warning("materials_extract exited %s", rc)
+
+        if enriched_keys and not args.dry_run:
+            for sym, ev_d in enriched_keys:
+                reextract_cmd = [
+                    py,
+                    "scripts/extract_earnings_material_facts.py",
+                    "--symbol",
+                    sym,
+                    "--event-date",
+                    ev_d.isoformat(),
+                    "--force-reextract",
+                ]
+                steps[f"reextract_{sym}_{ev_d.isoformat()}"] = _run(reextract_cmd)
 
     readiness_summary: dict = {}
     if not args.skip_readiness and not args.dry_run:

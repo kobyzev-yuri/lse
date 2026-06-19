@@ -61,6 +61,7 @@ FOOL_SLUG_HINTS: dict[str, tuple[str, ...]] = {
     "AVGO": ("broadcom-avgo", "broadcom-inc-avgo"),
     "PLTR": ("palantir-pltr", "palantir-technologies-pltr"),
     "ANET": ("arista-networks-anet", "arista-anet"),
+    "ARM": ("arm-holdings-arm", "arm-arm"),
 }
 
 
