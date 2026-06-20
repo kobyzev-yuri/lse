@@ -63,7 +63,7 @@
 | 0.1 | **`services/game5m_triple_barrier.py`**: forward scan 5m OHLC, first-touch upper/lower/time, net of round-trip cost bps | unit tests | Согласованность с ручным разбором 3–5 synthetic paths |
 | 0.2 | Константы в `config.env.example`: `GAME_5M_TB_UPPER_PCT`, `GAME_5M_TB_LOWER_PCT`, `GAME_5M_TB_MAX_BARS`, `GAME_5M_TB_MAX_MINUTES`, `GAME_5M_TB_COST_BPS` | config | Документированы в этом файле §6 |
 | 0.3 | **`GAME_5M_ENTRY_BAR_ML_SCHEMA`** + version в `services/game5m_entry_bar_dataset.py` (или analyzer) | schema dict | Перечень в `ANALYZER_METRIC_DEFINITIONS` / ML glossary |
-| 0.4 | Offline **oracle ceiling** (опционально): `% captured` vs best RTH exit — блок analyzer `game5m_oracle_exit_ceiling` | report block | Одна цифра + by exit_signal на 30d |
+| 0.4 | Offline **oracle ceiling** (опционально): `% captured` vs best RTH exit — блок analyzer `game5m_oracle_exit_ceiling` | report block | Одна цифра + by exit_signal на 30d ✅ |
 
 ---
 
@@ -214,7 +214,7 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 - [x] 0.1 `services/game5m_triple_barrier.py`
 - [x] 0.2 config.env.example
 - [x] 0.3 ENTRY_BAR schema
-- [ ] 0.4 oracle ceiling (optional)
+- [x] 0.4 oracle ceiling — analyzer `game5m_oracle_exit_ceiling`
 
 ### Фаза 1 — entry bar v2
 - [x] 1.1 build dataset script
@@ -250,46 +250,41 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 
 ---
 
-## 13. Handoff — сессия 2026-06-19 (prod)
-
-**Сделано сегодня (фаза 1, shadow):**
+## 13. Handoff — prod (2026-06-20)
 
 | Артефакт | Статус |
 |----------|--------|
-| `game5m_triple_barrier.py` + tests | ✅ |
-| `build_game5m_entry_bar_dataset.py` | ✅ prod: 9625 rows / 8 tickers / 90d |
-| `train_game5m_catboost.py --dataset bar` | ✅ AUC(valid) **0.5495**, n_valid=1925 |
-| Analyzer `game5m_entry_bar_dataset_stats`, `game5m_entry_model_v2_status` | ✅ |
-| log_only `catboost_entry_proba_good_v2` в cron | ✅ prod v1 без изменений |
-| Commits | `1922890`, `2a38338` |
+| Entry bar v2 train | AUC(valid) **0.5495**, model `/app/logs/ml/models/game5m_entry_catboost_v2.cbm` |
+| Continuation train | AUC(valid) **≈0.735**, 154 TAKE rows, model `game5m_continuation_catboost.cbm` |
+| Continuation ML telemetry | `CONTINUATION_ML_ENABLED=true`, `GATE_MODE=log_only`; **0 TAKE с `continuation_ml` в БД** — последний TAKE 2026-06-12, ждём новых выходов |
+| SQL мониторинг | `/sql` — пресеты continuation / recovery / bar v2 (`261bd2e`) |
+| Analyzer | `continuation_ml_live_review`, `game5m_oracle_exit_ceiling` (0.4) |
+| Deploy | `261bd2e` на VM |
 
-**Prod paths:** `/app/logs/ml/datasets/game5m_entry_bar_dataset.csv`, `…_stats.json`, `…_v2_train.json`, `/app/logs/ml/models/game5m_entry_catboost_v2.cbm`.
-
-**Блокер promotion (1.8):** AUC valid **< 0.55** + нужны **~2 нед** telemetry в `context_json` (v2 уже пишется). До этого **не** трогаем fusion / `GAME_5M_CATBOOST_ENABLED` под bar.
+**Блокеры apply:** **1.8** bar v2 fusion — ~2 нед telemetry v2 + sign-off; **2.6** continuation apply — ≥8–15 TAKE с `continuation_ml` + ops sign-off.
 
 ---
 
 ## 14. План на следующую сессию (приоритет)
 
-### P0 — не ждём 0.55
+### P0 — накопление telemetry (без apply)
 
-1. ~~**1.7 trust arbiter**~~ — done: `catboost_entry_bar_v2` в LSE Trust digest + `entry_bar_v2` в ml_train_readiness.jsonl.
-2. ~~**Фаза 5 (частично)**~~ — weekly hook: `run_game5m_entry_bar_v2_ml_refresh.py` в `weekly_full` dispatcher.
+1. Ждать новые TAKE / TIME_EXIT — cron пишет `continuation_ml` / recovery D4a.
+2. Мониторинг: `/sql` → Continuation ML coverage; analyzer `continuation_ml_live_review`.
 
-### P1 — параллельный трек (тоже без apply)
+### P1 — promotion review (когда n≥8–15)
 
-3. **Фаза 2.1–2.2** — `CONTINUATION_ML_SCHEMA` + `train_game5m_continuation_catboost.py` (офлайн).
-4. **Фаза 2.3** — analyzer `game5m_continuation_model_status` (shadow).
+3. **2.6 apply** — `GAME_5M_CONTINUATION_ML_GATE_MODE=apply` после sign-off.
+4. **1.8 apply** — bar v2 fusion после telemetry + AUC ≥0.545 (уже на train).
 
-### P2 — опционально
+### P2 — отложено
 
-5. **0.4** oracle ceiling (`game5m_oracle_exit_ceiling`) — offline % captured vs RTH oracle.
-6. Пересмотр TB-порогов / neg_ratio только если после weekly retrain AUC снова < 0.55.
+5. **3.2** D4b recovery apply — после D4a + continuation telemetry.
+6. **Ф4** multiday enrich — отдельный план, deferred.
 
 ### Явно не делать до sign-off
 
-- **1.8 apply** — fusion, переключение dataset version, влияние v2 на вход.
-- Отключать или подменять prod CatBoost v1 (trade-based).
+- Подмена prod CatBoost v1 (trade-based) или отключение rules_5m.
 
 ---
 

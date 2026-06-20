@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
@@ -216,6 +217,10 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
     "game5m_entry_model_v2_status": (
         "CatBoost entry bar v2 (shadow): путь GAME_5M_CATBOOST_V2_MODEL_PATH, meta/train metrics, AUC vs порог promotion (default 0.545). "
         "Не влияет на prod v1; log_only telemetry — catboost_entry_proba_good_v2."
+    ),
+    "game5m_oracle_exit_ceiling": (
+        "Offline ceiling: доля захваченного upside vs лучший RTH high между entry и exit (5m OHLC, 09:30–16:00 ET). "
+        "pct_captured = 100 × realized_pct / oracle_rth_mfe_pct; агрегаты mean/median и разбивка по exit_signal."
     ),
     "game5m_continuation_model_status": (
         "CatBoost continuation (shadow): TAKE exits → label_missed_upside; путь GAME_5M_CONTINUATION_CATBOOST_MODEL_PATH, "
@@ -3514,6 +3519,115 @@ def _build_continuation_ml_live_review(effects: List[TradeEffect], *, limit: int
     }
 
 
+def _filter_rth_bars_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Bars inside NYSE regular session (09:30–16:00 ET, Mon–Fri)."""
+    if df is None or df.empty or "datetime" not in df.columns:
+        return df
+    try:
+        dt = pd.to_datetime(df["datetime"], errors="coerce")
+        mins = dt.dt.hour * 60 + dt.dt.minute
+        mask = (dt.dt.weekday < 5) & (mins >= 570) & (mins <= 960)
+        out = df.loc[mask]
+        return out if not out.empty else df.iloc[0:0]
+    except Exception:
+        return df.iloc[0:0]
+
+
+def _oracle_rth_mfe_pct_from_ohlc(
+    df: Optional[pd.DataFrame],
+    entry_ts: pd.Timestamp,
+    exit_ts: pd.Timestamp,
+    entry_price: float,
+) -> Optional[float]:
+    if df is None or df.empty or entry_price <= 0 or exit_ts <= entry_ts:
+        return None
+    window = _slice_window(df, entry_ts, exit_ts)
+    if window is None or window.empty:
+        return None
+    rth = _filter_rth_bars_df(window)
+    if rth is None or rth.empty:
+        return None
+    try:
+        mfe = float(rth["High"].max())
+        if mfe <= 0:
+            return None
+        return (mfe / entry_price - 1.0) * 100.0
+    except Exception:
+        return None
+
+
+def _build_game5m_oracle_exit_ceiling(
+    effects: List[TradeEffect],
+    ohlc_cache: Dict[str, Optional[pd.DataFrame]],
+    *,
+    strategy: str,
+) -> Dict[str, Any]:
+    su = (strategy or "").strip().upper()
+    if su == "PORTFOLIO":
+        return {"mode": "skipped", "note": "Oracle ceiling — контур GAME_5M."}
+    if su not in ("GAME_5M", "ALL"):
+        return {"mode": "skipped", "note": "Oracle ceiling только для GAME_5M или ALL."}
+
+    rows: List[Dict[str, Any]] = []
+    captured: List[float] = []
+    for e in effects:
+        if su == "GAME_5M" and str(e.exit_strategy or "").upper() != "GAME_5M":
+            continue
+        oracle = _oracle_rth_mfe_pct_from_ohlc(
+            ohlc_cache.get(e.ticker), e.entry_ts, e.exit_ts, float(e.entry_price)
+        )
+        if oracle is None or oracle <= 0.05:
+            continue
+        cap = min(100.0, max(0.0, (float(e.realized_pct) / oracle) * 100.0))
+        captured.append(cap)
+        rows.append(
+            {
+                "trade_id": e.trade_id,
+                "ticker": e.ticker,
+                "exit_signal": e.exit_signal,
+                "realized_pct": round(float(e.realized_pct), 3),
+                "oracle_rth_mfe_pct": round(float(oracle), 3),
+                "pct_captured_of_oracle": round(cap, 1),
+                "missed_upside_pct": round(float(e.missed_upside_pct or 0.0), 3),
+            }
+        )
+
+    if not rows:
+        return {
+            "mode": "insufficient_data",
+            "note": "Нет закрытых GAME_5M сделок с положительным RTH oracle MFE в окне (нужен 5m OHLC).",
+            "trades_with_oracle": 0,
+        }
+
+    by_sig: Dict[str, List[float]] = defaultdict(list)
+    for r in rows:
+        by_sig[str(r.get("exit_signal") or "unknown")].append(float(r["pct_captured_of_oracle"]))
+
+    return {
+        "mode": "ok",
+        "trades_with_oracle": len(rows),
+        "pct_captured_mean": round(float(np.mean(captured)), 1),
+        "pct_captured_median": round(float(np.median(captured)), 1),
+        "oracle_rth_mfe_pct_mean": round(
+            float(np.mean([float(r["oracle_rth_mfe_pct"]) for r in rows])), 2
+        ),
+        "realized_pct_mean": round(float(np.mean([float(r["realized_pct"]) for r in rows])), 2),
+        "by_exit_signal": {
+            sig: {
+                "n": len(vals),
+                "pct_captured_mean": round(float(np.mean(vals)), 1),
+                "pct_captured_median": round(float(np.median(vals)), 1),
+            }
+            for sig, vals in sorted(by_sig.items())
+        },
+        "sample_low_capture": sorted(rows, key=lambda r: float(r["pct_captured_of_oracle"]))[:8],
+        "note": (
+            "Offline ceiling: oracle = max RTH High (09:30–16:00 ET) от entry до exit; "
+            "не цель для prod, а верхняя граница для интерпретации missed_upside."
+        ),
+    }
+
+
 def _effects_for_hanger_tune_json(strategy: str, effects: List[TradeEffect]) -> List[TradeEffect]:
     su = (strategy or "").strip().upper()
     if su == "ALL":
@@ -6806,10 +6920,12 @@ def analyze_trade_effectiveness(
         hanger_v2_review = _build_hanger_v2_review(effects)
         game5m_recovery_model_status = _build_game5m_recovery_model_status()
         game5m_continuation_model_status = _build_game5m_continuation_model_status()
+        game5m_oracle_exit_ceiling = _build_game5m_oracle_exit_ceiling(effects, cache, strategy=strategy)
     else:
         hanger_v2_review = _section_skip("game5m_extra")
         game5m_recovery_model_status = _section_skip("game5m_extra")
         game5m_continuation_model_status = _section_skip("game5m_extra")
+        game5m_oracle_exit_ceiling = _section_skip("game5m_extra")
     continuation_gate_review = (
         _build_continuation_gate_review(effects)
         if _section_want(secs, "exits") and want_g5m
@@ -6878,6 +6994,7 @@ def analyze_trade_effectiveness(
         ),
         "game5m_recovery_model_status": game5m_recovery_model_status,
         "game5m_continuation_model_status": game5m_continuation_model_status,
+        "game5m_oracle_exit_ceiling": game5m_oracle_exit_ceiling,
         "recovery_scenario_backtest": recovery_scenario,
         "continuation_take_delay_backtest": continuation_take_delay,
         "time_exit_early_review": te_review,
@@ -7071,6 +7188,7 @@ def analyze_trade_effectiveness_focused(
         "game5m_entry_model_v2_status": _build_game5m_entry_model_v2_status(),
         "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
         "game5m_continuation_model_status": _build_game5m_continuation_model_status(),
+        "game5m_oracle_exit_ceiling": _build_game5m_oracle_exit_ceiling(effects, cache, strategy=strategy),
         "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
         "continuation_take_delay_backtest": _build_continuation_take_delay_backtest(effects, cache, strategy=strategy),
         "time_exit_early_review": te_review_f,
