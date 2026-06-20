@@ -165,6 +165,53 @@ def forward_excursion_pct(
     return _pct_move(anchor_f, high_max), _pct_move(anchor_f, low_min)
 
 
+def forward_mfe_mae_pct_window(
+    bars: pd.DataFrame,
+    *,
+    ref_close: float,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+) -> tuple[float | None, float | None]:
+    """MFE/MAE % from ref_close over (start_ts, end_ts] — shared with recovery JSONL labels."""
+    if ref_close <= 0:
+        return None, None
+    df = _normalize_bars(bars)
+    if df.empty:
+        return None, None
+    try:
+        st = pd.Timestamp(start_ts)
+        et = pd.Timestamp(end_ts)
+        if st.tzinfo is None:
+            st = st.tz_localize("America/New_York", ambiguous=True)
+        else:
+            st = st.tz_convert("America/New_York")
+        if et.tzinfo is None:
+            et = et.tz_localize("America/New_York", ambiguous=True)
+        else:
+            et = et.tz_convert("America/New_York")
+        fwd = df.loc[(df["datetime"] > st) & (df["datetime"] <= et)]
+        if fwd is None or fwd.empty:
+            return None, None
+        hi = float(pd.to_numeric(fwd["High"], errors="coerce").max())
+        lo = float(pd.to_numeric(fwd["Low"], errors="coerce").min())
+        return _pct_move(ref_close, hi), _pct_move(ref_close, lo)
+    except Exception:
+        return None, None
+
+
+def recovery_y_label(
+    mfe_pct: float | None,
+    mae_pct: float | None,
+    *,
+    eps_up_pct: float,
+    max_adverse_pct: float,
+) -> int | None:
+    """Binary recovery label (same rule as RECOVERY_ML_SCHEMA export)."""
+    if mfe_pct is None or mae_pct is None:
+        return None
+    return 1 if (mfe_pct >= eps_up_pct and mae_pct >= max_adverse_pct) else 0
+
+
 def triple_barrier_forward(
     bars: pd.DataFrame,
     start_idx: int,

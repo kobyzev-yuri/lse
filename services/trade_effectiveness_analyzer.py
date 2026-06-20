@@ -2794,26 +2794,21 @@ def _build_game5m_hold_recovery_dataset_stats(
 
             labels_done: Dict[int, Tuple[float, float, int]] = {}
             ok_all_h = True
+            from services.game5m_triple_barrier import forward_mfe_mae_pct_window, recovery_y_label
+
             for H in horizons:
                 end_t = bar_time + pd.Timedelta(minutes=int(H))
-                try:
-                    fwd = df.loc[(df["datetime"] > bar_time) & (df["datetime"] <= end_t)]
-                except Exception:
+                mfe_pct, mae_pct = forward_mfe_mae_pct_window(
+                    df,
+                    ref_close=ref_close,
+                    start_ts=bar_time,
+                    end_ts=end_t,
+                )
+                y_rec = recovery_y_label(mfe_pct, mae_pct, eps_up_pct=eps_up, max_adverse_pct=max_adv)
+                if y_rec is None:
                     ok_all_h = False
                     break
-                if fwd is None or fwd.empty:
-                    ok_all_h = False
-                    break
-                try:
-                    hi = float(fwd["High"].max())
-                    lo = float(fwd["Low"].min())
-                except Exception:
-                    ok_all_h = False
-                    break
-                mfe_pct = (hi / ref_close - 1.0) * 100.0
-                mae_pct = (lo / ref_close - 1.0) * 100.0
-                y_rec = 1 if (mfe_pct >= eps_up and mae_pct >= max_adv) else 0
-                labels_done[int(H)] = (mfe_pct, mae_pct, y_rec)
+                labels_done[int(H)] = (float(mfe_pct), float(mae_pct), int(y_rec))
 
             if not ok_all_h or len(labels_done) != len(horizons):
                 continue

@@ -103,9 +103,13 @@ def predict_continuation_missed_upside_proba(
         return {"status": "no_catboost", "reason": "catboost not installed"}
 
     try:
+        from catboost import CatBoostClassifier, Pool
+
         model = CatBoostClassifier()
         model.load_model(str(mp))
-        proba = float(model.predict_proba(list(row))[0][1])
+        names, cats = continuation_catboost_schema()
+        pool = Pool([list(row)], cat_features=cats, feature_names=names)
+        proba = float(model.predict_proba(pool)[0, 1])
         if not math.isfinite(proba):
             return {"status": "bad_proba", "reason": "non-finite prediction"}
         return {

@@ -7,6 +7,8 @@ from services.game5m_triple_barrier import (
     ENTRY_BAR_ML_SCHEMA,
     TripleBarrierConfig,
     forward_excursion_pct,
+    forward_mfe_mae_pct_window,
+    recovery_y_label,
     triple_barrier_forward,
 )
 
@@ -79,6 +81,22 @@ def test_forward_excursion_pct():
     mfe, mae = forward_excursion_pct(df, 0, max_bars=2)
     assert mfe is not None and mfe > 0.9
     assert mae is not None and mae < 0
+
+
+def test_forward_mfe_mae_pct_window_matches_slice():
+    df = _bars(
+        [
+            {"datetime": "2026-06-01 10:00:00", "Open": 100, "High": 100.2, "Low": 99.8, "Close": 100},
+            {"datetime": "2026-06-01 10:05:00", "Open": 100, "High": 101, "Low": 99, "Close": 100.5},
+            {"datetime": "2026-06-01 10:10:00", "Open": 100.5, "High": 102, "Low": 100, "Close": 101},
+        ]
+    )
+    start = pd.Timestamp("2026-06-01 10:00:00", tz="America/New_York")
+    end = pd.Timestamp("2026-06-01 10:10:00", tz="America/New_York")
+    mfe, mae = forward_mfe_mae_pct_window(df, ref_close=100.0, start_ts=start, end_ts=end)
+    assert mfe is not None and mfe >= 1.9
+    assert mae is not None and mae <= -1.0
+    assert recovery_y_label(mfe, mae, eps_up_pct=0.5, max_adverse_pct=-3.0) == 1
 
 
 def test_entry_bar_schema_version():

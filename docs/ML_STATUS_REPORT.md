@@ -78,6 +78,8 @@ docker exec lse-bot python scripts/print_ml_product_status.py --json
 | **portfolio** | ✅ | ✅ ready | **promoted** | ✅ `PORTFOLIO_CATBOOST_ENABLED=true` | shadow | RMSE≈0.079 |
 | **multiday_lr** | ✅ | **ready** (WF 2026-06-09) | **legacy_apply** | ✅ entry `apply`, hold `log_only` | shadow | v3nm 1d sign 56%, RMSE 0.047 |
 | **game5m_entry** | ✅ | ❌ n_valid | **disabled** | ❌ `CATBOOST_ENABLED=false` | shadow | AUC≈**0.583**, n_valid=**49** (<80) |
+| **entry_bar_v2** | ✅ weekly | ✅ AUC≥0.545 | **shadow** | ❌ log_only `catboost_entry_proba_good_v2` | shadow | AUC≈**0.5495**, n_valid=1925 |
+| **continuation_ml** | ✅ weekly | ✅ AUC≥0.55 | **telemetry** | ❌ `CONTINUATION_ML_ENABLED=true` log_only | shadow | AUC≈**0.735**, 154 TAKE rows |
 | **recovery** | ✅ | D4a | **telemetry** | телеметрия only (D4a) | shadow | AUC≈0.51; D4b defer |
 | **gap_forecast** | ✅ | caution | **advisory** | **PM baseline** (policy auto); ML shadow | shadow | 14d PM MAE **0.99** vs ML **1.81** pp |
 | **event_reaction** | ✅ | ❌ RMSE | **advisory** | ✅ advisory (`ENABLED=true`) | shadow | RMSE≈0.13 |
@@ -97,6 +99,8 @@ docker exec lse-bot python scripts/print_ml_product_status.py --json
 | `peer_spillover_forward5d_catboost.cbm` | ✅ | advisory | Brief context |
 | `open_path_scenario_catboost.cbm` | ✅ | shadow | Не в hot path |
 | `game5m_entry_catboost.cbm` | ✅ | **off** | Gate не пройден |
+| `game5m_entry_catboost_v2.cbm` | ✅ | log_only | Bar TB shadow |
+| `game5m_continuation_catboost.cbm` | ✅ | log_only | TAKE telemetry (2026-06-20) |
 
 ---
 

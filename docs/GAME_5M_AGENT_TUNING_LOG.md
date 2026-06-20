@@ -16,6 +16,19 @@
 
 ---
 
+## Сессия 2026-06-20 — continuation ML telemetry ON (prod)
+
+**Включено на VM (`config.env`):**
+- `GAME_5M_CONTINUATION_ML_ENABLED=true`
+- `GAME_5M_CONTINUATION_ML_LOG_ONLY=true`
+- `GAME_5M_CONTINUATION_ML_GATE_MODE=log_only`
+
+**Fix после первого probe:** CatBoost predict через `Pool` + cat_features (был `invalid index to scalar variable`).
+
+**Ожидание:** в SELL `TAKE_PROFIT*` → `exit_context_json.continuation_ml` с `continuation_proba`, `would_defer_take`, `log_only=true`. Apply **не** включаем.
+
+---
+
 ## Сессия 2026-06-19 — entry bar v2 (shadow, без prod apply)
 
 **ML roadmap:** [GAME_5M_PREDICTOR_DATASET_PLAN.md](GAME_5M_PREDICTOR_DATASET_PLAN.md) §13–14.

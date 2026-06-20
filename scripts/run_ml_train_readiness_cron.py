@@ -400,6 +400,13 @@ def main() -> int:
             "metrics": bar_v2_data,
             "shadow_only": True,
         },
+        "continuation_ml": {
+            "invocation": {"source": "run_game5m_continuation_ml_refresh.py"},
+            "metrics_path": str(cont_path),
+            "gate": cont_gate,
+            "metrics": cont_data,
+            "shadow_only": True,
+        },
         "continuation": {
             "invocation": {"source": "run_game5m_continuation_ml_refresh.py"},
             "metrics_path": str(cont_path),

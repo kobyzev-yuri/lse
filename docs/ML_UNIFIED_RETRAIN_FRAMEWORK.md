@@ -239,7 +239,7 @@ ssh ai8049520@104.154.205.58 "docker exec lse-bot curl -sS 'http://127.0.0.1:808
 | `recovery` | ❌ D4 stats | ✅ TIME_EXIT Δ | ✅ poll + weekly_full | log-only (D4b pending) |
 | `gap_forecast` | ⚠️ analyzer arbiter | ✅ DB complete rows | ✅ poll + nightly `--full` | caution / baseline |
 
-**Дефолты `ML_*_RETRAIN_MIN_NEW_UNITS`:** open_path 5 · earnings_grid 3 · game5m_entry 8 · portfolio 5 · event_reaction 10.
+**Дефолты `ML_*_RETRAIN_MIN_NEW_UNITS`:** open_path 5 · earnings_grid 3 · game5m_entry 8 · **game5m_entry_bar_v2 500** · **game5m_continuation 10** · portfolio 5 · event_reaction 10.
 
 ---
 

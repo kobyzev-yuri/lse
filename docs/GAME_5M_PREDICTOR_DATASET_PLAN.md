@@ -174,9 +174,11 @@ GAME_5M_ENTRY_BAR_MIN_ROWS=5000   # builder warning threshold
 |----------|--------|----------------|
 | Bar с BUY до входа | **entry bar + TB** | Стоит ли входить сейчас? |
 | Удержание, near flat, TIME_EXIT? | **recovery_ml** | Будет отскок в H? |
-| TAKE сработал, momentum сильный | **continuation_ml** | Продали рано? |
+| TAKE сработал, momentum сильный | **continuation_ml** | Продали рано? (defer TAKE if P>τ; **не** если multiday hold apply+bullish) |
 | Overnight / multiday | **multiday_lr** | Знак 1–3d forward |
 | Open gap | **premarket_gap_baseline** (observable) | Не gap_forecast ML до beat PM |
+
+**3.3 — когда continuation vs recovery:** `recovery_ml` — удержание near flat, выход `TIME_EXIT_EARLY` («будет отскок?»). `continuation_ml` — уже сработал `TAKE_PROFIT` («зря закрыли, дальше росло?»). Не смешивать пороги τ и не defer оба одновременно на одной сделке.
 
 ---
 
@@ -213,23 +215,26 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 - [ ] 1.8 apply sign-off
 
 ### Фаза 2 — continuation
-- [ ] 2.1 schema
-- [ ] 2.2 train script
-- [ ] 2.3 analyzer backtest
-- [ ] 2.4 telemetry
-- [ ] 2.5 multiday interaction
-- [ ] 2.6 apply gate
+- [x] 2.1 schema
+- [x] 2.2 train script
+- [x] 2.3 analyzer backtest
+- [x] 2.4 telemetry (+ prod `CONTINUATION_ML_ENABLED=true` 2026-06-20)
+- [x] 2.5 multiday interaction
+- [x] 2.6 apply gate (infra; apply после sign-off)
 
 ### Фаза 3 — recovery unify
-- [ ] 3.1 refactor labels
-- [ ] 3.2 D4b decision
-- [ ] 3.3 doc split continuation vs recovery
+- [x] 3.1 refactor labels (`forward_mfe_mae_pct_window` + export)
+- [ ] 3.2 D4b decision (defer: ждём D4a + continuation telemetry)
+- [x] 3.3 doc split continuation vs recovery (§10)
 
 ### Фаза 4 — multiday enrich
-- [ ] см. GAME_5M_MULTIDAY_LR_FEATURE_ENRICHMENT_PLAN.md
+- [ ] см. GAME_5M_MULTIDAY_LR_FEATURE_ENRICHMENT_PLAN.md — **deferred**, не блокирует 1–2
 
 ### Фаза 5 — ops
-- [ ] readiness jsonl + ML_STATUS_REPORT + retrain hooks
+- [x] readiness jsonl (`entry_bar_v2`, `continuation_ml`)
+- [x] trust digest lines (bar v2 + continuation_ml)
+- [x] ML_STATUS_REPORT таблица (2026-06-20)
+- [x] retrain hooks (dispatcher weekly_full)
 
 ---
 
