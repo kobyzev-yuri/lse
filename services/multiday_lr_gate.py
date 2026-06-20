@@ -303,6 +303,27 @@ def should_skip_early_exit_for_bullish_multiday(
     return skip, gate
 
 
+def should_block_continuation_take_defer(
+    d5: Optional[Dict[str, Any]],
+    *,
+    pnl_current_pct: Optional[float] = None,
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Phase 2.5: при multiday hold apply + бычьих горizontах continuation не откладывает TAKE.
+    """
+    mode = _env_mode("GAME_5M_MULTIDAY_HOLD_GATE_MODE", "none")
+    bullish, meta = bullish_multiday_horizons_met(d5)
+    meta["hold_gate_mode"] = mode
+    meta["bullish_multiday"] = bullish
+    if pnl_current_pct is not None:
+        meta["pnl_current_pct"] = round(float(pnl_current_pct), 4)
+    if mode == "apply" and bullish:
+        meta["note"] = "multiday hold apply + bullish — continuation take defer blocked"
+        return True, meta
+    meta["note"] = "continuation defer not blocked by multiday"
+    return False, meta
+
+
 def finalize_technical_decision_with_multiday(out: Dict[str, Any]) -> None:
     """
     После CatBoost fusion: запись телеметрии и опционально HOLD по multiday (mode=apply).

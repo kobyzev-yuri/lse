@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""GAME_5M continuation ML refresh: TAKE dataset → train shadow CatBoost."""
+from __future__ import annotations
+
+import argparse
+import logging
+import subprocess
+import sys
+from pathlib import Path
+
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+
+def _run(cmd: list[str], *, cwd: Path) -> int:
+    logger.info("run: %s", " ".join(cmd))
+    return subprocess.call(cmd, cwd=str(cwd))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="GAME_5M continuation ML refresh (shadow)")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--full", action="store_true")
+    ap.add_argument("--skip-datasets", action="store_true")
+    ap.add_argument("--skip-train", action="store_true")
+    args = ap.parse_args()
+
+    from services.ml_contour_runner import finalize_contour_refresh, plan_contour_refresh
+    from report_generator import get_engine
+
+    contour_id = "game5m_continuation"
+    trigger, _gates, deltas = plan_contour_refresh(
+        contour_id,
+        project_root,
+        get_engine(),
+        force_full=args.full,
+    )
+    if not trigger.should_apply_data and not trigger.should_train and not args.dry_run:
+        logger.info("continuation refresh skipped: %s %s", trigger.reasons, deltas)
+        finalize_contour_refresh(
+            project_root,
+            contour_id,
+            trigger,
+            apply_ran=False,
+            train_ran=False,
+            full=False,
+            skipped=True,
+        )
+        return 0
+
+    from config_loader import get_config_value
+
+    mode = (get_config_value("ML_READINESS_TRAIN_MODE") or "dry_run").strip().lower()
+    full_train = args.full or mode in ("full", "train", "write", "prod")
+    apply_data = trigger.should_apply_data or full_train
+    do_train = (trigger.should_train or full_train) and not args.skip_train
+    train_dry_run = args.dry_run or not do_train or (not full_train and mode == "dry_run")
+    data_dry_run = args.dry_run or not apply_data
+
+    py = sys.executable
+    base_out = Path("/app/logs/ml") if Path("/app/logs").exists() else project_root / "local" / "logs" / "ml"
+    datasets_dir = base_out / "datasets"
+    models_dir = base_out / "models"
+    q_dir = base_out / "ml_data_quality"
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    q_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_out = datasets_dir / "game5m_continuation_dataset.csv"
+    metrics_path = q_dir / "last_game5m_continuation_train_metrics.json"
+    cb_out = models_dir / "game5m_continuation_catboost.cbm"
+
+    datasets_ran = False
+    if apply_data and not args.skip_datasets and not data_dry_run:
+        rc_build = _run(
+            [py, str(project_root / "scripts/build_game5m_continuation_dataset.py"), "--out", str(csv_out)],
+            cwd=project_root,
+        )
+        datasets_ran = rc_build == 0 and csv_out.is_file()
+
+    train_rc = 0
+    if do_train and csv_out.is_file():
+        train_cmd = [
+            py,
+            str(project_root / "scripts/train_game5m_continuation_catboost.py"),
+            "--csv",
+            str(csv_out),
+            "--out",
+            str(cb_out),
+            "--json-metrics-out",
+            str(metrics_path),
+        ]
+        if train_dry_run:
+            train_cmd.append("--dry-run")
+        train_rc = _run(train_cmd, cwd=project_root)
+    elif do_train and not csv_out.is_file():
+        logger.warning("skip train: dataset CSV missing at %s", csv_out)
+        train_rc = 2
+
+    if not train_dry_run and metrics_path.is_file():
+        try:
+            from services.unified_trust_arbiter import write_unified_trust_arbiter
+
+            write_unified_trust_arbiter(project_root=project_root, report=None)
+        except Exception as e:
+            logger.warning("trust arbiter refresh after continuation train: %s", e)
+
+    finalize_contour_refresh(
+        project_root,
+        contour_id,
+        trigger,
+        apply_ran=apply_data and not data_dry_run and datasets_ran,
+        train_ran=do_train and not train_dry_run and train_rc == 0,
+        full=full_train,
+        extra={
+            "train_rc": train_rc,
+            "datasets_ran": datasets_ran,
+            "dataset_csv": str(csv_out),
+            "metrics_path": str(metrics_path),
+        },
+    )
+    return 0 if train_rc in (0, 2) else train_rc
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

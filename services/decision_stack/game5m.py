@@ -703,6 +703,7 @@ def build_game5m_decision_snapshot(
             "catboost": gate_mode("DECISION_STACK_CATBOOST_GATE_MODE", "apply"),
             "multiday": gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply"),
             "earnings_trust": gate_mode("DECISION_STACK_EARNINGS_TRUST_GATE_MODE", "log_only"),
+            "continuation_ml": gate_mode("DECISION_STACK_CONTINUATION_ML_GATE_MODE", "log_only"),
         },
         "llm_eligible": [
             "news_fusion",

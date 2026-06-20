@@ -32,6 +32,7 @@ ACTIVE_REFRESH_CONTOURS: tuple[str, ...] = (
     "earnings_grid",
     "game5m_entry",
     "game5m_entry_bar_v2",
+    "game5m_continuation",
     "portfolio",
     "event_reaction_regression",
     "multiday_lr",
@@ -50,7 +51,7 @@ NIGHTLY_SEQUENCE: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 WEEKLY_FULL_CONTOURS: frozenset[str] = frozenset(
-    {"open_path", "game5m_entry", "game5m_entry_bar_v2", "multiday_lr", "recovery", "gap_forecast"}
+    {"open_path", "game5m_entry", "game5m_entry_bar_v2", "game5m_continuation", "multiday_lr", "recovery", "gap_forecast"}
 )
 
 _FLOCK_BIN: str | None = shutil.which("flock")

@@ -509,7 +509,8 @@ def process_ticker(
     entry_hanger_diag_checked = False
     entry_live_hanger_kind = None
     position_state_v2 = None
-    continuation_gate = None
+                continuation_gate = None
+                continuation_ml = None
 
     try:
         # GAME_5M и Portfolio независимы: 5m cron управляет только своими лотами.
@@ -681,6 +682,42 @@ def process_ticker(
                         rsi_5m=rsi_5m,
                         volume_vs_avg_pct=d5.get("volume_vs_avg_pct"),
                     )
+                    continuation_ml = None
+                    try:
+                        from services.game5m_continuation_live import evaluate_continuation_ml_at_take
+
+                        hold_minutes = 0.0
+                        try:
+                            import pandas as pd
+
+                            entry_ts_raw = open_pos.get("entry_ts")
+                            if entry_ts_raw is not None:
+                                hold_minutes = float(
+                                    (pd.Timestamp.now(tz="UTC") - pd.Timestamp(entry_ts_raw).tz_convert("UTC"))
+                                    / pd.Timedelta(minutes=1)
+                                )
+                        except Exception:
+                            hold_minutes = 0.0
+                        continuation_ml = evaluate_continuation_ml_at_take(
+                            ticker=ticker,
+                            exit_signal=exit_type,
+                            entry_price=float(entry_f) if entry_f else 0.0,
+                            exit_price=float(exit_price),
+                            hold_minutes=hold_minutes,
+                            d5=d5,
+                            entry_ctx=entry_ctx_db if isinstance(entry_ctx_db, dict) else None,
+                        )
+                        if isinstance(continuation_ml, dict) and continuation_ml.get("status") == "ok":
+                            logger.info(
+                                "[5m] CONTINUATION_ML %s: P=%s would_defer=%s log_only=%s multiday_block=%s",
+                                ticker,
+                                continuation_ml.get("continuation_proba"),
+                                continuation_ml.get("would_defer_take"),
+                                continuation_ml.get("log_only"),
+                                continuation_ml.get("multiday_block"),
+                            )
+                    except Exception as e_cont_ml:
+                        logger.debug("continuation_ml %s: %s", ticker, e_cont_ml)
                     if continuation_gate.get("enabled"):
                         logger.info(
                             "[5m] CONTINUATION_GATE %s: decision=%s would_extend=%s log_only=%s pnl=%s mom=%s rsi=%s",
@@ -708,6 +745,20 @@ def process_ticker(
                         )
                         outcome_lines.append("тейк отложен continuation_gate")
                         return False
+                    try:
+                        from services.game5m_continuation_live import continuation_ml_should_defer_take
+
+                        if continuation_ml_should_defer_take(continuation_ml):
+                            logger.info(
+                                "[5m] CONTINUATION_ML %s: TAKE отложен — P=%s > tau=%s",
+                                ticker,
+                                (continuation_ml or {}).get("continuation_proba"),
+                                (continuation_ml or {}).get("tau"),
+                            )
+                            outcome_lines.append("тейк отложен continuation_ml")
+                            return False
+                    except Exception as e_cont_ml_defer:
+                        logger.debug("continuation_ml defer %s: %s", ticker, e_cont_ml_defer)
                 logger.info(
                     "[5m] %s закрытие: тип=%s, exit_bar_close=%s exit_bar_close_ts=%s exit_bar_et=[%s..%s), "
                     "price_5m=%.2f, bar_high=%s bar_high_recent_max=%s bar_high_session_lifted=%s, "
@@ -748,6 +799,8 @@ def process_ticker(
                     close_ctx_enriched["position_state_v2"] = position_state_v2
                 if continuation_gate is not None:
                     close_ctx_enriched["continuation_gate"] = continuation_gate
+                if continuation_ml is not None:
+                    close_ctx_enriched["continuation_ml"] = continuation_ml
                 try:
                     from services.multiday_lr_gate import build_multiday_trade_context_snapshot
                     from services.game5m_overnight_policy import build_eod_gate_snapshot
@@ -1464,6 +1517,7 @@ def main():
                             else 0.0
                         )
                         continuation_gate_ah = None
+                        continuation_ml_ah = None
                         if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND"):
                             entry_price_ah = open_pos.get("entry_price")
                             try:
@@ -1477,6 +1531,32 @@ def main():
                                 rsi_5m=close_ctx_ah.get("rsi_5m"),
                                 volume_vs_avg_pct=d5.get("volume_vs_avg_pct"),
                             )
+                            try:
+                                from services.game5m_continuation_live import evaluate_continuation_ml_at_take
+
+                                hold_min_ah = 0.0
+                                try:
+                                    import pandas as pd
+
+                                    entry_ts_ah = open_pos.get("entry_ts")
+                                    if entry_ts_ah is not None:
+                                        hold_min_ah = float(
+                                            (pd.Timestamp.now(tz="UTC") - pd.Timestamp(entry_ts_ah).tz_convert("UTC"))
+                                            / pd.Timedelta(minutes=1)
+                                        )
+                                except Exception:
+                                    hold_min_ah = 0.0
+                                continuation_ml_ah = evaluate_continuation_ml_at_take(
+                                    ticker=ticker,
+                                    exit_signal=exit_type,
+                                    entry_price=float(entry_price_ah) if entry_price_ah else 0.0,
+                                    exit_price=float(exit_price),
+                                    hold_minutes=hold_min_ah,
+                                    d5=d5,
+                                    entry_ctx=entry_ctx_ah if isinstance(entry_ctx_ah, dict) else None,
+                                )
+                            except Exception as e_cont_ml_ah:
+                                logger.debug("[5m][AH] continuation_ml %s: %s", ticker, e_cont_ml_ah)
                             pnl_high_ah = (
                                 ((bar_high / float(entry_price_ah)) - 1.0) * 100.0
                                 if entry_price_ah and bar_high and float(entry_price_ah) > 0 and float(bar_high) > 0
@@ -1497,6 +1577,19 @@ def main():
                                     (continuation_gate_ah.get("params") or {}).get("trail_pullback_pct"),
                                 )
                                 continue
+                            try:
+                                from services.game5m_continuation_live import continuation_ml_should_defer_take
+
+                                if continuation_ml_should_defer_take(continuation_ml_ah):
+                                    logger.info(
+                                        "[5m][AH] CONTINUATION_ML %s: TAKE отложен — P=%s > tau=%s",
+                                        ticker,
+                                        (continuation_ml_ah or {}).get("continuation_proba"),
+                                        (continuation_ml_ah or {}).get("tau"),
+                                    )
+                                    continue
+                            except Exception as e_cont_ml_defer_ah:
+                                logger.debug("[5m][AH] continuation_ml defer %s: %s", ticker, e_cont_ml_defer_ah)
                         close_ctx_ah_merged = merge_close_context_with_trade_narrative(
                             close_ctx_ah,
                             d5=d5,
@@ -1512,6 +1605,8 @@ def main():
                             close_ctx_ah_merged["position_state_v2"] = position_state_ah
                         if continuation_gate_ah is not None:
                             close_ctx_ah_merged["continuation_gate"] = continuation_gate_ah
+                        if continuation_ml_ah is not None:
+                            close_ctx_ah_merged["continuation_ml"] = continuation_ml_ah
                         close_position(
                             ticker, exit_price, exit_type, position=open_pos,
                             bar_high=bar_high if exit_type in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND") else None,

@@ -97,9 +97,9 @@
 | 2.1 | Зафиксировать schema **`CONTINUATION_ML_SCHEMA`**, порог `min_extra_upside_pct` | service module | Version bump + tests ✅ |
 | 2.2 | **`scripts/train_game5m_continuation_catboost.py`**: y = `label_missed_upside` (или graded) | .cbm | AUC valid ≥ 0.55, n ≥ 50 TAKE rows |
 | 2.3 | Analyzer: **`game5m_continuation_model_status`**, backtest «delay TAKE на K bars if P > τ» | report | Контрфакт Δ log-ret без комиссий + note ✅ |
-| 2.4 | Telemetry в `context_json` при TAKE: `continuation_ml` (log_only) | cron | Аналог recovery D4a |
-| 2.5 | Согласование с **bullish multiday hold** — не defer TAKE если multiday gate bullish + hold apply | `game_5m.py` | Integration test |
-| 2.6 | Promotion: gate `GAME_5M_CONTINUATION_ML_GATE_MODE` | apply | Ops sign-off после 2 нед log |
+| 2.4 | Telemetry в `context_json` при TAKE: `continuation_ml` (log_only) | cron | Аналог recovery D4a ✅ |
+| 2.5 | Согласование с **bullish multiday hold** — не defer TAKE если multiday gate bullish + hold apply | `game_5m.py` | Integration test ✅ |
+| 2.6 | Promotion: gate `GAME_5M_CONTINUATION_ML_GATE_MODE` | apply | Ops sign-off после 2 нед log ✅ (infra) |
 
 **Контур id (предложение):** `continuation_ml` в decision_snapshot; не смешивать с `recovery_ml`.
 

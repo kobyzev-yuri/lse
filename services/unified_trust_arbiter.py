@@ -54,6 +54,15 @@ CONTOUR_TRUST_SPECS: dict[str, dict[str, Any]] = {
         "apply_t_hit": 0.55,
         "weights": (0.2, 0.3, 0.35, 0.15),
     },
+    "continuation_ml": {
+        "surface": "GAME_5M",
+        "display": "continuation_ml",
+        "n_min": 50,
+        "apply_t_hit": 0.55,
+        "weights": (0.2, 0.3, 0.35, 0.15),
+        "shadow_only": True,
+        "gate_key": "DECISION_STACK_CONTINUATION_ML_GATE_MODE",
+    },
     "portfolio_catboost": {
         "surface": "PORTFOLIO",
         "display": "portfolio_cb",
@@ -458,6 +467,7 @@ def _contour_from_ml_readiness(contour_id: str, spec: dict[str, Any], readiness:
         "catboost_entry_bar_v2": ("entry_bar_v2",),
         "portfolio_catboost": ("portfolio",),
         "recovery_ml": ("recovery",),
+        "continuation_ml": ("continuation",),
         "event_reaction": ("event_reaction",),
     }
     block: dict[str, Any] = {}
@@ -535,6 +545,12 @@ _CONTOUR_DIGEST_META: dict[str, dict[str, str]] = {
         "role": "bar-level + triple barrier; telemetry catboost_entry_proba_good_v2",
         "unit": "valid rows",
         "apply_note": "Shadow only: prod v1 без изменений до AUC≥0.545 (promotion gate) и sign-off.",
+    },
+    "continuation_ml": {
+        "title": "Continuation ML (TAKE shadow)",
+        "role": "P(missed post-exit upside) при TAKE; telemetry continuation_ml",
+        "unit": "valid TAKE rows",
+        "apply_note": "Shadow/log_only до GAME_5M_CONTINUATION_ML_GATE_MODE=apply + ops sign-off.",
     },
     "gap_forecast": {
         "title": "Gap forecast",
@@ -741,6 +757,9 @@ def build_unified_trust_arbiter(
     game_contours.append(_contour_from_ml_readiness("catboost_entry_5m", CONTOUR_TRUST_SPECS["catboost_entry_5m"], readiness))
     game_contours.append(
         _contour_from_entry_bar_v2(CONTOUR_TRUST_SPECS["catboost_entry_bar_v2"], _load_entry_bar_v2_metrics(root))
+    )
+    game_contours.append(
+        _contour_from_ml_readiness("continuation_ml", CONTOUR_TRUST_SPECS["continuation_ml"], readiness)
     )
     game_contours.append(_contour_from_gap_forecast(CONTOUR_TRUST_SPECS["gap_forecast"], gap_metrics))
     multiday_c = game_contours[0]

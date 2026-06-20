@@ -124,6 +124,7 @@ def default_readiness(contour_id: str) -> str:
         "portfolio_catboost",
         "event_reaction",
         "recovery_ml",
+        "continuation_ml",
         "cluster_context",
         "earnings_trust",
     }
@@ -171,6 +172,7 @@ def readiness_from_latest_report(contour_id: str) -> Optional[str]:
         "catboost_entry_5m": ("game5m", "entry_catboost", "catboost_entry"),
         "multiday_lr": ("multiday_lr", "game5m_multiday"),
         "recovery_ml": ("recovery", "game5m_recovery"),
+        "continuation_ml": ("continuation", "game5m_continuation"),
         "event_reaction": ("event_reaction",),
     }
     for key in aliases.get(contour_id, (contour_id,)):

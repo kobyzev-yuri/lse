@@ -78,6 +78,18 @@ CONTOUR_PRODUCT_SPECS: tuple[ContourProductSpec, ...] = (
         notes="D4a telemetry only; latest AUC ~0.51 — D4b defer until arbiter go.",
     ),
     ContourProductSpec(
+        contour_id="game5m_continuation",
+        display_name="Continuation TAKE CatBoost",
+        surface="GAME_5M",
+        l1_refresh="run_game5m_continuation_ml_refresh.py",
+        product_tier="telemetry",
+        legacy_flag="GAME_5M_CONTINUATION_ML_ENABLED",
+        legacy_default="false",
+        stack_contour_id="continuation_ml",
+        resolve_required=False,
+        notes="Phase 2.4 log_only telemetry continuation_ml; apply via GAME_5M_CONTINUATION_ML_GATE_MODE after sign-off.",
+    ),
+    ContourProductSpec(
         contour_id="gap_forecast",
         display_name="Gap forecast ML vs premarket baseline",
         surface="GAME_5M",
