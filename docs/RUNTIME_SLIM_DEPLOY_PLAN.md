@@ -337,11 +337,11 @@ docker exec lse-bot python scripts/cron_watchdog.py --help >/dev/null && echo OK
 ### Фаза 1
 - [x] 1.1 `.dockerignore`
 - [x] 1.3 `verify_docker_slim.sh`
-- [ ] 1.4 deploy + smoke §10
+- [x] 1.4 deploy + smoke §10 (2026-06-20 prod)
 
 ### Фаза 2
 - [x] 2.1–2.2 earnings MD → `templates/earnings_ui_guide.md`
-- [ ] 2.4 earnings UI smoke after deploy
+- [x] 2.4 earnings UI smoke after deploy (HTTP 200 `/earnings/guide`)
 
 ### Фаза 3
 - [ ] 3.1–3.6 VM cleanup log
