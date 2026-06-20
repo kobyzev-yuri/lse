@@ -14,6 +14,8 @@
 | Multiday ridge + enrich X | [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md), [GAME_5M_MULTIDAY_LR_FEATURE_ENRICHMENT_PLAN.md](GAME_5M_MULTIDAY_LR_FEATURE_ENRICHMENT_PLAN.md) |
 | L2 gates, retrain | [ML_UNIFIED_RETRAIN_FRAMEWORK.md](ML_UNIFIED_RETRAIN_FRAMEWORK.md), [DECISION_TRUST_ARBITER.md](DECISION_TRUST_ARBITER.md) |
 | Сводка ops | [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md) |
+| Money management (sizing) | [GAME_5M_MONEY_MANAGEMENT_PLAN.md](GAME_5M_MONEY_MANAGEMENT_PLAN.md) |
+| Chart CNN+LSTM (research) | [GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md](GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md) |
 
 ---
 
@@ -50,7 +52,7 @@
 | Oracle ceiling report | **новый offline** | analyzer | нет | «% captured of RTH oracle exit» |
 | Multiday enrich X | параллельный трек | `multiday_lr` | daily lags | calendar/news flags (отдельный план) |
 
-**Явно не делаем в этом плане:** регрессия \( \hat P_{t+1} \), LSTM/Transformer end-to-end, замена `rules_5m` одним классификатором.
+**Явно не делаем в prod roadmap (основной план):** регрессия \( \hat P_{t+1} \), LSTM/Transformer end-to-end в cron, замена `rules_5m` одним классификатором. **Offline research** chart CNN+LSTM — отдельно: [GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md](GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md).
 
 ---
 
@@ -332,6 +334,8 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 
 - **3.2** recovery D4b — если не go на 14.07, отдельный mini-review после +2 нед TIME_EXIT_EARLY.
 - **Ф4** multiday enrich — параллельный трек, не блокирует G1–G2.
+- **Money management (sizing)** — [GAME_5M_MONEY_MANAGEMENT_PLAN.md](GAME_5M_MONEY_MANAGEMENT_PLAN.md): vol + sentiment, shadow → apply.
+- **Chart pattern ML (CNN+LSTM)** — research-only [GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md](GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md); prod только если beat bar v2 + 2pp AUC.
 - Пересмотр TB-порогов только если weekly retrain снова AUC < 0.545.
 
 **Явно не делать до promotion review:** подмена prod CatBoost v1, отключение rules_5m, apply без sign-off.
