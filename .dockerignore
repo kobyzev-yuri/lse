@@ -1,0 +1,38 @@
+# Git / IDE
+.git
+.gitignore
+.cursor
+.cursorrules
+.vscode
+.idea
+
+# Dev-only (runtime reads templates/earnings_ui_guide.md, not docs/)
+tests/
+docs/
+
+# Archives & side projects
+scripts/archive/
+tradenews/
+kerimsrv/
+moex
+
+# Local/runtime on host (mounted as volumes)
+local/
+logs/
+config.env
+config.secrets.env
+config.security.env
+*.sql.gz
+
+# Binaries & caches
+scripts/bin/
+__pycache__/
+*.py[cod]
+.cache/
+*.egg-info/
+env/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

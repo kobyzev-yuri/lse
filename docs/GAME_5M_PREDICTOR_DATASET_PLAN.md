@@ -16,6 +16,7 @@
 | Сводка ops | [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md) |
 | Money management (sizing) | [GAME_5M_MONEY_MANAGEMENT_PLAN.md](GAME_5M_MONEY_MANAGEMENT_PLAN.md) |
 | Chart CNN+LSTM (research) | [GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md](GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md) |
+| Runtime slim / no docs in image | [RUNTIME_SLIM_DEPLOY_PLAN.md](RUNTIME_SLIM_DEPLOY_PLAN.md) |
 
 ---
 

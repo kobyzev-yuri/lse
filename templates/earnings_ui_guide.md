@@ -1,7 +1,5 @@
 # Earnings Intelligence — руководство по странице `/earnings`
 
-> **Runtime (Docker `/app`):** каноническая копия для `/earnings/guide` — [`templates/earnings_ui_guide.md`](../../templates/earnings_ui_guide.md). Этот файл — для навигации в git/docs.
-
 Страница: **`/earnings`** (FastAPI → `templates/earnings_intelligence.html`).
 
 **Словарь терминов:** [ML_GLOSSARY_RU.md](../ML_GLOSSARY_RU.md) — BMO/AMH, spillover (кросс-влияние на peers), shadow, advisory, event 5d vs open-path. Earnings-лексика — [EARNINGS_EVENT_AGENT_DESIGN.md](./EARNINGS_EVENT_AGENT_DESIGN.md) §10.

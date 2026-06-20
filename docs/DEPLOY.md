@@ -6,6 +6,7 @@
 
 - **Приложение** (Python, `web_app`, скрипты вроде `send_sndk_signal_cron.py`) выполняется **внутри контейнера** (`lse` / `lse-bot`), рабочий каталог в контейнере — `/app`.
 - **Код попадает в образ при сборке** (`docker compose build lse`). Одного `git pull` на хосте в `~/lse` **недостаточно**: контейнер продолжит работать со **старым** слоем образа, пока не выполните пересборку и перезапуск.
+- **Slim-образ:** docs/tests/archives не должны попадать в `/app` — см. [RUNTIME_SLIM_DEPLOY_PLAN.md](RUNTIME_SLIM_DEPLOY_PLAN.md) (`.dockerignore`).
 - **Нормальный цикл обновления кода:** `git push` с вашей машины → на сервере `./scripts/deploy_from_github.sh` (или cron с тем же скриптом): `pull` + **`docker compose build lse`** + **`docker compose up -d lse`**.
 - **Конфиг** `config.env` обычно **монтируется с хоста** в `/app/config.env` — для смены только env достаточно правки на сервере и `docker compose restart lse` (пересборка не нужна).
 - **Секреты отдельно:** необязательный файл `config.secrets.env` (шаблон — `config.secrets.env.example`) с теми же `KEY=value`; он подхватывается автоматически, если лежит в корне рядом с `config.env`, и **перекрывает** совпадающие ключи. В Docker добавьте volume `./config.secrets.env:/app/config.secrets.env` (см. комментарий в `docker-compose.yml`). Иначе путь: `LSE_CONFIG_SECRETS` в окружении контейнера.

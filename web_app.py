@@ -1205,13 +1205,13 @@ async def earnings_intelligence_page(request: Request):
 
 @app.get("/earnings/guide", response_class=HTMLResponse)
 async def earnings_ui_guide_page():
-    """Human-readable guide for /earnings tabs (from docs/EARNINGS_UI_GUIDE.md)."""
+    """Human-readable guide for /earnings tabs (templates/earnings_ui_guide.md)."""
     import html as html_mod
     from pathlib import Path
 
-    path = Path(__file__).resolve().parent / "docs/earnings-event-agent-lse/EARNINGS_UI_GUIDE.md"
+    path = Path(__file__).resolve().parent / "templates/earnings_ui_guide.md"
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="EARNINGS_UI_GUIDE.md not found")
+        raise HTTPException(status_code=404, detail="earnings_ui_guide.md not found")
     body = html_mod.escape(path.read_text(encoding="utf-8"))
     page = f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
