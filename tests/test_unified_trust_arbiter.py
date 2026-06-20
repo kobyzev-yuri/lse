@@ -98,3 +98,72 @@ def test_contour_digest_lines_human_readable():
     assert "CatBoost вход" in joined
     assert "49/80" in joined
     assert "telemetry" in joined
+
+
+def test_contour_digest_lines_entry_bar_v2_shadow():
+    lines = _contour_digest_lines(
+        {
+            "contour_id": "catboost_entry_bar_v2",
+            "trust_label": "low",
+            "trust_score": 0.42,
+            "recommended_gate_mode": "log_only",
+            "n_matured": 1925,
+            "dataset_n_rows": 9625,
+            "T_hit": 0.5495,
+            "T_hit_insufficient": False,
+            "conclusion_ru": "CatBoost entry bar v2 (shadow): low 0.42, log_only, AUC valid 0.55, dataset 9625 rows",
+        }
+    )
+    joined = "\n".join(lines)
+    assert "bar v2" in joined
+    assert "shadow" in joined.lower() or "log_only" in joined
+    assert "9625" in joined or "1925" in joined
+
+
+def test_build_unified_trust_includes_entry_bar_v2(tmp_path, monkeypatch):
+    q = tmp_path / "ml_data_quality"
+    ds = tmp_path / "datasets"
+    models = tmp_path / "models"
+    q.mkdir(parents=True)
+    ds.mkdir(parents=True)
+    models.mkdir(parents=True)
+    metrics = {
+        "status": "ok",
+        "dataset": "bar",
+        "auc_valid": 0.5495,
+        "n_valid": 1925,
+        "n_train": 7700,
+        "n_total": 9625,
+    }
+    (q / "last_game5m_entry_bar_v2_train_metrics.json").write_text(
+        __import__("json").dumps(metrics),
+        encoding="utf-8",
+    )
+    (ds / "game5m_entry_bar_dataset_stats.json").write_text(
+        __import__("json").dumps({"n_rows": 9625}),
+        encoding="utf-8",
+    )
+    (models / "game5m_entry_catboost_v2.cbm").write_bytes(b"")
+    (models / "game5m_entry_catboost_v2.meta.json").write_text(
+        __import__("json").dumps(metrics),
+        encoding="utf-8",
+    )
+
+    def _paths(_root=None):
+        return (
+            q / "last_game5m_entry_bar_v2_train_metrics.json",
+            models / "game5m_entry_catboost_v2.meta.json",
+            ds / "game5m_entry_bar_dataset_stats.json",
+        )
+
+    monkeypatch.setattr(
+        "services.unified_trust_arbiter._default_entry_bar_v2_metrics_paths",
+        _paths,
+    )
+    arb = build_unified_trust_arbiter(project_root=tmp_path, report={})
+    game = arb["surfaces"]["GAME_5M"]["contours"]
+    ids = [c.get("contour_id") for c in game]
+    assert "catboost_entry_bar_v2" in ids
+    bar = next(c for c in game if c.get("contour_id") == "catboost_entry_bar_v2")
+    assert bar.get("recommended_gate_mode") == "log_only"
+    assert "bar v2" in format_operator_digest_ru(arb).lower()

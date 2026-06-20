@@ -30,6 +30,15 @@ CONTOUR_TRUST_SPECS: dict[str, dict[str, Any]] = {
         "weights": (0.2, 0.35, 0.35, 0.1),
         "gate_key": "DECISION_STACK_CATBOOST_ENTRY_5M_GATE_MODE",
     },
+    "catboost_entry_bar_v2": {
+        "surface": "GAME_5M",
+        "display": "catboost_entry_bar_v2",
+        "n_min": 80,
+        "dataset_n_min": 5000,
+        "apply_t_hit": 0.55,
+        "weights": (0.2, 0.35, 0.35, 0.1),
+        "shadow_only": True,
+    },
     "gap_forecast": {
         "surface": "GAME_5M",
         "display": "gap_forecast",
@@ -357,9 +366,93 @@ def _contour_from_gap_forecast(spec: dict[str, Any], gap_metrics: dict[str, Any]
     }
 
 
+def _default_entry_bar_v2_metrics_paths(project_root: Path | None = None) -> tuple[Path, Path, Path]:
+    """Returns (train_metrics, meta, dataset_stats)."""
+    root = project_root or Path(__file__).resolve().parents[1]
+    if Path("/app/logs").exists():
+        base = Path("/app/logs/ml")
+        q = Path("/app/logs/ml/ml_data_quality")
+    else:
+        base = root / "local" / "logs" / "ml"
+        q = root / "local" / "logs" / "ml_data_quality"
+    return (
+        q / "last_game5m_entry_bar_v2_train_metrics.json",
+        base / "models" / "game5m_entry_catboost_v2.meta.json",
+        base / "datasets" / "game5m_entry_bar_dataset_stats.json",
+    )
+
+
+def _load_entry_bar_v2_metrics(project_root: Path | None = None) -> dict[str, Any]:
+    train_path, meta_path, stats_path = _default_entry_bar_v2_metrics_paths(project_root)
+    alt_train = train_path.parent.parent / "datasets" / "game5m_entry_bar_v2_train.json"
+    data: dict[str, Any] = {}
+    for p in (train_path, alt_train, meta_path):
+        if not p.is_file():
+            continue
+        block = _load_json(p)
+        if block:
+            data.update(block)
+    stats = _load_json(stats_path)
+    if stats:
+        data["dataset_stats"] = stats
+        if stats.get("n_rows") is not None:
+            data.setdefault("dataset_n_rows", stats.get("n_rows"))
+    data["train_metrics_path"] = str(train_path)
+    data["meta_path"] = str(meta_path)
+    data["dataset_stats_path"] = str(stats_path)
+    cbm_path = meta_path.with_name("game5m_entry_catboost_v2.cbm")
+    data["model_file_exists"] = cbm_path.is_file()
+    return data
+
+
+def _contour_from_entry_bar_v2(spec: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
+    n_valid = int(metrics.get("n_valid") or 0)
+    n_rows = int(metrics.get("dataset_n_rows") or (metrics.get("dataset_stats") or {}).get("n_rows") or 0)
+    auc_raw = metrics.get("auc_valid")
+    try:
+        auc_f = float(auc_raw) if auc_raw is not None else None
+    except (TypeError, ValueError):
+        auc_f = None
+    n_min = int(spec["n_min"])
+    dataset_n_min = int(spec.get("dataset_n_min") or 5000)
+    t_data = max(_t_data(n_valid, n_min), _t_data(n_rows, dataset_n_min))
+    t_model = 0.45 if metrics.get("model_file_exists") else 0.25
+    t_hit = auc_f
+    trust_score, components = _compute_trust_score(
+        t_data=t_data,
+        t_model=t_model,
+        t_hit=t_hit,
+        t_ctx=0.5,
+        weights=tuple(spec["weights"]),
+        n_matured=n_valid,
+        n_min=n_min,
+    )
+    label = trust_label_from_score(trust_score)
+    if spec.get("shadow_only"):
+        gate = "log_only"
+    else:
+        gate = recommended_gate_mode(label, l2_ready=False)
+    if auc_f is not None and auc_f < float(spec.get("apply_t_hit") or 0.55):
+        gate = "log_only"
+    auc_note = f"AUC valid {auc_f:.2f}" if auc_f is not None else "AUC n/a"
+    ds_note = f"dataset {n_rows} rows" if n_rows else "dataset n/a"
+    return {
+        "contour_id": "catboost_entry_bar_v2",
+        "trust_score": trust_score,
+        "trust_label": label,
+        **components,
+        "recommended_gate_mode": gate,
+        "n_matured": n_valid,
+        "dataset_n_rows": n_rows,
+        "shadow_only": True,
+        "conclusion_ru": f"CatBoost entry bar v2 (shadow): {label} {trust_score:.2f}, {gate}, {auc_note}, {ds_note}",
+    }
+
+
 def _contour_from_ml_readiness(contour_id: str, spec: dict[str, Any], readiness: dict[str, Any]) -> dict[str, Any]:
     aliases = {
         "catboost_entry_5m": ("game5m", "entry_catboost"),
+        "catboost_entry_bar_v2": ("entry_bar_v2",),
         "portfolio_catboost": ("portfolio",),
         "recovery_ml": ("recovery",),
         "event_reaction": ("event_reaction",),
@@ -429,10 +522,16 @@ _CONTOUR_DIGEST_META: dict[str, dict[str, str]] = {
         "apply_note": "На prod legacy: entry/hold apply.",
     },
     "catboost_entry_5m": {
-        "title": "CatBoost вход 5m",
-        "role": "фильтр «входить в эту 5m-сделку или нет»",
+        "title": "CatBoost вход 5m (v1 trade)",
+        "role": "фильтр «входить в эту 5m-сделку или нет» — prod trade-based",
         "unit": "сделок с context",
         "apply_note": "Для apply: high trust + ≥80 сделок + AUC ≥0.55.",
+    },
+    "catboost_entry_bar_v2": {
+        "title": "CatBoost вход bar v2 (shadow)",
+        "role": "bar-level + triple barrier; telemetry catboost_entry_proba_good_v2",
+        "unit": "valid rows",
+        "apply_note": "Shadow only: prod v1 без изменений до AUC≥0.55 и sign-off.",
     },
     "gap_forecast": {
         "title": "Gap forecast",
@@ -508,6 +607,19 @@ def _contour_metric_ru(contour: dict[str, Any], spec: dict[str, Any]) -> str:
                 base += f" (порог apply ≥{float(apply_t):.2f})"
             return base
         return "AUC ещё нестабилен"
+
+    if cid == "catboost_entry_bar_v2":
+        ds_rows = contour.get("dataset_n_rows")
+        if t_hit is not None and not t_hit_insufficient:
+            base = f"AUC valid {float(t_hit):.2f}"
+            if apply_t is not None:
+                base += f" (promotion ≥{float(apply_t):.2f})"
+            if ds_rows:
+                base += f", dataset {int(ds_rows)} rows"
+            return base
+        if ds_rows:
+            return f"dataset {int(ds_rows)} rows, AUC ещё нестабилен"
+        return "shadow / log_only"
 
     if t_hit is not None and not t_hit_insufficient:
         base = f"sign/метрика {_pct(t_hit)}"
@@ -624,6 +736,9 @@ def build_unified_trust_arbiter(
     else:
         game_contours.append(_contour_from_ml_readiness("multiday_lr", CONTOUR_TRUST_SPECS["multiday_lr"], readiness))
     game_contours.append(_contour_from_ml_readiness("catboost_entry_5m", CONTOUR_TRUST_SPECS["catboost_entry_5m"], readiness))
+    game_contours.append(
+        _contour_from_entry_bar_v2(CONTOUR_TRUST_SPECS["catboost_entry_bar_v2"], _load_entry_bar_v2_metrics(root))
+    )
     game_contours.append(_contour_from_gap_forecast(CONTOUR_TRUST_SPECS["gap_forecast"], gap_metrics))
     multiday_c = game_contours[0]
     surfaces["GAME_5M"] = {

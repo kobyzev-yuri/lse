@@ -107,6 +107,44 @@ def _gate_game5m(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _gate_entry_bar_v2(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    reasons: list[str] = []
+    if not data:
+        return {"ready": False, "reasons": ["no_metrics_file"], "shadow_only": True}
+    st = data.get("status")
+    if st != "ok":
+        reasons.append(f"status={st}")
+    try:
+        auc_min = float((get_config_value("ML_READINESS_ENTRY_BAR_V2_AUC_MIN") or "0.55").strip())
+    except (ValueError, TypeError):
+        auc_min = 0.55
+    auc = data.get("auc_valid")
+    if auc is None or (isinstance(auc, (int, float)) and float(auc) < auc_min):
+        reasons.append(f"auc_valid<{auc_min}")
+    try:
+        nv_min = int((get_config_value("ML_READINESS_ENTRY_BAR_V2_MIN_VALID") or "80").strip())
+    except (ValueError, TypeError):
+        nv_min = 80
+    nv = int(data.get("n_valid") or 0)
+    if nv < nv_min:
+        reasons.append(f"n_valid<{nv_min}")
+    try:
+        nt_min = int((get_config_value("ML_READINESS_ENTRY_BAR_V2_MIN_ROWS") or "5000").strip())
+    except (ValueError, TypeError):
+        nt_min = 5000
+    nt = int(data.get("n_total") or 0)
+    if nt < nt_min:
+        reasons.append(f"n_total<{nt_min}")
+    return {
+        "ready": len(reasons) == 0,
+        "reasons": reasons,
+        "shadow_only": True,
+        "auc_valid": auc,
+        "n_valid": nv,
+        "n_total": nt,
+    }
+
+
 def _gate_event_reaction(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     reasons: list[str] = []
     if not data:
@@ -209,6 +247,7 @@ def main() -> int:
         q_dir = Path("/app/logs/ml/ml_data_quality")
     q_dir.mkdir(parents=True, exist_ok=True)
     g5_path = q_dir / "last_game5m_train_metrics.json"
+    bar_v2_path = q_dir / "last_game5m_entry_bar_v2_train_metrics.json"
     pf_path = q_dir / "last_portfolio_train_metrics.json"
     er_path = q_dir / "last_event_reaction_train_metrics.json"
     ei_readiness_path = q_dir / "last_earnings_intelligence_readiness.json"
@@ -277,9 +316,11 @@ def main() -> int:
         ei_inv = {"skipped": True}
 
     g5_data = _load_json(g5_path)
+    bar_v2_data = _load_json(bar_v2_path)
     pf_data = _load_json(pf_path)
     er_data = _load_json(er_path)
     g5_gate = _gate_game5m(g5_data) if not skip_g5 else {"ready": None, "reasons": ["skipped"]}
+    bar_v2_gate = _gate_entry_bar_v2(bar_v2_data)
     pf_gate = _gate_portfolio(pf_data) if not skip_pf else {"ready": None, "reasons": ["skipped"]}
     er_gate = _gate_event_reaction(er_data) if not skip_er else {"ready": None, "reasons": ["skipped"]}
     ei_data = _load_json(ei_readiness_path)
@@ -313,6 +354,13 @@ def main() -> int:
         "ts_utc": datetime.now(timezone.utc).isoformat(),
         "train_mode": "full" if full_train else "dry_run",
         "game5m": {"invocation": g5_inv, "metrics_path": str(g5_path), "gate": g5_gate, "metrics": g5_data},
+        "entry_bar_v2": {
+            "invocation": {"source": "run_game5m_entry_bar_v2_ml_refresh.py"},
+            "metrics_path": str(bar_v2_path),
+            "gate": bar_v2_gate,
+            "metrics": bar_v2_data,
+            "shadow_only": True,
+        },
         "portfolio": {"invocation": pf_inv, "metrics_path": str(pf_path), "gate": pf_gate, "metrics": pf_data},
         "event_reaction": {"invocation": er_inv, "metrics_path": str(er_path), "gate": er_gate, "metrics": er_data},
         "earnings_intelligence": {

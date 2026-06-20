@@ -67,7 +67,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # 46 open_path | 51 event_reaction --full | 52 earnings_grid --full
 # Open-path */6 poll — via run_ml_refresh_dispatcher.py (15 */6)
 48 23 * * 0 flock -n /tmp/lse_open_path_ml_full.lock docker exec -e ML_READINESS_OPEN_PATH_TRAIN_MODE=full -e OPEN_PATH_ML_REFRESH_APPLY_DATA=1 -e OPEN_PATH_ML_CONTINUOUS_TRAIN=1 lse-bot python scripts/run_open_path_ml_refresh.py --full >> /home/ai8049520/lse/logs/open_path_ml_full.log 2>&1
-# Weekly ML full refresh: multiday_lr, recovery, gap_forecast (+ open_path, game5m_entry).
+# Weekly ML full refresh: multiday_lr, recovery, gap_forecast (+ open_path, game5m_entry, game5m_entry_bar_v2).
 5 6 * * 0 flock -n /tmp/lse_ml_refresh_weekly.lock docker exec -e ML_READINESS_TRAIN_MODE=full lse-bot python scripts/run_ml_refresh_dispatcher.py --slot weekly_full >> /home/ai8049520/lse/logs/ml_refresh_weekly.log 2>&1
 # Weekly earnings prod eval: полный end-to-end (materials + ERD + ML full + shadow).
 0 6 * * 0 flock -n /tmp/lse_earnings_prod_eval.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e EARNINGS_ML_REFRESH_APPLY_DATA=1 -e EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN=1 lse-bot python scripts/run_earnings_intelligence_prod_eval.py >> /home/ai8049520/lse/logs/earnings_prod_eval.log 2>&1

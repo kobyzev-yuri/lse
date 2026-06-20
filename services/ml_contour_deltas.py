@@ -381,6 +381,12 @@ def count_deltas_for_contour(
             "new_units_apply": count_strategy_closed_since(engine, "GAME_5M", since_apply),
             "new_units_train": count_strategy_closed_since(engine, "GAME_5M", since_train),
         }
+    if cid == "game5m_entry_bar_v2":
+        tickers = _multiday_lr_ticker_universe(engine)
+        return {
+            "new_units_apply": count_quotes_daily_rows_since(engine, since_apply, tickers=tickers or None),
+            "new_units_train": count_quotes_daily_rows_since(engine, since_train, tickers=tickers or None),
+        }
     if cid == "portfolio":
         return {
             "new_units_apply": count_strategy_closed_since(engine, "PORTFOLIO", since_apply),
@@ -452,6 +458,7 @@ def resolve_readiness_gates(
     row = _latest_ml_train_readiness(project_root)
     block_key = {
         "game5m_entry": "game5m",
+        "game5m_entry_bar_v2": "entry_bar_v2",
         "portfolio": "portfolio",
         "event_reaction_regression": "event_reaction",
     }.get(cid)
@@ -489,6 +496,16 @@ def resolve_readiness_gates(
         n_complete = int(raw.get("n_complete") or 0)
         out["dataset_ready"] = n_complete >= 12
         out["train_ready"] = n_complete >= 30
+        return out
+
+    if cid == "game5m_entry_bar_v2":
+        raw = _json_load(q_dir / spec.train_metrics_relpath) or {}
+        n_valid = int(raw.get("n_valid") or 0)
+        n_total = int(raw.get("n_total") or 0)
+        auc = raw.get("auc_valid")
+        out["dataset_ready"] = n_total >= 5000
+        out["train_ready"] = n_valid >= 80 and auc is not None
+        out["product_ready"] = False
         return out
 
     return out

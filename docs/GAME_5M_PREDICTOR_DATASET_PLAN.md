@@ -209,7 +209,7 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 - [x] 1.4 train v2
 - [x] 1.5 analyzer blocks
 - [x] 1.6 log_only telemetry
-- [ ] 1.7 trust arbiter
+- [x] 1.7 trust arbiter
 - [ ] 1.8 apply sign-off
 
 ### Фаза 2 — continuation
@@ -256,8 +256,8 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 
 ### P0 — не ждём 0.55
 
-1. **1.7 trust arbiter** — human line в unified/LSE Trust digest: contour `catboost_entry_bar_v2`, trust **low**, AUC 0.5495, n_valid 1925, mode **shadow/log_only**.
-2. **Фаза 5 (частично)** — weekly hook: build bar dataset + retrain v2 (cron или slot в `run_ml_refresh_dispatcher`); строка в `ml_train_readiness.jsonl`.
+1. ~~**1.7 trust arbiter**~~ — done: `catboost_entry_bar_v2` в LSE Trust digest + `entry_bar_v2` в ml_train_readiness.jsonl.
+2. ~~**Фаза 5 (частично)**~~ — weekly hook: `run_game5m_entry_bar_v2_ml_refresh.py` в `weekly_full` dispatcher.
 
 ### P1 — параллельный трек (тоже без apply)
 
