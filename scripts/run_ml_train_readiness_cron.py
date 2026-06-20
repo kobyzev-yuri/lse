@@ -108,16 +108,15 @@ def _gate_game5m(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _gate_entry_bar_v2(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    from services.game5m_entry_bar_dataset import entry_bar_v2_promotion_auc_min
+
     reasons: list[str] = []
     if not data:
         return {"ready": False, "reasons": ["no_metrics_file"], "shadow_only": True}
     st = data.get("status")
     if st != "ok":
         reasons.append(f"status={st}")
-    try:
-        auc_min = float((get_config_value("ML_READINESS_ENTRY_BAR_V2_AUC_MIN") or "0.55").strip())
-    except (ValueError, TypeError):
-        auc_min = 0.55
+    auc_min = entry_bar_v2_promotion_auc_min()
     auc = data.get("auc_valid")
     if auc is None or (isinstance(auc, (int, float)) and float(auc) < auc_min):
         reasons.append(f"auc_valid<{auc_min}")

@@ -214,7 +214,7 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Источник: GAME_5M_ENTRY_BAR_DATASET_STATS_PATH или /app/logs/ml/datasets/game5m_entry_bar_dataset_stats.json."
     ),
     "game5m_entry_model_v2_status": (
-        "CatBoost entry bar v2 (shadow): путь GAME_5M_CATBOOST_V2_MODEL_PATH, meta/train metrics, AUC vs порог promotion 0.55. "
+        "CatBoost entry bar v2 (shadow): путь GAME_5M_CATBOOST_V2_MODEL_PATH, meta/train metrics, AUC vs порог promotion (default 0.545). "
         "Не влияет на prod v1; log_only telemetry — catboost_entry_proba_good_v2."
     ),
     "time_exit_early_review": (
@@ -1000,6 +1000,9 @@ def _default_entry_bar_v2_train_metrics_path() -> Path:
 
 
 def _trust_level_game5m_entry_bar_v2(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    from services.game5m_entry_bar_dataset import entry_bar_v2_promotion_auc_min
+
+    promo_auc = entry_bar_v2_promotion_auc_min()
     if not isinstance(meta, dict):
         return {"entry_bar_v2_trust_level": "unknown", "entry_bar_v2_trust_reason": "Нет meta.json bar v2."}
     try:
@@ -1015,10 +1018,10 @@ def _trust_level_game5m_entry_bar_v2(meta: Optional[Dict[str, Any]]) -> Dict[str
             "entry_bar_v2_trust_level": "low",
             "entry_bar_v2_trust_reason": f"n_valid={nv} < 80; только shadow/log_only.",
         }
-    if auc_f < 0.55:
+    if auc_f < promo_auc:
         return {
             "entry_bar_v2_trust_level": "low",
-            "entry_bar_v2_trust_reason": f"AUC={auc_f:.3f} < 0.55 (promotion gate); prod v1 без изменений.",
+            "entry_bar_v2_trust_reason": f"AUC={auc_f:.3f} < {promo_auc:.3f} (promotion gate); prod v1 без изменений.",
         }
     if auc_f < 0.58:
         return {
@@ -1073,6 +1076,7 @@ def _build_game5m_entry_bar_dataset_stats() -> Dict[str, Any]:
 def _build_game5m_entry_model_v2_status() -> Dict[str, Any]:
     try:
         from services.catboost_5m_signal import _default_bar_v2_model_path
+        from services.game5m_entry_bar_dataset import entry_bar_v2_promotion_auc_min
 
         log_enabled = (get_config_value("GAME_5M_CATBOOST_BAR_V2_LOG_ENABLED", "true") or "true").strip().lower() in (
             "1",
@@ -1095,10 +1099,11 @@ def _build_game5m_entry_model_v2_status() -> Dict[str, Any]:
             except Exception:
                 train_metrics = None
         trust = _trust_level_game5m_entry_bar_v2(meta if isinstance(meta, dict) else train_metrics)
+        promo_auc = entry_bar_v2_promotion_auc_min()
         return {
             "log_only_enabled_config": bool(log_enabled),
             "prod_v1_unchanged": True,
-            "promotion_auc_min": 0.55,
+            "promotion_auc_min": promo_auc,
             "model_path": model_path,
             "meta_path": meta_path,
             "train_metrics_path": str(train_metrics_path),

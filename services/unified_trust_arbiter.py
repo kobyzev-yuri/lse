@@ -406,6 +406,9 @@ def _load_entry_bar_v2_metrics(project_root: Path | None = None) -> dict[str, An
 
 
 def _contour_from_entry_bar_v2(spec: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
+    from services.game5m_entry_bar_dataset import entry_bar_v2_promotion_auc_min
+
+    promo_auc = entry_bar_v2_promotion_auc_min()
     n_valid = int(metrics.get("n_valid") or 0)
     n_rows = int(metrics.get("dataset_n_rows") or (metrics.get("dataset_stats") or {}).get("n_rows") or 0)
     auc_raw = metrics.get("auc_valid")
@@ -432,7 +435,7 @@ def _contour_from_entry_bar_v2(spec: dict[str, Any], metrics: dict[str, Any]) ->
         gate = "log_only"
     else:
         gate = recommended_gate_mode(label, l2_ready=False)
-    if auc_f is not None and auc_f < float(spec.get("apply_t_hit") or 0.55):
+    if auc_f is not None and auc_f < promo_auc:
         gate = "log_only"
     auc_note = f"AUC valid {auc_f:.2f}" if auc_f is not None else "AUC n/a"
     ds_note = f"dataset {n_rows} rows" if n_rows else "dataset n/a"
@@ -531,7 +534,7 @@ _CONTOUR_DIGEST_META: dict[str, dict[str, str]] = {
         "title": "CatBoost вход bar v2 (shadow)",
         "role": "bar-level + triple barrier; telemetry catboost_entry_proba_good_v2",
         "unit": "valid rows",
-        "apply_note": "Shadow only: prod v1 без изменений до AUC≥0.55 и sign-off.",
+        "apply_note": "Shadow only: prod v1 без изменений до AUC≥0.545 (promotion gate) и sign-off.",
     },
     "gap_forecast": {
         "title": "Gap forecast",

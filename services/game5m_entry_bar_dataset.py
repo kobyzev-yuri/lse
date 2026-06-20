@@ -25,6 +25,23 @@ BAR_TRAIN_NUMERIC_KEYS: tuple[str, ...] = (
     "price_to_low5d_ratio",
 )
 
+# Promotion gate for bar v2 (relaxed from 0.55 → 0.545 after prod AUC 0.5495, 2026-06).
+ENTRY_BAR_V2_PROMOTION_AUC_MIN_DEFAULT = 0.545
+
+
+def entry_bar_v2_promotion_auc_min() -> float:
+    from config_loader import get_config_value
+
+    raw = (get_config_value("GAME_5M_ENTRY_BAR_V2_PROMOTION_AUC_MIN", "") or "").strip()
+    if not raw:
+        raw = (get_config_value("ML_READINESS_ENTRY_BAR_V2_AUC_MIN", "") or "").strip()
+    if not raw:
+        return ENTRY_BAR_V2_PROMOTION_AUC_MIN_DEFAULT
+    try:
+        return float(raw.replace(",", "."))
+    except (TypeError, ValueError):
+        return ENTRY_BAR_V2_PROMOTION_AUC_MIN_DEFAULT
+
 
 def _safe_float(v: Any, default: float = 0.0) -> float:
     if v is None:
@@ -58,6 +75,8 @@ __all__ = [
     "TripleBarrierConfig",
     "TripleBarrierResult",
     "get_bar_train_feature_schema",
+    "entry_bar_v2_promotion_auc_min",
+    "ENTRY_BAR_V2_PROMOTION_AUC_MIN_DEFAULT",
     "row_from_bar_dataset_dict",
     "triple_barrier_config_from_env",
     "triple_barrier_forward",

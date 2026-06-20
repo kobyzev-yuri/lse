@@ -251,7 +251,7 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
         "auc_valid": round(auc, 4) if auc == auc else None,
         "bar_csv": str(path),
         "out_model_path": str(out_path),
-        "promotion_note": "Shadow only until AUC valid >= 0.55 and trust sign-off; prod uses dataset=trade v1",
+        "promotion_note": "Shadow only until AUC valid >= promotion gate (default 0.545) and trust sign-off; prod uses dataset=trade v1",
     }
     _write_metrics_json(args.json_metrics_out, meta)
 

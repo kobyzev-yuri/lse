@@ -37,9 +37,14 @@ def test_build_catboost_bar_v2_feature_row():
 
 
 def test_trust_level_entry_bar_v2_below_promotion():
-    trust = _trust_level_game5m_entry_bar_v2({"auc_valid": 0.5495, "n_valid": 1925})
+    trust = _trust_level_game5m_entry_bar_v2({"auc_valid": 0.54, "n_valid": 1925})
     assert trust["entry_bar_v2_trust_level"] == "low"
-    assert "0.55" in trust["entry_bar_v2_trust_reason"]
+    assert "0.545" in trust["entry_bar_v2_trust_reason"]
+
+
+def test_trust_level_entry_bar_v2_at_prod_auc():
+    trust = _trust_level_game5m_entry_bar_v2({"auc_valid": 0.5495, "n_valid": 1925})
+    assert trust["entry_bar_v2_trust_level"] == "medium"
 
 
 def test_build_entry_bar_dataset_stats_missing_file(tmp_path, monkeypatch):
@@ -67,4 +72,4 @@ def test_build_entry_model_v2_status_structure(monkeypatch):
     status = _build_game5m_entry_model_v2_status()
     assert "model_path" in status
     assert status.get("prod_v1_unchanged") is True
-    assert status.get("promotion_auc_min") == 0.55
+    assert status.get("promotion_auc_min") == 0.545

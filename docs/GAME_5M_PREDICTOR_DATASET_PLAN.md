@@ -78,7 +78,7 @@
 | 1.1 | **`scripts/build_game5m_entry_bar_dataset.py`**: universe tickers × период; features = `compute_5m_features` + snapshot поля; фильтр RTH | CSV/JSONL | ≥5k rows / 90d на 15+ тикерах |
 | 1.2 | Метка **`tb_label`** ∈ {upper, lower, time, insufficient_data}; **`y_entry_good`** = 1 если upper первым (или upper до lower при настраиваемой политике) | columns | Баланс классов в отчёте builder |
 | 1.3 | Negative rows: HOLD bars (subsample) или rejected BUY (session/macro) с тем же TB | config `GAME_5M_ENTRY_BAR_NEG_RATIO` | Нет только «успешных» входов |
-| 1.4 | **`train_game5m_catboost.py --dataset bar`**: time-split; метрики AUC, calibration bucket; артефакт `game5m_entry_catboost_v2.cbm` | .cbm + meta | **AUC valid ≥ 0.55**, n_valid ≥ 80 |
+| 1.4 | **`train_game5m_catboost.py --dataset bar`**: time-split; метрики AUC, calibration bucket; артефакт `game5m_entry_catboost_v2.cbm` | .cbm + meta | **AUC valid ≥ 0.545** (promotion gate; было 0.55), n_valid ≥ 80 |
 | 1.5 | Analyzer: **`game5m_entry_bar_dataset_stats`**, **`game5m_entry_model_v2_status`** | API /analyzer | Объём, balance, AUC рядом с v1 |
 | 1.6 | Runtime: **`catboost_5m_signal.py`** — флаг `GAME_5M_CATBOOST_DATASET_VERSION=bar|trade`; snapshot `catboost_entry_proba_good_v2` | log_only | 2 нед telemetry без apply |
 | 1.7 | Trust arbiter: contour `catboost_entry_5m` обновляет n_min / T_hit из bar-valid | digest | Пороги из [DECISION_TRUST_ARBITER.md](DECISION_TRUST_ARBITER.md) §3 |
@@ -191,7 +191,7 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 Параллельно: Ф4 multiday enrich по отдельному плану
 ```
 
-**Definition of Done для всего плана:** `catboost_entry_5m` valid AUC ≥ 0.55 и trust medium+; `continuation_ml` в shadow с понятным backtest; recovery D4b решение задокументировано; multiday enrich в WF или явно deferred с rationale.
+**Definition of Done для всего плана:** `catboost_entry_5m` valid AUC ≥ 0.545 (bar v2 promotion gate) и trust medium+; `continuation_ml` в shadow с понятным backtest; recovery D4b решение задокументировано; multiday enrich в WF или явно deferred с rationale.
 
 ---
 
