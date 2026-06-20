@@ -28,3 +28,6 @@ def test_continuation_preset_lookup():
     p = sql_console_preset_by_id("continuation_ml_recent")
     assert p is not None
     assert "continuation_ml" in p["sql"]
+    wait = sql_console_preset_by_id("continuation_ml_wait_dashboard")
+    assert wait is not None
+    assert "days_since_last_take" in wait["sql"]

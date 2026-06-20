@@ -112,7 +112,7 @@
 | **Readiness** | `logs/ml_train_readiness.jsonl` → блок `continuation` / `continuation_ml` |
 | **Trust digest** | строка `continuation_ml` в unified trust |
 
-Go/no-go для **apply** (`GAME_5M_CONTINUATION_ML_GATE_MODE=apply`): ≥8–15 TAKE с `continuation_ml` в SELL `context_json`, нет массовых `predict_failed`, ops sign-off.
+Go/no-go для **apply** (`GAME_5M_CONTINUATION_ML_GATE_MODE=apply`): ≥8–15 TAKE с `continuation_ml` в SELL `context_json`, нет массовых `predict_failed`, ops sign-off. **Единый review всех гейтов:** §14 (целевая дата **2026-07-14**).
 
 ---
 
@@ -250,41 +250,91 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 
 ---
 
-## 13. Handoff — prod (2026-06-20)
+## 13. Где мы сейчас (зафиксировано 2026-06-20)
 
-| Артефакт | Статус |
-|----------|--------|
-| Entry bar v2 train | AUC(valid) **0.5495**, model `/app/logs/ml/models/game5m_entry_catboost_v2.cbm` |
-| Continuation train | AUC(valid) **≈0.735**, 154 TAKE rows, model `game5m_continuation_catboost.cbm` |
-| Continuation ML telemetry | `CONTINUATION_ML_ENABLED=true`, `GATE_MODE=log_only`; **0 TAKE с `continuation_ml` в БД** — последний TAKE 2026-06-12, ждём новых выходов |
-| SQL мониторинг | `/sql` — пресеты continuation / recovery / bar v2 (`261bd2e`) |
-| Analyzer | `continuation_ml_live_review`, `game5m_oracle_exit_ceiling` (0.4) |
-| Deploy | `261bd2e` на VM |
+**Фаза roadmap:** shadow / log_only — **код и infra готовы**, prod apply **не включён**.
 
-**Блокеры apply:** **1.8** bar v2 fusion — ~2 нед telemetry v2 + sign-off; **2.6** continuation apply — ≥8–15 TAKE с `continuation_ml` + ops sign-off.
+| Контур | Код | Prod config | Telemetry в БД | Блокер apply |
+|--------|-----|-------------|----------------|--------------|
+| Entry bar v2 (1.6–1.7) | ✅ train AUC **0.5495** | shadow log (default `BAR_V2_LOG=true`) | **0** BUY с `catboost_entry_proba_good_v2` | ≥2 нед RTH BUY после деплоя |
+| Continuation ML (2.4–2.6) | ✅ train AUC **≈0.735** | `CONTINUATION_ML_ENABLED=true`, `GATE_MODE=log_only` | **0** TAKE с `continuation_ml` | ≥8–15 TAKE + нет mass `predict_failed` |
+| Recovery D4a | ✅ | log_only D4a | **23** `recovery_ml_time_exit_early` | D4b — отдельный vote на promotion review |
+| Multiday enrich (Ф4) | — | без изменений | — | **deferred**, не входит в promotion review |
+
+**Факты prod БД (2026-06-20):**
+
+| Метрика | Значение |
+|---------|----------|
+| Последняя сделка (любая) | **2026-06-18** |
+| Последний TAKE | **2026-06-12** (до включения telemetry) |
+| Последний BUY | **2026-06-18** (до деплоя shadow 20.06) |
+| Deploy shadow telemetry | **2026-06-20** (`d319b60`) |
+| Следующий RTH (ожидание событий) | **2026-06-23** (пн) |
+
+**Почему SQL «последние TAKE с continuation_ml» пустой:** запрос корректен; фильтр `context_json ? 'continuation_ml'` не находит строк — telemetry пишется **только при новом TAKE после 20.06**. Диагностика: `/sql` → *Сводка ожидания telemetry* или *Последние TAKE (с флагом has_ml)*.
+
+**Чего ждём (P0):** не код, а **рыночные события** — cron на RTH закрывает позиции → первые строки в `context_json`. Без TAKE continuation_ml не появится; без BUY — bar v2 shadow.
 
 ---
 
-## 14. План на следующую сессию (приоритет)
+## 14. Единая точка решения — prod apply всех гейтов
 
-### P0 — накопление telemetry (без apply)
+Все контуры выходят из shadow в **одном ops-review**, не по отдельности ad hoc.
 
-1. Ждать новые TAKE / TIME_EXIT — cron пишет `continuation_ml` / recovery D4a.
-2. Мониторинг: `/sql` → Continuation ML coverage; analyzer `continuation_ml_live_review`.
+### Календарь (ориентир)
 
-### P1 — promotion review (когда n≥8–15)
+| Веха | Дата | Смысл |
+|------|------|--------|
+| **T0 — старт shadow-окна** | **2026-06-23** | Первый RTH после деплоя; с этого дня считаем telemetry |
+| **T+14 — минимум shadow** | **2026-07-07** | 2 календарные недели log_only (checklist §8 п.3) |
+| **T+21 — целевой review** | **2026-07-14** | **Promotion review #1** — go/no-go по всем гейтам ниже |
+| **T+28 — запасной review** | **2026-07-21** | Если к 14.07 мало TAKE (<8) или мало BUY |
 
-3. **2.6 apply** — `GAME_5M_CONTINUATION_ML_GATE_MODE=apply` после sign-off.
-4. **1.8 apply** — bar v2 fusion после telemetry + AUC ≥0.545 (уже на train).
+**Целевая дата prod apply (если review пройден):** **2026-07-15 – 2026-07-22** (config flip на VM + deploy, один change window).
 
-### P2 — отложено
+### Agenda promotion review #1 (одна встреча / один чеклист)
 
-5. **3.2** D4b recovery apply — после D4a + continuation telemetry.
-6. **Ф4** multiday enrich — отдельный план, deferred.
+| # | Gate | Env / действие | Go если |
+|---|------|----------------|---------|
+| G1 | **Entry bar v2 fusion** (1.8) | `GAME_5M_CATBOOST_DATASET_VERSION=bar` + fusion sign-off | ≥10–15 BUY с v2 telemetry; trust medium+; offline AUC ≥0.545 |
+| G2 | **Continuation ML apply** (2.6) | `GAME_5M_CONTINUATION_ML_GATE_MODE=apply` | ≥8–15 TAKE с `continuation_ml`; `status=ok` ≥80%; analyzer backtest не против |
+| G3 | **Recovery D4b** (3.2) | recovery live apply (см. recovery plan) | D4a ≥15 строк; `tau_sweep` / whipsaw review; **может быть defer** отдельно от G1–G2 |
+| — | Multiday enrich (Ф4) | — | **вне scope** review #1 |
 
-### Явно не делать до sign-off
+**No-go (любой пункт):** остаёмся log_only, перенос review на **2026-07-21** или +1 нед RTH.
 
-- Подмена prod CatBoost v1 (trade-based) или отключение rules_5m.
+**После apply:** snapshot в `decision_effective`, строка в [GAME_5M_AGENT_TUNING_LOG.md](GAME_5M_AGENT_TUNING_LOG.md), обновить [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md).
+
+### Мониторинг до review
+
+| Когда | Действие |
+|-------|----------|
+| Ежедневно (RTH) | `/sql` → *Сводка ожидания telemetry*, *Сводка shadow BUY* |
+| Еженедельно | analyzer (continuation_ml_live_review, bar v2 status, recovery D4a); readiness jsonl |
+| **2026-07-07** | Промежуточный sanity: есть ли ≥5 TAKE + ≥10 BUY с telemetry; иначе сразу сдвиг на 21.07 |
+| **2026-07-14** | **Promotion review #1** — решение по G1–G3 |
+
+---
+
+## 15. Handoff технич. (2026-06-20)
+
+| Артефакт | Статус |
+|----------|--------|
+| Entry bar v2 model | `/app/logs/ml/models/game5m_entry_catboost_v2.cbm`, AUC valid **0.5495** |
+| Continuation model | `/app/logs/ml/models/game5m_continuation_catboost.cbm`, AUC valid **≈0.735** |
+| SQL мониторинг | `/sql` — presets + диагностика wait dashboard |
+| Analyzer | `continuation_ml_live_review`, `game5m_oracle_exit_ceiling` |
+| Deploy | `d319b60` на VM |
+
+---
+
+## 16. Backlog (после review #1)
+
+- **3.2** recovery D4b — если не go на 14.07, отдельный mini-review после +2 нед TIME_EXIT_EARLY.
+- **Ф4** multiday enrich — параллельный трек, не блокирует G1–G2.
+- Пересмотр TB-порогов только если weekly retrain снова AUC < 0.545.
+
+**Явно не делать до promotion review:** подмена prod CatBoost v1, отключение rules_5m, apply без sign-off.
 
 ---
 

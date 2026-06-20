@@ -66,6 +66,47 @@ LIMIT 50""",
         ),
         "presets": [
             {
+                "id": "continuation_ml_wait_dashboard",
+                "title": "Сводка ожидания telemetry (начать здесь)",
+                "description": "Последний TAKE, дней без TAKE, покрытие continuation_ml. Пустой «последние с ml» — норма, пока with_ml=0.",
+                "sql": """SELECT
+  MAX(ts) FILTER (
+    WHERE signal_type IN ('TAKE_PROFIT', 'TAKE_PROFIT_SUSPEND')
+  ) AS last_take_ts,
+  ROUND(
+    EXTRACT(EPOCH FROM (
+      NOW() - MAX(ts) FILTER (
+        WHERE signal_type IN ('TAKE_PROFIT', 'TAKE_PROFIT_SUSPEND')
+      )
+    )) / 86400.0,
+    1
+  ) AS days_since_last_take,
+  COUNT(*) FILTER (WHERE context_json ? 'continuation_ml') AS with_ml,
+  COUNT(*) FILTER (WHERE NOT (context_json ? 'continuation_ml')) AS without_ml,
+  COUNT(*) AS total_take_30d
+FROM trade_history
+WHERE strategy_name = 'GAME_5M'
+  AND side = 'SELL'
+  AND signal_type IN ('TAKE_PROFIT', 'TAKE_PROFIT_SUSPEND')
+  AND ts >= NOW() - INTERVAL '30 days'""",
+            },
+            {
+                "id": "continuation_ml_last_take_diagnostic",
+                "title": "Последние TAKE (с флагом has_ml)",
+                "description": "Все TAKE за 30 д — видно, есть ли continuation_ml. Без фильтра ? continuation_ml.",
+                "sql": """SELECT id, ticker, signal_type, ts,
+       context_json ? 'continuation_ml' AS has_ml,
+       context_json->'continuation_ml'->>'status' AS st,
+       context_json->'continuation_ml'->>'continuation_proba' AS p
+FROM trade_history
+WHERE strategy_name = 'GAME_5M'
+  AND side = 'SELL'
+  AND signal_type IN ('TAKE_PROFIT', 'TAKE_PROFIT_SUSPEND')
+  AND ts >= NOW() - INTERVAL '30 days'
+ORDER BY id DESC
+LIMIT 30""",
+            },
+            {
                 "id": "continuation_ml_recent",
                 "title": "Последние TAKE с continuation_ml",
                 "description": "Строки с телеметрией: P(missed upside), would_defer_take, multiday_block.",
@@ -198,6 +239,21 @@ WHERE strategy_name = 'GAME_5M'
         "title": "Entry bar v2 (shadow BUY)",
         "description": "Log-only catboost_entry_proba_good_v2 на входах; prod v1 fusion не меняется.",
         "presets": [
+            {
+                "id": "bar_v2_wait_dashboard",
+                "title": "Сводка shadow BUY (bar v2)",
+                "description": "Последний BUY и покрытие catboost_entry_proba_good_v2 — для go/no-go 1.8.",
+                "sql": """SELECT
+  MAX(ts) AS last_buy_ts,
+  ROUND(EXTRACT(EPOCH FROM (NOW() - MAX(ts))) / 86400.0, 1) AS days_since_last_buy,
+  COUNT(*) FILTER (WHERE context_json ? 'catboost_entry_proba_good_v2') AS with_v2,
+  COUNT(*) FILTER (WHERE NOT (context_json ? 'catboost_entry_proba_good_v2')) AS without_v2,
+  COUNT(*) AS total_buy_30d
+FROM trade_history
+WHERE strategy_name = 'GAME_5M'
+  AND side = 'BUY'
+  AND ts >= NOW() - INTERVAL '30 days'""",
+            },
             {
                 "id": "bar_v2_recent_buys",
                 "title": "BUY с catboost_entry_proba_good_v2",
