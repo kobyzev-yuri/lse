@@ -217,6 +217,14 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "CatBoost entry bar v2 (shadow): путь GAME_5M_CATBOOST_V2_MODEL_PATH, meta/train metrics, AUC vs порог promotion (default 0.545). "
         "Не влияет на prod v1; log_only telemetry — catboost_entry_proba_good_v2."
     ),
+    "game5m_continuation_model_status": (
+        "CatBoost continuation (shadow): TAKE exits → label_missed_upside; путь GAME_5M_CONTINUATION_CATBOOST_MODEL_PATH, "
+        "dataset stats из build_game5m_continuation_dataset.py. Не влияет на prod до sign-off."
+    ),
+    "continuation_take_delay_backtest": (
+        "Контрфакт для TAKE_PROFIT: если P(label_missed_upside) > τ — задержка выхода на K 5m баров после фактического exit (Close, без комиссий). "
+        "Δ log-return vs факт; polarity противоположна recovery_scenario_backtest (там delay при P < τ)."
+    ),
     "time_exit_early_review": (
         "Контрфакт для TIME_EXIT_EARLY: что было бы с ценой после фактического выхода. "
         "Считаем post-exit MFE/MAE по 5m OHLC на горизонте 1 часа (и опционально до конца дня) относительно цены выхода, "
@@ -1128,6 +1136,262 @@ def _build_game5m_entry_model_v2_status() -> Dict[str, Any]:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+def _default_continuation_dataset_meta_path() -> Path:
+    raw = (get_config_value("GAME_5M_CONTINUATION_DATASET_CSV", "") or "").strip()
+    if raw:
+        return Path(raw).with_suffix(".csv.meta.json")
+    if Path("/app/logs").exists():
+        return Path("/app/logs/ml/datasets/game5m_continuation_dataset.csv.meta.json")
+    return Path(__file__).resolve().parents[1] / "local" / "datasets" / "game5m_continuation_dataset.csv.meta.json"
+
+
+def _trust_level_game5m_continuation(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    from services.game5m_continuation_dataset import continuation_promotion_auc_min
+
+    promo_auc = continuation_promotion_auc_min()
+    if not isinstance(meta, dict):
+        return {"continuation_trust_level": "unknown", "continuation_trust_reason": "Нет meta.json continuation."}
+    try:
+        auc_f = float(meta.get("auc_valid")) if meta.get("auc_valid") is not None else None
+        nv = int(meta.get("n_valid")) if meta.get("n_valid") is not None else None
+    except (TypeError, ValueError):
+        auc_f = None
+        nv = None
+    if auc_f is None or nv is None:
+        return {"continuation_trust_level": "unknown", "continuation_trust_reason": "В meta нет auc_valid/n_valid."}
+    if nv < 50:
+        return {
+            "continuation_trust_level": "low",
+            "continuation_trust_reason": f"n_valid={nv} < 50; только shadow/log_only.",
+        }
+    if auc_f < promo_auc:
+        return {
+            "continuation_trust_level": "low",
+            "continuation_trust_reason": f"AUC={auc_f:.3f} < {promo_auc:.3f} (promotion gate).",
+        }
+    if auc_f < 0.62:
+        return {
+            "continuation_trust_level": "medium",
+            "continuation_trust_reason": f"AUC={auc_f:.3f} при n_valid={nv}; калибровка τ по continuation_take_delay_backtest.",
+        }
+    return {
+        "continuation_trust_level": "high",
+        "continuation_trust_reason": f"AUC={auc_f:.3f} при n_valid={nv}; кандидат на promotion review.",
+    }
+
+
+def _build_game5m_continuation_model_status() -> Dict[str, Any]:
+    try:
+        from services.game5m_continuation_catboost import (
+            default_continuation_catboost_model_path,
+            load_continuation_model_meta,
+        )
+        from services.game5m_continuation_dataset import (
+            CONTINUATION_ML_SCHEMA_VERSION,
+            continuation_min_extra_upside_pct,
+            continuation_promotion_auc_min,
+        )
+
+        model_path = (get_config_value("GAME_5M_CONTINUATION_CATBOOST_MODEL_PATH", "") or "").strip()
+        if not model_path:
+            model_path = str(default_continuation_catboost_model_path())
+        meta_path = str(Path(model_path).with_suffix(".meta.json"))
+        meta = load_continuation_model_meta(model_path)
+        ds_meta_path = _default_continuation_dataset_meta_path()
+        ds_meta = None
+        if ds_meta_path.is_file():
+            try:
+                ds_meta = json.loads(ds_meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                ds_meta = None
+        trust = _trust_level_game5m_continuation(meta if isinstance(meta, dict) else None)
+        return {
+            "prod_apply_disabled": True,
+            "promotion_auc_min": continuation_promotion_auc_min(),
+            "min_extra_upside_pct": continuation_min_extra_upside_pct(),
+            "schema_version": CONTINUATION_ML_SCHEMA_VERSION,
+            "model_path": model_path,
+            "meta_path": meta_path,
+            "dataset_meta_path": str(ds_meta_path),
+            "model_file_exists": Path(model_path).is_file(),
+            "meta_file_exists": Path(meta_path).is_file(),
+            "dataset_meta_exists": ds_meta_path.is_file(),
+            "dataset_rows": (ds_meta or {}).get("rows") if isinstance(ds_meta, dict) else None,
+            "meta_summary": {
+                "trained_at": (meta or {}).get("trained_at"),
+                "n_train": (meta or {}).get("n_train"),
+                "n_valid": (meta or {}).get("n_valid"),
+                "n_total": (meta or {}).get("n_total"),
+                "label": (meta or {}).get("label"),
+                "auc_valid": (meta or {}).get("auc_valid"),
+                "csv_path": (meta or {}).get("csv_path"),
+            }
+            if isinstance(meta, dict)
+            else None,
+            **trust,
+            "note": "Shadow contour: telemetry continuation_ml (phase 2.4); apply только после sign-off.",
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _pre_exit_window_pct(
+    df: Optional[pd.DataFrame],
+    exit_ts_et: pd.Timestamp,
+    entry_price: float,
+    *,
+    minutes: int,
+    prefix: str,
+) -> Dict[str, Optional[float]]:
+    if df is None or getattr(df, "empty", True) or entry_price <= 0:
+        return {f"{prefix}_return_pct": None, f"{prefix}_mfe_pct": None}
+    try:
+        start = exit_ts_et - pd.Timedelta(minutes=int(minutes))
+        sub = df.loc[(df["datetime"] > start) & (df["datetime"] <= exit_ts_et)]
+        if sub is None or sub.empty:
+            return {f"{prefix}_return_pct": None, f"{prefix}_mfe_pct": None}
+        close_last = float(sub["Close"].iloc[-1])
+        high_max = float(sub["High"].max())
+        ret = (close_last / entry_price - 1.0) * 100.0
+        mfe = (high_max / entry_price - 1.0) * 100.0
+        return {f"{prefix}_return_pct": ret, f"{prefix}_mfe_pct": mfe}
+    except Exception:
+        return {f"{prefix}_return_pct": None, f"{prefix}_mfe_pct": None}
+
+
+def _build_continuation_take_delay_backtest(
+    effects: List[TradeEffect],
+    ohlc_cache: Dict[str, Optional[pd.DataFrame]],
+    *,
+    strategy: str,
+) -> Dict[str, Any]:
+    from services.game5m_continuation_catboost import (
+        default_continuation_catboost_model_path,
+        load_continuation_model_meta,
+        predict_continuation_missed_upside_proba,
+        row_vector_from_trade_effect,
+    )
+
+    su = (strategy or "").strip().upper()
+    if su == "PORTFOLIO":
+        return {"mode": "skipped", "note": "Continuation ML — контур GAME_5M."}
+    if su not in ("GAME_5M", "ALL"):
+        return {"mode": "skipped", "note": f"Стратегия {strategy!r}: только GAME_5M или ALL."}
+
+    model_path = (get_config_value("GAME_5M_CONTINUATION_CATBOOST_MODEL_PATH", "") or "").strip()
+    if not model_path:
+        model_path = str(default_continuation_catboost_model_path())
+    meta = load_continuation_model_meta(model_path)
+    mp = Path(model_path)
+
+    try:
+        tau = float((get_config_value("GAME_5M_CONTINUATION_SCENARIO_TAU", "0.55") or "0.55").replace(",", "."))
+    except (ValueError, TypeError):
+        tau = 0.55
+    try:
+        delay_bars = int((get_config_value("GAME_5M_CONTINUATION_SCENARIO_DELAY_BARS", "6") or "6").strip())
+    except (ValueError, TypeError):
+        delay_bars = 6
+    delay_bars = max(1, min(delay_bars, 48))
+
+    out: Dict[str, Any] = {
+        "mode": "take_profit_delay_if_high_p",
+        "tau": tau,
+        "delay_bars": delay_bars,
+        "model_path": model_path,
+        "model_file_exists": mp.is_file(),
+        "meta_summary": {
+            "trained_at": (meta or {}).get("trained_at"),
+            "label": (meta or {}).get("label"),
+            "auc_valid": (meta or {}).get("auc_valid"),
+            "n_valid": (meta or {}).get("n_valid"),
+        }
+        if isinstance(meta, dict)
+        else None,
+        "description": (
+            "TAKE_PROFIT / TAKE_PROFIT_SUSPEND: P = P(label_missed_upside). Если P > τ — контрфакт «выход на K баров позже» "
+            "(Close после exit_ts, без комиссий). Δ log-return vs факт."
+        ),
+        "commission_note": "Без transaction costs; для ориентира offline.",
+    }
+    out.update(_trust_level_game5m_continuation(meta if isinstance(meta, dict) else None))
+
+    take_eff = [
+        e
+        for e in effects
+        if str(e.exit_signal or "").upper() in ("TAKE_PROFIT", "TAKE_PROFIT_SUSPEND")
+        and str(e.exit_strategy or "").strip().upper() == "GAME_5M"
+    ]
+    out["take_trades"] = len(take_eff)
+
+    if not mp.is_file():
+        out["note"] = "Нет .cbm — build dataset + train_game5m_continuation_catboost.py"
+        out["scored"] = 0
+        return out
+
+    scored = 0
+    would_delay = 0
+    deltas_log: List[float] = []
+    improved = worse = equal = 0
+
+    for e in take_eff:
+        df = ohlc_cache.get(e.ticker)
+        exit_ts = _as_et(pd.Timestamp(e.exit_ts))
+        pre30 = _pre_exit_window_pct(df, exit_ts, float(e.entry_price), minutes=30, prefix="pre_exit_30m")
+        row = row_vector_from_trade_effect(
+            ticker=e.ticker,
+            exit_signal=e.exit_signal,
+            realized_pct=float(e.realized_pct),
+            hold_minutes=float(e.hold_minutes),
+            entry_rsi_5m=e.entry_rsi_5m,
+            entry_momentum_2h_pct=e.entry_momentum_2h_pct,
+            entry_vol_5m_pct=e.entry_vol_5m_pct,
+            entry_prob_up=e.entry_prob_up,
+            trade_mfe_pct=e.potential_best_pct,
+            pre_exit_30m_return_pct=pre30.get("pre_exit_30m_return_pct"),
+            pre_exit_30m_mfe_pct=pre30.get("pre_exit_30m_mfe_pct"),
+        )
+        if row is None:
+            continue
+        pred = predict_continuation_missed_upside_proba(str(mp), row, meta=meta if isinstance(meta, dict) else None)
+        proba = pred.get("continuation_proba") if pred.get("status") == "ok" else None
+        if proba is None:
+            continue
+        scored += 1
+        entry_px = float(e.entry_price)
+        act_log = float(e.realized_log_return)
+        del_close = _recovery_delayed_close_after_exit(df, exit_ts, delay_bars)
+        if del_close is None or entry_px <= 0:
+            continue
+        delayed_pct = (del_close / entry_px - 1.0) * 100.0
+        delayed_log = float(np.log1p(delayed_pct / 100.0)) if delayed_pct > -100 else -999.0
+        if float(proba) > tau:
+            would_delay += 1
+            delta = delayed_log - act_log
+            deltas_log.append(delta)
+            if delta > 1e-6:
+                improved += 1
+            elif delta < -1e-6:
+                worse += 1
+            else:
+                equal += 1
+
+    out["scored"] = scored
+    out["would_delay_policy_count"] = would_delay
+    out["delta_log_return"] = {
+        "n": len(deltas_log),
+        "mean": round(float(np.mean(deltas_log)), 6) if deltas_log else None,
+        "median": round(float(np.median(deltas_log)), 6) if deltas_log else None,
+        "improved": improved,
+        "worse": worse,
+        "equal": equal,
+    }
+    if scored == 0:
+        out["note"] = "Нет scored TAKE сделок (нет модели/OHLC или predict failed)."
+    return out
+
 
 # Краткий конспект для LLM: как устроен отчёт и где живёт торговая логика (без выдумывания путей).
 ANALYZER_LLM_ALGORITHM_DIGEST: Dict[str, Any] = {
@@ -6365,13 +6629,16 @@ def analyze_trade_effectiveness(
         else:
             empty_payload["game5m_hold_recovery_export"] = None
         empty_payload["game5m_recovery_model_status"] = _build_game5m_recovery_model_status()
+        empty_payload["game5m_continuation_model_status"] = _build_game5m_continuation_model_status()
         if light:
             empty_payload["recovery_scenario_backtest"] = dict(_ANALYZER_LIGHT_SKIP)
+            empty_payload["continuation_take_delay_backtest"] = dict(_ANALYZER_LIGHT_SKIP)
             empty_payload["recovery_ml_d4a_live_review"] = dict(_ANALYZER_LIGHT_SKIP)
             empty_payload["game5m_hold_recovery_dataset_stats"] = dict(_ANALYZER_LIGHT_SKIP)
             empty_payload["game5m_hold_recovery_export"] = None
         else:
             empty_payload["recovery_scenario_backtest"] = _build_recovery_scenario_backtest([], {}, strategy=strategy)
+            empty_payload["continuation_take_delay_backtest"] = _build_continuation_take_delay_backtest([], {}, strategy=strategy)
             empty_payload["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
                 [], te0, [], {}, strategy=strategy
             )
@@ -6448,9 +6715,11 @@ def analyze_trade_effectiveness(
     if _section_want(secs, "game5m_extra") and want_g5m:
         hanger_v2_review = _build_hanger_v2_review(effects)
         game5m_recovery_model_status = _build_game5m_recovery_model_status()
+        game5m_continuation_model_status = _build_game5m_continuation_model_status()
     else:
         hanger_v2_review = _section_skip("game5m_extra")
         game5m_recovery_model_status = _section_skip("game5m_extra")
+        game5m_continuation_model_status = _section_skip("game5m_extra")
     continuation_gate_review = (
         _build_continuation_gate_review(effects)
         if _section_want(secs, "exits") and want_g5m
@@ -6460,9 +6729,11 @@ def analyze_trade_effectiveness(
         recovery_d4a_live = _build_recovery_ml_d4a_live_review(closed, te_review, effects, cache, strategy=strategy)
         _maybe_attach_recovery_d4a_shallow_for_analyzer(recovery_d4a_live, days=days, strategy=strategy)
         recovery_scenario = _build_recovery_scenario_backtest(effects, cache, strategy=strategy)
+        continuation_take_delay = _build_continuation_take_delay_backtest(effects, cache, strategy=strategy)
     else:
         recovery_d4a_live = _section_skip("recovery")
         recovery_scenario = _section_skip("recovery")
+        continuation_take_delay = _section_skip("recovery")
     payload: Dict[str, Any] = {
         "meta": {
             "days": days,
@@ -6511,7 +6782,9 @@ def analyze_trade_effectiveness(
             else _section_skip("weekly_tactic")
         ),
         "game5m_recovery_model_status": game5m_recovery_model_status,
+        "game5m_continuation_model_status": game5m_continuation_model_status,
         "recovery_scenario_backtest": recovery_scenario,
+        "continuation_take_delay_backtest": continuation_take_delay,
         "time_exit_early_review": te_review,
         "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review),
         "recovery_ml_d4a_live_review": recovery_d4a_live,
@@ -6633,7 +6906,9 @@ def analyze_trade_effectiveness_focused(
         else:
             empty_focus["game5m_hold_recovery_export"] = None
         empty_focus["game5m_recovery_model_status"] = _build_game5m_recovery_model_status()
+        empty_focus["game5m_continuation_model_status"] = _build_game5m_continuation_model_status()
         empty_focus["recovery_scenario_backtest"] = _build_recovery_scenario_backtest([], {}, strategy=strategy)
+        empty_focus["continuation_take_delay_backtest"] = _build_continuation_take_delay_backtest([], {}, strategy=strategy)
         empty_focus["recovery_ml_d4a_live_review"] = _build_recovery_ml_d4a_live_review(
             [], te_f0, [], {}, strategy=strategy
         )
@@ -6698,7 +6973,9 @@ def analyze_trade_effectiveness_focused(
         "game5m_entry_bar_dataset_stats": _build_game5m_entry_bar_dataset_stats(),
         "game5m_entry_model_v2_status": _build_game5m_entry_model_v2_status(),
         "game5m_recovery_model_status": _build_game5m_recovery_model_status(),
+        "game5m_continuation_model_status": _build_game5m_continuation_model_status(),
         "recovery_scenario_backtest": _build_recovery_scenario_backtest(effects, cache, strategy=strategy),
+        "continuation_take_delay_backtest": _build_continuation_take_delay_backtest(effects, cache, strategy=strategy),
         "time_exit_early_review": te_review_f,
         "time_exit_early_action_summary": _build_time_exit_early_action_summary(te_review_f),
         "recovery_ml_d4a_live_review": recovery_d4a_live_f,

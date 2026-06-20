@@ -33,6 +33,11 @@ from services.deal_params_5m import normalize_entry_context
 from services.game_5m import trade_ts_to_et
 from services.game_5m_take_replay import load_bars_5m_for_replay
 
+from services.game5m_continuation_dataset import (
+    CONTINUATION_ML_SCHEMA_VERSION,
+    continuation_min_extra_upside_pct,
+)
+
 logger = logging.getLogger(__name__)
 
 GAME_5M = "GAME_5M"
@@ -294,7 +299,7 @@ def main() -> int:
     parser.add_argument("--exchange", default="US")
     parser.add_argument("--days-back", type=int, default=0, help="Only exits from last N days; 0 = all history")
     parser.add_argument("--lookahead-minutes", type=int, default=120)
-    parser.add_argument("--min-extra-upside-pct", type=float, default=1.0)
+    parser.add_argument("--min-extra-upside-pct", type=float, default=None)
     parser.add_argument("--pullback-after-take-pct", type=float, default=-0.5)
     parser.add_argument("--flat-post-exit-return-pct", type=float, default=0.2)
     parser.add_argument("--max-minutes-to-take-for-stretch", type=int, default=390)
@@ -303,6 +308,8 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="Debug: max rows to write")
     parser.add_argument("--dry-run", action="store_true", help="Print stats only, do not write CSV")
     args = parser.parse_args()
+    if args.min_extra_upside_pct is None:
+        args.min_extra_upside_pct = continuation_min_extra_upside_pct()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -320,6 +327,7 @@ def main() -> int:
     out = Path(args.out)
     _write_csv(out, rows)
     meta = {
+        "schema_version": CONTINUATION_ML_SCHEMA_VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "rows": len(rows),
         "args": vars(args),
