@@ -225,6 +225,11 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Контрфакт для TAKE_PROFIT: если P(label_missed_upside) > τ — задержка выхода на K 5m баров после фактического exit (Close, без комиссий). "
         "Δ log-return vs факт; polarity противоположна recovery_scenario_backtest (там delay при P < τ)."
     ),
+    "continuation_ml_live_review": (
+        "Фаза 2.4 live: по закрытым TAKE (GAME_5M) с `continuation_ml` в SELL context_json — статусы predict, "
+        "`would_defer_take` vs `would_defer_by_model`, multiday_block, missed_upside после закрытия. "
+        "Типовые SQL-запросы для prod-мониторинга — раздел ML на странице /sql."
+    ),
     "time_exit_early_review": (
         "Контрфакт для TIME_EXIT_EARLY: что было бы с ценой после фактического выхода. "
         "Считаем post-exit MFE/MAE по 5m OHLC на горизонте 1 часа (и опционально до конца дня) относительно цены выхода, "
@@ -1638,6 +1643,7 @@ class TradeEffect:
     exit_detail: Optional[str]
     position_state_v2: Optional[Dict[str, Any]]
     continuation_gate: Optional[Dict[str, Any]]
+    continuation_ml: Optional[Dict[str, Any]]
 
 
 def _safe_float(v: Any) -> Optional[float]:
@@ -2905,6 +2911,7 @@ def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Opti
         exit_ctx = _json_dict(getattr(t, "exit_context_json", None))
         position_state_v2 = exit_ctx.get("position_state_v2") if isinstance(exit_ctx.get("position_state_v2"), dict) else None
         continuation_gate = exit_ctx.get("continuation_gate") if isinstance(exit_ctx.get("continuation_gate"), dict) else None
+        continuation_ml = exit_ctx.get("continuation_ml") if isinstance(exit_ctx.get("continuation_ml"), dict) else None
         exit_detail = exit_ctx.get("exit_detail") or exit_ctx.get("exit_condition")
         exit_detail = str(exit_detail).strip() if exit_detail is not None and str(exit_detail).strip() else None
         raw_decision = entry_ctx.get("decision")
@@ -2956,6 +2963,7 @@ def _estimate_trade_effects(closed_trades: List[Any], ohlc_cache: Dict[str, Opti
                 exit_detail=exit_detail,
                 position_state_v2=position_state_v2,
                 continuation_gate=continuation_gate,
+                continuation_ml=continuation_ml,
             )
         )
     return effects
@@ -3165,6 +3173,7 @@ def _top_cases(effects: List[TradeEffect], limit: int = 8) -> Dict[str, List[Dic
             "exit_detail": e.exit_detail,
             "position_state_v2": e.position_state_v2,
             "continuation_gate": e.continuation_gate,
+            "continuation_ml": e.continuation_ml,
         }
 
     by_missed = sorted(effects, key=lambda x: x.missed_upside_pct or 0.0, reverse=True)[:limit]
@@ -3214,6 +3223,7 @@ def _trade_effect_detail_dict(e: TradeEffect) -> Dict[str, Any]:
         "decision_rule_params": e.decision_rule_params,
         "position_state_v2": e.position_state_v2,
         "continuation_gate": e.continuation_gate,
+        "continuation_ml": e.continuation_ml,
         "suggested_config_env_review_for_entry": _suggested_entry_env_keys(e),
     }
 
@@ -3416,6 +3426,91 @@ def _build_continuation_gate_review(effects: List[TradeEffect], *, limit: int = 
         "top_cases": top_cases,
         "parameter_candidates": parameter_candidates,
         "note": "Closed-trade review from SELL context_json.continuation_gate; current gate is expected to be log-only until enough samples are collected.",
+    }
+
+
+def _build_continuation_ml_live_review(effects: List[TradeEffect], *, limit: int = 20) -> Dict[str, Any]:
+    take_signals = frozenset({"TAKE_PROFIT", "TAKE_PROFIT_SUSPEND"})
+    rows: List[Dict[str, Any]] = []
+    probas: List[float] = []
+    for e in effects:
+        if str(e.exit_signal or "").upper() not in take_signals:
+            continue
+        if str(e.exit_strategy or "").upper() != "GAME_5M":
+            continue
+        ml = e.continuation_ml if isinstance(e.continuation_ml, dict) else None
+        if not ml:
+            continue
+        proba = _safe_float(ml.get("continuation_proba"))
+        if proba is not None:
+            probas.append(proba)
+        rows.append(
+            {
+                "trade_id": e.trade_id,
+                "ticker": e.ticker,
+                "exit_signal": e.exit_signal,
+                "realized_pct": round(e.realized_pct, 3),
+                "missed_upside_pct": round(e.missed_upside_pct or 0.0, 3),
+                "status": ml.get("status"),
+                "predict_status": ml.get("predict_status"),
+                "continuation_proba": round(proba, 4) if proba is not None else None,
+                "would_defer_by_model": bool(ml.get("would_defer_by_model"))
+                if ml.get("would_defer_by_model") is not None
+                else None,
+                "would_defer_take": bool(ml.get("would_defer_take"))
+                if ml.get("would_defer_take") is not None
+                else None,
+                "multiday_block": bool(ml.get("multiday_block"))
+                if ml.get("multiday_block") is not None
+                else None,
+                "log_only": bool(ml.get("log_only")) if ml.get("log_only") is not None else None,
+            }
+        )
+
+    take_game5m = [
+        e
+        for e in effects
+        if str(e.exit_signal or "").upper() in take_signals and str(e.exit_strategy or "").upper() == "GAME_5M"
+    ]
+    if not take_game5m:
+        return {
+            "mode": "skipped",
+            "note": "Нет TAKE_PROFIT* с exit_strategy=GAME_5M в окне.",
+            "sql_console_path": "/sql",
+        }
+    if not rows:
+        return {
+            "mode": "no_live_telemetry",
+            "note": (
+                f"В окне {len(take_game5m)} TAKE (GAME_5M), но в SELL context_json нет continuation_ml — "
+                "включите GAME_5M_CONTINUATION_ML_ENABLED или дождитесь новых выходов."
+            ),
+            "take_exits_game5m_in_window": len(take_game5m),
+            "trades_with_continuation_ml": 0,
+            "sql_console_path": "/sql",
+        }
+
+    defer_model = [r for r in rows if r.get("would_defer_by_model") is True]
+    defer_final = [r for r in rows if r.get("would_defer_take") is True]
+    high_proba_missed = [
+        r
+        for r in rows
+        if (r.get("continuation_proba") or 0.0) >= 0.5 and float(r.get("missed_upside_pct") or 0.0) >= 1.0
+    ]
+    sample = sorted(rows, key=lambda r: float(r.get("missed_upside_pct") or 0.0), reverse=True)[:limit]
+    return {
+        "mode": "ok",
+        "take_exits_game5m_in_window": len(take_game5m),
+        "trades_with_continuation_ml": len(rows),
+        "status_counts": _count_by(rows, "status"),
+        "would_defer_by_model_count": len(defer_model),
+        "would_defer_take_count": len(defer_final),
+        "multiday_block_count": sum(1 for r in rows if r.get("multiday_block") is True),
+        "avg_continuation_proba": _mean_finite(probas),
+        "high_proba_with_missed_upside_ge_1pct": len(high_proba_missed),
+        "sample": sample,
+        "sql_console_path": "/sql",
+        "note": "Live shadow telemetry continuation_ml на SELL; типовые SQL — /sql → Continuation ML.",
     }
 
 
@@ -6720,6 +6815,11 @@ def analyze_trade_effectiveness(
         if _section_want(secs, "exits") and want_g5m
         else _section_skip("exits")
     )
+    continuation_ml_live_review = (
+        _build_continuation_ml_live_review(effects)
+        if _section_want(secs, "exits") and want_g5m
+        else _section_skip("exits")
+    )
     if _section_want(secs, "recovery") and want_g5m:
         recovery_d4a_live = _build_recovery_ml_d4a_live_review(closed, te_review, effects, cache, strategy=strategy)
         _maybe_attach_recovery_d4a_shallow_for_analyzer(recovery_d4a_live, days=days, strategy=strategy)
@@ -6785,6 +6885,7 @@ def analyze_trade_effectiveness(
         "recovery_ml_d4a_live_review": recovery_d4a_live,
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
+        "continuation_ml_live_review": continuation_ml_live_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
     }
     _attach_portfolio_analyzer_blocks(payload, strategy=strategy, closed=closed, effects=effects)
@@ -6933,6 +7034,7 @@ def analyze_trade_effectiveness_focused(
     catboost_fusion_entry_review = _build_game5m_catboost_fusion_entry_review(strategy, filtered, effects)
     hanger_v2_review = _build_hanger_v2_review(effects)
     continuation_gate_review = _build_continuation_gate_review(effects)
+    continuation_ml_live_review = _build_continuation_ml_live_review(effects)
     recovery_d4a_live_f = _build_recovery_ml_d4a_live_review(
         filtered, te_review_f, effects, cache, strategy=strategy
     )
@@ -6976,6 +7078,7 @@ def analyze_trade_effectiveness_focused(
         "recovery_ml_d4a_live_review": recovery_d4a_live_f,
         "game5m_hanger_v2_review": hanger_v2_review,
         "continuation_gate_review": continuation_gate_review,
+        "continuation_ml_live_review": continuation_ml_live_review,
         "game5m_hanger_tune_json_review": hanger_tune_review,
     }
     _attach_portfolio_analyzer_blocks(payload, strategy=strategy, closed=filtered, effects=effects)

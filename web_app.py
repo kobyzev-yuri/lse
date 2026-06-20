@@ -71,6 +71,7 @@ from services.sql_console import (
     STATEMENT_TIMEOUT_MS,
     run_readonly_sql,
 )
+from services.sql_console_presets import sql_console_presets_for_ui
 from report_generator import (
     compute_closed_trade_pnls,
     compute_open_positions,
@@ -3813,6 +3814,7 @@ def _sql_console_disabled_reason() -> Optional[str]:
 async def sql_console_page(request: Request):
     """Read-only SQL: SELECT для проверок на проде без psql."""
     reason = _sql_console_disabled_reason()
+    preset_groups = sql_console_presets_for_ui()
     return HTMLResponse(
         render_template(
             "sql_console.html",
@@ -3821,6 +3823,8 @@ async def sql_console_page(request: Request):
                 "disabled_reason": reason,
                 "max_rows": SQL_CONSOLE_MAX_ROWS,
                 "timeout_sec": STATEMENT_TIMEOUT_MS // 1000,
+                "preset_groups": preset_groups,
+                "preset_groups_json": json.dumps(preset_groups, ensure_ascii=False),
             },
         )
     )

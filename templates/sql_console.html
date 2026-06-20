@@ -6,7 +6,7 @@
 <style>
     .sql-textarea {
         width: 100%;
-        min-height: 140px;
+        min-height: 160px;
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-size: 0.8rem;
         background: #0f172a;
@@ -16,17 +16,53 @@
         padding: 0.6rem 0.75rem;
         resize: vertical;
     }
-    .sql-presets { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
-    .sql-presets button {
+    .sql-preset-groups { margin: 0.75rem 0 1rem; }
+    .sql-preset-group {
+        margin-bottom: 1rem;
+        padding: 0.65rem 0.75rem;
+        background: #0f172a;
+        border: 1px solid #334155;
+        border-radius: 8px;
+    }
+    .sql-preset-group h3 {
+        margin: 0 0 0.35rem;
+        font-size: 0.95rem;
+        color: #e2e8f0;
+    }
+    .sql-preset-group > .group-desc {
         font-size: 0.78rem;
-        padding: 0.25rem 0.5rem;
+        color: #94a3b8;
+        margin: 0 0 0.55rem;
+        line-height: 1.35;
+    }
+    .sql-preset-item {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 0.5rem 0.75rem;
+        padding: 0.45rem 0;
+        border-top: 1px solid #1e293b;
+    }
+    .sql-preset-item:first-of-type { border-top: none; }
+    .sql-preset-item .preset-desc {
+        flex: 1 1 220px;
+        font-size: 0.76rem;
+        color: #94a3b8;
+        line-height: 1.35;
+        margin: 0;
+    }
+    .sql-preset-item button {
+        flex: 0 0 auto;
+        font-size: 0.76rem;
+        padding: 0.28rem 0.55rem;
         background: #1e293b;
         color: #7dd3fc;
         border: 1px solid #334155;
         border-radius: 6px;
         cursor: pointer;
+        white-space: nowrap;
     }
-    .sql-presets button:hover { background: #334155; }
+    .sql-preset-item button:hover { background: #334155; }
     .sql-meta { font-size: 0.82rem; color: #94a3b8; margin-top: 0.5rem; }
     .sql-error { color: #fca5a5; margin-top: 0.5rem; font-size: 0.85rem; }
     .sql-table-wrap { overflow-x: auto; margin-top: 0.75rem; }
@@ -56,16 +92,31 @@
 {% else %}
 
 <div class="card">
-    <h2>Запрос</h2>
-    <div class="sql-presets" aria-label="Примеры">
-        <button type="button" data-preset="decision_snapshot">decision_snapshot (GAME_5M BUY)</button>
-        <button type="button" data-preset="trades_24h">сделки за 24 ч</button>
-        <button type="button" data-preset="quotes_last">последняя дата quotes</button>
+    <h2>Типовые запросы</h2>
+    <p class="muted" style="font-size: 0.82rem; margin-bottom: 0.5rem;">
+        Нажмите кнопку — SQL подставится в редактор ниже. Разделы ML telemetry: continuation (TAKE), recovery (TIME_EXIT_EARLY), entry bar v2 (BUY).
+    </p>
+    <div class="sql-preset-groups" aria-label="Типовые запросы">
+        {% for group in preset_groups %}
+        <div class="sql-preset-group">
+            <h3>{{ group.title }}</h3>
+            <p class="group-desc">{{ group.description }}</p>
+            {% for preset in group.presets %}
+            <div class="sql-preset-item">
+                <p class="preset-desc"><strong>{{ preset.title }}</strong> — {{ preset.description }}</p>
+                <button type="button" class="sql-preset-load" data-preset-id="{{ preset.id }}">Загрузить</button>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
     </div>
+
+    <h2 style="margin-top: 1rem;">Запрос</h2>
     <textarea id="sqlInput" class="sql-textarea" spellcheck="false" placeholder="SELECT …"></textarea>
     <div style="margin-top: 0.6rem;">
         <button type="button" class="btn" id="sqlRunBtn">Выполнить</button>
         <button type="button" class="btn" id="sqlClearBtn" style="margin-left: 0.4rem; background: #334155;">Очистить</button>
+        <span class="muted" style="font-size: 0.78rem; margin-left: 0.5rem;">Ctrl+Enter — выполнить</span>
     </div>
     <p id="sqlError" class="sql-error" style="display: none;"></p>
     <p id="sqlMeta" class="sql-meta" style="display: none;"></p>
@@ -77,26 +128,20 @@
 
 {% block extra_js %}
 {% if not disabled_reason %}
+<script id="sqlPresetsJson" type="application/json">{{ preset_groups_json | safe }}</script>
 <script>
 (function() {
-    const PRESETS = {
-        decision_snapshot: `SELECT id, ticker,
-       context_json->'decision_snapshot'->>'resolve_divergence' AS div,
-       context_json->'decision_snapshot'->>'effective_decision' AS eff,
-       context_json->'decision_snapshot'->>'projected_effective_if_resolve' AS proj,
-       created_at
-FROM trade_history
-WHERE strategy_name = 'GAME_5M' AND side = 'BUY'
-  AND context_json ? 'decision_snapshot'
-ORDER BY id DESC
-LIMIT 20`,
-        trades_24h: `SELECT id, ticker, side, strategy_name, created_at
-FROM trade_history
-WHERE created_at >= NOW() - INTERVAL '24 hours'
-ORDER BY id DESC
-LIMIT 50`,
-        quotes_last: `SELECT MAX(date) AS quotes_last_date FROM quotes`
-    };
+    const PRESETS = {};
+    try {
+        const groups = JSON.parse(document.getElementById('sqlPresetsJson').textContent || '[]');
+        groups.forEach(function(g) {
+            (g.presets || []).forEach(function(p) {
+                if (p && p.id && p.sql) PRESETS[p.id] = p.sql;
+            });
+        });
+    } catch (e) {
+        console.warn('sql presets parse failed', e);
+    }
 
     const input = document.getElementById('sqlInput');
     const runBtn = document.getElementById('sqlRunBtn');
@@ -108,10 +153,10 @@ LIMIT 50`,
     const saved = localStorage.getItem('lse_sql_console_query');
     if (saved) input.value = saved;
 
-    document.querySelectorAll('[data-preset]').forEach(function(btn) {
+    document.querySelectorAll('.sql-preset-load').forEach(function(btn) {
         btn.addEventListener('click', function() {
-            const key = btn.getAttribute('data-preset');
-            if (PRESETS[key]) input.value = PRESETS[key];
+            const id = btn.getAttribute('data-preset-id');
+            if (id && PRESETS[id]) input.value = PRESETS[id];
         });
     });
 

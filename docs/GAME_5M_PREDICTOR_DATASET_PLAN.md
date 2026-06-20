@@ -103,6 +103,17 @@
 
 **Контур id (предложение):** `continuation_ml` в decision_snapshot; не смешивать с `recovery_ml`.
 
+### Мониторинг (prod)
+
+| Канал | Что смотреть |
+|-------|----------------|
+| **Web `/sql`** | Типовые SELECT с описанием: разделы *Continuation ML*, *Recovery ML*, *Entry bar v2* — `services/sql_console_presets.py` |
+| **Analyzer** | `continuation_ml_live_review` (окно trade_effects), `game5m_continuation_model_status`, `continuation_take_delay_backtest` |
+| **Readiness** | `logs/ml_train_readiness.jsonl` → блок `continuation` / `continuation_ml` |
+| **Trust digest** | строка `continuation_ml` в unified trust |
+
+Go/no-go для **apply** (`GAME_5M_CONTINUATION_ML_GATE_MODE=apply`): ≥8–15 TAKE с `continuation_ml` в SELL `context_json`, нет массовых `predict_failed`, ops sign-off.
+
 ---
 
 ## 6. Фаза 3 — Recovery ↔ общий barrier (опционально, после 1–2)
@@ -221,6 +232,7 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 - [x] 2.4 telemetry (+ prod `CONTINUATION_ML_ENABLED=true` 2026-06-20)
 - [x] 2.5 multiday interaction
 - [x] 2.6 apply gate (infra; apply после sign-off)
+- [x] 2.7 SQL presets + analyzer `continuation_ml_live_review` (`/sql`, `sql_console_presets.py`)
 
 ### Фаза 3 — recovery unify
 - [x] 3.1 refactor labels (`forward_mfe_mae_pct_window` + export)
