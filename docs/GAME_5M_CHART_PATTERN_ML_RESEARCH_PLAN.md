@@ -260,20 +260,26 @@ Chart research **параллелен** MM shadow и ML telemetry; **не бло
 
 ### Фаза 0
 - [x] 0.1 план (этот файл)
-- [ ] 0.2 schema module
-- [ ] 0.3 build script + stats JSON
-- [ ] 0.4 leak unit tests
+- [x] 0.2 `services/game5m_chart_entry_dataset.py`
+- [x] 0.3 `scripts/build_game5m_chart_entry_dataset.py` + stats JSON
+- [x] 0.4 leak unit tests (`tests/test_game5m_chart_entry_dataset.py`)
+- [x] 0.5 `scripts/train_game5m_chart_entry_lstm.py` (local GPU)
 
 ### Фаза 1
-- [ ] 1.1–1.4 baselines trained, metrics JSON
+- [x] 1.1 smoke baselines (smoke CSV, yfinance — sanity only)
+- [x] 1.2 CatBoost v2 full local (`auc_valid=0.5648`, bar CSV db/tunnel)
+- [x] 1.3 LSTM v1 full local (`auc_valid=0.5987`, GPU py12+cu130)
+- [x] 1.4 CNN v1 full local (`auc_valid=0.5985` seed42; stability mean **0.6138**)
+- [x] 1.5 stability 3 seeds LSTM/CNN → `local/datasets/game5m_chart_entry_stability.json`
 
 ### Фаза 2
 - [ ] 2.1 CNN+LSTM best checkpoint
 - [ ] 2.2–2.3 ablation report
 
 ### Фаза 3
+- [x] 3.4 interim report → [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md)
 - [ ] 3.1 analyzer status block
-- [ ] 3.4 go/no-go memo
+- [ ] 3.4 final go/no-go memo
 
 ### Фаза 4–5
 - [ ] only if go
@@ -290,6 +296,75 @@ Trade y смещён (только входы, которые rules уже пр�
 
 **CNN на PNG из Telegram?**  
 Нет — tensor из того же OHLC что CatBoost, иначе train/serve drift.
+
+**Локально с GPU и tunnel?**  
+Да — рекомендуемый research path (§13). Prod cron не нужен до go/no-go.
+
+---
+
+## 13. Local-first workflow (GPU + SSH tunnel)
+
+**Терминал 1 — tunnel к prod Postgres:**
+
+```bash
+ssh -N -L 5433:127.0.0.1:5432 ai8049520@104.154.205.58
+```
+
+**Терминал 2 — локальный venv, `config.env` с tunnel URL:**
+
+```bash
+# DATABASE_URL=postgresql://postgres:<pass>@127.0.0.1:5433/lse_trading
+pip install torch  # CUDA: см. https://pytorch.org
+pip install -r requirements.txt -r requirements-catboost.txt
+```
+
+**Шаг 1 — bar CSV (канон как prod bar v2):**
+
+```bash
+python scripts/build_game5m_entry_bar_dataset.py \
+  --source db --days 90 \
+  --out local/datasets/game5m_entry_bar_dataset.csv \
+  --summary-json local/datasets/game5m_entry_bar_stats.json
+```
+
+**Шаг 2 — chart NPZ:**
+
+```bash
+python scripts/build_game5m_chart_entry_dataset.py \
+  --bar-csv local/datasets/game5m_entry_bar_dataset.csv \
+  --source db --days 90 \
+  --out local/datasets/game5m_chart_entry_v1.npz \
+  --summary-json local/datasets/game5m_chart_entry_v1_stats.json
+```
+
+Или одной командой (пересоберёт bar CSV):
+
+```bash
+python scripts/build_game5m_chart_entry_dataset.py \
+  --build-bar-csv --source db --days 90 \
+  --out local/datasets/game5m_chart_entry_v1.npz \
+  --summary-json local/datasets/game5m_chart_entry_v1_stats.json
+```
+
+**Шаг 3 — LSTM baseline (GPU если `torch.cuda.is_available()`):**
+
+```bash
+python scripts/train_game5m_chart_entry_lstm.py \
+  --npz local/datasets/game5m_chart_entry_v1.npz \
+  --json-metrics-out local/datasets/game5m_chart_entry_lstm_metrics.json
+```
+
+**Шаг 4 — tabular reference на том же CSV:**
+
+```bash
+python scripts/train_game5m_catboost.py --dataset bar \
+  --bar-csv local/datasets/game5m_entry_bar_dataset.csv \
+  --json-metrics-out local/datasets/game5m_entry_bar_v2_metrics.json
+```
+
+Smoke без tunnel (yfinance, ~450 строк): `--bar-csv local/datasets/game5m_entry_bar_smoke.csv --source yfinance --days 30`.
+
+Артефакты в `local/datasets/` — **не в git** (`.gitignore` / untracked).
 
 ---
 
