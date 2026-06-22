@@ -322,6 +322,8 @@ def _iter_rows_for_ticker(
 
     kb_pool: list[dict[str, Any]] = []
     gaps_cache: dict[tuple[str, str], dict[str, float]] = {}
+    index_gaps_cache: dict[str, dict[str, float]] = {}
+    correlation_cache: dict = {}
     if enrich and engine is not None:
         kb_pool = _load_kb_pool_for_ticker(engine, ticker, kb_days=kb_days)
 
@@ -401,6 +403,8 @@ def _iter_rows_for_ticker(
                     kb_days=kb_days,
                     kb_news=kb_news if enrich else [],
                     gaps_cache=gaps_cache,
+                    index_gaps_cache=index_gaps_cache,
+                    correlation_cache=correlation_cache,
                 )
                 if enrich
                 else {k: None for k in ENTRY_CONTEXT_NUMERIC_KEYS}

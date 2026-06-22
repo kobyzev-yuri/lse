@@ -124,6 +124,7 @@ def default_readiness(contour_id: str) -> str:
         "portfolio_catboost",
         "event_reaction",
         "recovery_ml",
+        "hold_bar_ml_h3",
         "continuation_ml",
         "cluster_context",
         "earnings_trust",
@@ -172,6 +173,7 @@ def readiness_from_latest_report(contour_id: str) -> Optional[str]:
         "catboost_entry_5m": ("game5m", "entry_catboost", "catboost_entry"),
         "multiday_lr": ("multiday_lr", "game5m_multiday"),
         "recovery_ml": ("recovery", "game5m_recovery"),
+        "hold_bar_ml_h3": ("hold_bar_h3", "game5m_hold_bar"),
         "continuation_ml": ("continuation", "game5m_continuation"),
         "event_reaction": ("event_reaction",),
     }

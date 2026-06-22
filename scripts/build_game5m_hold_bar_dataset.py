@@ -253,6 +253,8 @@ def main() -> int:
         n_trade_rows = 0
         kb_pool: list[dict[str, Any]] = []
         gaps_cache: dict[tuple[str, str], dict[str, float]] = {}
+        index_gaps_cache: dict[str, dict[str, float]] = {}
+        correlation_cache: dict = {}
         if enrich:
             kb_pool = _load_kb_pool_for_ticker(engine, ticker, kb_days=kb_days)
         for i in range(0, len(sub), stride):
@@ -299,6 +301,8 @@ def main() -> int:
                     kb_days=kb_days,
                     kb_news=kb_news,
                     gaps_cache=gaps_cache,
+                    index_gaps_cache=index_gaps_cache,
+                    correlation_cache=correlation_cache,
                 )
                 if enrich
                 else {k: 0.0 for k in ENTRY_CONTEXT_NUMERIC_KEYS}

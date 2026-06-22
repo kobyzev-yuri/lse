@@ -56,6 +56,7 @@ from services.game5m_chart_entry_dataset import (
     window_tensor_from_df,
     window_tensor_with_context,
 )
+from services.game5m_chart_entry_fusion import FUSION_TAB_MODES, fusion_tab_keys, tabular_vector_from_row
 from services.game_5m_take_replay import load_bars_5m_for_replay
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,12 @@ def main() -> int:
     ap.add_argument("--window-bars", type=int, default=48, help="Bars per window (inclusive at decision)")
     ap.add_argument("--valid-ratio", type=float, default=0.2, help="Time-ordered valid fraction")
     ap.add_argument("--no-context", action="store_true", help="OHLCV only (no broadcast news/calendar channels)")
+    ap.add_argument(
+        "--fusion-tab",
+        choices=("none",) + FUSION_TAB_MODES,
+        default="none",
+        help="Phase 2: OHLCV chart + sidecar tabular vector (e2=E2_T_time_KB, e3=full TNC)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="Stats only, no NPZ write")
     args = ap.parse_args()
 
@@ -182,6 +189,7 @@ def main() -> int:
     window_bars = max(4, int(args.window_bars))
 
     tensors: list[np.ndarray] = []
+    tab_rows: list[list[float]] = []
     y_list: list[int] = []
     sample_ids: list[str] = []
     tickers: list[str] = []
@@ -189,7 +197,17 @@ def main() -> int:
     tb_labels: list[str] = []
     n_skipped = 0
 
-    include_context = not bool(args.no_context)
+    fusion_tab = str(args.fusion_tab).strip().lower()
+    if fusion_tab not in ("none",) + FUSION_TAB_MODES:
+        logger.error("invalid --fusion-tab %s", args.fusion_tab)
+        return 1
+    if fusion_tab != "none":
+        include_context = False
+        tab_keys = fusion_tab_keys(fusion_tab)  # type: ignore[arg-type]
+        logger.info("fusion-tab=%s: OHLCV chart + sidecar tab (%d features)", fusion_tab, len(tab_keys))
+    else:
+        tab_keys = ()
+        include_context = not bool(args.no_context)
     feat_names = chart_feature_names(include_context=include_context)
 
     for ticker in sorted(by_ticker.keys()):
@@ -215,6 +233,8 @@ def main() -> int:
                 n_skipped += 1
                 continue
             win = window_tensor_with_context(win, row, include_context=include_context)
+            if fusion_tab != "none":
+                tab_rows.append(tabular_vector_from_row(row, tab_keys))
             try:
                 y = int(float(row.get("y_entry_good") or 0))
             except (TypeError, ValueError):
@@ -254,8 +274,12 @@ def main() -> int:
         source=str(args.source),
     )
     stats["include_context"] = include_context
+    stats["fusion_tab"] = fusion_tab
     stats["n_features"] = len(feat_names)
     stats["feature_names"] = list(feat_names)
+    if fusion_tab != "none":
+        stats["n_tab_features"] = len(tab_keys)
+        stats["tab_feature_names"] = list(tab_keys)
     stats["tb_label_counts"] = {
         k: tb_labels.count(k) for k in sorted(set(tb_labels))
     }
@@ -279,8 +303,7 @@ def main() -> int:
 
     out_path = Path(out_arg).expanduser()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        out_path,
+    save_kw: dict[str, Any] = dict(
         schema_version=CHART_ENTRY_ML_SCHEMA_VERSION,
         X=X,
         y=y,
@@ -295,8 +318,16 @@ def main() -> int:
             dtype=object,
         ),
         include_context=np.bool_(include_context),
+        fusion_tab=np.asarray(fusion_tab, dtype=object),
         window_bars=np.int32(window_bars),
     )
+    if fusion_tab != "none":
+        if len(tab_rows) != n_rows:
+            logger.error("tab_rows mismatch %d vs %d", len(tab_rows), n_rows)
+            return 1
+        save_kw["X_tab"] = np.asarray(tab_rows, dtype=np.float32)
+        save_kw["tab_feature_names"] = np.asarray(list(tab_keys), dtype=object)
+    np.savez_compressed(out_path, **save_kw)
     logger.info("wrote %d rows shape=%s → %s", n_rows, X.shape, out_path)
     return 0
 

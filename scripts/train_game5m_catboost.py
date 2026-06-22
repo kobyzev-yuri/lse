@@ -198,7 +198,7 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
         )
         return 2
 
-    order = sorted(range(n_total), key=lambda i: (meta_rows[i][0] is not None, meta_rows[i][0]))
+    order = sorted(range(n_total), key=lambda i: (meta_rows[i][0] or ""))
     rows = [rows[i] for i in order]
     labels = [labels[i] for i in order]
 
@@ -209,26 +209,31 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
         n_valid = n_total - n_train
 
     feature_names, cat_features = get_bar_train_feature_schema(feature_mode)
-    train_pool = Pool(rows[:n_train], label=labels[:n_train], cat_features=cat_features, feature_names=feature_names)
-    valid_pool = Pool(rows[n_train:], label=labels[n_train:], cat_features=cat_features, feature_names=feature_names)
+    train_rows = rows[:n_train]
+    valid_rows = rows[n_train:]
+    train_y = labels[:n_train]
+    valid_y = labels[n_train:]
+    train_pool = Pool(train_rows, label=train_y, cat_features=cat_features, feature_names=feature_names)
+    valid_pool = Pool(valid_rows, label=valid_y, cat_features=cat_features, feature_names=feature_names)
 
+    pos = sum(train_y)
+    neg = len(train_y) - pos
     model = CatBoostClassifier(
-        iterations=300,
+        iterations=400,
         learning_rate=0.05,
         depth=6,
         loss_function="Logloss",
         eval_metric="AUC",
         random_seed=42,
         verbose=False,
-        early_stopping_rounds=40,
+        scale_pos_weight=neg / max(pos, 1),
     )
     model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
 
     try:
         from sklearn.metrics import roc_auc_score
 
-        proba = model.predict_proba(rows[n_train:])[:, 1]
-        valid_y = labels[n_train:]
+        proba = model.predict_proba(valid_pool)[:, 1]
         auc = roc_auc_score(valid_y, proba) if len(set(valid_y)) > 1 else float("nan")
     except Exception:
         auc = float("nan")

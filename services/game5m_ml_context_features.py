@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, time as dt_time, timedelta
+from datetime import time as dt_time
 from typing import Any, Mapping, Optional
 
+import numpy as np
 import pandas as pd
 
 from services.cluster_recommend import CORRELATION_CB_FEATURE_KEYS
@@ -77,7 +78,7 @@ _SESSION_PHASE_ORDER = (
     "HOLIDAY",
 )
 
-_MACRO_RISK_ORDER = ("LOW", "MEDIUM", "HIGH", "EXTREME", "UNKNOWN")
+_MACRO_RISK_ORDER = ("LOW", "MEDIUM", "HIGH", "EXTREME", "NEUTRAL", "CAUTION", "AVOID", "UNKNOWN")
 
 
 def _safe_float(v: Any, default: float = 0.0) -> float:
@@ -156,6 +157,185 @@ def kb_news_stats(kb_news: list[dict[str, Any]]) -> dict[str, float]:
     }
 
 
+def prob_direction_from_technical(
+    *,
+    rsi_5m: Any = None,
+    momentum_2h_pct: Any = None,
+    volatility_5m_pct: Any = None,
+) -> tuple[float, float]:
+    """Heuristic prob_up/prob_down (same scoring as recommend_5m scan)."""
+    up_score = 1.0
+    down_score = 1.0
+    try:
+        rsi_now = float(rsi_5m) if rsi_5m is not None else None
+    except (TypeError, ValueError):
+        rsi_now = None
+    try:
+        mom_2h = float(momentum_2h_pct) if momentum_2h_pct is not None else None
+    except (TypeError, ValueError):
+        mom_2h = None
+    try:
+        vol_5m = float(volatility_5m_pct) if volatility_5m_pct is not None else None
+    except (TypeError, ValueError):
+        vol_5m = None
+
+    if isinstance(rsi_now, (int, float)):
+        if rsi_now <= 30:
+            up_score += 0.6
+        elif rsi_now >= 70:
+            down_score += 0.6
+    if isinstance(mom_2h, (int, float)):
+        if mom_2h >= 1.0:
+            up_score += 0.4
+        elif mom_2h <= -1.0:
+            down_score += 0.4
+    if isinstance(vol_5m, (int, float)) and vol_5m >= 0.8:
+        up_score = 1.0 + (up_score - 1.0) * 0.7
+        down_score = 1.0 + (down_score - 1.0) * 0.7
+    s = up_score + down_score
+    return round(up_score / s, 2), round(down_score / s, 2)
+
+
+def _premarket_gap_sql(
+    conn: Any,
+    *,
+    symbol: str,
+    trade_date: Any,
+) -> float:
+    from sqlalchemy import text
+
+    row = conn.execute(
+        text(
+            """
+            SELECT premarket_gap_pct
+            FROM premarket_daily_features
+            WHERE exchange = 'US'
+              AND snapshot_label = 'latest'
+              AND symbol = :sym
+              AND trade_date = :d
+            LIMIT 1
+            """
+        ),
+        {"sym": str(symbol or "").strip().upper(), "d": pd.Timestamp(trade_date).date()},
+    ).fetchone()
+    return _safe_float(row[0]) if row else 0.0
+
+
+def _index_gaps_for_date(
+    conn: Any,
+    trade_date: Any,
+    *,
+    index_cache: dict[str, dict[str, float]] | None = None,
+) -> dict[str, float]:
+    from services.ticker_groups import get_market_ndx_fallback_ticker, get_market_ndx_ticker
+
+    dkey = str(pd.Timestamp(trade_date).date())
+    if index_cache is not None and dkey in index_cache:
+        return index_cache[dkey]
+    ndx_sym = get_market_ndx_ticker()
+    ndx_fb = get_market_ndx_fallback_ticker()
+    spy_gap = _premarket_gap_sql(conn, symbol="SPY", trade_date=trade_date)
+    ndx_gap = _premarket_gap_sql(conn, symbol=ndx_sym, trade_date=trade_date)
+    if ndx_gap == 0.0 and ndx_fb.upper() != ndx_sym.upper():
+        ndx_gap = _premarket_gap_sql(conn, symbol=ndx_fb, trade_date=trade_date)
+    out = {"spy_gap_pct": spy_gap, "ndx_gap_pct": ndx_gap}
+    if index_cache is not None:
+        index_cache[dkey] = out
+    return out
+
+
+def correlation_matrix_before_date(
+    engine: Any,
+    tickers: list[str],
+    *,
+    as_of_date: Any,
+    days: int = 30,
+) -> dict[str, dict[str, float]] | None:
+    """Daily log-return correlation using quotes strictly before as_of_date (no same-day leak)."""
+    if engine is None or len(tickers) < 2:
+        return None
+    from sqlalchemy import text
+
+    as_of = pd.Timestamp(as_of_date).date()
+    syms = sorted({str(t).strip().upper() for t in tickers if t})
+    if len(syms) < 2:
+        return None
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(
+                text(
+                    """
+                    SELECT ticker, date::date AS d, close::float AS close
+                    FROM quotes
+                    WHERE ticker = ANY(:tickers) AND date::date < :as_of
+                    ORDER BY d
+                    """
+                ),
+                conn,
+                params={"tickers": syms, "as_of": as_of},
+            )
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    pt = df.pivot_table(index="d", columns="ticker", values="close").sort_index()
+    pt = pt.replace(0, np.nan).tail(max(int(days) + 5, 35))
+    log_ret = np.log(pt / pt.shift(1)).replace([np.inf, -np.inf], np.nan)
+    log_ret = log_ret.tail(int(days))
+    if log_ret.shape[0] < 5 or log_ret.shape[1] < 2:
+        return None
+    corr = log_ret.corr(min_periods=5)
+    if corr is None or corr.empty:
+        return None
+    return corr.to_dict()
+
+
+def fetch_correlation_features_as_of(
+    engine: Any,
+    *,
+    ticker: str,
+    as_of_date: Any,
+    days: int = 30,
+    cache: dict[str, Any] | None = None,
+) -> dict[str, float]:
+    from services.cluster_recommend import extract_correlation_features_for_5m_entry
+    from services.ticker_groups import get_tickers_for_5m_correlation
+
+    zeros = {k: 0.0 for k in CORRELATION_CB_FEATURE_KEYS}
+    dkey = str(pd.Timestamp(as_of_date).date())
+    matrix: dict[str, dict[str, float]] | None = None
+    if cache is not None and dkey in cache:
+        matrix = cache[dkey]
+    else:
+        universe = list(get_tickers_for_5m_correlation() or [])
+        matrix = correlation_matrix_before_date(
+            engine, universe, as_of_date=as_of_date, days=days,
+        )
+        if cache is not None:
+            cache[dkey] = matrix
+    if not matrix:
+        return zeros
+    return extract_correlation_features_for_5m_entry(ticker, matrix)
+
+
+def _gap_from_macro_json(macro_json: Any, symbol: str) -> float:
+    if not macro_json:
+        return 0.0
+    if isinstance(macro_json, str):
+        try:
+            import json
+
+            macro_json = json.loads(macro_json)
+        except Exception:
+            return 0.0
+    if not isinstance(macro_json, dict):
+        return 0.0
+    info = macro_json.get(symbol) or macro_json.get(str(symbol).upper())
+    if not isinstance(info, dict):
+        return 0.0
+    return _safe_float(info.get("gap_pct"))
+
+
 def infer_kb_news_impact_label(kb_news: list[dict[str, Any]]) -> str:
     """Static impact label from KB list (no decision mutation)."""
     news_with_sentiment = [
@@ -181,17 +361,19 @@ def fetch_calendar_gaps_as_of(
     ticker: str,
     trade_date: Any,
     cache: dict[tuple[str, str], dict[str, float]] | None = None,
+    index_cache: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, float]:
-    """Premarket/NDX gaps for trade_date from DB; zeros if unavailable."""
+    """Premarket gaps + macro risk for trade_date (premarket_daily_features + gap_forecast)."""
     sym = str(ticker or "").strip().upper()
     dkey = str(pd.Timestamp(trade_date).date())
     ck = (sym, dkey)
     if cache is not None and ck in cache:
         return cache[ck]
-    out = {
+    out: dict[str, float] = {
         "ndx_gap_pct": 0.0,
         "spy_gap_pct": 0.0,
         "premarket_gap_pct": 0.0,
+        "macro_risk_level": "",
         "macro_risk_enc": macro_risk_enc(None),
     }
     if engine is None:
@@ -201,21 +383,38 @@ def fetch_calendar_gaps_as_of(
 
         d = pd.Timestamp(trade_date).date()
         with engine.connect() as conn:
-            row = conn.execute(
+            out["premarket_gap_pct"] = _premarket_gap_sql(conn, symbol=sym, trade_date=d)
+            idx = _index_gaps_for_date(conn, d, index_cache=index_cache)
+            out["ndx_gap_pct"] = idx["ndx_gap_pct"]
+            out["spy_gap_pct"] = idx["spy_gap_pct"]
+            gf = conn.execute(
                 text(
                     """
-                    SELECT premarket_gap_pct, ndx_gap_pct, spy_gap_pct
-                    FROM premarket_daily_features
-                    WHERE ticker = :ticker AND trade_date = :d
+                    SELECT macro_risk_level, premarket_gap_pct, macro_indicators_json
+                    FROM game5m_gap_forecast_daily
+                    WHERE symbol = :sym AND trade_date = :d
                     LIMIT 1
                     """
                 ),
-                {"ticker": str(ticker or "").strip().upper(), "d": d},
+                {"sym": sym, "d": d},
             ).fetchone()
-        if row:
-            out["premarket_gap_pct"] = _safe_float(row[0])
-            out["ndx_gap_pct"] = _safe_float(row[1])
-            out["spy_gap_pct"] = _safe_float(row[2])
+        if gf:
+            macro_level = str(gf[0] or "").strip().upper()
+            if macro_level:
+                out["macro_risk_level"] = macro_level
+                out["macro_risk_enc"] = macro_risk_enc(macro_level)
+            if out["premarket_gap_pct"] == 0.0:
+                out["premarket_gap_pct"] = _safe_float(gf[1])
+            macro_json = gf[2] if len(gf) > 2 else None
+            if out["spy_gap_pct"] == 0.0:
+                out["spy_gap_pct"] = _gap_from_macro_json(macro_json, "SPY")
+            if out["ndx_gap_pct"] == 0.0:
+                from services.ticker_groups import get_market_ndx_ticker
+
+                ndx_sym = get_market_ndx_ticker()
+                out["ndx_gap_pct"] = _gap_from_macro_json(macro_json, ndx_sym)
+                if out["ndx_gap_pct"] == 0.0:
+                    out["ndx_gap_pct"] = idx["ndx_gap_pct"]
     except Exception:
         pass
     if cache is not None:
@@ -233,6 +432,8 @@ def build_entry_context_features(
     kb_days: int = 7,
     kb_news: Optional[list[dict[str, Any]]] = None,
     gaps_cache: dict[tuple[str, str], dict[str, float]] | None = None,
+    index_gaps_cache: dict[str, dict[str, float]] | None = None,
+    correlation_cache: dict[str, Any] | None = None,
 ) -> dict[str, float]:
     """
     Numeric context at entry/hold decision bar.
@@ -255,13 +456,26 @@ def build_entry_context_features(
     impact_label = infer_kb_news_impact_label(kb_news)
     stats = kb_news_stats(kb_news)
     gaps = fetch_calendar_gaps_as_of(
-        engine, ticker=ticker, trade_date=ts.date(), cache=gaps_cache,
+        engine,
+        ticker=ticker,
+        trade_date=ts.date(),
+        cache=gaps_cache,
+        index_cache=index_gaps_cache,
     )
 
     ctx = dict(entry_context or {})
     feat = dict(features or {})
 
-    macro_level = ctx.get("macro_risk_level") or feat.get("macro_risk_level")
+    macro_level = ctx.get("macro_risk_level") or feat.get("macro_risk_level") or gaps.get("macro_risk_level")
+    prob_up = _safe_float(ctx.get("prob_up") or feat.get("prob_up"))
+    prob_down = _safe_float(ctx.get("prob_down") or feat.get("prob_down"))
+    if prob_up == 0.0 and prob_down == 0.0:
+        prob_up, prob_down = prob_direction_from_technical(
+            rsi_5m=feat.get("rsi_5m"),
+            momentum_2h_pct=feat.get("momentum_2h_pct"),
+            volatility_5m_pct=feat.get("volatility_5m_pct"),
+        )
+
     out: dict[str, float] = {
         "kb_news_impact_enc": kb_news_impact_enc(impact_label),
         "kb_news_sentiment_mean": stats["kb_news_sentiment_mean"],
@@ -273,12 +487,24 @@ def build_entry_context_features(
         "spy_gap_pct": gaps["spy_gap_pct"] or _safe_float(ctx.get("spy_gap_pct")),
         "premarket_gap_pct": gaps["premarket_gap_pct"] or _safe_float(ctx.get("premarket_gap_pct")),
         "macro_risk_enc": macro_risk_enc(macro_level) if macro_level else gaps["macro_risk_enc"],
-        "prob_up": _safe_float(ctx.get("prob_up") or feat.get("prob_up")),
-        "prob_down": _safe_float(ctx.get("prob_down") or feat.get("prob_down")),
+        "prob_up": prob_up,
+        "prob_down": prob_down,
         "llm_sentiment": _safe_float(ctx.get("llm_sentiment") or feat.get("llm_sentiment")),
     }
-    for k in CORRELATION_CB_FEATURE_KEYS:
-        out[k] = _safe_float(ctx.get(k))
+    if any(k in ctx for k in CORRELATION_CB_FEATURE_KEYS):
+        for k in CORRELATION_CB_FEATURE_KEYS:
+            out[k] = _safe_float(ctx.get(k))
+    elif engine is not None:
+        corr_feats = fetch_correlation_features_as_of(
+            engine,
+            ticker=ticker,
+            as_of_date=ts.date(),
+            cache=correlation_cache,
+        )
+        out.update(corr_feats)
+    else:
+        for k in CORRELATION_CB_FEATURE_KEYS:
+            out[k] = 0.0
     return out
 
 
@@ -347,8 +573,11 @@ __all__ = [
     "build_entry_context_features",
     "context_vector_from_dict",
     "entry_snapshot_from_context",
+    "correlation_matrix_before_date",
     "fetch_calendar_gaps_as_of",
+    "fetch_correlation_features_as_of",
     "hold_exit_tech_from_features",
+    "prob_direction_from_technical",
     "hold_state_features",
     "infer_kb_news_impact_label",
     "kb_news_impact_enc",

@@ -12,6 +12,7 @@ from services.game5m_ml_context_features import (
     hold_state_features,
     infer_kb_news_impact_label,
     kb_news_impact_enc,
+    prob_direction_from_technical,
     session_phase_enc_from_ts,
 )
 
@@ -58,6 +59,14 @@ def test_build_entry_context_features_defaults():
     )
     assert "session_phase_enc" in ctx
     assert ctx["kb_news_count"] == 0.0
+    assert ctx["prob_up"] > 0
+    assert abs(ctx["prob_up"] + ctx["prob_down"] - 1.0) < 1e-6
+
+
+def test_prob_direction_from_technical_oversold():
+    up, down = prob_direction_from_technical(rsi_5m=25.0, momentum_2h_pct=2.0)
+    assert up > down
+    assert abs(up + down - 1.0) < 1e-6
 
 
 def test_window_tensor_with_context_broadcast():

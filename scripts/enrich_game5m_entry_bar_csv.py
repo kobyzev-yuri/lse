@@ -36,6 +36,8 @@ def main() -> int:
     kb_days = max(1, int(args.kb_days))
     kb_pools: dict[str, list] = {}
     gaps_cache: dict = {}
+    index_gaps_cache: dict = {}
+    correlation_cache: dict = {}
 
     rows_out: list[dict] = []
     with open(in_path, newline="", encoding="utf-8") as f:
@@ -59,6 +61,8 @@ def main() -> int:
                 kb_days=kb_days,
                 kb_news=kb_news,
                 gaps_cache=gaps_cache,
+                index_gaps_cache=index_gaps_cache,
+                correlation_cache=correlation_cache,
             )
             row.update(ctx)
             rows_out.append(row)

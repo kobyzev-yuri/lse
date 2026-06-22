@@ -39,6 +39,15 @@ CONTOUR_TRUST_SPECS: dict[str, dict[str, Any]] = {
         "weights": (0.2, 0.35, 0.35, 0.1),
         "shadow_only": True,
     },
+    "hold_bar_ml_h3": {
+        "surface": "GAME_5M",
+        "display": "hold_bar_ml_h3",
+        "n_min": 50,
+        "dataset_n_min": 3000,
+        "apply_t_hit": 0.55,
+        "weights": (0.2, 0.3, 0.35, 0.15),
+        "shadow_only": True,
+    },
     "gap_forecast": {
         "surface": "GAME_5M",
         "display": "gap_forecast",

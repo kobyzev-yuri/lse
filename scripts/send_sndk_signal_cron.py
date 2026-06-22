@@ -818,6 +818,30 @@ def process_ticker(
                     )
                 except Exception as e_md_snap:
                     logger.debug("multiday exit snapshot %s: %s", ticker, e_md_snap)
+                try:
+                    from services.game5m_hold_quality_signal import build_hold_quality_shadow
+
+                    hq = build_hold_quality_shadow(
+                        ticker=ticker,
+                        open_position=open_pos,
+                        entry_ctx=entry_ctx_db,
+                        ref_close=float(price_for_check),
+                        bar_time_et=close_ctx.get("exit_5m_bar_open_et") or close_ctx.get("decision_5m_bar_open_et"),
+                        exit_features=d5 if isinstance(d5, dict) else None,
+                        exit_detail=exit_detail or "",
+                    )
+                    if hq is not None:
+                        close_ctx_enriched["hold_quality_ml"] = hq
+                        if hq.get("status") == "ok":
+                            logger.info(
+                                "[5m] HOLD_QUALITY %s: P=%s tau=%s would_defer=%s",
+                                ticker,
+                                hq.get("hold_quality_proba"),
+                                hq.get("tau_hold"),
+                                hq.get("would_defer_exit"),
+                            )
+                except Exception as e_hq:
+                    logger.debug("hold_quality shadow %s: %s", ticker, e_hq)
                 if exit_type == "TIME_EXIT_EARLY":
                     rec_gate = _game5m_recovery_live_gate_time_exit_early(
                         ticker=ticker,
