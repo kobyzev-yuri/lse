@@ -509,8 +509,8 @@ def process_ticker(
     entry_hanger_diag_checked = False
     entry_live_hanger_kind = None
     position_state_v2 = None
-                continuation_gate = None
-                continuation_ml = None
+    continuation_gate = None
+    continuation_ml = None
 
     try:
         # GAME_5M и Portfolio независимы: 5m cron управляет только своими лотами.
