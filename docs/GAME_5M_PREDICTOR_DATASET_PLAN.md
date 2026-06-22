@@ -255,30 +255,32 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 
 ---
 
-## 13. Где мы сейчас (зафиксировано 2026-06-20)
+## 13. Где мы сейчас (зафиксировано 2026-06-22)
 
-**Фаза roadmap:** shadow / log_only — **код и infra готовы**, prod apply **не включён**.
+**Фаза roadmap:** shadow / log_only — **E3 entry + H3 hold задеплоены**; prod apply **не включён**.
 
-| Контур | Код | Prod config | Telemetry в БД | Блокер apply |
-|--------|-----|-------------|----------------|--------------|
-| Entry bar v2 (1.6–1.7) | ✅ train AUC **0.5495** | shadow log (default `BAR_V2_LOG=true`) | **0** BUY с `catboost_entry_proba_good_v2` | ≥2 нед RTH BUY после деплоя |
-| Continuation ML (2.4–2.6) | ✅ train AUC **≈0.735** | `CONTINUATION_ML_ENABLED=true`, `GATE_MODE=log_only` | **0** TAKE с `continuation_ml` | ≥8–15 TAKE + нет mass `predict_failed` |
-| Recovery D4a | ✅ | log_only D4a | **23** `recovery_ml_time_exit_early` | D4b — отдельный vote на promotion review |
-| Multiday enrich (Ф4) | — | без изменений | — | **deferred**, не входит в promotion review |
+| Контур | Offline AUC | Prod | Telemetry в БД (7d) | UI |
+|--------|-------------|------|---------------------|-----|
+| Entry bar v2 (tech) | 0.550 | shadow | 0 BUY w/ v2 | — |
+| **Entry E3 (T+N+C)** | **0.610** (σ 0.004) | **shadow** ✅ 22.06 | 0 (нет BUY после деплоя) | cards ML shadow |
+| **Hold H3 (T+N+C)** | **0.623** (σ 0.022) | **shadow** ✅ 22.06 | 0 (нет SELL после деплоя) | cards при open pos |
+| Continuation ML | ≈0.735 | log_only | 0 TAKE w/ ml | — |
+| Recovery D4a | — | log_only | 23 TIME_EXIT_EARLY | — |
+| Chart LSTM/CNN | 0.612–0.616 | **не prod** | — | — |
+| Fusion E3 | 0.607 mean | **не prod** | — | — |
 
-**Факты prod БД (2026-06-20):**
+**Факты prod (2026-06-22 ~09:47 ET):**
 
 | Метрика | Значение |
 |---------|----------|
-| Последняя сделка (любая) | **2026-06-18** |
-| Последний TAKE | **2026-06-12** (до включения telemetry) |
-| Последний BUY | **2026-06-18** (до деплоя shadow 20.06) |
-| Deploy shadow telemetry | **2026-06-20** (`d319b60`) |
-| Следующий RTH (ожидание событий) | **2026-06-23** (пн) |
+| Deploy HEAD | `34df4b3` |
+| Последний BUY/SELL | **2026-06-18** (до E3/H3 deploy) |
+| E3/H3 models on VM | ✅ AUC meta 0.610 / 0.596 |
+| T0 shadow window | **2026-06-23** RTH |
 
-**Почему SQL «последние TAKE с continuation_ml» пустой:** запрос корректен; фильтр `context_json ? 'continuation_ml'` не находит строк — telemetry пишется **только при новом TAKE после 20.06**. Диагностика: `/sql` → *Сводка ожидания telemetry* или *Последние TAKE (с флагом has_ml)*.
+**Chart research:** interim **no-go prod** — см. [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md) v2. Prod path = **tabular E3/H3**, не cron torch.
 
-**Чего ждём (P0):** не код, а **рыночные события** — cron на RTH закрывает позиции → первые строки в `context_json`. Без TAKE continuation_ml не появится; без BUY — bar v2 shadow.
+**Retrain канон:** §15 [GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md](GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md) — `entry_bar_full.csv` + `hold_bar_dataset.csv` → ablation → `train_game5m_prod_shadow_models.py`.
 
 ---
 
@@ -301,9 +303,11 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 
 | # | Gate | Env / действие | Go если |
 |---|------|----------------|---------|
-| G1 | **Entry bar v2 fusion** (1.8) | `GAME_5M_CATBOOST_DATASET_VERSION=bar` + fusion sign-off | ≥10–15 BUY с v2 telemetry; trust medium+; offline AUC ≥0.545 |
+| G1 | **Entry bar v2** (1.8) | `GAME_5M_CATBOOST_DATASET_VERSION=bar` + fusion sign-off | ≥10–15 BUY с v2 telemetry; trust medium+; offline AUC ≥0.545 |
+| G1b | **Entry E3 shadow** (optional) | уже log_only | ≥10 BUY с `catboost_entry_proba_good_e3`; offline AUC ≥0.60; **apply defer** до chart/fusion go или отдельный vote |
 | G2 | **Continuation ML apply** (2.6) | `GAME_5M_CONTINUATION_ML_GATE_MODE=apply` | ≥8–15 TAKE с `continuation_ml`; `status=ok` ≥80%; analyzer backtest не против |
 | G3 | **Recovery D4b** (3.2) | recovery live apply (см. recovery plan) | D4a ≥15 строк; `tau_sweep` / whipsaw review; **может быть defer** отдельно от G1–G2 |
+| G4 | **Hold H3 shadow** (exit bake-off) | log_only → apply | ≥15 SELL с `hold_quality_ml`; policy ΔPnL не против; **не раньше** entry sign-off |
 | — | Multiday enrich (Ф4) | — | **вне scope** review #1 |
 
 **No-go (любой пункт):** остаёмся log_only, перенос review на **2026-07-21** или +1 нед RTH.
@@ -321,15 +325,18 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 
 ---
 
-## 15. Handoff технич. (2026-06-20)
+## 15. Handoff технич. (2026-06-22)
 
 | Артефакт | Статус |
 |----------|--------|
 | Entry bar v2 model | `/app/logs/ml/models/game5m_entry_catboost_v2.cbm`, AUC valid **0.5495** |
-| Continuation model | `/app/logs/ml/models/game5m_continuation_catboost.cbm`, AUC valid **≈0.735** |
-| SQL мониторинг | `/sql` — presets + диагностика wait dashboard |
-| Analyzer | `continuation_ml_live_review`, `game5m_oracle_exit_ceiling` |
-| Deploy | `d319b60` на VM |
+| **Entry E3 shadow** | `/app/logs/ml/models/game5m_entry_catboost_e3.cbm`, AUC **0.610** |
+| **Hold H3 shadow** | `/app/logs/ml/models/game5m_hold_bar_catboost_h3.cbm`, AUC **0.596** (train; ablation **0.623**) |
+| Continuation model | `/app/logs/ml/models/game5m_continuation_catboost.cbm`, AUC **≈0.735** |
+| Chart/fusion | local `.pt` only — **no prod** |
+| SQL мониторинг | `/sql` — bar v2, **Entry E3**, **Hold H3** presets |
+| UI | `/game5m/cards` — ML shadow block (E3 + H3 live) |
+| Deploy | **`34df4b3`** на VM |
 
 ---
 

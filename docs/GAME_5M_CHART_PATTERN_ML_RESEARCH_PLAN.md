@@ -12,9 +12,8 @@
 | Prod roadmap (без LSTM end-to-end) | [GAME_5M_PREDICTOR_DATASET_PLAN.md](GAME_5M_PREDICTOR_DATASET_PLAN.md) §2 |
 | Triple barrier код | `services/game5m_triple_barrier.py` |
 | Builder строк | `scripts/build_game5m_entry_bar_dataset.py` |
-| **Отчёт Phase 1 (2026-06-21)** | [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md) |
+| **Отчёт Phase 1–2 (2026-06-21–22)** | [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md) |
 | **Exit/hold bake-off (план)** | [GAME_5M_EXIT_HOLD_ML_BAKEOFF_PLAN.md](GAME_5M_EXIT_HOLD_ML_BAKEOFF_PLAN.md) |
-| **Отчёт Phase 1 (2026-06-21)** | [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md) |
 
 ---
 
@@ -301,46 +300,36 @@ Chart research **параллелен** MM shadow и ML telemetry; **не бло
 - [x] 1.5.0 spec §5.1 + `game5m_ml_context_features.py`
 - [x] 1.5.1 bar CSV enrich columns (default on)
 - [x] 1.5.2 chart NPZ broadcast ctx channels
-- [ ] 1.5.3 AUC compare T vs T+N+C vs Chart+ctx
+- [x] 1.5.3 AUC compare T vs T+N+C vs Chart+ctx → `local/datasets/game5m_entry_bakeoff_phase15.json`, `run_game5m_tabular_ablation.py`
 
 ### Фаза 1
 - [x] 1.1 smoke baselines (smoke CSV, yfinance — sanity only)
-- [x] 1.2 CatBoost v2 full local (`auc_valid=0.5648`, bar CSV db/tunnel)
-- [x] 1.3 LSTM v1 full local (`auc_valid=0.5987`, GPU py12+cu130)
-- [x] 1.4 CNN v1 full local (`auc_valid=0.5985` seed42; stability mean **0.6138**)
+- [x] 1.2 CatBoost tech-only (`auc_valid≈0.577` E0) / **E3 full TNC `0.610`**
+- [x] 1.3 LSTM OHLCV (`auc_valid≈0.616` seed42; stability mean **0.612**)
+- [x] 1.4 CNN OHLCV (`auc_valid≈0.599` seed42; stability mean **0.614**)
 - [x] 1.5 stability 3 seeds LSTM/CNN → `local/datasets/game5m_chart_entry_stability.json`
 
 ### Фаза 2
-- [ ] 2.1 CNN+LSTM best checkpoint
-- [ ] 2.2–2.3 ablation report
+- [x] 2.1 **Fusion** LSTM(OHLCV) + tabular sidecar (E2/E3), residual + concat → `game5m_chart_entry_fusion_bakeoff.json`
+- [ ] 2.1b end-to-end CNN+LSTM combo (§4.C) — **не делали**
+- [ ] 2.2 window ablation 24/48/96 bars
+- [ ] 2.3 PNG render vs raw tensor
 
 ### Фаза 3
-- [x] 3.4 interim report → [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md)
-- [ ] 3.1 analyzer status block
-- [ ] 3.4 final go/no-go memo
+- [x] 3.4 interim report → [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md) (v2 ниже)
+- [ ] 3.1 analyzer block `game5m_chart_entry_model_status`
+- [ ] 3.2 calibration / Brier / ticker-group valid
+- [ ] 3.4 **final go/no-go memo** (deadline ~2026-08-15)
 
 ### Фаза 4–5
-- [ ] only if go
+- [ ] chart prod shadow — **no-go interim** (§14)
+- [x] **tabular E3 entry shadow** в prod (`catboost_entry_proba_good_e3`) — см. predictor plan §13
+- [x] **tabular H3 hold shadow** в prod (`hold_quality_ml`) — exit bake-off track B3
+- [ ] Elliott tabular features (Ф5)
 
 ---
 
-## 12. FAQ
-
-**Это замена Эллиотта?**  
-Нет — замена **субъективного** wave count на **обучение с barrier y**. Эллиотт — интуиция; метрика — barrier.
-
-**Почему не net_pnl?**  
-Trade y смещён (только входы, которые rules уже пропустили). Barrier — честнее для «стоило входить на этом баре».
-
-**CNN на PNG из Telegram?**  
-Нет — tensor из того же OHLC что CatBoost, иначе train/serve drift.
-
-**Локально с GPU и tunnel?**  
-Да — рекомендуемый research path (§13). Prod cron не нужен до go/no-go.
-
----
-
-## 13. Local-first workflow (GPU + SSH tunnel)
+## 12. Local-first workflow (GPU + SSH tunnel)
 
 **Терминал 1 — tunnel к prod Postgres:**
 
@@ -356,35 +345,38 @@ pip install torch  # CUDA: см. https://pytorch.org
 pip install -r requirements.txt -r requirements-catboost.txt
 ```
 
-**Шаг 1 — bar CSV (канон как prod bar v2):**
+**Шаг 1 — bar CSV + enrich (канон E3):**
 
 ```bash
 python scripts/build_game5m_entry_bar_dataset.py \
   --source db --days 90 \
   --out local/datasets/game5m_entry_bar_dataset.csv \
   --summary-json local/datasets/game5m_entry_bar_stats.json
+
+python scripts/enrich_game5m_entry_bar_csv.py \
+  --in local/datasets/game5m_entry_bar_dataset.csv \
+  --out local/datasets/game5m_entry_bar_full.csv
 ```
 
-**Шаг 2 — chart NPZ:**
+**Шаг 1b — hold CSV (канон H3):**
+
+```bash
+python scripts/build_game5m_hold_bar_dataset.py \
+  --source db --days 90 \
+  --out local/datasets/game5m_hold_bar_dataset.csv
+```
+
+**Шаг 2 — chart NPZ (OHLCV-only recommended):**
 
 ```bash
 python scripts/build_game5m_chart_entry_dataset.py \
-  --bar-csv local/datasets/game5m_entry_bar_dataset.csv \
+  --bar-csv local/datasets/game5m_entry_bar_full.csv \
   --source db --days 90 \
   --out local/datasets/game5m_chart_entry_v1.npz \
   --summary-json local/datasets/game5m_chart_entry_v1_stats.json
 ```
 
-Или одной командой (пересоберёт bar CSV):
-
-```bash
-python scripts/build_game5m_chart_entry_dataset.py \
-  --build-bar-csv --source db --days 90 \
-  --out local/datasets/game5m_chart_entry_v1.npz \
-  --summary-json local/datasets/game5m_chart_entry_v1_stats.json
-```
-
-**Шаг 3 — LSTM baseline (GPU если `torch.cuda.is_available()`):**
+**Шаг 3 — LSTM / CNN baseline:**
 
 ```bash
 python scripts/train_game5m_chart_entry_lstm.py \
@@ -392,17 +384,203 @@ python scripts/train_game5m_chart_entry_lstm.py \
   --json-metrics-out local/datasets/game5m_chart_entry_lstm_metrics.json
 ```
 
-**Шаг 4 — tabular reference на том же CSV:**
+**Шаг 4 — tabular ablation + prod shadow train:**
 
 ```bash
-python scripts/train_game5m_catboost.py --dataset bar \
-  --bar-csv local/datasets/game5m_entry_bar_dataset.csv \
-  --json-metrics-out local/datasets/game5m_entry_bar_v2_metrics.json
+python scripts/run_game5m_tabular_ablation.py \
+  --entry-csv local/datasets/game5m_entry_bar_full.csv \
+  --hold-csv local/datasets/game5m_hold_bar_dataset.csv
+
+python scripts/train_game5m_prod_shadow_models.py
+
+python scripts/run_game5m_ml_stability.py
 ```
 
-Smoke без tunnel (yfinance, ~450 строк): `--bar-csv local/datasets/game5m_entry_bar_smoke.csv --source yfinance --days 30`.
+**Шаг 5 — fusion bake-off (optional):**
 
-Артефакты в `local/datasets/` — **не в git** (`.gitignore` / untracked).
+```bash
+python scripts/build_game5m_chart_entry_dataset.py \
+  --bar-csv local/datasets/game5m_entry_bar_full.csv \
+  --fusion-tab e3 --source db --days 90 \
+  --out local/datasets/game5m_chart_entry_fusion_e3.npz
+
+python scripts/train_game5m_chart_entry_fusion.py \
+  --npz local/datasets/game5m_chart_entry_fusion_e3.npz \
+  --fusion-tab e3 --fusion-mode residual --freeze-lstm
+```
+
+Smoke без tunnel (yfinance): `--source yfinance --days 30`. Артефакты в `local/datasets/` — **не в git**.
+
+---
+
+## 14. Выводы и статус (2026-06-22)
+
+### 14.1 Сводка bake-off entry (один CSV, time-split 80/20)
+
+Канон: `local/datasets/game5m_entry_bar_full.csv` — **11 336** строк, valid **2 267**, `y_entry_good` **34%**, 6 tickers, 90d db.
+
+| Track | Модель | AUC valid | Δ vs E3 (0.610) | Stability (3 seeds) |
+|-------|--------|-----------|-----------------|---------------------|
+| E0 | CatBoost T only | 0.577 | −3.3 pp | — |
+| E2 | CatBoost T+time+KB | 0.589 | −2.1 pp | — |
+| **E3** | **CatBoost full T+N+C** | **0.610** | — | mean **0.609**, σ **0.004** ✅ |
+| Chart | LSTM OHLCV (48 bars) | **0.616** | +0.6 pp | mean **0.612** |
+| Chart | CNN OHLCV | 0.599–0.631 | +0.4 pp peak | mean **0.614** |
+| Chart | LSTM + broadcast ctx | 0.523 | **−8.7 pp** | ❌ avoid |
+| Fusion | E3 residual + frozen LSTM | **0.620** peak | +1.0 pp peak | mean **0.607**, σ **0.009** |
+| Fusion | E2 / concat scratch | ≤0.603 | ≤−0.7 pp | хуже LSTM-only |
+
+**Ключевые выводы:**
+
+1. **Контекст N+C на tabular даёт +3.3 pp** (E0→E3); KB alone слаб (+0.03 pp E1→E2), NC layer — основной вклад.
+2. **Chart OHLCV ≈ tabular E3** offline; LSTM чуть лучше peak, CatBoost E3 **стабильнее** (σ 0.004 vs 0.009 fusion).
+3. **Broadcast ctx на timesteps вредит** chart-моделям (overfit / scale) — контекст только через **fusion sidecar** или tabular CatBoost.
+4. **Fusion E3 residual** — единственный chart-путь с additive gain (+1 pp peak), но **не beat E3 стабильно** на mean.
+5. **Interim prod path:** **tabular E3/H3 CatBoost shadow** (не chart cron) — уже в `decision_stack` + карточки.
+
+### 14.2 Hold (exit bake-off, tabular)
+
+Канон: `local/datasets/game5m_hold_bar_dataset.csv` — **4 278** баров удержания, valid **855**, `y_hold_good` **67%**.
+
+| Track | AUC valid | Δ cumulative |
+|-------|-----------|--------------|
+| H0 state | 0.596 | — |
+| H2 + exit tech | 0.616 | +2.0 pp |
+| **H3 full T+N+C** | **0.623** | +2.7 pp |
+| H recovery B1 | 0.611 | legacy baseline |
+
+Stability H3: mean **0.593**, σ **0.022** — **нестабильнее entry**; prod train **0.596**.
+
+Chart hold (LSTM на окне удержания) — **не делали**; приоритет tabular H3 shadow.
+
+### 14.3 Go / no-go chart-ML (interim, 2026-06-22)
+
+| Критерий §8 | Chart LSTM | Fusion E3 | Tabular E3 |
+|-------------|------------|-----------|------------|
+| AUC ≥ ref+2 pp (≥0.57) | ✅ | ✅ peak | ✅ |
+| Стабильность 3 seeds | ✅ | ⚠️ mean < E3 | ✅ |
+| Beat E3 **устойчиво** | ❌ (+0.6 pp mean) | ❌ | — |
+| Prod shadow | ❌ research | ❌ | ✅ **deployed** |
+| **Verdict** | research continue | research continue | **prod shadow** |
+
+**Формальный go chart → prod shadow:** **no-go** до стабильного beat E3 ≥2 pp **и** calibration audit. **Tabular E3/H3** — shadow telemetry (T0 **2026-06-23**).
+
+### 14.4 Единая точка решения — насколько продвинулись
+
+```text
+                    ┌─────────────────────────────────────┐
+  ENTRY (bar)       │  decision_stack / game5m_policy      │
+                    │  rules → core decision               │
+                    │  ├─ catboost v1 (APPLY fusion)       │
+                    │  ├─ bar v2 shadow (log_only)         │
+                    │  └─ entry E3 shadow (log_only) ✅ NEW │
+                    └─────────────────────────────────────┘
+                                      │
+                    ┌─────────────────▼───────────────────┐
+  HOLD (exit bar)   │  send_sndk_signal_cron / should_close│
+                    │  rules → exit signal                 │
+                    │  ├─ recovery_ml (log_only)           │
+                    │  ├─ continuation_ml (log_only)       │
+                    │  ├─ multiday hold gate (log_only)    │
+                    │  └─ hold H3 shadow (log_only) ✅ NEW │
+                    └─────────────────────────────────────┘
+```
+
+| Аспект | Было (06-20) | Сейчас (06-22) | Ещё не сделано |
+|--------|--------------|----------------|----------------|
+| Общая метка entry | `y_entry_good` barrier | ✅ + enrich T+N+C | — |
+| Общая метка hold | разрозненно | ✅ `y_hold_good` H0–H3 | chart hold |
+| Один feature layer | частично | ✅ `game5m_ml_context_features.py` entry+hold | gap predictor в X |
+| Offline bake-off | bar v2 only | ✅ entry ablation + chart + fusion + hold | chart hold |
+| Prod shadow entry | bar v2 | ✅ **E3 full** + UI cards | chart, apply |
+| Prod shadow hold | recovery | ✅ **H3 full** + UI при open pos | apply |
+| Trust arbiter | v2 spec | spec H3; **E3/H3 не в game_contours[]** | promotion G4? |
+| Apply / effective | v1 CatBoost | без изменений | E3/H3 apply после review ~07-14 |
+
+**Итог:** к **единой точке** продвинулись **архитектурно** (общие y, общий context module, shadow в stack/cron, карточки). **Исполнение** по-прежнему rules + v1 CatBoost; ML entry/hold — **telemetry**, не арбитры. Chart — **offline**, не в runtime.
+
+---
+
+## 15. Канонический датасет и retrain (2026-06-22)
+
+### 15.1 Entry pipeline
+
+| Шаг | Скрипт | Выход | Строки (Jun-22) |
+|-----|--------|-------|-----------------|
+| 1 | `build_game5m_entry_bar_dataset.py --source db --days 90` | `game5m_entry_bar_dataset.csv` | ~11.3k |
+| 2 | `enrich_game5m_entry_bar_csv.py` (KB, gaps, macro, corr) | **`game5m_entry_bar_full.csv`** | 11 336 |
+| 3a | `train_game5m_catboost.py --dataset bar --feature-mode full` | E3 `.cbm` | AUC **0.610** |
+| 3b | `run_game5m_tabular_ablation.py` | E0–E3 JSON | ablation |
+| 4 | `build_game5m_chart_entry_dataset.py --bar-csv …/full.csv` | NPZ OHLCV 48×5 | 11 303 |
+| 4b | same + `--fusion-tab e3` | fusion NPZ + tab sidecar | 11 303 |
+| 5 | `train_game5m_chart_entry_{lstm,cnn,fusion}.py` | `.pt` checkpoints | offline |
+| 6 | `run_game5m_ml_stability.py` | stability JSON | 3 seeds |
+
+**Feature contract entry:** `BAR_TRAIN_NUMERIC_KEYS` (8) + `ENTRY_CONTEXT_NUMERIC_KEYS` (20) = **28** cols (E3).  
+**y:** `y_entry_good` = triple barrier upper-first (`game5m_triple_barrier.py`).
+
+### 15.2 Hold pipeline
+
+| Шаг | Скрипт | Выход |
+|-----|--------|-------|
+| 1 | `build_game5m_hold_bar_dataset.py --source db` | `game5m_hold_bar_dataset.csv` (4 278) |
+| 2 | `train_game5m_hold_bar_catboost.py --feature-mode full` | H3 `.cbm` |
+| 3 | `run_game5m_tabular_ablation.py --hold-only` | H0–H3 JSON |
+
+**Feature contract hold:** `HOLD_STATE_KEYS` + entry snapshot + exit tech + NC = **34** cols (H3).  
+**y:** `y_hold_good` = forward MFE/MAE rule (`recovery_y_label`).
+
+### 15.3 Prod shadow models (не chart)
+
+```bash
+python scripts/train_game5m_prod_shadow_models.py
+# → local/models/game5m_entry_catboost_e3.cbm  (aligned hyperparams: iter=400, scale_pos_weight)
+# → local/models/game5m_hold_bar_catboost_h3.cbm
+# scp → VM /app/logs/ml/models/  (one-off; code via git deploy)
+```
+
+Runtime: `attach_entry_e3_signal()` в `game5m_policy.py`; `build_hold_quality_shadow()` в `send_sndk_signal_cron.py`.
+
+### 15.4 Train protocol (все модели)
+
+- Split: time-ordered, последние **20%** по `bar_ts_et`
+- CatBoost: `iterations=400`, `scale_pos_weight`, `use_best_model=True`, seed 42
+- Chart: 30 epochs, BCE + pos_weight, best AUC checkpoint; fusion — **freeze pretrained LSTM**
+- Stability: seeds **42, 43, 44** → `run_game5m_ml_stability.py`
+- Policy τ-grid (offline): `eval_game5m_ml_policy_backtest.py`
+
+---
+
+## 16. Следующие шаги (приоритет)
+
+| P | Задача | Срок |
+|---|--------|------|
+| P0 | **2 нед shadow telemetry** E3 BUY + H3 SELL в БД; `/sql` presets | T0 23.06 → 07.07 |
+| P0 | Promotion review #1: G1 v2, G2 continuation, **+ E3/H3 sign-off?** | ~14.07 |
+| P1 | Align H3 prod train с ablation (σ hold); retrain | до review |
+| P1 | Policy backtest **на trades** (ΔPnL), не только bar labels | до review |
+| P2 | Chart: window 24/48/96 ablation; ticker-group valid | август |
+| P2 | Chart hold LSTM vs H3 tabular | Q3 |
+| P3 | Fusion prod path — **только если** stable beat E3 | после chart go |
+| P3 | Trust arbiter contours `entry_e3` / `hold_h3` в digest | с telemetry |
+| defer | Broadcast ctx on chart timesteps | closed (negative result) |
+| defer | Chart prod cron / torch on VM | no-go interim |
+
+---
+
+## 17. FAQ
+
+**Это замена Эллиотта?**  
+Нет — замена **субъективного** wave count на **обучение с barrier y**. Эллиотт — интуиция; метрика — barrier.
+
+**Почему не net_pnl?**  
+Trade y смещён (только входы, которые rules уже пропустили). Barrier — честнее для «стоило входить на этом баре».
+
+**CNN на PNG из Telegram?**  
+Нет — tensor из того же OHLC что CatBoost, иначе train/serve drift.
+
+**Локально с GPU и tunnel?**  
+Да — рекомендуемый research path (§12). Prod cron не нужен до go/no-go.
 
 ---
 
