@@ -22,17 +22,46 @@ def _hold_h3_tau() -> float:
         return 0.55
 
 
+def _entry_e3_neutral_band() -> float:
+    from config_loader import get_config_value
+
+    try:
+        return max(0.0, min(0.15, float((get_config_value("GAME_5M_ENTRY_E3_NEUTRAL_BAND", "0.03") or "0.03").strip())))
+    except (TypeError, ValueError):
+        return 0.03
+
+
+def _hold_h3_neutral_band() -> float:
+    from config_loader import get_config_value
+
+    try:
+        return max(0.0, min(0.15, float((get_config_value("GAME_5M_HOLD_QUALITY_NEUTRAL_BAND", "0.03") or "0.03").strip())))
+    except (TypeError, ValueError):
+        return 0.03
+
+
+def _ternary_label(p: float, tau: float, band: float, *, positive: str, negative: str) -> tuple[str, bool | None]:
+    """Return (label_ru, would_positive_or_none_if_neutral)."""
+    if abs(p - tau) <= band:
+        return "нейтрально", None
+    if p > tau:
+        return positive, True
+    return negative, False
+
+
 def entry_e3_advice_from_d5(d5: Dict[str, Any]) -> Dict[str, Any]:
     """Shadow entry advice from d5 fields (no extra inference)."""
     status = str(d5.get("entry_e3_signal_status") or "skipped")
     raw_p = d5.get("catboost_entry_proba_good_e3")
     tau = _entry_e3_tau()
+    band = _entry_e3_neutral_band()
     out: Dict[str, Any] = {
         "contour": "entry_e3",
         "log_only": True,
         "status": status,
         "proba": None,
         "tau": tau,
+        "neutral_band": band,
         "would_enter": None,
         "label_ru": "нет данных",
         "detail_ru": (d5.get("entry_e3_signal_note") or "").strip() or None,
@@ -43,11 +72,14 @@ def entry_e3_advice_from_d5(d5: Dict[str, Any]) -> Dict[str, Any]:
         p = float(raw_p)
     except (TypeError, ValueError):
         return out
-    would = p >= tau
+    label, would = _ternary_label(p, tau, band, positive="за вход", negative="против входа")
     out["proba"] = round(p, 4)
     out["would_enter"] = would
-    out["label_ru"] = "за вход" if would else "против входа"
-    out["detail_ru"] = f"P(y_entry_good)≈{p:.2f} · порог τ={tau:.2f} · shadow"
+    out["label_ru"] = label
+    if would is None:
+        out["detail_ru"] = f"P(y_entry_good)≈{p:.2f} · на пороге τ={tau:.2f}±{band:.2f} · shadow"
+    else:
+        out["detail_ru"] = f"P(y_entry_good)≈{p:.2f} · порог τ={tau:.2f} · shadow"
     return out
 
 
@@ -56,12 +88,14 @@ def hold_h3_advice_from_shadow(hq: Dict[str, Any]) -> Dict[str, Any]:
     status = str(hq.get("status") or "skipped")
     raw_p = hq.get("hold_quality_proba")
     tau = float(hq.get("tau_hold") if hq.get("tau_hold") is not None else _hold_h3_tau())
+    band = _hold_h3_neutral_band()
     out: Dict[str, Any] = {
         "contour": "hold_h3",
         "log_only": bool(hq.get("log_only", True)),
         "status": status,
         "proba": None,
         "tau": tau,
+        "neutral_band": band,
         "would_defer_exit": hq.get("would_defer_exit"),
         "label_ru": "нет данных",
         "detail_ru": (hq.get("reason") or hq.get("skip_reason") or "").strip() or None,
@@ -72,12 +106,15 @@ def hold_h3_advice_from_shadow(hq: Dict[str, Any]) -> Dict[str, Any]:
         p = float(raw_p)
     except (TypeError, ValueError):
         return out
-    would_defer = bool(hq.get("would_defer_exit")) if hq.get("would_defer_exit") is not None else p >= tau
+    label, would_opt = _ternary_label(p, tau, band, positive="за удержание", negative="за выход")
     out["proba"] = round(p, 4)
-    out["would_defer_exit"] = would_defer
-    # would_defer_exit=True → model prefers holding (not selling now).
-    out["label_ru"] = "за удержание" if would_defer else "за выход"
-    out["detail_ru"] = f"P(y_hold_good)≈{p:.2f} · τ={tau:.2f} · shadow"
+    out["label_ru"] = label
+    if label == "нейтрально":
+        out["would_defer_exit"] = None
+        out["detail_ru"] = f"P(y_hold_good)≈{p:.2f} · на пороге τ={tau:.2f}±{band:.2f} · shadow"
+    else:
+        out["would_defer_exit"] = bool(would_opt)
+        out["detail_ru"] = f"P(y_hold_good)≈{p:.2f} · τ={tau:.2f} · shadow"
     return out
 
 

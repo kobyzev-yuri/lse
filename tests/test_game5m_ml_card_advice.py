@@ -21,6 +21,13 @@ class TestGame5mMlCardAdvice(unittest.TestCase):
         self.assertEqual(a["label_ru"], "против входа")
         self.assertFalse(a["would_enter"])
 
+    def test_entry_e3_neutral_near_tau(self):
+        a = entry_e3_advice_from_d5(
+            {"entry_e3_signal_status": "ok", "catboost_entry_proba_good_e3": 0.48}
+        )
+        self.assertEqual(a["label_ru"], "нейтрально")
+        self.assertIsNone(a["would_enter"])
+
     def test_hold_h3_defer(self):
         a = hold_h3_advice_from_shadow(
             {"status": "ok", "hold_quality_proba": 0.71, "would_defer_exit": True, "tau_hold": 0.55}
