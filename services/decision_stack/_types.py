@@ -124,6 +124,7 @@ def default_readiness(contour_id: str) -> str:
         "portfolio_catboost",
         "event_reaction",
         "recovery_ml",
+        "catboost_entry_bar_e3",
         "hold_bar_ml_h3",
         "continuation_ml",
         "cluster_context",

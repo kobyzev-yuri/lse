@@ -1241,6 +1241,7 @@ TECHNICAL_SIGNAL_KEYS = (
     # CatBoost (опционально); итог для входа/LLM — technical_decision_effective
     "catboost_entry_proba_good", "catboost_signal_status", "catboost_signal_note",
     "catboost_entry_proba_good_v2", "catboost_bar_v2_signal_status", "catboost_bar_v2_signal_note",
+    "catboost_entry_proba_good_e3", "entry_e3_signal_status", "entry_e3_signal_note",
     "technical_decision_core", "technical_decision_effective",
     "catboost_fusion_mode", "catboost_fusion_note",
     "entry_quality_guard_triggered", "entry_quality_guard_reason", "entry_quality_guard_prev_decision",

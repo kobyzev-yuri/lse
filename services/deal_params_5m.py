@@ -53,6 +53,9 @@ FULL_ENTRY_KEYS = (
     "catboost_entry_proba_good_v2",
     "catboost_bar_v2_signal_status",
     "catboost_bar_v2_signal_note",
+    "catboost_entry_proba_good_e3",
+    "entry_e3_signal_status",
+    "entry_e3_signal_note",
     # Прогноз цены 30/60/120 мин (лог-норм. по 5m) — для LLM и истории входа
     "price_forecast_5m", "price_forecast_5m_summary",
     # Мультидневный ridge по дневным close (+ опц. премаркет БД) — горизонты 1–3 торговых дня
