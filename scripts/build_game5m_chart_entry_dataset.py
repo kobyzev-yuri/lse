@@ -150,6 +150,7 @@ def main() -> int:
     ap.add_argument("--window-bars", type=int, default=48, help="Bars per window (inclusive at decision)")
     ap.add_argument("--valid-ratio", type=float, default=0.2, help="Time-ordered valid fraction")
     ap.add_argument("--no-context", action="store_true", help="OHLCV only (no broadcast news/calendar channels)")
+    ap.add_argument("--dry-run", action="store_true", help="Stats only, no NPZ write")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

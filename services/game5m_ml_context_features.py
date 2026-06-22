@@ -175,8 +175,14 @@ def fetch_calendar_gaps_as_of(
     *,
     ticker: str,
     trade_date: Any,
+    cache: dict[tuple[str, str], dict[str, float]] | None = None,
 ) -> dict[str, float]:
     """Premarket/NDX gaps for trade_date from DB; zeros if unavailable."""
+    sym = str(ticker or "").strip().upper()
+    dkey = str(pd.Timestamp(trade_date).date())
+    ck = (sym, dkey)
+    if cache is not None and ck in cache:
+        return cache[ck]
     out = {
         "ndx_gap_pct": 0.0,
         "spy_gap_pct": 0.0,
@@ -207,6 +213,8 @@ def fetch_calendar_gaps_as_of(
             out["spy_gap_pct"] = _safe_float(row[2])
     except Exception:
         pass
+    if cache is not None:
+        cache[ck] = out
     return out
 
 
@@ -219,6 +227,7 @@ def build_entry_context_features(
     engine: Any = None,
     kb_days: int = 7,
     kb_news: Optional[list[dict[str, Any]]] = None,
+    gaps_cache: dict[tuple[str, str], dict[str, float]] | None = None,
 ) -> dict[str, float]:
     """
     Numeric context at entry/hold decision bar.
@@ -234,11 +243,15 @@ def build_entry_context_features(
         from services.recommend_5m import fetch_kb_news_for_period
 
         as_of_utc = ts.tz_convert("UTC").to_pydatetime().replace(tzinfo=None)
-        kb_news = fetch_kb_news_for_period(ticker, int(kb_days), as_of=as_of_utc)
+        kb_news = fetch_kb_news_for_period(
+            ticker, int(kb_days), as_of=as_of_utc, engine=engine,
+        )
 
     impact_label = infer_kb_news_impact_label(kb_news)
     stats = kb_news_stats(kb_news)
-    gaps = fetch_calendar_gaps_as_of(engine, ticker=ticker, trade_date=ts.date())
+    gaps = fetch_calendar_gaps_as_of(
+        engine, ticker=ticker, trade_date=ts.date(), cache=gaps_cache,
+    )
 
     ctx = dict(entry_context or {})
     feat = dict(features or {})

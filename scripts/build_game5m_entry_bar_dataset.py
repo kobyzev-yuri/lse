@@ -226,6 +226,76 @@ def _load_ticker_bars(
     return _normalize_df(raw) if raw is not None else pd.DataFrame()
 
 
+def _load_kb_pool_for_ticker(engine: Any, ticker: str, *, kb_days: int, extra_days: int = 30) -> list[dict[str, Any]]:
+    """Prefetch KB rows for ticker; filter per bar in memory (builder speed)."""
+    if engine is None:
+        return []
+    try:
+        from datetime import datetime, timedelta
+
+        from sqlalchemy import text
+
+        end = datetime.utcnow()
+        cutoff = end - timedelta(days=int(kb_days) + int(extra_days))
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT ts, ticker, source, content, sentiment_score, insight,
+                           COALESCE(ingested_at, ts) AS eff_ts
+                    FROM knowledge_base
+                    WHERE (ticker = :ticker OR ticker IN ('MACRO', 'US_MACRO'))
+                      AND COALESCE(ingested_at, ts) >= :cutoff
+                      AND content IS NOT NULL
+                      AND LENGTH(TRIM(content)) > 0
+                    ORDER BY COALESCE(ingested_at, ts) DESC
+                    """
+                ),
+                {"ticker": ticker, "cutoff": cutoff},
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            ts, kb_ticker, source, content, sentiment_score, insight, eff_ts = row
+            out.append(
+                {
+                    "ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                    "eff_ts": eff_ts,
+                    "ticker": kb_ticker,
+                    "source": source or "",
+                    "content": (content or "")[:500],
+                    "sentiment_score": float(sentiment_score) if sentiment_score is not None else None,
+                    "insight": (insight or "")[:300] if insight else None,
+                }
+            )
+        return out
+    except Exception as e:
+        logger.warning("KB pool load failed for %s: %s", ticker, e)
+        return []
+
+
+def _filter_kb_pool_as_of(pool: list[dict[str, Any]], *, as_of_utc: Any, kb_days: int) -> list[dict[str, Any]]:
+    if not pool:
+        return []
+    from datetime import timedelta
+
+    end = pd.Timestamp(as_of_utc)
+    if end.tzinfo is not None:
+        end = end.tz_convert("UTC").tz_localize(None)
+    cutoff = end - pd.Timedelta(days=int(kb_days))
+    kept: list[dict[str, Any]] = []
+    for n in pool:
+        eff = n.get("eff_ts") or n.get("ts")
+        try:
+            t = pd.Timestamp(eff)
+            if t.tzinfo is not None:
+                t = t.tz_convert("UTC").tz_localize(None)
+        except Exception:
+            continue
+        if cutoff <= t <= end:
+            kept.append(n)
+    return kept[:50]
+
+
 def _iter_rows_for_ticker(
     ticker: str,
     df: pd.DataFrame,
@@ -250,11 +320,18 @@ def _iter_rows_for_ticker(
     if last_idx < min_warmup:
         return
 
+    kb_pool: list[dict[str, Any]] = []
+    gaps_cache: dict[tuple[str, str], dict[str, float]] = {}
+    if enrich and engine is not None:
+        kb_pool = _load_kb_pool_for_ticker(engine, ticker, kb_days=kb_days)
+
     for idx in range(min_warmup, last_idx + 1):
         if not _bar_is_rth(df, idx):
             continue
         bar_ts = pd.Timestamp(df.iloc[idx]["datetime"])
         bar_ts_et = bar_ts.isoformat()
+        as_of_utc = bar_ts.tz_convert("UTC").to_pydatetime().replace(tzinfo=None)
+        kb_news = _filter_kb_pool_as_of(kb_pool, as_of_utc=as_of_utc, kb_days=kb_days) if enrich else []
         tech = _technical_at_bar(
             ticker,
             df,
@@ -322,6 +399,8 @@ def _iter_rows_for_ticker(
                     features=features,
                     engine=engine if enrich else None,
                     kb_days=kb_days,
+                    kb_news=kb_news if enrich else [],
+                    gaps_cache=gaps_cache,
                 )
                 if enrich
                 else {k: None for k in ENTRY_CONTEXT_NUMERIC_KEYS}
@@ -363,6 +442,7 @@ def main() -> int:
     parser.add_argument("--summary-json", type=str, default="", help="Optional JSON stats path")
     parser.add_argument("--no-enrich", action="store_true", help="Technical features only (skip news/calendar)")
     parser.add_argument("--kb-days", type=int, default=7, help="KB lookback days for context enrich")
+    parser.add_argument("--dry-run", action="store_true", help="Print stats only, no CSV")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

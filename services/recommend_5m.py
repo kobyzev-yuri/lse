@@ -544,7 +544,13 @@ def has_5m_data(ticker: str, days: int = None, min_bars: int = 1) -> bool:
     return df is not None and not df.empty and len(df) >= min_bars
 
 
-def fetch_kb_news_for_period(ticker: str, days: int, *, as_of: datetime | None = None) -> List[Dict[str, Any]]:
+def fetch_kb_news_for_period(
+    ticker: str,
+    days: int,
+    *,
+    as_of: datetime | None = None,
+    engine: Any = None,
+) -> List[Dict[str, Any]]:
     """
     Новости/события из KB за те же days дней, что и окно 5m. Позволяет агенту
     сопоставить динамику цены и новости за один период и учесть влияние при решении.
@@ -556,8 +562,13 @@ def fetch_kb_news_for_period(ticker: str, days: int, *, as_of: datetime | None =
         from config_loader import get_database_url
         end = as_of if as_of is not None else datetime.utcnow()
         cutoff = end - timedelta(days=days)
-        engine = create_engine(get_database_url())
-        with engine.connect() as conn:
+        eng = engine
+        if eng is None:
+            eng = create_engine(get_database_url())
+            own_engine = True
+        else:
+            own_engine = False
+        with eng.connect() as conn:
             result = conn.execute(
                 text("""
                     SELECT ts, ticker, source, content, sentiment_score, insight
