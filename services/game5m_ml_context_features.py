@@ -54,12 +54,17 @@ HOLD_STATE_KEYS: tuple[str, ...] = (
     "hour_et",
 )
 
+# Hold-bar exit context at bar t (no dow_et/hour_et — already in HOLD_STATE_KEYS).
+HOLD_EXIT_CONTEXT_NUMERIC_KEYS: tuple[str, ...] = tuple(
+    k for k in ENTRY_CONTEXT_NUMERIC_KEYS if k not in ("dow_et", "hour_et")
+)
+
 # Full hold-bar tabular row for bake-off B2.
 HOLD_BAR_TRAIN_NUMERIC_KEYS: tuple[str, ...] = (
     HOLD_STATE_KEYS
     + HOLD_ENTRY_SNAPSHOT_KEYS
     + HOLD_EXIT_TECH_KEYS
-    + ENTRY_CONTEXT_NUMERIC_KEYS
+    + HOLD_EXIT_CONTEXT_NUMERIC_KEYS
 )
 
 _SESSION_PHASE_ORDER = (
@@ -336,6 +341,7 @@ __all__ = [
     "ENTRY_CONTEXT_NUMERIC_KEYS",
     "HOLD_BAR_TRAIN_NUMERIC_KEYS",
     "HOLD_ENTRY_SNAPSHOT_KEYS",
+    "HOLD_EXIT_CONTEXT_NUMERIC_KEYS",
     "HOLD_EXIT_TECH_KEYS",
     "HOLD_STATE_KEYS",
     "build_entry_context_features",

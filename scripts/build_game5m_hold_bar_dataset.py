@@ -41,6 +41,7 @@ from services.game5m_triple_barrier import forward_mfe_mae_pct_window, recovery_
 from services.game_5m import trade_ts_to_et
 from services.game_5m_take_replay import load_bars_5m_for_replay
 from services.recommend_5m import compute_5m_features
+from scripts.build_game5m_entry_bar_dataset import _filter_kb_pool_as_of, _load_kb_pool_for_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +230,7 @@ def main() -> int:
             continue
 
         entry_ts = _ts_et(trade.entry_ts)
-        exit_ts = _ts_et(trade.exit_ts)
+        exit_ts = _ts_et(trade.ts)
         entry_price = _safe_float(trade.entry_price)
         if entry_ts is None or exit_ts is None or entry_price is None or entry_price <= 0:
             continue
@@ -250,6 +251,10 @@ def main() -> int:
             continue
 
         n_trade_rows = 0
+        kb_pool: list[dict[str, Any]] = []
+        gaps_cache: dict[tuple[str, str], dict[str, float]] = {}
+        if enrich:
+            kb_pool = _load_kb_pool_for_ticker(engine, ticker, kb_days=kb_days)
         for i in range(0, len(sub), stride):
             if n_trade_rows >= max_per_trade:
                 break
@@ -282,6 +287,8 @@ def main() -> int:
                 ref_close=ref_close,
             )
             exit_tech = hold_exit_tech_from_features(exit_features)
+            as_of_utc = bar_time.tz_convert("UTC").to_pydatetime().replace(tzinfo=None)
+            kb_news = _filter_kb_pool_as_of(kb_pool, as_of_utc=as_of_utc, kb_days=kb_days) if enrich else []
             ctx_at_bar = (
                 build_entry_context_features(
                     ticker=ticker,
@@ -290,6 +297,8 @@ def main() -> int:
                     entry_context=entry_ctx,
                     engine=engine if enrich else None,
                     kb_days=kb_days,
+                    kb_news=kb_news,
+                    gaps_cache=gaps_cache,
                 )
                 if enrich
                 else {k: 0.0 for k in ENTRY_CONTEXT_NUMERIC_KEYS}
