@@ -1061,17 +1061,31 @@ def _entry_stale_chase_guard_params() -> Dict[str, Any]:
     }
 
 
+def _rth_intraday_entry_active(
+    session_phase: Optional[str],
+    mom_rth_bars: int,
+    min_session_bars: int,
+) -> bool:
+    """True when today's RTH has enough 5m bars for live intraday momentum entries."""
+    phase = (session_phase or "").strip().upper()
+    if phase in ("PRE_MARKET", "AFTER_HOURS", "WEEKEND", "HOLIDAY"):
+        return False
+    return int(mom_rth_bars) >= int(min_session_bars)
+
+
 def apply_entry_stale_chase_guard(
     decision: str,
     reasons: List[str],
     features: Dict[str, Any],
+    *,
+    rth_intraday_active: bool = True,
 ) -> Tuple[str, List[str], bool, Optional[str], Optional[str]]:
     """
     BUY/STRONG_BUY → HOLD, если импульс «протух»: сессия уже уехала, цена у day-high,
     новый session high давно не обновлялся (chase, не свежий вход).
     """
     params = _entry_stale_chase_guard_params()
-    if not params["enabled"] or decision not in ("BUY", "STRONG_BUY"):
+    if not params["enabled"] or decision not in ("BUY", "STRONG_BUY") or not rth_intraday_active:
         return decision, reasons, False, None, None
 
     session_move = features.get("session_move_from_open_pct")
@@ -1110,6 +1124,7 @@ def decide_game5m_technical(
     min_session_bars: int,
     premarket_intraday_momentum_pct: Optional[float],
     early_use_premarket_mom: bool,
+    session_phase: Optional[str] = None,
 ) -> Tuple[str, List[str], Optional[str], bool]:
     """
     Техническое ядро BUY/HOLD/SELL GAME_5M (без KB, VIX, премаркет-гейта сессии, price_forecast).
@@ -1144,6 +1159,7 @@ def decide_game5m_technical(
     momentum_2h_pct = features["momentum_2h_pct"]
     mom_rth_pct = features.get("momentum_rth_today_pct")
     mom_rth_bars = int(features.get("momentum_rth_today_bars") or 0)
+    rth_intraday_active = _rth_intraday_entry_active(session_phase, mom_rth_bars, min_session_bars)
     session_move = features.get("session_move_from_open_pct")
     bars_since_high = features.get("bars_since_session_high")
     stale_params = _entry_stale_chase_guard_params()
@@ -1163,7 +1179,8 @@ def decide_game5m_technical(
 
     if rsi_5m is not None:
         if (
-            rsi_5m <= rsi_strong_buy_max
+            rth_intraday_active
+            and rsi_5m <= rsi_strong_buy_max
             and momentum_2h_pct >= momentum_for_strong_buy_min
             and not block_stale_strong
         ):
@@ -1188,7 +1205,8 @@ def decide_game5m_technical(
             if decision == "HOLD":
                 reasons.append(f"RSI(5m)={rsi_5m:.1f} — ближе к перекупленности, ждать")
         elif (
-            mom_rth_pct is not None
+            rth_intraday_active
+            and mom_rth_pct is not None
             and mom_rth_bars >= min_session_bars
             and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
         ):
@@ -1232,7 +1250,8 @@ def decide_game5m_technical(
                     f"(1m до 9:30 ET; ранний RTH, баров сессии {mom_rth_bars} < {min_session_bars}), RSI не перекуплен"
                 )
         elif (
-            allow_cross_day_mom_buy
+            rth_intraday_active
+            and allow_cross_day_mom_buy
             and momentum_2h_pct > rth_momentum_buy_min
             and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
         ):
@@ -1914,6 +1933,15 @@ def get_decision_5m(
     # Правила решения (агрессивные под интрадей)
     from config_loader import get_config_value as _gcv
 
+    market_session: Dict[str, Any] = {}
+    try:
+        from services.market_session import get_market_session_context
+
+        market_session = get_market_session_context()
+    except Exception as e:
+        logger.debug("Контекст сессии биржи для 5m: %s", e)
+    session_phase = (market_session.get("session_phase") or "").strip()
+
     th = get_decision_5m_rule_thresholds()
     sell_confirm_bars = int(th["sell_confirm_bars"])
     min_sess_bars = int(th["momentum_min_session_bars"])
@@ -1940,6 +1968,7 @@ def get_decision_5m(
         "yes",
     )
     mom_rth_bars = int(features.get("momentum_rth_today_bars") or 0)
+    rth_intraday_active = _rth_intraday_entry_active(session_phase, mom_rth_bars, min_sess_bars)
     premarket_intraday_momentum_pct: Optional[float] = None
     if early_use_premarket_mom and mom_rth_bars < min_sess_bars:
         try:
@@ -1988,6 +2017,7 @@ def get_decision_5m(
         min_session_bars=min_sess_bars,
         premarket_intraday_momentum_pct=premarket_intraday_momentum_pct,
         early_use_premarket_mom=early_use_premarket_mom,
+        session_phase=session_phase,
     )
 
     # Влияние новостей из KB на короткую игру 5m: явный учёт в решении BUY/HOLD/SELL
@@ -2025,6 +2055,10 @@ def get_decision_5m(
         reasons.append(
             f"5m: цена {price:.2f}, RSI={rsi_str}, импульс 2ч={momentum_2h_pct:+.2f}%, волатильность={volatility_5m_pct:.2f}%, баров={len(df)}"
         )
+    elif session_phase == "PRE_MARKET" and not rth_intraday_active:
+        reasons.append(
+            "Премаркет: RTH-импульс ещё не начался — intraday BUY по momentum отключён; ориентир: multiday ridge, PM gap, macro, 5d low"
+        )
 
     reasoning = " ".join(reasons)
 
@@ -2042,16 +2076,7 @@ def get_decision_5m(
     stop_loss_enabled = _sl_raw in ("1", "true", "yes")
 
     # KB уже загружены выше для учёта негатива в решении; передаём в контекст
-    # Открытие/закрытие биржи и праздники — отдельно (особые процессы новостей в эти моменты)
-    market_session = {}
-    try:
-        from services.market_session import get_market_session_context
-        market_session = get_market_session_context()
-    except Exception as e:
-        logger.debug("Контекст сессии биржи для 5m: %s", e)
-
-    # Вход только в регулярную сессию NYSE (9:30–16:00 ET). Вне сессии — «торговля не началась», не входим.
-    session_phase = (market_session.get("session_phase") or "").strip()
+    # (market_session уже загружен до decide_game5m_technical)
     premarket_context = None
     if session_phase == "PRE_MARKET":
         try:
@@ -2177,7 +2202,7 @@ def get_decision_5m(
     entry_stale_chase_guard_prev_decision: Optional[str] = None
     entry_stale_chase_guard_reason: Optional[str] = None
     decision, reasons, entry_stale_chase_guard_triggered, entry_stale_chase_guard_prev_decision, entry_stale_chase_guard_reason = (
-        apply_entry_stale_chase_guard(decision, reasons, features)
+        apply_entry_stale_chase_guard(decision, reasons, features, rth_intraday_active=rth_intraday_active)
     )
     if entry_stale_chase_guard_triggered:
         reasoning = " ".join(reasons)

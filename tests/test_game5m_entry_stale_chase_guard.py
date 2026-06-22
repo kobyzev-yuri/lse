@@ -87,6 +87,37 @@ class TestEntryStaleChaseGuard(unittest.TestCase):
                 min_session_bars=6,
                 premarket_intraday_momentum_pct=None,
                 early_use_premarket_mom=False,
+                session_phase="REGULAR",
+            )
+        self.assertEqual(dec, "HOLD")
+        self.assertIsNone(branch)
+
+    def test_premarket_blocks_yesterday_cross_day_momentum(self):
+        th = get_decision_5m_rule_thresholds()
+        th = dict(th)
+        th["momentum_buy_min"] = 0.5
+        features = {
+            "price": 450.0,
+            "low_5d": 400.0,
+            "rsi_5m": 55.0,
+            "volatility_5m_pct": 0.5,
+            "momentum_2h_pct": 2.0,
+            "momentum_rth_today_pct": None,
+            "momentum_rth_today_bars": 0,
+        }
+        closes = pd.Series([440.0] * 30 + [450.0])
+        with patch.dict(os.environ, {"GAME_5M_MOMENTUM_ALLOW_CROSS_DAY_BUY": "true"}, clear=False):
+            dec, _, branch, _ = decide_game5m_technical(
+                ticker="CIEN",
+                features=features,
+                closes=closes,
+                th=th,
+                rsi_prev_values=[54.0, 53.0],
+                decision_rule_params=th,
+                min_session_bars=6,
+                premarket_intraday_momentum_pct=None,
+                early_use_premarket_mom=False,
+                session_phase="PRE_MARKET",
             )
         self.assertEqual(dec, "HOLD")
         self.assertIsNone(branch)
@@ -121,6 +152,7 @@ class TestEntryStaleChaseGuard(unittest.TestCase):
             min_session_bars=6,
             premarket_intraday_momentum_pct=None,
             early_use_premarket_mom=False,
+            session_phase="REGULAR",
         )
         self.assertIn(dec, ("BUY", "STRONG_BUY"))
         self.assertIsNotNone(branch)
