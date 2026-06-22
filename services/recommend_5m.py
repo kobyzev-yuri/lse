@@ -706,6 +706,11 @@ def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str
     momentum_rth_today_pct: Optional[float] = None
     momentum_rth_today_window_min = 0
     momentum_rth_today_bars = 0
+    session_open_price: Optional[float] = None
+    session_move_from_open_pct: Optional[float] = None
+    bars_since_session_high: Optional[int] = None
+    momentum_short_pct: Optional[float] = None
+    momentum_short_bars = 0
     try:
         from datetime import time as dt_time
 
@@ -733,8 +738,41 @@ def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str
                 if p_open_ref > 0:
                     momentum_rth_today_pct = ((p_now / p_open_ref) - 1.0) * 100.0
                     momentum_rth_today_window_min = n_sess * 5
+            if nt >= 1:
+                if "Open" in df_td.columns:
+                    session_open_price = float(df_td["Open"].iloc[0])
+                else:
+                    session_open_price = float(closes_td.iloc[0])
+                if session_open_price and session_open_price > 0:
+                    session_move_from_open_pct = ((price / session_open_price) - 1.0) * 100.0
+                if "High" in df_td.columns:
+                    highs_td = df_td["High"].astype(float).reset_index(drop=True)
+                    sh_td = float(highs_td.max())
+                    tol = max(sh_td * 1e-6, 0.02)
+                    last_high_idx = None
+                    for j in range(nt - 1, -1, -1):
+                        if float(highs_td.iloc[j]) >= sh_td - tol:
+                            last_high_idx = j
+                            break
+                    if last_high_idx is not None:
+                        bars_since_session_high = max(0, nt - 1 - last_high_idx)
     except Exception as e:
         logger.debug("momentum_rth_today %s: %s", ticker, e)
+
+    try:
+        from config_loader import get_config_value as _gcv_short
+
+        n_short = min(
+            max(1, int((_gcv_short("GAME_5M_ENTRY_SHORT_MOMENTUM_BARS", "6") or "6").strip())),
+            len(closes) - 1,
+        )
+        if n_short >= 1 and len(closes) >= n_short + 1:
+            p_short_ref = float(closes.iloc[-(n_short + 1)])
+            if p_short_ref > 0:
+                momentum_short_pct = ((price / p_short_ref) - 1.0) * 100.0
+                momentum_short_bars = n_short
+    except Exception as e:
+        logger.debug("momentum_short %s: %s", ticker, e)
 
     dt_min, dt_max = df["datetime"].min(), df["datetime"].max()
     period_str = f"{dt_min.strftime('%d.%m %H:%M')} – {dt_max.strftime('%d.%m %H:%M')}" if hasattr(dt_min, "strftime") else f"{dt_min} – {dt_max}"
@@ -777,6 +815,11 @@ def compute_5m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[str
         "momentum_rth_today_pct": momentum_rth_today_pct,
         "momentum_rth_today_window_min": momentum_rth_today_window_min,
         "momentum_rth_today_bars": momentum_rth_today_bars,
+        "session_open_price": session_open_price,
+        "session_move_from_open_pct": session_move_from_open_pct,
+        "bars_since_session_high": bars_since_session_high,
+        "momentum_short_pct": momentum_short_pct,
+        "momentum_short_bars": momentum_short_bars,
         "session_high": session_high,
         "session_high_ts": session_high_ts,
         "pullback_from_high_pct": pullback_from_high_pct,
@@ -990,6 +1033,72 @@ def compute_30m_features(df: pd.DataFrame, ticker: str = "") -> Optional[Dict[st
     }
 
 
+def _entry_stale_chase_guard_params() -> Dict[str, Any]:
+    from config_loader import get_config_value as _gcv
+
+    enabled = (_gcv("GAME_5M_ENTRY_STALE_CHASE_GUARD_ENABLED", "true") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    try:
+        extended_move_pct = float((_gcv("GAME_5M_ENTRY_EXTENDED_SESSION_MOVE_PCT", "2.5") or "2.5").strip())
+    except (TypeError, ValueError):
+        extended_move_pct = 2.5
+    try:
+        max_pullback_pct = float((_gcv("GAME_5M_ENTRY_CHASE_MAX_PULLBACK_FROM_HIGH_PCT", "2.0") or "2.0").strip())
+    except (TypeError, ValueError):
+        max_pullback_pct = 2.0
+    try:
+        min_bars_since_high = int(float((_gcv("GAME_5M_ENTRY_CHASE_MIN_BARS_SINCE_HIGH", "6") or "6").strip()))
+    except (TypeError, ValueError):
+        min_bars_since_high = 6
+    return {
+        "enabled": enabled,
+        "extended_move_pct": extended_move_pct,
+        "max_pullback_pct": max_pullback_pct,
+        "min_bars_since_high": max(1, min(min_bars_since_high, 48)),
+    }
+
+
+def apply_entry_stale_chase_guard(
+    decision: str,
+    reasons: List[str],
+    features: Dict[str, Any],
+) -> Tuple[str, List[str], bool, Optional[str], Optional[str]]:
+    """
+    BUY/STRONG_BUY → HOLD, если импульс «протух»: сессия уже уехала, цена у day-high,
+    новый session high давно не обновлялся (chase, не свежий вход).
+    """
+    params = _entry_stale_chase_guard_params()
+    if not params["enabled"] or decision not in ("BUY", "STRONG_BUY"):
+        return decision, reasons, False, None, None
+
+    session_move = features.get("session_move_from_open_pct")
+    pullback = features.get("pullback_from_high_pct")
+    bars_since = features.get("bars_since_session_high")
+    if session_move is None or pullback is None or bars_since is None:
+        return decision, reasons, False, None, None
+
+    stale_chase = (
+        float(session_move) >= float(params["extended_move_pct"])
+        and float(pullback) <= float(params["max_pullback_pct"])
+        and int(bars_since) >= int(params["min_bars_since_high"])
+    )
+    if not stale_chase:
+        return decision, reasons, False, None, None
+
+    prev = decision
+    decision = "HOLD"
+    guard_msg = (
+        "entry stale/chase guard: сессия "
+        f"+{float(session_move):.1f}%, у хая (откат {float(pullback):.2f}%), "
+        f"без нового high {int(bars_since)} бар (~{int(bars_since) * 5}м) — сигнал входа протух"
+    )
+    reasons.append(guard_msg)
+    return decision, reasons, True, prev, guard_msg
+
+
 def decide_game5m_technical(
     *,
     ticker: str,
@@ -1035,6 +1144,17 @@ def decide_game5m_technical(
     momentum_2h_pct = features["momentum_2h_pct"]
     mom_rth_pct = features.get("momentum_rth_today_pct")
     mom_rth_bars = int(features.get("momentum_rth_today_bars") or 0)
+    session_move = features.get("session_move_from_open_pct")
+    bars_since_high = features.get("bars_since_session_high")
+    stale_params = _entry_stale_chase_guard_params()
+    extended_move_pct = float(stale_params["extended_move_pct"])
+    min_bars_stale = int(stale_params["min_bars_since_high"])
+    block_stale_strong = (
+        session_move is not None
+        and float(session_move) >= extended_move_pct
+        and bars_since_high is not None
+        and int(bars_since_high) >= min_bars_stale
+    )
 
     decision = "HOLD"
     reasons: List[str] = []
@@ -1042,7 +1162,11 @@ def decide_game5m_technical(
     entry_strong_buy_downgraded = False
 
     if rsi_5m is not None:
-        if rsi_5m <= rsi_strong_buy_max and momentum_2h_pct >= momentum_for_strong_buy_min:
+        if (
+            rsi_5m <= rsi_strong_buy_max
+            and momentum_2h_pct >= momentum_for_strong_buy_min
+            and not block_stale_strong
+        ):
             decision = "STRONG_BUY"
             technical_entry_branch = "strong_buy_rsi"
             reasons.append(f"RSI(5m)={rsi_5m:.1f} — перепроданность, отскок")
@@ -1066,16 +1190,32 @@ def decide_game5m_technical(
         elif (
             mom_rth_pct is not None
             and mom_rth_bars >= min_session_bars
-            and float(mom_rth_pct) > rth_momentum_buy_min
             and (rsi_5m is None or rsi_5m < rsi_for_momentum_buy_max)
         ):
-            if decision == "HOLD":
+            mom_for_entry = mom_rth_pct
+            if (
+                session_move is not None
+                and float(session_move) >= extended_move_pct
+                and features.get("momentum_short_pct") is not None
+            ):
+                mom_for_entry = features.get("momentum_short_pct")
+            if decision == "HOLD" and float(mom_for_entry) > rth_momentum_buy_min:
                 wmin = int(features.get("momentum_rth_today_window_min") or 0)
+                short_bars = int(features.get("momentum_short_bars") or 0)
                 decision = "BUY"
                 technical_entry_branch = "buy_rth_momentum"
-                reasons.append(
-                    f"импульс +{float(mom_rth_pct):.2f}% за текущую сессию RTH (~{wmin} мин), RSI не перекуплен"
-                )
+                if (
+                    session_move is not None
+                    and float(session_move) >= extended_move_pct
+                    and features.get("momentum_short_pct") is not None
+                ):
+                    reasons.append(
+                        f"импульс +{float(mom_for_entry):.2f}% за ~{short_bars * 5} мин (сессия +{float(session_move):.2f}%), RSI не перекуплен"
+                    )
+                else:
+                    reasons.append(
+                        f"импульс +{float(mom_for_entry):.2f}% за текущую сессию RTH (~{wmin} мин), RSI не перекуплен"
+                    )
         elif (
             early_use_premarket_mom
             and mom_rth_bars < min_session_bars
@@ -1246,6 +1386,9 @@ TECHNICAL_SIGNAL_KEYS = (
     "technical_decision_core", "technical_decision_effective",
     "catboost_fusion_mode", "catboost_fusion_note",
     "entry_quality_guard_triggered", "entry_quality_guard_reason", "entry_quality_guard_prev_decision",
+    "entry_stale_chase_guard_triggered", "entry_stale_chase_guard_reason", "entry_stale_chase_guard_prev_decision",
+    "session_open_price", "session_move_from_open_pct", "bars_since_session_high",
+    "momentum_short_pct", "momentum_short_bars",
     # Явный разбор входа: формальное условие ветки + интуиция стратегии (не дублирует весь reasoning)
     "technical_entry_branch", "entry_strong_buy_downgraded", "entry_condition", "entry_intuition",
     # Прогноз цены на 30/60/120 мин (лог-нормаль по 5m лог-доходностям)
@@ -2030,6 +2173,15 @@ def get_decision_5m(
         except Exception as e:
             logger.debug("near_open buy guard для %s: %s", ticker, e)
 
+    entry_stale_chase_guard_triggered = False
+    entry_stale_chase_guard_prev_decision: Optional[str] = None
+    entry_stale_chase_guard_reason: Optional[str] = None
+    decision, reasons, entry_stale_chase_guard_triggered, entry_stale_chase_guard_prev_decision, entry_stale_chase_guard_reason = (
+        apply_entry_stale_chase_guard(decision, reasons, features)
+    )
+    if entry_stale_chase_guard_triggered:
+        reasoning = " ".join(reasons)
+
     # Рекомендация по входу в премаркете (2.2, 2.3): войти сейчас / ждать открытия / лимит ниже
     premarket_entry_recommendation = None
     premarket_suggested_limit_price = None
@@ -2185,6 +2337,9 @@ def get_decision_5m(
         "open_guard_mins_since_open": open_guard_mins_since_open,
         "open_guard_prev_decision": open_guard_prev_decision,
         "open_guard_next_decision": open_guard_next_decision,
+        "entry_stale_chase_guard_triggered": entry_stale_chase_guard_triggered,
+        "entry_stale_chase_guard_prev_decision": entry_stale_chase_guard_prev_decision,
+        "entry_stale_chase_guard_reason": entry_stale_chase_guard_reason,
     }
     if vix_snap.get("enabled"):
         out["vix_context"] = {
