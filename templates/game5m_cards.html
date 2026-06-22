@@ -142,6 +142,15 @@
             color: #e2e8f0;
         }
         .gate-chip.warn { border-color: #ca8a04; color: #fde047; }
+        .gate-chip.ok { border-color: #16a34a; color: #86efac; }
+        .gate-chip.bad { border-color: #b91c1c; color: #fca5a5; }
+        .ml-shadow-block {
+            margin: 0.35rem 0 0.5rem;
+            padding: 0.5rem 0.6rem;
+            background: #0f172a;
+            border-radius: 8px;
+            border: 1px solid #334155;
+        }
         .checklist-line { font-size: 0.82rem; margin: 0.35rem 0; font-variant-numeric: tabular-nums; }
         .checklist-line .ok { color: #86efac; }
         .checklist-line .bad { color: #fca5a5; }
@@ -479,6 +488,34 @@
             if (!chips.length) return '';
             return '<div class="gate-row">' + chips.join('') + '</div>';
         }
+        function renderMlShadowBlock(c) {
+            var e3 = c.ml_entry_e3;
+            var h3 = c.ml_hold_h3;
+            if (!e3 && !h3) return '';
+            var html = '<div class="block-title">ML shadow</div><div class="ml-shadow-block">';
+            if (e3) {
+                var e3cls = e3.would_enter === true ? 'positive' : (e3.would_enter === false ? 'negative' : 'muted');
+                html += '<div class="row"><span class="label">Вход E3</span><span class="value ' + e3cls + '">' + escapeHtml(e3.label_ru || '—') + '</span></div>';
+                if (e3.detail_ru) {
+                    html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.78rem;">' + escapeHtml(e3.detail_ru) + '</span></div>';
+                }
+            }
+            if (h3) {
+                var h3cls = h3.would_defer_exit === true ? 'positive' : (h3.would_defer_exit === false ? 'negative' : 'muted');
+                html += '<div class="row"><span class="label">Удержание H3</span><span class="value ' + h3cls + '">' + escapeHtml(h3.label_ru || '—') + '</span></div>';
+                if (h3.detail_ru) {
+                    var agree = h3.would_defer_exit ? 'согласен с удержанием' : 'за выход';
+                    html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.78rem;">' + escapeHtml(h3.detail_ru + ' · ' + agree) + '</span></div>';
+                }
+                if (c.open_position_pnl_pct != null) {
+                    var pnlCls = Number(c.open_position_pnl_pct) >= 0 ? 'positive' : 'negative';
+                    html += '<div class="row"><span class="label">PnL позиции</span><span class="value ' + pnlCls + '">' + fmt(c.open_position_pnl_pct, 2) + '%</span></div>';
+                }
+            }
+            html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.72rem;">telemetry only — сделки не меняет</span></div>';
+            html += '</div>';
+            return html;
+        }
         function renderEntryBlock(c) {
             var advice = c.entry_advice || '—';
             var adviceCls = advice === 'ALLOW' ? 'positive' : (advice === 'AVOID' ? 'negative' : '');
@@ -596,6 +633,7 @@
             html += renderDecisionVerdict(c);
             html += renderGateChips(c);
             html += renderEntryBlock(c);
+            html += renderMlShadowBlock(c);
             html += renderTradeBlock(c);
             html += renderSessionGapBlock(c);
             html += renderIntradayBlock(c);

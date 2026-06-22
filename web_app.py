@@ -2636,6 +2636,20 @@ async def get_game5m_cards(days: int = 5):
         except Exception:
             d5 = None
         card = get_5m_card_payload(d5, tkr)
+        try:
+            from services.game_5m import get_open_position, get_latest_buy_context_json
+            from services.game5m_ml_card_advice import enrich_game5m_card_ml_advice
+
+            open_pos = get_open_position(tkr)
+            entry_ctx = get_latest_buy_context_json(tkr, "GAME_5M") if open_pos else None
+            card = enrich_game5m_card_ml_advice(
+                card,
+                d5=d5 if isinstance(d5, dict) else None,
+                open_position=open_pos,
+                entry_ctx=entry_ctx if isinstance(entry_ctx, dict) else None,
+            )
+        except Exception as e_ml_card:
+            logger.debug("game5m card ml advice %s: %s", tkr, e_ml_card)
         if card.get("reasoning") and len(card["reasoning"]) > 400:
             card["reasoning"] = card["reasoning"][:400]
         session = (d5 or {}).get("market_session") or {}

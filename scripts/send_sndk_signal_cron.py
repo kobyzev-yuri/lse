@@ -832,6 +832,12 @@ def process_ticker(
                     )
                     if hq is not None:
                         close_ctx_enriched["hold_quality_ml"] = hq
+                        try:
+                            from services.game5m_ml_card_advice import append_hold_ml_to_close_context
+
+                            close_ctx_enriched = append_hold_ml_to_close_context(close_ctx_enriched, hq)
+                        except Exception as e_hq_adv:
+                            logger.debug("hold_ml advice narrative %s: %s", ticker, e_hq_adv)
                         if hq.get("status") == "ok":
                             logger.info(
                                 "[5m] HOLD_QUALITY %s: P=%s tau=%s would_defer=%s",
