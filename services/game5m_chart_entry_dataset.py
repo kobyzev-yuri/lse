@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import math
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 import numpy as np
 import pandas as pd
+
+from services.game5m_ml_context_features import ENTRY_CONTEXT_NUMERIC_KEYS, context_vector_from_dict
 
 CHART_ENTRY_ML_SCHEMA_VERSION = "1"
 DEFAULT_WINDOW_BARS = 48
@@ -20,6 +22,9 @@ CHART_FEATURE_NAMES: tuple[str, ...] = (
     "close_pct_anchor",
     "log_volume",
 )
+
+# Broadcast on each timestep when bar CSV has enrich columns (Phase 1.5).
+CHART_CONTEXT_FEATURE_NAMES: tuple[str, ...] = ENTRY_CONTEXT_NUMERIC_KEYS
 
 CHART_ENTRY_ML_SCHEMA: dict[str, Any] = {
     "version": CHART_ENTRY_ML_SCHEMA_VERSION,
@@ -137,6 +142,31 @@ def window_tensor_from_df(
     return arr
 
 
+def window_tensor_with_context(
+    window: np.ndarray,
+    context_row: Mapping[str, Any],
+    *,
+    include_context: bool = True,
+) -> np.ndarray:
+    """Append broadcast context scalars to each timestep: (T, 5) → (T, 5+C)."""
+    if not include_context or window is None:
+        return window
+    ctx = np.asarray(
+        context_vector_from_dict(context_row, CHART_CONTEXT_FEATURE_NAMES),
+        dtype=np.float32,
+    )
+    if ctx.size == 0:
+        return window
+    broadcast = np.tile(ctx.reshape(1, -1), (window.shape[0], 1))
+    return np.concatenate([window, broadcast], axis=1)
+
+
+def chart_feature_names(*, include_context: bool = True) -> tuple[str, ...]:
+    if include_context:
+        return CHART_FEATURE_NAMES + CHART_CONTEXT_FEATURE_NAMES
+    return CHART_FEATURE_NAMES
+
+
 def window_includes_future_bars(df: pd.DataFrame, decision_idx: int, window: np.ndarray, *, window_bars: int) -> bool:
     """True if any tensor row uses data from bars after decision_idx (leak)."""
     w = max(1, int(window_bars))
@@ -199,6 +229,7 @@ def chart_dataset_summary(
 
 
 __all__ = [
+    "CHART_CONTEXT_FEATURE_NAMES",
     "CHART_ENTRY_ML_SCHEMA",
     "CHART_ENTRY_ML_SCHEMA_VERSION",
     "CHART_FEATURE_NAMES",
@@ -207,9 +238,11 @@ __all__ = [
     "SplitName",
     "assign_time_splits",
     "chart_dataset_summary",
+    "chart_feature_names",
     "find_decision_bar_index",
     "make_sample_id",
     "parse_bar_ts_et",
     "window_includes_future_bars",
     "window_tensor_from_df",
+    "window_tensor_with_context",
 ]

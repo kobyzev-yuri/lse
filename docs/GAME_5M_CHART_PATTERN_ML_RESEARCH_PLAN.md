@@ -12,6 +12,9 @@
 | Prod roadmap (без LSTM end-to-end) | [GAME_5M_PREDICTOR_DATASET_PLAN.md](GAME_5M_PREDICTOR_DATASET_PLAN.md) §2 |
 | Triple barrier код | `services/game5m_triple_barrier.py` |
 | Builder строк | `scripts/build_game5m_entry_bar_dataset.py` |
+| **Отчёт Phase 1 (2026-06-21)** | [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md) |
+| **Exit/hold bake-off (план)** | [GAME_5M_EXIT_HOLD_ML_BAKEOFF_PLAN.md](GAME_5M_EXIT_HOLD_ML_BAKEOFF_PLAN.md) |
+| **Отчёт Phase 1 (2026-06-21)** | [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md) |
 
 ---
 
@@ -124,6 +127,35 @@ Chart-ML **не обязан** кодировать Elliott rules; он може
 ---
 
 ## 5. Dataset (общий контракт)
+
+### 5.1 Full context X (T + news + calendar) — Phase 1.5
+
+Бинарный классификатор на баре решения должен видеть **все влияния, доступные в prod** на этом баре, не только OHLC/RSI.
+
+| Слой | Поля (tabular / broadcast в chart) | Источник |
+|------|-------------------------------------|----------|
+| **T** | `BAR_TRAIN_NUMERIC_KEYS` | `compute_5m_features` |
+| **N** | `kb_news_impact_enc`, `kb_news_sentiment_mean`, `kb_news_count` | KB `as_of` bar close |
+| **C** | `session_phase_enc`, `dow_et`, `hour_et`, `ndx_gap_pct`, `spy_gap_pct`, `premarket_gap_pct`, `macro_risk_enc` | bar time + `premarket_daily_features` |
+| **+** | `prob_up`, `prob_down`, `llm_sentiment`, `cb_corr_*` | context / entry snapshot (0 если нет) |
+
+**Контракт:** `services/game5m_ml_context_features.py` → `ENTRY_CONTEXT_NUMERIC_KEYS`, `BAR_TRAIN_FULL_NUMERIC_KEYS`.
+
+**Chart:** скаляры **broadcast** на каждый timestep окна `(T, 5+C)` — один NPZ, те же LSTM/CNN trainers.
+
+**Bake-off tracks:**
+
+| Track | X | Скрипт |
+|-------|---|--------|
+| T | tech only (legacy) | `--no-enrich` |
+| T+N+C | full tabular | default builder |
+| Chart | OHLCV window | chart NPZ без ctx |
+| Chart+ctx | OHLCV + broadcast ctx | chart NPZ с `context_feature_names` |
+| Fusion | tab embedding + chart (Phase 2) | отдельный trainer |
+
+**Leak:** KB/calendar только с `ts ≤ bar_ts`; forward bars — только в y.
+
+---
 
 **Источник строк:** тот же CSV что `build_game5m_entry_bar_dataset.py` (ticker, bar_ts, features, `y_entry_good`, `tb_label`).
 
@@ -264,6 +296,12 @@ Chart research **параллелен** MM shadow и ML telemetry; **не бло
 - [x] 0.3 `scripts/build_game5m_chart_entry_dataset.py` + stats JSON
 - [x] 0.4 leak unit tests (`tests/test_game5m_chart_entry_dataset.py`)
 - [x] 0.5 `scripts/train_game5m_chart_entry_lstm.py` (local GPU)
+
+### Фаза 1.5 — Full context enrichment
+- [x] 1.5.0 spec §5.1 + `game5m_ml_context_features.py`
+- [x] 1.5.1 bar CSV enrich columns (default on)
+- [x] 1.5.2 chart NPZ broadcast ctx channels
+- [ ] 1.5.3 AUC compare T vs T+N+C vs Chart+ctx
 
 ### Фаза 1
 - [x] 1.1 smoke baselines (smoke CSV, yfinance — sanity only)

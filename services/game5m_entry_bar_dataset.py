@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Literal
 
+from services.game5m_ml_context_features import ENTRY_CONTEXT_NUMERIC_KEYS
 from services.game5m_triple_barrier import (
     ENTRY_BAR_ML_SCHEMA,
     ENTRY_BAR_ML_SCHEMA_VERSION,
@@ -13,7 +14,9 @@ from services.game5m_triple_barrier import (
     triple_barrier_forward,
 )
 
-# Offline train v2 (bar dataset) — subset of builder CSV columns; prod v1 unchanged.
+FeatureMode = Literal["tech", "full"]
+
+# Offline train v2 (bar dataset) — technical subset.
 BAR_TRAIN_NUMERIC_KEYS: tuple[str, ...] = (
     "rsi_5m",
     "momentum_2h_pct",
@@ -24,6 +27,9 @@ BAR_TRAIN_NUMERIC_KEYS: tuple[str, ...] = (
     "momentum_rth_today_bars",
     "price_to_low5d_ratio",
 )
+
+# T + news + calendar + macro (Phase 1.5).
+BAR_TRAIN_FULL_NUMERIC_KEYS: tuple[str, ...] = BAR_TRAIN_NUMERIC_KEYS + ENTRY_CONTEXT_NUMERIC_KEYS
 
 # Promotion gate for bar v2 (relaxed from 0.55 → 0.545 after prod AUC 0.5495, 2026-06).
 ENTRY_BAR_V2_PROMOTION_AUC_MIN_DEFAULT = 0.545
@@ -55,28 +61,42 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
     return default
 
 
-def get_bar_train_feature_schema() -> tuple[list[str], list[int]]:
-    colnames = ["ticker"] + list(BAR_TRAIN_NUMERIC_KEYS)
+def resolve_bar_train_numeric_keys(mode: FeatureMode = "full") -> tuple[str, ...]:
+    return BAR_TRAIN_NUMERIC_KEYS if mode == "tech" else BAR_TRAIN_FULL_NUMERIC_KEYS
+
+
+def get_bar_train_feature_schema(mode: FeatureMode = "full") -> tuple[list[str], list[int]]:
+    keys = resolve_bar_train_numeric_keys(mode)
+    colnames = ["ticker"] + list(keys)
     return colnames, [0]
 
 
-def row_from_bar_dataset_dict(row: dict[str, Any], ticker: str | None = None) -> list[Any]:
+def row_from_bar_dataset_dict(
+    row: dict[str, Any],
+    ticker: str | None = None,
+    *,
+    mode: FeatureMode = "full",
+) -> list[Any]:
     sym = (ticker or row.get("ticker") or "").strip()
     out: list[Any] = [sym]
-    for key in BAR_TRAIN_NUMERIC_KEYS:
+    for key in resolve_bar_train_numeric_keys(mode):
         out.append(_safe_float(row.get(key)))
     return out
 
 
 __all__ = [
+    "BAR_TRAIN_FULL_NUMERIC_KEYS",
     "BAR_TRAIN_NUMERIC_KEYS",
     "ENTRY_BAR_ML_SCHEMA",
     "ENTRY_BAR_ML_SCHEMA_VERSION",
+    "ENTRY_CONTEXT_NUMERIC_KEYS",
+    "FeatureMode",
     "TripleBarrierConfig",
     "TripleBarrierResult",
     "get_bar_train_feature_schema",
     "entry_bar_v2_promotion_auc_min",
     "ENTRY_BAR_V2_PROMOTION_AUC_MIN_DEFAULT",
+    "resolve_bar_train_numeric_keys",
     "row_from_bar_dataset_dict",
     "triple_barrier_config_from_env",
     "triple_barrier_forward",

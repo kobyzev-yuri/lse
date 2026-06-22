@@ -16,6 +16,8 @@
 | Сводка ops | [ML_STATUS_REPORT.md](ML_STATUS_REPORT.md) |
 | Money management (sizing) | [GAME_5M_MONEY_MANAGEMENT_PLAN.md](GAME_5M_MONEY_MANAGEMENT_PLAN.md) |
 | Chart CNN+LSTM (research) | [GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md](GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md) |
+| Chart ML test report | [GAME_5M_CHART_ML_RESEARCH_REPORT.md](GAME_5M_CHART_ML_RESEARCH_REPORT.md) |
+| Exit/hold unified bake-off | [GAME_5M_EXIT_HOLD_ML_BAKEOFF_PLAN.md](GAME_5M_EXIT_HOLD_ML_BAKEOFF_PLAN.md) |
 | Runtime slim / no docs in image | [RUNTIME_SLIM_DEPLOY_PLAN.md](RUNTIME_SLIM_DEPLOY_PLAN.md) |
 
 ---
@@ -337,6 +339,7 @@ Sprint 5 (Ф1.8 / Ф2.6): promotion review + trust gates
 - **Ф4** multiday enrich — параллельный трек, не блокирует G1–G2.
 - **Money management (sizing)** — [GAME_5M_MONEY_MANAGEMENT_PLAN.md](GAME_5M_MONEY_MANAGEMENT_PLAN.md): vol + sentiment, shadow → apply.
 - **Chart pattern ML (CNN+LSTM)** — research-only [GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md](GAME_5M_CHART_PATTERN_ML_RESEARCH_PLAN.md); prod только если beat bar v2 + 2pp AUC.
+- **Exit/hold bake-off** — единая `y_hold_good` + сравнение tabular/chart/rules: [GAME_5M_EXIT_HOLD_ML_BAKEOFF_PLAN.md](GAME_5M_EXIT_HOLD_ML_BAKEOFF_PLAN.md).
 - Пересмотр TB-порогов только если weekly retrain снова AUC < 0.545.
 
 **Явно не делать до promotion review:** подмена prod CatBoost v1, отключение rules_5m, apply без sign-off.

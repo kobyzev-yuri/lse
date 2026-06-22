@@ -48,12 +48,13 @@ sys.path.insert(0, str(project_root))
 from report_generator import get_engine
 from services.game5m_chart_entry_dataset import (
     CHART_ENTRY_ML_SCHEMA_VERSION,
-    CHART_FEATURE_NAMES,
     assign_time_splits,
     chart_dataset_summary,
+    chart_feature_names,
     find_decision_bar_index,
     make_sample_id,
     window_tensor_from_df,
+    window_tensor_with_context,
 )
 from services.game_5m_take_replay import load_bars_5m_for_replay
 
@@ -148,7 +149,7 @@ def main() -> int:
     ap.add_argument("--exchange", default="US", help="DB exchange code")
     ap.add_argument("--window-bars", type=int, default=48, help="Bars per window (inclusive at decision)")
     ap.add_argument("--valid-ratio", type=float, default=0.2, help="Time-ordered valid fraction")
-    ap.add_argument("--dry-run", action="store_true", help="Stats only, no NPZ write")
+    ap.add_argument("--no-context", action="store_true", help="OHLCV only (no broadcast news/calendar channels)")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -187,6 +188,9 @@ def main() -> int:
     tb_labels: list[str] = []
     n_skipped = 0
 
+    include_context = not bool(args.no_context)
+    feat_names = chart_feature_names(include_context=include_context)
+
     for ticker in sorted(by_ticker.keys()):
         try:
             df = _load_ticker_bars(ticker, days=int(args.days), source=args.source, exchange=str(args.exchange), engine=engine)
@@ -209,6 +213,7 @@ def main() -> int:
             if win is None:
                 n_skipped += 1
                 continue
+            win = window_tensor_with_context(win, row, include_context=include_context)
             try:
                 y = int(float(row.get("y_entry_good") or 0))
             except (TypeError, ValueError):
@@ -247,7 +252,9 @@ def main() -> int:
         bar_csv=str(bar_csv),
         source=str(args.source),
     )
-    stats["valid_ratio"] = float(args.valid_ratio)
+    stats["include_context"] = include_context
+    stats["n_features"] = len(feat_names)
+    stats["feature_names"] = list(feat_names)
     stats["tb_label_counts"] = {
         k: tb_labels.count(k) for k in sorted(set(tb_labels))
     }
@@ -281,7 +288,12 @@ def main() -> int:
         ticker=np.asarray(tickers, dtype=object),
         bar_ts_et=np.asarray(bar_ts_list, dtype=object),
         tb_label=np.asarray(tb_labels, dtype=object),
-        feature_names=np.asarray(list(CHART_FEATURE_NAMES), dtype=object),
+        feature_names=np.asarray(list(feat_names), dtype=object),
+        context_feature_names=np.asarray(
+            list(chart_feature_names(include_context=True)) if include_context else [],
+            dtype=object,
+        ),
+        include_context=np.bool_(include_context),
         window_bars=np.int32(window_bars),
     )
     logger.info("wrote %d rows shape=%s → %s", n_rows, X.shape, out_path)

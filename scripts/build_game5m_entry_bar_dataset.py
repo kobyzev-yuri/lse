@@ -35,9 +35,11 @@ from config_loader import get_config_value
 from report_generator import get_engine
 from services.game5m_entry_bar_dataset import (
     ENTRY_BAR_ML_SCHEMA_VERSION,
+    ENTRY_CONTEXT_NUMERIC_KEYS,
     triple_barrier_config_from_env,
     triple_barrier_forward,
 )
+from services.game5m_ml_context_features import build_entry_context_features, merge_context_into_row
 from services.game_5m_take_replay import load_bars_5m_for_replay
 from services.recommend_5m import (
     BARS_2H,
@@ -84,7 +86,7 @@ OUTPUT_COLUMNS: tuple[str, ...] = (
     "tb_mfe_pct",
     "tb_mae_pct",
     "sample_kind",
-)
+) + ENTRY_CONTEXT_NUMERIC_KEYS
 
 
 def _safe_float(v: Any) -> float | None:
@@ -236,6 +238,9 @@ def _iter_rows_for_ticker(
     neg_ratio: float,
     min_warmup: int,
     max_forward: int,
+    enrich: bool,
+    engine: Any,
+    kb_days: int,
 ) -> Iterable[dict[str, Any]]:
     if df.empty:
         return
@@ -310,6 +315,17 @@ def _iter_rows_for_ticker(
             "tb_mfe_pct": tb.mfe_pct,
             "tb_mae_pct": tb.mae_pct,
             "sample_kind": sample_kind,
+            **(
+                build_entry_context_features(
+                    ticker=ticker,
+                    bar_ts_et=bar_ts_et,
+                    features=features,
+                    engine=engine if enrich else None,
+                    kb_days=kb_days,
+                )
+                if enrich
+                else {k: None for k in ENTRY_CONTEXT_NUMERIC_KEYS}
+            ),
         }
 
 
@@ -345,7 +361,8 @@ def main() -> int:
     parser.add_argument("--neg-ratio", type=float, default=None, help="HOLD subsample ratio (default GAME_5M_ENTRY_BAR_NEG_RATIO)")
     parser.add_argument("--min-rows", type=int, default=None, help="Warn if fewer rows (GAME_5M_ENTRY_BAR_MIN_ROWS)")
     parser.add_argument("--summary-json", type=str, default="", help="Optional JSON stats path")
-    parser.add_argument("--dry-run", action="store_true", help="Print stats only, no CSV")
+    parser.add_argument("--no-enrich", action="store_true", help="Technical features only (skip news/calendar)")
+    parser.add_argument("--kb-days", type=int, default=7, help="KB lookback days for context enrich")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -376,7 +393,10 @@ def main() -> int:
     min_warmup = max(RSI_PERIOD_5M + sell_confirm_bars + 2, BARS_2H + 5, min_sess_bars + 2)
     max_forward = max(int(tb_cfg.max_bars), 1)
 
-    engine = get_engine() if args.source == "db" else None
+    enrich = not bool(args.no_enrich)
+    kb_days = max(1, int(args.kb_days))
+
+    engine = get_engine() if args.source == "db" or enrich else None
     all_rows: list[dict[str, Any]] = []
 
     for ticker in tickers:
@@ -406,12 +426,17 @@ def main() -> int:
             neg_ratio=neg_ratio,
             min_warmup=min_warmup,
             max_forward=max_forward,
+            enrich=enrich,
+            engine=engine,
+            kb_days=kb_days,
         ):
             all_rows.append(row)
         logger.info("%s: +%d rows (bars=%d)", ticker, len(all_rows) - n_before, len(df))
 
     stats = _summary_stats(all_rows)
     stats["days"] = int(args.days)
+    stats["enrich_context"] = enrich
+    stats["kb_days"] = kb_days
     stats["neg_ratio"] = neg_ratio
     stats["tb_config"] = {
         "upper_pct": tb_cfg.upper_pct,

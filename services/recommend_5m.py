@@ -544,15 +544,18 @@ def has_5m_data(ticker: str, days: int = None, min_bars: int = 1) -> bool:
     return df is not None and not df.empty and len(df) >= min_bars
 
 
-def fetch_kb_news_for_period(ticker: str, days: int) -> List[Dict[str, Any]]:
+def fetch_kb_news_for_period(ticker: str, days: int, *, as_of: datetime | None = None) -> List[Dict[str, Any]]:
     """
     Новости/события из KB за те же days дней, что и окно 5m. Позволяет агенту
     сопоставить динамику цены и новости за один период и учесть влияние при решении.
+
+    as_of: UTC naive cutoff for offline replay (only news with ingested_at/ts <= as_of).
     """
     try:
         from sqlalchemy import create_engine, text
         from config_loader import get_database_url
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        end = as_of if as_of is not None else datetime.utcnow()
+        cutoff = end - timedelta(days=days)
         engine = create_engine(get_database_url())
         with engine.connect() as conn:
             result = conn.execute(
@@ -561,11 +564,12 @@ def fetch_kb_news_for_period(ticker: str, days: int) -> List[Dict[str, Any]]:
                     FROM knowledge_base
                     WHERE (ticker = :ticker OR ticker IN ('MACRO', 'US_MACRO'))
                       AND COALESCE(ingested_at, ts) >= :cutoff
+                      AND COALESCE(ingested_at, ts) <= :as_of_end
                       AND content IS NOT NULL
                       AND LENGTH(TRIM(content)) > 0
                     ORDER BY COALESCE(ingested_at, ts) DESC
                 """),
-                {"ticker": ticker, "cutoff": cutoff},
+                {"ticker": ticker, "cutoff": cutoff, "as_of_end": end},
             )
             rows = result.fetchall()
         out = []

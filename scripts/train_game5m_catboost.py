@@ -123,7 +123,9 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
         return 1
 
     from config_loader import get_config_value
-    from services.game5m_entry_bar_dataset import get_bar_train_feature_schema, row_from_bar_dataset_dict
+    from services.game5m_entry_bar_dataset import FeatureMode, get_bar_train_feature_schema, row_from_bar_dataset_dict
+
+    feature_mode: FeatureMode = "full" if getattr(args, "feature_mode", "full") == "full" else "tech"
 
     csv_path = (args.bar_csv or "").strip()
     if not csv_path:
@@ -164,7 +166,7 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
             if str(raw.get("tb_label") or "") == "insufficient_data":
                 continue
             try:
-                row = row_from_bar_dataset_dict(raw)
+                row = row_from_bar_dataset_dict(raw, mode=feature_mode)
             except Exception as e:
                 logger.debug("skip bar row: %s", e)
                 continue
@@ -206,7 +208,7 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
         n_train = max(10, n_total // 2)
         n_valid = n_total - n_train
 
-    feature_names, cat_features = get_bar_train_feature_schema()
+    feature_names, cat_features = get_bar_train_feature_schema(feature_mode)
     train_pool = Pool(rows[:n_train], label=labels[:n_train], cat_features=cat_features, feature_names=feature_names)
     valid_pool = Pool(rows[n_train:], label=labels[n_train:], cat_features=cat_features, feature_names=feature_names)
 
@@ -247,6 +249,7 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
         "n_total": n_total,
         "y_pos": pos,
         "label": "y_entry_good",
+        "feature_mode": feature_mode,
         "min_train_rows_config": min_rows,
         "auc_valid": round(auc, 4) if auc == auc else None,
         "bar_csv": str(path),
@@ -302,6 +305,12 @@ def main() -> int:
         type=str,
         default="",
         help="Input CSV from build_game5m_entry_bar_dataset.py (required for --dataset bar)",
+    )
+    parser.add_argument(
+        "--feature-mode",
+        choices=("tech", "full"),
+        default="full",
+        help="bar dataset: tech=BAR_TRAIN_NUMERIC_KEYS only; full=+news/calendar (default)",
     )
     args = parser.parse_args()
 
