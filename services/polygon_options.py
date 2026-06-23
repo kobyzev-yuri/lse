@@ -60,6 +60,7 @@ def fetch_option_expiration_dates(ticker: str, *, limit: int = 1000) -> List[str
     return sorted(out)
 
 
+def fetch_options_chain_snapshot(
     ticker: str,
     *,
     expiration_date: Optional[str] = None,
