@@ -119,8 +119,8 @@ PCR_OI     = OI_P / OI_C</div>
     <div class="grid-2">
         <div><label>Тикер</label><input id="calcTicker" value="MU"></div>
         <div><label>Цена акции ($)</label><input id="calcSpot" type="number" step="0.01" value="189"></div>
-        <div><label>Дата earnings (справочно)</label><input id="calcEarnings" type="date"></div>
-        <div><label>Экспирация</label><input id="calcExp" type="date"></div>
+        <div><label>Дата earnings (справочно)</label><input id="calcEarnings" type="date" title="Не влияет на расчёт — для контекста (отчёт перед экспирацией)"></div>
+        <div><label>Экспирация (справочно)</label><input id="calcExp" type="date" title="Не влияет на расчёт — дата, к которой относится intrinsic-сценарий"></div>
         <div><label>Контрактов</label><input id="calcContracts" type="number" min="1" value="1"></div>
         <div>
             <label>Стратегия</label>
@@ -149,7 +149,17 @@ PCR_OI     = OI_P / OI_C</div>
 
     <div class="formula-docs">
         <h3 style="margin-bottom:0.6rem;color:#94a3b8;font-size:0.95rem;">Справка: формулы калькулятора</h3>
-        <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem;">Расчёт на экспирацию по intrinsic value (без временной стоимости). 1 контракт = 100 акций.</p>
+        <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem;">Расчёт на экспирацию по intrinsic value. <strong>IV</strong> (implied volatility, подразумеваемая волатильность) и временная стоимость в премии не моделируются — см. справку внизу.</p>
+
+        <details>
+            <summary>Почему премия $8.5, а в таблице только intrinsic?</summary>
+            <div class="formula-body">
+                <p><strong>IV (implied volatility)</strong> — ожидаемая волатильность, заложенная рынком в цену опциона. Перед earnings IV обычно высокая → премия дорогая.</p>
+                <p>Премия = <em>внутренняя стоимость</em> + <em>временная стоимость</em> (зависит от IV и дней до экспирации). Калькулятор считает только intrinsic на дату экспирации: max(0, K−S)×100.</p>
+                <p>После отчёта часто бывает <strong>IV crush</strong> — IV падает, премия сжимается даже при движении цены в вашу сторону. Поэтому реальный P/L до экспирации может отличаться от таблицы.</p>
+                <p>Поля <strong>earnings</strong> и <strong>экспирация</strong> — справочные, на формулы не влияют; заполняются из демо-пресетов или вручную.</p>
+            </div>
+        </details>
 
         <details open>
             <summary>Общие обозначения</summary>
@@ -327,9 +337,10 @@ P/L(S) = Value(S) − Entry</div>
     async function loadExamples() {
         const r = await fetch('/api/options/calculator/examples');
         const j = await r.json();
+        const examples = j.examples || [];
         const box = $('exampleBtns');
         box.innerHTML = '';
-        (j.examples || []).forEach(ex => {
+        examples.forEach((ex, idx) => {
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'btn-outline-primary';
@@ -337,6 +348,10 @@ P/L(S) = Value(S) − Entry</div>
             b.title = ex.description_ru || '';
             b.onclick = () => { applyExample(ex); runCalc(); };
             box.appendChild(b);
+            if (idx === 0) {
+                applyExample(ex);
+                runCalc();
+            }
         });
     }
 

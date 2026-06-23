@@ -155,7 +155,11 @@ def compute_put_strategy(
         "max_profit_usd": round(max_profit, 2) if max_profit is not None else None,
         "spread_width": round(width, 2) if width is not None else None,
         "scenarios": scenarios,
-        "note_ru": "Расчёт на экспирацию по intrinsic value (без IV и временной стоимости).",
+        "note_ru": (
+            "Расчёт на экспирацию по intrinsic value. "
+            "В премии заложена подразумеваемая волатильность (IV) и время — калькулятор их не моделирует; "
+            "даты earnings/экспирации справочные."
+        ),
     }
 
 
