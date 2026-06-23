@@ -132,7 +132,7 @@ PCR_OI     = OI_P / OI_C</div>
     </div>
     <h3>Long Put</h3>
     <div class="grid-2">
-        <div><label>Страйк long ($)</label><input id="longStrike" type="number" step="0.5" value="190"></div>
+        <div><label>Страйк long ($)</label><input id="longStrike" type="number" step="0.5" value="189"></div>
         <div><label>Премия long ($/акция)</label><input id="longPrem" type="number" step="0.01" value="8.5"></div>
     </div>
     <div id="spreadFields" class="hidden">
@@ -193,7 +193,8 @@ ROI(S) = P/L(S) / Entry × 100%</div>
                             <li>S ≥ K → «Максимальный убыток»</li>
                             <li>|P/L| ≈ 0 → «Безубыток»</li>
                             <li>P/L &lt; 0 → «Убыток»</li>
-                            <li>P/L &gt; 0 → «Прибыль» (теоретически не ограничена)</li>
+                            <li>P/L &gt; 0 → «Прибыль»</li>
+                            <li>Max profit (pure put) = K × M − Entry при S → 0</li>
                         </ul>
                     </div>
                 </details>
@@ -281,14 +282,16 @@ P/L(S) = Value(S) − Entry</div>
             $('calcTable').innerHTML = '';
             return;
         }
+        const beDrop = j.breakeven_drop_pct != null ? ' (' + j.breakeven_drop_pct + '%)' : '';
+        const maxProfitNote = j.strategy === 'pure_put' ? ' <span class="muted" style="font-size:0.75rem">при S→0</span>' : '';
         $('calcSummary').innerHTML =
+            '<p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">' + (j.note_ru || '') + '</p>' +
             '<div class="stats">' +
             '<div class="stat-card"><h3>Вход</h3><div class="value">$' + j.entry_cost_usd + '</div></div>' +
-            '<div class="stat-card"><h3>Breakeven</h3><div class="value">$' + j.breakeven + '</div></div>' +
+            '<div class="stat-card"><h3>Breakeven</h3><div class="value">$' + j.breakeven + beDrop + '</div></div>' +
             '<div class="stat-card"><h3>Max loss</h3><div class="value negative">$' + j.max_loss_usd + '</div></div>' +
-            '<div class="stat-card"><h3>Max profit</h3><div class="value positive">' +
-            (j.max_profit_usd != null ? '$' + j.max_profit_usd : '∞') + '</div></div></div>';
-        let tbl = '<table><tr><th>Падение</th><th>Цена</th><th>Стоимость</th><th>P/L</th><th>ROI</th><th>Статус</th></tr>';
+            '<div class="stat-card"><h3>Max profit</h3><div class="value positive">$' + j.max_profit_usd + maxProfitNote + '</div></div></div>';
+        let tbl = '<table><tr><th>Падение</th><th>Цена</th><th>Value (intr.)</th><th>P/L</th><th>ROI</th><th>Статус</th></tr>';
         (j.scenarios || []).forEach(s => {
             const cls = s.pnl_usd >= 0 ? 'positive' : 'negative';
             tbl += '<tr><td>' + s.drop_pct + '%</td><td>$' + s.stock_price + '</td><td>$' + s.position_value_usd +

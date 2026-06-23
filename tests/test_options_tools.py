@@ -18,6 +18,7 @@ def test_pure_put_breakeven_and_max_loss():
     assert r["entry_cost_usd"] == 500.0
     assert r["breakeven"] == 95.0
     assert r["max_loss_usd"] == 500.0
+    assert r["max_profit_usd"] == 9500.0  # 100*100 - 500 at S→0
     flat = r["scenarios"][0]
     assert flat["drop_pct"] == 0.0
     assert flat["pnl_usd"] == -500.0

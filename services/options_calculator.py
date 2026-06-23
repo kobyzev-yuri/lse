@@ -20,7 +20,7 @@ CALCULATOR_DEMO_EXAMPLES: List[Dict[str, Any]] = [
         "ticker": "MU",
         "spot": 189.0,
         "contracts": 1,
-        "long_strike": 190.0,
+        "long_strike": 189.0,
         "long_premium": 8.5,
         "earnings_date": "2026-06-25",
         "expiration_date": "2026-06-26",
@@ -110,7 +110,7 @@ def compute_put_strategy(
     if strategy == "pure_put":
         entry = long_prem * mult
         max_loss = entry
-        max_profit = None  # unbounded
+        max_profit = max(0.0, long_k * mult - entry)  # теор. максимум при S → 0
         breakeven = long_k - long_prem
         width = None
     else:
@@ -142,16 +142,20 @@ def compute_put_strategy(
         width=width,
     )
 
+    breakeven_drop_pct = ((breakeven - spot) / spot * 100.0) if spot > 0 else 0.0
+
     return {
         "strategy": strategy,
         "spot": round(spot, 2),
         "contracts": n,
         "entry_cost_usd": round(entry, 2),
         "breakeven": round(breakeven, 2),
+        "breakeven_drop_pct": round(breakeven_drop_pct, 2),
         "max_loss_usd": round(max_loss if strategy == "pure_put" else max_loss, 2),
         "max_profit_usd": round(max_profit, 2) if max_profit is not None else None,
         "spread_width": round(width, 2) if width is not None else None,
         "scenarios": scenarios,
+        "note_ru": "Расчёт на экспирацию по intrinsic value (без IV и временной стоимости).",
     }
 
 
