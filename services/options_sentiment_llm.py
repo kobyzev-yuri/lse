@@ -1,12 +1,12 @@
 """
 LLM-интерпретация отчёта option chain sentiment (ProxyAPI / OPENAI_*).
+Маршрутизация — как у анализатора (resolve_analyzer_llm_base_model).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -28,12 +28,16 @@ def interpret_options_chain_report(report: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     try:
-        from services.llm_service import LLMService, get_openai_http_timeout_prompt_entry
+        from services.llm_service import (
+            LLMService,
+            get_openai_http_timeout_prompt_entry,
+            resolve_analyzer_llm_base_model,
+        )
     except Exception as exc:
         return {"status": "error", "error": f"LLM import: {exc}"}
 
     llm = LLMService()
-    if not getattr(llm, "client", None):
+    if not getattr(llm, "api_key", None):
         return {"status": "disabled", "error": "LLM недоступен (OPENAI_GPT_KEY / ProxyAPI)"}
 
     payload = _compact_report_for_llm(report)
@@ -48,42 +52,42 @@ def interpret_options_chain_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "5) Ограничения источника и что не выводить из одного снимка"
     )
 
-    model = (os.environ.get("OPTIONS_SENTIMENT_LLM_MODEL") or "").strip() or None
     timeout = get_openai_http_timeout_prompt_entry()
-    kwargs: Dict[str, Any] = {
+    call_kwargs: Dict[str, Any] = {
         "temperature": 0.2,
         "max_completion_tokens": 900,
     }
-    if model:
-        kwargs["model"] = model
     if timeout:
-        kwargs["http_timeout_sec"] = float(timeout)
+        call_kwargs["http_timeout_sec"] = float(timeout)
 
+    base_url, model = resolve_analyzer_llm_base_model()
     try:
-        resp = llm.generate_response(
+        resp = llm.generate_response_with_model(
+            base_url,
+            model,
             [{"role": "user", "content": user_prompt}],
             system_prompt=SYSTEM_PROMPT,
-            **kwargs,
+            **call_kwargs,
         )
     except Exception as exc:
         logger.exception("options sentiment LLM failed")
-        return {"status": "error", "error": str(exc)}
+        return {"status": "error", "error": str(exc), "model": model}
 
-    if resp.get("api_error") or resp.get("error"):
+    if not resp or resp.get("api_error") or resp.get("error"):
         return {
             "status": "error",
-            "error": str(resp.get("error") or resp.get("response") or "LLM API error"),
-            "model": resp.get("model"),
+            "error": str((resp or {}).get("error") or "LLM API error"),
+            "model": model,
         }
 
     text = (resp.get("response") or "").strip()
     if not text:
-        return {"status": "error", "error": "пустой ответ LLM", "model": resp.get("model")}
+        return {"status": "error", "error": "пустой ответ LLM", "model": model}
 
     return {
         "status": "ok",
         "interpretation_ru": text,
-        "model": resp.get("model"),
+        "model": resp.get("model") or model,
         "usage": resp.get("usage"),
         "ticker": report.get("ticker"),
         "source": report.get("source"),
