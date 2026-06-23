@@ -237,3 +237,52 @@ def build_chain_sentiment_report(
         "available_expirations": exps,
         **analysis,
     }
+
+
+def build_yfinance_chain_sentiment_report(
+    ticker: str,
+    *,
+    expiration_date: Optional[str] = None,
+    strike_window_pct: float = 0.15,
+) -> Dict[str, Any]:
+    """Полный отчёт: yfinance option_chain → та же аналитика, что Polygon."""
+    from services.yfinance_options import (
+        fetch_yfinance_option_chain,
+        fetch_yfinance_option_expirations,
+    )
+
+    sym = ticker.strip().upper()
+    exps = fetch_yfinance_option_expirations(sym)
+    if not expiration_date:
+        expiration_date = exps[0] if exps else None
+    if not expiration_date:
+        return {
+            "status": "error",
+            "error": f"yfinance: нет дат экспирации для {sym}",
+            "ticker": sym,
+            "source": "yfinance",
+        }
+
+    raw = fetch_yfinance_option_chain(sym, expiration_date=expiration_date)
+    if raw.get("status") == "error":
+        return {"status": "error", "error": raw.get("error"), "ticker": sym, "source": "yfinance"}
+
+    contracts = raw.get("contracts") or []
+    spot = raw.get("underlying_price")
+    if spot and strike_window_pct > 0:
+        lo, hi = float(spot) * (1.0 - strike_window_pct), float(spot) * (1.0 + strike_window_pct)
+        contracts = [c for c in contracts if lo <= float(c["strike"]) <= hi]
+
+    analysis = analyze_options_chain(contracts, spot=spot)
+    return {
+        "ticker": sym,
+        "expiration_date": expiration_date,
+        "source": "yfinance",
+        "contract_count": len(contracts),
+        "available_expirations": exps,
+        "chain_calls_puts": {
+            "calls": raw.get("calls_count"),
+            "puts": raw.get("puts_count"),
+        },
+        **analysis,
+    }

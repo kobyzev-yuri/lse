@@ -39,12 +39,18 @@
         background: #16213e; padding: 0.5rem 0.65rem; border-radius: 6px; margin: 0.35rem 0;
         overflow-x: auto; white-space: pre-wrap;
     }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; align-items: center; }
+    .btn-row .lbl { font-size: 0.8rem; color: #94a3b8; min-width: 4.5rem; }
+    .compare-panels { display: grid; grid-template-columns: 1fr; gap: 1rem; margin-top: 1rem; }
+    @media (min-width: 960px) { .compare-panels { grid-template-columns: 1fr 1fr; } }
+    .compare-card { border: 1px solid #0f3460; border-radius: 8px; padding: 0.85rem; background: #0f172a; }
+    .compare-card h3 { margin: 0 0 0.6rem; font-size: 0.95rem; color: #94a3b8; }
 </style>
 {% endblock %}
 {% block content %}
 <div class="card">
     <h1>Опционы</h1>
-    <p class="muted">Цепочка через Polygon API (volume/OI) и калькулятор Put / Put Spread. Данные Investing.com не парсим — Polygon даёт ту же доску проще.</p>
+    <p class="muted">Сравнение Polygon snapshot и yfinance option_chain. Калькулятор — intrinsic P/L; сентимент — PCR, max pain, ключевые страйки.</p>
 </div>
 
 <div class="tabs">
@@ -64,9 +70,26 @@
             <select id="sentExp"><option value="">— загрузка —</option></select>
         </div>
     </div>
-    <button type="button" id="btnLoadExp">Загрузить даты</button>
-    <button type="button" id="btnAnalyze">Анализ</button>
-    <div id="sentimentOut" class="muted" style="margin-top:1rem;">Задайте POLYGON_API_KEY и нажмите «Анализ».</div>
+    <div class="btn-row">
+        <span class="lbl">Даты:</span>
+        <button type="button" id="btnLoadExpPolygon" class="btn-outline-primary">Polygon</button>
+        <button type="button" id="btnLoadExpYfinance" class="btn-outline-primary">yfinance</button>
+    </div>
+    <div class="btn-row">
+        <span class="lbl">Анализ:</span>
+        <button type="button" id="btnAnalyzePolygon">Polygon</button>
+        <button type="button" id="btnAnalyzeYfinance">yfinance</button>
+    </div>
+    <div class="compare-panels">
+        <div class="compare-card">
+            <h3>Polygon snapshot</h3>
+            <div id="sentimentPolygon" class="muted">Загрузите даты и нажмите «Polygon» (нужен Options Starter).</div>
+        </div>
+        <div class="compare-card">
+            <h3>yfinance option_chain</h3>
+            <div id="sentimentYfinance" class="muted">Загрузите даты и нажмите «yfinance» (без ключа).</div>
+        </div>
+    </div>
 
     <div class="formula-docs">
         <h3 style="margin-bottom:0.6rem;color:#94a3b8;font-size:0.95rem;">Справка: метрики сентимента</h3>
@@ -143,9 +166,12 @@ PCR_OI     = OI_P / OI_C</div>
         </div>
     </div>
     <button type="button" id="btnCalc" style="margin-top:0.5rem;">Рассчитать</button>
-    <button type="button" id="btnFillFromChain" class="btn-outline-primary">Подтянуть spot с Polygon</button>
-    <button type="button" id="btnFillFromYfinance" class="btn-outline-primary">Подтянуть spot с yfinance</button>
-    <button type="button" id="btnFillCalendar" class="btn-outline-primary">Подтянуть даты из календаря</button>
+    <div class="btn-row" style="margin-top:0.5rem;">
+        <span class="lbl">Spot:</span>
+        <button type="button" id="btnFillFromChain" class="btn-outline-primary">Polygon</button>
+        <button type="button" id="btnFillFromYfinance" class="btn-outline-primary">yfinance</button>
+        <button type="button" id="btnFillCalendar" class="btn-outline-primary">Даты из календаря</button>
+    </div>
     <p id="calcPrefillMsg" class="muted" style="font-size:0.85rem;margin-top:0.5rem;min-height:1.2em;"></p>
     <div id="calcSummary" style="margin-top:1rem;"></div>
     <div id="calcTable" class="table-responsive"></div>
@@ -359,55 +385,73 @@ P/L(S) = Value(S) − Entry</div>
         });
     }
 
-    async function loadExpirations() {
-        const t = $('sentTicker').value.trim().toUpperCase();
-        const r = await fetch('/api/options/expirations/' + encodeURIComponent(t));
-        const j = await r.json();
-        const sel = $('sentExp');
-        sel.innerHTML = '';
-        (j.expirations || []).forEach(d => {
-            const o = document.createElement('option');
-            o.value = d; o.textContent = d;
-            sel.appendChild(o);
-        });
-        if (!sel.options.length) {
-            sel.innerHTML = '<option value="">нет дат (ключ Polygon?)</option>';
-        }
-    }
-    $('btnLoadExp').onclick = loadExpirations;
-
-    $('btnAnalyze').onclick = async () => {
-        const t = $('sentTicker').value.trim().toUpperCase();
-        const exp = $('sentExp').value;
-        let url = '/api/options/sentiment/' + encodeURIComponent(t);
-        if (exp) url += '?expiration_date=' + encodeURIComponent(exp);
-        $('sentimentOut').innerHTML = '<div class="loading">Загрузка…</div>';
-        const r = await fetch(url);
-        const j = await r.json();
+    function renderSentimentCard(j, sourceLabel) {
         if (j.status === 'error') {
-            $('sentimentOut').innerHTML = '<p class="text-danger">' + (j.error || 'ошибка') + '</p>';
-            return;
+            return '<p class="text-danger"><strong>' + sourceLabel + ':</strong> ' + (j.error || 'ошибка') + '</p>';
+        }
+        if (j.status === 'empty' || j.sentiment_label === 'NO_DATA') {
+            return '<p class="text-danger"><strong>' + sourceLabel + ':</strong> нет контрактов на выбранную экспирацию</p>';
         }
         const label = j.sentiment_label || 'NEUTRAL';
-        let html = '<span class="sentiment-badge sentiment-' + label + '">' + label + '</span>';
+        let html = '<p class="muted" style="margin:0 0 0.5rem;font-size:0.8rem;">' + sourceLabel;
+        if (j.expiration_date) html += ' · exp ' + j.expiration_date;
+        if (j.contract_count != null) html += ' · ' + j.contract_count + ' контрактов';
+        html += '</p>';
+        html += '<span class="sentiment-badge sentiment-' + label + '">' + label + '</span>';
         html += ' <span class="muted">score ' + (j.sentiment_score ?? '—') + '</span>';
-        html += '<p style="margin:0.75rem 0">' + (j.sentiment_summary_ru || '') + '</p>';
+        html += '<p style="margin:0.6rem 0;font-size:0.9rem">' + (j.sentiment_summary_ru || '') + '</p>';
         html += '<div class="stats">';
         const tot = j.totals || {};
-        html += '<div class="stat-card"><h3>PCR volume</h3><div class="value">' + (tot.pcr_volume ?? '—') + '</div></div>';
+        html += '<div class="stat-card"><h3>PCR vol</h3><div class="value">' + (tot.pcr_volume ?? '—') + '</div></div>';
         html += '<div class="stat-card"><h3>PCR OI</h3><div class="value">' + (tot.pcr_open_interest ?? '—') + '</div></div>';
         html += '<div class="stat-card"><h3>Spot</h3><div class="value">$' + (j.spot ?? '—') + '</div></div>';
         html += '<div class="stat-card"><h3>Max pain</h3><div class="value">$' + (j.max_pain_strike ?? '—') + '</div></div>';
         html += '</div>';
         if (j.key_strikes_oi && j.key_strikes_oi.length) {
-            html += '<h3>Ключевые страйки (OI)</h3><table><tr><th>Strike</th><th>OI</th><th>Call OI</th><th>Put OI</th></tr>';
-            j.key_strikes_oi.forEach(row => {
+            html += '<table style="margin-top:0.5rem;font-size:0.85rem"><tr><th>Strike</th><th>OI</th><th>Call</th><th>Put</th></tr>';
+            j.key_strikes_oi.slice(0, 6).forEach(row => {
                 html += '<tr><td>' + row.strike + '</td><td>' + row.total_oi + '</td><td>' + row.call_oi + '</td><td>' + row.put_oi + '</td></tr>';
             });
             html += '</table>';
         }
-        $('sentimentOut').innerHTML = html;
-    };
+        return html;
+    }
+
+    async function loadExpirations(source) {
+        const t = $('sentTicker').value.trim().toUpperCase();
+        const r = await fetch('/api/options/expirations/' + encodeURIComponent(t) + '?source=' + encodeURIComponent(source));
+        const j = await r.json();
+        const sel = $('sentExp');
+        sel.innerHTML = '';
+        (j.expirations || []).forEach(d => {
+            const o = document.createElement('option');
+            o.value = d;
+            o.textContent = d + (source === 'yfinance' ? ' (YF)' : ' (PG)');
+            sel.appendChild(o);
+        });
+        if (!sel.options.length) {
+            const err = j.error ? ' — ' + j.error : '';
+            sel.innerHTML = '<option value="">нет дат ' + source + err + '</option>';
+        }
+        return j;
+    }
+
+    async function runSentiment(source, outId) {
+        const t = $('sentTicker').value.trim().toUpperCase();
+        const exp = $('sentExp').value;
+        const label = source === 'yfinance' ? 'yfinance' : 'Polygon';
+        $(outId).innerHTML = '<div class="loading">' + label + '…</div>';
+        let url = '/api/options/sentiment/' + encodeURIComponent(t) + '?source=' + encodeURIComponent(source);
+        if (exp) url += '&expiration_date=' + encodeURIComponent(exp);
+        const r = await fetch(url);
+        const j = await r.json();
+        $(outId).innerHTML = renderSentimentCard(j, label);
+    }
+
+    $('btnLoadExpPolygon').onclick = () => loadExpirations('polygon');
+    $('btnLoadExpYfinance').onclick = () => loadExpirations('yfinance');
+    $('btnAnalyzePolygon').onclick = () => runSentiment('polygon', 'sentimentPolygon');
+    $('btnAnalyzeYfinance').onclick = () => runSentiment('yfinance', 'sentimentYfinance');
 
     $('btnCalc').onclick = () => runCalc();
 
@@ -420,7 +464,7 @@ P/L(S) = Value(S) − Entry</div>
     $('btnFillFromChain').onclick = async () => {
         const t = $('calcTicker').value.trim().toUpperCase();
         setPrefillMsg('Polygon…');
-        const r = await fetch('/api/options/sentiment/' + encodeURIComponent(t));
+        const r = await fetch('/api/options/sentiment/' + encodeURIComponent(t) + '?source=polygon');
         const j = await r.json();
         if (j.status === 'error' || !j.spot) {
             setPrefillMsg(j.error || 'Polygon: spot недоступен (нужна подписка Options?)', true);
@@ -467,7 +511,7 @@ P/L(S) = Value(S) − Entry</div>
         setPrefillMsg(msg);
     };
 
-    loadExpirations();
+    loadExpirations('yfinance');
     loadExamples();
 })();
 </script>

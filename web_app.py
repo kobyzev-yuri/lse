@@ -1204,32 +1204,48 @@ async def options_tools_page(request: Request):
 
 
 @app.get("/api/options/expirations/{ticker}", response_class=JSONResponse)
-async def api_options_expirations(ticker: str):
+async def api_options_expirations(ticker: str, source: str = "polygon"):
     from services.polygon_options import fetch_option_expiration_dates, polygon_options_available
+    from services.yfinance_options import fetch_yfinance_option_expirations
 
     t = (ticker or "").strip().upper()
     if not t:
         raise HTTPException(status_code=400, detail="ticker required")
+    src = (source or "polygon").strip().lower()
+    if src == "yfinance":
+        exps = await asyncio.to_thread(fetch_yfinance_option_expirations, t)
+        return {"ticker": t, "source": "yfinance", "expirations": exps}
     if not polygon_options_available():
-        return {"ticker": t, "expirations": [], "error": "POLYGON_API_KEY not configured"}
+        return {"ticker": t, "source": "polygon", "expirations": [], "error": "POLYGON_API_KEY not configured"}
     exps = await asyncio.to_thread(fetch_option_expiration_dates, t)
-    return {"ticker": t, "expirations": exps}
+    return {"ticker": t, "source": "polygon", "expirations": exps}
 
 
 @app.get("/api/options/sentiment/{ticker}", response_class=JSONResponse)
-async def api_options_sentiment(ticker: str, expiration_date: Optional[str] = None):
-    from services.options_chain_sentiment import build_chain_sentiment_report
+async def api_options_sentiment(ticker: str, expiration_date: Optional[str] = None, source: str = "polygon"):
+    from services.options_chain_sentiment import (
+        build_chain_sentiment_report,
+        build_yfinance_chain_sentiment_report,
+    )
 
     t = (ticker or "").strip().upper()
     if not t:
         raise HTTPException(status_code=400, detail="ticker required")
+    src = (source or "polygon").strip().lower()
     try:
-        payload = await asyncio.to_thread(
-            build_chain_sentiment_report, t, expiration_date=expiration_date or None
-        )
+        if src == "yfinance":
+            payload = await asyncio.to_thread(
+                build_yfinance_chain_sentiment_report,
+                t,
+                expiration_date=expiration_date or None,
+            )
+        else:
+            payload = await asyncio.to_thread(
+                build_chain_sentiment_report, t, expiration_date=expiration_date or None
+            )
         return _to_jsonable(payload)
     except Exception as e:
-        logger.exception("api_options_sentiment %s", t)
+        logger.exception("api_options_sentiment %s source=%s", t, src)
         raise HTTPException(status_code=500, detail=str(e))
 
 

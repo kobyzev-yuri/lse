@@ -137,3 +137,76 @@ def test_load_calendar_picks_nearest_future(monkeypatch):
     assert r["suggested_earnings_date"] == "2099-06-25"
     assert r["suggested_expiration_date"] == "2099-06-28"
     assert r["pick_reason"] == "nearest_future"
+
+
+def test_yfinance_rows_to_contracts():
+    import pandas as pd
+
+    from services.yfinance_options import _rows_to_contracts
+
+    df = pd.DataFrame(
+        [
+            {
+                "contractSymbol": "MU260626P00190000",
+                "strike": 190.0,
+                "bid": 8.0,
+                "ask": 9.0,
+                "lastPrice": 8.5,
+                "volume": 120,
+                "openInterest": 5000,
+                "impliedVolatility": 0.45,
+            }
+        ]
+    )
+    out = _rows_to_contracts(
+        df,
+        contract_type="put",
+        expiration_date="2026-06-26",
+        underlying="MU",
+        underlying_price=189.0,
+    )
+    assert len(out) == 1
+    assert out[0]["strike"] == 190.0
+    assert out[0]["open_interest"] == 5000
+    assert out[0]["contract_type"] == "put"
+
+
+def test_yfinance_sentiment_report(monkeypatch):
+    from services.options_chain_sentiment import build_yfinance_chain_sentiment_report
+
+    fake_contracts = [
+        {
+            "strike": 190.0,
+            "contract_type": "call",
+            "volume": 100,
+            "open_interest": 500,
+            "underlying_price": 189.0,
+        },
+        {
+            "strike": 190.0,
+            "contract_type": "put",
+            "volume": 800,
+            "open_interest": 3000,
+            "underlying_price": 189.0,
+        },
+    ]
+
+    monkeypatch.setattr(
+        "services.yfinance_options.fetch_yfinance_option_expirations",
+        lambda t: ["2026-06-26"],
+    )
+    monkeypatch.setattr(
+        "services.yfinance_options.fetch_yfinance_option_chain",
+        lambda t, expiration_date: {
+            "status": "ok",
+            "underlying_price": 189.0,
+            "contracts": fake_contracts,
+            "calls_count": 1,
+            "puts_count": 1,
+        },
+    )
+
+    r = build_yfinance_chain_sentiment_report("MU", expiration_date="2026-06-26")
+    assert r["source"] == "yfinance"
+    assert r["sentiment_label"] == "BEARISH"
+    assert r["totals"]["pcr_open_interest"] > 1.0
