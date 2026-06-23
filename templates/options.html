@@ -20,6 +20,25 @@
     .example-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0; }
     .example-btns button { flex: 1 1 auto; min-width: 160px; font-size: 0.82rem; }
     .demo-hint { font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.5rem; }
+    .formula-docs { margin-top: 1.25rem; border-top: 1px solid #0f3460; padding-top: 1rem; }
+    .formula-docs > details { margin-bottom: 0.5rem; border: 1px solid #0f3460; border-radius: 8px; background: #0f172a; }
+    .formula-docs > details > summary {
+        cursor: pointer; padding: 0.65rem 0.85rem; font-weight: 600; color: #cbd5e1; list-style: none;
+    }
+    .formula-docs > details > summary::-webkit-details-marker { display: none; }
+    .formula-docs > details > summary::before { content: "▸ "; color: #7dd3fc; }
+    .formula-docs > details[open] > summary::before { content: "▾ "; }
+    .formula-docs details details { margin: 0.5rem 0.75rem 0.75rem; border-color: #1e3a5f; }
+    .formula-docs details details > summary { font-weight: 500; font-size: 0.88rem; padding: 0.5rem 0.7rem; }
+    .formula-body { padding: 0 0.85rem 0.85rem; font-size: 0.88rem; line-height: 1.55; color: #cbd5e1; }
+    .formula-body p { margin: 0.4rem 0; }
+    .formula-body ul { margin: 0.35rem 0 0.5rem 1.1rem; }
+    .formula-body li { margin: 0.25rem 0; }
+    .formula-block {
+        font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 0.82rem;
+        background: #16213e; padding: 0.5rem 0.65rem; border-radius: 6px; margin: 0.35rem 0;
+        overflow-x: auto; white-space: pre-wrap;
+    }
 </style>
 {% endblock %}
 {% block content %}
@@ -48,6 +67,49 @@
     <button type="button" id="btnLoadExp">Загрузить даты</button>
     <button type="button" id="btnAnalyze">Анализ</button>
     <div id="sentimentOut" class="muted" style="margin-top:1rem;">Задайте POLYGON_API_KEY и нажмите «Анализ».</div>
+
+    <div class="formula-docs">
+        <h3 style="margin-bottom:0.6rem;color:#94a3b8;font-size:0.95rem;">Справка: метрики сентимента</h3>
+        <details>
+            <summary>Обозначения</summary>
+            <div class="formula-body">
+                <ul>
+                    <li><strong>S₀</strong> — текущая цена акции (spot)</li>
+                    <li><strong>V<sub>C</sub>, V<sub>P</sub></strong> — суммарный volume call и put по выбранной экспирации</li>
+                    <li><strong>OI<sub>C</sub>, OI<sub>P</sub></strong> — open interest call и put</li>
+                    <li><strong>NTM</strong> — страйки в полосе ±8% от S₀</li>
+                </ul>
+            </div>
+        </details>
+        <details>
+            <summary>Put/Call Ratio (PCR)</summary>
+            <div class="formula-body">
+                <div class="formula-block">PCR_volume = V_P / V_C
+PCR_OI     = OI_P / OI_C</div>
+                <p>PCR &gt; 1 — относительный перевес put (часто трактуют как hedging / bearish positioning).</p>
+            </div>
+        </details>
+        <details>
+            <summary>Max pain</summary>
+            <div class="formula-body">
+                <p>Для каждого кандидата страйка <strong>S</strong> считаем суммарную выплату держателям опционов на экспирацию:</p>
+                <div class="formula-block">Cost(S) = Σ_K max(0, S − K) × OI_call(K) × 100
+         + Σ_K max(0, K − S) × OI_put(K) × 100</div>
+                <p><strong>Max pain</strong> — страйк S с минимальным Cost(S). Часто рассматривают как «магнит» цены к экспирации (эвристика, не гарантия).</p>
+            </div>
+        </details>
+        <details>
+            <summary>Индикатор sentiment_score</summary>
+            <div class="formula-body">
+                <p>Нормируем отклонение PCR от 1 и усредняем по volume / OI / NTM-OI. Score ∈ [−1, +1]:</p>
+                <ul>
+                    <li><strong>BEARISH</strong> (≤ −0.35) — put-heavy</li>
+                    <li><strong>NEUTRAL</strong> — баланс</li>
+                    <li><strong>BULLISH</strong> (≥ +0.35) — call-heavy</li>
+                </ul>
+            </div>
+        </details>
+    </div>
 </section>
 
 <section id="panelCalc" class="panel card">
@@ -84,6 +146,96 @@
     <button type="button" id="btnFillFromChain" class="btn-outline-primary">Подтянуть spot с Polygon</button>
     <div id="calcSummary" style="margin-top:1rem;"></div>
     <div id="calcTable" class="table-responsive"></div>
+
+    <div class="formula-docs">
+        <h3 style="margin-bottom:0.6rem;color:#94a3b8;font-size:0.95rem;">Справка: формулы калькулятора</h3>
+        <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem;">Расчёт на экспирацию по intrinsic value (без временной стоимости). 1 контракт = 100 акций.</p>
+
+        <details open>
+            <summary>Общие обозначения</summary>
+            <div class="formula-body">
+                <ul>
+                    <li><strong>S₀</strong> — цена акции сейчас (ввод)</li>
+                    <li><strong>S</strong> — цена в сценарии</li>
+                    <li><strong>K</strong> — страйк long put</li>
+                    <li><strong>K₂</strong> — страйк short put (только spread)</li>
+                    <li><strong>P<sub>L</sub>, P<sub>S</sub></strong> — премия long / short ($ за 1 акцию)</li>
+                    <li><strong>N</strong> — число контрактов</li>
+                    <li><strong>M = 100 × N</strong> — множитель контрактов</li>
+                </ul>
+            </div>
+        </details>
+
+        <details>
+            <summary>Pure Put (long put)</summary>
+            <div class="formula-body">
+                <details>
+                    <summary>Стоимость входа и breakeven</summary>
+                    <div class="formula-body">
+                        <div class="formula-block">Entry = P_L × M
+Breakeven = K − P_L</div>
+                        <p>При S ≥ K на экспирации put без стоимости → <strong>max loss = Entry</strong>.</p>
+                    </div>
+                </details>
+                <details>
+                    <summary>Стоимость и P/L в сценарии</summary>
+                    <div class="formula-body">
+                        <div class="formula-block">Intrinsic_put(S) = max(0, K − S)
+Value(S) = Intrinsic_put(S) × M
+P/L(S) = Value(S) − Entry
+ROI(S) = P/L(S) / Entry × 100%</div>
+                    </div>
+                </details>
+                <details>
+                    <summary>Статусы позиции</summary>
+                    <div class="formula-body">
+                        <ul>
+                            <li>S ≥ K → «Максимальный убыток»</li>
+                            <li>|P/L| ≈ 0 → «Безубыток»</li>
+                            <li>P/L &lt; 0 → «Убыток»</li>
+                            <li>P/L &gt; 0 → «Прибыль» (теоретически не ограничена)</li>
+                        </ul>
+                    </div>
+                </details>
+            </div>
+        </details>
+
+        <details>
+            <summary>Put Spread (дебетовый bear put spread)</summary>
+            <div class="formula-body">
+                <p>Условие: <strong>K &gt; K₂</strong> (long страйк выше short).</p>
+                <details>
+                    <summary>Вход, breakeven, max loss / max profit</summary>
+                    <div class="formula-body">
+                        <div class="formula-block">Net_debit = P_L − P_S
+Entry = Net_debit × M
+Width = K − K₂
+Max_loss = Entry
+Max_profit = (Width − Net_debit) × M
+Breakeven = K − Net_debit</div>
+                    </div>
+                </details>
+                <details>
+                    <summary>Стоимость спреда и P/L</summary>
+                    <div class="formula-body">
+                        <div class="formula-block">Spread_intrinsic(S) = max(0, K − S) − max(0, K₂ − S)
+Value(S) = Spread_intrinsic(S) × M
+P/L(S) = Value(S) − Entry</div>
+                        <p>При S ≤ K₂: Spread_intrinsic = Width → «Максимальная прибыль».</p>
+                    </div>
+                </details>
+            </div>
+        </details>
+
+        <details>
+            <summary>Таблица сценариев падения</summary>
+            <div class="formula-body">
+                <p>Шаги: 0%, −2%, −3%, −5%, −7%, −8%, −10%, −12%, −15%, −20% от S₀.</p>
+                <div class="formula-block">S = S₀ × (1 + drop% / 100)</div>
+                <p>Для каждого S пересчитываются Value, P/L, ROI и текстовый статус.</p>
+            </div>
+        </details>
+    </div>
 </section>
 {% endblock %}
 
