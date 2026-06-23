@@ -78,3 +78,12 @@ def test_put_spread_requires_higher_long_strike():
             short_strike=100.0,
             short_premium=2.0,
         )
+
+
+def test_calculator_demo_examples_list():
+    from services.options_calculator import list_calculator_demo_examples
+
+    ex = list_calculator_demo_examples()
+    assert len(ex) >= 3
+    assert ex[0]["preview"]["entry_cost_usd"] > 0
+    assert "scenarios" in ex[0]["preview"]

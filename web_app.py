@@ -1233,6 +1233,14 @@ async def api_options_sentiment(ticker: str, expiration_date: Optional[str] = No
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/options/calculator/examples", response_class=JSONResponse)
+async def api_options_calculator_examples():
+    """Демо-пресеты для калькулятора (без Polygon)."""
+    from services.options_calculator import list_calculator_demo_examples
+
+    return _to_jsonable({"examples": list_calculator_demo_examples()})
+
+
 @app.post("/api/options/calculator", response_class=JSONResponse)
 async def api_options_calculator(body: Dict[str, Any]):
     from services.options_calculator import compute_put_strategy

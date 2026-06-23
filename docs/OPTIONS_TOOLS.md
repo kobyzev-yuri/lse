@@ -117,7 +117,22 @@ flowchart TB
 Кнопки:
 
 - **Рассчитать** → `POST /api/options/calculator`;
-- **Подтянуть spot с Polygon** — берёт spot из последнего sentiment-запроса (если snapshot доступен).
+- **Подтянуть spot с Polygon** — берёт spot из последнего sentiment-запроса (если snapshot доступен);
+- **Примеры (демо)** — три пресета без Polygon (см. ниже).
+
+### Демо-примеры (без подписки Polygon)
+
+Кнопки на вкладке «Калькулятор» загружают готовые параметры и сразу считают P/L:
+
+| ID | Сценарий |
+|----|----------|
+| `mu_pure_put_earnings` | MU, Pure Put, spot $189, strike $190, 1 контракт |
+| `mu_put_spread_2x` | MU, Put Spread 200/180, 2 контракта |
+| `lite_otm_put` | LITE, далёкий OTM put, 3 контракта |
+
+API: `GET /api/options/calculator/examples` — JSON с полями и `preview` (предрасчёт).
+
+Код пресетов: `CALCULATOR_DEMO_EXAMPLES` в `services/options_calculator.py`.
 
 **Итоги:** вход ($), breakeven, max loss, max profit.  
 **Таблица сценариев:** падение %, цена, стоимость позиции, P/L, ROI %, статус (`Максимальный убыток`, `Прибыль`, …).

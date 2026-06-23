@@ -10,6 +10,74 @@ Strategy = Literal["pure_put", "put_spread"]
 
 SCENARIO_DROP_PCTS = (0.0, -2.0, -3.0, -5.0, -7.0, -8.0, -10.0, -12.0, -15.0, -20.0)
 
+# Демо-примеры для UI (без Polygon): условные премии в духе доски опционов.
+CALCULATOR_DEMO_EXAMPLES: List[Dict[str, Any]] = [
+    {
+        "id": "mu_pure_put_earnings",
+        "title_ru": "MU — Pure Put (earnings)",
+        "description_ru": "Один long put перед отчётом: spot ~$189, страйк ATM, премия как на доске.",
+        "strategy": "pure_put",
+        "ticker": "MU",
+        "spot": 189.0,
+        "contracts": 1,
+        "long_strike": 190.0,
+        "long_premium": 8.5,
+        "earnings_date": "2026-06-25",
+        "expiration_date": "2026-06-26",
+    },
+    {
+        "id": "mu_put_spread_2x",
+        "title_ru": "MU — Put Spread ×2",
+        "description_ru": "Дебетовый спред: long 200 / short 180, два контракта — ограниченный риск.",
+        "strategy": "put_spread",
+        "ticker": "MU",
+        "spot": 189.0,
+        "contracts": 2,
+        "long_strike": 200.0,
+        "long_premium": 12.0,
+        "short_strike": 180.0,
+        "short_premium": 4.5,
+        "earnings_date": "2026-06-25",
+        "expiration_date": "2026-06-26",
+    },
+    {
+        "id": "lite_otm_put",
+        "title_ru": "LITE — дешёвый OTM Put",
+        "description_ru": "Далёкий put: малый дебет, профит только при сильном падении.",
+        "strategy": "pure_put",
+        "ticker": "LITE",
+        "spot": 95.0,
+        "contracts": 3,
+        "long_strike": 85.0,
+        "long_premium": 1.25,
+        "earnings_date": None,
+        "expiration_date": "2026-07-18",
+    },
+]
+
+
+def list_calculator_demo_examples() -> List[Dict[str, Any]]:
+    """Копии пресетов с предрасчётом summary для API/UI."""
+    out: List[Dict[str, Any]] = []
+    for ex in CALCULATOR_DEMO_EXAMPLES:
+        row = dict(ex)
+        try:
+            kwargs: Dict[str, Any] = {
+                "strategy": ex["strategy"],
+                "spot": float(ex["spot"]),
+                "contracts": int(ex["contracts"]),
+                "long_strike": float(ex["long_strike"]),
+                "long_premium": float(ex["long_premium"]),
+            }
+            if ex["strategy"] == "put_spread":
+                kwargs["short_strike"] = float(ex["short_strike"])
+                kwargs["short_premium"] = float(ex["short_premium"])
+            row["preview"] = compute_put_strategy(**kwargs)
+        except (TypeError, ValueError) as e:
+            row["preview_error"] = str(e)
+        out.append(row)
+    return out
+
 
 def _put_intrinsic(strike: float, spot: float) -> float:
     return max(0.0, strike - spot)

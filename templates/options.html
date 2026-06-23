@@ -17,6 +17,9 @@
     .sentiment-BULLISH { background: #14532d; color: #bbf7d0; }
     .sentiment-NEUTRAL { background: #334155; color: #e2e8f0; }
     .hidden { display: none !important; }
+    .example-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0; }
+    .example-btns button { flex: 1 1 auto; min-width: 160px; font-size: 0.82rem; }
+    .demo-hint { font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.5rem; }
 </style>
 {% endblock %}
 {% block content %}
@@ -49,6 +52,8 @@
 
 <section id="panelCalc" class="panel card">
     <h2>Калькулятор Put / Put Spread</h2>
+    <p class="demo-hint">Без подписки Polygon: выберите пример ниже — поля заполнятся и сразу посчитается таблица сценариев.</p>
+    <div class="example-btns" id="exampleBtns"></div>
     <div class="grid-2">
         <div><label>Тикер</label><input id="calcTicker" value="MU"></div>
         <div><label>Цена акции ($)</label><input id="calcSpot" type="number" step="0.01" value="189"></div>
@@ -100,6 +105,86 @@
         $('spreadFields').classList.toggle('hidden', $('calcStrategy').value !== 'put_spread');
     };
 
+    function applyExample(ex) {
+        $('calcTicker').value = ex.ticker || 'MU';
+        $('calcSpot').value = ex.spot;
+        $('calcContracts').value = ex.contracts || 1;
+        $('calcStrategy').value = ex.strategy;
+        $('spreadFields').classList.toggle('hidden', ex.strategy !== 'put_spread');
+        $('longStrike').value = ex.long_strike;
+        $('longPrem').value = ex.long_premium;
+        if (ex.earnings_date) $('calcEarnings').value = ex.earnings_date;
+        else $('calcEarnings').value = '';
+        if (ex.expiration_date) $('calcExp').value = ex.expiration_date;
+        else $('calcExp').value = '';
+        if (ex.strategy === 'put_spread') {
+            $('shortStrike').value = ex.short_strike;
+            $('shortPrem').value = ex.short_premium;
+        }
+    }
+
+    function renderCalcResult(j) {
+        if (j.error) {
+            $('calcSummary').innerHTML = '<p class="text-danger">' + j.error + '</p>';
+            $('calcTable').innerHTML = '';
+            return;
+        }
+        $('calcSummary').innerHTML =
+            '<div class="stats">' +
+            '<div class="stat-card"><h3>Вход</h3><div class="value">$' + j.entry_cost_usd + '</div></div>' +
+            '<div class="stat-card"><h3>Breakeven</h3><div class="value">$' + j.breakeven + '</div></div>' +
+            '<div class="stat-card"><h3>Max loss</h3><div class="value negative">$' + j.max_loss_usd + '</div></div>' +
+            '<div class="stat-card"><h3>Max profit</h3><div class="value positive">' +
+            (j.max_profit_usd != null ? '$' + j.max_profit_usd : '∞') + '</div></div></div>';
+        let tbl = '<table><tr><th>Падение</th><th>Цена</th><th>Стоимость</th><th>P/L</th><th>ROI</th><th>Статус</th></tr>';
+        (j.scenarios || []).forEach(s => {
+            const cls = s.pnl_usd >= 0 ? 'positive' : 'negative';
+            tbl += '<tr><td>' + s.drop_pct + '%</td><td>$' + s.stock_price + '</td><td>$' + s.position_value_usd +
+                '</td><td class="' + cls + '">$' + s.pnl_usd + '</td><td class="' + cls + '">' + s.roi_pct + '%</td><td>' + s.status_ru + '</td></tr>';
+        });
+        tbl += '</table>';
+        $('calcTable').innerHTML = tbl;
+    }
+
+    async function runCalc() {
+        const body = {
+            strategy: $('calcStrategy').value,
+            ticker: $('calcTicker').value.trim().toUpperCase(),
+            spot: parseFloat($('calcSpot').value),
+            contracts: parseInt($('calcContracts').value, 10) || 1,
+            long_strike: parseFloat($('longStrike').value),
+            long_premium: parseFloat($('longPrem').value),
+            earnings_date: $('calcEarnings').value || null,
+            expiration_date: $('calcExp').value || null,
+        };
+        if (body.strategy === 'put_spread') {
+            body.short_strike = parseFloat($('shortStrike').value);
+            body.short_premium = parseFloat($('shortPrem').value);
+        }
+        const r = await fetch('/api/options/calculator', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+        });
+        renderCalcResult(await r.json());
+    }
+
+    async function loadExamples() {
+        const r = await fetch('/api/options/calculator/examples');
+        const j = await r.json();
+        const box = $('exampleBtns');
+        box.innerHTML = '';
+        (j.examples || []).forEach(ex => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'btn-outline-primary';
+            b.textContent = ex.title_ru || ex.id;
+            b.title = ex.description_ru || '';
+            b.onclick = () => { applyExample(ex); runCalc(); };
+            box.appendChild(b);
+        });
+    }
+
     async function loadExpirations() {
         const t = $('sentTicker').value.trim().toUpperCase();
         const r = await fetch('/api/options/expirations/' + encodeURIComponent(t));
@@ -150,47 +235,7 @@
         $('sentimentOut').innerHTML = html;
     };
 
-    $('btnCalc').onclick = async () => {
-        const body = {
-            strategy: $('calcStrategy').value,
-            ticker: $('calcTicker').value.trim().toUpperCase(),
-            spot: parseFloat($('calcSpot').value),
-            contracts: parseInt($('calcContracts').value, 10) || 1,
-            long_strike: parseFloat($('longStrike').value),
-            long_premium: parseFloat($('longPrem').value),
-            earnings_date: $('calcEarnings').value || null,
-            expiration_date: $('calcExp').value || null,
-        };
-        if (body.strategy === 'put_spread') {
-            body.short_strike = parseFloat($('shortStrike').value);
-            body.short_premium = parseFloat($('shortPrem').value);
-        }
-        const r = await fetch('/api/options/calculator', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(body),
-        });
-        const j = await r.json();
-        if (j.error) {
-            $('calcSummary').innerHTML = '<p class="text-danger">' + j.error + '</p>';
-            return;
-        }
-        $('calcSummary').innerHTML =
-            '<div class="stats">' +
-            '<div class="stat-card"><h3>Вход</h3><div class="value">$' + j.entry_cost_usd + '</div></div>' +
-            '<div class="stat-card"><h3>Breakeven</h3><div class="value">$' + j.breakeven + '</div></div>' +
-            '<div class="stat-card"><h3>Max loss</h3><div class="value negative">$' + j.max_loss_usd + '</div></div>' +
-            '<div class="stat-card"><h3>Max profit</h3><div class="value positive">' +
-            (j.max_profit_usd != null ? '$' + j.max_profit_usd : '∞') + '</div></div></div>';
-        let tbl = '<table><tr><th>Падение</th><th>Цена</th><th>Стоимость</th><th>P/L</th><th>ROI</th><th>Статус</th></tr>';
-        (j.scenarios || []).forEach(s => {
-            const cls = s.pnl_usd >= 0 ? 'positive' : 'negative';
-            tbl += '<tr><td>' + s.drop_pct + '%</td><td>$' + s.stock_price + '</td><td>$' + s.position_value_usd +
-                '</td><td class="' + cls + '">$' + s.pnl_usd + '</td><td class="' + cls + '">' + s.roi_pct + '%</td><td>' + s.status_ru + '</td></tr>';
-        });
-        tbl += '</table>';
-        $('calcTable').innerHTML = tbl;
-    };
+    $('btnCalc').onclick = () => runCalc();
 
     $('btnFillFromChain').onclick = async () => {
         const t = $('calcTicker').value.trim().toUpperCase();
@@ -200,6 +245,7 @@
     };
 
     loadExpirations();
+    loadExamples();
 })();
 </script>
 {% endblock %}
