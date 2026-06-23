@@ -4085,12 +4085,10 @@ def _analyzer_llm_generate(
     http_timeout_sec: float,
 ) -> Dict[str, Any]:
     """Та же маршрутизация, что у основного LLM (OPENAI_MODEL), если ANALYZER_LLM_* не заданы."""
-    from services.llm_service import resolve_analyzer_llm_base_model
+    from services.llm_service import generate_analyzer_llm_response
 
-    base, model = resolve_analyzer_llm_base_model()
-    out = llm.generate_response_with_model(
-        base,
-        model,
+    out = generate_analyzer_llm_response(
+        llm,
         messages,
         system_prompt=system_prompt,
         temperature=temperature,
@@ -4098,13 +4096,11 @@ def _analyzer_llm_generate(
         http_timeout_sec=http_timeout_sec,
     )
     if not out:
-        raise RuntimeError(f"LLM empty response (model={model}, base={base})")
+        raise RuntimeError("LLM empty response")
     if out.get("api_error"):
         raise RuntimeError(str(out.get("error") or "LLM API error"))
     if not str(out.get("response") or "").strip():
-        raise RuntimeError(f"LLM empty response (model={model}, base={base})")
-    out["model"] = model
-    out["base_url"] = base
+        raise RuntimeError(f"LLM empty response (model={out.get('model')})")
     return out
 
 

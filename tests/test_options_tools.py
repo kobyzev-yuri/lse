@@ -190,6 +190,33 @@ def test_llm_interpret_requires_data():
     assert r["status"] == "error"
 
 
+def test_format_llm_anthropic_500_message():
+    pytest.importorskip("openai")
+    from services.llm_service import format_llm_provider_error
+
+    msg = format_llm_provider_error(
+        "Error code: 500 - AnthropicException Internal Server Error anthropic/claude-sonnet-4-6"
+    )
+    assert "Anthropic" in msg
+    assert "LLM_COMPARE_MODELS" in msg
+
+
+def test_build_analyzer_llm_attempts_includes_compare(monkeypatch):
+    pytest.importorskip("openai")
+    from services import llm_service
+
+    monkeypatch.setattr(llm_service, "resolve_analyzer_llm_base_model", lambda: ("https://x/v1", "primary"))
+    monkeypatch.setattr(llm_service, "load_config", lambda: {"LLM_COMPARE_MODELS": "gpt-5.4-mini"})
+    monkeypatch.setattr(
+        llm_service,
+        "parse_compare_models",
+        lambda cfg: [("https://api.proxyapi.ru/openai/v1", "gpt-5.4-mini")],
+    )
+    attempts = llm_service.build_analyzer_llm_attempts()
+    assert attempts[0] == ("https://x/v1", "primary")
+    assert len(attempts) == 2
+
+
 def test_yfinance_sentiment_report(monkeypatch):
     from services.options_chain_sentiment import build_yfinance_chain_sentiment_report
 

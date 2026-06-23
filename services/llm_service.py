@@ -715,6 +715,115 @@ def get_openai_http_timeout_prompt_entry() -> Optional[float]:
         return None
 
 
+def is_transient_llm_provider_error(error: str | BaseException | None) -> bool:
+    """Временные ошибки провайдера — имеет смысл retry / следующая модель из LLM_COMPARE_MODELS."""
+    blob = str(error or "").lower()
+    return any(
+        m in blob
+        for m in (
+            "500",
+            "502",
+            "503",
+            "504",
+            "internal server error",
+            "timeout",
+            "timed out",
+            "connection error",
+            "temporarily unavailable",
+        )
+    )
+
+
+def format_llm_provider_error(error: str | BaseException | None) -> str:
+    """Человекочитаемое сообщение для UI/Telegram."""
+    from services.proxyapi_balance import is_proxyapi_insufficient_balance, proxyapi_balance_user_message
+
+    blob = str(error or "").strip()
+    if not blob:
+        return "LLM API error"
+    if is_proxyapi_insufficient_balance(error):
+        return proxyapi_balance_user_message(error)
+    low = blob.lower()
+    if "anthropic" in low and ("500" in blob or "internal server error" in low):
+        return (
+            "ProxyAPI / Anthropic: временный сбой провайдера (HTTP 500). "
+            "Затронуты все вызовы Claude в проекте, не только опционы. "
+            "Повторите позже или задайте запасную модель в LLM_COMPARE_MODELS (config.env)."
+        )
+    return blob[:1200]
+
+
+def build_analyzer_llm_attempts() -> List[Tuple[str, str]]:
+    """
+    Основная модель анализатора + уникальные пары из LLM_COMPARE_MODELS (fallback при сбое).
+    """
+    primary_base, primary_model = resolve_analyzer_llm_base_model()
+    attempts: List[Tuple[str, str]] = [(primary_base, primary_model)]
+    seen = {(primary_base.rstrip("/"), primary_model)}
+    for cbase, cmodel in parse_compare_models(load_config()):
+        bu_n, mo_n = normalize_openai_sdk_proxyapi_base_model(cbase, cmodel)
+        key = (bu_n.rstrip("/"), mo_n)
+        if key in seen:
+            continue
+        seen.add(key)
+        attempts.append((bu_n, mo_n))
+    return attempts
+
+
+def generate_analyzer_llm_response(
+    llm: "LLMService",
+    messages: List[Dict[str, str]],
+    *,
+    system_prompt: Optional[str] = None,
+    max_retries_per_model: int = 2,
+    retry_delay_sec: float = 2.0,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """
+    Вызов LLM с маршрутизацией анализатора: retry на transient-ошибках,
+    затем fallback по LLM_COMPARE_MODELS (без хардкода модели в коде).
+    """
+    import time
+
+    attempts = build_analyzer_llm_attempts()
+    last_error = "LLM API error"
+    last_model = attempts[0][1] if attempts else ""
+
+    for base_url, model in attempts:
+        for attempt in range(max(1, max_retries_per_model)):
+            if attempt > 0:
+                time.sleep(max(0.0, retry_delay_sec))
+            out = llm.generate_response_with_model(
+                base_url,
+                model,
+                messages,
+                system_prompt=system_prompt,
+                **kwargs,
+            )
+            if out and not out.get("api_error") and not out.get("error"):
+                text = str(out.get("response") or "").strip()
+                if text:
+                    out = dict(out)
+                    out["model"] = out.get("model") or model
+                    out["base_url"] = base_url
+                    if (base_url, model) != attempts[0]:
+                        out["used_fallback_model"] = True
+                    return out
+            err = str((out or {}).get("error") or "LLM API error")
+            last_error = err
+            last_model = model
+            if not is_transient_llm_provider_error(err):
+                break
+
+    return {
+        "response": "",
+        "api_error": True,
+        "error": format_llm_provider_error(last_error),
+        "error_raw": last_error[:1200],
+        "model": last_model,
+    }
+
+
 def parse_compare_models(config: Dict[str, str]) -> List[Tuple[str, str]]:
     """
     Парсит LLM_COMPARE_MODELS в список (base_url, model).

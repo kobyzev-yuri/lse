@@ -452,7 +452,10 @@ P/L(S) = Value(S) − Entry</div>
         const j = await r.json();
         btn.disabled = false;
         if (j.status === 'ok') {
-            outEl.innerHTML = '<strong>LLM</strong> <span class="muted">(' + (j.model || '') + ')</span><div style="margin-top:0.4rem;white-space:pre-wrap">' +
+            let hdr = '<strong>LLM</strong> <span class="muted">(' + (j.model || '') + ')';
+            if (j.used_fallback_model) hdr += ' · fallback LLM_COMPARE_MODELS';
+            hdr += '</span>';
+            outEl.innerHTML = hdr + '<div style="margin-top:0.4rem;white-space:pre-wrap">' +
                 (j.interpretation_ru || '') + '</div>';
         } else {
             outEl.innerHTML = '<span class="text-danger">' + (j.error || 'ошибка LLM') + '</span>';

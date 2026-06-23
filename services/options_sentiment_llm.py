@@ -1,13 +1,13 @@
 """
 LLM-интерпретация отчёта option chain sentiment (ProxyAPI / OPENAI_*).
-Маршрутизация — как у анализатора (resolve_analyzer_llm_base_model).
+Маршрутизация — как у анализатора (resolve_analyzer_llm_base_model + LLM_COMPARE_MODELS fallback).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +28,7 @@ def interpret_options_chain_report(report: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     try:
-        from services.llm_service import (
-            LLMService,
-            get_openai_http_timeout_prompt_entry,
-            resolve_analyzer_llm_base_model,
-        )
+        from services.llm_service import LLMService, generate_analyzer_llm_response, get_openai_http_timeout_prompt_entry
     except Exception as exc:
         return {"status": "error", "error": f"LLM import: {exc}"}
 
@@ -60,38 +56,35 @@ def interpret_options_chain_report(report: Dict[str, Any]) -> Dict[str, Any]:
     if timeout:
         call_kwargs["http_timeout_sec"] = float(timeout)
 
-    base_url, model = resolve_analyzer_llm_base_model()
-    try:
-        resp = llm.generate_response_with_model(
-            base_url,
-            model,
-            [{"role": "user", "content": user_prompt}],
-            system_prompt=SYSTEM_PROMPT,
-            **call_kwargs,
-        )
-    except Exception as exc:
-        logger.exception("options sentiment LLM failed")
-        return {"status": "error", "error": str(exc), "model": model}
+    resp = generate_analyzer_llm_response(
+        llm,
+        [{"role": "user", "content": user_prompt}],
+        system_prompt=SYSTEM_PROMPT,
+        **call_kwargs,
+    )
 
-    if not resp or resp.get("api_error") or resp.get("error"):
+    if resp.get("api_error") or resp.get("error"):
         return {
             "status": "error",
-            "error": str((resp or {}).get("error") or "LLM API error"),
-            "model": model,
+            "error": str(resp.get("error") or "LLM API error"),
+            "model": resp.get("model"),
         }
 
     text = (resp.get("response") or "").strip()
     if not text:
-        return {"status": "error", "error": "пустой ответ LLM", "model": model}
+        return {"status": "error", "error": "пустой ответ LLM", "model": resp.get("model")}
 
-    return {
+    out: Dict[str, Any] = {
         "status": "ok",
         "interpretation_ru": text,
-        "model": resp.get("model") or model,
+        "model": resp.get("model"),
         "usage": resp.get("usage"),
         "ticker": report.get("ticker"),
         "source": report.get("source"),
     }
+    if resp.get("used_fallback_model"):
+        out["used_fallback_model"] = True
+    return out
 
 
 def _compact_report_for_llm(report: Dict[str, Any]) -> Dict[str, Any]:
