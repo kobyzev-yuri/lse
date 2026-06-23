@@ -10,9 +10,17 @@
 
 ### Задача 1 — Option Chain и рыночный сентимент
 
-Анализ шорт-опционов по стокам из universe LSE. На Investing.com есть доска **Option Chain** (call/put, strike, volume, bid/ask). Требовалось:
+Анализ шорт-опционов по стокам из universe LSE. Эталонная доска — **Investing.com Option Chain** (call/put, strike, volume, bid/ask, OI):
 
-1. Проверить, можно ли получать ту же доску через **Polygon API** (предпочтительнее парсинга HTML).
+| Источник | URL (пример MU) | Роль |
+|----------|-----------------|------|
+| **Investing.com** | [micron-tech-options](https://www.investing.com/equities/micron-tech-options) | HTML-таблица «как ордербук» — эталон постановки |
+| **Yahoo / yfinance** | [finance.yahoo.com/quote/MU/options](https://finance.yahoo.com/quote/MU/options) | `Ticker.options` + `option_chain(date)` — strike, volume, OI, bid/ask, IV **без API-ключа** (задержка/дыры в bid вне RTH) |
+| **Polygon snapshot** | `GET /v3/snapshot/options/MU` | Целевой источник для LSE: REST, пагинация, Greeks |
+
+Требовалось:
+
+1. Проверить, можно ли получать ту же доску через **Polygon API** (предпочтительнее парсинга HTML Investing).
 2. На основе **Volume** и **Open Interest** по call/put выдавать аналитику:
    - куда целится рынок по бумаге;
    - где больше открывают позиций (перекос put vs call);
@@ -33,23 +41,49 @@
 
 ## 2. Решение по источнику данных
 
-| Критерий | Investing.com | Polygon.io |
-|----------|---------------|------------|
-| Доступ | HTML, нестабильная вёрстка | REST API |
-| Volume / OI | в таблице | snapshot + reference |
-| Greeks / IV | нет | да (Options-план) |
-| Интеграция с LSE | отдельный парсер | один `requests` клиент |
+| Критерий | Investing.com | yfinance | Polygon reference | Polygon **snapshot** |
+|----------|---------------|----------|-------------------|----------------------|
+| Доступ | HTML | Python, без ключа | REST + ключ | REST + ключ + **Options-план** |
+| Volume / OI | в таблице | да (`volume`, `openInterest`) | **нет** | да (`day.volume`, `open_interest`) |
+| Bid/Ask/Last | да | да (bid/ask часто 0 вне сессии) | **нет** | `last_quote`, `last_trade` |
+| Greeks / IV | нет | `impliedVolatility` | нет | да (Options-план) |
+| Экспирации | UI dropdown | `Ticker.options` (19 для MU) | `reference/contracts` | фильтр `expiration_date` |
 
-**Вывод:** используем Polygon.
+**Вывод:** для **Задачи 1 (сентимент)** нужен именно **Polygon snapshot** — аналог Investing. Reference API даёт только справочник контрактов (страйк, тип, дата), без live volume/OI.
+
+**yfinance** — запасной/сверочный источник той же таблицы (см. `--compare-yfinance` в скрипте проверки), в прод-сентименте не используется.
 
 | API | Назначение |
 |-----|------------|
-| `GET /v3/reference/options/contracts?underlying_ticker={T}` | список дат экспирации, метаданные контрактов |
-| `GET /v3/snapshot/options/{T}?expiration_date=...` | live snapshot: volume, OI, bid/ask, Greeks, underlying price |
+| `GET /v3/reference/options/contracts?underlying_ticker={T}` | список дат экспирации, метаданные контрактов (**не доска**) |
+| `GET /v3/snapshot/options/{T}?expiration_date=...` | **live snapshot = Option Chain**: volume, OI, bid/ask, Greeks, underlying price |
 
 Документация Polygon: [Options chain snapshot](https://polygon.io/docs/options/get_v3_snapshot_options__underlyingasset).
 
-**Ограничение на проде (2026-06-23):** ключ `POLYGON_API_KEY` валиден; reference API отвечает `OK`, snapshot возвращает **403** без подписки **Options** ([pricing](https://polygon.io/pricing?product=options)). После апгрейда плана сентимент заработает без смены кода.
+**Ограничение на проде (проверка 2026-06-23):** ключ `POLYGON_API_KEY` валиден; **reference** API → `200` (2 экспирации MU в ответе плана); **snapshot** → **403** без подписки **Options** ([pricing](https://polygon.io/pricing?product=options)). После апгрейда плана сентимент на `/options` заработает без смены кода.
+
+### Проверка после оплаты подписки Options
+
+```bash
+# на GCP VM
+docker exec lse-bot python scripts/verify_polygon_options_chain.py --ticker MU --compare-yfinance
+```
+
+Ожидаемый результат:
+- `polygon_snapshot.status` = `ok`
+- `contract_count` > 0 (для MU на одну экспирацию — десятки/сотни call+put)
+- `contracts_with_oi` / `contracts_with_volume` > 0
+- `VERDICT: OK — доска как Investing`
+
+Сверка с yfinance на ту же дату: порядок величины calls/puts (у MU ~300+ строк на экспирацию в yfinance).
+
+Если всё ещё **403 / NOT_AUTHORIZED** при оплаченном счёте — почти всегда оплачен **Stocks**, а не **Options** (отдельный продукт ~$29/мес Starter). Проверка на VM:
+
+```bash
+docker exec lse-bot python scripts/verify_polygon_options_chain.py --ticker MU --compare-yfinance
+```
+
+В [dashboard](https://polygon.io/dashboard) → Billing / Subscriptions должны быть **два** продукта (или bundle): Stocks **и** Options. Один API key — entitlements с обоих планов.
 
 ---
 

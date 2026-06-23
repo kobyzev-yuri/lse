@@ -29,6 +29,24 @@ def polygon_options_available() -> bool:
     return bool(_api_key())
 
 
+def _format_polygon_error(resp: requests.Response) -> str:
+    """Человекочитаемая ошибка Polygon (без утечки apiKey в URL)."""
+    try:
+        data = resp.json()
+        msg = (data.get("message") or data.get("status") or "").strip()
+        if msg:
+            if resp.status_code == 403 and "NOT_AUTHORIZED" in str(data.get("status", "")).upper():
+                return (
+                    f"{msg} "
+                    "(ключ валиден, но нет продукта Options на этом аккаунте — "
+                    "Stocks и Options оплачиваются отдельно: massive.com/pricing?product=options)"
+                )
+            return msg
+    except (ValueError, TypeError):
+        pass
+    return f"HTTP {resp.status_code}"
+
+
 def fetch_option_expiration_dates(ticker: str, *, limit: int = 1000) -> List[str]:
     """Список дат экспирации из reference API (легче полного snapshot)."""
     key = _api_key()
@@ -45,7 +63,9 @@ def fetch_option_expiration_dates(ticker: str, *, limit: int = 1000) -> List[str
     }
     try:
         resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
+        if not resp.ok:
+            logger.warning("Polygon expirations %s: %s", underlying, _format_polygon_error(resp))
+            return []
         data = resp.json()
     except requests.RequestException as e:
         logger.warning("Polygon expirations %s: %s", underlying, e)
@@ -106,7 +126,16 @@ def fetch_options_chain_snapshot(
             else:
                 sep = "&" if "?" in url else "?"
                 resp = requests.get(f"{url}{sep}apiKey={key}", timeout=45)
-            resp.raise_for_status()
+            if not resp.ok:
+                err = _format_polygon_error(resp)
+                logger.warning("Polygon options chain %s: %s", underlying, err)
+                return {
+                    "status": "error",
+                    "error": err,
+                    "http_status": resp.status_code,
+                    "contracts": contracts,
+                    "underlying": underlying,
+                }
             data = resp.json()
         except requests.RequestException as e:
             logger.warning("Polygon options chain %s: %s", underlying, e)
