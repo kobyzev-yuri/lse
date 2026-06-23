@@ -1233,6 +1233,28 @@ async def api_options_sentiment(ticker: str, expiration_date: Optional[str] = No
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/options/calculator/yfinance/{ticker}", response_class=JSONResponse)
+async def api_options_calculator_yfinance(ticker: str):
+    """Spot для калькулятора — только yfinance."""
+    from services.options_calculator_prefill import fetch_spot_yfinance
+
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker required")
+    return _to_jsonable(await asyncio.to_thread(fetch_spot_yfinance, t))
+
+
+@app.get("/api/options/calculator/calendar/{ticker}", response_class=JSONResponse)
+async def api_options_calculator_calendar(ticker: str):
+    """Earnings из knowledge_base; экспирация — Polygon reference (если ключ есть)."""
+    from services.options_calculator_prefill import load_ticker_earnings_calendar
+
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker required")
+    return _to_jsonable(await asyncio.to_thread(load_ticker_earnings_calendar, engine, t))
+
+
 @app.get("/api/options/calculator/examples", response_class=JSONResponse)
 async def api_options_calculator_examples():
     """Демо-пресеты для калькулятора (без Polygon)."""

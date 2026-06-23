@@ -144,6 +144,9 @@ PCR_OI     = OI_P / OI_C</div>
     </div>
     <button type="button" id="btnCalc" style="margin-top:0.5rem;">Рассчитать</button>
     <button type="button" id="btnFillFromChain" class="btn-outline-primary">Подтянуть spot с Polygon</button>
+    <button type="button" id="btnFillFromYfinance" class="btn-outline-primary">Подтянуть spot с yfinance</button>
+    <button type="button" id="btnFillCalendar" class="btn-outline-primary">Подтянуть даты из календаря</button>
+    <p id="calcPrefillMsg" class="muted" style="font-size:0.85rem;margin-top:0.5rem;min-height:1.2em;"></p>
     <div id="calcSummary" style="margin-top:1rem;"></div>
     <div id="calcTable" class="table-responsive"></div>
 
@@ -157,7 +160,8 @@ PCR_OI     = OI_P / OI_C</div>
                 <p><strong>IV (implied volatility)</strong> — ожидаемая волатильность, заложенная рынком в цену опциона. Перед earnings IV обычно высокая → премия дорогая.</p>
                 <p>Премия = <em>внутренняя стоимость</em> + <em>временная стоимость</em> (зависит от IV и дней до экспирации). Калькулятор считает только intrinsic на дату экспирации: max(0, K−S)×100.</p>
                 <p>После отчёта часто бывает <strong>IV crush</strong> — IV падает, премия сжимается даже при движении цены в вашу сторону. Поэтому реальный P/L до экспирации может отличаться от таблицы.</p>
-                <p>Поля <strong>earnings</strong> и <strong>экспирация</strong> — справочные, на формулы не влияют; заполняются из демо-пресетов или вручную.</p>
+                <p>Поля <strong>earnings</strong> и <strong>экспирация</strong> — справочные для контекста; на intrinsic-формулы не влияют.</p>
+                <p><strong>Подтянуть spot с yfinance</strong> — только цена акции. <strong>Подтянуть даты из календаря</strong> — earnings из <code>knowledge_base</code>, экспирация — первая дата из Polygon reference после earnings (если есть ключ).</p>
             </div>
         </details>
 
@@ -407,11 +411,60 @@ P/L(S) = Value(S) − Entry</div>
 
     $('btnCalc').onclick = () => runCalc();
 
+    function setPrefillMsg(text, isError) {
+        const el = $('calcPrefillMsg');
+        el.textContent = text || '';
+        el.style.color = isError ? '#f87171' : '#94a3b8';
+    }
+
     $('btnFillFromChain').onclick = async () => {
         const t = $('calcTicker').value.trim().toUpperCase();
+        setPrefillMsg('Polygon…');
         const r = await fetch('/api/options/sentiment/' + encodeURIComponent(t));
         const j = await r.json();
-        if (j.spot) $('calcSpot').value = j.spot;
+        if (j.status === 'error' || !j.spot) {
+            setPrefillMsg(j.error || 'Polygon: spot недоступен (нужна подписка Options?)', true);
+            return;
+        }
+        $('calcSpot').value = j.spot;
+        setPrefillMsg('Spot $' + j.spot + ' с Polygon (options snapshot).');
+    };
+
+    $('btnFillFromYfinance').onclick = async () => {
+        const t = $('calcTicker').value.trim().toUpperCase();
+        setPrefillMsg('yfinance…');
+        const r = await fetch('/api/options/calculator/yfinance/' + encodeURIComponent(t));
+        const j = await r.json();
+        if (j.status === 'error' || !j.spot) {
+            setPrefillMsg(j.error || 'yfinance: нет котировки', true);
+            return;
+        }
+        $('calcSpot').value = j.spot;
+        const kind = j.price_kind === 'intraday_last' ? 'внутридневная' : 'close';
+        setPrefillMsg('Spot $' + j.spot + ' с yfinance (' + kind + ').');
+    };
+
+    $('btnFillCalendar').onclick = async () => {
+        const t = $('calcTicker').value.trim().toUpperCase();
+        setPrefillMsg('Календарь…');
+        const r = await fetch('/api/options/calculator/calendar/' + encodeURIComponent(t));
+        const j = await r.json();
+        if (j.status === 'error') {
+            setPrefillMsg((j.error || 'нет дат') + (j.hint_ru ? ' — ' + j.hint_ru : ''), true);
+            return;
+        }
+        if (j.suggested_earnings_date) $('calcEarnings').value = j.suggested_earnings_date;
+        if (j.suggested_expiration_date) $('calcExp').value = j.suggested_expiration_date;
+        let msg = 'Earnings ' + (j.suggested_earnings_date || '—') + ' из knowledge_base';
+        if (j.events && j.events.length > 1) msg += ' (' + j.events.length + ' событий в БД)';
+        if (j.suggested_expiration_date) {
+            msg += '; экспирация ' + j.suggested_expiration_date;
+            if (j.expiration_source === 'polygon_reference') msg += ' (Polygon reference)';
+        } else {
+            msg += '; экспирацию выберите вручную';
+        }
+        if (j.pick_reason === 'last_known_past') msg += ' [последняя известная дата в прошлом]';
+        setPrefillMsg(msg);
     };
 
     loadExpirations();

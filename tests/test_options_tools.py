@@ -88,3 +88,52 @@ def test_calculator_demo_examples_list():
     assert len(ex) >= 3
     assert ex[0]["preview"]["entry_cost_usd"] > 0
     assert "scenarios" in ex[0]["preview"]
+
+
+def test_fetch_spot_yfinance_requires_ticker():
+    from services.options_calculator_prefill import fetch_spot_yfinance
+
+    r = fetch_spot_yfinance("")
+    assert r["status"] == "error"
+
+
+def test_load_calendar_empty_ticker():
+    from unittest.mock import MagicMock
+
+    from services.options_calculator_prefill import load_ticker_earnings_calendar
+
+    r = load_ticker_earnings_calendar(MagicMock(), "")
+    assert r["status"] == "error"
+
+
+def test_load_calendar_picks_nearest_future(monkeypatch):
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    from services.options_calculator_prefill import load_ticker_earnings_calendar
+
+    class FakeResult:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [
+                {"knowledge_base_id": 1, "event_date": date(2025, 1, 15), "source": "Yahoo", "report_timing": None},
+                {"knowledge_base_id": 2, "event_date": date(2099, 6, 25), "source": "Yahoo", "report_timing": "AMC"},
+            ]
+
+    conn = MagicMock()
+    conn.execute.return_value = FakeResult()
+    engine = MagicMock()
+    engine.connect.return_value.__enter__.return_value = conn
+
+    monkeypatch.setattr(
+        "services.options_calculator_prefill._suggest_expiration",
+        lambda t, e: ("2099-06-28", "polygon_reference"),
+    )
+
+    r = load_ticker_earnings_calendar(engine, "MU")
+    assert r["status"] == "ok"
+    assert r["suggested_earnings_date"] == "2099-06-25"
+    assert r["suggested_expiration_date"] == "2099-06-28"
+    assert r["pick_reason"] == "nearest_future"
