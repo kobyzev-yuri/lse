@@ -25,17 +25,30 @@ def fetch_spot_yfinance(ticker: str) -> Dict[str, Any]:
     t = yf.Ticker(sym)
     as_of: Optional[str] = None
     price: Optional[float] = None
-    price_kind = "last_close"
+    price_kind = "unknown"
 
+    # 1) Yahoo quote summary — стабильнее для spot, чем случайная минутная свеча
     try:
-        df = t.history(period="1d", interval="1m", auto_adjust=False)
-        if df is not None and not df.empty and "Close" in df.columns:
-            price = float(df["Close"].iloc[-1])
-            ts = df.index[-1]
-            as_of = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
-            price_kind = "intraday_last"
+        info = getattr(t, "info", None) or {}
+        for key in ("regularMarketPrice", "currentPrice", "postMarketPrice", "preMarketPrice"):
+            p = info.get(key)
+            if p is not None and float(p) > 0:
+                price = float(p)
+                price_kind = f"info.{key}"
+                break
     except Exception as e:
-        logger.debug("yfinance intraday %s: %s", sym, e)
+        logger.debug("yfinance info spot %s: %s", sym, e)
+
+    if price is None:
+        try:
+            df = t.history(period="1d", interval="1m", auto_adjust=False)
+            if df is not None and not df.empty and "Close" in df.columns:
+                price = float(df["Close"].iloc[-1])
+                ts = df.index[-1]
+                as_of = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+                price_kind = "intraday_last"
+        except Exception as e:
+            logger.debug("yfinance intraday %s: %s", sym, e)
 
     if price is None:
         try:

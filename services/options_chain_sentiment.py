@@ -185,6 +185,49 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
+def compute_chain_totals(contracts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Суммарные volume/OI и PCR по списку контрактов."""
+    call_vol = sum(int(c.get("volume") or 0) for c in contracts if c.get("contract_type") == "call")
+    put_vol = sum(int(c.get("volume") or 0) for c in contracts if c.get("contract_type") == "put")
+    call_oi = sum(int(c.get("open_interest") or 0) for c in contracts if c.get("contract_type") == "call")
+    put_oi = sum(int(c.get("open_interest") or 0) for c in contracts if c.get("contract_type") == "put")
+    pcr_vol = (put_vol / call_vol) if call_vol > 0 else None
+    pcr_oi = (put_oi / call_oi) if call_oi > 0 else None
+    return {
+        "call_volume": call_vol,
+        "put_volume": put_vol,
+        "call_open_interest": call_oi,
+        "put_open_interest": put_oi,
+        "pcr_volume": round(pcr_vol, 3) if pcr_vol is not None else None,
+        "pcr_open_interest": round(pcr_oi, 3) if pcr_oi is not None else None,
+        "contract_rows": len(contracts),
+    }
+
+
+def _filter_contracts_for_analysis(
+    contracts: List[Dict[str, Any]],
+    *,
+    spot: Optional[float],
+    strike_window_pct: float,
+    drop_zero_oi_volume: bool,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Фильтр: ликвидные строки + окно страйков вокруг spot."""
+    meta: Dict[str, Any] = {"contracts_raw": len(contracts)}
+    working = list(contracts)
+    if drop_zero_oi_volume:
+        working = [c for c in working if int(c.get("volume") or 0) > 0 or int(c.get("open_interest") or 0) > 0]
+        meta["contracts_after_liquidity_filter"] = len(working)
+        meta["dropped_zero_oi_volume"] = meta["contracts_raw"] - len(working)
+    if spot and strike_window_pct > 0:
+        lo, hi = float(spot) * (1.0 - strike_window_pct), float(spot) * (1.0 + strike_window_pct)
+        meta["strike_window_pct"] = strike_window_pct
+        meta["strike_lo"] = round(lo, 2)
+        meta["strike_hi"] = round(hi, 2)
+        working = [c for c in working if lo <= float(c["strike"]) <= hi]
+        meta["contracts_in_window"] = len(working)
+    return working, meta
+
+
 def build_chain_sentiment_report(
     ticker: str,
     *,
@@ -223,10 +266,12 @@ def build_chain_sentiment_report(
     if raw.get("status") == "error":
         return {"status": "error", "error": raw.get("error"), "ticker": ticker}
 
+    all_contracts = list(raw.get("contracts") or [])
     spot = raw.get("underlying_price")
-    if spot and strike_window_pct > 0:
-        lo, hi = float(spot) * (1.0 - strike_window_pct), float(spot) * (1.0 + strike_window_pct)
-        contracts = [c for c in contracts if lo <= float(c["strike"]) <= hi]
+    totals_full = compute_chain_totals(all_contracts)
+    contracts, scope_meta = _filter_contracts_for_analysis(
+        all_contracts, spot=spot, strike_window_pct=strike_window_pct, drop_zero_oi_volume=False
+    )
 
     analysis = analyze_options_chain(contracts, spot=spot)
     return {
@@ -235,6 +280,13 @@ def build_chain_sentiment_report(
         "source": "polygon",
         "contract_count": len(contracts),
         "available_expirations": exps,
+        "totals_full_chain": totals_full,
+        "analysis_scope": scope_meta,
+        "data_quality": {
+            "note_ru": "Score и PCR в карточке — по страйкам ±{:.0f}% от spot; totals_full_chain — вся доска.".format(
+                strike_window_pct * 100
+            ),
+        },
         **analysis,
     }
 
@@ -267,11 +319,16 @@ def build_yfinance_chain_sentiment_report(
     if raw.get("status") == "error":
         return {"status": "error", "error": raw.get("error"), "ticker": sym, "source": "yfinance"}
 
-    contracts = raw.get("contracts") or []
+    all_contracts = list(raw.get("contracts") or [])
     spot = raw.get("underlying_price")
-    if spot and strike_window_pct > 0:
-        lo, hi = float(spot) * (1.0 - strike_window_pct), float(spot) * (1.0 + strike_window_pct)
-        contracts = [c for c in contracts if lo <= float(c["strike"]) <= hi]
+    totals_full = compute_chain_totals(all_contracts)
+    contracts, scope_meta = _filter_contracts_for_analysis(
+        all_contracts, spot=spot, strike_window_pct=strike_window_pct, drop_zero_oi_volume=False
+    )
+    if raw.get("spot_source"):
+        scope_meta["spot_source"] = raw.get("spot_source")
+    if raw.get("dropped_zero_oi_volume"):
+        scope_meta["dropped_zero_oi_volume"] = raw.get("dropped_zero_oi_volume")
 
     analysis = analyze_options_chain(contracts, spot=spot)
     return {
@@ -283,6 +340,15 @@ def build_yfinance_chain_sentiment_report(
         "chain_calls_puts": {
             "calls": raw.get("calls_count"),
             "puts": raw.get("puts_count"),
+        },
+        "totals_full_chain": totals_full,
+        "analysis_scope": scope_meta,
+        "data_quality": {
+            "note_ru": (
+                "yfinance: score/PCR по ±{:.0f}% spot; удалены строки без OI и volume; "
+                "задержка Yahoo — сверяйте с Polygon после Options Starter."
+            ).format(strike_window_pct * 100),
+            "source": "yfinance",
         },
         **analysis,
     }

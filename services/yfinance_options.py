@@ -104,6 +104,7 @@ def fetch_yfinance_option_chain(
 
     spot_payload = fetch_spot_yfinance(sym)
     spot = spot_payload.get("spot") if spot_payload.get("status") == "ok" else None
+    dropped = 0
 
     try:
         t = yf.Ticker(sym)
@@ -123,6 +124,10 @@ def fetch_yfinance_option_chain(
             underlying_price=spot,
         )
         contracts = calls + puts
+        # Убираем «мёртвые» строки без OI и volume — шум Yahoo
+        liquid = [c for c in contracts if c["volume"] > 0 or c["open_interest"] > 0]
+        dropped = len(contracts) - len(liquid)
+        contracts = liquid
     except Exception as e:
         logger.warning("yfinance chain %s %s: %s", sym, exp, e)
         return {"status": "error", "error": str(e), "contracts": [], "underlying": sym}
@@ -148,4 +153,6 @@ def fetch_yfinance_option_chain(
         "source": "yfinance",
         "calls_count": len(calls),
         "puts_count": len(puts),
+        "spot_source": spot_payload.get("price_kind") if spot_payload.get("status") == "ok" else None,
+        "dropped_zero_oi_volume": dropped,
     }

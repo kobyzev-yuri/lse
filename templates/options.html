@@ -407,6 +407,15 @@ P/L(S) = Value(S) − Entry</div>
         html += '<div class="stat-card"><h3>Spot</h3><div class="value">$' + (j.spot ?? '—') + '</div></div>';
         html += '<div class="stat-card"><h3>Max pain</h3><div class="value">$' + (j.max_pain_strike ?? '—') + '</div></div>';
         html += '</div>';
+        const full = j.totals_full_chain || {};
+        if (full.pcr_volume != null || full.pcr_open_interest != null) {
+            html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">Вся доска: PCR vol ' +
+                (full.pcr_volume ?? '—') + ', PCR OI ' + (full.pcr_open_interest ?? '—') +
+                (full.contract_rows != null ? ' · ' + full.contract_rows + ' строк' : '') + '</p>';
+        }
+        if (j.data_quality && j.data_quality.note_ru) {
+            html += '<p class="muted" style="font-size:0.78rem;margin:0.35rem 0">' + j.data_quality.note_ru + '</p>';
+        }
         if (j.key_strikes_oi && j.key_strikes_oi.length) {
             html += '<table style="margin-top:0.5rem;font-size:0.85rem"><tr><th>Strike</th><th>OI</th><th>Call</th><th>Put</th></tr>';
             j.key_strikes_oi.slice(0, 6).forEach(row => {
@@ -414,7 +423,49 @@ P/L(S) = Value(S) − Entry</div>
             });
             html += '</table>';
         }
+        html += '<div class="btn-row" style="margin-top:0.6rem"><button type="button" class="btn-llm btn-outline-primary" data-llm-source="' +
+            (j.source || '') + '">LLM интерпретация</button></div>';
+        html += '<div class="llm-out muted" style="font-size:0.88rem;margin-top:0.5rem;display:none"></div>';
         return html;
+    }
+
+    const lastReports = { polygon: null, yfinance: null };
+
+    async function runLlmInterpret(source, cardEl) {
+        const key = source === 'yfinance' ? 'yfinance' : 'polygon';
+        const report = lastReports[key];
+        const outEl = cardEl.querySelector('.llm-out');
+        const btn = cardEl.querySelector('.btn-llm');
+        if (!report || report.status === 'error') {
+            outEl.style.display = 'block';
+            outEl.innerHTML = '<span class="text-danger">Сначала нажмите «Анализ» для этого источника.</span>';
+            return;
+        }
+        btn.disabled = true;
+        outEl.style.display = 'block';
+        outEl.innerHTML = '<div class="loading">LLM…</div>';
+        const r = await fetch('/api/options/sentiment/interpret', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({report: report}),
+        });
+        const j = await r.json();
+        btn.disabled = false;
+        if (j.status === 'ok') {
+            outEl.innerHTML = '<strong>LLM</strong> <span class="muted">(' + (j.model || '') + ')</span><div style="margin-top:0.4rem;white-space:pre-wrap">' +
+                (j.interpretation_ru || '') + '</div>';
+        } else {
+            outEl.innerHTML = '<span class="text-danger">' + (j.error || 'ошибка LLM') + '</span>';
+        }
+    }
+
+    function bindLlmButtons(containerId) {
+        const card = $(containerId).closest('.compare-card');
+        if (!card) return;
+        const btn = card.querySelector('.btn-llm');
+        if (!btn || btn._bound) return;
+        btn._bound = true;
+        btn.onclick = () => runLlmInterpret(btn.getAttribute('data-llm-source'), card);
     }
 
     async function loadExpirations(source) {
@@ -445,7 +496,10 @@ P/L(S) = Value(S) − Entry</div>
         if (exp) url += '&expiration_date=' + encodeURIComponent(exp);
         const r = await fetch(url);
         const j = await r.json();
+        if (source === 'yfinance') lastReports.yfinance = j;
+        else lastReports.polygon = j;
         $(outId).innerHTML = renderSentimentCard(j, label);
+        bindLlmButtons(outId);
     }
 
     $('btnLoadExpPolygon').onclick = () => loadExpirations('polygon');

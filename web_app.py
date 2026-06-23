@@ -1249,6 +1249,24 @@ async def api_options_sentiment(ticker: str, expiration_date: Optional[str] = No
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/options/sentiment/interpret", response_class=JSONResponse)
+async def api_options_sentiment_interpret(body: Dict[str, Any]):
+    """LLM-интерпретация готового отчёта сентимента (ProxyAPI / OPENAI_*)."""
+    if not web_llm_enabled():
+        return JSONResponse(
+            {"status": "disabled", "error": "LLM отключён (WEB_DISABLE_LLM или demo mode)"},
+            status_code=403,
+        )
+    from services.options_sentiment_llm import interpret_options_chain_report
+
+    report = body.get("report") if isinstance(body.get("report"), dict) else body
+    try:
+        return _to_jsonable(await asyncio.to_thread(interpret_options_chain_report, report))
+    except Exception as e:
+        logger.exception("api_options_sentiment_interpret")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/options/calculator/yfinance/{ticker}", response_class=JSONResponse)
 async def api_options_calculator_yfinance(ticker: str):
     """Spot для калькулятора — только yfinance."""

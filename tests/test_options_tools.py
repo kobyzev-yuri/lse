@@ -171,6 +171,25 @@ def test_yfinance_rows_to_contracts():
     assert out[0]["contract_type"] == "put"
 
 
+def test_compute_chain_totals():
+    from services.options_chain_sentiment import compute_chain_totals
+
+    contracts = [
+        {"contract_type": "call", "volume": 100, "open_interest": 500},
+        {"contract_type": "put", "volume": 300, "open_interest": 900},
+    ]
+    t = compute_chain_totals(contracts)
+    assert t["pcr_volume"] == 3.0
+    assert t["pcr_open_interest"] == 1.8
+
+
+def test_llm_interpret_requires_data():
+    from services.options_sentiment_llm import interpret_options_chain_report
+
+    r = interpret_options_chain_report({"status": "error", "error": "x"})
+    assert r["status"] == "error"
+
+
 def test_yfinance_sentiment_report(monkeypatch):
     from services.options_chain_sentiment import build_yfinance_chain_sentiment_report
 
@@ -210,3 +229,4 @@ def test_yfinance_sentiment_report(monkeypatch):
     assert r["source"] == "yfinance"
     assert r["sentiment_label"] == "BEARISH"
     assert r["totals"]["pcr_open_interest"] > 1.0
+    assert r["totals_full_chain"]["pcr_volume"] == 8.0
