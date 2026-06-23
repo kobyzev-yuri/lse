@@ -30,6 +30,7 @@ def collect_portfolio_contributions(
     portfolio_ml: Optional[Dict[str, Any]] = None,
     event_reaction: Optional[Dict[str, Any]] = None,
     cluster_context: Optional[Dict[str, Any]] = None,
+    multiday: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     sig = decision.get("decision") or decision.get("strategy_signal") or "HOLD"
@@ -152,6 +153,45 @@ def collect_portfolio_contributions(
                 },
             )
         )
+    md = multiday or {}
+    if md.get("portfolio_multiday_status") == "ok" or md.get("multiday_lr_horizon_1d_pct_vs_spot") is not None:
+        from services.multiday_lr_gate import evaluate_multiday_entry_gate
+
+        gate = evaluate_multiday_entry_gate(
+            md,
+            mode_env_key="PORTFOLIO_MULTIDAY_ENTRY_GATE_MODE",
+            tau_1d_env_key="PORTFOLIO_MULTIDAY_ENTRY_TAU_1D_PCT",
+            tau_other_env_key="PORTFOLIO_MULTIDAY_ENTRY_TAU_PCT",
+            neg_min_env_key="PORTFOLIO_MULTIDAY_ENTRY_NEGATIVE_HORIZONS_MIN",
+        )
+        h1 = md.get("multiday_lr_horizon_1d_pct_vs_spot")
+        try:
+            strength = max(-1.0, min(1.0, float(h1) / 2.0)) if h1 is not None else 0.0
+        except (TypeError, ValueError):
+            strength = 0.0
+        gm = gate_mode("PORTFOLIO_MULTIDAY_ENTRY_GATE_MODE", "log_only")
+        would_veto = bool(gate.get("would_hold"))
+        action = "telemetry"
+        if would_veto and gm == "apply":
+            action = "veto"
+        cid = "multiday_lr"
+        out.append(
+            make_contribution(
+                contour_id=cid,
+                role="policy_gate",
+                readiness=stack_readiness("multiday_lr"),
+                strength=strength,
+                weight=effective_stack_weight(cid, stack_readiness("multiday_lr")),
+                action=action,
+                detail=gate.get("note") or md.get("log_return_multiday_forecast_summary"),
+                metrics={
+                    "horizons_pct": gate.get("horizons_pct"),
+                    "would_hold": would_veto,
+                    "gate_mode": gm,
+                    "trust_score": trust_score_for_contour(cid),
+                },
+            )
+        )
     cc = cluster_context or decision.get("cluster")
     if isinstance(cc, dict):
         corr = cc.get("correlation_this_ticker") or {}
@@ -216,12 +256,14 @@ def build_portfolio_decision_snapshot(
     portfolio_ml: Optional[Dict[str, Any]] = None,
     event_reaction: Optional[Dict[str, Any]] = None,
     cluster_context: Optional[Dict[str, Any]] = None,
+    multiday: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     contributions = collect_portfolio_contributions(
         decision,
         portfolio_ml=portfolio_ml,
         event_reaction=event_reaction,
         cluster_context=cluster_context,
+        multiday=multiday,
     )
     core = str(decision.get("decision") or "HOLD").upper()
     legacy_eff = str(decision.get("decision_fused") or decision.get("llm_decision") or core).upper()
@@ -273,6 +315,7 @@ def finalize_portfolio_decision_stack(
     portfolio_ml: Optional[Dict[str, Any]] = None,
     event_reaction: Optional[Dict[str, Any]] = None,
     cluster_context: Optional[Dict[str, Any]] = None,
+    multiday: Optional[Dict[str, Any]] = None,
 ) -> None:
     if not _cfg_bool("DECISION_STACK_ENABLED", True):
         return
@@ -282,6 +325,7 @@ def finalize_portfolio_decision_stack(
         portfolio_ml=portfolio_ml,
         event_reaction=event_reaction,
         cluster_context=cluster_context,
+        multiday=multiday,
     )
     decision["decision_snapshot"] = snap
     decision["decision_effective"] = snap.get("effective_decision")

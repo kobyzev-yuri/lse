@@ -71,15 +71,22 @@ def _forecast_ok(d5: Dict[str, Any]) -> bool:
     return any(v is not None for v in pcts.values())
 
 
-def evaluate_multiday_entry_gate(d5: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate_multiday_entry_gate(
+    d5: Dict[str, Any],
+    *,
+    mode_env_key: str = "GAME_5M_MULTIDAY_ENTRY_GATE_MODE",
+    tau_1d_env_key: str = "GAME_5M_MULTIDAY_ENTRY_TAU_1D_PCT",
+    tau_other_env_key: str = "GAME_5M_MULTIDAY_ENTRY_TAU_PCT",
+    neg_min_env_key: str = "GAME_5M_MULTIDAY_ENTRY_NEGATIVE_HORIZONS_MIN",
+) -> Dict[str, Any]:
     """
     Оценка «понизить ли вход» по дневному ridge.
     would_hold=True — при apply режиме effective→HOLD при BUY/STRONG_BUY.
     """
-    mode = _env_mode("GAME_5M_MULTIDAY_ENTRY_GATE_MODE", "none")
-    tau_1d = _env_float("GAME_5M_MULTIDAY_ENTRY_TAU_1D_PCT", 0.25)
-    tau_other = _env_float("GAME_5M_MULTIDAY_ENTRY_TAU_PCT", 0.15)
-    neg_min = max(1, min(3, _env_int("GAME_5M_MULTIDAY_ENTRY_NEGATIVE_HORIZONS_MIN", 2)))
+    mode = _env_mode(mode_env_key, "none")
+    tau_1d = _env_float(tau_1d_env_key, 0.25)
+    tau_other = _env_float(tau_other_env_key, 0.15)
+    neg_min = max(1, min(3, _env_int(neg_min_env_key, 2)))
 
     base: Dict[str, Any] = {
         "gate": "entry",

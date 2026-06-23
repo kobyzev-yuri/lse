@@ -67,6 +67,19 @@ def portfolio_catboost_blocks_buy(ticker: str) -> Tuple[bool, str]:
     return False, ""
 
 
+def portfolio_indicator_blocks_buy(ticker: str) -> Tuple[bool, str]:
+    """Тикер только индикатор (металлы/нефть/VIX) — не открываем portfolio BUY."""
+    try:
+        from services.ticker_groups import get_tickers_indicator_only
+
+        ind = {t.strip().upper() for t in get_tickers_indicator_only()}
+        if ticker.strip().upper() in ind:
+            return True, f"{ticker} в TICKERS_INDICATOR_ONLY (только корреляция)"
+    except Exception:
+        pass
+    return False, ""
+
+
 def merge_portfolio_buy_context(
     context_json: Optional[Dict[str, Any]],
     ticker: str,
@@ -82,6 +95,15 @@ def merge_portfolio_buy_context(
     for k, v in ml.items():
         if k.startswith("portfolio_ml_"):
             base[k] = v
+    try:
+        from services.portfolio_multiday_signal import portfolio_multiday_snapshot
+
+        md = portfolio_multiday_snapshot(ticker)
+        for k, v in md.items():
+            if k.startswith(("portfolio_multiday_", "multiday_lr_", "log_return_multiday")):
+                base[k] = v
+    except Exception as e:
+        logger.debug("portfolio multiday snapshot %s: %s", ticker, e)
     try:
         from services.event_reaction_entry_guards import event_reaction_ml_snapshot
 

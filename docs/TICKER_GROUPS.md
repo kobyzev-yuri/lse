@@ -23,6 +23,9 @@ TICKERS_MEDIUM=ALAB,TER,AMD,ANET,INTC,DELL,AVGO,ORCL,PLTR
 
 # Вдолгую (свинг + мегакап + драйверы + макро)
 TICKERS_LONG=MSFT,META,GOOGL,AMZN,NVDA,ANET,INTC,DELL,ALAB,AVGO,ORCL,PLTR,AMD,SNDK,GBPUSD=X,GC=F,^VIX,CL=F,BZ=F
+
+# Портфель: без сделок по металлам/нефти (только корреляция). Пусто = ^VIX,GC=F,CL=F,BZ=F
+TICKERS_INDICATOR_ONLY=^VIX,GC=F,CL=F,BZ=F
 ```
 
 Если не задано — используются дефолты из `services/ticker_groups.py` (см. выше).

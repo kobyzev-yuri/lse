@@ -24,6 +24,10 @@ DEFAULT_TICKERS_LONG = (
     "GBPUSD=X,GC=F,^VIX,CL=F,BZ=F"
 )
 
+# Портфель: не открываем позиции, но котировки/KB/корреляция остаются в TICKERS_LONG.
+DEFAULT_PORTFOLIO_COMMODITY_INDICATORS = ("GC=F", "CL=F", "BZ=F")
+DEFAULT_TICKERS_INDICATOR_ONLY = "^VIX," + ",".join(DEFAULT_PORTFOLIO_COMMODITY_INDICATORS)
+
 # Быстрая игра 5m: целевые стоки для daily (Alex: SNDK, NBIS — лидеры; ASML, MU — AI bottlenecks; LITE, CIEN — волатильные)
 DEFAULT_GAME_5M_FAST = "SNDK,NBIS,ASML,MU,LITE,CIEN"
 # Correlation “all vs all”: megacap + semis + VIX/oil/gold/forex + extra drivers (ANET, INTC, DELL, …) for LLM/matrix context.
@@ -228,9 +232,16 @@ def get_tickers_for_portfolio_game() -> List[str]:
 
 def get_tickers_indicator_only() -> List[str]:
     """Тикеры только как индикаторы (контекст, корреляция): по ним не открываем позиции в портфеле.
-    config.env: TICKERS_INDICATOR_ONLY (например ^VIX). Пусто — используем правило: тикеры с ^ в портфеле считаем индикаторами."""
+
+    config.env: TICKERS_INDICATOR_ONLY. Пусто — дефолт ^VIX + металлы/нефть (GC=F, CL=F, BZ=F).
+    Явное значение в env полностью заменяет дефолт."""
     raw = get_config_value("TICKERS_INDICATOR_ONLY", "").strip()
-    if raw:
-        return [t.strip() for t in raw.split(",") if t.strip()]
-    portfolio = get_tickers_for_portfolio_game()
-    return [t for t in portfolio if t.startswith("^")]
+    if not raw:
+        raw = DEFAULT_TICKERS_INDICATOR_ONLY
+    seen: set[str] = set()
+    out: List[str] = []
+    for t in _parse_ticker_csv(raw):
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out

@@ -14,7 +14,7 @@
 По умолчанию LLM (ШАГ 3 portfolio_fusion в AnalystAgent) в этом кроне не вызывается — только техника + стратегия.
 Включить: TRADING_CYCLE_USE_LLM=true в config.env.
 
-Cron: 0 9,13,17 * * 1-5  cd /path/to/lse && python scripts/trading_cycle_cron.py
+Cron: 0 16,19,22 * * 1-5 MSK (~09:30, 12:30, 15:30 ET)  cd /path/to/lse && python scripts/trading_cycle_cron.py
   или с тикерами: ... trading_cycle_cron.py "MSFT,ORCL,AMD"
 """
 

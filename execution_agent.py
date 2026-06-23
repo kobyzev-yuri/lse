@@ -1011,6 +1011,13 @@ class ExecutionAgent:
         logger.info("=" * 60)
         self._trades_done_this_run = []
 
+        try:
+            from services.portfolio_maintenance import run_portfolio_maintenance
+
+            run_portfolio_maintenance(dry_run=False)
+        except Exception as e:
+            logger.debug("portfolio_maintenance: %s", e)
+
         # Кластер: корреляция по полному списку (включая индикаторы) — LLM видит связи с VIX и др.
         list_for_corr = cluster_tickers if cluster_tickers is not None else tickers
         cluster_context = None
@@ -1096,8 +1103,10 @@ class ExecutionAgent:
                     from services.portfolio_entry_guards import (
                         merge_portfolio_buy_context,
                         portfolio_catboost_blocks_buy,
+                        portfolio_indicator_blocks_buy,
                         portfolio_ml_snapshot,
                     )
+                    from services.portfolio_multiday_signal import portfolio_multiday_blocks_buy
                     from services.event_reaction_entry_guards import (
                         event_reaction_blocks_buy,
                         event_reaction_ml_snapshot,
@@ -1114,12 +1123,16 @@ class ExecutionAgent:
 
                     ml_snap = portfolio_ml_snapshot(ticker)
                     er_snap = event_reaction_ml_snapshot(ticker)
+                    from services.portfolio_multiday_signal import portfolio_multiday_snapshot
+
+                    md_snap = portfolio_multiday_snapshot(ticker)
                     finalize_portfolio_decision_stack(
                         strat_row,
                         ticker=ticker,
                         portfolio_ml=ml_snap,
                         event_reaction=er_snap,
                         cluster_context=context_json.get("cluster") if isinstance(context_json, dict) else None,
+                        multiday=md_snap,
                     )
                     stack_effective = str(strat_row.get("decision_effective") or decision).upper()
                     if stack_effective not in ("BUY", "STRONG_BUY"):
@@ -1134,7 +1147,19 @@ class ExecutionAgent:
                             other_signals[ticker] = stack_effective
                         continue
 
+                    blocked, block_reason = portfolio_indicator_blocks_buy(ticker)
+                    if blocked:
+                        logger.info("⏭️ %s: portfolio BUY пропущен — %s", ticker, block_reason)
+                        if cluster_context is not None:
+                            other_signals[ticker] = "HOLD"
+                        continue
                     blocked, block_reason = event_reaction_blocks_buy(ticker)
+                    if blocked:
+                        logger.info("⏭️ %s: portfolio BUY пропущен — %s", ticker, block_reason)
+                        if cluster_context is not None:
+                            other_signals[ticker] = "HOLD"
+                        continue
+                    blocked, block_reason = portfolio_multiday_blocks_buy(ticker)
                     if blocked:
                         logger.info("⏭️ %s: portfolio BUY пропущен — %s", ticker, block_reason)
                         if cluster_context is not None:

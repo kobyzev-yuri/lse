@@ -18,7 +18,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 22 * * 0,6 docker exec lse-bot python scripts/update_prices_cron.py >> /dev/null 2>&1
 10 22 * * * docker exec lse-bot python scripts/update_rsi_local.py >> /dev/null 2>&1
 0 19 * * 1-5 docker exec lse-bot python update_finviz_data.py >> /dev/null 2>&1
-0 9,13,17 * * 1-5 docker exec lse-bot python scripts/trading_cycle_cron.py >> /home/ai8049520/lse/logs/cron_trading_cycle.log 2>&1
+0 16,19,22 * * 1-5 docker exec lse-bot python scripts/trading_cycle_cron.py >> /home/ai8049520/lse/logs/cron_trading_cycle.log 2>&1
 */5 * * * 1-5 docker exec lse-bot python scripts/send_sndk_signal_cron.py >> /home/ai8049520/lse/logs/cron_sndk_signal.log 2>&1
 30 12,15 * * 1-5 docker exec lse-bot python scripts/premarket_cron.py >> /home/ai8049520/lse/logs/premarket_cron.log 2>&1
 # Earnings autoprep (полный цикл documents): KB yfinance → sync → ingest → LLM extract → readiness JSON.

@@ -31,6 +31,7 @@ GAME5M_VETO_ORDER = (
 PORTFOLIO_VETO_ORDER = (
     "session",
     "cluster_context",
+    "multiday_lr",
     "portfolio_catboost",
     "event_reaction",
 )
