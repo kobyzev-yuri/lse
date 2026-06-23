@@ -1194,6 +1194,76 @@ async def api_earnings_postmortem(symbol: str, event_date: str = ""):
         raise HTTPException(status_code=500, detail=f"earnings postmortem: {e!s}")
 
 
+@app.get("/options", response_class=HTMLResponse)
+async def options_tools_page(request: Request):
+    """Option chain sentiment (Polygon) + Put / Put Spread calculator."""
+    return HTMLResponse(
+        render_template("options.html", {"request": request}),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/api/options/expirations/{ticker}", response_class=JSONResponse)
+async def api_options_expirations(ticker: str):
+    from services.polygon_options import fetch_option_expiration_dates, polygon_options_available
+
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker required")
+    if not polygon_options_available():
+        return {"ticker": t, "expirations": [], "error": "POLYGON_API_KEY not configured"}
+    exps = await asyncio.to_thread(fetch_option_expiration_dates, t)
+    return {"ticker": t, "expirations": exps}
+
+
+@app.get("/api/options/sentiment/{ticker}", response_class=JSONResponse)
+async def api_options_sentiment(ticker: str, expiration_date: Optional[str] = None):
+    from services.options_chain_sentiment import build_chain_sentiment_report
+
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker required")
+    try:
+        payload = await asyncio.to_thread(
+            build_chain_sentiment_report, t, expiration_date=expiration_date or None
+        )
+        return _to_jsonable(payload)
+    except Exception as e:
+        logger.exception("api_options_sentiment %s", t)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/options/calculator", response_class=JSONResponse)
+async def api_options_calculator(body: Dict[str, Any]):
+    from services.options_calculator import compute_put_strategy
+
+    try:
+        strategy = (body.get("strategy") or "pure_put").strip().lower()
+        if strategy not in ("pure_put", "put_spread"):
+            return JSONResponse({"error": "strategy must be pure_put or put_spread"}, status_code=400)
+        spot = float(body.get("spot") or 0)
+        if spot <= 0:
+            return JSONResponse({"error": "spot must be > 0"}, status_code=400)
+        result = compute_put_strategy(
+            strategy=strategy,  # type: ignore[arg-type]
+            spot=spot,
+            contracts=int(body.get("contracts") or 1),
+            long_strike=float(body.get("long_strike")),
+            long_premium=float(body.get("long_premium")),
+            short_strike=float(body["short_strike"]) if body.get("short_strike") is not None else None,
+            short_premium=float(body["short_premium"]) if body.get("short_premium") is not None else None,
+        )
+        result["ticker"] = (body.get("ticker") or "").strip().upper()
+        result["earnings_date"] = body.get("earnings_date")
+        result["expiration_date"] = body.get("expiration_date")
+        return _to_jsonable(result)
+    except (TypeError, ValueError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.exception("api_options_calculator")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/earnings", response_class=HTMLResponse)
 async def earnings_intelligence_page(request: Request):
     """Earnings intelligence: universe coverage + Event Brief viewer."""

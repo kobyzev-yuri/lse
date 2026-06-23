@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Опционы — LSE{% endblock %}
+{% block extra_css %}
+<style>
+    .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .tabs button { flex: 1; min-width: 140px; }
+    .tabs button.active { background: #1e40af; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .grid-2 { display: grid; grid-template-columns: 1fr; gap: 0.75rem; }
+    @media (min-width: 768px) { .grid-2 { grid-template-columns: 1fr 1fr; } }
+    .sentiment-badge {
+        display: inline-block; padding: 0.35rem 0.75rem; border-radius: 8px;
+        font-weight: 600; font-size: 0.95rem;
+    }
+    .sentiment-BEARISH { background: #7f1d1d; color: #fecaca; }
+    .sentiment-BULLISH { background: #14532d; color: #bbf7d0; }
+    .sentiment-NEUTRAL { background: #334155; color: #e2e8f0; }
+    .hidden { display: none !important; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Опционы</h1>
+    <p class="muted">Цепочка через Polygon API (volume/OI) и калькулятор Put / Put Spread. Данные Investing.com не парсим — Polygon даёт ту же доску проще.</p>
+</div>
+
+<div class="tabs">
+    <button type="button" id="tabSentiment" class="active">Сентимент chain</button>
+    <button type="button" id="tabCalc">Калькулятор</button>
+</div>
+
+<section id="panelSentiment" class="panel active card">
+    <h2>Option Chain → сентимент</h2>
+    <div class="grid-2">
+        <div>
+            <label for="sentTicker">Тикер</label>
+            <input id="sentTicker" value="MU" placeholder="MU">
+        </div>
+        <div>
+            <label for="sentExp">Экспирация</label>
+            <select id="sentExp"><option value="">— загрузка —</option></select>
+        </div>
+    </div>
+    <button type="button" id="btnLoadExp">Загрузить даты</button>
+    <button type="button" id="btnAnalyze">Анализ</button>
+    <div id="sentimentOut" class="muted" style="margin-top:1rem;">Задайте POLYGON_API_KEY и нажмите «Анализ».</div>
+</section>
+
+<section id="panelCalc" class="panel card">
+    <h2>Калькулятор Put / Put Spread</h2>
+    <div class="grid-2">
+        <div><label>Тикер</label><input id="calcTicker" value="MU"></div>
+        <div><label>Цена акции ($)</label><input id="calcSpot" type="number" step="0.01" value="189"></div>
+        <div><label>Дата earnings (справочно)</label><input id="calcEarnings" type="date"></div>
+        <div><label>Экспирация</label><input id="calcExp" type="date"></div>
+        <div><label>Контрактов</label><input id="calcContracts" type="number" min="1" value="1"></div>
+        <div>
+            <label>Стратегия</label>
+            <select id="calcStrategy">
+                <option value="pure_put">Pure Put</option>
+                <option value="put_spread">Put Spread</option>
+            </select>
+        </div>
+    </div>
+    <h3>Long Put</h3>
+    <div class="grid-2">
+        <div><label>Страйк long ($)</label><input id="longStrike" type="number" step="0.5" value="190"></div>
+        <div><label>Премия long ($/акция)</label><input id="longPrem" type="number" step="0.01" value="8.5"></div>
+    </div>
+    <div id="spreadFields" class="hidden">
+        <h3>Short Put (ниже long)</h3>
+        <div class="grid-2">
+            <div><label>Страйк short ($)</label><input id="shortStrike" type="number" step="0.5" value="180"></div>
+            <div><label>Премия short ($/акция)</label><input id="shortPrem" type="number" step="0.01" value="4.2"></div>
+        </div>
+    </div>
+    <button type="button" id="btnCalc" style="margin-top:0.5rem;">Рассчитать</button>
+    <button type="button" id="btnFillFromChain" class="btn-outline-primary">Подтянуть spot с Polygon</button>
+    <div id="calcSummary" style="margin-top:1rem;"></div>
+    <div id="calcTable" class="table-responsive"></div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    const $ = (id) => document.getElementById(id);
+
+    function showTab(name) {
+        $('panelSentiment').classList.toggle('active', name === 'sent');
+        $('panelCalc').classList.toggle('active', name === 'calc');
+        $('tabSentiment').classList.toggle('active', name === 'sent');
+        $('tabCalc').classList.toggle('active', name === 'calc');
+    }
+    $('tabSentiment').onclick = () => showTab('sent');
+    $('tabCalc').onclick = () => showTab('calc');
+
+    $('calcStrategy').onchange = () => {
+        $('spreadFields').classList.toggle('hidden', $('calcStrategy').value !== 'put_spread');
+    };
+
+    async function loadExpirations() {
+        const t = $('sentTicker').value.trim().toUpperCase();
+        const r = await fetch('/api/options/expirations/' + encodeURIComponent(t));
+        const j = await r.json();
+        const sel = $('sentExp');
+        sel.innerHTML = '';
+        (j.expirations || []).forEach(d => {
+            const o = document.createElement('option');
+            o.value = d; o.textContent = d;
+            sel.appendChild(o);
+        });
+        if (!sel.options.length) {
+            sel.innerHTML = '<option value="">нет дат (ключ Polygon?)</option>';
+        }
+    }
+    $('btnLoadExp').onclick = loadExpirations;
+
+    $('btnAnalyze').onclick = async () => {
+        const t = $('sentTicker').value.trim().toUpperCase();
+        const exp = $('sentExp').value;
+        let url = '/api/options/sentiment/' + encodeURIComponent(t);
+        if (exp) url += '?expiration_date=' + encodeURIComponent(exp);
+        $('sentimentOut').innerHTML = '<div class="loading">Загрузка…</div>';
+        const r = await fetch(url);
+        const j = await r.json();
+        if (j.status === 'error') {
+            $('sentimentOut').innerHTML = '<p class="text-danger">' + (j.error || 'ошибка') + '</p>';
+            return;
+        }
+        const label = j.sentiment_label || 'NEUTRAL';
+        let html = '<span class="sentiment-badge sentiment-' + label + '">' + label + '</span>';
+        html += ' <span class="muted">score ' + (j.sentiment_score ?? '—') + '</span>';
+        html += '<p style="margin:0.75rem 0">' + (j.sentiment_summary_ru || '') + '</p>';
+        html += '<div class="stats">';
+        const tot = j.totals || {};
+        html += '<div class="stat-card"><h3>PCR volume</h3><div class="value">' + (tot.pcr_volume ?? '—') + '</div></div>';
+        html += '<div class="stat-card"><h3>PCR OI</h3><div class="value">' + (tot.pcr_open_interest ?? '—') + '</div></div>';
+        html += '<div class="stat-card"><h3>Spot</h3><div class="value">$' + (j.spot ?? '—') + '</div></div>';
+        html += '<div class="stat-card"><h3>Max pain</h3><div class="value">$' + (j.max_pain_strike ?? '—') + '</div></div>';
+        html += '</div>';
+        if (j.key_strikes_oi && j.key_strikes_oi.length) {
+            html += '<h3>Ключевые страйки (OI)</h3><table><tr><th>Strike</th><th>OI</th><th>Call OI</th><th>Put OI</th></tr>';
+            j.key_strikes_oi.forEach(row => {
+                html += '<tr><td>' + row.strike + '</td><td>' + row.total_oi + '</td><td>' + row.call_oi + '</td><td>' + row.put_oi + '</td></tr>';
+            });
+            html += '</table>';
+        }
+        $('sentimentOut').innerHTML = html;
+    };
+
+    $('btnCalc').onclick = async () => {
+        const body = {
+            strategy: $('calcStrategy').value,
+            ticker: $('calcTicker').value.trim().toUpperCase(),
+            spot: parseFloat($('calcSpot').value),
+            contracts: parseInt($('calcContracts').value, 10) || 1,
+            long_strike: parseFloat($('longStrike').value),
+            long_premium: parseFloat($('longPrem').value),
+            earnings_date: $('calcEarnings').value || null,
+            expiration_date: $('calcExp').value || null,
+        };
+        if (body.strategy === 'put_spread') {
+            body.short_strike = parseFloat($('shortStrike').value);
+            body.short_premium = parseFloat($('shortPrem').value);
+        }
+        const r = await fetch('/api/options/calculator', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        if (j.error) {
+            $('calcSummary').innerHTML = '<p class="text-danger">' + j.error + '</p>';
+            return;
+        }
+        $('calcSummary').innerHTML =
+            '<div class="stats">' +
+            '<div class="stat-card"><h3>Вход</h3><div class="value">$' + j.entry_cost_usd + '</div></div>' +
+            '<div class="stat-card"><h3>Breakeven</h3><div class="value">$' + j.breakeven + '</div></div>' +
+            '<div class="stat-card"><h3>Max loss</h3><div class="value negative">$' + j.max_loss_usd + '</div></div>' +
+            '<div class="stat-card"><h3>Max profit</h3><div class="value positive">' +
+            (j.max_profit_usd != null ? '$' + j.max_profit_usd : '∞') + '</div></div></div>';
+        let tbl = '<table><tr><th>Падение</th><th>Цена</th><th>Стоимость</th><th>P/L</th><th>ROI</th><th>Статус</th></tr>';
+        (j.scenarios || []).forEach(s => {
+            const cls = s.pnl_usd >= 0 ? 'positive' : 'negative';
+            tbl += '<tr><td>' + s.drop_pct + '%</td><td>$' + s.stock_price + '</td><td>$' + s.position_value_usd +
+                '</td><td class="' + cls + '">$' + s.pnl_usd + '</td><td class="' + cls + '">' + s.roi_pct + '%</td><td>' + s.status_ru + '</td></tr>';
+        });
+        tbl += '</table>';
+        $('calcTable').innerHTML = tbl;
+    };
+
+    $('btnFillFromChain').onclick = async () => {
+        const t = $('calcTicker').value.trim().toUpperCase();
+        const r = await fetch('/api/options/sentiment/' + encodeURIComponent(t));
+        const j = await r.json();
+        if (j.spot) $('calcSpot').value = j.spot;
+    };
+
+    loadExpirations();
+})();
+</script>
+{% endblock %}
