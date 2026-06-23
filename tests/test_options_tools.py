@@ -183,11 +183,98 @@ def test_compute_chain_totals():
     assert t["pcr_open_interest"] == 1.8
 
 
+def test_put_spread_stale_strike_warning():
+    r = compute_put_strategy(
+        strategy="put_spread",
+        spot=1084.71,
+        contracts=1,
+        long_strike=189.0,
+        long_premium=8.5,
+        short_strike=180.0,
+        short_premium=7.2,
+    )
+    assert r["input_warning_ru"]
+    assert "OTM" in r["input_warning_ru"] or "ниже spot" in r["input_warning_ru"]
+
+
+def test_put_spread_sane_strikes():
+    r = compute_put_strategy(
+        strategy="put_spread",
+        spot=1084.71,
+        contracts=2,
+        long_strike=1100.0,
+        long_premium=61.0,
+        short_strike=1050.0,
+        short_premium=42.0,
+    )
+    assert r.get("input_warning_ru") is None
+    deep = [s for s in r["scenarios"] if s["drop_pct"] == -20.0][0]
+    assert deep["pnl_usd"] > 0
+
+
 def test_llm_interpret_requires_data():
     from services.options_sentiment_llm import interpret_options_chain_report
 
     r = interpret_options_chain_report({"status": "error", "error": "x"})
     assert r["status"] == "error"
+
+
+def test_llm_calculator_interpret_requires_data():
+    from services.options_calculator_llm import interpret_calculator_result
+
+    r = interpret_calculator_result({"error": "x"})
+    assert r["status"] == "error"
+
+
+def test_mid_option_price():
+    from services.options_calculator_prefill import _mid_option_price
+
+    assert _mid_option_price(10.0, 12.0, None) == 11.0
+    assert _mid_option_price(None, None, 8.5) == 8.5
+
+
+def test_calculator_yfinance_prefill_monkeypatch(monkeypatch):
+    from services.options_calculator_prefill import fetch_calculator_yfinance_prefill
+
+    monkeypatch.setattr(
+        "services.options_calculator_prefill.fetch_spot_yfinance",
+        lambda t: {"status": "ok", "ticker": "MU", "spot": 1090.0, "price_kind": "info.regularMarketPrice"},
+    )
+    monkeypatch.setattr(
+        "services.yfinance_options.fetch_yfinance_option_expirations",
+        lambda t: ["2026-06-26"],
+    )
+    monkeypatch.setattr(
+        "services.yfinance_options.fetch_yfinance_option_chain",
+        lambda t, expiration_date: {
+            "status": "ok",
+            "contracts": [
+                {
+                    "contract_type": "put",
+                    "strike": 1090.0,
+                    "bid": 56.0,
+                    "ask": 58.0,
+                    "last": 57.0,
+                    "volume": 10,
+                    "open_interest": 100,
+                },
+                {
+                    "contract_type": "put",
+                    "strike": 1050.0,
+                    "bid": 40.0,
+                    "ask": 42.0,
+                    "last": 41.0,
+                    "volume": 5,
+                    "open_interest": 50,
+                },
+            ],
+        },
+    )
+    r = fetch_calculator_yfinance_prefill("MU", expiration_date="2026-06-26", strategy="put_spread")
+    assert r["status"] == "ok"
+    assert r["long_strike"] == 1090.0
+    assert r["long_premium"] == 57.0
+    assert r["short_strike"] == 1050.0
 
 
 def test_format_llm_anthropic_500_message():

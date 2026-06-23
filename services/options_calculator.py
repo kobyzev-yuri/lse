@@ -10,34 +10,34 @@ Strategy = Literal["pure_put", "put_spread"]
 
 SCENARIO_DROP_PCTS = (0.0, -2.0, -3.0, -5.0, -7.0, -8.0, -10.0, -12.0, -15.0, -20.0)
 
-# Демо-примеры для UI (без Polygon): условные премии в духе доски опционов.
+# Демо-примеры для UI (без Polygon): страйки в духе текущей доски MU ~$1080+.
 CALCULATOR_DEMO_EXAMPLES: List[Dict[str, Any]] = [
     {
         "id": "mu_pure_put_earnings",
         "title_ru": "MU — Pure Put (earnings)",
-        "description_ru": "Один long put перед отчётом: spot ~$189, страйк ATM, премия как на доске.",
+        "description_ru": "Long put ATM перед отчётом: spot ~$1090, страйк и премия как на yfinance-доске.",
         "strategy": "pure_put",
         "ticker": "MU",
-        "spot": 189.0,
+        "spot": 1090.0,
         "contracts": 1,
-        "long_strike": 189.0,
-        "long_premium": 8.5,
-        "earnings_date": "2026-06-25",
+        "long_strike": 1090.0,
+        "long_premium": 57.0,
+        "earnings_date": "2026-06-24",
         "expiration_date": "2026-06-26",
     },
     {
         "id": "mu_put_spread_2x",
         "title_ru": "MU — Put Spread ×2",
-        "description_ru": "Дебетовый спред: long 200 / short 180, два контракта — ограниченный риск.",
+        "description_ru": "Дебетовый спред: long 1100 / short 1050, два контракта.",
         "strategy": "put_spread",
         "ticker": "MU",
-        "spot": 189.0,
+        "spot": 1090.0,
         "contracts": 2,
-        "long_strike": 200.0,
-        "long_premium": 12.0,
-        "short_strike": 180.0,
-        "short_premium": 4.5,
-        "earnings_date": "2026-06-25",
+        "long_strike": 1100.0,
+        "long_premium": 61.0,
+        "short_strike": 1050.0,
+        "short_premium": 42.0,
+        "earnings_date": "2026-06-24",
         "expiration_date": "2026-06-26",
     },
     {
@@ -85,6 +85,31 @@ def _put_intrinsic(strike: float, spot: float) -> float:
 
 def _spread_intrinsic(long_k: float, short_k: float, spot: float) -> float:
     return max(0.0, long_k - spot) - max(0.0, short_k - spot)
+
+
+def check_calculator_inputs(
+    *,
+    strategy: Strategy,
+    spot: float,
+    long_strike: float,
+    short_strike: Optional[float] = None,
+) -> Optional[str]:
+    """Предупреждение, если страйки явно не соответствуют spot (частая ошибка после prefill только цены)."""
+    if spot <= 0:
+        return None
+    if long_strike < spot * 0.85:
+        return (
+            f"Страйк long (${long_strike:g}) намного ниже spot (${spot:.2f}): put глубоко OTM — "
+            "при сценариях падения −20% позиция останется без intrinsic. "
+            "Подтяните «yfinance chain» или пример MU с актуальными страйками."
+        )
+    if strategy == "put_spread" and short_strike is not None:
+        if short_strike < spot * 0.85:
+            return (
+                f"Страйк short (${short_strike:g}) не согласован со spot (${spot:.2f}). "
+                "Используйте «yfinance chain» для обеих ног спреда."
+            )
+    return None
 
 
 def compute_put_strategy(
@@ -144,6 +169,13 @@ def compute_put_strategy(
 
     breakeven_drop_pct = ((breakeven - spot) / spot * 100.0) if spot > 0 else 0.0
 
+    input_warning = check_calculator_inputs(
+        strategy=strategy,
+        spot=spot,
+        long_strike=long_k,
+        short_strike=float(short_strike) if short_strike is not None else None,
+    )
+
     return {
         "strategy": strategy,
         "spot": round(spot, 2),
@@ -155,6 +187,7 @@ def compute_put_strategy(
         "max_profit_usd": round(max_profit, 2) if max_profit is not None else None,
         "spread_width": round(width, 2) if width is not None else None,
         "scenarios": scenarios,
+        "input_warning_ru": input_warning,
         "note_ru": (
             "Расчёт на экспирацию по intrinsic value. "
             "В премии заложена подразумеваемая волатильность (IV) и время — калькулятор их не моделирует; "

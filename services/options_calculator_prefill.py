@@ -14,6 +14,34 @@ from sqlalchemy.engine import Engine
 logger = logging.getLogger(__name__)
 
 
+def _mid_option_price(
+    bid: Optional[float], ask: Optional[float], last: Optional[float]
+) -> Optional[float]:
+    if bid is not None and ask is not None and bid > 0 and ask > 0:
+        return (float(bid) + float(ask)) / 2.0
+    if last is not None and float(last) > 0:
+        return float(last)
+    if bid is not None and float(bid) > 0:
+        return float(bid)
+    if ask is not None and float(ask) > 0:
+        return float(ask)
+    return None
+
+
+def round_option_strike(strike: float) -> float:
+    """Округление к типичному шагу страйка US equity options."""
+    s = float(strike)
+    if s >= 500:
+        step = 10.0
+    elif s >= 200:
+        step = 5.0
+    elif s >= 25:
+        step = 1.0
+    else:
+        step = 0.5
+    return round(s / step) * step
+
+
 def fetch_spot_yfinance(ticker: str) -> Dict[str, Any]:
     """Текущая / последняя цена акции только через yfinance (без fallback)."""
     import yfinance as yf
@@ -163,3 +191,114 @@ def _suggest_expiration(ticker: str, earnings_date: str) -> tuple[Optional[str],
     except Exception as e:
         logger.debug("expiration suggest %s: %s", ticker, e)
     return None, None
+
+
+def fetch_calculator_yfinance_prefill(
+    ticker: str,
+    *,
+    expiration_date: Optional[str] = None,
+    strategy: str = "pure_put",
+) -> Dict[str, Any]:
+    """
+    Spot + ATM put (и опционально нога spread) из yfinance option_chain.
+    Премия — mid(bid, ask) или last; без Polygon.
+    """
+    from services.yfinance_options import (
+        fetch_yfinance_option_chain,
+        fetch_yfinance_option_expirations,
+    )
+
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return {"status": "error", "error": "ticker required", "ticker": sym}
+
+    spot_payload = fetch_spot_yfinance(sym)
+    if spot_payload.get("status") != "ok":
+        return spot_payload
+
+    spot = float(spot_payload["spot"])
+    exps = fetch_yfinance_option_expirations(sym)
+    exp = (expiration_date or "").strip() or (exps[0] if exps else "")
+    if not exp:
+        return {
+            "status": "error",
+            "error": f"yfinance: нет дат экспирации для {sym}",
+            "ticker": sym,
+            "spot": spot,
+        }
+
+    chain = fetch_yfinance_option_chain(sym, expiration_date=exp)
+    if chain.get("status") != "ok":
+        return {
+            "status": "error",
+            "error": chain.get("error") or "пустая цепочка yfinance",
+            "ticker": sym,
+            "spot": spot,
+            "expiration_date": exp,
+        }
+
+    puts = [
+        c
+        for c in chain.get("contracts") or []
+        if c.get("contract_type") == "put"
+        and (int(c.get("open_interest") or 0) > 0 or int(c.get("volume") or 0) > 0)
+    ]
+    if not puts:
+        return {
+            "status": "error",
+            "error": f"нет ликвидных put на экспирацию {exp}",
+            "ticker": sym,
+            "spot": spot,
+            "expiration_date": exp,
+        }
+
+    atm = min(puts, key=lambda c: abs(float(c["strike"]) - spot))
+    if strategy == "put_spread":
+        # Long — put на/выше spot (bear put spread); иначе ближайший к spot
+        on_or_above = [p for p in puts if float(p["strike"]) >= spot * 0.995]
+        long_put = min(on_or_above or puts, key=lambda c: abs(float(c["strike"]) - spot))
+    else:
+        long_put = atm
+    long_strike = float(long_put["strike"])
+    long_prem = _mid_option_price(long_put.get("bid"), long_put.get("ask"), long_put.get("last"))
+    if long_prem is None or long_prem <= 0:
+        return {
+            "status": "error",
+            "error": f"нет bid/ask/last у put {long_strike}",
+            "ticker": sym,
+            "spot": spot,
+            "expiration_date": exp,
+        }
+
+    out: Dict[str, Any] = {
+        "status": "ok",
+        "ticker": sym,
+        "spot": round(spot, 4),
+        "spot_source": spot_payload.get("price_kind"),
+        "expiration_date": exp,
+        "available_expirations": exps,
+        "strategy": strategy,
+        "long_strike": long_strike,
+        "long_premium": round(long_prem, 2),
+        "source": "yfinance",
+    }
+
+    if strategy == "put_spread":
+        target_short = spot * 0.95
+        candidates = [p for p in puts if float(p["strike"]) < long_strike - 0.01]
+        if not candidates:
+            out["status"] = "partial"
+            out["warning_ru"] = "Не найден short put ниже long — заполнен только long."
+            return out
+        short_put = min(candidates, key=lambda c: abs(float(c["strike"]) - target_short))
+        short_prem = _mid_option_price(
+            short_put.get("bid"), short_put.get("ask"), short_put.get("last")
+        )
+        if short_prem is None or short_prem <= 0:
+            out["status"] = "partial"
+            out["warning_ru"] = "Short put без котировки — заполнен только long."
+            return out
+        out["short_strike"] = float(short_put["strike"])
+        out["short_premium"] = round(short_prem, 2)
+
+    return out

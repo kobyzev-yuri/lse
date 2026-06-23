@@ -141,7 +141,7 @@ PCR_OI     = OI_P / OI_C</div>
     <div class="example-btns" id="exampleBtns"></div>
     <div class="grid-2">
         <div><label>Тикер</label><input id="calcTicker" value="MU"></div>
-        <div><label>Цена акции ($)</label><input id="calcSpot" type="number" step="0.01" value="189"></div>
+        <div><label>Цена акции ($)</label><input id="calcSpot" type="number" step="0.01" value="1090"></div>
         <div><label>Дата earnings (справочно)</label><input id="calcEarnings" type="date" title="Не влияет на расчёт — для контекста (отчёт перед экспирацией)"></div>
         <div><label>Экспирация (справочно)</label><input id="calcExp" type="date" title="Не влияет на расчёт — дата, к которой относится intrinsic-сценарий"></div>
         <div><label>Контрактов</label><input id="calcContracts" type="number" min="1" value="1"></div>
@@ -153,23 +153,25 @@ PCR_OI     = OI_P / OI_C</div>
             </select>
         </div>
     </div>
-    <h3>Long Put</h3>
+    <h3>① Long Put — покупка</h3>
     <div class="grid-2">
-        <div><label>Страйк long ($)</label><input id="longStrike" type="number" step="0.5" value="189"></div>
-        <div><label>Премия long ($/акция)</label><input id="longPrem" type="number" step="0.01" value="8.5"></div>
+        <div><label>Страйк long ($)</label><input id="longStrike" type="number" step="0.5" value="1090"></div>
+        <div><label>Премия long ($/акция)</label><input id="longPrem" type="number" step="0.01" value="57"></div>
     </div>
     <div id="spreadFields" class="hidden">
-        <h3>Short Put (ниже long)</h3>
+        <h3>② Short Put — продажа (страйк ниже long)</h3>
+        <p class="muted" style="font-size:0.82rem;margin:0 0 0.5rem">Вторая нога спреда: вы <strong>продаёте</strong> put с более низким страйком — премия short уменьшает дебет входа.</p>
         <div class="grid-2">
-            <div><label>Страйк short ($)</label><input id="shortStrike" type="number" step="0.5" value="180"></div>
-            <div><label>Премия short ($/акция)</label><input id="shortPrem" type="number" step="0.01" value="4.2"></div>
+            <div><label>Страйк short ($)</label><input id="shortStrike" type="number" step="0.5" value="1050"></div>
+            <div><label>Премия short ($/акция)</label><input id="shortPrem" type="number" step="0.01" value="42"></div>
         </div>
     </div>
+    <p id="spreadHint" class="muted" style="font-size:0.82rem;margin:0.35rem 0 0">Для Put Spread выберите стратегию выше — появятся поля short put (продажа).</p>
     <button type="button" id="btnCalc" style="margin-top:0.5rem;">Рассчитать</button>
     <div class="btn-row" style="margin-top:0.5rem;">
         <span class="lbl">Spot:</span>
         <button type="button" id="btnFillFromChain" class="btn-outline-primary">Polygon</button>
-        <button type="button" id="btnFillFromYfinance" class="btn-outline-primary">yfinance</button>
+        <button type="button" id="btnFillFromYfinance" class="btn-outline-primary">yfinance chain</button>
         <button type="button" id="btnFillCalendar" class="btn-outline-primary">Даты из календаря</button>
     </div>
     <p id="calcPrefillMsg" class="muted" style="font-size:0.85rem;margin-top:0.5rem;min-height:1.2em;"></p>
@@ -187,7 +189,7 @@ PCR_OI     = OI_P / OI_C</div>
                 <p>Премия = <em>внутренняя стоимость</em> + <em>временная стоимость</em> (зависит от IV и дней до экспирации). Калькулятор считает только intrinsic на дату экспирации: max(0, K−S)×100.</p>
                 <p>После отчёта часто бывает <strong>IV crush</strong> — IV падает, премия сжимается даже при движении цены в вашу сторону. Поэтому реальный P/L до экспирации может отличаться от таблицы.</p>
                 <p>Поля <strong>earnings</strong> и <strong>экспирация</strong> — справочные для контекста; на intrinsic-формулы не влияют.</p>
-                <p><strong>Подтянуть spot с yfinance</strong> — только цена акции. <strong>Подтянуть даты из календаря</strong> — earnings из <code>knowledge_base</code>, экспирация — первая дата из Polygon reference после earnings (если есть ключ).</p>
+                <p><strong>Подтянуть spot с yfinance</strong> — только цена акции. <strong>yfinance chain</strong> — spot + ближайший ATM put и премия mid(bid/ask) с доски; для spread — short put ~5% ниже spot.</p>
             </div>
         </details>
 
@@ -244,6 +246,7 @@ ROI(S) = P/L(S) / Entry × 100%</div>
         <details>
             <summary>Put Spread (дебетовый bear put spread)</summary>
             <div class="formula-body">
+                <p>В форме калькуляра: <strong>① Long Put</strong> — покупка; <strong>② Short Put</strong> — продажа (блок виден при стратегии «Put Spread»). Вход = (P<sub>L</sub> − P<sub>S</sub>) × 100 × N.</p>
                 <p>Условие: <strong>K &gt; K₂</strong> (long страйк выше short).</p>
                 <details>
                     <summary>Вход, breakeven, max loss / max profit</summary>
@@ -294,16 +297,20 @@ P/L(S) = Value(S) − Entry</div>
     $('tabSentiment').onclick = () => showTab('sent');
     $('tabCalc').onclick = () => showTab('calc');
 
-    $('calcStrategy').onchange = () => {
-        $('spreadFields').classList.toggle('hidden', $('calcStrategy').value !== 'put_spread');
-    };
+    function syncSpreadFields() {
+        const isSpread = $('calcStrategy').value === 'put_spread';
+        $('spreadFields').classList.toggle('hidden', !isSpread);
+        if ($('spreadHint')) $('spreadHint').classList.toggle('hidden', isSpread);
+    }
+
+    $('calcStrategy').onchange = () => syncSpreadFields();
 
     function applyExample(ex) {
         $('calcTicker').value = ex.ticker || 'MU';
         $('calcSpot').value = ex.spot;
         $('calcContracts').value = ex.contracts || 1;
         $('calcStrategy').value = ex.strategy;
-        $('spreadFields').classList.toggle('hidden', ex.strategy !== 'put_spread');
+        syncSpreadFields();
         $('longStrike').value = ex.long_strike;
         $('longPrem').value = ex.long_premium;
         if (ex.earnings_date) $('calcEarnings').value = ex.earnings_date;
@@ -316,21 +323,36 @@ P/L(S) = Value(S) − Entry</div>
         }
     }
 
+    let lastCalcResult = null;
+
     function renderCalcResult(j) {
+        lastCalcResult = j && !j.error ? j : null;
         if (j.error) {
             $('calcSummary').innerHTML = '<p class="text-danger">' + j.error + '</p>';
             $('calcTable').innerHTML = '';
+            $('calcLlmOut').style.display = 'none';
             return;
         }
         const beDrop = j.breakeven_drop_pct != null ? ' (' + j.breakeven_drop_pct + '%)' : '';
         const maxProfitNote = j.strategy === 'pure_put' ? ' <span class="muted" style="font-size:0.75rem">при S→0</span>' : '';
+        let warn = '';
+        if (j.input_warning_ru) {
+            warn = '<p class="text-danger" style="font-size:0.9rem;margin:0 0 0.75rem">' + j.input_warning_ru + '</p>';
+        }
         $('calcSummary').innerHTML =
+            warn +
+            (j.strategy === 'put_spread' && j.long_strike != null && j.short_strike != null
+                ? '<p class="muted" style="font-size:0.82rem;margin:0 0 0.5rem">Ноги: <strong>long</strong> put ' + j.long_strike +
+                  ' @ $' + j.long_premium + ' · <strong>short</strong> put ' + j.short_strike + ' @ $' + j.short_premium + '</p>'
+                : '') +
             '<p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">' + (j.note_ru || '') + '</p>' +
             '<div class="stats">' +
             '<div class="stat-card"><h3>Вход</h3><div class="value">$' + j.entry_cost_usd + '</div></div>' +
             '<div class="stat-card"><h3>Breakeven</h3><div class="value">$' + j.breakeven + beDrop + '</div></div>' +
             '<div class="stat-card"><h3>Max loss</h3><div class="value negative">$' + j.max_loss_usd + '</div></div>' +
-            '<div class="stat-card"><h3>Max profit</h3><div class="value positive">$' + j.max_profit_usd + maxProfitNote + '</div></div></div>';
+            '<div class="stat-card"><h3>Max profit</h3><div class="value positive">$' + j.max_profit_usd + maxProfitNote + '</div></div></div>' +
+            '<div class="btn-row" style="margin-top:0.6rem"><button type="button" id="btnCalcLlm" class="btn-outline-primary">LLM интерпретация</button></div>' +
+            '<div id="calcLlmOut" class="llm-out muted" style="font-size:0.88rem;margin-top:0.5rem;display:none"></div>';
         let tbl = '<table><tr><th>Падение</th><th>Цена</th><th>Value (intr.)</th><th>P/L</th><th>ROI</th><th>Статус</th></tr>';
         (j.scenarios || []).forEach(s => {
             const cls = s.pnl_usd >= 0 ? 'positive' : 'negative';
@@ -339,6 +361,36 @@ P/L(S) = Value(S) − Entry</div>
         });
         tbl += '</table>';
         $('calcTable').innerHTML = tbl;
+        const llmBtn = $('btnCalcLlm');
+        if (llmBtn) llmBtn.onclick = runCalcLlmInterpret;
+    }
+
+    async function runCalcLlmInterpret() {
+        const outEl = $('calcLlmOut');
+        const btn = $('btnCalcLlm');
+        if (!lastCalcResult) {
+            outEl.style.display = 'block';
+            outEl.innerHTML = '<span class="text-danger">Сначала нажмите «Рассчитать».</span>';
+            return;
+        }
+        btn.disabled = true;
+        outEl.style.display = 'block';
+        outEl.innerHTML = '<div class="loading">LLM…</div>';
+        const r = await fetch('/api/options/calculator/interpret', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({result: lastCalcResult}),
+        });
+        const j = await r.json();
+        btn.disabled = false;
+        if (j.status === 'ok') {
+            let hdr = '<strong>LLM</strong> <span class="muted">(' + (j.model || '') + ')';
+            if (j.used_fallback_model) hdr += ' · fallback LLM_COMPARE_MODELS';
+            hdr += '</span>';
+            outEl.innerHTML = hdr + '<div style="margin-top:0.4rem;white-space:pre-wrap">' + (j.interpretation_ru || '') + '</div>';
+        } else {
+            outEl.innerHTML = '<span class="text-danger">' + (j.error || 'ошибка LLM') + '</span>';
+        }
     }
 
     async function runCalc() {
@@ -351,6 +403,7 @@ P/L(S) = Value(S) − Entry</div>
             long_premium: parseFloat($('longPrem').value),
             earnings_date: $('calcEarnings').value || null,
             expiration_date: $('calcExp').value || null,
+            prefill_source: $('calcPrefillMsg').dataset.source || null,
         };
         if (body.strategy === 'put_spread') {
             body.short_strike = parseFloat($('shortStrike').value);
@@ -512,10 +565,12 @@ P/L(S) = Value(S) − Entry</div>
 
     $('btnCalc').onclick = () => runCalc();
 
-    function setPrefillMsg(text, isError) {
+    function setPrefillMsg(text, isError, source) {
         const el = $('calcPrefillMsg');
         el.textContent = text || '';
         el.style.color = isError ? '#f87171' : '#94a3b8';
+        if (source) el.dataset.source = source;
+        else delete el.dataset.source;
     }
 
     $('btnFillFromChain').onclick = async () => {
@@ -533,16 +588,31 @@ P/L(S) = Value(S) − Entry</div>
 
     $('btnFillFromYfinance').onclick = async () => {
         const t = $('calcTicker').value.trim().toUpperCase();
-        setPrefillMsg('yfinance…');
-        const r = await fetch('/api/options/calculator/yfinance/' + encodeURIComponent(t));
+        const strat = $('calcStrategy').value;
+        const exp = $('calcExp').value;
+        setPrefillMsg('yfinance chain…');
+        let url = '/api/options/calculator/yfinance-prefill/' + encodeURIComponent(t) + '?strategy=' + encodeURIComponent(strat);
+        if (exp) url += '&expiration_date=' + encodeURIComponent(exp);
+        const r = await fetch(url);
         const j = await r.json();
-        if (j.status === 'error' || !j.spot) {
-            setPrefillMsg(j.error || 'yfinance: нет котировки', true);
+        if (j.status === 'error') {
+            setPrefillMsg(j.error || 'yfinance: нет данных', true);
             return;
         }
         $('calcSpot').value = j.spot;
-        const kind = j.price_kind === 'intraday_last' ? 'внутридневная' : 'close';
-        setPrefillMsg('Spot $' + j.spot + ' с yfinance (' + kind + ').');
+        $('longStrike').value = j.long_strike;
+        $('longPrem').value = j.long_premium;
+        if (j.expiration_date) $('calcExp').value = j.expiration_date;
+        if (strat === 'put_spread' && j.short_strike != null) {
+            $('shortStrike').value = j.short_strike;
+            $('shortPrem').value = j.short_premium;
+        }
+        let msg = 'Spot $' + j.spot + ', put ' + j.long_strike + ' @ $' + j.long_premium;
+        if (j.spot_source) msg += ' (' + j.spot_source + ')';
+        if (j.expiration_date) msg += ', exp ' + j.expiration_date;
+        if (j.warning_ru) msg += '. ' + j.warning_ru;
+        setPrefillMsg(msg + ' — yfinance chain.', false, 'yfinance');
+        runCalc();
     };
 
     $('btnFillCalendar').onclick = async () => {
@@ -570,6 +640,7 @@ P/L(S) = Value(S) − Entry</div>
 
     loadExpirations('yfinance');
     loadExamples();
+    syncSpreadFields();
 })();
 </script>
 {% endblock %}

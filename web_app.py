@@ -1268,14 +1268,48 @@ async def api_options_sentiment_interpret(body: Dict[str, Any]):
 
 
 @app.get("/api/options/calculator/yfinance/{ticker}", response_class=JSONResponse)
-async def api_options_calculator_yfinance(ticker: str):
-    """Spot для калькулятора — только yfinance."""
-    from services.options_calculator_prefill import fetch_spot_yfinance
+async def api_options_calculator_yfinance(ticker: str, chain: bool = False, expiration_date: Optional[str] = None):
+    """Spot для калькулятора; chain=1 — spot + ATM put (+ spread) из yfinance option_chain."""
+    from services.options_calculator_prefill import fetch_calculator_yfinance_prefill, fetch_spot_yfinance
 
     t = (ticker or "").strip().upper()
     if not t:
         raise HTTPException(status_code=400, detail="ticker required")
+    if chain:
+        return _to_jsonable(
+            await asyncio.to_thread(
+                fetch_calculator_yfinance_prefill,
+                t,
+                expiration_date=expiration_date or None,
+                strategy="pure_put",
+            )
+        )
     return _to_jsonable(await asyncio.to_thread(fetch_spot_yfinance, t))
+
+
+@app.get("/api/options/calculator/yfinance-prefill/{ticker}", response_class=JSONResponse)
+async def api_options_calculator_yfinance_prefill(
+    ticker: str,
+    expiration_date: Optional[str] = None,
+    strategy: str = "pure_put",
+):
+    """Spot + страйки/премии из yfinance option_chain для калькулятора."""
+    from services.options_calculator_prefill import fetch_calculator_yfinance_prefill
+
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker required")
+    strat = (strategy or "pure_put").strip().lower()
+    if strat not in ("pure_put", "put_spread"):
+        raise HTTPException(status_code=400, detail="strategy must be pure_put or put_spread")
+    return _to_jsonable(
+        await asyncio.to_thread(
+            fetch_calculator_yfinance_prefill,
+            t,
+            expiration_date=expiration_date or None,
+            strategy=strat,
+        )
+    )
 
 
 @app.get("/api/options/calculator/calendar/{ticker}", response_class=JSONResponse)
@@ -1320,11 +1354,37 @@ async def api_options_calculator(body: Dict[str, Any]):
         result["ticker"] = (body.get("ticker") or "").strip().upper()
         result["earnings_date"] = body.get("earnings_date")
         result["expiration_date"] = body.get("expiration_date")
+        result["long_strike"] = float(body.get("long_strike"))
+        result["long_premium"] = float(body.get("long_premium"))
+        if body.get("short_strike") is not None:
+            result["short_strike"] = float(body["short_strike"])
+        if body.get("short_premium") is not None:
+            result["short_premium"] = float(body["short_premium"])
+        if body.get("prefill_source"):
+            result["prefill_source"] = body.get("prefill_source")
         return _to_jsonable(result)
     except (TypeError, ValueError) as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         logger.exception("api_options_calculator")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/options/calculator/interpret", response_class=JSONResponse)
+async def api_options_calculator_interpret(body: Dict[str, Any]):
+    """LLM-интерпретация результата калькулятора Put / Put Spread."""
+    if not web_llm_enabled():
+        return JSONResponse(
+            {"status": "disabled", "error": "LLM отключён (WEB_DISABLE_LLM или demo mode)"},
+            status_code=403,
+        )
+    from services.options_calculator_llm import interpret_calculator_result
+
+    result = body.get("result") if isinstance(body.get("result"), dict) else body
+    try:
+        return _to_jsonable(await asyncio.to_thread(interpret_calculator_result, result))
+    except Exception as e:
+        logger.exception("api_options_calculator_interpret")
         raise HTTPException(status_code=500, detail=str(e))
 
 
