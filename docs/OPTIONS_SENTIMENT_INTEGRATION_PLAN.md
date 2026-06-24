@@ -37,7 +37,7 @@
 | **1** | `options_card_context` | — | Компактный JSON: score, PCR, max pain, плиты, exp, `data_as_of` | ✅ |
 | **2** | GAME_5M shadow | `log_only` | Поля в `d5`, contribution `options_sentiment` в `decision_snapshot`, вход **не** меняется | ✅ |
 | **3** | UI / prompt | — | Блок в `game5m_cards`, `/prompt_entry`, earnings brief overview | ✅ |
-| **4** | Shadow-анализ | `log_only` | 2–4 недели: analyzer / ручной срез «сколько BUY отсекли бы» | ⏳ |
+| **4** | Shadow-анализ | `log_only` | 2–4 недели: analyzer / ручной срез «сколько BUY отсекли бы» | 🔄 |
 | **5** | GAME_5M apply | `apply` | `DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE=apply`, пороги согласованы | ⏳ |
 | **6** | Portfolio shadow | `log_only` | `portfolio_entry_guards` + contribution в `decision_stack/portfolio.py` | ⏳ |
 | **7** | Portfolio apply | `apply` | Отдельные пороги, не конфликтовать с CatBoost / event_reaction | ⏳ |
@@ -138,18 +138,41 @@
 
 ## Фаза 4 — Shadow-анализ (2–4 недели)
 
-**Не менять prod-вход.** Собирать:
+**Не менять prod-вход.** Скрипт `scripts/analyze_options_gate_shadow.py` собирает:
 
-- Доля решений CORE=BUY/STRONG_BUY, где options gate = `would_downgrade`
-- Пересечение с убыточными закрытиями GAME_5M (analyzer closed trades)
-- Ложные отсечения (BUY был бы хорошим, gate бы отрезал)
+| Метрика | Смысл |
+|---------|--------|
+| `bull_core_total` | Закрытые GAME_5M, где на входе CORE ∈ {BUY, STRONG_BUY} |
+| `bull_with_would_downgrade` | Из них options gate = `would_downgrade` (shadow) |
+| `downgrade_false_positive` | would_downgrade, но **сделка в плюсе** (ложное отсечение) |
+| `downgrade_true_positive` | would_downgrade и убыток (gate «помог бы») |
+| `live_scan.bull_would_downgrade_rate` | Текущий срез: доля CORE=BUY с shadow-downgrade |
 
-**Артефакты:**
+**Артефакт:** `local/logs/ml_data_quality/last_options_gate_shadow.json` (prod: `/app/logs/ml/ml_data_quality/...`).
 
-- Срез в `trade_effectiveness_analyzer` или одноразовый script `scripts/analyze_options_gate_shadow.py`
-- Короткая запись в § «Журнал решений» ниже
+```bash
+# локально / на VM
+python3 scripts/analyze_options_gate_shadow.py --days 28
 
-**Критерий перехода к фазе 5:** согласование порогов; нет доминирующих ложных downgrade на SNDK/MU/LITE.
+# быстрее (без live get_decision_5m по кластеру)
+python3 scripts/analyze_options_gate_shadow.py --days 28 --no-live-scan
+
+# prod
+docker exec lse-bot python scripts/analyze_options_gate_shadow.py
+```
+
+**Критерий перехода к фазе 5:** согласование порогов; нет доминирующих ложных downgrade на SNDK/MU/LITE; `recommendation.ready_for_apply_discussion` — только для обсуждения, apply вручную через config.
+
+**Чеклист фазы 4:**
+
+- [x] Скрипт `analyze_options_gate_shadow.py` + `services/options_gate_shadow.py`
+- [x] Unit-тесты
+- [ ] 2–4 недели накопления context_json с `options_sentiment` (cron + новые входы)
+- [ ] Запись в журнал решений после среза
+
+| Фаза | Статус |
+|------|--------|
+| 4 Shadow-анализ | 🔄 скрипт готов, ждём данных |
 
 ---
 
@@ -233,6 +256,7 @@ OPTIONS_SENTIMENT_PCR_VOL_BULLISH=0.87
 | 2026-06-24 | — | План принят; старт с фаз 1–2 shadow, без apply | — |
 | 2026-06-16 | 1–2 | `options_card_context` + GAME_5M log_only contribution | — |
 | 2026-06-16 | 3 | UI: game5m cards, prompt_entry, earnings brief overview | — |
+| 2026-06-16 | 4 | Shadow script `analyze_options_gate_shadow.py` | — |
 | | | | |
 
 ---
@@ -252,4 +276,4 @@ flowchart LR
   F0 --> F9[9 OI history в brief]
 ```
 
-**Следующий шаг по плану:** фаза 4 (shadow-анализ 2–4 недели, без изменения prod-входа).
+**Следующий шаг по плану:** фаза 4 — периодический запуск `analyze_options_gate_shadow.py` (2–4 недели), затем решение о apply.

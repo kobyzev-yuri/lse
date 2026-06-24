@@ -14,7 +14,7 @@ set -euo pipefail
 
 REPO_DIR="${LSE_REPO_DIR:-$HOME/lse}"
 CONTAINER="${LSE_CONTAINER_NAME:-lse-bot}"
-TEST_FILES="${LSE_POST_DEPLOY_TEST_FILES:-tests/test_options_tools.py tests/test_decision_stack_game5m.py}"
+TEST_FILES="${LSE_POST_DEPLOY_TEST_FILES:-tests/test_options_tools.py tests/test_decision_stack_game5m.py tests/test_options_gate_shadow.py}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] post_deploy_tests: $*"; }
 
