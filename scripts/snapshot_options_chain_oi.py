@@ -12,10 +12,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import date
 from typing import Any, Dict, List
 
-DEFAULT_TICKERS = ("MU", "NVDA", "AAPL", "AMD", "SMCI")
+from services.options_tickers import get_options_oi_watchlist
 
 
 def snapshot_ticker(ticker: str, *, expiration_date: str | None, dry_run: bool) -> Dict[str, Any]:
@@ -96,10 +97,12 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    tickers = [t.strip().upper() for t in args.ticker] if args.ticker else list(DEFAULT_TICKERS)
-    results = [
-        snapshot_ticker(t, expiration_date=args.expiration, dry_run=args.dry_run) for t in tickers
-    ]
+    tickers = [t.strip().upper() for t in args.ticker] if args.ticker else get_options_oi_watchlist()
+    results = []
+    for i, t in enumerate(tickers):
+        if i > 0:
+            time.sleep(0.75)
+        results.append(snapshot_ticker(t, expiration_date=args.expiration, dry_run=args.dry_run))
     if args.json:
         print(json.dumps(results, indent=2, ensure_ascii=False))
     else:

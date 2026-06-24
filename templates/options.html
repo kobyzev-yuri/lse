@@ -88,6 +88,11 @@
     <p class="muted" style="font-size:0.85rem;margin-bottom:0.5rem"><a href="/options/map">← Option Money Map</a> (где сидят деньги по OI)</p>
     <p id="pageIntroSent" class="muted intro-tab">Две колонки — один тикер из Polygon и yfinance. Нажмите «Оба» для параллельного анализа; расшифровка метрик — в справке внизу.</p>
     <p id="pageIntroCalc" class="muted intro-tab hidden">Две колонки Polygon и yfinance: премии с доски слева и справа, ниже — сводная таблица P/L по сценариям.</p>
+    <div style="margin-top:0.75rem;max-width:360px;">
+        <label for="optTicker">Тикер</label>
+        <select id="optTicker"><option value="">— загрузка —</option></select>
+        <p id="optTickerHint" class="muted" style="font-size:0.78rem;margin-top:0.35rem;"></p>
+    </div>
 </div>
 
 <div class="tabs">
@@ -98,10 +103,6 @@
 <section id="panelSentiment" class="panel active card">
     <h2>Option Chain → сентимент</h2>
     <div class="grid-2">
-        <div>
-            <label for="sentTicker">Тикер</label>
-            <input id="sentTicker" value="MU" placeholder="MU">
-        </div>
         <div>
             <label for="sentExp">Экспирация</label>
             <select id="sentExp"><option value="">— загрузка —</option></select>
@@ -237,7 +238,6 @@ PCR по OI      = сумма put OI / сумма call OI</div>
     <h2>Калькулятор Put / Put Spread</h2>
     <p class="demo-hint">Премии подтягиваются с доски (Polygon / yfinance). <strong>Страйк</strong> — цена в контракте; <strong>вход в позицию</strong> = премия × 100 × контракты.</p>
     <div class="grid-2">
-        <div><label for="calcTicker">Тикер</label><input id="calcTicker" value="MU"></div>
         <div>
             <label for="calcExp">Экспирация</label>
             <select id="calcExp"><option value="">— загрузка —</option></select>
@@ -400,6 +400,57 @@ P/L(S) = Value(S) − Entry</div>
 <script>
 (function() {
     const $ = (id) => document.getElementById(id);
+
+    let optionsTickerMeta = {};
+
+    function getOptTicker() {
+        const sel = $('optTicker');
+        return sel ? sel.value.trim().toUpperCase() : '';
+    }
+
+    function formatTickerLabel(t) {
+        const m = optionsTickerMeta[t] || {};
+        const parts = [t];
+        if (m.has_snapshot) parts.push('OI ' + m.snapshot_days + 'д');
+        const g = m.groups || [];
+        if (g.indexOf('game_5m') >= 0 && g.indexOf('portfolio') >= 0) parts.push('5m+PF');
+        else if (g.indexOf('game_5m') >= 0) parts.push('5m');
+        else if (g.indexOf('portfolio') >= 0) parts.push('PF');
+        return parts.join(' · ');
+    }
+
+    function updateTickerHint(t) {
+        const hint = $('optTickerHint');
+        if (!hint) return;
+        const m = optionsTickerMeta[t] || {};
+        if (m.has_snapshot) {
+            hint.textContent = 'Снимки OI в БД · последний ' + (m.last_snapshot || '—') + '.';
+        } else if (m.watchlist) {
+            hint.textContent = 'В cron-watchlist (5m + портфель); снимок после вечернего cron.';
+        } else {
+            hint.textContent = '';
+        }
+    }
+
+    async function loadOptionsTickerSelect() {
+        const sel = $('optTicker');
+        if (!sel) return;
+        const prev = sel.value || 'MU';
+        const r = await fetch('/api/options/tickers');
+        const j = await r.json();
+        optionsTickerMeta = j.by_ticker || {};
+        sel.innerHTML = '';
+        (j.tickers || []).forEach(t => {
+            const o = document.createElement('option');
+            o.value = t;
+            o.textContent = formatTickerLabel(t);
+            sel.appendChild(o);
+        });
+        if (prev && (j.tickers || []).includes(prev)) sel.value = prev;
+        else if ((j.tickers || []).includes('MU')) sel.value = 'MU';
+        else if ((j.tickers || []).length) sel.value = j.tickers[0];
+        updateTickerHint(sel.value);
+    }
 
     function showTab(name) {
         $('panelSentiment').classList.toggle('active', name === 'sent');
@@ -588,7 +639,7 @@ P/L(S) = Value(S) − Entry</div>
         if (!p || (p.status !== 'ok' && p.status !== 'partial')) return null;
         const body = {
             strategy: calcStrategy(),
-            ticker: $('calcTicker').value.trim().toUpperCase(),
+            ticker: getOptTicker(),
             spot: parseFloat(p.spot),
             contracts: calcContracts(),
             long_strike: parseFloat(p.long_strike),
@@ -612,7 +663,7 @@ P/L(S) = Value(S) − Entry</div>
     }
 
     async function prefillCalc(source, quiet) {
-        const t = $('calcTicker').value.trim().toUpperCase();
+        const t = getOptTicker();
         const strat = calcStrategy();
         const exp = $('calcExp').value;
         const label = source === 'yfinance' ? 'yfinance' : 'Polygon';
@@ -658,7 +709,7 @@ P/L(S) = Value(S) − Entry</div>
     }
 
     async function loadCalcExpirations(source) {
-        const t = $('calcTicker').value.trim().toUpperCase();
+        const t = getOptTicker();
         const r = await fetch('/api/options/expirations/' + encodeURIComponent(t) + '?source=' + encodeURIComponent(source));
         const j = await r.json();
         const sel = $('calcExp');
@@ -828,7 +879,7 @@ P/L(S) = Value(S) − Entry</div>
     }
 
     async function loadExpirations(source) {
-        const t = $('sentTicker').value.trim().toUpperCase();
+        const t = getOptTicker();
         const prev = $('sentExp').value;
         const r = await fetch('/api/options/expirations/' + encodeURIComponent(t) + '?source=' + encodeURIComponent(source));
         const j = await r.json();
@@ -842,7 +893,7 @@ P/L(S) = Value(S) − Entry</div>
     }
 
     async function loadExpirationsBoth() {
-        const t = $('sentTicker').value.trim().toUpperCase();
+        const t = getOptTicker();
         const prev = $('sentExp').value;
         const [rp, ry] = await Promise.all([
             fetch('/api/options/expirations/' + encodeURIComponent(t) + '?source=polygon').then(r => r.json()),
@@ -856,7 +907,7 @@ P/L(S) = Value(S) − Entry</div>
     }
 
     async function runSentiment(source, outId) {
-        const t = $('sentTicker').value.trim().toUpperCase();
+        const t = getOptTicker();
         const exp = $('sentExp').value;
         const label = source === 'yfinance' ? 'yfinance' : 'Polygon';
         $(outId).innerHTML = '<div class="loading">' + label + '…</div>';
@@ -901,7 +952,7 @@ P/L(S) = Value(S) − Entry</div>
     };
 
     $('btnFillCalendar').onclick = async () => {
-        const t = $('calcTicker').value.trim().toUpperCase();
+        const t = getOptTicker();
         setCalcPrefillMsg('Календарь…');
         const r = await fetch('/api/options/calculator/calendar/' + encodeURIComponent(t));
         const j = await r.json();
@@ -923,8 +974,16 @@ P/L(S) = Value(S) − Entry</div>
         setCalcPrefillMsg(msg);
     };
 
-    loadExpirations('yfinance');
-    loadCalcExpirations('yfinance');
+    $('optTicker').onchange = () => {
+        updateTickerHint(getOptTicker());
+        loadExpirationsBoth();
+        loadCalcExpirations('yfinance');
+    };
+
+    loadOptionsTickerSelect().then(() => {
+        loadExpirations('yfinance');
+        loadCalcExpirations('yfinance');
+    });
 })();
 </script>
 {% endblock %}

@@ -1269,6 +1269,17 @@ async def api_options_money_map(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/options/tickers", response_class=JSONResponse)
+async def api_options_tickers():
+    from services.options_tickers import list_options_ui_tickers
+
+    try:
+        return _to_jsonable(await asyncio.to_thread(list_options_ui_tickers))
+    except Exception as e:
+        logger.exception("api_options_tickers failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/options/expirations/{ticker}", response_class=JSONResponse)
 async def api_options_expirations(ticker: str, source: str = "polygon"):
     from services.polygon_options import fetch_option_expiration_dates, polygon_options_available

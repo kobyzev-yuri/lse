@@ -489,6 +489,28 @@ def test_money_map_from_snapshot_db(monkeypatch):
     assert r["support_plate"][0]["strike"] == 1000.0
 
 
+def test_options_oi_watchlist_filters_macro(monkeypatch):
+    monkeypatch.setattr(
+        "services.ticker_groups.get_tickers_game_5m",
+        lambda: ["MU", "SNDK"],
+    )
+    monkeypatch.setattr(
+        "services.ticker_groups.get_tickers_for_portfolio_game",
+        lambda: ["AMD", "NVDA", "^VIX", "CL=F"],
+    )
+    monkeypatch.setattr(
+        "config_loader.get_config_value",
+        lambda key, default="": "" if key == "OPTIONS_OI_WATCHLIST" else default,
+    )
+    from services.options_tickers import get_options_oi_watchlist, list_options_ui_tickers
+
+    wl = get_options_oi_watchlist()
+    assert wl == ["AMD", "MU", "NVDA", "SNDK"]
+    ui = list_options_ui_tickers()
+    assert "MU" in ui["tickers"]
+    assert ui["by_ticker"]["MU"]["groups"] == ["game_5m"]
+
+
 def test_yfinance_sentiment_report(monkeypatch):
     from services.options_chain_sentiment import build_yfinance_chain_sentiment_report
 

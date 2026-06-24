@@ -58,7 +58,7 @@
     <div class="grid-2" style="align-items:end;">
         <div>
             <label for="mapTicker">Тикер</label>
-            <input id="mapTicker" value="MU" placeholder="MU">
+            <select id="mapTicker"><option value="">— загрузка —</option></select>
         </div>
         <div>
             <button type="button" id="btnMapLoad" style="width:100%;">Показать</button>
@@ -107,9 +107,40 @@
 (function() {
     const $ = (id) => document.getElementById(id);
     let exps = [];
-    let snapDates = []; // newest first; slider index 0 = live
-    let currentSnap = null; // null = live
+    let snapDates = [];
+    let currentSnap = null;
     let sliderBusy = false;
+    let optionsTickerMeta = {};
+
+    function formatTickerLabel(t) {
+        const m = optionsTickerMeta[t] || {};
+        const parts = [t];
+        if (m.has_snapshot) parts.push('OI ' + m.snapshot_days + 'д');
+        const g = m.groups || [];
+        if (g.indexOf('game_5m') >= 0 && g.indexOf('portfolio') >= 0) parts.push('5m+PF');
+        else if (g.indexOf('game_5m') >= 0) parts.push('5m');
+        else if (g.indexOf('portfolio') >= 0) parts.push('PF');
+        return parts.join(' · ');
+    }
+
+    async function loadOptionsTickerSelect() {
+        const sel = $('mapTicker');
+        if (!sel) return;
+        const prev = sel.value || 'MU';
+        const r = await fetch('/api/options/tickers');
+        const j = await r.json();
+        optionsTickerMeta = j.by_ticker || {};
+        sel.innerHTML = '';
+        (j.tickers || []).forEach(t => {
+            const o = document.createElement('option');
+            o.value = t;
+            o.textContent = formatTickerLabel(t);
+            sel.appendChild(o);
+        });
+        if (prev && (j.tickers || []).includes(prev)) sel.value = prev;
+        else if ((j.tickers || []).includes('MU')) sel.value = 'MU';
+        else if ((j.tickers || []).length) sel.value = j.tickers[0];
+    }
 
     function renderPlates(listId, items, leg) {
         const ul = $(listId);
@@ -237,6 +268,7 @@
     }
 
     $('btnMapLoad').onclick = () => { currentSnap = null; loadMap($('mapExpLabel').textContent !== '—' ? $('mapExpLabel').textContent : null); };
+    $('mapTicker').onchange = () => { currentSnap = null; loadMap(); };
     $('mapExpSlider').oninput = async function() {
         if (sliderBusy || !exps.length) return;
         const exp = exps[parseInt(this.value, 10)];
@@ -263,7 +295,7 @@
         sliderBusy = false;
     };
 
-    loadMap();
+    loadOptionsTickerSelect().then(() => loadMap());
 })();
 </script>
 {% endblock %}
