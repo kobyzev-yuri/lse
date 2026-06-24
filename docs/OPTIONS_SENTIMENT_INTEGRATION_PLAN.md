@@ -161,12 +161,15 @@ python3 scripts/analyze_options_gate_shadow.py --days 28 --no-live-scan
 docker exec lse-bot python scripts/analyze_options_gate_shadow.py
 ```
 
+**Cron:** воскресенье **06:15 UTC** (09:15 MSK) — `crontab/lse-docker.crontab`, лог `~/lse/logs/options_gate_shadow.log`. После обновления репозитория на VM переустановить crontab (с бэкапом): `crontab /home/ai8049520/lse/crontab/lse-docker.crontab`.
+
 **Критерий перехода к фазе 5:** согласование порогов; нет доминирующих ложных downgrade на SNDK/MU/LITE; `recommendation.ready_for_apply_discussion` — только для обсуждения, apply вручную через config.
 
 **Чеклист фазы 4:**
 
 - [x] Скрипт `analyze_options_gate_shadow.py` + `services/options_gate_shadow.py`
 - [x] Unit-тесты
+- [x] Cron: вс 06:15 UTC (`crontab/lse-docker.crontab`)
 - [ ] 2–4 недели накопления context_json с `options_sentiment` (cron + новые входы)
 - [ ] Запись в журнал решений после среза
 

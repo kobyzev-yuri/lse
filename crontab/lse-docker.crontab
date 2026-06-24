@@ -79,6 +79,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 54 23 * * 1-5 flock -n /tmp/lse_recovery_d4a_stats.lock docker exec lse-bot python scripts/run_recovery_d4a_stats_cron.py >> /home/ai8049520/lse/logs/recovery_d4a_stats_cron.log 2>&1
 # Decision stack mirror telemetry (phase 3): weekly shadow diff, no RESOLVE gate.
 10 6 * * 0 flock -n /tmp/lse_decision_stack_mirror.lock docker exec lse-bot python scripts/report_decision_stack_mirror.py --days 14 --strategy ALL --json-out /app/logs/ml/ml_data_quality/last_decision_stack_mirror_report.json >> /home/ai8049520/lse/logs/decision_stack_mirror.log 2>&1
+# Options sentiment gate shadow (phase 4): closed GAME_5M vs would_downgrade + live scan; log_only, no apply.
+15 6 * * 0 flock -n /tmp/lse_options_gate_shadow.lock docker exec lse-bot python scripts/analyze_options_gate_shadow.py --days 28 >> /home/ai8049520/lse/logs/options_gate_shadow.log 2>&1
 # Multiday walk-forward OOS (GAME_5M tickers) — weekly before RTH.
 25 6 * * 0 flock -n /tmp/lse_multiday_wf.lock docker exec lse-bot python3 /app/scripts/run_multiday_wf_game5m.py >> /home/ai8049520/lse/logs/multiday_wf_game5m.log 2>&1
 # Post-RTH GAME_5M session review + gap rolling metrics (after US close ~23:30 MSK).

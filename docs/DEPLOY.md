@@ -109,6 +109,7 @@ LSE_POST_DEPLOY_TESTS=all ./scripts/deploy_from_github.sh
 
 # shadow-отчёт options gate (фаза 4, не меняет торговлю)
 docker exec lse-bot python scripts/analyze_options_gate_shadow.py --days 28
+# cron: вс 06:15 UTC → ~/lse/logs/options_gate_shadow.log (см. crontab/lse-docker.crontab)
 ```
 
 Отключить очистку `/app/tests`: `LSE_POST_DEPLOY_TESTS_CLEANUP=0`.
