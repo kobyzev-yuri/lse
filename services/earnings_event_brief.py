@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -17,6 +18,8 @@ from services.event_reaction_labeling import (
     timing_from_features_before,
 )
 from services.earnings_scenario_signal import predict_scenario_from_features
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_json(val: Any) -> dict | list | None:
@@ -331,5 +334,13 @@ def build_event_brief(
     if not guidance.get("management_tone") and not scenario:
         brief["status"] = "partial"
         brief["reason"] = "earnings_event_detail missing LLM extraction; run extract_earnings_material_facts.py"
+
+    if brief.get("status") in ("ok", "partial"):
+        try:
+            from services.options_card_context import attach_options_polygon_to_brief
+
+            attach_options_polygon_to_brief(brief, symbol=symbol, event_date=event_date)
+        except Exception as e:
+            logger.debug("build_event_brief options_polygon %s: %s", symbol, e)
 
     return brief

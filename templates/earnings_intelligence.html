@@ -321,6 +321,31 @@ const fmtLlmVsMlScenarioCompare = (b) => {
             <div class="muted">advisory · quotes_regime_earnings_v1</div></div>
     </div>`;
 };
+const fmtOptionsPolygon = (opts) => {
+    if (!opts || typeof opts !== 'object') return '';
+    if (opts.status !== 'ok') {
+        const err = opts.error || opts.status || 'нет данных';
+        return `<div class="block"><h3>Options (Polygon)</h3><span class="muted">${esc(err)} · live</span></div>`;
+    }
+    const sym = opts.ticker || eiContext.symbol || '';
+    const lbl = opts.sentiment_label || '—';
+    const gateMap = { would_downgrade: 'shadow ↓ BUY', would_signal: 'shadow ↑', neutral: 'нейтрально', unavailable: '—' };
+    const gate = gateMap[opts.gate_hint] || opts.gate_hint || '—';
+    let html = `<div class="block"><h3>Options (Polygon) <span class="muted" style="font-weight:normal">live · ${esc(opts.data_as_of || 'live')}</span></h3>`;
+    html += `<div><strong>${esc(lbl)}</strong> score ${opts.sentiment_score != null ? Number(opts.sentiment_score).toFixed(2) : '—'}`;
+    if (opts.pcr_volume != null) html += ` · PCR vol ${Number(opts.pcr_volume).toFixed(2)}`;
+    if (opts.max_pain_strike != null) html += ` · max pain $${Number(opts.max_pain_strike).toFixed(0)}`;
+    html += `</div>`;
+    html += `<div class="muted" style="margin-top:0.35rem">Gate: ${esc(gate)}`;
+    if (opts.expiration_date) html += ` · exp ${esc(opts.expiration_date)}`;
+    html += `</div>`;
+    if (opts.one_liner_ru) html += `<p class="muted" style="margin-top:0.35rem">${esc(opts.one_liner_ru)}</p>`;
+    if (sym) {
+        html += `<p style="margin-top:0.35rem"><a href="/options/map?ticker=${encodeURIComponent(sym)}" target="_blank" rel="noopener">Money Map →</a></p>`;
+    }
+    html += `</div>`;
+    return html;
+};
 const horizonPills = () =>
     '<span class="horizon-pills"><span class="pill pill-spillover" title="1 торг. день после отчёта">1d</span>'
     + '<span class="pill pill-spillover" title="5 торг. дней после отчёта">5d</span></span>';
@@ -737,6 +762,7 @@ async function loadOverview() {
             ${b.reason ? `<p class="muted">${esc(b.reason)}</p>` : ''}
             ${fmtLlmVsMlScenarioCompare(b)}
             ${scen.rationale ? `<p class="muted">LLM rationale: ${esc(scen.rationale)}</p>` : ''}
+            ${fmtOptionsPolygon(b.options_polygon)}
             <div class="detail-grid">
                 <div class="block"><h3>Guidance &amp; capex</h3>
                     <div><strong>Guidance:</strong> ${fmtGuidance(b.guidance)}</div>

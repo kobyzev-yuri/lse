@@ -485,6 +485,12 @@
                 var etCls = (eti.action === 'downgrade' && eti.gate_mode === 'apply') ? ' warn' : '';
                 chips.push('<span class="gate-chip' + etCls + '">' + escapeHtml(et) + '</span>');
             }
+            var opts = c.options_sentiment;
+            if (opts && opts.status === 'ok' && opts.gate_hint === 'would_downgrade') {
+                chips.push('<span class="gate-chip warn">Options shadow ↓</span>');
+            } else if (opts && opts.status === 'ok' && opts.gate_hint === 'would_signal') {
+                chips.push('<span class="gate-chip ok">Options shadow ↑</span>');
+            }
             if (!chips.length) return '';
             return '<div class="gate-row">' + chips.join('') + '</div>';
         }
@@ -513,6 +519,37 @@
                 }
             }
             html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.72rem;">telemetry only — сделки не меняет</span></div>';
+            html += '</div>';
+            return html;
+        }
+        function renderOptionsSentimentBlock(c) {
+            var o = c.options_sentiment;
+            if (!o || typeof o !== 'object') return '';
+            var html = '<div class="block-title">Options (Polygon)</div><div class="ml-shadow-block">';
+            if (o.status !== 'ok') {
+                html += '<div class="row"><span class="label">Статус</span><span class="value muted">' + escapeHtml(o.error || o.status || '—') + '</span></div></div>';
+                return html;
+            }
+            var lbl = o.sentiment_label || '—';
+            var lblCls = lbl === 'BULLISH' ? 'positive' : (lbl === 'BEARISH' ? 'negative' : '');
+            html += '<div class="row"><span class="label">Сентимент</span><span class="value ' + lblCls + '">' +
+                escapeHtml(lbl) + ' · ' + fmt(o.sentiment_score, 2) + '</span></div>';
+            if (o.pcr_volume != null) {
+                html += '<div class="row"><span class="label">PCR vol</span><span class="value">' + fmt(o.pcr_volume, 2) + '</span></div>';
+            }
+            if (o.max_pain_strike != null) {
+                html += '<div class="row"><span class="label">Max pain</span><span class="value">' + fmt(o.max_pain_strike, 0) + '</span></div>';
+            }
+            var hintMap = { would_downgrade: 'shadow ↓ BUY', would_signal: 'shadow ↑', neutral: 'нейтрально', unavailable: '—' };
+            var hint = o.gate_hint || 'neutral';
+            var hintRu = hintMap[hint] || hint;
+            var hintCls = hint === 'would_downgrade' ? 'negative' : (hint === 'would_signal' ? 'positive' : 'muted');
+            html += '<div class="row"><span class="label">Gate</span><span class="value ' + hintCls + '" style="font-size:0.78rem;">' + escapeHtml(hintRu) + '</span></div>';
+            if (o.one_liner_ru) {
+                html += '<div class="row"><span class="label"></span><span class="value muted" style="font-size:0.76rem;">' +
+                    escapeHtml(String(o.one_liner_ru).slice(0, 220)) + '</span></div>';
+            }
+            html += '<div class="chart-link"><a href="/options/map?ticker=' + encodeURIComponent(c.ticker) + '" target="_blank">Money Map →</a></div>';
             html += '</div>';
             return html;
         }
@@ -633,6 +670,7 @@
             html += renderDecisionVerdict(c);
             html += renderGateChips(c);
             html += renderEntryBlock(c);
+            html += renderOptionsSentimentBlock(c);
             html += renderMlShadowBlock(c);
             html += renderTradeBlock(c);
             html += renderSessionGapBlock(c);

@@ -601,3 +601,35 @@ def test_options_card_context_polygon_unavailable():
         r = build_options_card_context("MU")
     assert r["status"] == "error"
     assert r["gate_hint"] == "unavailable"
+
+
+def test_options_card_context_formatters():
+    from services.options_card_context import (
+        attach_options_polygon_to_brief,
+        format_gate_hint_ru,
+        format_options_card_context_html_block,
+        format_options_card_context_lines_ru,
+    )
+
+    opts = {
+        "status": "ok",
+        "ticker": "MU",
+        "sentiment_label": "BEARISH",
+        "sentiment_score": -0.42,
+        "pcr_volume": 1.2,
+        "max_pain_strike": 1050.0,
+        "gate_hint": "would_downgrade",
+        "one_liner_ru": "Spot $1 050 · рынок — ожидание снижения.",
+        "data_as_of": "live",
+        "expiration_date": "2026-06-26",
+    }
+    lines = format_options_card_context_lines_ru(opts)
+    assert any("BEARISH" in ln for ln in lines)
+    assert format_gate_hint_ru("would_downgrade").startswith("shadow")
+    html = format_options_card_context_html_block(opts)
+    assert "Options (Polygon)" in html
+    assert "/options/map" in html
+
+    brief: dict = {"status": "ok", "symbol": "MU"}
+    attach_options_polygon_to_brief(brief, symbol="MU", event_date=None)
+    assert "options_polygon" in brief

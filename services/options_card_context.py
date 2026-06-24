@@ -220,3 +220,90 @@ def build_options_card_context(
     )
     _cache_put(cache_key, out)
     return out
+
+
+def format_gate_hint_ru(hint: Optional[str]) -> str:
+    m = {
+        "would_downgrade": "shadow: ослабил бы BUY",
+        "would_signal": "shadow: поддержка BUY",
+        "neutral": "нейтрально",
+        "unavailable": "нет данных",
+    }
+    return m.get(str(hint or "").strip(), str(hint or "—"))
+
+
+def format_options_card_context_lines_ru(opts: Dict[str, Any]) -> List[str]:
+    """3–4 строки для карточек / prompt_entry (plain text)."""
+    if not isinstance(opts, dict):
+        return []
+    if opts.get("status") != "ok":
+        err = opts.get("error") or opts.get("status") or "нет данных"
+        return [f"Options (Polygon): {err}"]
+    lines = [
+        f"{opts.get('sentiment_label') or '—'} · score {float(opts.get('sentiment_score') or 0):.2f}",
+    ]
+    pcr = opts.get("pcr_volume")
+    if pcr is not None:
+        lines.append(f"PCR volume {float(pcr):.2f}")
+    mp = opts.get("max_pain_strike")
+    if mp is not None:
+        lines.append(f"Max pain ${float(mp):,.0f}".replace(",", " "))
+    hint = format_gate_hint_ru(opts.get("gate_hint"))
+    lines.append(f"Gate: {hint}")
+    one = opts.get("one_liner_ru")
+    if one:
+        lines.append(str(one))
+    return lines
+
+
+def format_options_card_context_html_block(opts: Dict[str, Any]) -> str:
+    """HTML-блок для prompt_entry game5m."""
+    from services.game_report_html import esc
+
+    if not isinstance(opts, dict):
+        return ""
+    lines = format_options_card_context_lines_ru(opts)
+    if not lines:
+        return ""
+    meta = []
+    if opts.get("expiration_date"):
+        meta.append(f"exp {opts['expiration_date']}")
+    if opts.get("data_as_of"):
+        meta.append(f"as-of {opts['data_as_of']}")
+    if opts.get("spot") is not None:
+        meta.append(f"spot ${float(opts['spot']):,.2f}".replace(",", " "))
+    head = "Options (Polygon)"
+    if meta:
+        head += " · " + " · ".join(meta)
+    body = "<br>".join(esc(ln) for ln in lines)
+    link = ""
+    ticker = (opts.get("ticker") or "").strip().upper()
+    if ticker:
+        link = f' <a href="/options/map?ticker={esc(ticker)}">Money Map →</a>'
+    return f"<h3>{esc(head)}</h3><p class=\"meta\">{body}{link}</p>"
+
+
+def attach_options_polygon_to_brief(
+    brief: Dict[str, Any],
+    *,
+    symbol: str,
+    event_date: Optional[Any] = None,
+) -> None:
+    """Добавляет live options_polygon в earnings brief (фаза 3 UI)."""
+    sym = (symbol or "").strip().upper()
+    exp: Optional[str] = None
+    if event_date is not None:
+        try:
+            from datetime import date as date_cls
+
+            from services.options_calculator_prefill import _suggest_expiration
+
+            ev_s = event_date.isoformat() if isinstance(event_date, date_cls) else str(event_date)[:10]
+            exp, _ = _suggest_expiration(sym, ev_s)
+        except Exception as e:
+            logger.debug("attach_options_polygon exp %s: %s", sym, e)
+    try:
+        brief["options_polygon"] = build_options_card_context(sym, expiration_date=exp)
+    except Exception as e:
+        logger.debug("attach_options_polygon %s: %s", sym, e)
+        brief["options_polygon"] = {"status": "error", "error": str(e), "gate_hint": "unavailable", "ticker": sym}

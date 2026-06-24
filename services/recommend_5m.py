@@ -1507,7 +1507,10 @@ def get_5m_card_payload(d5: Dict[str, Any], ticker: str) -> Dict[str, Any]:
     else:
         out["expected_value_pct"] = None
 
-    # Текстовый вывод Квена: почему параметры сделки позитивны или негативны (по чек-листу)
+    if "options_sentiment" in d5:
+        out["options_sentiment"] = d5["options_sentiment"]
+
+    # Текстовый вывод Квена:
     rr = out.get("risk_reward_ratio")
     ev = out.get("expected_value_pct")
     rr_ok = rr is not None and rr >= 2.0  # риск/ревард ≥ 1:2

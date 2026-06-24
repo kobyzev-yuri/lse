@@ -543,6 +543,13 @@ def _build_prompt_entry_game5m_html(
             context_parts.append(f"Влияние новостей (KB): {esc(kb_news_impact)}")
         if kb_news_summary:
             context_parts.append(f"Новости из KB: {esc(kb_news_summary)}")
+        opts = r.get("options_sentiment")
+        if isinstance(opts, dict):
+            from services.options_card_context import format_options_card_context_html_block
+
+            opt_block = format_options_card_context_html_block(opts)
+            if opt_block:
+                context_parts.append(opt_block)
         ef = r.get("entry_fusion_metrics")
         if isinstance(ef, dict) and ef.get("fused_bias_neg1") is not None:
             context_parts.append(
