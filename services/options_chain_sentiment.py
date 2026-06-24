@@ -74,6 +74,7 @@ def analyze_options_chain(
     put_vol = sum(int(c.get("volume") or 0) for c in contracts if c.get("contract_type") == "put")
     call_oi = sum(int(c.get("open_interest") or 0) for c in contracts if c.get("contract_type") == "call")
     put_oi = sum(int(c.get("open_interest") or 0) for c in contracts if c.get("contract_type") == "put")
+    oi_available = (call_oi + put_oi) > 0
 
     pcr_vol = (put_vol / call_vol) if call_vol > 0 else None
     pcr_oi = (put_oi / call_oi) if call_oi > 0 else None
@@ -85,12 +86,21 @@ def analyze_options_chain(
         r["total_volume"] = int(r["call_volume"]) + int(r["put_volume"])
         r["oi_put_share"] = (r["put_oi"] / r["total_oi"]) if r["total_oi"] > 0 else 0.5
 
-    # Ключевые барьеры — топ по OI
-    barriers_oi = sorted(rows, key=lambda x: x["total_oi"], reverse=True)[:8]
-    # Активность — топ по volume
-    barriers_vol = sorted(rows, key=lambda x: x["total_volume"], reverse=True)[:8]
+    # Ключевые барьеры — топ по OI (если OI есть) или по volume
+    barriers_oi = (
+        sorted([r for r in rows if r["total_oi"] > 0], key=lambda x: x["total_oi"], reverse=True)[:8]
+        if oi_available
+        else []
+    )
+    barriers_vol = sorted(
+        [r for r in rows if r["total_volume"] > 0],
+        key=lambda x: x["total_volume"],
+        reverse=True,
+    )[:8]
 
-    max_pain, _ = _max_pain_strike(by_strike, spot)
+    max_pain = None
+    if oi_available:
+        max_pain, _ = _max_pain_strike(by_strike, spot)
 
     # Near-the-money subset
     if spot > 0:
@@ -104,9 +114,16 @@ def analyze_options_chain(
     ntm_pcr = (ntm_put_oi / ntm_call_oi) if ntm_call_oi > 0 else None
 
     score, label, bias_ru = _sentiment_score(pcr_vol, pcr_oi, ntm_pcr)
+    if not oi_available and label == "NEUTRAL":
+        bias_ru = (
+            "Баланс call/put по volume без явного перекоса; OI в источнике недоступен — "
+            "смотрите топ страйков по volume, max pain не считается."
+        )
 
     return {
         "status": "ok",
+        "oi_available": oi_available,
+        "barriers_mode": "oi" if oi_available else "volume",
         "spot": round(spot, 2) if spot else None,
         "totals": {
             "call_volume": call_vol,
@@ -288,6 +305,7 @@ def build_chain_sentiment_report(
             "note_ru": "Score и PCR в карточке — по страйкам ±{:.0f}% от spot; totals_full_chain — вся доска.".format(
                 strike_window_pct * 100
             ),
+            "oi_available": bool(analysis.get("oi_available")),
         },
         **analysis,
     }
@@ -347,10 +365,11 @@ def build_yfinance_chain_sentiment_report(
         "analysis_scope": scope_meta,
         "data_quality": {
             "note_ru": (
-                "yfinance: score/PCR по ±{:.0f}% spot; удалены строки без OI и volume; "
-                "задержка Yahoo — сверяйте с Polygon после Options Starter."
+                "yfinance: score/PCR vol по ±{:.0f}% spot; OI в Yahoo часто нулевой — "
+                "PCR OI, max pain и магниты по OI смотрите на вкладке Polygon."
             ).format(strike_window_pct * 100),
             "source": "yfinance",
+            "oi_available": bool(analysis.get("oi_available")),
         },
         **analysis,
     }

@@ -100,10 +100,13 @@ def _compact_report_for_llm(report: Dict[str, Any]) -> Dict[str, Any]:
         "sentiment_score": report.get("sentiment_score"),
         "sentiment_summary_ru": report.get("sentiment_summary_ru"),
         "max_pain_strike": report.get("max_pain_strike"),
+        "oi_available": report.get("oi_available"),
+        "barriers_mode": report.get("barriers_mode"),
         "totals_window": report.get("totals"),
         "totals_full_chain": report.get("totals_full_chain"),
         "analysis_scope": scope,
         "key_strikes_oi": (report.get("key_strikes_oi") or [])[:6],
+        "key_strikes_volume": (report.get("key_strikes_volume") or [])[:6],
         "data_quality": report.get("data_quality"),
     }
     return {k: v for k, v in out.items() if v is not None}

@@ -1287,6 +1287,31 @@ async def api_options_calculator_yfinance(ticker: str, chain: bool = False, expi
     return _to_jsonable(await asyncio.to_thread(fetch_spot_yfinance, t))
 
 
+@app.get("/api/options/calculator/polygon-prefill/{ticker}", response_class=JSONResponse)
+async def api_options_calculator_polygon_prefill(
+    ticker: str,
+    expiration_date: Optional[str] = None,
+    strategy: str = "pure_put",
+):
+    """Spot + страйки/премии из Polygon snapshot для калькулятора."""
+    from services.options_calculator_prefill import fetch_calculator_polygon_prefill
+
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker required")
+    strat = (strategy or "pure_put").strip().lower()
+    if strat not in ("pure_put", "put_spread"):
+        raise HTTPException(status_code=400, detail="strategy must be pure_put or put_spread")
+    return _to_jsonable(
+        await asyncio.to_thread(
+            fetch_calculator_polygon_prefill,
+            t,
+            expiration_date=expiration_date or None,
+            strategy=strat,
+        )
+    )
+
+
 @app.get("/api/options/calculator/yfinance-prefill/{ticker}", response_class=JSONResponse)
 async def api_options_calculator_yfinance_prefill(
     ticker: str,

@@ -42,6 +42,37 @@ def test_put_spread_max_profit_at_deep_drop():
     assert deep["status_ru"] == "Максимальная прибыль"
 
 
+def test_sentiment_zero_oi_uses_volume_barriers():
+    contracts = []
+    for k in (1040.0, 1050.0, 1060.0):
+        contracts.append(
+            {
+                "strike": k,
+                "contract_type": "call",
+                "volume": 1000 + int(k),
+                "open_interest": 0,
+                "underlying_price": 1051.0,
+            }
+        )
+        contracts.append(
+            {
+                "strike": k,
+                "contract_type": "put",
+                "volume": 2000 + int(k),
+                "open_interest": 0,
+                "underlying_price": 1051.0,
+            }
+        )
+    a = analyze_options_chain(contracts, spot=1051.0)
+    assert a["oi_available"] is False
+    assert a["barriers_mode"] == "volume"
+    assert a["max_pain_strike"] is None
+    assert a["key_strikes_oi"] == []
+    assert len(a["key_strikes_volume"]) > 0
+    assert a["key_strikes_volume"][0]["total_volume"] > 0
+    assert a["totals"]["pcr_open_interest"] is None
+
+
 def test_sentiment_bearish_on_put_heavy_oi():
     contracts = []
     for k in (185.0, 190.0, 195.0):
@@ -231,6 +262,53 @@ def test_mid_option_price():
 
     assert _mid_option_price(10.0, 12.0, None) == 11.0
     assert _mid_option_price(None, None, 8.5) == 8.5
+
+
+def test_calculator_polygon_prefill_monkeypatch(monkeypatch):
+    from services.options_calculator_prefill import fetch_calculator_polygon_prefill
+
+    monkeypatch.setattr(
+        "services.polygon_options.fetch_option_expiration_dates",
+        lambda t: ["2026-06-26"],
+    )
+    monkeypatch.setattr(
+        "services.polygon_options.polygon_options_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "services.polygon_options.fetch_options_chain_snapshot",
+        lambda ticker, expiration_date=None, limit=250: {
+            "status": "ok",
+            "underlying_price": 1090.0,
+            "spot_source": "stocks_snapshot",
+            "contracts": [
+                {
+                    "contract_type": "put",
+                    "strike": 1090.0,
+                    "bid": 56.0,
+                    "ask": 58.0,
+                    "last": 57.0,
+                    "volume": 10,
+                    "open_interest": 100,
+                },
+                {
+                    "contract_type": "put",
+                    "strike": 1050.0,
+                    "bid": 40.0,
+                    "ask": 42.0,
+                    "last": 41.0,
+                    "volume": 5,
+                    "open_interest": 50,
+                },
+            ],
+        },
+    )
+
+    r = fetch_calculator_polygon_prefill("MU", expiration_date="2026-06-26", strategy="put_spread")
+    assert r["status"] == "ok"
+    assert r["source"] == "polygon"
+    assert r["long_strike"] == 1090.0
+    assert r["short_strike"] == 1050.0
 
 
 def test_calculator_yfinance_prefill_monkeypatch(monkeypatch):
