@@ -339,10 +339,7 @@ pytest tests/test_options_tools.py -v
 
 ## 11. Дальнейшие улучшения
 
-- Фаза 6: ✅ `/options` редирект на карту; инструменты на `/options/tools`.
-- Накопление истории OI (cron, без fake backfill) — см. [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md).
-- Учёт IV crush / временной стоимости в калькуляторе.
-- Интеграция сентимента в карточки GAME_5M / earnings brief.
+- Интеграция сентимента в GAME_5M / portfolio / earnings — см. [OPTIONS_SENTIMENT_INTEGRATION_PLAN.md](OPTIONS_SENTIMENT_INTEGRATION_PLAN.md).
 
 ---
 

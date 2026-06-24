@@ -40,6 +40,7 @@
 | Multiday ridge | [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md) |
 | **Option Money Map** (`/options`, `/options/map`) | [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md) |
 | **Опционы · инструменты** (`/options/tools`) | [OPTIONS_TOOLS.md](OPTIONS_TOOLS.md) |
+| **Options → GAME_5M / portfolio / brief** (план) | [OPTIONS_SENTIMENT_INTEGRATION_PLAN.md](OPTIONS_SENTIMENT_INTEGRATION_PLAN.md) |
 
 ## Игра GAME_5M (одна цепочка: вход → удержание → выход → разбор)
 
