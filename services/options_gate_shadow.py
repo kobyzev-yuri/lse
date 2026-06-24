@@ -21,7 +21,7 @@ DEFAULT_FOCUS_TICKERS = ("SNDK", "MU", "LITE")
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _core_decision_from_context(ctx: Dict[str, Any]) -> str:
