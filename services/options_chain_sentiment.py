@@ -272,6 +272,8 @@ def build_chain_sentiment_report(
     contracts, scope_meta = _filter_contracts_for_analysis(
         all_contracts, spot=spot, strike_window_pct=strike_window_pct, drop_zero_oi_volume=False
     )
+    if raw.get("spot_source"):
+        scope_meta["spot_source"] = raw.get("spot_source")
 
     analysis = analyze_options_chain(contracts, spot=spot)
     return {

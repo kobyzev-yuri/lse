@@ -80,6 +80,31 @@ def fetch_option_expiration_dates(ticker: str, *, limit: int = 1000) -> List[str
     return sorted(out)
 
 
+def fetch_polygon_stock_spot(ticker: str) -> Optional[float]:
+    """Spot underlying из Polygon stocks snapshot (если options snapshot без ua.price)."""
+    key = _api_key()
+    sym = (ticker or "").strip().upper()
+    if not key or not sym:
+        return None
+    url = f"{POLYGON_API_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{sym}"
+    try:
+        resp = requests.get(url, params={"apiKey": key}, timeout=20)
+        if not resp.ok:
+            return None
+        t = (resp.json().get("ticker") or {})
+        for block in ("day", "min", "prevDay"):
+            b = t.get(block) if isinstance(t.get(block), dict) else {}
+            p = b.get("c")
+            if p is not None and float(p) > 0:
+                return float(p)
+        lt = t.get("lastTrade") if isinstance(t.get("lastTrade"), dict) else {}
+        if lt.get("p") is not None and float(lt["p"]) > 0:
+            return float(lt["p"])
+    except (requests.RequestException, TypeError, ValueError) as e:
+        logger.debug("Polygon stock spot %s: %s", sym, e)
+    return None
+
+
 def fetch_options_chain_snapshot(
     ticker: str,
     *,
@@ -158,16 +183,27 @@ def fetch_options_chain_snapshot(
             pass  # append on next iteration
 
     spot = None
+    spot_source: Optional[str] = None
     for c in contracts:
         if c.get("underlying_price") is not None:
             spot = c["underlying_price"]
+            spot_source = "options_snapshot.underlying_asset"
             break
+    if spot is None:
+        spot = fetch_polygon_stock_spot(underlying)
+        if spot is not None:
+            spot_source = "stocks_snapshot"
+    if spot is not None:
+        for c in contracts:
+            if c.get("underlying_price") is None:
+                c["underlying_price"] = spot
 
     return {
         "status": "ok" if contracts else "empty",
         "polygon_status": last_status,
         "underlying": underlying,
         "underlying_price": spot,
+        "spot_source": spot_source,
         "expiration_date": expiration_date,
         "contract_count": len(contracts),
         "contracts": contracts,
