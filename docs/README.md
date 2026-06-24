@@ -38,7 +38,8 @@
 | Ключи config.env | [CONFIG_OPTIONS_ANALYSIS.md](CONFIG_OPTIONS_ANALYSIS.md) §6 |
 | Бизнес-процессы | [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md) |
 | Multiday ridge | [GAME_5M_MULTIDAY_LR_RIDGE.md](GAME_5M_MULTIDAY_LR_RIDGE.md), [ML_CALIBRATION_PHASES.md](ML_CALIBRATION_PHASES.md) |
-| **Опционы: chain + калькулятор Put** (`/options`) | [OPTIONS_TOOLS.md](OPTIONS_TOOLS.md) |
+| **Опционы: chain + калькулятор** (`/options`) | [OPTIONS_TOOLS.md](OPTIONS_TOOLS.md) |
+| **Option Money Map** (`/options/map`) | [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md) |
 
 ## Игра GAME_5M (одна цепочка: вход → удержание → выход → разбор)
 

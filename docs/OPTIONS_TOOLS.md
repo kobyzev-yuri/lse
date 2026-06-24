@@ -1,8 +1,10 @@
-# Опционы: вкладка `/options` — постановка, реализация, эксплуатация
+# Опционы: `/options` и `/options/map` — постановка, реализация, эксплуатация
 
-**Статус:** реализовано (2026-06-23), коммиты `3527211`, `2c8da73`.  
-**Веб:** `/options` (пункт меню «Опционы»).  
-**Зависимость:** `POLYGON_API_KEY` + подписка Polygon **Options** для snapshot chain (volume/OI).
+**Статус:** в prod (2026-06-24): dual-column Polygon/yfinance, Money Map, OI cron.  
+**Веб:** `/options` (сентимент + калькулятор), `/options/map` (карта денег).  
+**Зависимость:** `POLYGON_API_KEY` + подписка Polygon **Options Starter+** для OI/volume.
+
+**См. также:** [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md) — карта OI, cron, ползунок истории.
 
 ---
 
@@ -60,7 +62,7 @@
 
 Документация Polygon: [Options chain snapshot](https://polygon.io/docs/options/get_v3_snapshot_options__underlyingasset).
 
-**Ограничение на проде (проверка 2026-06-23):** ключ `POLYGON_API_KEY` валиден; **reference** API → `200` (2 экспирации MU в ответе плана); **snapshot** → **403** без подписки **Options** ([pricing](https://polygon.io/pricing?product=options)). После апгрейда плана сентимент на `/options` заработает без смены кода.
+**Ограничение snapshot API:** исторический OI за прошлые недели **не запрашивается** — только текущий снимок. История накапливается cron → `options_chain_oi_snapshot` (см. [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md)).
 
 ### Проверка после оплаты подписки Options
 
@@ -96,14 +98,19 @@ flowchart TB
     POLY["services/polygon_options.py"]
     SENT["services/options_chain_sentiment.py"]
     CALC["services/options_calculator.py"]
+    MAP["services/options_money_map.py"]
     PG["api.polygon.io"]
+    DB["options_chain_oi_snapshot"]
 
     UI --> API
     API --> POLY
     API --> SENT
     API --> CALC
+    API --> MAP
     POLY --> PG
     SENT --> POLY
+    MAP --> POLY
+    MAP --> DB
 ```
 
 ### Файлы репозитория
@@ -112,74 +119,100 @@ flowchart TB
 |------|------|
 | `services/polygon_options.py` | клиент Polygon: expirations, chain snapshot, нормализация контрактов |
 | `services/options_chain_sentiment.py` | PCR, max pain, ключевые страйки, sentiment score |
-| `services/options_calculator.py` | Pure Put / Put Spread, сценарии P/L |
-| `templates/options.html` | UI: две вкладки, fetch к API |
-| `web_app.py` | маршруты страницы и JSON API |
-| `templates/partials/site_nav_links.html` | ссылка «Опционы» в навбаре |
-| `tests/test_options_tools.py` | unit-тесты калькулятора и сентимента |
+| `services/options_calculator_prefill.py` | prefill премий с Polygon / yfinance |
+| `services/options_money_map.py` | Option Money Map (плиты OI) |
+| `templates/options.html` | UI: две вкладки, dual-column compare |
+| `templates/options_map.html` | UI карты денег |
+| `web_app.py` | маршруты страниц и JSON API |
+| `templates/partials/site_nav_links.html` | «Опционы», «Опционы · карта» |
+| `scripts/snapshot_options_chain_oi.py` | ежедневный снимок OI в PostgreSQL |
+| `tests/test_options_tools.py` | unit-тесты |
 | `config.env.example` | `POLYGON_API_KEY` (секрет только в `config.env` на VM, не в git) |
 
 ---
 
 ## 4. Вкладка «Опционы» в веб-UI
 
-**URL:** `http://<host>:8000/options` (на проде — тот же порт, что у `lse-bot`).
+**URL:** `/options` и `/options/map` (на проде порт `8080` внутри VM).
 
 ### 4.1. Вкладка «Сентимент chain»
 
+Две колонки: **Polygon snapshot** | **yfinance option_chain**.
+
 1. Поле **Тикер** (по умолчанию `MU`).
-2. **Экспирация** — dropdown; кнопка «Загрузить даты» → `GET /api/options/expirations/{ticker}`.
-3. «Анализ» → `GET /api/options/sentiment/{ticker}?expiration_date=YYYY-MM-DD`.
+2. **Экспирация** — dropdown; кнопки «Polygon» / «yfinance» / **«Оба»** для дат.
+3. «Анализ» — по источнику или **«Оба»** параллельно.
 
 **На экране:**
 
 - бейдж `BEARISH` / `BULLISH` / `NEUTRAL` + score −1…+1;
-- краткое пояснение на русском;
-- карточки: PCR volume, PCR OI, spot, max pain;
-- таблица топ-страйков по open interest.
-
-Клиентский JS — внизу `templates/options.html` (без отдельного bundler).
+- PCR vol, PCR OI, spot, max pain;
+- таблица топ-страйков: **Call OI / Put OI** (Polygon) или **Call vol / Put vol** (yfinance без OI);
+- после «Оба» — баннер сравнения (разный spot, разный состав score);
+- **LLM интерпретация** по кнопке в каждой колонке.
 
 ### 4.2. Вкладка «Калькулятор»
 
-Поля:
+Две колонки prefill + сводная таблица P/L. Подписи: **страйк ≠ вход**; вход = премия × 100 × контракты.
 
-- тикер, цена акции ($), дата earnings, экспирация, число контрактов;
-- стратегия: Pure Put / Put Spread;
-- long strike + premium; для спреда — short strike + premium.
+Кнопки: загрузка дат, **Polygon** / **yfinance** / **Оба** для prefill, календарь earnings из knowledge_base.
 
-Кнопки:
+### 4.3. Option Money Map (`/options/map`)
 
-- **Рассчитать** → `POST /api/options/calculator`;
-- **Подтянуть spot с Polygon** — берёт spot из последнего sentiment-запроса (если snapshot доступен);
-- **Примеры (демо)** — три пресета без Polygon (см. ниже).
-
-### Демо-примеры (без подписки Polygon)
-
-Кнопки на вкладке «Калькулятор» загружают готовые параметры и сразу считают P/L:
-
-| ID | Сценарий |
-|----|----------|
-| `mu_pure_put_earnings` | MU, Pure Put, spot $189, strike $190, 1 контракт |
-| `mu_put_spread_2x` | MU, Put Spread 200/180, 2 контракта |
-| `lite_otm_put` | LITE, далёкий OTM put, 3 контракта |
-
-API: `GET /api/options/calculator/examples` — JSON с полями и `preview` (предрасчёт).
-
-Код пресетов: `CALCULATOR_DEMO_EXAMPLES` в `services/options_calculator.py`.
-
-**Итоги:** вход ($), breakeven, max loss, max profit.  
-**Таблица сценариев:** падение %, цена, стоимость позиции, P/L, ROI %, статус (`Максимальный убыток`, `Прибыль`, …).
-
-На странице `/options` те же формулы доступны во **вложенных секциях «Справка»** под калькулятором и сентиментом (раскрывающиеся блоки).
-
-Модель P/L: **intrinsic value на экспирацию** (без временной стоимости). Для earnings-игры это базовый сценарий «что если spot окажется здесь к закрытию».
+Отдельная страница: one-liner, график OI, put-плита / call-потолок, ползунки **экспирации** и **даты снимка** (0 = live). Подробности и пример MU — [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md).
 
 ---
 
-## 5. REST API
+## 5. Реальный пример торговли: MU put spread перед экспирацией
 
-### `GET /api/options/expirations/{ticker}`
+**Контекст:** MU ~$1 093, экспирация **2026-06-26**, доска Polygon (2026-06-24).
+
+### Prefill с Polygon
+
+`GET /api/options/calculator/polygon-prefill/MU?expiration_date=2026-06-26&strategy=put_spread`
+
+| Поле | Значение |
+|------|----------|
+| Spot | $1 093.59 |
+| Long put K | $1 095, премия **$91.38** |
+| Short put K | $1 040, премия **$61.60** |
+
+### Расчёт (`POST /api/options/calculator`, 1 контракт)
+
+| | |
+|--|--|
+| Вход (net debit) | **$2 978** |
+| Breakeven | **$1 065.22** (−2.6% от spot) |
+| Max loss | **$2 978** |
+| Max profit | **$2 522** (ширина $55 − debit) |
+
+**Сценарии intrinsic на экспирацию:**
+
+| Падение spot | Цена | P/L | Смысл |
+|--------------|------|-----|--------|
+| 0% | $1 093.59 | **−$2 837** | Далеко OTM — почти полная потеря премии |
+| −2% | $1 071.72 | **−$650** | Ещё ниже breakeven |
+| −3% | $1 060.78 | **+$444** | Начало зоны прибыли |
+| −5% | … | растёт | Спред ловит падение без полной премии naked put |
+
+**Связь с картой OI:** put-плита на **$1 000** (OI 8 480) — зона, куда рынок концентрировал защиту; max pain сентимента **$1 050** — эвристический «магнит» на экспирацию. Это **не** сигнал входа; калькулятор показывает только P/L при заданных премиях.
+
+### Сентимент на той же дате (Polygon vs yfinance)
+
+| | Polygon | yfinance |
+|--|---------|----------|
+| Spot | $1 093 | $1 052 |
+| Score | BULLISH **0.43** | NEUTRAL **0.14** |
+| PCR vol | 0.65 | 0.89 |
+| Max pain | $1 050 | — (нет OI) |
+
+Put spread — ставка на **падение**; при BULLISH call-flow на доске это контртренд — осознанный риск, а не противоречие в данных.
+
+---
+
+## 6. REST API
+
+### `GET /api/options/expirations/{ticker}?source=polygon|yfinance`
 
 ```json
 {
@@ -190,28 +223,26 @@ API: `GET /api/options/calculator/examples` — JSON с полями и `preview
 
 Если ключа нет: `expirations: []`, `error: "POLYGON_API_KEY not configured"`.
 
-### `GET /api/options/sentiment/{ticker}?expiration_date=2026-06-26`
+### `GET /api/options/sentiment/{ticker}?source=polygon|yfinance&expiration_date=2026-06-26`
 
-Пример успешного ответа (сокращённо):
+Пример (MU, Polygon, prod 2026-06-24):
 
 ```json
 {
   "status": "ok",
   "ticker": "MU",
+  "source": "polygon",
   "expiration_date": "2026-06-26",
-  "spot": 189.21,
-  "sentiment_label": "BEARISH",
-  "sentiment_score": -0.42,
-  "sentiment_summary_ru": "Перевес put по volume/OI...",
+  "spot": 1093.0,
+  "sentiment_label": "BULLISH",
+  "sentiment_score": 0.427,
   "totals": {
-    "pcr_volume": 1.35,
-    "pcr_open_interest": 1.28,
-    "call_volume": 12000,
-    "put_volume": 16200
+    "pcr_volume": 0.647,
+    "pcr_open_interest": 0.779
   },
-  "max_pain_strike": 185.0,
+  "max_pain_strike": 1050.0,
   "key_strikes_oi": [
-    {"strike": 190, "total_oi": 45000, "call_oi": 12000, "put_oi": 33000}
+    {"strike": 1050.0, "total_oi": 18858, "call_oi": 16500, "put_oi": 2358}
   ]
 }
 ```
@@ -239,7 +270,7 @@ API: `GET /api/options/calculator/examples` — JSON с полями и `preview
 
 ---
 
-## 6. Логика сентимента
+## 7. Логика сентимента
 
 Реализация: `analyze_options_chain()` в `services/options_chain_sentiment.py`.
 
@@ -257,7 +288,7 @@ API: `GET /api/options/calculator/examples` — JSON с полями и `preview
 
 ---
 
-## 7. Логика калькулятора
+## 8. Логика калькулятора
 
 `services/options_calculator.py`
 
@@ -270,7 +301,7 @@ API: `GET /api/options/calculator/examples` — JSON с полями и `preview
 
 ---
 
-## 8. Конфигурация и прод
+## 9. Конфигурация и прод
 
 ### config.env (на VM, не в git)
 
@@ -296,7 +327,7 @@ ssh <vm> "cd ~/lse && ./scripts/deploy_from_github.sh"
 
 ---
 
-## 9. Тесты
+## 10. Тесты
 
 ```bash
 pytest tests/test_options_tools.py -v
@@ -306,17 +337,18 @@ pytest tests/test_options_tools.py -v
 
 ---
 
-## 10. Дальнейшие улучшения (не в scope первой версии)
+## 11. Дальнейшие улучшения
 
-- Автозаполнение премий bid/ask с доски по выбранному страйку.
-- Fallback-парсер Investing.com при отсутствии Options-плана Polygon.
-- Учёт временной стоимости (Black-Scholes) для сценариев до экспирации.
-- Кэш snapshot в PostgreSQL + cron для снижения квоты API.
+- Фаза 6: `/options/map` как главный вход для casual users.
+- Накопление истории OI (cron, без fake backfill) — см. [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md).
+- Учёт IV crush / временной стоимости в калькуляторе.
 - Интеграция сентимента в карточки GAME_5M / earnings brief.
 
 ---
 
-## 11. Связанные документы
+## 12. Связанные документы
+
+- [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md) — карта денег, cron, пример MU
 
 - [README.md](README.md) — навигация по документации
 - [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md) — портфельная игра (отдельный контур)
