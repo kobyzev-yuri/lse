@@ -39,6 +39,11 @@
         display: inline-block; font-size: 0.72rem; padding: 0.15rem 0.45rem;
         border-radius: 4px; background: #1e3a5f; color: #7dd3fc; margin-left: 0.5rem;
     }
+    .plate-shift {
+        margin: 0.5rem 0 0; padding: 0.5rem 0.75rem; border-radius: 6px;
+        background: #172554; border: 1px dashed #3b82f6; font-size: 0.85rem; color: #93c5fd;
+    }
+    .snap-live-tag { color: #86efac; font-size: 0.8rem; }
 </style>
 {% endblock %}
 {% block content %}
@@ -68,6 +73,11 @@
         <p class="exp-label">Экспирация: <strong id="mapExpLabel">—</strong></p>
         <input type="range" id="mapExpSlider" class="exp-slider" min="0" max="0" value="0" step="1">
 
+        <p class="exp-label">Дата снимка: <strong id="mapSnapLabel">сейчас (Polygon)</strong> <span id="mapSnapLive" class="snap-live-tag"></span></p>
+        <input type="range" id="mapSnapSlider" class="exp-slider" min="0" max="0" value="0" step="1">
+
+        <p id="mapPlateShift" class="plate-shift" style="display:none;"></p>
+
         <p class="spot-line-legend">
             <span><span class="dot-put">■</span> Put OI (поддержка)</span>
             <span><span class="dot-call">■</span> Call OI (потолок)</span>
@@ -95,6 +105,8 @@
 (function() {
     const $ = (id) => document.getElementById(id);
     let exps = [];
+    let snapDates = []; // newest first; slider index 0 = live
+    let currentSnap = null; // null = live
     let sliderBusy = false;
 
     function renderPlates(listId, items, leg) {
@@ -151,6 +163,33 @@
         });
     }
 
+    function updateSnapSlider(j) {
+        const dates = j.available_snapshot_dates || [];
+        snapDates = dates;
+        const slider = $('mapSnapSlider');
+        slider.min = 0;
+        slider.max = dates.length; // 0 = live, 1..n = historical
+        if (j.is_live) {
+            currentSnap = null;
+            slider.value = 0;
+            $('mapSnapLabel').textContent = 'сейчас (Polygon)';
+            $('mapSnapLive').textContent = dates.length ? '(+' + dates.length + ' в БД)' : '';
+        } else {
+            currentSnap = j.snapshot_date;
+            const idx = dates.indexOf(j.snapshot_date);
+            slider.value = idx >= 0 ? idx + 1 : 1;
+            $('mapSnapLabel').textContent = j.snapshot_date || '—';
+            $('mapSnapLive').textContent = '(архив)';
+        }
+        if (j.plate_shift_ru) {
+            $('mapPlateShift').style.display = 'block';
+            $('mapPlateShift').textContent = j.plate_shift_ru;
+        } else {
+            $('mapPlateShift').style.display = 'none';
+            $('mapPlateShift').textContent = '';
+        }
+    }
+
     function renderReport(j) {
         if (j.status === 'error') {
             $('mapError').style.display = 'block';
@@ -170,6 +209,7 @@
         renderPlates('mapSupport', j.support_plate, 'put');
         renderPlates('mapResistance', j.resistance_ceiling, 'call');
         renderChart(j.chart_bars || [], j.spot || 0);
+        updateSnapSlider(j);
 
         exps = j.available_expirations || [j.expiration_date];
         const slider = $('mapExpSlider');
@@ -179,25 +219,45 @@
         slider.value = idx >= 0 ? idx : 0;
     }
 
-    async function loadMap(exp) {
+    async function loadMap(exp, snap) {
         const t = $('mapTicker').value.trim().toUpperCase();
         if (!t) return;
         $('mapLoading').style.display = 'block';
         let url = '/api/options/map/' + encodeURIComponent(t);
-        if (exp) url += '?expiration_date=' + encodeURIComponent(exp);
+        const qs = [];
+        if (exp) qs.push('expiration_date=' + encodeURIComponent(exp));
+        if (snap) qs.push('snapshot_date=' + encodeURIComponent(snap));
+        if (qs.length) url += '?' + qs.join('&');
         const r = await fetch(url);
         const j = await r.json();
         $('mapLoading').style.display = 'none';
         renderReport(j);
     }
 
-    $('btnMapLoad').onclick = () => loadMap();
+    $('btnMapLoad').onclick = () => { currentSnap = null; loadMap($('mapExpLabel').textContent !== '—' ? $('mapExpLabel').textContent : null); };
     $('mapExpSlider').oninput = async function() {
         if (sliderBusy || !exps.length) return;
         const exp = exps[parseInt(this.value, 10)];
         if (!exp) return;
         sliderBusy = true;
-        await loadMap(exp);
+        currentSnap = null;
+        await loadMap(exp, null);
+        sliderBusy = false;
+    };
+    $('mapSnapSlider').oninput = async function() {
+        if (sliderBusy) return;
+        const idx = parseInt(this.value, 10);
+        const exp = $('mapExpLabel').textContent;
+        if (!exp || exp === '—') return;
+        sliderBusy = true;
+        if (idx === 0) {
+            currentSnap = null;
+            await loadMap(exp, null);
+        } else {
+            const snap = snapDates[idx - 1];
+            currentSnap = snap;
+            await loadMap(exp, snap);
+        }
         sliderBusy = false;
     };
 

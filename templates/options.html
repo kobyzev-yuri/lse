@@ -70,9 +70,12 @@
     .compare-merge tr:last-child td { border-bottom: none; }
     .diff-ok { color: #86efac; }
     .diff-warn { color: #fcd34d; }
-    .compare-merge tr:last-child td { border-bottom: none; }
-    .diff-ok { color: #86efac; }
-    .diff-warn { color: #fcd34d; }
+    .sentiment-compare-banner {
+        margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px;
+        background: #1e293b; border: 1px solid #334155; font-size: 0.88rem; line-height: 1.5;
+    }
+    .sentiment-compare-banner ul { margin: 0.4rem 0 0; padding-left: 1.2rem; }
+    .sentiment-warn { color: #fcd34d; }
     .compare-card .calc-scenarios { font-size: 0.8rem; margin-top: 0.5rem; overflow-x: auto; }
     .compare-card .calc-scenarios table { width: 100%; }
     .prefill-kv { font-size: 0.85rem; margin: 0.35rem 0; line-height: 1.5; }
@@ -126,6 +129,8 @@
             <div id="sentimentYfinance" class="muted">Загрузите даты и нажмите «yfinance» или «Оба» в строке «Анализ».</div>
         </div>
     </div>
+
+    <div id="sentimentCompareBanner" class="sentiment-compare-banner" style="display:none;"></div>
 
     <div class="formula-docs">
         <h3 style="margin-bottom:0.6rem;color:#94a3b8;font-size:0.95rem;">Справка: метрики сентимента</h3>
@@ -707,8 +712,8 @@ P/L(S) = Value(S) − Entry</div>
         }
         const barriersMode = j.barriers_mode || (j.oi_available === false ? 'volume' : 'oi');
         if (barriersMode === 'volume' && j.key_strikes_volume && j.key_strikes_volume.length) {
-            html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">Ключевые страйки по volume</p>';
-            html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>Vol</th><th>Call</th><th>Put</th></tr>';
+            html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">Ключевые страйки по volume (yfinance: OI часто 0)</p>';
+            html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>Vol Σ</th><th>Call vol</th><th>Put vol</th></tr>';
             j.key_strikes_volume.slice(0, 6).forEach(row => {
                 html += '<tr><td>' + row.strike + '</td><td>' + row.total_volume + '</td><td>' +
                     row.call_volume + '</td><td>' + row.put_volume + '</td></tr>';
@@ -716,7 +721,7 @@ P/L(S) = Value(S) − Entry</div>
             html += '</table>';
         } else if (j.key_strikes_oi && j.key_strikes_oi.length) {
             html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">Ключевые страйки по OI</p>';
-            html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>OI</th><th>Call</th><th>Put</th></tr>';
+            html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>OI Σ</th><th>Call OI</th><th>Put OI</th></tr>';
             j.key_strikes_oi.slice(0, 6).forEach(row => {
                 html += '<tr><td>' + row.strike + '</td><td>' + row.total_oi + '</td><td>' + row.call_oi + '</td><td>' + row.put_oi + '</td></tr>';
             });
@@ -729,6 +734,41 @@ P/L(S) = Value(S) − Entry</div>
     }
 
     const lastReports = { polygon: null, yfinance: null };
+
+    function renderSentimentCompareBanner() {
+        const box = $('sentimentCompareBanner');
+        const pg = lastReports.polygon;
+        const yf = lastReports.yfinance;
+        if (!pg || !yf || pg.status === 'error' || yf.status === 'error') {
+            box.style.display = 'none';
+            return;
+        }
+        const items = [];
+        const pgSpot = parseFloat(pg.spot);
+        const yfSpot = parseFloat(yf.spot);
+        if (Number.isFinite(pgSpot) && Number.isFinite(yfSpot)) {
+            const delta = Math.abs(pgSpot - yfSpot);
+            if (delta > 5) {
+                items.push(
+                    '<li class="sentiment-warn"><strong>Разный spot:</strong> Polygon $' + pgSpot +
+                    ' vs yfinance $' + yfSpot + ' (Δ $' + delta.toFixed(1) +
+                    '). Окно ±15% и score считаются от разных цен — сравнивайте осторожно.</li>'
+                );
+            }
+        }
+        const pgOi = pg.oi_available !== false && (pg.data_quality || {}).oi_available !== false;
+        const yfOi = yf.oi_available === true || (yf.data_quality || {}).oi_available === true;
+        items.push(
+            '<li><strong>Score:</strong> Polygon — PCR vol + PCR OI + NTM-OI (±8%). ' +
+            (yfOi ? 'yfinance — все три канала, если OI есть.' : 'yfinance — в основном PCR vol (OI часто 0).') +
+            '</li>'
+        );
+        if (!yfOi && pgOi) {
+            items.push('<li>Max pain и магниты по OI — только в колонке Polygon; в yfinance смотрите таблицу <em>Call vol / Put vol</em>.</li>');
+        }
+        box.innerHTML = '<strong>Сравнение Polygon vs yfinance</strong><ul>' + items.join('') + '</ul>';
+        box.style.display = 'block';
+    }
 
     async function runLlmInterpret(source, cardEl) {
         const key = source === 'yfinance' ? 'yfinance' : 'polygon';
@@ -834,6 +874,7 @@ P/L(S) = Value(S) − Entry</div>
             runSentiment('polygon', 'sentimentPolygon'),
             runSentiment('yfinance', 'sentimentYfinance'),
         ]);
+        renderSentimentCompareBanner();
     }
 
     $('btnLoadExpPolygon').onclick = () => loadExpirations('polygon');

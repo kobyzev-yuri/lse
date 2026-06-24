@@ -11,17 +11,19 @@
 | **1** | ✅ | Подписи калькулятора (страйк ≠ вход) |
 | **2** | ✅ wireframe | `GET /api/options/map/{ticker}`, страница `/options/map` |
 | **3** | 📋 schema + stub | Таблица `options_chain_oi_snapshot`, `scripts/snapshot_options_chain_oi.py` |
-| **4** | ⏳ | Миграция 031 на prod, cron 1×/день после US close |
-| **5** | ⏳ | Ползунок «время»: история OI из БД + анимация сдвига плит |
+| **4** | ✅ | Миграция 031 на prod, cron 1×/день после US close |
+| **5** | ✅ | Ползунок «время»: история OI из БД + сдвиг плит vs предыдущий снимок |
 | **6** | ⏳ | Заменить `/options` главным экраном или редирект для casual users |
 
 ## API
 
 ```
 GET /api/options/map/MU?expiration_date=2026-06-26
+GET /api/options/map/MU?expiration_date=2026-06-26&snapshot_date=2026-06-24
+GET /api/options/map/MU/snapshots?expiration_date=2026-06-26
 ```
 
-Ответ: `summary_one_liner_ru`, `support_plate`, `resistance_ceiling`, `chart_bars`, `available_expirations`, `flow_label`, `pcr_volume`.
+Ответ: `summary_one_liner_ru`, `support_plate`, `resistance_ceiling`, `chart_bars`, `available_expirations`, `available_snapshot_dates`, `is_live`, `plate_shift_ru`, `flow_label`, `pcr_volume`.
 
 Источник: **только Polygon** (OI).
 
@@ -49,7 +51,7 @@ docker exec lse-bot python scripts/snapshot_options_chain_oi.py --ticker MU --ti
 30 23 * * 1-5 cd @LSE_HOME@ && docker exec @CONTAINER@ python scripts/snapshot_options_chain_oi.py >> logs/options_oi_snapshot.log 2>&1
 ```
 
-**Фаза 5 UI:** второй ползунок «дата снимка» или overlay прошлой плиты пунктиром.
+**Фаза 5 UI:** ползунок «дата снимка» (0 = live Polygon, 1+ = архив из БД); строка `plate_shift_ru` — сдвиг топ-плит vs предыдущий снимок.
 
 ## Ответы стейкхолдеру
 

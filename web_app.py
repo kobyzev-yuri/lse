@@ -1203,8 +1203,38 @@ async def options_money_map_page(request: Request):
     )
 
 
+@app.get("/api/options/map/{ticker}/snapshots", response_class=JSONResponse)
+async def api_options_money_map_snapshots(ticker: str, expiration_date: Optional[str] = None):
+    from services.options_money_map import list_oi_snapshot_dates
+
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker required")
+    try:
+        dates = await asyncio.to_thread(
+            list_oi_snapshot_dates,
+            t,
+            expiration_date=expiration_date or None,
+        )
+        return _to_jsonable(
+            {
+                "status": "ok",
+                "ticker": t,
+                "expiration_date": expiration_date,
+                "snapshot_dates": dates,
+            }
+        )
+    except Exception as e:
+        logger.exception("api_options_money_map_snapshots %s", t)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/options/map/{ticker}", response_class=JSONResponse)
-async def api_options_money_map(ticker: str, expiration_date: Optional[str] = None):
+async def api_options_money_map(
+    ticker: str,
+    expiration_date: Optional[str] = None,
+    snapshot_date: Optional[str] = None,
+):
     from services.options_money_map import build_money_map_report
 
     t = (ticker or "").strip().upper()
@@ -1216,6 +1246,7 @@ async def api_options_money_map(ticker: str, expiration_date: Optional[str] = No
                 build_money_map_report,
                 t,
                 expiration_date=expiration_date or None,
+                snapshot_date=snapshot_date or None,
             )
         )
     except Exception as e:

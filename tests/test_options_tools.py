@@ -432,6 +432,63 @@ def test_money_map_report_monkeypatch(monkeypatch):
     assert len(r["chart_bars"]) >= 2
 
 
+def test_money_map_snapshot_assembly():
+    from services.options_money_map import _assemble_money_map_report
+
+    contracts = [
+        {"contract_type": "put", "strike": 1000.0, "open_interest": 8000, "volume": 100},
+        {"contract_type": "call", "strike": 1100.0, "open_interest": 3000, "volume": 80},
+    ]
+    r = _assemble_money_map_report(
+        "MU",
+        "2026-06-26",
+        contracts=contracts,
+        spot_f=1050.0,
+        source="snapshot",
+        available_expirations=["2026-06-26"],
+        strike_window_pct=0.20,
+        snapshot_date="2026-06-24",
+        available_snapshot_dates=["2026-06-24"],
+    )
+    assert r["status"] == "ok"
+    assert r["is_live"] is False
+    assert r["snapshot_date"] == "2026-06-24"
+    assert r["source"] == "snapshot"
+    assert r["available_snapshot_dates"] == ["2026-06-24"]
+
+
+def test_money_map_from_snapshot_db(monkeypatch):
+    from services.options_money_map import build_money_map_report
+
+    monkeypatch.setattr(
+        "services.polygon_options.polygon_options_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "services.polygon_options.fetch_option_expiration_dates",
+        lambda t: ["2026-06-26"],
+    )
+    monkeypatch.setattr(
+        "services.options_money_map.list_oi_snapshot_dates",
+        lambda ticker, expiration_date=None: ["2026-06-24"],
+    )
+    monkeypatch.setattr(
+        "services.options_money_map._load_snapshot_contracts",
+        lambda ticker, snapshot_date, expiration_date: {
+            "status": "ok",
+            "spot": 1050.0,
+            "contracts": [
+                {"contract_type": "put", "strike": 1000.0, "open_interest": 8000, "volume": 100},
+                {"contract_type": "call", "strike": 1100.0, "open_interest": 3000, "volume": 80},
+            ],
+        },
+    )
+    r = build_money_map_report("MU", expiration_date="2026-06-26", snapshot_date="2026-06-24")
+    assert r["status"] == "ok"
+    assert r["snapshot_date"] == "2026-06-24"
+    assert r["support_plate"][0]["strike"] == 1000.0
+
+
 def test_yfinance_sentiment_report(monkeypatch):
     from services.options_chain_sentiment import build_yfinance_chain_sentiment_report
 
