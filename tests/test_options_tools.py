@@ -382,6 +382,56 @@ def test_build_analyzer_llm_attempts_includes_compare(monkeypatch):
     assert len(attempts) == 2
 
 
+def test_money_map_one_liner():
+    from services.options_money_map import build_summary_one_liner
+
+    s = build_summary_one_liner(
+        spot=1050.0,
+        support=[{"strike": 1000.0, "oi": 8000}],
+        resistance=[{"strike": 1180.0, "oi": 5000}],
+        flow_label="BULLISH",
+        flow_ru="свежее активнее call",
+        oi_available=True,
+    )
+    assert "плита" in s
+    assert "1 000" in s or "1000" in s
+    assert "1 180" in s or "1180" in s
+    assert "call" in s.lower() or "рост" in s
+
+
+def test_money_map_report_monkeypatch(monkeypatch):
+    from services.options_money_map import build_money_map_report
+
+    monkeypatch.setattr(
+        "services.polygon_options.polygon_options_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "services.polygon_options.fetch_option_expiration_dates",
+        lambda t: ["2026-06-26"],
+    )
+    monkeypatch.setattr(
+        "services.polygon_options.fetch_options_chain_snapshot",
+        lambda ticker, expiration_date=None, limit=250: {
+            "status": "ok",
+            "underlying_price": 1050.0,
+            "spot_source": "stocks_snapshot",
+            "contracts": [
+                {"contract_type": "put", "strike": 1000.0, "open_interest": 8000, "volume": 100},
+                {"contract_type": "put", "strike": 1050.0, "open_interest": 2000, "volume": 50},
+                {"contract_type": "call", "strike": 1100.0, "open_interest": 3000, "volume": 80},
+                {"contract_type": "call", "strike": 1180.0, "open_interest": 5000, "volume": 120},
+            ],
+        },
+    )
+    r = build_money_map_report("MU", expiration_date="2026-06-26")
+    assert r["status"] == "ok"
+    assert r["support_plate"][0]["strike"] == 1000.0
+    assert r["resistance_ceiling"][0]["strike"] == 1180.0
+    assert r["summary_one_liner_ru"]
+    assert len(r["chart_bars"]) >= 2
+
+
 def test_yfinance_sentiment_report(monkeypatch):
     from services.options_chain_sentiment import build_yfinance_chain_sentiment_report
 

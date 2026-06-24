@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}Option Money Map — LSE{% endblock %}
+{% block extra_css %}
+<style>
+    .map-hero {
+        margin: 1rem 0; padding: 1rem 1.1rem; border-radius: 8px;
+        background: #0f172a; border: 1px solid #1e3a5f; font-size: 1.05rem; line-height: 1.55;
+    }
+    .map-hero .bias-BULLISH { color: #86efac; }
+    .map-hero .bias-BEARISH { color: #fca5a5; }
+    .map-hero .bias-NEUTRAL { color: #cbd5e1; }
+    .exp-slider { width: 100%; margin: 0.75rem 0; }
+    .exp-label { font-size: 0.88rem; color: #94a3b8; margin-bottom: 0.35rem; }
+    .oi-chart {
+        display: flex; align-items: flex-end; gap: 2px; height: 220px;
+        margin: 1rem 0; padding: 0.5rem 0; border-bottom: 1px solid #334155;
+        overflow-x: auto;
+    }
+    .oi-bar-wrap {
+        flex: 1 0 12px; max-width: 28px; display: flex; flex-direction: column;
+        align-items: center; justify-content: flex-end; height: 100%; position: relative;
+    }
+    .oi-bar-put { width: 100%; background: #7f1d1d; border-radius: 2px 2px 0 0; min-height: 2px; }
+    .oi-bar-call { width: 100%; background: #14532d; border-radius: 2px 2px 0 0; min-height: 2px; margin-bottom: 2px; }
+    .oi-bar-strike {
+        font-size: 0.62rem; color: #64748b; writing-mode: vertical-rl; transform: rotate(180deg);
+        margin-top: 4px; max-height: 48px; overflow: hidden;
+    }
+    .spot-line-legend { font-size: 0.8rem; color: #94a3b8; margin: 0.5rem 0; }
+    .spot-line-legend span { display: inline-block; margin-right: 1rem; }
+    .spot-line-legend .dot-put { color: #fca5a5; }
+    .spot-line-legend .dot-call { color: #86efac; }
+    .plates-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 1rem 0; }
+    @media (max-width: 640px) { .plates-grid { grid-template-columns: 1fr; } }
+    .plate-card { background: #0f172a; border: 1px solid #0f3460; border-radius: 8px; padding: 0.75rem; }
+    .plate-card h3 { margin: 0 0 0.5rem; font-size: 0.88rem; color: #94a3b8; }
+    .plate-card ul { margin: 0; padding-left: 1.1rem; font-size: 0.9rem; }
+    .wireframe-tag {
+        display: inline-block; font-size: 0.72rem; padding: 0.15rem 0.45rem;
+        border-radius: 4px; background: #1e3a5f; color: #7dd3fc; margin-left: 0.5rem;
+    }
+</style>
+{% endblock %}
+{% block content %}
+<div class="card page-intro">
+    <h1>Option Money Map <span class="wireframe-tag">wireframe</span></h1>
+    <p class="muted">Тикер → где накоплен OI (плита put / потолок call) → ползунок экспираций. Без LLM и лишних метрик. Источник: Polygon.</p>
+    <p class="muted" style="font-size:0.85rem"><a href="/options">← Полный раздел опционов</a> (сентимент, калькулятор)</p>
+</div>
+
+<div class="card">
+    <div class="grid-2" style="align-items:end;">
+        <div>
+            <label for="mapTicker">Тикер</label>
+            <input id="mapTicker" value="MU" placeholder="MU">
+        </div>
+        <div>
+            <button type="button" id="btnMapLoad" style="width:100%;">Показать</button>
+        </div>
+    </div>
+
+    <div id="mapLoading" class="muted" style="display:none;margin-top:0.75rem;">Загрузка Polygon…</div>
+    <div id="mapError" class="text-danger" style="display:none;margin-top:0.75rem;"></div>
+
+    <div id="mapBody" style="display:none;">
+        <div id="mapHero" class="map-hero"></div>
+
+        <p class="exp-label">Экспирация: <strong id="mapExpLabel">—</strong></p>
+        <input type="range" id="mapExpSlider" class="exp-slider" min="0" max="0" value="0" step="1">
+
+        <p class="spot-line-legend">
+            <span><span class="dot-put">■</span> Put OI (поддержка)</span>
+            <span><span class="dot-call">■</span> Call OI (потолок)</span>
+            <span>Spot: <strong id="mapSpot">—</strong></span>
+        </p>
+        <div id="mapChart" class="oi-chart"></div>
+
+        <div class="plates-grid">
+            <div class="plate-card">
+                <h3>Put-плита (поддержка)</h3>
+                <ul id="mapSupport"></ul>
+            </div>
+            <div class="plate-card">
+                <h3>Call-потолок</h3>
+                <ul id="mapResistance"></ul>
+            </div>
+        </div>
+        <p id="mapNote" class="muted" style="font-size:0.8rem;"></p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    const $ = (id) => document.getElementById(id);
+    let exps = [];
+    let sliderBusy = false;
+
+    function renderPlates(listId, items, leg) {
+        const ul = $(listId);
+        ul.innerHTML = '';
+        if (!items || !items.length) {
+            ul.innerHTML = '<li class="muted">нет данных</li>';
+            return;
+        }
+        items.forEach(it => {
+            const li = document.createElement('li');
+            li.textContent = '$' + it.strike + ' — OI ' + it.oi.toLocaleString();
+            ul.appendChild(li);
+        });
+    }
+
+    function renderChart(bars, spot) {
+        const box = $('mapChart');
+        box.innerHTML = '';
+        if (!bars || !bars.length) {
+            box.innerHTML = '<p class="muted">Нет OI в окне</p>';
+            return;
+        }
+        const maxOi = Math.max(...bars.map(b => Math.max(b.put_oi, b.call_oi)), 1);
+        const showStrike = (s) => Number.isInteger(s) || s % 5 === 0;
+
+        bars.forEach(b => {
+            const wrap = document.createElement('div');
+            wrap.className = 'oi-bar-wrap';
+            wrap.title = 'K=' + b.strike + ' put OI=' + b.put_oi + ' call OI=' + b.call_oi;
+
+            const callH = Math.max(2, (b.call_oi / maxOi) * 160);
+            const putH = Math.max(2, (b.put_oi / maxOi) * 160);
+            const callBar = document.createElement('div');
+            callBar.className = 'oi-bar-call';
+            callBar.style.height = callH + 'px';
+            const putBar = document.createElement('div');
+            putBar.className = 'oi-bar-put';
+            putBar.style.height = putH + 'px';
+
+            wrap.appendChild(callBar);
+            wrap.appendChild(putBar);
+
+            if (showStrike(b.strike) || Math.abs(b.strike - spot) < spot * 0.02) {
+                const lbl = document.createElement('div');
+                lbl.className = 'oi-bar-strike';
+                lbl.textContent = b.strike;
+                wrap.appendChild(lbl);
+            }
+            if (Math.abs(b.strike - spot) < spot * 0.008) {
+                wrap.style.outline = '1px solid #7dd3fc';
+            }
+            box.appendChild(wrap);
+        });
+    }
+
+    function renderReport(j) {
+        if (j.status === 'error') {
+            $('mapError').style.display = 'block';
+            $('mapError').textContent = j.error || 'ошибка';
+            $('mapBody').style.display = 'none';
+            return;
+        }
+        $('mapError').style.display = 'none';
+        $('mapBody').style.display = 'block';
+
+        const bias = j.flow_label || 'NEUTRAL';
+        $('mapHero').innerHTML = '<span class="bias-' + bias + '">' + (j.summary_one_liner_ru || '') + '</span>';
+        $('mapSpot').textContent = '$' + (j.spot ?? '—');
+        $('mapExpLabel').textContent = j.expiration_date || '—';
+        $('mapNote').textContent = (j.data_quality && j.data_quality.note_ru) || '';
+
+        renderPlates('mapSupport', j.support_plate, 'put');
+        renderPlates('mapResistance', j.resistance_ceiling, 'call');
+        renderChart(j.chart_bars || [], j.spot || 0);
+
+        exps = j.available_expirations || [j.expiration_date];
+        const slider = $('mapExpSlider');
+        slider.min = 0;
+        slider.max = Math.max(0, exps.length - 1);
+        const idx = exps.indexOf(j.expiration_date);
+        slider.value = idx >= 0 ? idx : 0;
+    }
+
+    async function loadMap(exp) {
+        const t = $('mapTicker').value.trim().toUpperCase();
+        if (!t) return;
+        $('mapLoading').style.display = 'block';
+        let url = '/api/options/map/' + encodeURIComponent(t);
+        if (exp) url += '?expiration_date=' + encodeURIComponent(exp);
+        const r = await fetch(url);
+        const j = await r.json();
+        $('mapLoading').style.display = 'none';
+        renderReport(j);
+    }
+
+    $('btnMapLoad').onclick = () => loadMap();
+    $('mapExpSlider').oninput = async function() {
+        if (sliderBusy || !exps.length) return;
+        const exp = exps[parseInt(this.value, 10)];
+        if (!exp) return;
+        sliderBusy = true;
+        await loadMap(exp);
+        sliderBusy = false;
+    };
+
+    loadMap();
+})();
+</script>
+{% endblock %}

@@ -1194,6 +1194,35 @@ async def api_earnings_postmortem(symbol: str, event_date: str = ""):
         raise HTTPException(status_code=500, detail=f"earnings postmortem: {e!s}")
 
 
+@app.get("/options/map", response_class=HTMLResponse)
+async def options_money_map_page(request: Request):
+    """Wireframe: Option Money Map — OI plates + expiration slider."""
+    return HTMLResponse(
+        render_template("options_map.html", {"request": request}),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/api/options/map/{ticker}", response_class=JSONResponse)
+async def api_options_money_map(ticker: str, expiration_date: Optional[str] = None):
+    from services.options_money_map import build_money_map_report
+
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker required")
+    try:
+        return _to_jsonable(
+            await asyncio.to_thread(
+                build_money_map_report,
+                t,
+                expiration_date=expiration_date or None,
+            )
+        )
+    except Exception as e:
+        logger.exception("api_options_money_map %s", t)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/options", response_class=HTMLResponse)
 async def options_tools_page(request: Request):
     """Option chain sentiment (Polygon) + Put / Put Spread calculator."""

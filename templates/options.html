@@ -229,6 +229,7 @@ PCR по OI      = сумма put OI / сумма call OI</div>
 
 <section id="panelCalc" class="panel card">
     <h2>Калькулятор Put / Put Spread</h2>
+    <p class="demo-hint">Премии подтягиваются с доски (Polygon / yfinance). <strong>Страйк</strong> — цена в контракте; <strong>вход в позицию</strong> = премия × 100 × контракты.</p>
     <div class="grid-2">
         <div><label for="calcTicker">Тикер</label><input id="calcTicker" value="MU"></div>
         <div>
@@ -280,6 +281,15 @@ PCR по OI      = сумма put OI / сумма call OI</div>
         <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem;">Расчёт на экспирацию по intrinsic value. <strong>IV</strong> (implied volatility, подразумеваемая волатильность) и временная стоимость в премии не моделируются — см. справку внизу.</p>
 
         <details>
+            <summary>Страйк и премия — не одно и то же</summary>
+            <div class="formula-body">
+                <p><strong>Страйк long</strong> — цена в опционном контракте (по какой цене можно продать акцию на экспирации). Это <em>не</em> сумма, которую вы платите при входе.</p>
+                <p><strong>Премия</strong> — цена опциона за 1 акцию. <strong>Вход в позицию</strong> = премия × 100 × число контрактов.</p>
+                <p>Пример: spot $1050, страйк $1050, премия $67, 1 контракт → вы платите <strong>$6 700</strong>, breakeven ≈ $983 ($1050 − $67).</p>
+            </div>
+        </details>
+
+        <details>
             <summary>Почему премия $8.5, а в таблице только intrinsic?</summary>
             <div class="formula-body">
                 <p><strong>IV (implied volatility)</strong> — ожидаемая волатильность, заложенная рынком в цену опциона. Перед earnings IV обычно высокая → премия дорогая.</p>
@@ -294,9 +304,9 @@ PCR по OI      = сумма put OI / сумма call OI</div>
             <summary>Общие обозначения</summary>
             <div class="formula-body">
                 <ul>
-                    <li><strong>S₀</strong> — цена акции сейчас (ввод)</li>
+                    <li><strong>S₀</strong> — цена акции сейчас (spot с доски)</li>
                     <li><strong>S</strong> — цена в сценарии</li>
-                    <li><strong>K</strong> — страйк long put</li>
+                    <li><strong>K</strong> — <strong>страйк</strong> long put (цена в контракте, не вход)</li>
                     <li><strong>K₂</strong> — страйк short put (только spread)</li>
                     <li><strong>P<sub>L</sub>, P<sub>S</sub></strong> — премия long / short ($ за 1 акцию)</li>
                     <li><strong>N</strong> — число контрактов</li>
@@ -420,8 +430,9 @@ P/L(S) = Value(S) − Entry</div>
         if (p.spot_source) html += ' · spot: ' + p.spot_source;
         if (p.price_kind) html += ' · премия: ' + p.price_kind;
         html += '</p>';
-        html += '<p><strong>Spot</strong> $' + p.spot + '</p>';
-        html += '<p><strong>① Long put</strong> ' + p.long_strike + ' @ $' + p.long_premium + '</p>';
+        html += '<p><strong>Spot</strong> (цена акции) $' + p.spot + '</p>';
+        html += '<p><strong>① Long put</strong> страйк ' + p.long_strike + ' @ премия $' + p.long_premium +
+            ' <span class="muted" style="font-size:0.78rem">(вход ≈ $' + (p.long_premium * 100 * calcContracts()).toFixed(0) + ' на ' + calcContracts() + ' к.)</span></p>';
         if (p.strategy === 'put_spread' && p.short_strike != null) {
             html += '<p><strong>② Short put</strong> ' + p.short_strike + ' @ $' + p.short_premium + '</p>';
         }
