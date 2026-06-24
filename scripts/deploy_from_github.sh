@@ -68,6 +68,20 @@ if [ "$FORCE" -eq 1 ] || [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
     time docker compose up -d "$SERVICE_NAME"
     log "docker compose up finished."
     log "Deploy completed. Container: $CONTAINER_NAME"
+    case "${LSE_POST_DEPLOY_TESTS:-smoke}" in
+        0|false|no|off|skip)
+            log "Post-deploy tests skipped (LSE_POST_DEPLOY_TESTS=$LSE_POST_DEPLOY_TESTS)"
+            ;;
+        all)
+            log "Post-deploy tests: full tests/ (copied into container)..."
+            LSE_POST_DEPLOY_TEST_FILES="tests/" \
+                "$REPO_DIR/scripts/post_deploy_tests.sh" || exit 4
+            ;;
+        *)
+            log "Post-deploy tests: smoke (options + decision_stack)..."
+            "$REPO_DIR/scripts/post_deploy_tests.sh" || exit 4
+            ;;
+    esac
 else
     log "No changes. Skip rebuild. HEAD=$NEW_HEAD"
 fi

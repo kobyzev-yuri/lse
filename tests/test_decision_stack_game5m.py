@@ -252,6 +252,30 @@ class TestDecisionStackGame5m(unittest.TestCase):
         out = summarize_earnings_trust_impact([], core="BUY", legacy_eff="BUY", projected="BUY")
         self.assertFalse(out.get("active"))
 
+    def test_options_sentiment_contribution_log_only(self):
+        env = {"DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE": "log_only"}
+        d5 = {
+            "technical_decision_core": "BUY",
+            "technical_decision_effective": "BUY",
+            "kb_news_impact": "нейтрально",
+            "options_sentiment": {
+                "status": "ok",
+                "sentiment_label": "BEARISH",
+                "sentiment_score": -0.5,
+                "pcr_volume": 1.2,
+                "gate_hint": "would_downgrade",
+                "data_as_of": "live",
+            },
+        }
+        with patch("config_loader.get_config_value", side_effect=lambda k, d=None: env.get(k, d)):
+            contribs = collect_game5m_contributions(d5, ticker="MU")
+        opt = next(c for c in contribs if c["contour_id"] == "options_sentiment")
+        self.assertEqual(opt["action"], "telemetry")
+        self.assertTrue(opt["metrics"]["would_downgrade"])
+        self.assertEqual(opt["metrics"]["gate_mode"], "log_only")
+        snap = build_game5m_decision_snapshot(d5, ticker="MU")
+        self.assertEqual(snap["effective_decision"], "BUY")
+
 
 if __name__ == "__main__":
     unittest.main()

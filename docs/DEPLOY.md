@@ -92,6 +92,24 @@ git push origin main
 
 Итог: код на сервере = последний `main`, контейнер `lse-bot` пересобран и перезапущен.
 
+**Post-deploy тесты (smoke):** образ slim — каталог `tests/` не в image (см. `.dockerignore`). После успешной пересборки `deploy_from_github.sh` по умолчанию копирует `tests/` в контейнер, ставит `pytest`, гоняет smoke-набор, затем удаляет `/app/tests`.
+
+```bash
+# по умолчанию: smoke после rebuild
+./scripts/deploy_from_github.sh
+
+# без тестов
+LSE_POST_DEPLOY_TESTS=0 ./scripts/deploy_from_github.sh
+
+# полный tests/ в контейнере
+LSE_POST_DEPLOY_TESTS=all ./scripts/deploy_from_github.sh
+
+# только тесты (без rebuild)
+./scripts/post_deploy_tests.sh
+```
+
+Отключить очистку `/app/tests`: `LSE_POST_DEPLOY_TESTS_CLEANUP=0`.
+
 ---
 
 ### 2. У вас изменился только конфиг (`config.env`)

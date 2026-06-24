@@ -102,6 +102,70 @@ def _collect_kb_news_contribution(d5: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def _collect_options_sentiment_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    opts = d5.get("options_sentiment")
+    if not isinstance(opts, dict):
+        return None
+    gm = gate_mode("DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE", "log_only")
+    if opts.get("status") != "ok":
+        err = opts.get("error") or opts.get("status") or "unavailable"
+        return make_contribution(
+            contour_id="options_sentiment",
+            role="policy_gate",
+            readiness=READINESS_CAUTION,
+            strength=0.0,
+            weight=0.0,
+            action="telemetry",
+            detail=str(err),
+            metrics={"gate_mode": gm, "status": opts.get("status"), "gate_hint": "unavailable"},
+        )
+
+    hint = str(opts.get("gate_hint") or "neutral")
+    label = str(opts.get("sentiment_label") or "")
+    score = float(opts.get("sentiment_score") or 0.0)
+    pcr_vol = opts.get("pcr_volume")
+    would_downgrade = hint == "would_downgrade"
+    would_signal = hint == "would_signal"
+    strength = 0.0
+    action = "telemetry"
+    if would_downgrade:
+        strength = -0.45
+    elif would_signal:
+        strength = 0.25
+    if gm == "apply":
+        if would_downgrade:
+            action = "downgrade"
+        elif would_signal:
+            action = "signal"
+
+    detail = f"{label} score={score:.2f}"
+    if pcr_vol is not None:
+        detail += f" pcr_vol={float(pcr_vol):.2f}"
+    if gm == "log_only" and (would_downgrade or would_signal):
+        detail += f" ({hint})"
+
+    return make_contribution(
+        contour_id="options_sentiment",
+        role="policy_gate",
+        readiness=READINESS_CAUTION,
+        strength=strength,
+        weight=effective_stack_weight("options_sentiment", READINESS_CAUTION),
+        action=action,
+        detail=detail,
+        metrics={
+            "gate_mode": gm,
+            "gate_hint": hint,
+            "sentiment_label": label,
+            "sentiment_score": score,
+            "pcr_volume": pcr_vol,
+            "max_pain_strike": opts.get("max_pain_strike"),
+            "would_downgrade": would_downgrade,
+            "would_signal": would_signal,
+            "data_as_of": opts.get("data_as_of"),
+        },
+    )
+
+
 def _collect_entry_advice_contribution(d5: Dict[str, Any]) -> Dict[str, Any]:
     advice = (d5.get("entry_advice") or "ALLOW").strip().upper()
     gm = gate_mode("DECISION_STACK_ENTRY_ADVICE_GATE_MODE", "log_only")
@@ -499,6 +563,7 @@ def collect_game5m_contributions(d5: Dict[str, Any], *, ticker: str = "") -> Lis
         _collect_session_contribution,
         _collect_rules_contribution,
         _collect_kb_news_contribution,
+        _collect_options_sentiment_contribution,
         _collect_entry_advice_contribution,
         _collect_macro_contribution,
         _collect_premarket_gap_baseline_contribution,
@@ -704,6 +769,7 @@ def build_game5m_decision_snapshot(
             "multiday": gate_mode("DECISION_STACK_MULTIDAY_GATE_MODE", "apply"),
             "earnings_trust": gate_mode("DECISION_STACK_EARNINGS_TRUST_GATE_MODE", "log_only"),
             "continuation_ml": gate_mode("DECISION_STACK_CONTINUATION_ML_GATE_MODE", "log_only"),
+            "options_sentiment": gate_mode("DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE", "log_only"),
         },
         "llm_eligible": [
             "news_fusion",

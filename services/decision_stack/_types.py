@@ -19,6 +19,7 @@ GAME5M_VETO_ORDER = (
     "macro_risk",
     "entry_advice",
     "kb_news",
+    "options_sentiment",
     "news_fusion",
     "premarket_gap_baseline",
     "forecast_layer",
@@ -130,6 +131,7 @@ def default_readiness(contour_id: str) -> str:
         "continuation_ml",
         "cluster_context",
         "earnings_trust",
+        "options_sentiment",
     }
     if contour_id in prod:
         return READINESS_PRODUCTION

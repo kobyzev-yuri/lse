@@ -34,8 +34,8 @@
 | Фаза | Что | Режим | Критерий «готово» | Статус |
 |------|-----|--------|-------------------|--------|
 | **0** | Инфраструктура данных | — | Cron, watchlist, API map/sentiment | ✅ |
-| **1** | `options_card_context` | — | Компактный JSON: score, PCR, max pain, плиты, exp, `data_as_of` | ⏳ |
-| **2** | GAME_5M shadow | `log_only` | Поля в `d5`, contribution `options_sentiment` в `decision_snapshot`, вход **не** меняется | ⏳ |
+| **1** | `options_card_context` | — | Компактный JSON: score, PCR, max pain, плиты, exp, `data_as_of` | ✅ |
+| **2** | GAME_5M shadow | `log_only` | Поля в `d5`, contribution `options_sentiment` в `decision_snapshot`, вход **не** меняется | ✅ |
 | **3** | UI / prompt | — | Блок в `game5m_cards`, `/prompt_entry`, earnings brief overview | ⏳ |
 | **4** | Shadow-анализ | `log_only` | 2–4 недели: analyzer / ручной срез «сколько BUY отсекли бы» | ⏳ |
 | **5** | GAME_5M apply | `apply` | `DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE=apply`, пороги согласованы | ⏳ |
@@ -83,9 +83,9 @@
 
 **Чеклист фазы 1:**
 
-- [ ] Модуль `options_card_context.py`
-- [ ] Unit-тесты
-- [ ] Док: поля в этом файле § «Фаза 1»
+- [x] Модуль `options_card_context.py`
+- [x] Unit-тесты
+- [x] Док: поля в этом файле § «Фаза 1»
 
 ---
 
@@ -111,10 +111,10 @@
 
 **Чеклист фазы 2:**
 
-- [ ] Поля `options_sentiment` в `get_decision_5m`
-- [ ] Contribution в `collect_game5m_contributions`
-- [ ] `gate_hint` в context для `/prompt_entry`
-- [ ] config.env.example
+- [x] Поля `options_sentiment` в `get_decision_5m`
+- [x] Contribution в `collect_game5m_contributions`
+- [x] `gate_hint` в context для `/prompt_entry`
+- [x] config.env.example
 
 ---
 
@@ -231,6 +231,7 @@ OPTIONS_SENTIMENT_PCR_VOL_BULLISH=0.87
 | Дата | Фаза | Решение | Кто |
 |------|------|---------|-----|
 | 2026-06-24 | — | План принят; старт с фаз 1–2 shadow, без apply | — |
+| 2026-06-16 | 1–2 | `options_card_context` + GAME_5M log_only contribution | — |
 | | | | |
 
 ---
@@ -250,4 +251,4 @@ flowchart LR
   F0 --> F9[9 OI history в brief]
 ```
 
-**Следующий шаг по плану:** фаза 1 (`options_card_context.py` + тесты).
+**Следующий шаг по плану:** фаза 3 (UI: game5m cards, prompt_entry, earnings brief).

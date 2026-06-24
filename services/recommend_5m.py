@@ -2983,6 +2983,14 @@ def get_decision_5m(
         logger.warning("attach_catboost_bar_v2_signal(%s): %s", ticker, e)
 
     try:
+        from services.options_card_context import build_options_card_context
+
+        out["options_sentiment"] = build_options_card_context(ticker)
+    except Exception as e:
+        logger.debug("options_card_context %s: %s", ticker, e)
+        out["options_sentiment"] = {"status": "error", "error": str(e), "gate_hint": "unavailable"}
+
+    try:
         from services.decision_stack import finalize_game5m_decision_stack
 
         finalize_game5m_decision_stack(out, ticker=ticker, kb_news=kb_news)

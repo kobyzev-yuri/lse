@@ -551,3 +551,53 @@ def test_yfinance_sentiment_report(monkeypatch):
     assert r["sentiment_label"] == "BEARISH"
     assert r["totals"]["pcr_open_interest"] > 1.0
     assert r["totals_full_chain"]["pcr_volume"] == 8.0
+
+
+def test_options_card_context_monkeypatch(monkeypatch):
+    from services.options_card_context import build_options_card_context, clear_options_card_context_cache
+
+    clear_options_card_context_cache()
+    monkeypatch.setattr(
+        "services.polygon_options.polygon_options_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "services.polygon_options.fetch_option_expiration_dates",
+        lambda t: ["2026-06-26"],
+    )
+    monkeypatch.setattr(
+        "services.polygon_options.fetch_options_chain_snapshot",
+        lambda ticker, expiration_date=None, limit=250: {
+            "status": "ok",
+            "underlying_price": 1050.0,
+            "spot_source": "stocks_snapshot",
+            "contracts": [
+                {"contract_type": "put", "strike": 1000.0, "open_interest": 8000, "volume": 500},
+                {"contract_type": "put", "strike": 1050.0, "open_interest": 2000, "volume": 100},
+                {"contract_type": "call", "strike": 1100.0, "open_interest": 3000, "volume": 80},
+                {"contract_type": "call", "strike": 1180.0, "open_interest": 5000, "volume": 120},
+            ],
+        },
+    )
+
+    r = build_options_card_context("MU", expiration_date="2026-06-26")
+    assert r["status"] == "ok"
+    assert r["source"] == "polygon"
+    assert r["data_as_of"] == "live"
+    assert r["sentiment_label"] in ("BULLISH", "BEARISH", "NEUTRAL")
+    assert r["support_plate_strikes"][0] == 1000.0
+    assert r["resistance_ceiling_strikes"][0] == 1180.0
+    assert r["gate_hint"] in ("neutral", "would_downgrade", "would_signal")
+    assert r["one_liner_ru"]
+
+
+def test_options_card_context_polygon_unavailable():
+    from unittest.mock import patch
+
+    from services.options_card_context import build_options_card_context, clear_options_card_context_cache
+
+    clear_options_card_context_cache()
+    with patch("services.polygon_options.polygon_options_available", return_value=False):
+        r = build_options_card_context("MU")
+    assert r["status"] == "error"
+    assert r["gate_hint"] == "unavailable"
