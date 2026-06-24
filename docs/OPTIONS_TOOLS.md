@@ -1,7 +1,7 @@
 # Опционы: `/options` и `/options/map` — постановка, реализация, эксплуатация
 
 **Статус:** в prod (2026-06-24): dual-column Polygon/yfinance, Money Map, OI cron.  
-**Веб:** `/options` (сентимент + калькулятор), `/options/map` (карта денег).  
+**Веб:** `/options` → карта денег (`/options/map`), `/options/tools` — сентимент + калькулятор.  
 **Зависимость:** `POLYGON_API_KEY` + подписка Polygon **Options Starter+** для OI/volume.
 
 **См. также:** [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md) — карта OI, cron, ползунок истории.
@@ -339,7 +339,7 @@ pytest tests/test_options_tools.py -v
 
 ## 11. Дальнейшие улучшения
 
-- Фаза 6: `/options/map` как главный вход для casual users.
+- Фаза 6: ✅ `/options` редирект на карту; инструменты на `/options/tools`.
 - Накопление истории OI (cron, без fake backfill) — см. [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md).
 - Учёт IV crush / временной стоимости в калькуляторе.
 - Интеграция сентимента в карточки GAME_5M / earnings brief.

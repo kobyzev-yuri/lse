@@ -30,15 +30,16 @@
     .spot-line-legend span { display: inline-block; margin-right: 1rem; }
     .spot-line-legend .dot-put { color: #fca5a5; }
     .spot-line-legend .dot-call { color: #86efac; }
+    .spot-line-legend .atm-swatch {
+        display: inline-block; width: 11px; height: 15px; margin-right: 3px;
+        border: 1px solid #7dd3fc; border-radius: 1px; vertical-align: -3px;
+        background: linear-gradient(to top, #7f1d1d 45%, #14532d 45%);
+    }
     .plates-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 1rem 0; }
     @media (max-width: 640px) { .plates-grid { grid-template-columns: 1fr; } }
     .plate-card { background: #0f172a; border: 1px solid #0f3460; border-radius: 8px; padding: 0.75rem; }
     .plate-card h3 { margin: 0 0 0.5rem; font-size: 0.88rem; color: #94a3b8; }
     .plate-card ul { margin: 0; padding-left: 1.1rem; font-size: 0.9rem; }
-    .wireframe-tag {
-        display: inline-block; font-size: 0.72rem; padding: 0.15rem 0.45rem;
-        border-radius: 4px; background: #1e3a5f; color: #7dd3fc; margin-left: 0.5rem;
-    }
     .plate-shift {
         margin: 0.5rem 0 0; padding: 0.5rem 0.75rem; border-radius: 6px;
         background: #172554; border: 1px dashed #3b82f6; font-size: 0.85rem; color: #93c5fd;
@@ -48,9 +49,9 @@
 {% endblock %}
 {% block content %}
 <div class="card page-intro">
-    <h1>Option Money Map <span class="wireframe-tag">wireframe</span></h1>
-    <p class="muted">Тикер → где накоплен OI (плита put / потолок call) → ползунок экспираций. Без LLM и лишних метрик. Источник: Polygon.</p>
-    <p class="muted" style="font-size:0.85rem"><a href="/options">← Полный раздел опционов</a> (сентимент, калькулятор)</p>
+    <h1>Option Money Map</h1>
+    <p class="muted">Тикер → где накоплен OI (плита put / потолок call) → ползунки экспирации и даты снимка. Источник: Polygon.</p>
+    <p class="muted" style="font-size:0.85rem"><a href="/options/tools">Сентимент и калькулятор</a> (Polygon / yfinance, put spread)</p>
 </div>
 
 <div class="card">
@@ -81,6 +82,7 @@
         <p class="spot-line-legend">
             <span><span class="dot-put">■</span> Put OI (поддержка)</span>
             <span><span class="dot-call">■</span> Call OI (потолок)</span>
+            <span><span class="atm-swatch"></span> ATM — страйки ±0.8% от spot</span>
             <span>Spot: <strong id="mapSpot">—</strong></span>
         </p>
         <div id="mapChart" class="oi-chart"></div>

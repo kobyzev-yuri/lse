@@ -1196,11 +1196,26 @@ async def api_earnings_postmortem(symbol: str, event_date: str = ""):
 
 @app.get("/options/map", response_class=HTMLResponse)
 async def options_money_map_page(request: Request):
-    """Wireframe: Option Money Map — OI plates + expiration slider."""
+    """Option Money Map — OI plates + expiration / snapshot sliders."""
     return HTMLResponse(
         render_template("options_map.html", {"request": request}),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
+
+
+@app.get("/options/tools", response_class=HTMLResponse)
+async def options_tools_page(request: Request):
+    """Option chain sentiment (Polygon/yfinance) + Put / Put Spread calculator."""
+    return HTMLResponse(
+        render_template("options.html", {"request": request}),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/options")
+async def options_entry_redirect():
+    """Главный вход в опционы — карта денег (фаза 6)."""
+    return RedirectResponse(url="/options/map", status_code=302)
 
 
 @app.get("/api/options/map/{ticker}/snapshots", response_class=JSONResponse)
@@ -1252,15 +1267,6 @@ async def api_options_money_map(
     except Exception as e:
         logger.exception("api_options_money_map %s", t)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/options", response_class=HTMLResponse)
-async def options_tools_page(request: Request):
-    """Option chain sentiment (Polygon) + Put / Put Spread calculator."""
-    return HTMLResponse(
-        render_template("options.html", {"request": request}),
-        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-    )
 
 
 @app.get("/api/options/expirations/{ticker}", response_class=JSONResponse)

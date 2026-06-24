@@ -1,8 +1,7 @@
 # Option Money Map — план и эксплуатация
 
 **Статус:** фазы 1–5 в prod (коммит `f8c457e`, 2026-06-24).  
-**Веб:** `/options/map` (меню «Опционы · карта»).  
-**Полный раздел:** `/options` (сентимент + калькулятор).
+**Веб:** `/options` (редирект → `/options/map`), `/options/tools` (сентимент + калькулятор).
 
 ## Цель
 
@@ -17,7 +16,7 @@
 | **3** | ✅ | Таблица `options_chain_oi_snapshot`, `scripts/snapshot_options_chain_oi.py` |
 | **4** | ✅ | Миграция 031 на prod, cron пн–пт 23:30 UTC |
 | **5** | ✅ | Ползунок «дата снимка» из БД + `plate_shift_ru` vs предыдущий день |
-| **6** | ⏳ | Сделать `/options/map` главным входом (по согласованию) |
+| **6** | ✅ | `/options` → редирект на `/options/map`; сентимент/калькулятор на `/options/tools` |
 
 **История OI:** настоящие прошлые недели **нельзя** скачать из Polygon snapshot API (только текущий снимок). Накопление — только через ежедневный cron. Фейковый backfill с прошлыми датами не делаем.
 
@@ -130,7 +129,8 @@ Watchlist по умолчанию: `MU, NVDA, AAPL, AMD, SMCI`. Объём ≈ 8
 ```bash
 # страницы
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/options/map
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/options
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/options/tools
+curl -s -o /dev/null -w "%{http_code} redirect\n" -L http://127.0.0.1:8080/options
 
 # live map
 curl -s "http://127.0.0.1:8080/api/options/map/MU?expiration_date=2026-06-26" \
