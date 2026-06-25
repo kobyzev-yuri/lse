@@ -93,11 +93,11 @@ One-liner (шаблон, без LLM):
 | **рынок — ожидание …** | PCR **volume** | put_vol / call_vol в окне ±20%; bullish если PCR ≤ порог, bearish если ≥ |
 | **Свежее активнее …** | тот же PCR | Текстовая расшифровка BULLISH/BEARISH/NEUTRAL |
 
-**Пороги PCR (по умолчанию 0.87 / 1.15):** стартовая эвристика wireframe (нейтральная полоса вокруг PCR=1), **не калиброваны** на исходах GAME_5M. Настройка: слайдеры на `/options/map` (localStorage per ticker) или query `pcr_volume_bullish_max` / `pcr_volume_bearish_min`; глобально — `OPTIONS_MAP_PCR_VOL_*` в config.
+**Пороги PCR (по умолчанию 0.87 / 1.15):** стартовая эвристика wireframe (нейтральная полоса вокруг PCR=1). Настройка: слайдеры на `/options/map` (localStorage per ticker) или query `pcr_volume_bullish_max` / `pcr_volume_bearish_min`; глобально — `OPTIONS_MAP_PCR_VOL_*` в config.
 
-**Не путать с:** sentiment score на `/options/tools` (окно ±15%, score ±0.35, несколько PCR) и decision gate (`OPTIONS_SENTIMENT_PCR_VOL_*`).
+**Объективная калибровка (cron):** ежедневно после OI-снимка считаются квантили PCR volume по истории `options_chain_oi_snapshot` (то же окно ±20%). При ≥10 снимках на пару ticker+exp: **p25 → bullish_max**, **p75 → bearish_min**; иначе wireframe. Артефакт: `last_options_map_cron_stats.json` (см. § Cron stats).
 
-**Будущая калибровка:** сопоставление PCR/flow_label на входе сделки с `realized_pct` → подбор порогов per ticker (см. план в `docs/OPTIONS_MONEY_MAP.md` § Cron OI + shadow).
+**Калибровка по исходам сделок (будущее):** сопоставление PCR/flow_label на входе с `realized_pct` GAME_5M — отдельный шаг поверх cron-статистики.
 
 ---
 
@@ -152,6 +152,39 @@ curl -s http://127.0.0.1:8080/api/options/tickers | python3 -m json.tool
 
 ---
 
+## Cron stats (калибровка PCR)
+
+**Зачем:** wireframe 0.87 / 1.15 — стартовые пороги; для объективного подбора per ticker нужна история PCR volume из тех же cron-снимков, что и ползунок «дата».
+
+| Компонент | Путь |
+|-----------|------|
+| Логика | `services/options_map_cron_stats.py` |
+| CLI / cron | `scripts/analyze_options_map_cron_stats.py` |
+| Обёртка cron | `scripts/cron_options_map_stats.sh` |
+| Расписание VM | `45 23 * * 1-5` UTC (через 15 мин после OI snapshot) |
+| JSON-артефакт | `/app/logs/ml/ml_data_quality/last_options_map_cron_stats.json` |
+
+**Метод:** для каждого `(ticker, expiration_date, snapshot_date)` — PCR volume = put_vol / call_vol в окне ±20% spot (как Money Map). По серии снимков: квантили p10–p90; при `snapshot_count ≥ 10` предлагаются **p25 → bullish_max**, **p75 → bearish_min**. Поле `ticker_rollup` — лучшая экспирация по числу снимков на тикер.
+
+```bash
+# вручную (как cron)
+docker exec lse-bot python scripts/analyze_options_map_cron_stats.py --days 90
+
+# один тикер
+docker exec lse-bot python scripts/analyze_options_map_cron_stats.py --days 90 --ticker MU
+
+# локально (если есть БД)
+python3 scripts/analyze_options_map_cron_stats.py --days 90 --json-out local/logs/ml_data_quality/last_options_map_cron_stats.json
+```
+
+**Как читать отчёт:** `ticker_exp_series[].suggested_thresholds` — готово ли (`ready`), источник (`quantile_p25_p75` или `wireframe_fallback`), пороги и `wireframe_comparison.delta_*`. Пока история <10 дней на серию — смотрите только квантили в `pcr_volume_stats`, пороги остаются wireframe.
+
+**UI:** на вкладке «Расчёт one-liner» показывается блок **«Рекомендовано из cron»** с p25/p75 порогами и кнопкой «Применить в слайдеры PCR». Автоподстановка при загрузке карты не делается — только по клику.
+
+**Не путать с:** sentiment score на `/options/tools` (окно ±15%) и decision gate (`OPTIONS_SENTIMENT_PCR_VOL_*`).
+
+---
+
 ## Чеклист тестов (prod)
 
 ```bash
@@ -173,6 +206,10 @@ curl -s "http://127.0.0.1:8080/api/options/map/MU?expiration_date=2026-06-26&sna
 
 # cron
 crontab -l | grep options_chain_oi
+crontab -l | grep options_map_stats
+
+# PCR stats artifact (после ≥1 прогона cron)
+docker exec lse-bot cat /app/logs/ml/ml_data_quality/last_options_map_cron_stats.json | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('status'), d.get('summary'))"
 ```
 
 Ручной UI: `/options/map` → MU → ползунок экспирации → ползунок даты (0 = live). `/options` → «Оба» на сентименте → баннер сравнения.
@@ -193,7 +230,10 @@ crontab -l | grep options_chain_oi
 | `services/options_money_map.py` | Плиты, one-liner, чтение БД |
 | `templates/options_map.html` | UI карты |
 | `scripts/snapshot_options_chain_oi.py` | Запись снимка |
-| `scripts/cron_options_chain_oi.sh` | Обёртка cron |
+| `scripts/cron_options_chain_oi.sh` | Обёртка cron OI |
+| `services/options_map_cron_stats.py` | PCR-квантили из cron-снимков |
+| `scripts/analyze_options_map_cron_stats.py` | CLI + JSON-артефакт порогов |
+| `scripts/cron_options_map_stats.sh` | Cron после OI snapshot |
 | `db/knowledge_pg/sql/031_*.sql` | Схема истории |
 
 ## Связанные документы

@@ -99,6 +99,19 @@
         font-size: 0.78rem; padding: 0.35rem 0.65rem; background: #1e293b; border: 1px solid #475569;
         color: #cbd5e1; border-radius: 5px; cursor: pointer;
     }
+    .calc-cron-rec {
+        margin: 0.75rem 0 0; padding: 0.75rem 0.9rem; border-radius: 8px;
+        background: #0c4a6e; border: 1px solid #0369a1; font-size: 0.82rem; color: #e0f2fe;
+    }
+    .calc-cron-rec h3 { margin: 0 0 0.45rem; font-size: 0.92rem; color: #bae6fd; }
+    .calc-cron-rec.missing { background: #1e293b; border-color: #475569; color: #94a3b8; }
+    .calc-cron-rec.missing h3 { color: #cbd5e1; }
+    .calc-cron-rec .cron-thresholds { font-size: 1rem; color: #7dd3fc; margin: 0.35rem 0; }
+    .calc-cron-rec button {
+        margin-top: 0.55rem; font-size: 0.78rem; padding: 0.35rem 0.75rem;
+        background: #0369a1; border: 1px solid #0284c7; color: #f0f9ff; border-radius: 5px; cursor: pointer;
+    }
+    .calc-cron-rec button:disabled { opacity: 0.45; cursor: not-allowed; }
 </style>
 {% endblock %}
 {% block content %}
@@ -196,6 +209,7 @@
 
         <div id="mapPanelCalc" style="display:none;">
             <div id="mapCalcMeta" class="calc-meta"></div>
+            <div id="mapCalcCronRec"></div>
             <div id="mapCalcSteps"></div>
             <p id="mapCalcAssembled" class="muted" style="font-size:0.82rem;margin-top:0.75rem;"></p>
         </div>
@@ -319,6 +333,77 @@
         });
     }
 
+    function applyCronPcrRecommendation(rec) {
+        const st = rec && rec.suggested_thresholds;
+        if (!st || !st.ready) return;
+        syncPcrUiFromValues(st.pcr_volume_bullish_max, st.pcr_volume_bearish_min);
+        schedulePcrReload();
+    }
+
+    function renderCronRecommendation(rec, appliedTh) {
+        const box = $('mapCalcCronRec');
+        if (!box) return;
+        if (!rec) {
+            box.innerHTML = '';
+            box.style.display = 'none';
+            return;
+        }
+        const st = rec.suggested_thresholds || {};
+        const vol = rec.pcr_volume_stats || {};
+        const appliedBull = appliedTh && appliedTh.pcr_volume_bullish_max;
+        const appliedBear = appliedTh && appliedTh.pcr_volume_bearish_min;
+        const matchesApplied = st.ready && appliedBull != null && appliedBear != null
+            && Math.abs(st.pcr_volume_bullish_max - appliedBull) < 0.001
+            && Math.abs(st.pcr_volume_bearish_min - appliedBear) < 0.001;
+
+        let cls = 'calc-cron-rec';
+        if (rec.status === 'missing' || rec.status === 'not_ready') cls += ' missing';
+        let html = '<h3>Рекомендовано из cron (PCR volume)</h3>';
+
+        if (rec.status === 'missing') {
+            html += '<p style="margin:0;line-height:1.45">' + esc(rec.reason_ru || 'Нет данных cron.') + '</p>';
+        } else if (rec.status === 'not_ready') {
+            html += '<p style="margin:0 0 0.35rem;line-height:1.45">' + esc(rec.reason_ru || '') + '</p>';
+            if (vol.p50 != null) {
+                html += '<p style="margin:0;font-size:0.78rem;color:#94a3b8">Пока доступны только квантили: p25 '
+                    + esc(vol.p25) + ', p50 ' + esc(vol.p50) + ', p75 ' + esc(vol.p75)
+                    + ' (снимков: ' + esc(rec.snapshot_count) + ').</p>';
+            }
+        } else {
+            html += '<div class="cron-thresholds">bullish ≤ ' + esc(st.pcr_volume_bullish_max)
+                + ' · bearish ≥ ' + esc(st.pcr_volume_bearish_min) + '</div>';
+            html += '<p style="margin:0.35rem 0 0;line-height:1.45;font-size:0.78rem;color:#bae6fd">'
+                + esc(rec.reason_ru || '') + '</p>';
+            if (rec.match_type === 'ticker_rollup' && rec.effective_expiration_date !== rec.requested_expiration_date) {
+                html += '<p style="margin:0.35rem 0 0;font-size:0.78rem;color:#94a3b8">Серия: exp '
+                    + esc(rec.effective_expiration_date) + ' (max снимков для тикера).</p>';
+            }
+            if (vol.p25 != null && vol.p75 != null) {
+                html += '<p style="margin:0.35rem 0 0;font-size:0.78rem;color:#94a3b8">Квантили PCR vol: p25 '
+                    + esc(vol.p25) + ', p50 ' + esc(vol.p50) + ', p75 ' + esc(vol.p75)
+                    + ' · снимков ' + esc(rec.snapshot_count) + '.</p>';
+            }
+            const wire = rec.wireframe_comparison || {};
+            if (wire.delta_bullish_vs_wireframe != null) {
+                html += '<p style="margin:0.35rem 0 0;font-size:0.78rem;color:#94a3b8">Δ vs wireframe 0.87/1.15: bullish '
+                    + esc(wire.delta_bullish_vs_wireframe) + ', bearish ' + esc(wire.delta_bearish_vs_wireframe) + '.</p>';
+            }
+            if (rec.generated_at_utc) {
+                html += '<p style="margin:0.35rem 0 0;font-size:0.72rem;color:#64748b">Артефакт: '
+                    + esc(rec.generated_at_utc) + (rec.artifact_days ? ', окно ' + esc(rec.artifact_days) + ' д.' : '') + '.</p>';
+            }
+            html += '<button type="button" id="btnApplyCronPcr"' + (matchesApplied ? ' disabled' : '') + '>'
+                + (matchesApplied ? 'Уже применено в слайдерах' : 'Применить в слайдеры PCR') + '</button>';
+        }
+        box.className = cls;
+        box.innerHTML = html;
+        box.style.display = 'block';
+        const btn = document.getElementById('btnApplyCronPcr');
+        if (btn && st.ready && !matchesApplied) {
+            btn.onclick = () => applyCronPcrRecommendation(rec);
+        }
+    }
+
     function renderBreakdown(bd) {
         const meta = $('mapCalcMeta');
         const steps = $('mapCalcSteps');
@@ -327,9 +412,11 @@
             meta.textContent = 'Нет данных для разбора.';
             steps.innerHTML = '';
             assembled.textContent = '';
+            renderCronRecommendation(null);
             return;
         }
         const th = bd.thresholds || {};
+        renderCronRecommendation(bd.cron_pcr_recommendation || null, th);
         let metaHtml = '';
         if (bd.intro_ru) {
             metaHtml += '<p style="margin:0 0 0.5rem;line-height:1.45">' + esc(bd.intro_ru) + '</p>';

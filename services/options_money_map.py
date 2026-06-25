@@ -182,6 +182,7 @@ def build_one_liner_breakdown(
     strike_window_pct: float,
     summary_one_liner_ru: str,
     pcr_thresholds: Optional[Dict[str, Any]] = None,
+    cron_pcr_recommendation: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Пошаговый разбор шаблонного one-liner для вкладки «Расчёт» в Money Map."""
     th = pcr_thresholds or resolve_pcr_vol_thresholds()
@@ -251,6 +252,7 @@ def build_one_liner_breakdown(
             "pcr_thresholds_defaults": th.get("defaults"),
             "pcr_thresholds_note_ru": th.get("note_ru"),
         },
+        "cron_pcr_recommendation": cron_pcr_recommendation,
         "steps": [
             {
                 "id": "spot",
@@ -398,6 +400,20 @@ def build_summary_one_liner(
     ).replace(",", " ")
 
 
+def _load_cron_pcr_recommendation(sym: str, exp: str) -> Dict[str, Any]:
+    try:
+        from services.options_map_cron_stats import lookup_cron_pcr_recommendation
+
+        return lookup_cron_pcr_recommendation(sym, exp)
+    except Exception:
+        return {
+            "status": "missing",
+            "ticker": sym,
+            "requested_expiration_date": exp,
+            "reason_ru": "Не удалось загрузить cron-артефакт.",
+        }
+
+
 def _plate_shift_ru(
     *,
     prev_date: str,
@@ -510,6 +526,7 @@ def _assemble_money_map_report(
         strike_window_pct=strike_window_pct,
         summary_one_liner_ru=one_liner,
         pcr_thresholds=th,
+        cron_pcr_recommendation=_load_cron_pcr_recommendation(sym, exp),
     )
 
     is_live = snapshot_date is None
