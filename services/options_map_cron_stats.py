@@ -296,7 +296,7 @@ def build_options_map_cron_stats_report(
 
     reasons: List[str] = []
     if not series:
-        reasons.append("Нет строк в options_chain_oi_snapshot за окно — дождитесь cron snapshot_options_chain_oi.")
+        reasons.append("Нет строк в options_chain_oi_snapshot за окно — дождитесь cron snapshot_options_chain_oi (yfinance).")
     elif not ready:
         reasons.append(
             f"Ни одна пара ticker+exp не набрала ≥{min_samples} снимков; квантили пока не применяются."

@@ -1,5 +1,5 @@
 -- Ежедневные снимки OI по страйкам для «ползунка во времени» (Option Money Map).
--- Заполнение: scripts/snapshot_options_chain_oi.py (cron, Phase 3).
+-- Заполнение: scripts/snapshot_options_chain_oi.py (cron, yfinance option_chain).
 
 CREATE TABLE IF NOT EXISTS options_chain_oi_snapshot (
     id BIGSERIAL PRIMARY KEY,

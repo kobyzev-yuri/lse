@@ -34,8 +34,14 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 15 */6 * * * flock -n /tmp/lse_ml_refresh_dispatcher.lock docker exec lse-bot python scripts/run_ml_refresh_dispatcher.py >> /home/ai8049520/lse/logs/ml_refresh_dispatcher.log 2>&1
 # Earnings ML (legacy slot — optional; dispatcher covers */6 poll). Full train: 23:52 below.
 # 30 */6 * * * flock -n /tmp/lse_earnings_ml_refresh.lock docker exec lse-bot python scripts/run_earnings_ml_refresh.py >> ...
-10 */2 * * * flock -n /tmp/lse_news_newsapi.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode newsapi >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
+# News ingest: free stack (RSS ЦБ + yfinance earnings). NewsAPI отключён (426 на free tier).
+*/15 * * * * flock -n /tmp/lse_news_core_fast.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode core-fast >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
+# Ticker news: Yahoo yfinance.get_news по GAME_5M / portfolio (без ключа).
+5 */2 * * * flock -n /tmp/lse_news_tickers.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode tickers >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
+# Investing: economic calendar JSON (работает) + HTML news (может 403 без прокси).
 0 */2 * * * flock -n /tmp/lse_news_investing.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode investing >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
+# NewsAPI — выключено (NEWSAPI 426 Upgrade Required). Включить при платном плане:
+# 10 */2 * * * flock -n /tmp/lse_news_newsapi.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode newsapi >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 10 * * * * docker exec lse-bot python scripts/sync_vector_kb_cron.py >> /home/ai8049520/lse/logs/sync_vector_kb.log 2>&1
 20 * * * * docker exec lse-bot python scripts/add_sentiment_to_news_cron.py >> /home/ai8049520/lse/logs/add_sentiment_to_news.log 2>&1
 0 4 * * * docker exec lse-bot python scripts/analyze_event_outcomes_cron.py >> /home/ai8049520/lse/logs/analyze_event_outcomes.log 2>&1
@@ -85,7 +91,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 25 6 * * 0 flock -n /tmp/lse_multiday_wf.lock docker exec lse-bot python3 /app/scripts/run_multiday_wf_game5m.py >> /home/ai8049520/lse/logs/multiday_wf_game5m.log 2>&1
 # Post-RTH GAME_5M session review + gap rolling metrics (after US close ~23:30 MSK).
 35 23 * * 1-5 flock -n /tmp/lse_game5m_daily_review.lock /home/ai8049520/lse/scripts/cron_game5m_daily_session_review.sh >> /home/ai8049520/lse/logs/game5m_daily_review.log 2>&1
-# Polygon option OI daily snapshot → options_chain_oi_snapshot (Money Map history slider). docs/OPTIONS_MONEY_MAP.md
+# yfinance option OI daily snapshot → options_chain_oi_snapshot (Money Map history slider). docs/OPTIONS_MONEY_MAP.md
 30 23 * * 1-5 flock -n /tmp/lse_options_oi_snap.lock /home/ai8049520/lse/scripts/cron_options_chain_oi.sh
 # Money Map PCR stats from cron OI snapshots (p25/p75 thresholds vs wireframe). docs/OPTIONS_MONEY_MAP.md § Cron stats
 45 23 * * 1-5 flock -n /tmp/lse_options_map_stats.lock /home/ai8049520/lse/scripts/cron_options_map_stats.sh

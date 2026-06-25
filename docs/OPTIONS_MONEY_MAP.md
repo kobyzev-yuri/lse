@@ -303,7 +303,7 @@ GET /api/options/map/MU/snapshots?expiration_date=2026-06-26
 
 **График OI:** в `chart_bars` только страйки с OI ≥ `max(200, 5% от максимума)` — убирает «расческу» из мелких уровней; плиты put/call считаются по полной доске. На UI под ползунками — подписи дат экспирации и снимка (Live + даты из БД).
 
-Источник live: **Polygon**. Архив: **`options_chain_oi_snapshot`** (не knowledge_base).
+Источник live: **Polygon** (или yfinance на `/options/tools`). Архив cron: **`options_chain_oi_snapshot`** (`source=yfinance`).
 
 ---
 

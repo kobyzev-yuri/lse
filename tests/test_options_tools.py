@@ -763,3 +763,30 @@ def test_options_card_context_formatters():
     brief: dict = {"status": "ok", "symbol": "MU"}
     attach_options_polygon_to_brief(brief, symbol="MU", event_date=None)
     assert "options_polygon" in brief
+
+
+def test_snapshot_options_chain_oi_yfinance_dry_run(monkeypatch):
+    from scripts import snapshot_options_chain_oi as snap
+
+    def fake_exps(ticker: str):
+        assert ticker == "MU"
+        return ["2026-06-26"]
+
+    def fake_chain(ticker: str, *, expiration_date: str):
+        assert expiration_date == "2026-06-26"
+        return {
+            "status": "ok",
+            "underlying_price": 1200.0,
+            "contracts": [
+                {"strike": 1200.0, "contract_type": "put", "open_interest": 100, "volume": 10},
+                {"strike": 1250.0, "contract_type": "call", "open_interest": 0, "volume": 0},
+            ],
+        }
+
+    monkeypatch.setattr("services.yfinance_options.fetch_yfinance_option_expirations", fake_exps)
+    monkeypatch.setattr("services.yfinance_options.fetch_yfinance_option_chain", fake_chain)
+
+    r = snap.snapshot_ticker("MU", expiration_date=None, dry_run=True)
+    assert r["status"] == "ok"
+    assert r["source"] == "yfinance"
+    assert r["rows"] == 1
