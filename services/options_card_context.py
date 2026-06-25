@@ -14,7 +14,12 @@ from services.options_chain_sentiment import (
     _filter_contracts_for_analysis,
     analyze_options_chain,
 )
-from services.options_money_map import _flow_label, _top_strikes, build_summary_one_liner
+from services.options_money_map import (
+    _flow_label,
+    _top_strikes,
+    build_summary_one_liner,
+    default_pcr_vol_thresholds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +258,12 @@ def _compact_from_chain(
     call_vol = sum(int(c.get("volume") or 0) for c in filtered if c.get("contract_type") == "call")
     put_vol = sum(int(c.get("volume") or 0) for c in filtered if c.get("contract_type") == "put")
     pcr_vol = (put_vol / call_vol) if call_vol > 0 else totals.get("pcr_volume")
-    flow_label, flow_ru = _flow_label(float(pcr_vol) if pcr_vol is not None else None)
+    map_pcr = default_pcr_vol_thresholds()
+    flow_label, flow_ru = _flow_label(
+        float(pcr_vol) if pcr_vol is not None else None,
+        pcr_volume_bullish_max=float(map_pcr["pcr_volume_bullish_max"]),
+        pcr_volume_bearish_min=float(map_pcr["pcr_volume_bearish_min"]),
+    )
     oi_available = bool(analysis.get("oi_available"))
 
     score = float(analysis.get("sentiment_score") or 0.0)

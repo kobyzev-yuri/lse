@@ -58,13 +58,54 @@
         background: #172554; border: 1px dashed #3b82f6; font-size: 0.85rem; color: #93c5fd;
     }
     .snap-live-tag { color: #86efac; font-size: 0.8rem; }
+    .map-tabs {
+        display: flex; gap: 0.35rem; margin: 0.85rem 0 0.5rem; flex-wrap: wrap;
+    }
+    .map-tab {
+        background: #0f172a; border: 1px solid #334155; color: #94a3b8;
+        padding: 0.4rem 0.85rem; border-radius: 6px; cursor: pointer; font-size: 0.88rem;
+    }
+    .map-tab.active { border-color: #3b82f6; color: #e2e8f0; background: #172554; }
+    .calc-step {
+        background: #0f172a; border: 1px solid #1e3a5f; border-radius: 8px;
+        padding: 0.85rem 1rem; margin: 0.65rem 0;
+    }
+    .calc-step h3 { margin: 0 0 0.35rem; font-size: 0.95rem; color: #e2e8f0; }
+    .calc-result { font-size: 1.05rem; color: #7dd3fc; margin: 0.25rem 0 0.5rem; }
+    .calc-method { font-size: 0.85rem; color: #94a3b8; line-height: 1.45; margin: 0; }
+    .calc-kv { margin: 0.5rem 0 0; font-size: 0.82rem; color: #cbd5e1; }
+    .calc-kv dt { color: #64748b; display: inline; }
+    .calc-kv dd { display: inline; margin: 0 0.75rem 0 0; }
+    .calc-cands { margin: 0.45rem 0 0; padding-left: 1.1rem; font-size: 0.82rem; color: #cbd5e1; }
+    .calc-meta {
+        margin: 0.75rem 0 0; padding: 0.65rem 0.85rem; border-radius: 6px;
+        background: #172554; border: 1px dashed #475569; font-size: 0.8rem; color: #94a3b8;
+    }
+    .pcr-thresholds {
+        margin: 0.75rem 0 0; padding: 0.75rem 0.9rem; border-radius: 8px;
+        background: #0f172a; border: 1px solid #334155;
+    }
+    .pcr-thresholds h3 { margin: 0 0 0.35rem; font-size: 0.9rem; color: #cbd5e1; }
+    .pcr-thresholds .muted-note { font-size: 0.78rem; color: #64748b; margin: 0 0 0.65rem; line-height: 1.4; }
+    .pcr-thresholds-grid {
+        display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.65rem 1rem; align-items: end;
+    }
+    @media (max-width: 720px) { .pcr-thresholds-grid { grid-template-columns: 1fr; } }
+    .pcr-thresholds label { font-size: 0.78rem; color: #94a3b8; display: block; margin-bottom: 0.2rem; }
+    .pcr-thresholds input[type="range"] { width: 100%; }
+    .pcr-val { font-size: 0.88rem; color: #7dd3fc; font-weight: 600; }
+    .pcr-thresholds-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .pcr-thresholds-actions button {
+        font-size: 0.78rem; padding: 0.35rem 0.65rem; background: #1e293b; border: 1px solid #475569;
+        color: #cbd5e1; border-radius: 5px; cursor: pointer;
+    }
 </style>
 {% endblock %}
 {% block content %}
 <div class="card page-intro">
     <h1>Option Money Map</h1>
     <p class="muted">Тикер → где накоплен OI (плита put / потолок call) → ползунки экспирации и даты снимка. Источник: Polygon.</p>
-    <p class="muted" style="font-size:0.85rem"><a href="/options/tools">Сентимент и калькулятор</a> (Polygon / yfinance, put spread)</p>
+    <p class="muted" style="font-size:0.85rem">One-liner — шаблон без LLM. <a href="#" id="linkCalcTab">Как считается →</a> · <a href="/options/tools">Сентимент и калькулятор</a></p>
 </div>
 
 <div class="card">
@@ -84,6 +125,35 @@
     <div id="mapBody" style="display:none;">
         <div id="mapHero" class="map-hero"></div>
 
+        <div id="mapPcrThresholds" class="pcr-thresholds">
+            <h3>PCR volume — пороги для «рынок — ожидание …»</h3>
+            <p class="muted-note">
+                Стартовые 0.87 / 1.15 — wireframe (полоса вокруг PCR=1), <strong>не калиброваны</strong> по сделкам.
+                Можно подобрать per ticker — сохраняется в браузере. На вкладке «Расчёт» видно, какие пороги применились.
+                GAME_5M decision gate — отдельные <code>OPTIONS_SENTIMENT_PCR_VOL_*</code> в config.
+            </p>
+            <div class="pcr-thresholds-grid">
+                <div>
+                    <label for="mapPcrBull">Bullish: PCR ≤ <span id="mapPcrBullVal" class="pcr-val">0.87</span></label>
+                    <input type="range" id="mapPcrBull" min="50" max="99" value="87" step="1">
+                </div>
+                <div>
+                    <label for="mapPcrBear">Bearish: PCR ≥ <span id="mapPcrBearVal" class="pcr-val">1.15</span></label>
+                    <input type="range" id="mapPcrBear" min="101" max="200" value="115" step="1">
+                </div>
+                <div class="pcr-thresholds-actions">
+                    <button type="button" id="btnPcrResetTicker">Сброс тикера</button>
+                    <button type="button" id="btnPcrResetGlobal">Дефолт 0.87 / 1.15</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="map-tabs" role="tablist">
+            <button type="button" class="map-tab active" data-tab="map" role="tab" aria-selected="true">Карта</button>
+            <button type="button" class="map-tab" data-tab="calc" role="tab" aria-selected="false">Расчёт one-liner</button>
+        </div>
+
+        <div id="mapPanelMap">
         <p class="exp-label">Экспирация: <strong id="mapExpLabel">—</strong></p>
         <div class="slider-block">
             <div class="slider-wrap">
@@ -121,6 +191,13 @@
             </div>
         </div>
         <p id="mapNote" class="muted" style="font-size:0.8rem;"></p>
+        </div>
+
+        <div id="mapPanelCalc" style="display:none;">
+            <div id="mapCalcMeta" class="calc-meta"></div>
+            <div id="mapCalcSteps"></div>
+            <p id="mapCalcAssembled" class="muted" style="font-size:0.82rem;margin-top:0.75rem;"></p>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -134,6 +211,183 @@
     let currentSnap = null;
     let sliderBusy = false;
     let optionsTickerMeta = {};
+    let activeMapTab = 'map';
+    const PCR_LS_KEY = 'lse_options_map_pcr_thresholds_v1';
+    const PCR_DEFAULTS = { bullish_max: 0.87, bearish_min: 1.15 };
+    let pcrReloadTimer = null;
+
+    function loadAllPcrFromStorage() {
+        try {
+            return JSON.parse(localStorage.getItem(PCR_LS_KEY) || '{}') || {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function savePcrForTicker(ticker, bullish, bearish) {
+        const all = loadAllPcrFromStorage();
+        all[ticker] = { bullish_max: bullish, bearish_min: bearish };
+        localStorage.setItem(PCR_LS_KEY, JSON.stringify(all));
+    }
+
+    function clearPcrForTicker(ticker) {
+        const all = loadAllPcrFromStorage();
+        delete all[ticker];
+        localStorage.setItem(PCR_LS_KEY, JSON.stringify(all));
+    }
+
+    function getPcrForTicker(ticker) {
+        const row = loadAllPcrFromStorage()[ticker];
+        if (row && row.bullish_max != null && row.bearish_min != null) return row;
+        return { ...PCR_DEFAULTS };
+    }
+
+    function sliderToBull(v) { return Math.round(parseInt(v, 10)) / 100; }
+    function sliderToBear(v) { return Math.round(parseInt(v, 10)) / 100; }
+    function bullToSlider(v) { return Math.round(parseFloat(v) * 100); }
+    function bearToSlider(v) { return Math.round(parseFloat(v) * 100); }
+
+    function readPcrFromUi() {
+        const bull = sliderToBull($('mapPcrBull').value);
+        let bear = sliderToBear($('mapPcrBear').value);
+        if (bull >= bear - 0.02) bear = Math.min(2.0, bull + 0.05);
+        return { bullish_max: bull, bearish_min: bear };
+    }
+
+    function syncPcrUiFromValues(bull, bear) {
+        $('mapPcrBull').value = String(bullToSlider(bull));
+        $('mapPcrBear').value = String(bearToSlider(bear));
+        $('mapPcrBullVal').textContent = bull.toFixed(2);
+        $('mapPcrBearVal').textContent = bear.toFixed(2);
+    }
+
+    function loadPcrUiForCurrentTicker() {
+        const t = ($('mapTicker').value || '').trim().toUpperCase();
+        const p = t ? getPcrForTicker(t) : { ...PCR_DEFAULTS };
+        syncPcrUiFromValues(p.bullish_max, p.bearish_min);
+    }
+
+    function schedulePcrReload() {
+        const t = ($('mapTicker').value || '').trim().toUpperCase();
+        if (!t) return;
+        const p = readPcrFromUi();
+        syncPcrUiFromValues(p.bullish_max, p.bearish_min);
+        savePcrForTicker(t, p.bullish_max, p.bearish_min);
+        if (pcrReloadTimer) clearTimeout(pcrReloadTimer);
+        pcrReloadTimer = setTimeout(() => {
+            const exp = $('mapExpLabel').textContent;
+            loadMap(exp && exp !== '—' ? exp : null, currentSnap);
+        }, 280);
+    }
+
+    function pcrQueryParams() {
+        const p = readPcrFromUi();
+        return [
+            'pcr_volume_bullish_max=' + encodeURIComponent(p.bullish_max.toFixed(4)),
+            'pcr_volume_bearish_min=' + encodeURIComponent(p.bearish_min.toFixed(4)),
+        ];
+    }
+
+    function esc(s) {
+        const d = document.createElement('div');
+        d.textContent = s == null ? '' : String(s);
+        return d.innerHTML;
+    }
+
+    function setMapTab(tab) {
+        activeMapTab = tab;
+        document.querySelectorAll('.map-tab').forEach(btn => {
+            const on = btn.getAttribute('data-tab') === tab;
+            btn.classList.toggle('active', on);
+            btn.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+        $('mapPanelMap').style.display = tab === 'map' ? 'block' : 'none';
+        $('mapPanelCalc').style.display = tab === 'calc' ? 'block' : 'none';
+    }
+
+    document.querySelectorAll('.map-tab').forEach(btn => {
+        btn.addEventListener('click', () => setMapTab(btn.getAttribute('data-tab') || 'map'));
+    });
+    const linkCalc = document.getElementById('linkCalcTab');
+    if (linkCalc) {
+        linkCalc.addEventListener('click', (e) => {
+            e.preventDefault();
+            if ($('mapBody').style.display === 'none') return;
+            setMapTab('calc');
+            $('mapPanelCalc').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    }
+
+    function renderBreakdown(bd) {
+        const meta = $('mapCalcMeta');
+        const steps = $('mapCalcSteps');
+        const assembled = $('mapCalcAssembled');
+        if (!bd || !bd.steps) {
+            meta.textContent = 'Нет данных для разбора.';
+            steps.innerHTML = '';
+            assembled.textContent = '';
+            return;
+        }
+        const th = bd.thresholds || {};
+        let metaHtml = '';
+        if (bd.intro_ru) {
+            metaHtml += '<p style="margin:0 0 0.5rem;line-height:1.45">' + esc(bd.intro_ru) + '</p>';
+        }
+        metaHtml +=
+            '<strong>Источник:</strong> ' + esc(bd.data_source_ru || '') +
+            ' · <strong>exp</strong> ' + esc(bd.expiration_date || '—') +
+            (th.pcr_thresholds_source === 'ui_override' ? ' · <span style="color:#7dd3fc">пороги из UI</span>' : ' · пороги: дефолт') +
+            '<br><strong>Параметры:</strong> окно ±' + esc((th.strike_window_pct * 100).toFixed(0)) + '% spot; ' +
+            'PCR bullish ≤ ' + esc(th.pcr_volume_bullish_max) + ', bearish ≥ ' + esc(th.pcr_volume_bearish_min) + '; ' +
+            'топ-' + esc(th.top_strikes_n) + ' страйков по OI.';
+        if (bd.caveats_ru && bd.caveats_ru.length) {
+            metaHtml += '<ul class="calc-cands" style="margin:0.5rem 0 0">';
+            bd.caveats_ru.forEach(c => { metaHtml += '<li>' + esc(c) + '</li>'; });
+            metaHtml += '</ul>';
+        }
+        meta.innerHTML = metaHtml;
+
+        steps.innerHTML = '';
+        bd.steps.forEach((step, idx) => {
+            const card = document.createElement('div');
+            card.className = 'calc-step';
+            let html = '<h3>' + (idx + 1) + '. ' + esc(step.title_ru) + '</h3>';
+            if (step.result_ru) html += '<div class="calc-result">' + esc(step.result_ru) + '</div>';
+            if (step.method_ru) html += '<p class="calc-method">' + esc(step.method_ru) + '</p>';
+            if (step.formula_ru) {
+                html += '<dl class="calc-kv"><dt>Формула:</dt><dd>' + esc(step.formula_ru) + '</dd></dl>';
+            }
+            if (step.rule_ru) {
+                html += '<dl class="calc-kv"><dt>Правило:</dt><dd>' + esc(step.rule_ru) + '</dd></dl>';
+            }
+            if (step.inputs) {
+                const inp = step.inputs;
+                const labels = step.inputs_labels_ru || {};
+                html += '<dl class="calc-kv">';
+                Object.keys(inp).forEach(k => {
+                    if (inp[k] != null) {
+                        html += '<dt>' + esc(labels[k] || k) + ':</dt><dd>' + esc(inp[k]) + '</dd>';
+                    }
+                });
+                html += '</dl>';
+            }
+            const cands = step.candidates || [];
+            if (cands.length) {
+                html += '<ul class="calc-cands">';
+                cands.forEach(c => {
+                    const oi = c.put_oi != null ? c.put_oi : c.call_oi;
+                    const leg = c.put_oi != null ? 'put OI' : 'call OI';
+                    html += '<li>#' + esc(c.rank) + ' $' + esc(c.strike) + ' — ' + leg + ' ' + esc((oi || 0).toLocaleString()) + '</li>';
+                });
+                html += '</ul>';
+            }
+            card.innerHTML = html;
+            steps.appendChild(card);
+        });
+        assembled.textContent = bd.assembled_ru
+            ? ('Итоговая строка совпадает с блоком над картой: ' + bd.assembled_ru)
+            : '';
+    }
 
     function formatTickerLabel(t) {
         const m = optionsTickerMeta[t] || {};
@@ -308,6 +562,7 @@
         renderPlates('mapResistance', j.resistance_ceiling, 'call');
         renderChart(j.chart_bars || [], j.spot || 0, j.chart_scope || null);
         updateSnapSlider(j);
+        renderBreakdown(j.one_liner_breakdown || null);
 
         exps = j.available_expirations || [j.expiration_date];
         const slider = $('mapExpSlider');
@@ -326,6 +581,7 @@
         const qs = [];
         if (exp) qs.push('expiration_date=' + encodeURIComponent(exp));
         if (snap) qs.push('snapshot_date=' + encodeURIComponent(snap));
+        pcrQueryParams().forEach(q => qs.push(q));
         if (qs.length) url += '?' + qs.join('&');
         const r = await fetch(url);
         const j = await r.json();
@@ -334,7 +590,19 @@
     }
 
     $('btnMapLoad').onclick = () => { currentSnap = null; loadMap($('mapExpLabel').textContent !== '—' ? $('mapExpLabel').textContent : null); };
-    $('mapTicker').onchange = () => { currentSnap = null; loadMap(); };
+    $('mapTicker').onchange = () => { loadPcrUiForCurrentTicker(); currentSnap = null; loadMap(); };
+    $('mapPcrBull').oninput = schedulePcrReload;
+    $('mapPcrBear').oninput = schedulePcrReload;
+    $('btnPcrResetTicker').onclick = () => {
+        const t = ($('mapTicker').value || '').trim().toUpperCase();
+        if (t) clearPcrForTicker(t);
+        syncPcrUiFromValues(PCR_DEFAULTS.bullish_max, PCR_DEFAULTS.bearish_min);
+        schedulePcrReload();
+    };
+    $('btnPcrResetGlobal').onclick = () => {
+        syncPcrUiFromValues(PCR_DEFAULTS.bullish_max, PCR_DEFAULTS.bearish_min);
+        schedulePcrReload();
+    };
     $('mapExpSlider').oninput = async function() {
         if (sliderBusy || !exps.length) return;
         const idx = parseInt(this.value, 10);
@@ -364,7 +632,7 @@
         sliderBusy = false;
     };
 
-    loadOptionsTickerSelect().then(() => loadMap());
+    loadOptionsTickerSelect().then(() => { loadPcrUiForCurrentTicker(); loadMap(); });
 })();
 </script>
 {% endblock %}

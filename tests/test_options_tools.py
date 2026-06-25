@@ -449,7 +449,93 @@ def test_money_map_report_monkeypatch(monkeypatch):
     assert r["support_plate"][0]["strike"] == 1000.0
     assert r["resistance_ceiling"][0]["strike"] == 1180.0
     assert r["summary_one_liner_ru"]
+    bd = r.get("one_liner_breakdown") or {}
+    assert bd.get("is_template_not_llm") is True
+    assert len(bd.get("steps") or []) >= 5
+    assert bd.get("intro_ru")
+    assert bd.get("caveats_ru")
+    assert bd.get("assembled_ru")
+    assert r["pcr_thresholds"]["pcr_volume_bullish_max"] == 0.87
     assert len(r["chart_bars"]) >= 2
+
+
+def test_resolve_pcr_vol_thresholds_override():
+    from services.options_money_map import resolve_pcr_vol_thresholds
+
+    th = resolve_pcr_vol_thresholds(ticker="MU", pcr_volume_bullish_max=0.8, pcr_volume_bearish_min=1.25)
+    assert th["source"] == "ui_override"
+    assert th["pcr_volume_bullish_max"] == 0.8
+    assert th["pcr_volume_bearish_min"] == 1.25
+    assert th["calibrated"] is False
+
+
+def test_flow_label_custom_thresholds():
+    from services.options_money_map import _flow_label
+
+    label, _ = _flow_label(0.9, pcr_volume_bullish_max=0.95, pcr_volume_bearish_min=1.2)
+    assert label == "BULLISH"
+    label2, _ = _flow_label(0.9, pcr_volume_bullish_max=0.85, pcr_volume_bearish_min=1.2)
+    assert label2 == "NEUTRAL"
+
+
+def test_money_map_report_custom_pcr_thresholds(monkeypatch):
+    from services.options_money_map import build_money_map_report
+
+    monkeypatch.setattr("services.polygon_options.polygon_options_available", lambda: True)
+    monkeypatch.setattr("services.polygon_options.fetch_option_expiration_dates", lambda t: ["2026-06-26"])
+    monkeypatch.setattr(
+        "services.polygon_options.fetch_options_chain_snapshot",
+        lambda ticker, expiration_date=None, limit=250: {
+            "status": "ok",
+            "underlying_price": 1050.0,
+            "contracts": [
+                {"contract_type": "put", "strike": 1000.0, "open_interest": 8000, "volume": 50},
+                {"contract_type": "call", "strike": 1100.0, "open_interest": 3000, "volume": 100},
+            ],
+        },
+    )
+    r = build_money_map_report("MU", expiration_date="2026-06-26", pcr_volume_bullish_max=0.95, pcr_volume_bearish_min=1.2)
+    assert r["pcr_thresholds"]["pcr_volume_bullish_max"] == 0.95
+    assert r["flow_label"] == "BULLISH"  # pcr 0.5
+
+
+def test_money_map_one_liner_breakdown():
+    from services.options_money_map import build_one_liner_breakdown
+
+    bd = build_one_liner_breakdown(
+        sym="MU",
+        exp="2026-06-26",
+        spot_f=1182.0,
+        spot_source="stocks_snapshot",
+        source="polygon",
+        snapshot_date=None,
+        support=[
+            {"strike": 1100.0, "oi": 12000},
+            {"strike": 1000.0, "oi": 9000},
+            {"strike": 950.0, "oi": 8000},
+        ],
+        resistance=[
+            {"strike": 1200.0, "oi": 15000},
+            {"strike": 1250.0, "oi": 11000},
+            {"strike": 1300.0, "oi": 7000},
+        ],
+        flow_label="BULLISH",
+        flow_ru="свежее активнее call (ставки на рост)",
+        pcr_vol=0.72,
+        call_vol=5000,
+        put_vol=3600,
+        call_oi=40000,
+        put_oi=35000,
+        scope={"strike_lo": 945.6, "strike_hi": 1418.4, "contracts_in_window": 120, "contracts_raw": 200},
+        strike_window_pct=0.20,
+        summary_one_liner_ru="…",
+        pcr_thresholds={"pcr_volume_bullish_max": 0.87, "pcr_volume_bearish_min": 1.15, "source": "default"},
+    )
+    flow = next(s for s in bd["steps"] if s["id"] == "flow")
+    assert "0.72" in (flow.get("formula_ru") or "")
+    assert bd["thresholds"]["pcr_volume_bullish_max"] == 0.87
+    put = next(s for s in bd["steps"] if s["id"] == "put_plate")
+    assert "$950" in put["result_ru"] and "$1 100" in put["result_ru"]
 
 
 def test_money_map_snapshot_assembly():

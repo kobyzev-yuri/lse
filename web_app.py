@@ -1249,6 +1249,8 @@ async def api_options_money_map(
     ticker: str,
     expiration_date: Optional[str] = None,
     snapshot_date: Optional[str] = None,
+    pcr_volume_bullish_max: Optional[float] = None,
+    pcr_volume_bearish_min: Optional[float] = None,
 ):
     from services.options_money_map import build_money_map_report
 
@@ -1262,6 +1264,8 @@ async def api_options_money_map(
                 t,
                 expiration_date=expiration_date or None,
                 snapshot_date=snapshot_date or None,
+                pcr_volume_bullish_max=pcr_volume_bullish_max,
+                pcr_volume_bearish_min=pcr_volume_bearish_min,
             )
         )
     except Exception as e:

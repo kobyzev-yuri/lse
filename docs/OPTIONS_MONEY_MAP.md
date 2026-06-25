@@ -81,6 +81,26 @@ One-liner (шаблон, без LLM):
 
 ---
 
+## Как собирается one-liner (вкладка «Расчёт»)
+
+Шаблон **без LLM**. Поля API: `summary_one_liner_ru`, `one_liner_breakdown` (шаги + `intro_ru` + `caveats_ru`).
+
+| Часть фразы | Метрика | Правило |
+|-------------|---------|---------|
+| **Spot $…** | `underlying_price` / spot из БД | Цена акции на момент снимка |
+| **Put-плита** | put **open interest** | Топ-3 страйка ниже spot (≤ spot×1.01) с max put OI; в тексте min…max страйков |
+| **Call-потолок** | call **open interest** | Топ-3 страйка выше spot (≥ spot×0.99) с max call OI |
+| **рынок — ожидание …** | PCR **volume** | put_vol / call_vol в окне ±20%; bullish если PCR ≤ порог, bearish если ≥ |
+| **Свежее активнее …** | тот же PCR | Текстовая расшифровка BULLISH/BEARISH/NEUTRAL |
+
+**Пороги PCR (по умолчанию 0.87 / 1.15):** стартовая эвристика wireframe (нейтральная полоса вокруг PCR=1), **не калиброваны** на исходах GAME_5M. Настройка: слайдеры на `/options/map` (localStorage per ticker) или query `pcr_volume_bullish_max` / `pcr_volume_bearish_min`; глобально — `OPTIONS_MAP_PCR_VOL_*` в config.
+
+**Не путать с:** sentiment score на `/options/tools` (окно ±15%, score ±0.35, несколько PCR) и decision gate (`OPTIONS_SENTIMENT_PCR_VOL_*`).
+
+**Будущая калибровка:** сопоставление PCR/flow_label на входе сделки с `realized_pct` → подбор порогов per ticker (см. план в `docs/OPTIONS_MONEY_MAP.md` § Cron OI + shadow).
+
+---
+
 ## API
 
 ```
@@ -89,7 +109,9 @@ GET /api/options/map/MU?expiration_date=2026-06-26&snapshot_date=2026-06-24
 GET /api/options/map/MU/snapshots?expiration_date=2026-06-26
 ```
 
-Ответ (ключевые поля): `summary_one_liner_ru`, `support_plate`, `resistance_ceiling`, `chart_bars`, `chart_scope` (порог OI для графика), `available_expirations`, `available_snapshot_dates`, `is_live`, `plate_shift_ru`, `flow_label`, `pcr_volume`.
+Ответ (ключевые поля): `summary_one_liner_ru`, **`one_liner_breakdown`** (пошаговый разбор для вкладки «Расчёт» в UI), `support_plate`, `resistance_ceiling`, `chart_bars`, `chart_scope` (порог OI для графика), `available_expirations`, `available_snapshot_dates`, `is_live`, `plate_shift_ru`, `flow_label`, `pcr_volume`.
+
+**Вкладка «Расчёт one-liner»** (`/options/map`): шаблон без LLM; показывает spot, окно ±20%, топ-3 put/call OI, PCR volume и пороги. **Пороги PCR** настраиваются per ticker в UI (localStorage) и через query `pcr_volume_bullish_max` / `pcr_volume_bearish_min`; глобальный дефолт — `OPTIONS_MAP_PCR_VOL_*` в config (wireframe 0.87 / 1.15). Калибровка по сделкам — отдельная будущая задача.
 
 **График OI:** в `chart_bars` только страйки с OI ≥ `max(200, 5% от максимума)` — убирает «расческу» из мелких уровней; плиты put/call считаются по полной доске. На UI под ползунками — подписи дат экспирации и снимка (Live + даты из БД).
 
