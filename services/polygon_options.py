@@ -123,7 +123,7 @@ def fetch_options_chain_snapshot(
     if not key:
         return {
             "status": "error",
-            "error": "POLYGON_API_KEY не задан в config.env",
+            "error": "POLYGON_API_KEY не задан (config.security.env)",
             "contracts": [],
         }
 

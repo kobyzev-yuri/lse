@@ -92,6 +92,7 @@ CONFIG_ENV_WEB_BLOCKLIST = frozenset(
         "MARKETAUX_API_KEY",
         "ALPHAVANTAGE_KEY",
         "GEMINI_API_KEY",
+        "POLYGON_API_KEY",
         "TELEGRAM_BOT_TOKEN",
         "INVESTING_NEWS_PROXY",  # может содержать user:pass
     }

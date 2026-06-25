@@ -36,9 +36,11 @@ services:
     # Секреты: на хосте должен быть обычный файл ./config.secrets.env (не каталог). Иначе compose не поднимется —
     # скопируйте из config.secrets.env.example или закомментируйте монтирование и передайте ключи через environment.
     # logs — без :ro, чтобы cron (fetch_news_cron и др.) мог писать в /app/logs; веб читает для страницы «Сервис / логи».
+    # Security overlay (Polygon и др.): файл config.security.env на хосте — иначе ключи из overlay не видны в контейнере.
     volumes:
       - ./config.env:/app/config.env
       - ./config.secrets.env:/app/config.secrets.env
+      - ./config.security.env:/app/config.security.env
       - ./logs:/app/logs
       - ./local:/app/local
     environment:

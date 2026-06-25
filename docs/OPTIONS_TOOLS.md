@@ -127,7 +127,7 @@ flowchart TB
 | `templates/partials/site_nav_links.html` | «Опционы», «Опционы · карта» |
 | `scripts/snapshot_options_chain_oi.py` | ежедневный снимок OI в PostgreSQL |
 | `tests/test_options_tools.py` | unit-тесты |
-| `config.env.example` | `POLYGON_API_KEY` (секрет только в `config.env` на VM, не в git) |
+| `config.security.env.example` | `POLYGON_API_KEY` (live: `config.security.env` на VM) |
 
 ---
 
@@ -303,16 +303,18 @@ Put spread — ставка на **падение**; при BULLISH call-flow н
 
 ## 9. Конфигурация и прод
 
-### config.env (на VM, не в git)
+### config.security.env (на VM, не в git)
 
 ```env
 POLYGON_API_KEY=<ключ из https://polygon.io/dashboard/api-keys>
 ```
 
+Шаблон: `config.security.env.example`. Файл перекрывает `config.env` / `config.secrets.env` (см. `config_loader.py`). В `docker-compose.yml` смонтирован как `./config.security.env:/app/config.security.env`.
+
 Регистрация: [polygon.io/dashboard/signup](https://polygon.io/dashboard/signup).  
 Ключи: [polygon.io/dashboard/api-keys](https://polygon.io/dashboard/api-keys).
 
-После изменения `config.env`:
+После изменения:
 
 ```bash
 docker compose restart lse   # на GCP VM в каталоге lse

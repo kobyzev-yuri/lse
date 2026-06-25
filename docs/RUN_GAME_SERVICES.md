@@ -97,7 +97,7 @@ cd /path/to/lse && docker compose exec lse python scripts/telegram_signal_diagno
 
 Только слой конфигов, без запросов к `api.telegram.org`: добавьте `--skip-api`. Скрипт: `scripts/telegram_signal_diagnose.py`.
 
-Если на хосте используется `config.security.env`, добавьте в `docker-compose.yml` такой же `volumes`, как у `config.secrets.env`, иначе внутри контейнера overlay не подхватится.
+Если на хосте используется `config.security.env`, в `docker-compose.yml` смонтирован volume `./config.security.env:/app/config.security.env` (рядом с `config.secrets.env`).
 
 ## 6. Веб-интерфейс (опционально)
 
