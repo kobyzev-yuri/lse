@@ -412,8 +412,13 @@ def test_money_map_one_liner():
         flow_label="BULLISH",
         flow_ru="свежее активнее call",
         oi_available=True,
+        pcr_volume=0.72,
+        pcr_volume_bullish_max=0.87,
+        pcr_volume_bearish_min=1.15,
     )
     assert "плита" in s
+    assert "PCR vol 0.72" in s
+    assert "≤0.87" in s and "≥1.15" in s
     assert "1 000" in s or "1000" in s
     assert "1 180" in s or "1180" in s
     assert "call" in s.lower() or "рост" in s

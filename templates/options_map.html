@@ -129,8 +129,9 @@
             <h3>PCR volume — пороги для «рынок — ожидание …»</h3>
             <p class="muted-note">
                 Стартовые 0.87 / 1.15 — wireframe (полоса вокруг PCR=1), <strong>не калиброваны</strong> по сделкам.
-                Можно подобрать per ticker — сохраняется в браузере. На вкладке «Расчёт» видно, какие пороги применились.
-                GAME_5M decision gate — отдельные <code>OPTIONS_SENTIMENT_PCR_VOL_*</code> в config.
+                Строка над картой <strong>пересчитывается сама</strong> ~0.3 с после отпускания слайдера (кнопка «Показать» не нужна).
+                Меняется блок «рынок — …», если PCR пересекает порог; плиты по OI не зависят от PCR.
+                Пороги в конце one-liner: <code>PCR vol … · пороги ≤… / ≥…</code>.
             </p>
             <div class="pcr-thresholds-grid">
                 <div>
@@ -563,6 +564,13 @@
         renderChart(j.chart_bars || [], j.spot || 0, j.chart_scope || null);
         updateSnapSlider(j);
         renderBreakdown(j.one_liner_breakdown || null);
+
+        if (j.pcr_thresholds) {
+            syncPcrUiFromValues(
+                j.pcr_thresholds.pcr_volume_bullish_max,
+                j.pcr_thresholds.pcr_volume_bearish_min
+            );
+        }
 
         exps = j.available_expirations || [j.expiration_date];
         const slider = $('mapExpSlider');

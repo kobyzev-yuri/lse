@@ -347,13 +347,19 @@ def build_one_liner_breakdown(
                 "result_ru": summary_one_liner_ru,
                 "method_ru": (
                     "Фиксированный шаблон из шагов 1–5: spot, формулировка bias по PCR, "
-                    "две полосы страйков по OI и фраза про поток. LLM не участвует."
+                    "две полосы страйков по OI и фраза про поток; в конце — фактический PCR vol и "
+                    "применённые пороги. LLM не участвует."
                 ),
             },
         ],
         "assembled_ru": (
             f"Spot {_money_fmt_usd(spot_f)} · рынок — {bias_ru}. "
             f"Put-плита (поддержка): {sup_band}. Call-потолок: {res_band}. {flow_ru.capitalize()}."
+            + (
+                f" · PCR vol {float(pcr_vol):.2f} · пороги ≤{bull_max:.2f} / ≥{bear_min:.2f}"
+                if pcr_vol is not None
+                else ""
+            )
         ),
     }
 
@@ -366,11 +372,20 @@ def build_summary_one_liner(
     flow_label: str,
     flow_ru: str,
     oi_available: bool,
+    pcr_volume: Optional[float] = None,
+    pcr_volume_bullish_max: Optional[float] = None,
+    pcr_volume_bearish_min: Optional[float] = None,
 ) -> str:
+    pcr_tail = ""
+    if pcr_volume is not None and pcr_volume_bullish_max is not None and pcr_volume_bearish_min is not None:
+        pcr_tail = (
+            f" · PCR vol {float(pcr_volume):.2f} · пороги ≤{float(pcr_volume_bullish_max):.2f} / "
+            f"≥{float(pcr_volume_bearish_min):.2f}"
+        )
     if not oi_available:
         return (
             f"Spot ${spot:,.0f}: open interest недоступен в источнике — "
-            f"для плит нужен Polygon. Поток: {flow_ru}."
+            f"для плит нужен Polygon. Поток: {flow_ru}.{pcr_tail}"
         ).replace(",", " ")
     sup = _format_strike_band([s["strike"] for s in support])
     res = _format_strike_band([s["strike"] for s in resistance])
@@ -379,7 +394,7 @@ def build_summary_one_liner(
     )
     return (
         f"Spot ${spot:,.0f} · рынок — {bias}. "
-        f"Put-плита (поддержка): {sup}. Call-потолок: {res}. {flow_ru.capitalize()}."
+        f"Put-плита (поддержка): {sup}. Call-потолок: {res}. {flow_ru.capitalize()}.{pcr_tail}"
     ).replace(",", " ")
 
 
@@ -471,6 +486,9 @@ def _assemble_money_map_report(
         flow_label=flow_label,
         flow_ru=flow_ru,
         oi_available=oi_available,
+        pcr_volume=pcr_vol,
+        pcr_volume_bullish_max=bull_max,
+        pcr_volume_bearish_min=bear_min,
     )
     breakdown = build_one_liner_breakdown(
         sym=sym,
