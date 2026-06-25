@@ -151,14 +151,14 @@ def _rows_to_daily_metrics(
     """rows: SQL tuples (snapshot_date, strike, contract_type, oi, vol, spot)."""
     if not rows:
         return []
-    spot_vals = [float(r[5]) for r in rows if r[5] is not None]
+    spot_vals = [float(r[7]) for r in rows if r[7] is not None]
     spot_f = spot_vals[0] if spot_vals else 0.0
     contracts = [
         {
-            "strike": float(r[1]),
-            "contract_type": str(r[2]),
-            "open_interest": int(r[3] or 0),
-            "volume": int(r[4] or 0),
+            "strike": float(r[3]),
+            "contract_type": str(r[4]),
+            "open_interest": int(r[5] or 0),
+            "volume": int(r[6] or 0),
         }
         for r in rows
     ]

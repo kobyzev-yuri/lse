@@ -15,7 +15,18 @@ def test_quantiles_basic():
     assert q["p75"] == 1.2
 
 
-def test_compute_snapshot_flow_metrics():
+def test_rows_to_daily_metrics_column_indices():
+    from services.options_map_cron_stats import _rows_to_daily_metrics
+
+    rows = [
+        ("2026-06-24", "MU", "2026-06-26", 1000.0, "put", 5000, 200, 1050.0),
+        ("2026-06-24", "MU", "2026-06-26", 1100.0, "call", 3000, 400, 1050.0),
+    ]
+    daily = _rows_to_daily_metrics(rows, strike_window_pct=0.20)
+    assert len(daily) == 1
+    assert daily[0]["pcr_volume"] == 0.5
+    assert daily[0]["snapshot_date"] == "2026-06-24"
+
     contracts = [
         {"contract_type": "put", "strike": 1000.0, "open_interest": 5000, "volume": 200},
         {"contract_type": "call", "strike": 1100.0, "open_interest": 3000, "volume": 400},
