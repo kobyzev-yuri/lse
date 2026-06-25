@@ -159,7 +159,7 @@ flowchart TB
 
 ### 4.3. Option Money Map (`/options/map`)
 
-Отдельная страница: one-liner, график OI, put-плита / call-потолок, ползунки **экспирации** и **даты снимка** (0 = live). Подробности и пример MU — [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md).
+Отдельная страница: one-liner, график OI, put-плита / call-потолок, ползунки **экспирации** и **даты снимка** (0 = live). Подробности и пример MU — [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md). **Метод bullish/bearish/neutral (PCR volume, пороги, примеры расчёта)** — [OPTIONS_MONEY_MAP.md § Метод: bullish / bearish / neutral](OPTIONS_MONEY_MAP.md#метод-bullish--bearish--neutral-pcr-volume).
 
 ---
 
