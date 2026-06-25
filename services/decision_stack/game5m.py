@@ -158,9 +158,84 @@ def _collect_options_sentiment_contribution(d5: Dict[str, Any]) -> Optional[Dict
             "sentiment_label": label,
             "sentiment_score": score,
             "pcr_volume": pcr_vol,
+            "pcr_open_interest": opts.get("pcr_open_interest"),
+            "pcr_divergence": opts.get("pcr_divergence"),
             "max_pain_strike": opts.get("max_pain_strike"),
             "would_downgrade": would_downgrade,
             "would_signal": would_signal,
+            "data_as_of": opts.get("data_as_of"),
+        },
+    )
+
+
+def _collect_options_structure_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    opts = d5.get("options_sentiment")
+    if not isinstance(opts, dict):
+        return None
+    gm = gate_mode("DECISION_STACK_OPTIONS_STRUCTURE_GATE_MODE", "log_only")
+    if opts.get("status") != "ok":
+        err = opts.get("error") or opts.get("status") or "unavailable"
+        return make_contribution(
+            contour_id="options_structure",
+            role="policy_gate",
+            readiness=READINESS_CAUTION,
+            strength=0.0,
+            weight=0.0,
+            action="telemetry",
+            detail=str(err),
+            metrics={"gate_mode": gm, "status": opts.get("status"), "structure_gate_hint": "unavailable"},
+        )
+
+    hint = str(opts.get("structure_gate_hint") or "neutral")
+    trigger = opts.get("structure_gate_trigger")
+    would_downgrade = hint == "would_downgrade"
+    would_support = hint == "would_support"
+    strength = 0.0
+    action = "telemetry"
+    if would_downgrade:
+        strength = -0.35
+    elif would_support:
+        strength = 0.15
+    if gm == "apply" and would_downgrade:
+        action = "downgrade"
+
+    detail_parts = []
+    if trigger:
+        detail_parts.append(str(trigger))
+    for key in (
+        "dist_spot_max_pain_pct",
+        "dist_spot_call_ceiling_pct",
+        "dist_spot_put_plate_pct",
+        "plate_shift_put_strike_delta",
+    ):
+        val = opts.get(key)
+        if val is not None:
+            detail_parts.append(f"{key}={val}")
+    detail = " ".join(detail_parts) or hint
+    if gm == "log_only" and (would_downgrade or would_support):
+        detail += f" ({hint})"
+
+    return make_contribution(
+        contour_id="options_structure",
+        role="policy_gate",
+        readiness=READINESS_CAUTION,
+        strength=strength,
+        weight=effective_stack_weight("options_structure", READINESS_CAUTION),
+        action=action,
+        detail=detail,
+        metrics={
+            "gate_mode": gm,
+            "structure_gate_hint": hint,
+            "structure_gate_trigger": trigger,
+            "dist_spot_max_pain_pct": opts.get("dist_spot_max_pain_pct"),
+            "dist_spot_call_ceiling_pct": opts.get("dist_spot_call_ceiling_pct"),
+            "dist_spot_put_plate_pct": opts.get("dist_spot_put_plate_pct"),
+            "top_put_plate_strike": opts.get("top_put_plate_strike"),
+            "top_call_ceiling_strike": opts.get("top_call_ceiling_strike"),
+            "plate_shift_put_strike_delta": opts.get("plate_shift_put_strike_delta"),
+            "plate_shift_ru": opts.get("plate_shift_ru"),
+            "would_downgrade": would_downgrade,
+            "would_support": would_support,
             "data_as_of": opts.get("data_as_of"),
         },
     )
@@ -596,6 +671,7 @@ def collect_game5m_contributions(d5: Dict[str, Any], *, ticker: str = "") -> Lis
         _collect_rules_contribution,
         _collect_kb_news_contribution,
         _collect_options_sentiment_contribution,
+        _collect_options_structure_contribution,
         _collect_entry_advice_contribution,
         _collect_macro_contribution,
         _collect_premarket_gap_baseline_contribution,
@@ -803,6 +879,7 @@ def build_game5m_decision_snapshot(
             "earnings_trust": gate_mode("DECISION_STACK_EARNINGS_TRUST_GATE_MODE", "log_only"),
             "continuation_ml": gate_mode("DECISION_STACK_CONTINUATION_ML_GATE_MODE", "log_only"),
             "options_sentiment": gate_mode("DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE", "log_only"),
+            "options_structure": gate_mode("DECISION_STACK_OPTIONS_STRUCTURE_GATE_MODE", "log_only"),
         },
         "llm_eligible": [
             "news_fusion",

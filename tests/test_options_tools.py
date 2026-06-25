@@ -607,8 +607,27 @@ def test_options_card_context_monkeypatch(monkeypatch):
     assert r["sentiment_label"] in ("BULLISH", "BEARISH", "NEUTRAL")
     assert r["support_plate_strikes"][0] == 1000.0
     assert r["resistance_ceiling_strikes"][0] == 1180.0
+    assert "dist_spot_max_pain_pct" in r
+    assert "dist_spot_call_ceiling_pct" in r
+    assert r["structure_gate_hint"] in ("neutral", "would_downgrade", "would_support")
     assert r["gate_hint"] in ("neutral", "would_downgrade", "would_signal")
     assert r["one_liner_ru"]
+
+
+def test_options_structure_gate_helpers():
+    from services.options_card_context import _compute_structure_fields, _structure_gate_hint
+
+    structure = _compute_structure_fields(
+        1100.0,
+        max_pain_strike=1060.0,
+        support=[{"strike": 1000.0, "oi": 8000}],
+        resistance=[{"strike": 1105.0, "oi": 5000}],
+    )
+    assert structure["dist_spot_max_pain_pct"] == pytest.approx(3.636, rel=1e-2)
+    assert structure["dist_spot_call_ceiling_pct"] == pytest.approx(0.455, rel=1e-2)
+    hint, trigger = _structure_gate_hint(structure)
+    assert hint == "would_downgrade"
+    assert trigger == "call_ceiling_chase"
 
 
 def test_options_card_context_polygon_unavailable():

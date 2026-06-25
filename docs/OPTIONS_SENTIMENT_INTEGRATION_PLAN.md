@@ -1,7 +1,7 @@
 # Options sentiment (Polygon) → торговые контуры — план интеграции
 
 **Статус документа:** живой чеклист — обновлять по мере фаз.  
-**Последнее обновление:** 2026-06-24  
+**Последнее обновление:** 2026-06-16  
 **Связано:** [OPTIONS_TOOLS.md](OPTIONS_TOOLS.md), [OPTIONS_MONEY_MAP.md](OPTIONS_MONEY_MAP.md), [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md)
 
 ---
@@ -38,6 +38,7 @@
 | **2** | GAME_5M shadow | `log_only` | Поля в `d5`, contribution `options_sentiment` в `decision_snapshot`, вход **не** меняется | ✅ |
 | **3** | UI / prompt | — | Блок в `game5m_cards`, `/prompt_entry`, earnings brief overview | ✅ |
 | **4** | Shadow-анализ | `log_only` | 2–4 недели: analyzer / ручной срез «сколько BUY отсекли бы» | 🔄 |
+| **4b** | `options_structure` + PCR divergence | `log_only` | Max pain / ceiling / plate shift в shadow; отдельный contribution | ✅ |
 | **5** | GAME_5M apply | `apply` | `DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE=apply`, пороги согласованы | ⏳ |
 | **6** | Portfolio shadow | `log_only` | `portfolio_entry_guards` + contribution в `decision_stack/portfolio.py` | ⏳ |
 | **7** | Portfolio apply | `apply` | Отдельные пороги, не конфликтовать с CatBoost / event_reaction | ⏳ |
@@ -143,7 +144,8 @@
 | Метрика | Смысл |
 |---------|--------|
 | `bull_core_total` | Закрытые GAME_5M, где на входе CORE ∈ {BUY, STRONG_BUY} |
-| `bull_with_would_downgrade` | Из них options gate = `would_downgrade` (shadow) |
+| `bull_with_structure_downgrade` | CORE=BUY + `structure_gate_hint=would_downgrade` |
+| `combined_would_downgrade` | sentiment **или** structure хотели downgrade |
 | `downgrade_false_positive` | would_downgrade, но **сделка в плюсе** (ложное отсечение) |
 | `downgrade_true_positive` | would_downgrade и убыток (gate «помог бы») |
 | `live_scan.bull_would_downgrade_rate` | Текущий срез: доля CORE=BUY с shadow-downgrade |
@@ -176,6 +178,28 @@ docker exec lse-bot python scripts/analyze_options_gate_shadow.py
 | Фаза | Статус |
 |------|--------|
 | 4 Shadow-анализ | 🔄 скрипт готов, ждём данных |
+
+---
+
+## Фаза 4b — Structure + PCR divergence (shadow)
+
+**Контур:** `options_structure` в `decision_stack/game5m.py`, данные в `options_sentiment` (один Polygon fetch).
+
+| Триггер | Условие | Shadow action |
+|---------|---------|---------------|
+| Max pain gravity | `dist_spot_max_pain_pct` > `OPTIONS_MAX_PAIN_CHASE_PCT` | `would_downgrade` |
+| Call ceiling chase | spot в пределах `OPTIONS_CALL_CEILING_PROX_PCT` от top call OI | `would_downgrade` |
+| Put plate shift | `plate_shift_put_strike_delta` ≤ −`OPTIONS_PLATE_SHIFT_DOWN_BEARISH` (cron) | `would_downgrade` |
+| Put plate support | spot у put-плиты | `would_support` (telemetry only) |
+
+**PCR divergence:** если PCR vol медвежий, но OI нейтральный (`OPTIONS_PCR_OI_NEUTRAL_*`) — `options_sentiment` gate **не** downgrade.
+
+**Чеклист фазы 4b:**
+
+- [x] Числовые поля: `dist_spot_*_pct`, `structure_gate_hint`, `pcr_divergence`
+- [x] Contribution `options_structure` (`DECISION_STACK_OPTIONS_STRUCTURE_GATE_MODE=log_only`)
+- [x] Shadow analyzer: `combined_would_downgrade`, `structure_gate_hint`
+- [x] Unit-тесты
 
 ---
 
@@ -233,12 +257,19 @@ OPTIONS_SENTIMENT_PCR_VOL_BULLISH=0.87
 
 | Ключ | Default | Назначение |
 |------|---------|------------|
-| `DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE` | `log_only` | GAME_5M gate |
+| `DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE` | `log_only` | GAME_5M sentiment gate |
+| `DECISION_STACK_OPTIONS_STRUCTURE_GATE_MODE` | `log_only` | GAME_5M structure gate (max pain / ceiling / plate shift) |
 | `DECISION_STACK_PORTFOLIO_OPTIONS_GATE_MODE` | `log_only` | Portfolio gate |
 | `OPTIONS_SENTIMENT_BEARISH_SCORE` | `-0.35` | Порог label |
 | `OPTIONS_SENTIMENT_BULLISH_SCORE` | `0.35` | Порог label |
 | `OPTIONS_SENTIMENT_PCR_VOL_BEARISH` | `1.15` | Put-heavy flow |
 | `OPTIONS_SENTIMENT_PCR_VOL_BULLISH` | `0.87` | Call-heavy flow |
+| `OPTIONS_PCR_OI_NEUTRAL_LOW` | `0.85` | PCR divergence: нейтральный OI (низ) |
+| `OPTIONS_PCR_OI_NEUTRAL_HIGH` | `1.15` | PCR divergence: нейтральный OI (верх) |
+| `OPTIONS_MAX_PAIN_CHASE_PCT` | `4.0` | Spot выше max pain → shadow downgrade |
+| `OPTIONS_CALL_CEILING_PROX_PCT` | `1.0` | Spot у call-потолка OI → shadow downgrade |
+| `OPTIONS_PUT_PLATE_SUPPORT_PCT` | `1.5` | Spot у put-плиты → telemetry support |
+| `OPTIONS_PLATE_SHIFT_DOWN_BEARISH` | `5.0` | Put-плита уехала вниз (cron) → shadow downgrade |
 | `OPTIONS_CARD_CONTEXT_CACHE_SEC` | `900` | Кэш Polygon |
 
 ---
@@ -259,7 +290,7 @@ OPTIONS_SENTIMENT_PCR_VOL_BULLISH=0.87
 | 2026-06-24 | — | План принят; старт с фаз 1–2 shadow, без apply | — |
 | 2026-06-16 | 1–2 | `options_card_context` + GAME_5M log_only contribution | — |
 | 2026-06-16 | 3 | UI: game5m cards, prompt_entry, earnings brief overview | — |
-| 2026-06-16 | 4 | Shadow script `analyze_options_gate_shadow.py` | — |
+| 2026-06-16 | 4b | `options_structure` contour + PCR divergence + structure metrics в context | — |
 | | | | |
 
 ---

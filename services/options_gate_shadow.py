@@ -36,38 +36,56 @@ def _core_decision_from_context(ctx: Dict[str, Any]) -> str:
 
 
 def extract_options_gate_from_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
-    """gate_hint из options_sentiment или contribution decision_snapshot."""
+    """gate_hint из options_sentiment / structure или contribution decision_snapshot."""
     opts = ctx.get("options_sentiment")
     if isinstance(opts, dict):
         hint = opts.get("gate_hint")
-        if hint or opts.get("status"):
+        struct_hint = opts.get("structure_gate_hint")
+        if hint or struct_hint or opts.get("status"):
             return {
                 "has_context": True,
                 "source": "options_sentiment",
                 "status": opts.get("status"),
                 "gate_hint": hint,
+                "structure_gate_hint": struct_hint,
+                "structure_gate_trigger": opts.get("structure_gate_trigger"),
+                "combined_would_downgrade": hint == "would_downgrade" or struct_hint == "would_downgrade",
                 "sentiment_label": opts.get("sentiment_label"),
                 "sentiment_score": opts.get("sentiment_score"),
                 "pcr_volume": opts.get("pcr_volume"),
+                "pcr_divergence": opts.get("pcr_divergence"),
+                "dist_spot_max_pain_pct": opts.get("dist_spot_max_pain_pct"),
             }
 
     snap = ctx.get("decision_snapshot")
     if isinstance(snap, dict):
         contribs = snap.get("contributions") if isinstance(snap.get("contributions"), list) else []
         opt = next((c for c in contribs if c.get("contour_id") == "options_sentiment"), None)
-        if isinstance(opt, dict):
-            metrics = opt.get("metrics") if isinstance(opt.get("metrics"), dict) else {}
-            hint = metrics.get("gate_hint")
+        struct = next((c for c in contribs if c.get("contour_id") == "options_structure"), None)
+        if isinstance(opt, dict) or isinstance(struct, dict):
+            opt_metrics = opt.get("metrics") if isinstance(opt, dict) and isinstance(opt.get("metrics"), dict) else {}
+            struct_metrics = (
+                struct.get("metrics") if isinstance(struct, dict) and isinstance(struct.get("metrics"), dict) else {}
+            )
+            hint = opt_metrics.get("gate_hint")
+            struct_hint = struct_metrics.get("structure_gate_hint")
             return {
                 "has_context": True,
                 "source": "decision_snapshot",
-                "status": metrics.get("status") or "ok",
+                "status": opt_metrics.get("status") or "ok",
                 "gate_hint": hint,
-                "sentiment_label": metrics.get("sentiment_label"),
-                "sentiment_score": metrics.get("sentiment_score"),
-                "pcr_volume": metrics.get("pcr_volume"),
-                "would_downgrade": metrics.get("would_downgrade"),
-                "would_signal": metrics.get("would_signal"),
+                "structure_gate_hint": struct_hint,
+                "structure_gate_trigger": struct_metrics.get("structure_gate_trigger"),
+                "combined_would_downgrade": bool(
+                    opt_metrics.get("would_downgrade") or struct_metrics.get("would_downgrade")
+                ),
+                "sentiment_label": opt_metrics.get("sentiment_label"),
+                "sentiment_score": opt_metrics.get("sentiment_score"),
+                "pcr_volume": opt_metrics.get("pcr_volume"),
+                "pcr_divergence": opt_metrics.get("pcr_divergence"),
+                "dist_spot_max_pain_pct": struct_metrics.get("dist_spot_max_pain_pct"),
+                "would_downgrade": opt_metrics.get("would_downgrade"),
+                "would_signal": opt_metrics.get("would_signal"),
             }
 
     return {
@@ -75,6 +93,9 @@ def extract_options_gate_from_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
         "source": None,
         "status": None,
         "gate_hint": None,
+        "structure_gate_hint": None,
+        "structure_gate_trigger": None,
+        "combined_would_downgrade": False,
         "sentiment_label": None,
         "sentiment_score": None,
         "pcr_volume": None,
@@ -161,6 +182,8 @@ def _build_closed_trades_section(
         eff = effects_by_id.get(tid)
         realized = round(float(eff.realized_pct), 4) if eff else None
         gh = gate.get("gate_hint")
+        struct_gh = gate.get("structure_gate_hint")
+        combined_down = bool(gate.get("combined_would_downgrade"))
         row = {
             "trade_id": tid or None,
             "ticker": getattr(t, "ticker", None),
@@ -170,17 +193,24 @@ def _build_closed_trades_section(
             "has_options_context": bool(gate.get("has_context")),
             "options_source": gate.get("source"),
             "gate_hint": gh,
+            "structure_gate_hint": struct_gh,
+            "structure_gate_trigger": gate.get("structure_gate_trigger"),
+            "combined_would_downgrade": combined_down,
             "sentiment_label": gate.get("sentiment_label"),
             "sentiment_score": gate.get("sentiment_score"),
             "realized_pct": realized,
             "win": bool(realized > 0) if realized is not None else None,
-            "downgrade_outcome": _classify_downgrade_outcome(realized, gh),
+            "downgrade_outcome": _classify_downgrade_outcome(
+                realized,
+                "would_downgrade" if combined_down else gh,
+            ),
         }
         rows.append(row)
 
     bull_rows = [r for r in rows if r["core_decision"] in BULL_CORE]
     with_ctx = [r for r in rows if r["has_options_context"]]
-    bull_down = [r for r in bull_rows if r["gate_hint"] == "would_downgrade"]
+    bull_down = [r for r in bull_rows if r.get("combined_would_downgrade")]
+    struct_down = [r for r in bull_rows if r.get("structure_gate_hint") == "would_downgrade"]
     fp = [r for r in bull_down if r["downgrade_outcome"] == "false_positive"]
     tp = [r for r in bull_down if r["downgrade_outcome"] == "true_positive"]
 
@@ -196,6 +226,7 @@ def _build_closed_trades_section(
         "missing_options_context": len(rows) - len(with_ctx),
         "bull_core_total": len(bull_rows),
         "bull_with_would_downgrade": len(bull_down),
+        "bull_with_structure_downgrade": len(struct_down),
         "bull_with_would_signal": sum(1 for r in bull_rows if r["gate_hint"] == "would_signal"),
         "bull_would_downgrade_rate": _rate(len(bull_down), len(bull_rows)),
         "downgrade_false_positive": len(fp),
@@ -243,6 +274,13 @@ def _build_live_scan_section(
                 "core_decision": core,
                 "effective_decision": d5.get("technical_decision_effective") or d5.get("decision"),
                 "gate_hint": gate.get("gate_hint") or opts.get("gate_hint"),
+                "structure_gate_hint": gate.get("structure_gate_hint") or opts.get("structure_gate_hint"),
+                "structure_gate_trigger": gate.get("structure_gate_trigger") or opts.get("structure_gate_trigger"),
+                "combined_would_downgrade": bool(
+                    gate.get("combined_would_downgrade")
+                    or opts.get("gate_hint") == "would_downgrade"
+                    or opts.get("structure_gate_hint") == "would_downgrade"
+                ),
                 "sentiment_label": gate.get("sentiment_label") or opts.get("sentiment_label"),
                 "sentiment_score": gate.get("sentiment_score") or opts.get("sentiment_score"),
                 "options_status": opts.get("status"),
@@ -250,13 +288,15 @@ def _build_live_scan_section(
         )
 
     bull = [r for r in rows if r.get("core_decision") in BULL_CORE]
-    down = [r for r in bull if r.get("gate_hint") == "would_downgrade"]
+    down = [r for r in bull if r.get("combined_would_downgrade")]
+    struct_down = [r for r in bull if r.get("structure_gate_hint") == "would_downgrade"]
     sig = [r for r in bull if r.get("gate_hint") == "would_signal"]
 
     return {
         "tickers_scanned": len(rows),
         "bull_core_now": len(bull),
         "would_downgrade_now": len(down),
+        "structure_downgrade_now": len(struct_down),
         "would_signal_now": len(sig),
         "bull_would_downgrade_rate": _rate(len(down), len(bull)),
         "rows": rows,

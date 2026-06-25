@@ -276,6 +276,39 @@ class TestDecisionStackGame5m(unittest.TestCase):
         snap = build_game5m_decision_snapshot(d5, ticker="MU")
         self.assertEqual(snap["effective_decision"], "BUY")
 
+    def test_options_structure_contribution_log_only(self):
+        env = {"DECISION_STACK_OPTIONS_STRUCTURE_GATE_MODE": "log_only"}
+        d5 = {
+            "technical_decision_core": "BUY",
+            "technical_decision_effective": "BUY",
+            "options_sentiment": {
+                "status": "ok",
+                "structure_gate_hint": "would_downgrade",
+                "structure_gate_trigger": "call_ceiling_chase",
+                "dist_spot_call_ceiling_pct": 0.5,
+                "dist_spot_max_pain_pct": 2.0,
+                "data_as_of": "live",
+            },
+        }
+        with patch("config_loader.get_config_value", side_effect=lambda k, d=None: env.get(k, d)):
+            contribs = collect_game5m_contributions(d5, ticker="MU")
+        struct = next(c for c in contribs if c["contour_id"] == "options_structure")
+        self.assertEqual(struct["action"], "telemetry")
+        self.assertTrue(struct["metrics"]["would_downgrade"])
+        self.assertEqual(struct["metrics"]["structure_gate_trigger"], "call_ceiling_chase")
+
+    def test_options_sentiment_pcr_divergence_softens_downgrade(self):
+        from services.options_card_context import _gate_hint
+
+        with patch("config_loader.get_config_value", side_effect=lambda k, d=None: d):
+            hint = _gate_hint(
+                sentiment_label="BEARISH",
+                sentiment_score=-0.5,
+                pcr_volume=1.2,
+                pcr_open_interest=1.0,
+            )
+        self.assertEqual(hint, "neutral")
+
 
 if __name__ == "__main__":
     unittest.main()

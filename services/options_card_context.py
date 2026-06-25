@@ -51,11 +51,34 @@ def clear_options_card_context_cache() -> None:
     _CACHE.clear()
 
 
+def _pcr_divergence_label(
+    pcr_volume: Optional[float],
+    pcr_open_interest: Optional[float],
+) -> Optional[str]:
+    """Flow vs positioning: intraday hedge vs structural skew."""
+    from services.decision_stack._types import _cfg_float
+
+    if pcr_volume is None or pcr_open_interest is None:
+        return None
+    oi_lo = _cfg_float("OPTIONS_PCR_OI_NEUTRAL_LOW", 0.85)
+    oi_hi = _cfg_float("OPTIONS_PCR_OI_NEUTRAL_HIGH", 1.15)
+    if not (oi_lo <= float(pcr_open_interest) <= oi_hi):
+        return None
+    pcr_bear = _cfg_float("OPTIONS_SENTIMENT_PCR_VOL_BEARISH", 1.15)
+    pcr_bull = _cfg_float("OPTIONS_SENTIMENT_PCR_VOL_BULLISH", 0.87)
+    if float(pcr_volume) >= pcr_bear:
+        return "flow_bearish_oi_neutral"
+    if float(pcr_volume) <= pcr_bull:
+        return "flow_bullish_oi_neutral"
+    return None
+
+
 def _gate_hint(
     *,
     sentiment_label: str,
     sentiment_score: float,
     pcr_volume: Optional[float],
+    pcr_open_interest: Optional[float] = None,
 ) -> str:
     from services.decision_stack._types import _cfg_float
 
@@ -65,11 +88,13 @@ def _gate_hint(
     pcr_bull = _cfg_float("OPTIONS_SENTIMENT_PCR_VOL_BULLISH", 0.87)
 
     label = (sentiment_label or "").strip().upper()
+    divergence = _pcr_divergence_label(pcr_volume, pcr_open_interest)
     if (
         label == "BEARISH"
         and sentiment_score <= bear_score
         and pcr_volume is not None
         and pcr_volume >= pcr_bear
+        and divergence != "flow_bearish_oi_neutral"
     ):
         return "would_downgrade"
     if (
@@ -77,9 +102,133 @@ def _gate_hint(
         and sentiment_score >= bull_score
         and pcr_volume is not None
         and pcr_volume <= pcr_bull
+        and divergence != "flow_bullish_oi_neutral"
     ):
         return "would_signal"
     return "neutral"
+
+
+def _compute_structure_fields(
+    spot: float,
+    *,
+    max_pain_strike: Optional[float],
+    support: List[Dict[str, Any]],
+    resistance: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Дистанции spot ↔ max pain / плиты — для structure gate и ML-фич."""
+    if spot <= 0:
+        return {}
+    out: Dict[str, Any] = {}
+    if max_pain_strike is not None and float(max_pain_strike) > 0:
+        mp = float(max_pain_strike)
+        out["dist_spot_max_pain_pct"] = round((spot - mp) / spot * 100.0, 3)
+        out["max_pain_strike"] = mp
+    top_put = support[0] if support else None
+    top_call = resistance[0] if resistance else None
+    if top_put:
+        k = float(top_put["strike"])
+        out["top_put_plate_strike"] = k
+        out["put_plate_oi"] = int(top_put.get("oi") or 0)
+        out["dist_spot_put_plate_pct"] = round((spot - k) / spot * 100.0, 3)
+    if top_call:
+        k = float(top_call["strike"])
+        out["top_call_ceiling_strike"] = k
+        out["call_ceiling_oi"] = int(top_call.get("oi") or 0)
+        out["dist_spot_call_ceiling_pct"] = round((k - spot) / spot * 100.0, 3)
+    return out
+
+
+def _structure_gate_hint(structure: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    """
+    Max pain gravity + call-ceiling chase + put-plate support (shadow).
+    Returns (gate_hint, trigger_reason).
+    """
+    from services.decision_stack._types import _cfg_float
+
+    chase_pct = _cfg_float("OPTIONS_MAX_PAIN_CHASE_PCT", 4.0)
+    ceil_prox = _cfg_float("OPTIONS_CALL_CEILING_PROX_PCT", 1.0)
+    put_support = _cfg_float("OPTIONS_PUT_PLATE_SUPPORT_PCT", 1.5)
+
+    mp_dist = structure.get("dist_spot_max_pain_pct")
+    if mp_dist is not None and float(mp_dist) > chase_pct:
+        return "would_downgrade", "max_pain_gravity"
+
+    ceil_dist = structure.get("dist_spot_call_ceiling_pct")
+    if ceil_dist is not None and 0.0 <= float(ceil_dist) <= ceil_prox:
+        return "would_downgrade", "call_ceiling_chase"
+
+    put_dist = structure.get("dist_spot_put_plate_pct")
+    if put_dist is not None and 0.0 <= float(put_dist) <= put_support:
+        return "would_support", "put_plate_near"
+
+    shift = structure.get("plate_shift_put_strike_delta")
+    shift_thresh = _cfg_float("OPTIONS_PLATE_SHIFT_DOWN_BEARISH", 5.0)
+    if shift is not None and float(shift) <= -shift_thresh:
+        return "would_downgrade", "put_plate_shift_down"
+
+    return "neutral", None
+
+
+def _try_plate_shift_from_db(
+    sym: str,
+    exp: str,
+    *,
+    spot: float,
+    contracts: List[Dict[str, Any]],
+    strike_window_pct: float,
+) -> Dict[str, Any]:
+    """Best-effort plate shift из cron OI (≥2 снимка). Не ломает hot path."""
+    out: Dict[str, Any] = {}
+    try:
+        from services.options_money_map import (
+            _aggregate_by_strike,
+            _filter_contracts_for_analysis,
+            _load_snapshot_contracts,
+            _plate_shift_ru,
+            _top_strikes,
+            list_oi_snapshot_dates,
+        )
+
+        snap_dates = list_oi_snapshot_dates(sym, expiration_date=exp)
+        if len(snap_dates) < 2:
+            return out
+        prev_date = snap_dates[1]
+        prev_loaded = _load_snapshot_contracts(sym, prev_date, exp)
+        if prev_loaded.get("status") != "ok":
+            return out
+        prev_spot = float(prev_loaded["spot"])
+        prev_filtered, _ = _filter_contracts_for_analysis(
+            prev_loaded["contracts"],
+            spot=prev_spot,
+            strike_window_pct=strike_window_pct,
+            drop_zero_oi_volume=False,
+        )
+        prev_rows = list(_aggregate_by_strike(prev_filtered).values())
+        prev_support = _top_strikes(prev_rows, side="put_support", spot=prev_spot, n=3)
+        prev_resistance = _top_strikes(prev_rows, side="call_resistance", spot=prev_spot, n=3)
+
+        cur_filtered, _ = _filter_contracts_for_analysis(
+            contracts, spot=spot, strike_window_pct=strike_window_pct, drop_zero_oi_volume=False
+        )
+        cur_rows = list(_aggregate_by_strike(cur_filtered).values())
+        support = _top_strikes(cur_rows, side="put_support", spot=spot, n=3)
+        resistance = _top_strikes(cur_rows, side="call_resistance", spot=spot, n=3)
+        shift_ru = _plate_shift_ru(
+            prev_date=prev_date,
+            prev_support=prev_support,
+            prev_resistance=prev_resistance,
+            support=support,
+            resistance=resistance,
+        )
+        if shift_ru:
+            out["plate_shift_ru"] = shift_ru
+        if prev_support and support:
+            delta = float(support[0]["strike"]) - float(prev_support[0]["strike"])
+            if abs(delta) >= 1.0:
+                out["plate_shift_put_strike_delta"] = round(delta, 2)
+    except Exception as e:
+        logger.debug("plate_shift_from_db %s: %s", sym, e)
+    return out
 
 
 def _compact_from_chain(
@@ -109,6 +258,21 @@ def _compact_from_chain(
 
     score = float(analysis.get("sentiment_score") or 0.0)
     label = str(analysis.get("sentiment_label") or "NEUTRAL")
+    pcr_vol = totals.get("pcr_volume")
+    pcr_oi = totals.get("pcr_open_interest")
+    divergence = _pcr_divergence_label(pcr_vol, pcr_oi)
+    structure = _compute_structure_fields(
+        spot_f,
+        max_pain_strike=analysis.get("max_pain_strike"),
+        support=support,
+        resistance=resistance,
+    )
+    plate_shift = _try_plate_shift_from_db(
+        sym, exp, spot=spot_f, contracts=contracts, strike_window_pct=_STRIKE_WINDOW_PCT
+    )
+    if plate_shift.get("plate_shift_put_strike_delta") is not None:
+        structure["plate_shift_put_strike_delta"] = plate_shift["plate_shift_put_strike_delta"]
+    structure_hint, structure_trigger = _structure_gate_hint(structure)
     one_liner = build_summary_one_liner(
         spot=spot_f,
         support=support,
@@ -128,16 +292,23 @@ def _compact_from_chain(
         "spot_source": spot_source,
         "sentiment_label": label,
         "sentiment_score": score,
-        "pcr_volume": totals.get("pcr_volume"),
-        "pcr_open_interest": totals.get("pcr_open_interest"),
+        "pcr_volume": pcr_vol,
+        "pcr_open_interest": pcr_oi,
+        "flow_label": flow_label,
+        "pcr_divergence": divergence,
         "max_pain_strike": analysis.get("max_pain_strike"),
         "support_plate_strikes": [s["strike"] for s in support],
         "resistance_ceiling_strikes": [s["strike"] for s in resistance],
+        **structure,
+        "structure_gate_hint": structure_hint,
+        "structure_gate_trigger": structure_trigger,
+        **plate_shift,
         "one_liner_ru": one_liner,
         "gate_hint": _gate_hint(
             sentiment_label=label,
             sentiment_score=score,
-            pcr_volume=totals.get("pcr_volume"),
+            pcr_volume=pcr_vol,
+            pcr_open_interest=pcr_oi,
         ),
         "oi_available": oi_available,
     }
@@ -226,6 +397,7 @@ def format_gate_hint_ru(hint: Optional[str]) -> str:
     m = {
         "would_downgrade": "shadow: ослабил бы BUY",
         "would_signal": "shadow: поддержка BUY",
+        "would_support": "shadow: put-плита рядом",
         "neutral": "нейтрально",
         "unavailable": "нет данных",
     }
@@ -248,8 +420,18 @@ def format_options_card_context_lines_ru(opts: Dict[str, Any]) -> List[str]:
     mp = opts.get("max_pain_strike")
     if mp is not None:
         lines.append(f"Max pain ${float(mp):,.0f}".replace(",", " "))
+    d_mp = opts.get("dist_spot_max_pain_pct")
+    if d_mp is not None:
+        lines.append(f"Spot vs max pain {float(d_mp):+.1f}%")
     hint = format_gate_hint_ru(opts.get("gate_hint"))
-    lines.append(f"Gate: {hint}")
+    lines.append(f"Sentiment gate: {hint}")
+    sh = opts.get("structure_gate_hint")
+    if sh and sh != "neutral":
+        trig = opts.get("structure_gate_trigger") or ""
+        lines.append(f"Structure: {format_gate_hint_ru(sh)}" + (f" ({trig})" if trig else ""))
+    div = opts.get("pcr_divergence")
+    if div:
+        lines.append(f"PCR divergence: {div}")
     one = opts.get("one_liner_ru")
     if one:
         lines.append(str(one))

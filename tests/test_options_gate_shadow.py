@@ -52,6 +52,20 @@ def test_classify_downgrade_outcome():
     assert _classify_downgrade_outcome(1.0, "neutral") == "n/a"
 
 
+def test_extract_options_gate_structure_hint():
+    ctx = {
+        "options_sentiment": {
+            "status": "ok",
+            "gate_hint": "neutral",
+            "structure_gate_hint": "would_downgrade",
+            "structure_gate_trigger": "max_pain_gravity",
+        },
+    }
+    g = extract_options_gate_from_context(ctx)
+    assert g["structure_gate_hint"] == "would_downgrade"
+    assert g["combined_would_downgrade"] is True
+
+
 def test_build_shadow_report_empty(monkeypatch):
     from services.options_gate_shadow import build_options_gate_shadow_report
 
