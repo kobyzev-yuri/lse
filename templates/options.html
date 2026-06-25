@@ -151,9 +151,9 @@
                     <dt style="font-weight:600;color:#e2e8f0">PCR vol</dt>
                     <dd style="margin:0;color:#94a3b8"><strong>Put/Call Ratio по объёму торгов</strong>: сколько put торговалось относительно call. Больше 1 — сегодня активнее защита (put), чем ставки на рост (call).</dd>
                     <dt style="font-weight:600;color:#e2e8f0">PCR OI</dt>
-                    <dd style="margin:0;color:#94a3b8">То же по <strong>открытым позициям (OI)</strong>. Надёжнее для уровней-магнитов. OI в Yahoo совпадает с Polygon (clearing); в правой колонке таблица по <strong>volume</strong>.</dd>
+                    <dd style="margin:0;color:#94a3b8">То же по <strong>открытым позициям (OI)</strong>. Надёжнее для уровней-магнитов. В Yahoo OI из того же clearing (OCC), что у Polygon.</dd>
                     <dt style="font-weight:600;color:#e2e8f0">Max pain</dt>
-                    <dd style="margin:0;color:#94a3b8">Страйк с минимальной суммарной выплатой держателям опционов на экспирации. Эвристика, не прогноз. Без OI не считается (yfinance).</dd>
+                    <dd style="margin:0;color:#94a3b8">Страйк с минимальной суммарной выплатой держателям опционов на экспирации. Эвристика, не прогноз. Без OI в источнике не считается.</dd>
                     <dt style="font-weight:600;color:#e2e8f0">Окно ±15% от spot</dt>
                     <dd style="margin:0;color:#94a3b8">Только страйки от «цена −15%» до «цена +15%». Далёкие страйки не попадают в score и PCR в карточке.</dd>
                     <dt style="font-weight:600;color:#e2e8f0">Вся доска</dt>
@@ -172,7 +172,7 @@
                 <p>Страница не предсказывает цену акции. Она показывает, <strong>как распределены ставки трейдеров</strong> в опционах на выбранную дату.</p>
                 <ul>
                     <li><strong>Polygon</strong> — платный снимок рынка (нужен Options Starter). Лучше для OI и max pain.</li>
-                    <li><strong>yfinance</strong> — бесплатные данные Yahoo. OI совпадает с Polygon; для сравнения смотрите <strong>volume</strong>, spot и премии (калькулятор).</li>
+                    <li><strong>yfinance</strong> — бесплатные данные Yahoo (option_chain). OI, PCR, max pain и таблица страйков — тот же набор, что у Polygon; объёмы и spot могут чуть отличаться.</li>
                     <li><strong>LLM интерпретация</strong> — краткий текст от нейросети по уже посчитанным цифрам; не замена собственному анализу.</li>
                 </ul>
             </div>
@@ -763,15 +763,15 @@ P/L(S) = Value(S) − Entry</div>
         if (j.data_quality && j.data_quality.note_ru) {
             html += '<p class="muted" style="font-size:0.78rem;margin:0.35rem 0">' + j.data_quality.note_ru + '</p>';
         }
-        // yfinance: OI совпадает с Polygon (единый OCC clearing) — для сравнения показываем volume
         const src = (j.source || '').toLowerCase();
-        const barriersMode = (src === 'yfinance')
-            ? 'volume'
-            : (j.barriers_mode || (j.oi_available === false ? 'volume' : 'oi'));
+        const barriersMode = j.barriers_mode || (j.oi_available === false ? 'volume' : 'oi');
+        const oiCaption = src === 'yfinance'
+            ? 'Ключевые страйки по OI (yfinance option_chain)'
+            : 'Ключевые страйки по OI (Polygon snapshot)';
         if (barriersMode === 'volume' && j.key_strikes_volume && j.key_strikes_volume.length) {
-            const volCaption = src === 'yfinance' && j.oi_available
-                ? 'Ключевые страйки по volume (OI в Yahoo = тот же clearing, что у Polygon — здесь смотрим активность торгов)'
-                : 'Ключевые страйки по volume (yfinance: OI часто 0)';
+            const volCaption = src === 'yfinance'
+                ? 'Ключевые страйки по volume (OI недоступен в Yahoo)'
+                : 'Ключевые страйки по volume';
             html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">' + volCaption + '</p>';
             html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>Vol Σ</th><th>Call vol</th><th>Put vol</th></tr>';
             j.key_strikes_volume.slice(0, 6).forEach(row => {
@@ -780,7 +780,7 @@ P/L(S) = Value(S) − Entry</div>
             });
             html += '</table>';
         } else if (j.key_strikes_oi && j.key_strikes_oi.length) {
-            html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">Ключевые страйки по OI (Polygon snapshot)</p>';
+            html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">' + oiCaption + '</p>';
             html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>OI Σ</th><th>Call OI</th><th>Put OI</th></tr>';
             j.key_strikes_oi.slice(0, 6).forEach(row => {
                 html += '<tr><td>' + row.strike + '</td><td>' + row.total_oi + '</td><td>' + row.call_oi + '</td><td>' + row.put_oi + '</td></tr>';
@@ -836,12 +836,10 @@ P/L(S) = Value(S) − Entry</div>
             );
         }
         items.push(
-            '<li><strong>Score:</strong> Polygon — PCR vol + PCR OI + NTM-OI (±8%). ' +
-            (yfOi ? 'yfinance — те же формулы; таблица справа — по volume.' : 'yfinance — в основном PCR vol (OI часто 0).') +
-            '</li>'
+            '<li><strong>Score:</strong> PCR vol + PCR OI + NTM-OI (±8%) — одинаковые формулы в обеих колонках.</li>'
         );
         if (!yfOi && pgOi) {
-            items.push('<li>Max pain и магниты по OI — только в колонке Polygon; в yfinance смотрите таблицу <em>Call vol / Put vol</em>.</li>');
+            items.push('<li>Max pain и магниты по OI — только в колонке Polygon; в yfinance смотрите таблицу по volume.</li>');
         }
         box.innerHTML = '<strong>Сравнение Polygon vs yfinance</strong><ul>' + items.join('') + '</ul>';
         box.style.display = 'block';

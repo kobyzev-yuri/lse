@@ -365,8 +365,7 @@ def build_yfinance_chain_sentiment_report(
         "analysis_scope": scope_meta,
         "data_quality": {
             "note_ru": (
-                "yfinance: score/PCR vol по ±{:.0f}% spot; OI совпадает с Polygon (единый clearing) — "
-                "в UI таблица по volume; max pain по OI смотрите в колонке Polygon."
+                "Score и PCR в карточке — по страйкам ±{:.0f}% от spot; totals_full_chain — вся доска."
             ).format(strike_window_pct * 100),
             "source": "yfinance",
             "oi_available": bool(analysis.get("oi_available")),

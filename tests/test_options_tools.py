@@ -250,6 +250,30 @@ def test_llm_interpret_requires_data():
     assert r["status"] == "error"
 
 
+def test_compact_report_for_llm_includes_days_to_expiration():
+    from datetime import date
+
+    from services.options_sentiment_llm import _compact_report_for_llm, _days_to_expiration
+
+    assert _days_to_expiration("2026-06-26", as_of=date(2026, 6, 14)) == 12
+    payload = _compact_report_for_llm(
+        {
+            "status": "ok",
+            "ticker": "MU",
+            "source": "polygon",
+            "expiration_date": "2026-06-26",
+            "spot": 1213.0,
+            "totals": {"pcr_volume": 0.5},
+            "totals_full_chain": {"pcr_open_interest": 1.88},
+            "key_strikes_oi": [{"strike": 1200, "total_oi": 14060}],
+        }
+    )
+    assert payload["calendar_days_to_expiration"] == _days_to_expiration("2026-06-26")
+    assert payload["as_of_date"] == date.today().isoformat()
+    assert "expiration_note_ru" in payload
+    assert payload["totals_window"]["pcr_volume"] == 0.5
+
+
 def test_llm_calculator_interpret_requires_data():
     from services.options_calculator_llm import interpret_calculator_result
 

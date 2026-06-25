@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict
+from datetime import date, datetime
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """Ты — аналитик опционного рынка для частного инвестора LSE.
 Пиши по-русски, кратко и по делу (до 12 предложений + буллеты уровней).
 Не давай категоричных торговых приказов («покупай/продавай») — только интерпретация позиционирования.
-Учитывай источник данных (yfinance менее надёжен, чем Polygon snapshot).
-Различай PCR по окну ±15% от spot и PCR по всей цепочке, если оба есть.
+Источник: Polygon snapshot или yfinance option_chain — OI из одного clearing (OCC), PCR OI сопоставимы.
+Различай totals_window (±15% от spot, score/карточка) и totals_full_chain (вся доска).
+Используй calendar_days_to_expiration из JSON — не угадывай срок до экспирации.
+Max pain — эвристика; сила сигнала зависит от days_to_expiration (близкая exp ≠ далёкая LEAPS).
 Отдельно: осторожность, ограничения данных, что проверить дополнительно."""
 
 
@@ -44,7 +47,7 @@ def interpret_options_chain_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "1) Суть сентимента (1-2 предложения)\n"
         "2) Насколько согласованы PCR volume/OI и score\n"
         "3) Ключевые страйки-магниты (2-4 буллета)\n"
-        "4) Max pain vs spot — что это может значить (эвристика)\n"
+        "4) Max pain vs spot — что это может значить (эвристика; учти calendar_days_to_expiration)\n"
         "5) Ограничения источника и что не выводить из одного снимка"
     )
 
@@ -87,13 +90,38 @@ def interpret_options_chain_report(report: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _parse_expiration_date(raw: Any) -> Optional[date]:
+    if not raw:
+        return None
+    if isinstance(raw, date) and not isinstance(raw, datetime):
+        return raw
+    s = str(raw).strip()[:10]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _days_to_expiration(expiration_date: Any, *, as_of: Optional[date] = None) -> Optional[int]:
+    exp = _parse_expiration_date(expiration_date)
+    if not exp:
+        return None
+    today = as_of or date.today()
+    return (exp - today).days
+
+
 def _compact_report_for_llm(report: Dict[str, Any]) -> Dict[str, Any]:
     """Урезанный отчёт без тяжёлых таблиц."""
     scope = report.get("analysis_scope") or {}
+    as_of = date.today().isoformat()
+    exp = report.get("expiration_date")
+    dte = _days_to_expiration(exp)
     out: Dict[str, Any] = {
         "ticker": report.get("ticker"),
         "source": report.get("source"),
-        "expiration_date": report.get("expiration_date"),
+        "as_of_date": as_of,
+        "expiration_date": exp,
+        "calendar_days_to_expiration": dte,
         "spot": report.get("spot"),
         "spot_source": scope.get("spot_source"),
         "sentiment_label": report.get("sentiment_label"),
@@ -109,4 +137,16 @@ def _compact_report_for_llm(report: Dict[str, Any]) -> Dict[str, Any]:
         "key_strikes_volume": (report.get("key_strikes_volume") or [])[:6],
         "data_quality": report.get("data_quality"),
     }
+    if dte is not None:
+        if dte <= 0:
+            out["expiration_note_ru"] = "Экспирация сегодня или уже прошла — max pain и «магниты» к exp наиболее релевантны."
+        elif dte <= 21:
+            out["expiration_note_ru"] = (
+                f"До экспирации {dte} календ. дн. — ближний горизонт; max pain и OI у текущего spot важнее, "
+                "чем для LEAPS."
+            )
+        else:
+            out["expiration_note_ru"] = (
+                f"До экспирации {dte} календ. дн. — max pain слабее как «цель к дате», OI может быть стратегическим."
+            )
     return {k: v for k, v in out.items() if v is not None}
