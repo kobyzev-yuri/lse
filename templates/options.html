@@ -87,7 +87,7 @@
     <h1>Опционы · инструменты</h1>
     <p class="muted" style="font-size:0.85rem;margin-bottom:0.5rem"><a href="/options/map">← Option Money Map</a> (где сидят деньги по OI)</p>
     <p id="pageIntroSent" class="muted intro-tab">Две колонки — один тикер из Polygon и yfinance. Нажмите «Оба» для параллельного анализа; расшифровка метрик — в справке внизу.</p>
-    <p id="pageIntroCalc" class="muted intro-tab hidden">Две колонки Polygon и yfinance: премии с доски слева и справа, ниже — сводная таблица P/L по сценариям.</p>
+    <p id="pageIntroCalc" class="muted intro-tab hidden">Две колонки Polygon и yfinance: chain (PCR, OI, Vol), премии с доски, ниже — P/L по сценариям.</p>
     <div style="margin-top:0.75rem;max-width:360px;">
         <label for="optTicker">Тикер</label>
         <select id="optTicker"><option value="">— загрузка —</option></select>
@@ -464,8 +464,8 @@ P/L(S) = Value(S) − Entry</div>
     $('tabCalc').onclick = () => showTab('calc');
 
     const calcState = {
-        polygon: { prefill: null, result: null },
-        yfinance: { prefill: null, result: null },
+        polygon: { prefill: null, result: null, sentiment: null },
+        yfinance: { prefill: null, result: null, sentiment: null },
     };
 
     function calcStrategy() { return $('calcStrategy').value; }
@@ -540,6 +540,14 @@ P/L(S) = Value(S) − Entry</div>
         }
         let html = '<div class="calc-panel-section"><p class="calc-panel-label">Данные с доски</p>';
         html += renderPrefillBlock(p) + '</div>';
+        const chain = calcState[sourceKey].sentiment;
+        if (chain && chain.status === 'ok') {
+            html += '<div class="calc-panel-section"><p class="calc-panel-label">Chain ±15% (PCR · OI · Vol)</p>';
+            html += renderChainMetricsBlock(chain) + '</div>';
+        } else if (chain && chain.status === 'error') {
+            html += '<div class="calc-panel-section"><p class="muted" style="font-size:0.82rem">Chain: ' +
+                (chain.error || 'ошибка') + '</p></div>';
+        }
         if (r && !r.error) {
             html += '<div class="calc-panel-section"><p class="calc-panel-label">Результат</p>';
             html += renderCalcResultBlock(r, sourceKey) + '</div>';
@@ -663,6 +671,14 @@ P/L(S) = Value(S) − Entry</div>
         return j;
     }
 
+    async function fetchChainSentiment(source, exp) {
+        const t = getOptTicker();
+        let url = '/api/options/sentiment/' + encodeURIComponent(t) + '?source=' + encodeURIComponent(source);
+        if (exp) url += '&expiration_date=' + encodeURIComponent(exp);
+        const r = await fetch(url);
+        return r.json();
+    }
+
     async function prefillCalc(source, quiet) {
         const t = getOptTicker();
         const strat = calcStrategy();
@@ -678,6 +694,7 @@ P/L(S) = Value(S) − Entry</div>
         const j = await r.json();
         calcState[source].prefill = j;
         calcState[source].result = null;
+        calcState[source].sentiment = null;
         if (j.status === 'error') {
             setCalcPrefillMsg(label + ': ' + (j.error || 'ошибка'), true);
             renderCalcColumn(source, outId);
@@ -687,9 +704,13 @@ P/L(S) = Value(S) − Entry</div>
         if (j.expiration_date && !$('calcExp').value) {
             $('calcExp').value = j.expiration_date;
         }
-        await runCalcForSource(source);
+        const expUse = j.expiration_date || exp;
+        await Promise.all([
+            runCalcForSource(source),
+            fetchChainSentiment(source, expUse).then(s => { calcState[source].sentiment = s; }),
+        ]);
         renderCalcColumn(source, outId);
-        renderCalcCompareDiff();
+        renderCalcCompareMerge();
         let msg = label + ': spot $' + j.spot + ', long ' + j.long_strike + ' @ $' + j.long_premium;
         if (j.short_strike != null) msg += ', short ' + j.short_strike + ' @ $' + j.short_premium;
         if (j.warning_ru) msg += '. ' + j.warning_ru;
@@ -731,46 +752,36 @@ P/L(S) = Value(S) − Entry</div>
         return j;
     }
 
-    function renderSentimentCard(j, sourceLabel) {
-        if (j.status === 'error') {
-            return '<p class="text-danger"><strong>' + sourceLabel + ':</strong> ' + (j.error || 'ошибка') + '</p>';
-        }
-        if (j.status === 'empty' || j.sentiment_label === 'NO_DATA') {
-            return '<p class="text-danger"><strong>' + sourceLabel + ':</strong> нет контрактов на выбранную экспирацию</p>';
+    function renderChainMetricsBlock(j) {
+        if (!j || j.status === 'error' || j.status === 'empty' || j.sentiment_label === 'NO_DATA') {
+            return '<p class="muted" style="font-size:0.82rem">Нет данных chain.</p>';
         }
         const label = j.sentiment_label || 'NEUTRAL';
-        let html = '<p class="muted" style="margin:0 0 0.5rem;font-size:0.8rem;">' + sourceLabel;
-        if (j.expiration_date) html += ' · exp ' + j.expiration_date;
-        if (j.contract_count != null) html += ' · ' + j.contract_count + ' контрактов';
-        html += '</p>';
-        html += '<span class="sentiment-badge sentiment-' + label + '">' + label + '</span>';
-        html += ' <span class="muted">score ' + (j.sentiment_score ?? '—') + '</span>';
-        html += '<p style="margin:0.6rem 0;font-size:0.9rem">' + (j.sentiment_summary_ru || '') + '</p>';
-        html += '<div class="stats">';
+        let html = '<span class="sentiment-badge sentiment-' + label + '">' + label + '</span>';
+        html += ' <span class="muted" style="font-size:0.85rem">score ' + (j.sentiment_score ?? '—') + '</span>';
+        if (j.contract_count != null) {
+            html += ' <span class="muted" style="font-size:0.78rem">· ' + j.contract_count + ' контр. в ±15%</span>';
+        }
+        html += '<div class="stats" style="margin-top:0.5rem">';
         const tot = j.totals || {};
         html += '<div class="stat-card"><h3>PCR vol</h3><div class="value">' + (tot.pcr_volume ?? '—') + '</div></div>';
         html += '<div class="stat-card"><h3>PCR OI</h3><div class="value">' + (tot.pcr_open_interest ?? '—') + '</div></div>';
-        html += '<div class="stat-card"><h3>Spot</h3><div class="value">$' + (j.spot ?? '—') + '</div></div>';
         html += '<div class="stat-card"><h3>Max pain</h3><div class="value">' +
             (j.max_pain_strike != null ? '$' + j.max_pain_strike : '—') + '</div></div>';
         html += '</div>';
         const full = j.totals_full_chain || {};
         if (full.pcr_volume != null || full.pcr_open_interest != null) {
-            html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">Вся доска: PCR vol ' +
+            html += '<p class="muted" style="font-size:0.78rem;margin:0.45rem 0 0">Вся доска: PCR vol ' +
                 (full.pcr_volume ?? '—') + ', PCR OI ' + (full.pcr_open_interest ?? '—') +
                 (full.contract_rows != null ? ' · ' + full.contract_rows + ' строк' : '') + '</p>';
         }
-        if (j.data_quality && j.data_quality.note_ru) {
-            html += '<p class="muted" style="font-size:0.78rem;margin:0.35rem 0">' + j.data_quality.note_ru + '</p>';
-        }
         const src = (j.source || '').toLowerCase();
         const oiCaption = src === 'yfinance'
-            ? 'Ключевые страйки по OI (yfinance option_chain)'
-            : 'Ключевые страйки по OI (Polygon snapshot)';
+            ? 'Ключевые страйки по OI (yfinance)'
+            : 'Ключевые страйки по OI (Polygon)';
         const volCaption = src === 'yfinance'
-            ? 'Ключевые страйки по volume (yfinance option_chain)'
-            : 'Ключевые страйки по volume (Polygon snapshot)';
-
+            ? 'Ключевые страйки по volume (yfinance)'
+            : 'Ключевые страйки по volume (Polygon)';
         if (j.key_strikes_oi && j.key_strikes_oi.length) {
             html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">' + oiCaption + '</p>';
             html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>OI Σ</th><th>Call OI</th><th>Put OI</th></tr>';
@@ -787,6 +798,28 @@ P/L(S) = Value(S) − Entry</div>
                     row.call_volume + '</td><td>' + row.put_volume + '</td></tr>';
             });
             html += '</table>';
+        }
+        return html;
+    }
+
+    function renderSentimentCard(j, sourceLabel) {
+        if (j.status === 'error') {
+            return '<p class="text-danger"><strong>' + sourceLabel + ':</strong> ' + (j.error || 'ошибка') + '</p>';
+        }
+        if (j.status === 'empty' || j.sentiment_label === 'NO_DATA') {
+            return '<p class="text-danger"><strong>' + sourceLabel + ':</strong> нет контрактов на выбранную экспирацию</p>';
+        }
+        let html = '<p class="muted" style="margin:0 0 0.5rem;font-size:0.8rem;">' + sourceLabel;
+        if (j.expiration_date) html += ' · exp ' + j.expiration_date;
+        if (j.contract_count != null) html += ' · ' + j.contract_count + ' контрактов';
+        html += '</p>';
+        html += '<p style="margin:0 0 0.5rem;font-size:0.9rem">' + (j.sentiment_summary_ru || '') + '</p>';
+        html += renderChainMetricsBlock(j);
+        html += '<div class="stats" style="margin-top:0.5rem">';
+        html += '<div class="stat-card"><h3>Spot</h3><div class="value">$' + (j.spot ?? '—') + '</div></div>';
+        html += '</div>';
+        if (j.data_quality && j.data_quality.note_ru) {
+            html += '<p class="muted" style="font-size:0.78rem;margin:0.35rem 0">' + j.data_quality.note_ru + '</p>';
         }
         if (!(j.key_strikes_oi && j.key_strikes_oi.length) && !(j.key_strikes_volume && j.key_strikes_volume.length)) {
             html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">Нет ключевых страйков в окне ±15%.</p>';
@@ -971,8 +1004,10 @@ P/L(S) = Value(S) − Entry</div>
     $('calcStrategy').onchange = () => {
         calcState.polygon.prefill = null;
         calcState.polygon.result = null;
+        calcState.polygon.sentiment = null;
         calcState.yfinance.prefill = null;
         calcState.yfinance.result = null;
+        calcState.yfinance.sentiment = null;
         $('calcPolygon').innerHTML = '<p class="muted">Стратегия изменена — загрузите цепочку снова.</p>';
         $('calcYfinance').innerHTML = '<p class="muted">Стратегия изменена — загрузите цепочку снова.</p>';
         $('calcCompareMerge').style.display = 'none';
