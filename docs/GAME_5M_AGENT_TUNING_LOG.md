@@ -158,7 +158,9 @@ ML_READINESS_GAME5M_MIN_VALID=80
 
 ---
 
-## Сессия 2026-06-25 — intraday regime router (pre-RTH deploy)
+## Сессия 2026-06-25 — intraday regime router
+
+**Статус:** **applied** на prod (deploy `c994205`, config через `update_config_key`, 2026-06-25 ~14:15 MSK).
 
 **Код:** `services/game5m_intraday_regime.py` — классификатор `chop` / `impulse_up` / `fade_extended` / `neutral`.
 
@@ -168,13 +170,23 @@ ML_READINESS_GAME5M_MIN_VALID=80
 | `impulse_up` | без блока | momentum factor ×1.15 |
 | `fade_extended` | BUY/STRONG_BUY → HOLD | — |
 
-**Config (bundle `intraday_regime_v1`, apply сразу — без log_only warm-up):**
+**Config на проде:**
 ```env
 GAME_5M_INTRADAY_REGIME_ENABLED=true
 GAME_5M_INTRADAY_REGIME_GATE_MODE=apply
+# + chop/impulse multipliers (см. config.env.example)
 ```
 
-**Observe:** `context_json.intraday_regime`, `intraday_regime_entry_guard_*` на BUY; decision_stack contour `intraday_regime`.
+**Post-session checklist (1–3 RTH после deploy):**
+- [ ] В BUY `context_json`: `intraday_regime.regime`, при chop — `intraday_regime_entry_guard_triggered=true` на слабом momentum
+- [ ] Меньше входов `buy_rth_momentum` с RTH 1.2–1.5% в chop-дни vs 24.06
+- [ ] В chop: soft-take / EOD-flat `overnight_eod_flat_loss` при −0.35% (не −0.5%)
+- [ ] В impulse_up: доля TAKE_PROFIT / выше avg realized на тейках
+- [ ] `game5m_daily_session_review.py` + `/api/analyzer?days=3` — сравнить с 16–24.06
+
+**Не трогать параллельно:** пороги `RTH_MOMENTUM_BUY_MIN`, EOD multiday, block near-close — пока не оценён этот пакет.
+
+**Техдолг:** `apply-bundle intraday_regime_v1` падает на `negative_value_not_allowed` для `CHOP_EOD_MAX_LOSS`; ledger всё ещё `overnight_multiday_v1` pending — не блокирует работу режима.
 
 ---
 

@@ -87,6 +87,25 @@ decision_effective -> cron entry/hold/exit
 
 После этого KB-новости могут ослабить или запретить вход. Сессия может принудительно отложить вход.
 
+### 3.1 Intraday Regime Router (с 2026-06-25)
+
+**Код:** `services/game5m_intraday_regime.py`. Классифицирует **текущую** ленту по observable-фичам (`momentum_rth_today_pct`, `session_move_from_open_pct`, `pullback_from_high_pct`, `bars_since_session_high`) — без ML.
+
+| Режим | Критерий (упрощённо) | Вход | Выход / EOD |
+|-------|----------------------|------|-------------|
+| `impulse_up` | RTH ≥ 2.5% или сессия ≥ 3% со свежим high | без доп. блока | `TAKE_MOMENTUM_FACTOR × 1.15` |
+| `chop` | RTH < 1.5% и 2ч < 0.5% | `buy_rth_momentum` → HOLD если RTH < 1.5% | take cap ×0.85, soft-take 2% в REGULAR, EOD-flat при −0.35% |
+| `fade_extended` | сессия у хая, импульс затух | все BUY → HOLD | — |
+| `neutral` | остальное | базовые правила | базовые правила |
+
+**Порядок на входе:** `decide_game5m_technical` → stale-chase guard → **intraday regime guard** → KB/VIX/…
+
+**На выходе:** `_effective_take_profit_pct(..., d5_context=)` и `should_close_position` читают `intraday_regime` из текущего `d5` (режим пересчитывается каждый бар).
+
+**Конфиг:** `GAME_5M_INTRADAY_REGIME_*` в `config.env`; bundle `intraday_regime_v1` в `game5m_tuning_bundles.py`. Gate: `GAME_5M_INTRADAY_REGIME_GATE_MODE=apply` (песочница — apply-first, без warm-up log_only).
+
+**Телеметрия в сделке:** `context_json.intraday_regime`, `intraday_regime_entry_guard_*`; decision_stack contour `intraday_regime`.
+
 ---
 
 ## 4. Premarket Gap Baseline
@@ -250,6 +269,7 @@ DECISION_STACK_FORECAST_GATE_MODE=apply
 - `gap_forecast`: caution, ML open-gap prediction.
 - `catboost_entry_5m`: caution/apply по readiness.
 - `multiday_lr`: caution/apply по readiness.
+- `intraday_regime`: production policy gate (chop/fade downgrade входа; telemetry regime label).
 - `news_fusion`: caution/log-only до готовности.
 
 В `resolve_game5m_technical()` применяются только contribution с gate mode `apply`. ML-контуры дополнительно должны быть `production`, иначе они остаются в snapshot как telemetry/caution.
