@@ -160,6 +160,17 @@ def should_eod_flatten_position(
         return False, ""
 
     max_loss_hold = _cfg_float("GAME_5M_EOD_FLATTEN_MAX_LOSS_TO_FORCE_PCT", -0.5)
+    regime_lab = None
+    if isinstance(d5, dict):
+        try:
+            from services.game5m_intraday_regime import chop_eod_max_loss_pct, regime_label_from_context
+
+            regime_lab = regime_label_from_context(d5)
+            if regime_lab == "chop":
+                max_loss_hold = chop_eod_max_loss_pct()
+        except Exception:
+            pass
+
     if pnl_current_pct is not None and float(pnl_current_pct) <= max_loss_hold:
         return True, "overnight_eod_flat_loss"
 

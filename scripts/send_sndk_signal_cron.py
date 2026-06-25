@@ -594,7 +594,7 @@ def process_ticker(
             if (open_pos.get("strategy_name") or "GAME_5M").strip().upper() == "GAME_5M" and entry_f and entry_f > 0:
                 cap_e = _take_profit_cap_pct(ticker, apply_hanger_json=apply_hanger_json)
                 take_e = _effective_take_profit_pct(
-                    momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json
+                    momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json, d5_context=d5
                 )
                 position_state_v2 = classify_game5m_position_state_v2(
                     open_pos,
@@ -656,7 +656,7 @@ def process_ticker(
                 strat_nm = (open_pos.get("strategy_name") or "GAME_5M").strip() or "GAME_5M"
                 entry_ctx_db = get_latest_buy_context_json(ticker, strat_nm)
                 take_pct_e = _effective_take_profit_pct(
-                    momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json
+                    momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json, d5_context=d5
                 )
                 stop_pct_e = (
                     _effective_stop_loss_pct(momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json)
@@ -967,7 +967,7 @@ def process_ticker(
                 if entry_f:
                     pnl_pct = (price_for_check - entry_f) / entry_f * 100.0
                     take_pct = _effective_take_profit_pct(
-                        momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json
+                        momentum_2h_pct, ticker=ticker, apply_hanger_json=apply_hanger_json, d5_context=d5
                     )
                     if _game_5m_stop_loss_enabled():
                         stop_pct = _effective_stop_loss_pct(

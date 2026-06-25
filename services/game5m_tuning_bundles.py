@@ -43,6 +43,30 @@ BUNDLES: dict[str, Game5mTuningBundle] = {
     OVERNIGHT_MULTIDAY_V1.bundle_id: OVERNIGHT_MULTIDAY_V1,
 }
 
+INTRADAY_REGIME_V1 = Game5mTuningBundle(
+    bundle_id="intraday_regime_v1",
+    description_ru="Режимный роутер: chop vs impulse — вход/тейк/EOD",
+    rationale_ru=(
+        "Боковик: блок слабого buy_rth_momentum (<1.5%), ниже take cap, мягкий тейк 2%, "
+        "EOD-flat при −0.35%. Импульс: factor×1.15 на тейк. fade_extended: veto входа."
+    ),
+    observe_days_default=5,
+    changes={
+        "GAME_5M_INTRADAY_REGIME_ENABLED": "true",
+        "GAME_5M_INTRADAY_REGIME_GATE_MODE": "apply",
+        "GAME_5M_INTRADAY_REGIME_CHOP_ENTRY_MOMENTUM_BUY_MIN": "1.5",
+        "GAME_5M_INTRADAY_REGIME_CHOP_TAKE_CAP_MULT": "0.85",
+        "GAME_5M_INTRADAY_REGIME_CHOP_MOMENTUM_FACTOR_MULT": "0.9",
+        "GAME_5M_INTRADAY_REGIME_CHOP_SOFT_TAKE_MIN_PCT": "2.0",
+        "GAME_5M_INTRADAY_REGIME_CHOP_SOFT_TAKE_REGULAR_ENABLED": "true",
+        "GAME_5M_INTRADAY_REGIME_CHOP_EOD_MAX_LOSS_TO_FORCE_PCT": "-0.35",
+        "GAME_5M_INTRADAY_REGIME_IMPULSE_MOMENTUM_FACTOR_MULT": "1.15",
+        "GAME_5M_RTH_MOMENTUM_BUY_MIN": "1.2",
+    },
+)
+
+BUNDLES["intraday_regime_v1"] = INTRADAY_REGIME_V1
+
 
 def get_bundle(bundle_id: str) -> Game5mTuningBundle:
     bid = str(bundle_id or "").strip()

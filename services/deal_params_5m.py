@@ -43,6 +43,8 @@ FULL_ENTRY_KEYS = (
     "atr_5m_pct", "volume_5m_last", "volume_vs_avg_pct",
     "decision_rule_version", "decision_rule_params",
     "technical_entry_branch", "entry_strong_buy_downgraded", "entry_condition", "entry_intuition",
+    "intraday_regime", "intraday_regime_entry_guard_triggered",
+    "intraday_regime_entry_guard_reason", "intraday_regime_entry_guard_prev_decision",
     # CatBoost на входе (для анализатора без логов): core/effective, P, fusion
     "technical_decision_core",
     "technical_decision_effective",

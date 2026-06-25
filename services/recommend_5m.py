@@ -1406,6 +1406,8 @@ TECHNICAL_SIGNAL_KEYS = (
     "catboost_fusion_mode", "catboost_fusion_note",
     "entry_quality_guard_triggered", "entry_quality_guard_reason", "entry_quality_guard_prev_decision",
     "entry_stale_chase_guard_triggered", "entry_stale_chase_guard_reason", "entry_stale_chase_guard_prev_decision",
+    "intraday_regime", "intraday_regime_entry_guard_triggered",
+    "intraday_regime_entry_guard_reason", "intraday_regime_entry_guard_prev_decision",
     "session_open_price", "session_move_from_open_pct", "bars_since_session_high",
     "momentum_short_pct", "momentum_short_bars",
     # Явный разбор входа: формальное условие ветки + интуиция стратегии (не дублирует весь reasoning)
@@ -2210,6 +2212,31 @@ def get_decision_5m(
     if entry_stale_chase_guard_triggered:
         reasoning = " ".join(reasons)
 
+    from services.game5m_intraday_regime import (
+        apply_intraday_regime_entry_guard,
+        classify_intraday_regime,
+    )
+
+    intraday_regime_info = classify_intraday_regime(features)
+    intraday_regime_entry_guard_triggered = False
+    intraday_regime_entry_guard_prev_decision: Optional[str] = None
+    intraday_regime_entry_guard_reason: Optional[str] = None
+    (
+        decision,
+        reasons,
+        intraday_regime_entry_guard_triggered,
+        intraday_regime_entry_guard_prev_decision,
+        intraday_regime_entry_guard_reason,
+    ) = apply_intraday_regime_entry_guard(
+        decision,
+        reasons,
+        features,
+        technical_entry_branch=technical_entry_branch,
+        regime_info=intraday_regime_info,
+    )
+    if intraday_regime_entry_guard_triggered:
+        reasoning = " ".join(reasons)
+
     # Рекомендация по входу в премаркете (2.2, 2.3): войти сейчас / ждать открытия / лимит ниже
     premarket_entry_recommendation = None
     premarket_suggested_limit_price = None
@@ -2368,6 +2395,10 @@ def get_decision_5m(
         "entry_stale_chase_guard_triggered": entry_stale_chase_guard_triggered,
         "entry_stale_chase_guard_prev_decision": entry_stale_chase_guard_prev_decision,
         "entry_stale_chase_guard_reason": entry_stale_chase_guard_reason,
+        "intraday_regime": intraday_regime_info,
+        "intraday_regime_entry_guard_triggered": intraday_regime_entry_guard_triggered,
+        "intraday_regime_entry_guard_prev_decision": intraday_regime_entry_guard_prev_decision,
+        "intraday_regime_entry_guard_reason": intraday_regime_entry_guard_reason,
     }
     if vix_snap.get("enabled"):
         out["vix_context"] = {
@@ -2420,7 +2451,9 @@ def get_decision_5m(
     # - минимально интересная цель для игры: 4%.
     try:
         from services.game_5m import _effective_take_profit_pct, _take_profit_cap_pct
-        effective_take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=ticker)
+        effective_take_pct = _effective_take_profit_pct(
+            momentum_2h_pct, ticker=ticker, d5_context={"intraday_regime": intraday_regime_info}
+        )
         out["estimated_upside_pct_day"] = effective_take_pct
         out["take_profit_pct"] = effective_take_pct
         p = out.get("price") or price

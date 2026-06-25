@@ -5,7 +5,7 @@
 **Иерархия источников (как договорились):**
 1. **Анализатор** — центральная система метрик и `auto_config_override` (см. [GAME_5M_TUNING_REGLEMENT.md](GAME_5M_TUNING_REGLEMENT.md)).
 2. **Этот лог** — оперативные решения агента до/между прогонами анализатора; при расхождении приоритет у проверенных live-фактов + WF/OOS.
-3. **Один параметр за эксперимент** — как в регламенте; observe 1–3 сессии перед следующим шагом.
+3. **Песочница (prod VM):** эксперименты **apply-first** — без лишних фаз `log_only`/observe, если гипотеза ясна и откат тривиален. `log_only` только для чистого ML-shadow без влияния на PnL. Один **смысловой** пакет за раз (bundle), не один ключ в вакууме.
 
 **Связанные артефакты:** `local/game5m_tuning_ledger.json` (controller/replay), `last_multiday_wf_game5m.json` (WF v3nm).
 
@@ -155,6 +155,26 @@ ML_READINESS_GAME5M_MIN_VALID=80
 | ML-12-02 | entry CatBoost L3 | **deferred** (AUC 0.58, n_valid 49<80) |
 | ML-12-03 | multiday hold apply | **rejected** (would_defer<5) |
 | ML-12-04 | P-02 EOD_FLATTEN_ALWAYS=false | **deferred** |
+
+---
+
+## Сессия 2026-06-25 — intraday regime router (pre-RTH deploy)
+
+**Код:** `services/game5m_intraday_regime.py` — классификатор `chop` / `impulse_up` / `fade_extended` / `neutral`.
+
+| Режим | Вход | Выход |
+|-------|------|-------|
+| `chop` | блок `buy_rth_momentum` при RTH < 1.5% | take cap ×0.85, factor ×0.9, soft-take 2% в REGULAR, EOD −0.35% |
+| `impulse_up` | без блока | momentum factor ×1.15 |
+| `fade_extended` | BUY/STRONG_BUY → HOLD | — |
+
+**Config (bundle `intraday_regime_v1`, apply сразу — без log_only warm-up):**
+```env
+GAME_5M_INTRADAY_REGIME_ENABLED=true
+GAME_5M_INTRADAY_REGIME_GATE_MODE=apply
+```
+
+**Observe:** `context_json.intraday_regime`, `intraday_regime_entry_guard_*` на BUY; decision_stack contour `intraday_regime`.
 
 ---
 

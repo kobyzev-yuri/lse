@@ -556,6 +556,38 @@ def _collect_earnings_trust_contribution(d5: Dict[str, Any]) -> Optional[Dict[st
     )
 
 
+def _collect_intraday_regime_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    raw = d5.get("intraday_regime")
+    if not isinstance(raw, dict) or not raw.get("enabled"):
+        return None
+    regime = str(raw.get("regime") or "neutral")
+    gm = str(raw.get("gate_mode") or "apply")
+    triggered = bool(d5.get("intraday_regime_entry_guard_triggered"))
+    strength = 0.0
+    action = "telemetry"
+    if regime == "impulse_up":
+        strength = 0.25
+    elif regime in ("chop", "fade_extended"):
+        strength = -0.2
+    if triggered and gm == "apply":
+        action = "downgrade"
+        strength = min(strength, -0.35)
+    return make_contribution(
+        contour_id="intraday_regime",
+        role="policy_gate",
+        readiness=READINESS_PRODUCTION,
+        strength=strength,
+        weight=0.85,
+        action=action,
+        detail=str(raw.get("reason") or regime),
+        metrics={
+            "regime": regime,
+            "gate_mode": gm,
+            "entry_guard_triggered": triggered,
+        },
+    )
+
+
 def collect_game5m_contributions(d5: Dict[str, Any], *, ticker: str = "") -> List[Dict[str, Any]]:
     """Собирает все известные контуры из полей d5 (после finalize)."""
     out: List[Dict[str, Any]] = []
@@ -572,6 +604,7 @@ def collect_game5m_contributions(d5: Dict[str, Any], *, ticker: str = "") -> Lis
         _collect_news_fusion_contribution,
         _collect_catboost_contribution,
         _collect_multiday_contribution,
+        _collect_intraday_regime_contribution,
         _collect_earnings_trust_contribution,
     )
     for fn in collectors:

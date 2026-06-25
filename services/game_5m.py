@@ -1241,6 +1241,8 @@ def _effective_take_profit_pct(
     ticker: Optional[str] = None,
     *,
     apply_hanger_json: Optional[bool] = None,
+    intraday_regime: Optional[str] = None,
+    d5_context: Optional[dict] = None,
 ) -> float:
     """Тейк-профит по импульсу 2ч или из конфига.
 
@@ -1261,6 +1263,24 @@ def _effective_take_profit_pct(
         momentum_factor = max(0.3, min(2.0, momentum_factor))
     except (ValueError, TypeError):
         momentum_factor = 1.0
+    regime_lab = intraday_regime
+    if not regime_lab and isinstance(d5_context, dict):
+        try:
+            from services.game5m_intraday_regime import regime_label_from_context
+
+            regime_lab = regime_label_from_context(d5_context)
+        except Exception:
+            regime_lab = None
+    if regime_lab:
+        try:
+            from services.game5m_intraday_regime import exit_multipliers_for_regime
+
+            mult = exit_multipliers_for_regime(regime_lab)
+            cap *= float(mult.get("take_cap_mult") or 1.0)
+            momentum_factor *= float(mult.get("momentum_factor_mult") or 1.0)
+            momentum_factor = max(0.3, min(2.0, momentum_factor))
+        except Exception:
+            pass
     if momentum_2h_pct is not None and momentum_2h_pct >= min_take:
         effective_momentum = float(momentum_2h_pct) * momentum_factor
         return min(effective_momentum, cap)
@@ -1829,7 +1849,12 @@ def should_close_position(
                 return True, derisk_sig, derisk_det
 
         tkr = open_position.get("ticker")
-        take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=tkr, apply_hanger_json=apply_hanger_json)
+        take_pct = _effective_take_profit_pct(
+            momentum_2h_pct,
+            ticker=tkr,
+            apply_hanger_json=apply_hanger_json,
+            d5_context=d5_context,
+        )
         stop_pct = _effective_stop_loss_pct(momentum_2h_pct, ticker=tkr, apply_hanger_json=apply_hanger_json)
         # Для тейка учитываем High последней свечи (отскок вверх при открытии сессии)
         price_for_take = max(current_price, bar_high) if bar_high is not None and bar_high > 0 else current_price
@@ -1839,7 +1864,9 @@ def should_close_position(
         pnl_stop_pct = (price_for_stop - entry_price) / entry_price * 100.0
         ticker = open_position.get("ticker", "?")
         hanger_cap_overridden = False
-        base_take_pct = _effective_take_profit_pct(momentum_2h_pct, ticker=tkr, apply_hanger_json=False)
+        base_take_pct = _effective_take_profit_pct(
+            momentum_2h_pct, ticker=tkr, apply_hanger_json=False, d5_context=d5_context
+        )
         if base_take_pct > take_pct:
             override_margin = max(0.0, _game5m_cfg_float("GAME_5M_HANGER_CAP_OVERRIDE_MARGIN_PCT", 2.0))
             if pnl_take_pct >= take_pct + override_margin:
@@ -1872,11 +1899,28 @@ def should_close_position(
         # Мягкий тейк: в первый час RTH цена у дневного high, PnL уже есть, но до полного тейка не дотянули —
         # фиксируем, чтобы не ловить разворот после «погони» у хая (см. NEAR_OPEN в market_session).
         st_en, st_min, st_pb = _game_5m_soft_take_near_high_params()
+        regime_lab = None
+        chop_soft_regular = False
+        if isinstance(d5_context, dict):
+            try:
+                from services.game5m_intraday_regime import (
+                    chop_soft_take_regular_enabled,
+                    exit_multipliers_for_regime,
+                    regime_label_from_context,
+                )
+
+                regime_lab = regime_label_from_context(d5_context)
+                if regime_lab:
+                    st_min = float(exit_multipliers_for_regime(regime_lab).get("soft_take_min_pct") or st_min)
+                chop_soft_regular = regime_lab == "chop" and chop_soft_take_regular_enabled()
+            except Exception:
+                pass
         phase = (session_phase or "").strip()
+        soft_phase_ok = phase == "NEAR_OPEN" or (chop_soft_regular and phase in ("REGULAR", "NEAR_CLOSE"))
         if (
             st_en
             and not exit_only_take
-            and phase == "NEAR_OPEN"
+            and soft_phase_ok
             and pullback_from_high_pct is not None
             and pnl_take_pct >= st_min
             and pnl_take_pct < take_threshold
