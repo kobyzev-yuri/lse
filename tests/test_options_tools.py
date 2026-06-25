@@ -382,6 +382,26 @@ def test_build_analyzer_llm_attempts_includes_compare(monkeypatch):
     assert len(attempts) == 2
 
 
+def test_money_map_chart_bars_oi_filter():
+    from services.options_money_map import _filter_chart_bars_for_display
+
+    bars = [
+        {"strike": 990.0, "put_oi": 10, "call_oi": 5, "total_oi": 15},
+        {"strike": 1000.0, "put_oi": 8000, "call_oi": 200, "total_oi": 8200},
+        {"strike": 1050.0, "put_oi": 3000, "call_oi": 100, "total_oi": 3100},
+        {"strike": 1100.0, "put_oi": 50, "call_oi": 5000, "total_oi": 5050},
+        {"strike": 1200.0, "put_oi": 5, "call_oi": 8, "total_oi": 13},
+    ]
+    kept, meta = _filter_chart_bars_for_display(bars)
+    strikes = [b["strike"] for b in kept]
+    assert 990.0 not in strikes
+    assert 1200.0 not in strikes
+    assert 1000.0 in strikes
+    assert meta["bars_raw"] == 5
+    assert meta["bars_shown"] < 5
+    assert meta["oi_threshold"] >= 200
+
+
 def test_money_map_one_liner():
     from services.options_money_map import build_summary_one_liner
 

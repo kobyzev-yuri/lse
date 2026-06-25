@@ -9,15 +9,28 @@
     .map-hero .bias-BULLISH { color: #86efac; }
     .map-hero .bias-BEARISH { color: #fca5a5; }
     .map-hero .bias-NEUTRAL { color: #cbd5e1; }
-    .exp-slider { width: 100%; margin: 0.75rem 0; }
+    .exp-slider { width: 100%; margin: 0.35rem 0 0; }
     .exp-label { font-size: 0.88rem; color: #94a3b8; margin-bottom: 0.35rem; }
+    .slider-block { margin: 0.85rem 0 1.1rem; }
+    .slider-wrap { position: relative; padding-bottom: 0.25rem; }
+    .slider-ticks {
+        display: flex; justify-content: space-between; gap: 2px;
+        margin-top: 0.35rem; min-height: 2.2rem; align-items: flex-start;
+    }
+    .slider-tick {
+        flex: 1 1 0; min-width: 0; text-align: center; font-size: 0.62rem;
+        line-height: 1.15; color: #64748b; word-break: break-all;
+        cursor: default; user-select: none;
+    }
+    .slider-tick.active { color: #7dd3fc; font-weight: 700; }
+    .slider-tick.many { font-size: 0.55rem; }
     .oi-chart {
-        display: flex; align-items: flex-end; gap: 2px; height: 220px;
-        margin: 1rem 0; padding: 0.5rem 0; border-bottom: 1px solid #334155;
+        display: flex; align-items: flex-end; gap: 4px; height: 220px;
+        margin: 1rem 0; padding: 0.5rem 0.25rem; border-bottom: 1px solid #334155;
         overflow-x: auto;
     }
     .oi-bar-wrap {
-        flex: 1 0 12px; max-width: 28px; display: flex; flex-direction: column;
+        flex: 1 0 22px; max-width: 48px; display: flex; flex-direction: column;
         align-items: center; justify-content: flex-end; height: 100%; position: relative;
     }
     .oi-bar-put { width: 100%; background: #7f1d1d; border-radius: 2px 2px 0 0; min-height: 2px; }
@@ -72,10 +85,20 @@
         <div id="mapHero" class="map-hero"></div>
 
         <p class="exp-label">Экспирация: <strong id="mapExpLabel">—</strong></p>
-        <input type="range" id="mapExpSlider" class="exp-slider" min="0" max="0" value="0" step="1">
+        <div class="slider-block">
+            <div class="slider-wrap">
+                <input type="range" id="mapExpSlider" class="exp-slider" min="0" max="0" value="0" step="1">
+                <div id="mapExpTicks" class="slider-ticks" aria-hidden="true"></div>
+            </div>
+        </div>
 
         <p class="exp-label">Дата снимка: <strong id="mapSnapLabel">сейчас (Polygon)</strong> <span id="mapSnapLive" class="snap-live-tag"></span></p>
-        <input type="range" id="mapSnapSlider" class="exp-slider" min="0" max="0" value="0" step="1">
+        <div class="slider-block">
+            <div class="slider-wrap">
+                <input type="range" id="mapSnapSlider" class="exp-slider" min="0" max="0" value="0" step="1">
+                <div id="mapSnapTicks" class="slider-ticks" aria-hidden="true"></div>
+            </div>
+        </div>
 
         <p id="mapPlateShift" class="plate-shift" style="display:none;"></p>
 
@@ -156,7 +179,21 @@
         });
     }
 
-    function renderChart(bars, spot) {
+    function renderSliderTicks(containerId, labels, activeIndex) {
+        const box = $(containerId);
+        if (!box) return;
+        box.innerHTML = '';
+        const many = labels.length > 10;
+        labels.forEach((lbl, i) => {
+            const span = document.createElement('span');
+            span.className = 'slider-tick' + (i === activeIndex ? ' active' : '') + (many ? ' many' : '');
+            span.textContent = lbl;
+            span.title = lbl;
+            box.appendChild(span);
+        });
+    }
+
+    function renderChart(bars, spot, chartScope) {
         const box = $('mapChart');
         box.innerHTML = '';
         if (!bars || !bars.length) {
@@ -164,15 +201,17 @@
             return;
         }
         const maxOi = Math.max(...bars.map(b => Math.max(b.put_oi, b.call_oi)), 1);
-        const showStrike = (s) => Number.isInteger(s) || s % 5 === 0;
+        const scopeNote = chartScope && chartScope.bars_raw > chartScope.bars_shown
+            ? ' (показано ' + chartScope.bars_shown + ' из ' + chartScope.bars_raw + ' страйков, OI ≥ ' + (chartScope.oi_threshold || 0).toLocaleString() + ')'
+            : '';
 
         bars.forEach(b => {
             const wrap = document.createElement('div');
             wrap.className = 'oi-bar-wrap';
-            wrap.title = 'K=' + b.strike + ' put OI=' + b.put_oi + ' call OI=' + b.call_oi;
+            wrap.title = 'K=' + b.strike + ' put OI=' + b.put_oi + ' call OI=' + b.call_oi + ' total=' + b.total_oi;
 
-            const callH = Math.max(2, (b.call_oi / maxOi) * 160);
-            const putH = Math.max(2, (b.put_oi / maxOi) * 160);
+            const callH = Math.max(3, (b.call_oi / maxOi) * 160);
+            const putH = Math.max(3, (b.put_oi / maxOi) * 160);
             const callBar = document.createElement('div');
             callBar.className = 'oi-bar-call';
             callBar.style.height = callH + 'px';
@@ -183,17 +222,43 @@
             wrap.appendChild(callBar);
             wrap.appendChild(putBar);
 
-            if (showStrike(b.strike) || Math.abs(b.strike - spot) < spot * 0.02) {
-                const lbl = document.createElement('div');
-                lbl.className = 'oi-bar-strike';
-                lbl.textContent = b.strike;
-                wrap.appendChild(lbl);
-            }
-            if (Math.abs(b.strike - spot) < spot * 0.008) {
+            const lbl = document.createElement('div');
+            lbl.className = 'oi-bar-strike';
+            lbl.textContent = Number.isInteger(b.strike) ? b.strike : b.strike.toFixed(1);
+            wrap.appendChild(lbl);
+
+            if (spot && Math.abs(b.strike - spot) < spot * 0.008) {
                 wrap.style.outline = '1px solid #7dd3fc';
             }
             box.appendChild(wrap);
         });
+        if (scopeNote) {
+            const note = document.createElement('p');
+            note.className = 'muted';
+            note.style.fontSize = '0.75rem';
+            note.style.marginTop = '0.35rem';
+            note.textContent = 'График' + scopeNote;
+            box.appendChild(note);
+        }
+    }
+
+    function syncExpSliderUi(idx) {
+        const i = parseInt(idx, 10);
+        if (exps[i]) $('mapExpLabel').textContent = exps[i];
+        renderSliderTicks('mapExpTicks', exps, i);
+    }
+
+    function syncSnapSliderUi(idx) {
+        const i = parseInt(idx, 10);
+        const labels = ['Live'].concat(snapDates);
+        if (i === 0) {
+            $('mapSnapLabel').textContent = 'сейчас (Polygon)';
+            $('mapSnapLive').textContent = snapDates.length ? '(+' + snapDates.length + ' в БД)' : '';
+        } else if (snapDates[i - 1]) {
+            $('mapSnapLabel').textContent = snapDates[i - 1];
+            $('mapSnapLive').textContent = '(архив)';
+        }
+        renderSliderTicks('mapSnapTicks', labels, i);
     }
 
     function updateSnapSlider(j) {
@@ -202,18 +267,18 @@
         const slider = $('mapSnapSlider');
         slider.min = 0;
         slider.max = dates.length; // 0 = live, 1..n = historical
+        let snapIdx = 0;
         if (j.is_live) {
             currentSnap = null;
             slider.value = 0;
-            $('mapSnapLabel').textContent = 'сейчас (Polygon)';
-            $('mapSnapLive').textContent = dates.length ? '(+' + dates.length + ' в БД)' : '';
+            snapIdx = 0;
         } else {
             currentSnap = j.snapshot_date;
             const idx = dates.indexOf(j.snapshot_date);
-            slider.value = idx >= 0 ? idx + 1 : 1;
-            $('mapSnapLabel').textContent = j.snapshot_date || '—';
-            $('mapSnapLive').textContent = '(архив)';
+            snapIdx = idx >= 0 ? idx + 1 : 1;
+            slider.value = snapIdx;
         }
+        syncSnapSliderUi(snapIdx);
         if (j.plate_shift_ru) {
             $('mapPlateShift').style.display = 'block';
             $('mapPlateShift').textContent = j.plate_shift_ru;
@@ -241,7 +306,7 @@
 
         renderPlates('mapSupport', j.support_plate, 'put');
         renderPlates('mapResistance', j.resistance_ceiling, 'call');
-        renderChart(j.chart_bars || [], j.spot || 0);
+        renderChart(j.chart_bars || [], j.spot || 0, j.chart_scope || null);
         updateSnapSlider(j);
 
         exps = j.available_expirations || [j.expiration_date];
@@ -250,6 +315,7 @@
         slider.max = Math.max(0, exps.length - 1);
         const idx = exps.indexOf(j.expiration_date);
         slider.value = idx >= 0 ? idx : 0;
+        syncExpSliderUi(slider.value);
     }
 
     async function loadMap(exp, snap) {
@@ -271,7 +337,9 @@
     $('mapTicker').onchange = () => { currentSnap = null; loadMap(); };
     $('mapExpSlider').oninput = async function() {
         if (sliderBusy || !exps.length) return;
-        const exp = exps[parseInt(this.value, 10)];
+        const idx = parseInt(this.value, 10);
+        syncExpSliderUi(idx);
+        const exp = exps[idx];
         if (!exp) return;
         sliderBusy = true;
         currentSnap = null;
@@ -281,6 +349,7 @@
     $('mapSnapSlider').oninput = async function() {
         if (sliderBusy) return;
         const idx = parseInt(this.value, 10);
+        syncSnapSliderUi(idx);
         const exp = $('mapExpLabel').textContent;
         if (!exp || exp === '—') return;
         sliderBusy = true;

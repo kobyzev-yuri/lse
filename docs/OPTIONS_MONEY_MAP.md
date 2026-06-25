@@ -89,7 +89,9 @@ GET /api/options/map/MU?expiration_date=2026-06-26&snapshot_date=2026-06-24
 GET /api/options/map/MU/snapshots?expiration_date=2026-06-26
 ```
 
-Ответ (ключевые поля): `summary_one_liner_ru`, `support_plate`, `resistance_ceiling`, `chart_bars`, `available_expirations`, `available_snapshot_dates`, `is_live`, `plate_shift_ru`, `flow_label`, `pcr_volume`.
+Ответ (ключевые поля): `summary_one_liner_ru`, `support_plate`, `resistance_ceiling`, `chart_bars`, `chart_scope` (порог OI для графика), `available_expirations`, `available_snapshot_dates`, `is_live`, `plate_shift_ru`, `flow_label`, `pcr_volume`.
+
+**График OI:** в `chart_bars` только страйки с OI ≥ `max(200, 5% от максимума)` — убирает «расческу» из мелких уровней; плиты put/call считаются по полной доске. На UI под ползунками — подписи дат экспирации и снимка (Live + даты из БД).
 
 Источник live: **Polygon**. Архив: **`options_chain_oi_snapshot`** (не knowledge_base).
 

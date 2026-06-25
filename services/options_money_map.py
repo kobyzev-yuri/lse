@@ -44,6 +44,44 @@ def _format_strike_band(strikes: List[float]) -> str:
     return f"${strikes[0]:,.0f}–${strikes[-1]:,.0f}".replace(",", " ")
 
 
+def _filter_chart_bars_for_display(
+    chart_bars: List[Dict[str, Any]],
+    *,
+    min_oi_abs: int = 200,
+    min_oi_frac_of_max: float = 0.05,
+    min_bars: int = 3,
+    max_bars: int = 24,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Убирает «мусорные» страйки с крошечным OI — остаются крупные пики для графика.
+    Плиты (support/resistance) считаются по полной выборке до фильтра.
+    """
+    raw = list(chart_bars or [])
+    meta: Dict[str, Any] = {"bars_raw": len(raw), "bars_shown": len(raw), "oi_threshold": 0}
+    if not raw:
+        return [], meta
+
+    max_total = max(int(b.get("total_oi") or 0) for b in raw)
+    if max_total <= 0:
+        return [], meta
+
+    threshold = max(int(min_oi_abs), int(max_total * min_oi_frac_of_max))
+    meta["oi_threshold"] = threshold
+    kept = [b for b in raw if int(b.get("total_oi") or 0) >= threshold]
+
+    if len(kept) < min_bars:
+        kept = sorted(raw, key=lambda x: int(x.get("total_oi") or 0), reverse=True)[:max_bars]
+        kept.sort(key=lambda x: float(x["strike"]))
+        meta["fallback"] = "top_by_oi"
+    elif len(kept) > max_bars:
+        kept = sorted(kept, key=lambda x: int(x.get("total_oi") or 0), reverse=True)[:max_bars]
+        kept.sort(key=lambda x: float(x["strike"]))
+        meta["capped"] = max_bars
+
+    meta["bars_shown"] = len(kept)
+    return kept, meta
+
+
 def _flow_label(pcr_vol: Optional[float]) -> Tuple[str, str]:
     if pcr_vol is None:
         return "NEUTRAL", "баланс put/call по объёму"
@@ -150,6 +188,7 @@ def _assemble_money_map_report(
         ],
         key=lambda x: x["strike"],
     )
+    chart_bars, chart_scope = _filter_chart_bars_for_display(chart_bars)
 
     one_liner = build_summary_one_liner(
         spot=spot_f,
@@ -194,6 +233,7 @@ def _assemble_money_map_report(
         },
         "analysis_scope": scope,
         "chart_bars": chart_bars,
+        "chart_scope": chart_scope,
         "data_quality": {"note_ru": note},
     }
     if plate_shift_ru:
