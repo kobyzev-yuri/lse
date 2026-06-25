@@ -159,7 +159,7 @@
                     <dt style="font-weight:600;color:#e2e8f0">Вся доска</dt>
                     <dd style="margin:0;color:#94a3b8">Те же PCR по <strong>всем</strong> страйкам экспирации без обрезки 15%.</dd>
                     <dt style="font-weight:600;color:#e2e8f0">Ключевые страйки (OI / Vol)</dt>
-                    <dd style="margin:0;color:#94a3b8">Уровни с наибольшим OI или объёмом торгов — частые «магниты» цены к экспирации.</dd>
+                    <dd style="margin:0;color:#94a3b8">Две таблицы: накопленные позиции (OI) и сегодняшняя активность (volume). Обе в окне ±15% от spot.</dd>
                     <dt style="font-weight:600;color:#e2e8f0">Call / Put</dt>
                     <dd style="margin:0;color:#94a3b8"><strong>Call</strong> — ставка на рост. <strong>Put</strong> — ставка на падение или страховка.</dd>
                 </dl>
@@ -764,28 +764,32 @@ P/L(S) = Value(S) − Entry</div>
             html += '<p class="muted" style="font-size:0.78rem;margin:0.35rem 0">' + j.data_quality.note_ru + '</p>';
         }
         const src = (j.source || '').toLowerCase();
-        const barriersMode = j.barriers_mode || (j.oi_available === false ? 'volume' : 'oi');
         const oiCaption = src === 'yfinance'
             ? 'Ключевые страйки по OI (yfinance option_chain)'
             : 'Ключевые страйки по OI (Polygon snapshot)';
-        if (barriersMode === 'volume' && j.key_strikes_volume && j.key_strikes_volume.length) {
-            const volCaption = src === 'yfinance'
-                ? 'Ключевые страйки по volume (OI недоступен в Yahoo)'
-                : 'Ключевые страйки по volume';
-            html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">' + volCaption + '</p>';
-            html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>Vol Σ</th><th>Call vol</th><th>Put vol</th></tr>';
-            j.key_strikes_volume.slice(0, 6).forEach(row => {
-                html += '<tr><td>' + row.strike + '</td><td>' + row.total_volume + '</td><td>' +
-                    row.call_volume + '</td><td>' + row.put_volume + '</td></tr>';
-            });
-            html += '</table>';
-        } else if (j.key_strikes_oi && j.key_strikes_oi.length) {
+        const volCaption = src === 'yfinance'
+            ? 'Ключевые страйки по volume (yfinance option_chain)'
+            : 'Ключевые страйки по volume (Polygon snapshot)';
+
+        if (j.key_strikes_oi && j.key_strikes_oi.length) {
             html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">' + oiCaption + '</p>';
             html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>OI Σ</th><th>Call OI</th><th>Put OI</th></tr>';
             j.key_strikes_oi.slice(0, 6).forEach(row => {
                 html += '<tr><td>' + row.strike + '</td><td>' + row.total_oi + '</td><td>' + row.call_oi + '</td><td>' + row.put_oi + '</td></tr>';
             });
             html += '</table>';
+        }
+        if (j.key_strikes_volume && j.key_strikes_volume.length) {
+            html += '<p class="muted" style="font-size:0.78rem;margin:0.65rem 0 0">' + volCaption + '</p>';
+            html += '<table style="margin-top:0.25rem;font-size:0.85rem"><tr><th>Strike</th><th>Vol Σ</th><th>Call vol</th><th>Put vol</th></tr>';
+            j.key_strikes_volume.slice(0, 6).forEach(row => {
+                html += '<tr><td>' + row.strike + '</td><td>' + row.total_volume + '</td><td>' +
+                    row.call_volume + '</td><td>' + row.put_volume + '</td></tr>';
+            });
+            html += '</table>';
+        }
+        if (!(j.key_strikes_oi && j.key_strikes_oi.length) && !(j.key_strikes_volume && j.key_strikes_volume.length)) {
+            html += '<p class="muted" style="font-size:0.78rem;margin:0.5rem 0 0">Нет ключевых страйков в окне ±15%.</p>';
         }
         html += '<div class="btn-row" style="margin-top:0.6rem"><button type="button" class="btn-llm btn-outline-primary" data-llm-source="' +
             (j.source || '') + '">LLM интерпретация</button></div>';

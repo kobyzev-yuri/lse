@@ -426,6 +426,27 @@ def test_money_map_chart_bars_oi_filter():
     assert meta["oi_threshold"] >= 200
 
 
+def test_money_map_chart_bars_keeps_atm_strikes():
+    from services.options_money_map import _filter_chart_bars_for_display
+
+    spot = 1213.56
+    bars = [
+        {"strike": 1000.0, "put_oi": 5000, "call_oi": 2000, "total_oi": 7000},
+        {"strike": 1100.0, "put_oi": 4000, "call_oi": 3000, "total_oi": 7000},
+        {"strike": 1200.0, "put_oi": 1900, "call_oi": 12100, "total_oi": 14000},
+        {"strike": 1210.0, "put_oi": 50, "call_oi": 80, "total_oi": 130},
+        {"strike": 1215.0, "put_oi": 40, "call_oi": 60, "total_oi": 100},
+        {"strike": 1250.0, "put_oi": 98, "call_oi": 13357, "total_oi": 13455},
+        {"strike": 1300.0, "put_oi": 80, "call_oi": 7960, "total_oi": 8040},
+    ]
+    kept, meta = _filter_chart_bars_for_display(bars, spot=spot)
+    strikes = [b["strike"] for b in kept]
+    assert 1210.0 in strikes
+    assert 1215.0 in strikes
+    assert meta.get("atm_strikes_forced")
+    assert meta["atm_lo"] == round(spot * 0.992, 2)
+
+
 def test_money_map_one_liner():
     from services.options_money_map import build_summary_one_liner
 

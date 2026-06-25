@@ -189,7 +189,7 @@
         <p class="spot-line-legend">
             <span><span class="dot-put">■</span> Put OI (поддержка)</span>
             <span><span class="dot-call">■</span> Call OI (потолок)</span>
-            <span><span class="atm-swatch"></span> ATM — страйки ±0.8% от spot</span>
+            <span><span class="atm-swatch"></span> <span id="mapAtmLegend">ATM — страйки ±0.8% от spot</span></span>
             <span>Spot: <strong id="mapSpot">—</strong></span>
         </p>
         <div id="mapChart" class="oi-chart"></div>
@@ -535,6 +535,19 @@
         });
     }
 
+    function updateAtmLegend(spot) {
+        const el = $('mapAtmLegend');
+        if (!el) return;
+        const s = parseFloat(spot);
+        if (!Number.isFinite(s) || s <= 0) {
+            el.textContent = 'ATM — страйки ±0.8% от spot';
+            return;
+        }
+        const lo = s * 0.992;
+        const hi = s * 1.008;
+        el.textContent = 'ATM $' + lo.toFixed(0) + '–$' + hi.toFixed(0) + ' (±0.8%, голубая рамка)';
+    }
+
     function renderChart(bars, spot, chartScope) {
         const box = $('mapChart');
         box.innerHTML = '';
@@ -546,6 +559,9 @@
         const scopeNote = chartScope && chartScope.bars_raw > chartScope.bars_shown
             ? ' (показано ' + chartScope.bars_shown + ' из ' + chartScope.bars_raw + ' страйков, OI ≥ ' + (chartScope.oi_threshold || 0).toLocaleString() + ')'
             : '';
+        let atmOnChart = 0;
+        const atmLo = chartScope && chartScope.atm_lo;
+        const atmHi = chartScope && chartScope.atm_hi;
 
         bars.forEach(b => {
             const wrap = document.createElement('div');
@@ -571,15 +587,22 @@
 
             if (spot && Math.abs(b.strike - spot) < spot * 0.008) {
                 wrap.style.outline = '1px solid #7dd3fc';
+                wrap.style.outlineOffset = '1px';
+                atmOnChart += 1;
             }
             box.appendChild(wrap);
         });
-        if (scopeNote) {
+        if (scopeNote || (spot && atmOnChart === 0 && atmLo && atmHi)) {
             const note = document.createElement('p');
             note.className = 'muted';
             note.style.fontSize = '0.75rem';
             note.style.marginTop = '0.35rem';
-            note.textContent = 'График' + scopeNote;
+            let txt = 'График' + (scopeNote || '');
+            if (spot && atmOnChart === 0 && atmLo && atmHi) {
+                txt += (scopeNote ? ' · ' : '') + 'ATM $' + Number(atmLo).toFixed(0) + '–$' + Number(atmHi).toFixed(0)
+                    + ' — нет страйков с OI в цепочке (spot $' + Number(spot).toFixed(2) + ')';
+            }
+            note.textContent = txt;
             box.appendChild(note);
         }
     }
@@ -643,6 +666,7 @@
         const bias = j.flow_label || 'NEUTRAL';
         $('mapHero').innerHTML = '<span class="bias-' + bias + '">' + (j.summary_one_liner_ru || '') + '</span>';
         $('mapSpot').textContent = '$' + (j.spot ?? '—');
+        updateAtmLegend(j.spot);
         $('mapExpLabel').textContent = j.expiration_date || '—';
         $('mapNote').textContent = (j.data_quality && j.data_quality.note_ru) || '';
 

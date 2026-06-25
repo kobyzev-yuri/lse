@@ -104,9 +104,15 @@ def _format_strike_band(strikes: List[float]) -> str:
     return f"${strikes[0]:,.0f}–${strikes[-1]:,.0f}".replace(",", " ")
 
 
+def _is_atm_strike(strike: float, spot: float, *, atm_pct: float = 0.008) -> bool:
+    return spot > 0 and abs(float(strike) - float(spot)) < float(spot) * atm_pct
+
+
 def _filter_chart_bars_for_display(
     chart_bars: List[Dict[str, Any]],
     *,
+    spot: Optional[float] = None,
+    atm_pct: float = 0.008,
     min_oi_abs: int = 200,
     min_oi_frac_of_max: float = 0.05,
     min_bars: int = 3,
@@ -115,6 +121,7 @@ def _filter_chart_bars_for_display(
     """
     Убирает «мусорные» страйки с крошечным OI — остаются крупные пики для графика.
     Плиты (support/resistance) считаются по полной выборке до фильтра.
+    ATM (±atm_pct от spot) всегда оставляем на графике, даже при малом OI.
     """
     raw = list(chart_bars or [])
     meta: Dict[str, Any] = {"bars_raw": len(raw), "bars_shown": len(raw), "oi_threshold": 0}
@@ -137,6 +144,23 @@ def _filter_chart_bars_for_display(
         kept = sorted(kept, key=lambda x: int(x.get("total_oi") or 0), reverse=True)[:max_bars]
         kept.sort(key=lambda x: float(x["strike"]))
         meta["capped"] = max_bars
+
+    spot_f = float(spot or 0.0)
+    if spot_f > 0:
+        meta["atm_pct"] = atm_pct
+        meta["atm_lo"] = round(spot_f * (1.0 - atm_pct), 2)
+        meta["atm_hi"] = round(spot_f * (1.0 + atm_pct), 2)
+        kept_strikes = {float(b["strike"]) for b in kept}
+        atm_forced: List[float] = []
+        for b in raw:
+            k = float(b["strike"])
+            if k not in kept_strikes and _is_atm_strike(k, spot_f, atm_pct=atm_pct):
+                kept.append(b)
+                kept_strikes.add(k)
+                atm_forced.append(k)
+        if atm_forced:
+            kept.sort(key=lambda x: float(x["strike"]))
+            meta["atm_strikes_forced"] = atm_forced
 
     meta["bars_shown"] = len(kept)
     return kept, meta
@@ -493,7 +517,7 @@ def _assemble_money_map_report(
         ],
         key=lambda x: x["strike"],
     )
-    chart_bars, chart_scope = _filter_chart_bars_for_display(chart_bars)
+    chart_bars, chart_scope = _filter_chart_bars_for_display(chart_bars, spot=spot_f)
 
     one_liner = build_summary_one_liner(
         spot=spot_f,
