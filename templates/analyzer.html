@@ -6,6 +6,60 @@
 <h1>Анализатор эффективности сделок</h1>
 <p class="muted">Тот же расчёт, что и в Telegram: <code>/analyser</code>. Период — 1–30 дней. Ниже краткая выжимка на русском; <strong>полный отчёт</strong> — в JSON с <code>GET /api/analyzer</code> (удобно сохранить или скормить скрипту).</p>
 
+<style>
+    .analyzer-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        margin: 0 0 0.85rem 0;
+    }
+    .analyzer-tabs button {
+        flex: 1 1 auto;
+        min-width: 7.5rem;
+        padding: 0.45rem 0.75rem;
+        font-size: 0.88rem;
+        border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.65);
+        color: #cbd5e1;
+        cursor: pointer;
+    }
+    .analyzer-tabs button:hover { border-color: #38bdf8; color: #e2e8f0; }
+    .analyzer-tabs button.active {
+        background: #0f3460;
+        border-color: #38bdf8;
+        color: #e2e8f0;
+        font-weight: 600;
+    }
+    .analyzer-tab-panel { display: none; }
+    .analyzer-tab-panel.active { display: block; }
+    .analyzer-tab-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+        margin-bottom: 0.85rem;
+        padding: 0.65rem 0.85rem;
+        background: rgba(15, 23, 42, 0.55);
+        border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .analyzer-tab-actions .muted { font-size: 0.84rem; margin: 0; flex: 1 1 12rem; }
+    .analyzer-tab-guide {
+        margin: 0 0 0.85rem 0;
+        padding: 0.75rem 0.9rem;
+        border-radius: 8px;
+        border: 1px solid rgba(56, 189, 248, 0.28);
+        background: rgba(15, 23, 42, 0.45);
+        font-size: 0.88rem;
+        line-height: 1.5;
+        color: #cbd5e1;
+    }
+    .analyzer-tab-guide strong { color: #e2e8f0; }
+    .analyzer-tab-guide ul { margin: 0.4rem 0 0 1.1rem; padding: 0; }
+    .analyzer-tab-guide li { margin: 0.2rem 0; }
+</style>
+
 <details class="card" style="border:1px solid rgba(148,163,184,0.2);">
     <summary style="cursor:pointer; font-weight:600; color:#e2e8f0; user-select:none;">Справка по метрикам (поля JSON)</summary>
     <div style="margin-top:0.85rem; font-size:0.92rem; line-height:1.55; color:#cbd5e1;">
@@ -45,92 +99,37 @@
             </select>
         </div>
         <div>
-            <label><input id="useLlm" type="checkbox" {% if not web_llm_enabled %}disabled{% endif %}> Запросить рекомендации модели (<code>use_llm=1</code>)</label>
-        </div>
-        <div>
-            <button id="runBtn" type="button">Запустить анализ</button>
+            <label><input id="useLlm" type="checkbox" {% if not web_llm_enabled %}disabled{% endif %}> Рекомендации модели (<code>use_llm=1</code>)</label>
         </div>
     </div>
-    <p class="muted" style="margin:0.65rem 0 0 0; font-size:0.9rem;">
-        Быстрый отчёт: сводка, кейсы и блок выбранной игры. Опционально — тяжёлые секции ниже.
+    <p class="muted" style="margin:0.65rem 0 0 0; font-size:0.88rem;">
+        Период и стратегия общие для всех вкладок. Действия — на соответствующей подзакладке.
     </p>
-    <div style="display:flex; flex-wrap:wrap; gap:0.75rem 1.25rem; margin-top:0.5rem; font-size:0.9rem;">
-        <label><input id="optSectionCatboost" type="checkbox"> CatBoost / fusion</label>
-        <label><input id="optSectionAdvanced" type="checkbox"> ML-арбитры</label>
-        <label><input id="optSectionRecovery" type="checkbox"> Recovery / D4a</label>
-        <label><input id="optSectionGame5mExtra" type="checkbox"> Hanger / tune</label>
-    </div>
 </div>
 
-<div class="card" style="border: 1px solid rgba(125, 211, 252, 0.35);">
-    <h2>Скачать и открыть отчёт (JSON, <code>GET /api/analyzer</code>)</h2>
-    <p style="color:#e2e8f0; font-size:0.95rem; margin-bottom:0.6rem;">
-        Один запрос возвращает весь отчёт: <code>meta</code>, <code>summary</code>, <code>top_cases</code>, <code>llm</code>, <code>auto_config_override</code>;
-        при параметре детализации — массив <code>trade_effects</code> по сделкам. Дни, стратегия и флаг LLM из формы выше подставляются в ссылки и в кнопки скачивания.
-    </p>
-    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.65rem;">
-        <button type="button" id="analyzerDownloadJson" class="btn" style="padding:0.45rem 0.85rem;">Скачать .json</button>
-        <button type="button" id="analyzerDownloadJsonFull" class="btn" style="padding:0.45rem 0.85rem;">Скачать .json + trade_effects</button>
-    </div>
-    <p style="margin:0 0 0.35rem 0; font-size:0.9rem; color:#cbd5e1;">Открыть в браузере (можно «Сохранить как…»):</p>
-    <ul style="margin:0; padding-left:1.2rem; color:#e2e8f0; font-size:0.9rem; line-height:1.55;">
-        <li><a id="analyzerJsonUrl" href="/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0" target="_blank" rel="noopener">Полный отчёт</a> — как после «Запустить анализ»</li>
-        <li><a id="analyzerJsonFullUrl" href="/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0&amp;include_trade_details=1" target="_blank" rel="noopener">То же + массив <code>trade_effects</code></a> по каждой сделке</li>
-    </ul>
-    <p class="muted" style="margin-top:0.65rem; margin-bottom:0.25rem;">Путь для curl / копирования:</p>
-    <pre id="analyzerJsonCurl" style="font-size:0.78rem; overflow:auto; max-width:100%; padding:0.5rem 0.65rem; background:rgba(15,23,42,0.85); border-radius:6px; border:1px solid rgba(148,163,184,0.25); color:#cbd5e1; white-space:pre-wrap; word-break:break-all;">curl -sS &quot;https://ВАШ_ХОСТ/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0&quot; -o report.json</pre>
-    <p id="analyzerJsonDownloadStatus" class="muted" style="margin-top:0.5rem; min-height:1.2em;"></p>
-</div>
+<nav class="analyzer-tabs" role="tablist" aria-label="Разделы анализатора">
+    <button type="button" class="analyzer-tab-btn active" data-tab="trades" role="tab" aria-selected="true">Сделки</button>
+    <button type="button" class="analyzer-tab-btn" data-tab="ml" role="tab" aria-selected="false">ML</button>
+    <button type="button" class="analyzer-tab-btn analyzer-game5m-tab" data-tab="exits" role="tab" aria-selected="false">Выходы</button>
+    <button type="button" class="analyzer-tab-btn analyzer-game5m-tab" data-tab="tuning" role="tab" aria-selected="false">Tuning</button>
+    <button type="button" class="analyzer-tab-btn" data-tab="export" role="tab" aria-selected="false" title="Полный JSON для скриптов и архива">Экспорт</button>
+</nav>
 
-<div class="card" style="border: 1px solid rgba(196, 181, 253, 0.35);">
-    <h2>ML: готовность и качество данных</h2>
-    <p class="muted" style="font-size:0.88rem;margin:0 0 0.5rem 0;">Снимок <code>GET /api/ml/data-quality</code> (без тяжёлого CSV). Срез гейтов и метрик — по <strong>стратегии из формы</strong> (PORTFOLIO не показывает GAME_5M/event-reaction в таблице). <strong>Обновить блок</strong> — быстро из cron-кэша; <strong>Полный перерасчёт</strong> — пересборка БД + readiness (может занять минуты).</p>
-    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
-        <button type="button" id="mlDataQualityRefresh" class="btn" style="padding:0.45rem 0.85rem;">Обновить блок</button>
-        <button type="button" id="mlDataQualityForceRefresh" class="btn" style="padding:0.45rem 0.85rem;">Полный перерасчёт</button>
-        <a id="mlDataQualityJsonUrl" href="/api/ml/data-quality" target="_blank" rel="noopener" class="muted" style="font-size:0.9rem;">Открыть JSON</a>
-    </div>
-    <p id="mlDataQualityStatus" class="muted" style="min-height:1.2em;">Загрузка…</p>
-    <div id="mlDataQualityInner" class="dashboard-text" style="margin-top:0.5rem;">—</div>
-</div>
+<p class="muted analyzer-tab-cheat" style="font-size:0.82rem;margin:-0.35rem 0 0.75rem 0;line-height:1.45;">
+    Шпаргалка: PnL → <strong>Сделки</strong> · ML не готов → <strong>ML</strong> · ранние выходы → <strong>Выходы</strong> · смена config → <strong>Tuning</strong> · полный дамп → <strong>Экспорт</strong>
+</p>
 
-<div class="card analyzer-game5m-only analyzer-tuning-only" style="border: 1px solid rgba(34,197,94,0.35);">
-    <h2>GAME_5M tuning: регламент и live-эксперимент</h2>
-    <p class="muted" style="font-size:0.9rem;">Пакеты параметров (bundle) для согласованных политик; либо один ключ: apply → наблюдение → review/rollback. Ledger: <code>local/game5m_tuning_ledger.json</code>.</p>
-    <div id="tuningStatus" class="dashboard-text">Загрузка tuning status...</div>
-    <details style="margin-top:0.65rem;">
-        <summary style="cursor:pointer; color:#e2e8f0; font-weight:600;">Регламент</summary>
-        <div id="tuningReglement" class="dashboard-text muted" style="margin-top:0.45rem;">—</div>
-    </details>
-    <div style="margin-top:0.75rem; display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.55rem; align-items:end;">
-        <div>
-            <label for="tuningKey">Ключ</label>
-            <input id="tuningKey" type="text" value="GAME_5M_TAKE_PROFIT_MIN_PCT">
-        </div>
-        <div>
-            <label for="tuningValue">Значение</label>
-            <input id="tuningValue" type="text" value="2.5">
-        </div>
-        <div>
-            <label for="tuningObserveDays">Observe days</label>
-            <input id="tuningObserveDays" type="number" min="1" max="30" value="2">
-        </div>
-        <div>
-            <label for="tuningMinNewTrades">Min new trades</label>
-            <input id="tuningMinNewTrades" type="number" min="1" max="100" value="8">
-        </div>
+<div id="analyzerTab-trades" class="analyzer-tab-panel active" role="tabpanel" data-tab="trades">
+    <div class="analyzer-tab-guide">
+        <strong>Когда:</strong> ежедневный разбор PnL — win rate, недоборы, что менять в config.<br>
+        <strong>Действие:</strong> «Запустить анализ» (быстро, без тяжёлых ML).<br>
+        <strong>Смотрите:</strong> сводку и top-кейсы; decision stack / earnings trust; hold-to-gap; при галочке LLM — рекомендации и «Применить в config.env».<br>
+        <span class="muted">Типично: раз в 1–3 дня, <code>days=7</code>, стратегия GAME_5M.</span>
     </div>
-    <div style="margin-top:0.7rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-        <button id="tuningRefreshBtn" type="button">Обновить статус</button>
-        <button id="tuningObserveBtn" type="button">Observe</button>
-        <button id="tuningApplyBtn" type="button">Apply один параметр</button>
-        <button id="tuningApplyBundleBtn" type="button" style="background:#14532d;">Apply bundle</button>
-        <button id="tuningRollbackBtn" type="button" style="background:#7f1d1d;">Rollback active</button>
+    <div class="analyzer-tab-actions">
+        <button id="runTradesBtn" type="button">Запустить анализ</button>
+        <p class="muted">Сводка, кейсы, decision stack, earnings trust, config hints.</p>
     </div>
-    <div id="tuningBundles" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
-    <div id="tuningActionStatus" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
-    <div id="tuningTopProposals" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
-</div>
 
 <div class="card">
     <h2>Сводка периода (<code>summary</code>)</h2>
@@ -178,6 +177,69 @@
     <div id="portfolioConfigGridBlock" class="dashboard-text">—</div>
 </div>
 
+<div class="card">
+    <h2>Худшие исходы (<code>top_cases.top_losses</code>)</h2>
+    <p class="muted">Сначала сделки с <strong>наименьшим</strong> <code>realized_pct</code> (до 8 строк на странице). При высоком win rate это часто самые маленькие плюсы; смотрите также <code>missed_upside_pct</code> и <code>exit_signal</code>.</p>
+    <div id="topLosses" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
+    <h2>Крупнейший недобор — все сделки (<code>top_cases.top_missed_upside</code>)</h2>
+    <p class="muted">Сортировка по убыванию <code>missed_upside_pct</code> (до 8 строк): максимальный «недожатый» запас до <strong>high</strong> 5m-окна, без фильтра по прибыли/убытку.</p>
+    <div id="topMissed" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
+    <h2>Прибыльные с крупным недобором (<code>top_cases.top_profitable_missed_upside</code>)</h2>
+    <p class="muted">Только <code>realized_pct &gt; 0</code>; на странице — до 8 строк с <code>missed_upside_pct ≥ 0.25</code>. Полный список — в JSON с <code>include_trade_details=1</code> → фильтр по <code>trade_effects</code>.</p>
+    <div id="topWinMissed" class="dashboard-text">—</div>
+</div>
+
+<div class="card">
+    <h2>Текстовые рекомендации модели (<code>llm</code>)</h2>
+    <p class="muted">Включается галочкой «Рекомендации модели»; в ответе API — поле <code>llm</code>.</p>
+    <pre id="llmBlock">—</pre>
+</div>
+
+<div class="card">
+    <h2>Предложения для <code>config.env</code> (<code>auto_config_override</code>)</h2>
+    <p class="muted">Готовые пары ключ=значение и служебные пометки из того же JSON. Применение — кнопка ниже (только разрешённые ключи).</p>
+    <pre id="envBlock">—</pre>
+    <div id="envManual" class="dashboard-text muted">—</div>
+    <div id="envSkip" class="dashboard-text muted">—</div>
+    <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <label><input id="restartAfterApply" type="checkbox" checked> Перезагрузить сервис после применения</label>
+        <button id="applyEnvBtn" type="button" disabled {% if web_demo_mode %}title="WEB_DEMO_MODE: apply отключён"{% endif %}>Применить в config.env</button>
+    </div>
+    <div id="applyStatus" class="dashboard-text muted" style="margin-top:0.5rem;">—</div>
+</div>
+</div>
+
+<div id="analyzerTab-ml" class="analyzer-tab-panel" role="tabpanel" data-tab="ml">
+    <div class="analyzer-tab-guide">
+        <strong>Когда:</strong> вопрос не «сколько заработали», а <em>почему ML не продвигается</em> — bar v2, E3, арбитры, trust, telemetry.<br>
+        <strong>Действия:</strong>
+        <ul>
+            <li><strong>Обновить готовность</strong> — снимок из cron-кэша (секунды);</li>
+            <li><strong>Полный перерасчёт</strong> — тяжёлая пересборка readiness (минуты, редко);</li>
+            <li><strong>Загрузить ML-отчёт</strong> — CatBoost, runtime blockers, multiday/trust арбитры.</li>
+        </ul>
+        <span class="muted">Типично: после деплоя ML-фикса, перед promotion shadow→apply, когда trust digest «стоит».</span>
+    </div>
+    <div class="analyzer-tab-actions">
+        <button type="button" id="mlDataQualityRefresh" class="btn" style="padding:0.45rem 0.85rem;">Обновить готовность</button>
+        <button type="button" id="mlDataQualityForceRefresh" class="btn" style="padding:0.45rem 0.85rem;">Полный перерасчёт</button>
+        <button type="button" id="runMlBtn">Загрузить ML-отчёт</button>
+        <p class="muted">Готовность данных (cron-кэш) и тяжёлые секции CatBoost / арбитры.</p>
+    </div>
+
+<div class="card" style="border: 1px solid rgba(196, 181, 253, 0.35);">
+    <h2>ML: готовность и качество данных</h2>
+    <p class="muted" style="font-size:0.88rem;margin:0 0 0.5rem 0;">Снимок <code>GET /api/ml/data-quality</code> (без тяжёлого CSV). Срез гейтов и метрик — по <strong>стратегии из формы</strong>. «Обновить готовность» — из cron-кэша; «Полный перерасчёт» — пересборка БД + readiness (минуты).</p>
+    <p id="mlDataQualityStatus" class="muted" style="min-height:1.2em;">Загрузка…</p>
+    <div id="mlDataQualityInner" class="dashboard-text" style="margin-top:0.5rem;">—</div>
+</div>
+
 <div class="card analyzer-game5m-only analyzer-section-optional" data-section="catboost">
     <h2>CatBoost GAME_5M (вход)</h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Два среза: <strong>снимок из сделок</strong> (что сохранено в BUY <code>context_json</code> при входе — без логов крона) и <strong>бэктест скора</strong> vs <code>realized_pct</code>. Для старых сделок до деплоя расширенного дампа часть полей может отсутствовать.</p>
@@ -201,13 +263,12 @@
     <h2>Арбитр multiday gates <code>multiday_lr_gates_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Достаточность выборки log_only (вход / удержание), средний PnL по корзинам и следующие шаги (когда включать apply). Не меняет config.</p>
     <div id="multidayGatesArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
-
+</div>
 
 <div class="card analyzer-game5m-only analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(251, 191, 36, 0.35);">
     <h2>Арбитр прогноза гэпа <code>game5m_gap_forecast_arbiter</code></h2>
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">Контур <code>gap_forecast</code>: sector OLS + <strong>ticker v2</strong> (<code>pred_ticker_gap_pct</code>) vs open. Вердикты: insufficient_data → accumulating → caution → <code>ready_for_apply</code>. Лог: <code>game5m_gap_forecast_daily</code>; DDL 027; premarket_cron + <code>ingest_game5m_gap_forecast.py --phase open</code>.</p>
     <div id="gapForecastArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
-</div>
 </div>
 
 <div class="card analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(244, 114, 182, 0.45);">
@@ -221,26 +282,39 @@
     <p class="muted" style="font-size:0.9rem;margin:0 0 0.65rem 0;">При <strong>PORTFOLIO</strong> — только портфельный CatBoost и гейт <code>ML_READINESS_PORTFOLIO_RMSE_MAX</code>; при <strong>GAME_5M</strong> — multiday, entry CatBoost, recovery. Не меняет <code>config.env</code>.</p>
     <div id="mlArbiterBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
 </div>
+</div>
 
-<div class="card analyzer-game5m-only analyzer-section-optional" data-section="game5m_extra">
+<div id="analyzerTab-exits" class="analyzer-tab-panel analyzer-game5m-only" role="tabpanel" data-tab="exits">
+    <div class="analyzer-tab-guide">
+        <strong>Когда:</strong> проблема в <em>выходах</em> — ранний тейк, stale exits, TIME_EXIT_EARLY, recovery D4a.<br>
+        <strong>Действие:</strong> «Загрузить выходы» (тяжёлые секции exits).<br>
+        <strong>Смотрите:</strong> hanger v2 (зависшие позиции); continuation gate (тейк слишком рано); Recovery D4a (defer vs факт).<br>
+        <span class="muted">Только GAME_5M / ALL. Типично: много TAKE с большим missed_upside или разбор recovery shadow.</span>
+    </div>
+    <div class="analyzer-tab-actions">
+        <button id="runExitsBtn" type="button">Загрузить выходы</button>
+        <p class="muted">Hanger v2, continuation gate, Recovery ML D4a (тяжёлые секции exits).</p>
+    </div>
+
+<div class="card analyzer-section-optional" data-section="game5m_extra">
     <h2>Hanger v2 / stale exits <code>game5m_hanger_v2_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Разбор закрытых сделок по диагностике <code>position_state_v2</code>, сохранённой в SELL <code>context_json</code>. Live-наблюдение открытых позиций — отдельно по логам крона.</p>
     <div id="hangerV2Block" class="dashboard-text">—</div>
 </div>
 
-<div class="card analyzer-game5m-only analyzer-section-optional" data-section="game5m_extra">
+<div class="card analyzer-section-optional" data-section="game5m_extra">
     <h2>Hanger JSON / TAKE_PROFIT_SUSPEND <code>game5m_hanger_tune_json_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Файл <code>GAME_5M_HANGER_TUNE_JSON</code>, возраст, капы по тикеру, смесь <code>TAKE_PROFIT</code> vs <code>TAKE_PROFIT_SUSPEND</code> в окне; кандидаты на offline-перегенерацию и на <code>GAME_5M_HANGER_TUNE_APPLY_TAKE</code> (см. также <code>practical_parameter_suggestions</code> / <code>auto_config_override</code>).</p>
     <div id="hangerTuneJsonBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card analyzer-game5m-only">
+<div class="card">
     <h2>Continuation gate <code>continuation_gate_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">Сравнение log-only решения <code>continuation_gate</code> с фактическим недобором после закрытия. Помогает понять, где тейк был слишком ранним.</p>
     <div id="continuationGateBlock" class="dashboard-text">—</div>
 </div>
 
-<div class="card analyzer-game5m-only analyzer-section-optional" data-section="recovery" style="border: 1px solid rgba(251, 191, 36, 0.35);">
+<div class="card analyzer-section-optional" data-section="recovery" style="border: 1px solid rgba(251, 191, 36, 0.35);">
     <h2>Recovery ML D4a (live телеметрия) <code>recovery_ml_d4a_live_review</code></h2>
     <p class="muted" style="font-size:0.9rem;">
         Сопоставление <code>recovery_ml_time_exit_early</code> из SELL с пост-выходом (<code>time_exit_early_review.detail_rows</code>)
@@ -249,42 +323,80 @@
     </p>
     <div id="recoveryMlD4aBlock" class="dashboard-text">—</div>
 </div>
-
-<div class="card">
-    <h2>Худшие исходы (<code>top_cases.top_losses</code>)</h2>
-    <p class="muted">Сначала сделки с <strong>наименьшим</strong> <code>realized_pct</code> (до 8 строк на странице). При высоком win rate это часто самые маленькие плюсы; смотрите также <code>missed_upside_pct</code> и <code>exit_signal</code>.</p>
-    <div id="topLosses" class="dashboard-text">—</div>
 </div>
 
-<div class="card">
-    <h2>Крупнейший недобор — все сделки (<code>top_cases.top_missed_upside</code>)</h2>
-    <p class="muted">Сортировка по убыванию <code>missed_upside_pct</code> (до 8 строк): максимальный «недожатый» запас до <strong>high</strong> 5m-окна, без фильтра по прибыли/убытку.</p>
-    <div id="topMissed" class="dashboard-text">—</div>
-</div>
-
-<div class="card">
-    <h2>Прибыльные с крупным недобором (<code>top_cases.top_profitable_missed_upside</code>)</h2>
-    <p class="muted">Только <code>realized_pct &gt; 0</code>; на странице — до 8 строк с <code>missed_upside_pct ≥ 0.25</code>. Полный список — в JSON с <code>include_trade_details=1</code> → фильтр по <code>trade_effects</code>.</p>
-    <div id="topWinMissed" class="dashboard-text">—</div>
-</div>
-
-<div class="card">
-    <h2>Текстовые рекомендации модели (<code>llm</code>)</h2>
-    <p class="muted">Включается галочкой «Запросить рекомендации модели»; в ответе API — поле <code>llm</code>.</p>
-    <pre id="llmBlock">—</pre>
-</div>
-
-<div class="card">
-    <h2>Предложения для <code>config.env</code> (<code>auto_config_override</code>)</h2>
-    <p class="muted">Готовые пары ключ=значение и служебные пометки из того же JSON. Применение — кнопка ниже (только разрешённые ключи).</p>
-    <pre id="envBlock">—</pre>
-    <div id="envManual" class="dashboard-text muted">—</div>
-    <div id="envSkip" class="dashboard-text muted">—</div>
-    <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-        <label><input id="restartAfterApply" type="checkbox" checked> Перезагрузить сервис после применения</label>
-        <button id="applyEnvBtn" type="button" disabled {% if web_demo_mode %}title="WEB_DEMO_MODE: apply отключён"{% endif %}>Применить в config.env</button>
+<div id="analyzerTab-tuning" class="analyzer-tab-panel analyzer-game5m-only analyzer-tuning-only" role="tabpanel" data-tab="tuning">
+    <div class="analyzer-tab-guide">
+        <strong>Когда:</strong> осознанно меняете параметры GAME_5M по регламенту — observe → apply → rollback.<br>
+        <strong>Действия:</strong> Observe / Apply один ключ / Apply bundle / Rollback — <em>не связаны</em> с анализом сделок.<br>
+        <strong>Смотрите:</strong> активный эксперимент, bundle, top proposals из ledger.<br>
+        <span class="muted">Не для «посмотреть статистику» — для управляемых A/B в prod. Только GAME_5M.</span>
     </div>
-    <div id="applyStatus" class="dashboard-text muted" style="margin-top:0.5rem;">—</div>
+<div class="card" style="border: 1px solid rgba(34,197,94,0.35);">
+    <h2>GAME_5M tuning: регламент и live-эксперимент</h2>
+    <p class="muted" style="font-size:0.9rem;">Пакеты параметров (bundle) для согласованных политик; либо один ключ: apply → наблюдение → review/rollback. Ledger: <code>local/game5m_tuning_ledger.json</code>.</p>
+    <div id="tuningStatus" class="dashboard-text">Загрузка tuning status...</div>
+    <details style="margin-top:0.65rem;">
+        <summary style="cursor:pointer; color:#e2e8f0; font-weight:600;">Регламент</summary>
+        <div id="tuningReglement" class="dashboard-text muted" style="margin-top:0.45rem;">—</div>
+    </details>
+    <div style="margin-top:0.75rem; display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.55rem; align-items:end;">
+        <div>
+            <label for="tuningKey">Ключ</label>
+            <input id="tuningKey" type="text" value="GAME_5M_TAKE_PROFIT_MIN_PCT">
+        </div>
+        <div>
+            <label for="tuningValue">Значение</label>
+            <input id="tuningValue" type="text" value="2.5">
+        </div>
+        <div>
+            <label for="tuningObserveDays">Observe days</label>
+            <input id="tuningObserveDays" type="number" min="1" max="30" value="2">
+        </div>
+        <div>
+            <label for="tuningMinNewTrades">Min new trades</label>
+            <input id="tuningMinNewTrades" type="number" min="1" max="100" value="8">
+        </div>
+    </div>
+    <div style="margin-top:0.7rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <button id="tuningRefreshBtn" type="button">Обновить статус</button>
+        <button id="tuningObserveBtn" type="button">Observe</button>
+        <button id="tuningApplyBtn" type="button">Apply один параметр</button>
+        <button id="tuningApplyBundleBtn" type="button" style="background:#14532d;">Apply bundle</button>
+        <button id="tuningRollbackBtn" type="button" style="background:#7f1d1d;">Rollback active</button>
+    </div>
+    <div id="tuningBundles" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
+    <div id="tuningActionStatus" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
+    <div id="tuningTopProposals" class="dashboard-text muted" style="margin-top:0.55rem;">—</div>
+</div>
+</div>
+
+<div id="analyzerTab-export" class="analyzer-tab-panel" role="tabpanel" data-tab="export">
+    <div class="analyzer-tab-guide">
+        <strong>Когда:</strong> нужен <em>весь отчёт</em> разом — для curl, скрипта, архива, <code>trade_effects</code> по сделкам.<br>
+        <strong>Действия:</strong> скачать <code>.json</code> или <code>.json + trade_effects</code>; ссылки открывают API со <strong>всеми</strong> секциями.<br>
+        <span class="muted">Типично: раз в неделю архив, отладка, передача в другой инструмент.</span>
+    </div>
+<div class="card" style="border: 1px solid rgba(125, 211, 252, 0.35);">
+    <h2>Скачать и открыть отчёт (JSON, <code>GET /api/analyzer</code>)</h2>
+    <p style="color:#e2e8f0; font-size:0.95rem; margin-bottom:0.6rem;">
+        Один запрос возвращает весь отчёт: <code>meta</code>, <code>summary</code>, <code>top_cases</code>, <code>llm</code>, <code>auto_config_override</code>;
+        при параметре детализации — массив <code>trade_effects</code> по сделкам. Дни, стратегия и флаг LLM из формы выше подставляются в ссылки и в кнопки скачивания.
+    </p>
+    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.65rem;">
+        <button type="button" id="analyzerDownloadJson" class="btn" style="padding:0.45rem 0.85rem;">Скачать .json</button>
+        <button type="button" id="analyzerDownloadJsonFull" class="btn" style="padding:0.45rem 0.85rem;">Скачать .json + trade_effects</button>
+    </div>
+    <p style="margin:0 0 0.35rem 0; font-size:0.9rem; color:#cbd5e1;">Открыть в браузере (можно «Сохранить как…»):</p>
+    <ul style="margin:0; padding-left:1.2rem; color:#e2e8f0; font-size:0.9rem; line-height:1.55;">
+        <li><a id="analyzerJsonUrl" href="/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0" target="_blank" rel="noopener">Полный отчёт</a> — все секции API</li>
+        <li><a id="analyzerJsonFullUrl" href="/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0&amp;include_trade_details=1" target="_blank" rel="noopener">То же + массив <code>trade_effects</code></a> по каждой сделке</li>
+        <li><a id="mlDataQualityJsonUrl" href="/api/ml/data-quality" target="_blank" rel="noopener">ML data-quality JSON</a></li>
+    </ul>
+    <p class="muted" style="margin-top:0.65rem; margin-bottom:0.25rem;">Путь для curl / копирования:</p>
+    <pre id="analyzerJsonCurl" style="font-size:0.78rem; overflow:auto; max-width:100%; padding:0.5rem 0.65rem; background:rgba(15,23,42,0.85); border-radius:6px; border:1px solid rgba(148,163,184,0.25); color:#cbd5e1; white-space:pre-wrap; word-break:break-all;">curl -sS &quot;https://ВАШ_ХОСТ/api/analyzer?days=7&amp;strategy=GAME_5M&amp;use_llm=0&quot; -o report.json</pre>
+    <p id="analyzerJsonDownloadStatus" class="muted" style="margin-top:0.5rem; min-height:1.2em;"></p>
+</div>
 </div>
 {% endblock %}
 
@@ -292,19 +404,46 @@
 <script>
 let lastAutoUpdates = [];
 let lastTuningStatus = null;
+let activeAnalyzerTab = 'trades';
+
+const ANALYZER_ALL_SECTIONS = 'core,strategy,exits,catboost,ml_arbiters,recovery,game5m_extra';
+
+function getAnalyzerSectionsForTab(tab) {
+    const base = ['core', 'strategy', 'exits'];
+    if (tab === 'ml') {
+        return base.concat(['catboost', 'ml_arbiters']).join(',');
+    }
+    if (tab === 'exits') {
+        return base.concat(['recovery', 'game5m_extra']).join(',');
+    }
+    return base.join(',');
+}
+
+function switchAnalyzerTab(tabId) {
+    activeAnalyzerTab = tabId;
+    document.querySelectorAll('.analyzer-tab-btn').forEach(function (btn) {
+        const on = btn.getAttribute('data-tab') === tabId;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    document.querySelectorAll('.analyzer-tab-panel').forEach(function (panel) {
+        panel.classList.toggle('active', panel.getAttribute('data-tab') === tabId);
+    });
+    try {
+        sessionStorage.setItem('analyzerTab', tabId);
+    } catch (e) { /* ignore */ }
+}
 
 function updateAnalyzerJsonLinks() {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
     const useLlm = document.getElementById('useLlm').checked;
-    const sections = getAnalyzerSectionsParam();
-    const hasHeavy = sections.indexOf('catboost') >= 0 || sections.indexOf('ml_arbiters') >= 0;
     const baseQ = {
         days: String(days),
         strategy: strategy,
         use_llm: useLlm ? '1' : '0',
-        sections: sections,
-        light: hasHeavy ? '0' : '1',
+        sections: ANALYZER_ALL_SECTIONS,
+        light: '0',
     };
     const q = new URLSearchParams(baseQ);
     const qFull = new URLSearchParams(Object.assign({}, baseQ, { include_trade_details: '1' }));
@@ -333,7 +472,13 @@ async function downloadAnalyzerJson(includeDetails) {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
     const useLlm = document.getElementById('useLlm').checked;
-    const q = new URLSearchParams({ days: String(days), strategy: strategy, use_llm: useLlm ? '1' : '0' });
+    const q = new URLSearchParams({
+        days: String(days),
+        strategy: strategy,
+        use_llm: useLlm ? '1' : '0',
+        sections: ANALYZER_ALL_SECTIONS,
+        light: '0',
+    });
     if (includeDetails) {
         q.set('include_trade_details', '1');
     }
@@ -1891,32 +2036,8 @@ function renderRecoveryMlD4aBlock(data) {
     el.innerHTML = html || '<span class="muted">Нет данных.</span>';
 }
 
-function getAnalyzerSectionsParam() {
-    const parts = ['core', 'strategy', 'exits'];
-    if (document.getElementById('optSectionCatboost') && document.getElementById('optSectionCatboost').checked) {
-        parts.push('catboost');
-    }
-    if (document.getElementById('optSectionAdvanced') && document.getElementById('optSectionAdvanced').checked) {
-        parts.push('ml_arbiters');
-    }
-    if (document.getElementById('optSectionRecovery') && document.getElementById('optSectionRecovery').checked) {
-        parts.push('recovery');
-    }
-    if (document.getElementById('optSectionGame5mExtra') && document.getElementById('optSectionGame5mExtra').checked) {
-        parts.push('game5m_extra');
-    }
-    return parts.join(',');
-}
-
-function applyAnalyzerOptionalSectionsVisibility() {
-    const anyOpt =
-        (document.getElementById('optSectionCatboost') && document.getElementById('optSectionCatboost').checked) ||
-        (document.getElementById('optSectionAdvanced') && document.getElementById('optSectionAdvanced').checked) ||
-        (document.getElementById('optSectionRecovery') && document.getElementById('optSectionRecovery').checked) ||
-        (document.getElementById('optSectionGame5mExtra') && document.getElementById('optSectionGame5mExtra').checked);
-    document.querySelectorAll('.analyzer-section-optional').forEach(function (el) {
-        el.style.display = anyOpt ? '' : 'none';
-    });
+function getAnalyzerSectionsParam(tab) {
+    return getAnalyzerSectionsForTab(tab || activeAnalyzerTab);
 }
 
 function applyAnalyzerStrategyVisibility() {
@@ -1932,15 +2053,16 @@ function applyAnalyzerStrategyVisibility() {
     document.querySelectorAll('.analyzer-tuning-only').forEach(function (el) {
         el.style.display = isPortfolio ? 'none' : '';
     });
-    ['optSectionCatboost', 'optSectionRecovery', 'optSectionGame5mExtra'].forEach(function (id) {
-        const inp = document.getElementById(id);
-        if (!inp) return;
-        const lab = inp.closest('label');
-        if (lab) {
-            lab.style.display = isPortfolio ? 'none' : '';
-        }
+    document.querySelectorAll('.analyzer-game5m-tab').forEach(function (el) {
+        el.style.display = isPortfolio ? 'none' : '';
     });
-    applyAnalyzerOptionalSectionsVisibility();
+    if (isPortfolio && (activeAnalyzerTab === 'exits' || activeAnalyzerTab === 'tuning')) {
+        switchAnalyzerTab('trades');
+    }
+}
+
+function applyAnalyzerOptionalSectionsVisibility() {
+    /* optional sections always visible inside their tab panels */
 }
 
 function renderPortfolioCatboostStatusBlock(data) {
@@ -2272,10 +2394,11 @@ function renderHoldToGapBlock(data) {
     el.innerHTML = html;
 }
 
-async function fetchAnalyzerApi(useLlm, timeoutMs) {
+async function fetchAnalyzerApi(useLlm, timeoutMs, tab) {
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
-    const sections = getAnalyzerSectionsParam();
+    const tabId = tab || activeAnalyzerTab;
+    const sections = getAnalyzerSectionsForTab(tabId);
     const hasHeavy = sections.indexOf('catboost') >= 0 || sections.indexOf('ml_arbiters') >= 0 ||
         sections.indexOf('recovery') >= 0 || sections.indexOf('game5m_extra') >= 0;
     const q = new URLSearchParams({
@@ -2328,11 +2451,14 @@ function analyzerFetchErrorMessage(err, useLlm) {
     return msg;
 }
 
-async function runAnalyzer() {
+async function runAnalyzer(tabOverride) {
+    const tabId = tabOverride || activeAnalyzerTab;
     const days = document.getElementById('days').value || 7;
     const strategy = document.getElementById('strategy').value || 'GAME_5M';
     const useLlm = document.getElementById('useLlm').checked;
-    const runBtn = document.getElementById('runBtn');
+    const runBtn = tabId === 'ml'
+        ? document.getElementById('runMlBtn')
+        : (tabId === 'exits' ? document.getElementById('runExitsBtn') : document.getElementById('runTradesBtn'));
     const summary = document.getElementById('summary');
     const topLosses = document.getElementById('topLosses');
     const topMissed = document.getElementById('topMissed');
@@ -2351,47 +2477,53 @@ async function runAnalyzer() {
     const mlArbiterBlock = document.getElementById('mlArbiterBlock');
     const applyBtn = document.getElementById('applyEnvBtn');
     const applyStatus = document.getElementById('applyStatus');
-    summary.innerHTML = useLlm
-        ? 'Загрузка… с LLM может занять до 10 мин (OPENAI_TIMEOUT_PROMPT_ENTRY). Остальные страницы не блокируются.'
-        : 'Загрузка…';
-    topLosses.innerHTML = '—';
-    topMissed.innerHTML = '—';
-    topWinMissed.innerHTML = '—';
-    hangerV2Block.innerHTML = '—';
-    hangerTuneJsonBlock.innerHTML = '—';
-    continuationGateBlock.innerHTML = '—';
-    if (recoveryMlD4aBlock) {
-        recoveryMlD4aBlock.innerHTML = '—';
-    }
-    if (decisionStackShadowBlock) {
-        decisionStackShadowBlock.innerHTML = '—';
-    }
-    if (catboostFusionBlock) {
-        catboostFusionBlock.innerHTML = '—';
-    }
     const mlRuntimeReadinessBlock = document.getElementById('mlRuntimeReadinessBlock');
-    if (mlRuntimeReadinessBlock) {
-        mlRuntimeReadinessBlock.textContent = '—';
+    const loadingMsg = useLlm
+        ? 'Загрузка… с LLM может занять до 10 мин (OPENAI_TIMEOUT_PROMPT_ENTRY).'
+        : 'Загрузка…';
+    if (runBtn) {
+        runBtn.disabled = true;
     }
-    if (multidayLrBlock) {
-        multidayLrBlock.innerHTML = '—';
+    if (tabId === 'trades') {
+        summary.innerHTML = loadingMsg;
+        topLosses.innerHTML = '—';
+        topMissed.innerHTML = '—';
+        topWinMissed.innerHTML = '—';
+        llmBlock.textContent = '—';
+        envBlock.textContent = '—';
+        envManual.textContent = '—';
+        envSkip.textContent = '—';
+        applyBtn.disabled = true;
+        applyStatus.innerHTML = '—';
+        lastAutoUpdates = [];
+        if (decisionStackShadowBlock) {
+            decisionStackShadowBlock.innerHTML = '—';
+        }
+    } else if (tabId === 'ml') {
+        if (catboostFusionBlock) {
+            catboostFusionBlock.innerHTML = loadingMsg;
+        }
+        if (mlRuntimeReadinessBlock) {
+            mlRuntimeReadinessBlock.textContent = loadingMsg;
+        }
+    } else if (tabId === 'exits') {
+        if (hangerV2Block) {
+            hangerV2Block.innerHTML = loadingMsg;
+        }
     }
-    if (mlArbiterBlock) {
-        mlArbiterBlock.textContent = '—';
-    }
-    llmBlock.textContent = '—';
-    envBlock.textContent = '—';
-    envManual.textContent = '—';
-    envSkip.textContent = '—';
-    applyBtn.disabled = true;
-    applyStatus.innerHTML = '—';
-    lastAutoUpdates = [];
     updateAnalyzerJsonLinks();
     try {
         const timeoutMs = useLlm ? 600000 : 300000;
-        const { ok, data } = await fetchAnalyzerApi(useLlm, timeoutMs);
+        const { ok, data } = await fetchAnalyzerApi(useLlm, timeoutMs, tabId);
         if (!ok) {
-            summary.innerHTML = `<span class="text-danger">Ошибка: ${esc(data.detail || 'API error')}</span>`;
+            const errHtml = '<span class="text-danger">Ошибка: ' + esc(data.detail || 'API error') + '</span>';
+            if (tabId === 'ml' && catboostFusionBlock) {
+                catboostFusionBlock.innerHTML = errHtml;
+            } else if (tabId === 'exits' && hangerV2Block) {
+                hangerV2Block.innerHTML = errHtml;
+            } else {
+                summary.innerHTML = errHtml;
+            }
             return;
         }
         applyAnalyzerStrategyVisibility();
@@ -2519,7 +2651,20 @@ async function runAnalyzer() {
     }
 }
 
-document.getElementById('runBtn').addEventListener('click', runAnalyzer);
+document.getElementById('runTradesBtn').addEventListener('click', function () { runAnalyzer('trades'); });
+const runMlBtn = document.getElementById('runMlBtn');
+if (runMlBtn) {
+    runMlBtn.addEventListener('click', function () { runAnalyzer('ml'); });
+}
+const runExitsBtn = document.getElementById('runExitsBtn');
+if (runExitsBtn) {
+    runExitsBtn.addEventListener('click', function () { runAnalyzer('exits'); });
+}
+document.querySelectorAll('.analyzer-tab-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        switchAnalyzerTab(btn.getAttribute('data-tab'));
+    });
+});
 document.getElementById('days').addEventListener('change', updateAnalyzerJsonLinks);
 document.getElementById('strategy').addEventListener('change', function () {
     updateAnalyzerJsonLinks();
@@ -2527,15 +2672,6 @@ document.getElementById('strategy').addEventListener('change', function () {
     loadMlDataQuality();
 });
 document.getElementById('useLlm').addEventListener('change', updateAnalyzerJsonLinks);
-['optSectionCatboost', 'optSectionAdvanced', 'optSectionRecovery', 'optSectionGame5mExtra'].forEach(function (id) {
-    const el = document.getElementById(id);
-    if (el) {
-        el.addEventListener('change', function () {
-            applyAnalyzerOptionalSectionsVisibility();
-            updateAnalyzerJsonLinks();
-        });
-    }
-});
 document.getElementById('analyzerDownloadJson').addEventListener('click', function() { downloadAnalyzerJson(false); });
 document.getElementById('analyzerDownloadJsonFull').addEventListener('click', function() { downloadAnalyzerJson(true); });
 document.getElementById('mlDataQualityRefresh').addEventListener('click', function() { loadMlDataQuality(false); });
@@ -2549,7 +2685,12 @@ document.getElementById('tuningApplyBundleBtn').addEventListener('click', functi
 document.getElementById('tuningRollbackBtn').addEventListener('click', rollbackTuningExperiment);
 updateAnalyzerJsonLinks();
 applyAnalyzerStrategyVisibility();
-applyAnalyzerOptionalSectionsVisibility();
+try {
+    const savedTab = sessionStorage.getItem('analyzerTab');
+    if (savedTab && document.getElementById('analyzerTab-' + savedTab)) {
+        switchAnalyzerTab(savedTab);
+    }
+} catch (e) { /* ignore */ }
 loadTuningStatus();
 loadMlDataQuality();
 
