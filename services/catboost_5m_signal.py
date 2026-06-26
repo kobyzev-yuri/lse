@@ -301,9 +301,18 @@ def _bar_v2_log_enabled() -> bool:
     return raw in ("1", "true", "yes")
 
 
-def build_catboost_bar_v2_feature_row(ticker: str, d5: Dict[str, Any]) -> Tuple[List[str], List[Any]]:
+def build_catboost_bar_v2_feature_row(
+    ticker: str,
+    d5: Dict[str, Any],
+    *,
+    mode: str = "tech",
+) -> Tuple[List[str], List[Any]]:
     """Feature row for bar-level entry v2 (subset of live 5m payload)."""
-    from services.game5m_entry_bar_dataset import get_bar_train_feature_schema, row_from_bar_dataset_dict
+    from services.game5m_entry_bar_dataset import (
+        FeatureMode,
+        get_bar_train_feature_schema,
+        row_from_bar_dataset_dict,
+    )
 
     high_5d = _safe_float(d5.get("high_5d"), 0.0)
     low_5d = _safe_float(d5.get("low_5d"), 0.0)
@@ -323,8 +332,9 @@ def build_catboost_bar_v2_feature_row(ticker: str, d5: Dict[str, Any]) -> Tuple[
         "momentum_rth_today_bars": d5.get("momentum_rth_today_bars"),
         "price_to_low5d_ratio": price_to_low5d_ratio,
     }
-    colnames, _ = get_bar_train_feature_schema()
-    return colnames, row_from_bar_dataset_dict(row_dict, ticker)
+    feat_mode: FeatureMode = "full" if mode == "full" else "tech"
+    colnames, _ = get_bar_train_feature_schema(feat_mode)
+    return colnames, row_from_bar_dataset_dict(row_dict, ticker, mode=feat_mode)
 
 
 def _catboost_bar_v2_runtime_guards() -> Tuple[str, str, Optional[str], Optional[Tuple[Any, Dict[str, Any]]]]:
@@ -370,7 +380,10 @@ def attach_catboost_bar_v2_signal(out: Dict[str, Any], ticker: str) -> None:
 
     model, meta = bundle
     try:
-        colnames, row = build_catboost_bar_v2_feature_row(ticker, out)
+        from services.game5m_entry_bar_dataset import resolve_bar_v2_feature_mode
+
+        feat_mode = resolve_bar_v2_feature_mode(meta)
+        colnames, row = build_catboost_bar_v2_feature_row(ticker, out, mode=feat_mode)
         p_st, p_good, p_note = _catboost_predict_proba_row(model, meta, colnames, row)
         out["catboost_bar_v2_signal_status"] = p_st
         out["catboost_entry_proba_good_v2"] = p_good

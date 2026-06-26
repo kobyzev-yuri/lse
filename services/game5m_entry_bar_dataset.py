@@ -65,6 +65,19 @@ def resolve_bar_train_numeric_keys(mode: FeatureMode = "full") -> tuple[str, ...
     return BAR_TRAIN_NUMERIC_KEYS if mode == "tech" else BAR_TRAIN_FULL_NUMERIC_KEYS
 
 
+def resolve_bar_v2_feature_mode(meta: dict[str, Any] | None = None) -> FeatureMode:
+    """Match live feature row to trained model (prod v2 .cbm is tech-only)."""
+    expected = list((meta or {}).get("feature_names") or [])
+    if expected:
+        full_n = 1 + len(BAR_TRAIN_FULL_NUMERIC_KEYS)
+        tech_n = 1 + len(BAR_TRAIN_NUMERIC_KEYS)
+        if len(expected) == full_n:
+            return "full"
+        if len(expected) == tech_n:
+            return "tech"
+    return "tech"
+
+
 def get_bar_train_feature_schema(mode: FeatureMode = "full") -> tuple[list[str], list[int]]:
     keys = resolve_bar_train_numeric_keys(mode)
     colnames = ["ticker"] + list(keys)
@@ -97,6 +110,7 @@ __all__ = [
     "entry_bar_v2_promotion_auc_min",
     "ENTRY_BAR_V2_PROMOTION_AUC_MIN_DEFAULT",
     "resolve_bar_train_numeric_keys",
+    "resolve_bar_v2_feature_mode",
     "row_from_bar_dataset_dict",
     "triple_barrier_config_from_env",
     "triple_barrier_forward",

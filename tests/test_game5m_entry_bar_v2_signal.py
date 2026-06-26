@@ -33,7 +33,30 @@ def test_build_catboost_bar_v2_feature_row():
     assert colnames[0] == "ticker"
     assert row[0] == "AMD"
     assert len(row) == len(colnames)
+    assert len(colnames) == 9  # ticker + 8 tech features (prod v2 model)
     assert row[colnames.index("rsi_5m")] == pytest.approx(35.0)
+
+
+def test_bar_v2_feature_row_matches_prod_meta():
+    from services.game5m_entry_bar_dataset import BAR_TRAIN_NUMERIC_KEYS, resolve_bar_v2_feature_mode
+
+    meta = {"feature_names": ["ticker", *BAR_TRAIN_NUMERIC_KEYS]}
+    assert resolve_bar_v2_feature_mode(meta) == "tech"
+    colnames, row = build_catboost_bar_v2_feature_row("MU", {"price": 50, "high_5d": 55, "low_5d": 45}, mode="tech")
+    assert colnames == meta["feature_names"]
+    assert len(row) == len(colnames)
+
+
+def test_attach_catboost_bar_v2_signal_ok_when_model_present():
+    from services.catboost_5m_signal import attach_catboost_bar_v2_signal
+
+    model_path = Path("/app/logs/ml/models/game5m_entry_catboost_v2.cbm")
+    if not model_path.is_file():
+        pytest.skip("bar v2 model not on disk")
+    out: dict = {"price": 100.0, "high_5d": 110.0, "low_5d": 90.0, "rsi_5m": 40.0}
+    attach_catboost_bar_v2_signal(out, "AMD")
+    assert out.get("catboost_bar_v2_signal_status") == "ok"
+    assert out.get("catboost_entry_proba_good_v2") is not None
 
 
 def test_trust_level_entry_bar_v2_below_promotion():
