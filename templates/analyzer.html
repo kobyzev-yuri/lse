@@ -31,8 +31,8 @@
         color: #e2e8f0;
         font-weight: 600;
     }
-    .analyzer-tab-panel { display: none; }
-    .analyzer-tab-panel.active { display: block; }
+    .analyzer-tab-panel { display: none !important; }
+    .analyzer-tab-panel.active { display: block !important; }
     .analyzer-tab-actions {
         display: flex;
         flex-wrap: wrap;
@@ -215,7 +215,7 @@
 </div>
 </div>
 
-<div id="analyzerTab-ml" class="analyzer-tab-panel" role="tabpanel" data-tab="ml">
+<div id="analyzerTab-ml" class="analyzer-tab-panel" role="tabpanel" data-tab="ml" hidden>
     <div class="analyzer-tab-guide">
         <strong>Когда:</strong> вопрос не «сколько заработали», а <em>почему ML не продвигается</em> — bar v2, E3, арбитры, trust, telemetry.<br>
         <strong>Действия:</strong>
@@ -284,7 +284,7 @@
 </div>
 </div>
 
-<div id="analyzerTab-exits" class="analyzer-tab-panel analyzer-game5m-only" role="tabpanel" data-tab="exits">
+<div id="analyzerTab-exits" class="analyzer-tab-panel analyzer-game5m-only" role="tabpanel" data-tab="exits" hidden>
     <div class="analyzer-tab-guide">
         <strong>Когда:</strong> проблема в <em>выходах</em> — ранний тейк, stale exits, TIME_EXIT_EARLY, recovery D4a.<br>
         <strong>Действие:</strong> «Загрузить выходы» (тяжёлые секции exits).<br>
@@ -325,7 +325,7 @@
 </div>
 </div>
 
-<div id="analyzerTab-tuning" class="analyzer-tab-panel analyzer-game5m-only analyzer-tuning-only" role="tabpanel" data-tab="tuning">
+<div id="analyzerTab-tuning" class="analyzer-tab-panel analyzer-game5m-only analyzer-tuning-only" role="tabpanel" data-tab="tuning" hidden>
     <div class="analyzer-tab-guide">
         <strong>Когда:</strong> осознанно меняете параметры GAME_5M по регламенту — observe → apply → rollback.<br>
         <strong>Действия:</strong> Observe / Apply один ключ / Apply bundle / Rollback — <em>не связаны</em> с анализом сделок.<br>
@@ -371,7 +371,7 @@
 </div>
 </div>
 
-<div id="analyzerTab-export" class="analyzer-tab-panel" role="tabpanel" data-tab="export">
+<div id="analyzerTab-export" class="analyzer-tab-panel" role="tabpanel" data-tab="export" hidden>
     <div class="analyzer-tab-guide">
         <strong>Когда:</strong> нужен <em>весь отчёт</em> разом — для curl, скрипта, архива, <code>trade_effects</code> по сделкам.<br>
         <strong>Действия:</strong> скачать <code>.json</code> или <code>.json + trade_effects</code>; ссылки открывают API со <strong>всеми</strong> секциями.<br>
@@ -420,6 +420,9 @@ function getAnalyzerSectionsForTab(tab) {
 }
 
 function switchAnalyzerTab(tabId) {
+    if (!tabId) {
+        return;
+    }
     activeAnalyzerTab = tabId;
     document.querySelectorAll('.analyzer-tab-btn').forEach(function (btn) {
         const on = btn.getAttribute('data-tab') === tabId;
@@ -427,8 +430,14 @@ function switchAnalyzerTab(tabId) {
         btn.setAttribute('aria-selected', on ? 'true' : 'false');
     });
     document.querySelectorAll('.analyzer-tab-panel').forEach(function (panel) {
-        panel.classList.toggle('active', panel.getAttribute('data-tab') === tabId);
+        const on = panel.getAttribute('data-tab') === tabId;
+        panel.classList.toggle('active', on);
+        panel.hidden = !on;
     });
+    const panel = document.getElementById('analyzerTab-' + tabId);
+    if (panel) {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
     try {
         sessionStorage.setItem('analyzerTab', tabId);
     } catch (e) { /* ignore */ }
@@ -1375,7 +1384,9 @@ async function applyTuningBundle(bundleId) {
     if (!bid) {
         return;
     }
-    if (!confirm('Применить bundle ' + bid + ' (' + (lastTuningStatus.bundles || []).find(function (b) { return b.bundle_id === bid; })?.keys?.length || '?') + ' keys)?')) {
+    var bundleRow = (lastTuningStatus.bundles || []).find(function (b) { return b.bundle_id === bid; });
+    var bundleKeyCount = (bundleRow && bundleRow.keys) ? bundleRow.keys.length : '?';
+    if (!confirm('Применить bundle ' + bid + ' (' + bundleKeyCount + ' keys)?')) {
         return;
     }
     actionEl.textContent = 'Применение bundle...';
@@ -2045,12 +2056,21 @@ function applyAnalyzerStrategyVisibility() {
     const isPortfolio = strategy === 'PORTFOLIO';
     const isAll = strategy === 'ALL';
     document.querySelectorAll('.analyzer-game5m-only').forEach(function (el) {
+        if (el.classList.contains('analyzer-tab-panel')) {
+            return;
+        }
         el.style.display = isPortfolio ? 'none' : '';
     });
     document.querySelectorAll('.analyzer-portfolio-only').forEach(function (el) {
+        if (el.classList.contains('analyzer-tab-panel')) {
+            return;
+        }
         el.style.display = (isPortfolio || isAll) ? '' : 'none';
     });
     document.querySelectorAll('.analyzer-tuning-only').forEach(function (el) {
+        if (el.classList.contains('analyzer-tab-panel')) {
+            return;
+        }
         el.style.display = isPortfolio ? 'none' : '';
     });
     document.querySelectorAll('.analyzer-game5m-tab').forEach(function (el) {
@@ -2058,6 +2078,8 @@ function applyAnalyzerStrategyVisibility() {
     });
     if (isPortfolio && (activeAnalyzerTab === 'exits' || activeAnalyzerTab === 'tuning')) {
         switchAnalyzerTab('trades');
+    } else {
+        switchAnalyzerTab(activeAnalyzerTab);
     }
 }
 
@@ -2660,11 +2682,17 @@ const runExitsBtn = document.getElementById('runExitsBtn');
 if (runExitsBtn) {
     runExitsBtn.addEventListener('click', function () { runAnalyzer('exits'); });
 }
-document.querySelectorAll('.analyzer-tab-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-        switchAnalyzerTab(btn.getAttribute('data-tab'));
-    });
-});
+    const analyzerTabsNav = document.querySelector('.analyzer-tabs');
+    if (analyzerTabsNav) {
+        analyzerTabsNav.addEventListener('click', function (ev) {
+            const btn = ev.target.closest('.analyzer-tab-btn');
+            if (!btn) {
+                return;
+            }
+            ev.preventDefault();
+            switchAnalyzerTab(btn.getAttribute('data-tab'));
+        });
+    }
 document.getElementById('days').addEventListener('change', updateAnalyzerJsonLinks);
 document.getElementById('strategy').addEventListener('change', function () {
     updateAnalyzerJsonLinks();
