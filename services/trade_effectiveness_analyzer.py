@@ -218,6 +218,10 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "CatBoost entry bar v2 (shadow): путь GAME_5M_CATBOOST_V2_MODEL_PATH, meta/train metrics, AUC vs порог promotion (default 0.545). "
         "Не влияет на prod v1; log_only telemetry — catboost_entry_proba_good_v2."
     ),
+    "ml_runtime_readiness_diagnostics": (
+        "Сводка live ML probes + telemetry в trade_history: feature_mismatch, missing status, мало ok rows. "
+        "Объясняет, почему shadow/apply не прогрессирует (см. services/ml_runtime_readiness.py)."
+    ),
     "game5m_oracle_exit_ceiling": (
         "Offline ceiling: доля захваченного upside vs лучший RTH high между entry и exit (5m OHLC, 09:30–16:00 ET). "
         "pct_captured = 100 × realized_pct / oracle_rth_mfe_pct; агрегаты mean/median и разбивка по exit_signal."
@@ -1118,6 +1122,27 @@ def _build_game5m_entry_model_v2_status() -> Dict[str, Any]:
                 train_metrics = None
         trust = _trust_level_game5m_entry_bar_v2(meta if isinstance(meta, dict) else train_metrics)
         promo_auc = entry_bar_v2_promotion_auc_min()
+        runtime_diag: Dict[str, Any] = {}
+        try:
+            from services.ml_runtime_readiness import build_ml_runtime_readiness_diagnostics
+            from report_generator import get_engine
+
+            runtime_diag = build_ml_runtime_readiness_diagnostics(
+                get_engine(),
+                strategy="GAME_5M",
+                days=21,
+            )
+            bar_entry = next(
+                (x for x in (runtime_diag.get("entry_telemetry") or []) if x.get("contour_id") == "catboost_entry_bar_v2"),
+                {},
+            )
+            bar_probe = next(
+                (x for x in (runtime_diag.get("live_entry_probes") or []) if x.get("contour_id") == "catboost_entry_bar_v2"),
+                {},
+            )
+        except Exception as e:
+            bar_entry = {}
+            bar_probe = {"error": str(e)}
         return {
             "log_only_enabled_config": bool(log_enabled),
             "prod_v1_unchanged": True,
@@ -1141,6 +1166,15 @@ def _build_game5m_entry_model_v2_status() -> Dict[str, Any]:
             if isinstance(meta, dict)
             else None,
             "last_train_metrics": train_metrics if isinstance(train_metrics, dict) else None,
+            "live_probe_status": bar_probe.get("live_probe_status"),
+            "live_probe_proba": bar_probe.get("live_probe_proba"),
+            "telemetry_21d": {
+                "buys_total": bar_entry.get("buys_total"),
+                "status_counts": bar_entry.get("status_counts"),
+                "with_proba": bar_entry.get("with_proba"),
+                "ok_rate": bar_entry.get("ok_rate"),
+                "progress_blockers": bar_entry.get("progress_blockers"),
+            },
             **trust,
             "note": "Shadow contour: catboost_entry_proba_good_v2 в context_json; fusion/apply только после sign-off.",
         }
@@ -6906,12 +6940,23 @@ def analyze_trade_effectiveness(
         game5m_catboost_status = _build_game5m_catboost_status()
         game5m_entry_bar_dataset_stats = _build_game5m_entry_bar_dataset_stats()
         game5m_entry_model_v2_status = _build_game5m_entry_model_v2_status()
+        try:
+            from services.ml_runtime_readiness import build_ml_runtime_readiness_diagnostics
+
+            ml_runtime_readiness_diagnostics = build_ml_runtime_readiness_diagnostics(
+                _analyzer_engine_safe(),
+                strategy=strategy if strategy_u == "GAME_5M" else "GAME_5M",
+                days=days,
+            )
+        except Exception as e:
+            ml_runtime_readiness_diagnostics = {"error": str(e)}
     else:
         catboost_entry_backtest = _section_skip("catboost")
         catboost_fusion_entry_review = _section_skip("catboost")
         game5m_catboost_status = _section_skip("catboost")
         game5m_entry_bar_dataset_stats = _section_skip("catboost")
         game5m_entry_model_v2_status = _section_skip("catboost")
+        ml_runtime_readiness_diagnostics = _section_skip("catboost")
     if _section_want(secs, "game5m_extra") and want_g5m:
         hanger_v2_review = _build_hanger_v2_review(effects)
         game5m_recovery_model_status = _build_game5m_recovery_model_status()
@@ -6974,6 +7019,7 @@ def analyze_trade_effectiveness(
         "game5m_catboost_status": game5m_catboost_status,
         "game5m_entry_bar_dataset_stats": game5m_entry_bar_dataset_stats,
         "game5m_entry_model_v2_status": game5m_entry_model_v2_status,
+        "ml_runtime_readiness_diagnostics": ml_runtime_readiness_diagnostics,
         "decision_stack_shadow_diff": _build_decision_stack_shadow_diff(strategy, closed, effects),
         "earnings_trust_gate_monitor": (
             build_earnings_trust_gate_monitor(closed, limit=30) if want_g5m else _section_skip("earnings_trust")
