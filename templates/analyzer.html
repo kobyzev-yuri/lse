@@ -186,6 +186,9 @@
     <h3 style="font-size:1rem;margin:0.85rem 0 0.35rem 0;color:#e2e8f0;">Бэктест скора <code>catboost_entry_backtest</code></h3>
     <p class="muted" style="font-size:0.86rem;margin:0 0 0.45rem 0;">Для <strong>GAME_5M</strong> и <strong>ALL</strong> (только сделки с <code>entry_strategy=GAME_5M</code>): пересчёт P из сохранённого контекста vs факт.</p>
     <div id="catboostBlock" class="dashboard-text">—</div>
+    <h3 style="font-size:1rem;margin:0.85rem 0 0.35rem 0;color:#e2e8f0;">Runtime readiness / blockers <code>ml_runtime_readiness_diagnostics</code></h3>
+    <p class="muted" style="font-size:0.86rem;margin:0 0 0.45rem 0;">Live probe сейчас vs telemetry в BUY/SELL. Отдельно — сделки <strong>после последнего сбоя</strong> (<code>post_issue</code>).</p>
+    <div id="mlRuntimeReadinessBlock" class="dashboard-text" style="white-space:pre-wrap;">—</div>
 </div>
 
 <div class="card analyzer-game5m-only analyzer-section-optional" data-section="ml_arbiters" style="border: 1px solid rgba(56, 189, 248, 0.35);">
@@ -1559,6 +1562,66 @@ function renderUnifiedTrustArbiterBlock(data) {
     el.textContent = lines.join('\n').trim() || '—';
 }
 
+function renderMlRuntimeReadinessBlock(data) {
+    const el = document.getElementById('mlRuntimeReadinessBlock');
+    if (!el) {
+        return;
+    }
+    const d = data.ml_runtime_readiness_diagnostics || {};
+    if (d.error || d.status === 'skipped') {
+        el.textContent = d.error || '—';
+        return;
+    }
+    if (!d.overall_runtime_health && !d.live_entry_probes) {
+        el.textContent = '—';
+        return;
+    }
+    const health = d.overall_runtime_health || '?';
+    const histOnly = d.historical_schema_issue_only ? ' (исторический mismatch, live ok)' : '';
+    let lines = [];
+    lines.push('overall_runtime_health: ' + health + histOnly);
+    (d.progress_summary_ru || []).forEach(function (s) { lines.push('• ' + s); });
+    lines.push('');
+    lines.push('priority_blockers:');
+    const blockers = d.priority_blockers || [];
+    if (!blockers.length) {
+        lines.push('  (нет)');
+    } else {
+        blockers.forEach(function (b) { lines.push('  - ' + b); });
+    }
+    lines.push('');
+    lines.push('live_entry_probes:');
+    (d.live_entry_probes || []).forEach(function (p) {
+        lines.push('  ' + p.contour_id + ': ' + (p.live_probe_status || '?') +
+            (p.live_probe_proba != null ? ' P≈' + Number(p.live_probe_proba).toFixed(3) : ''));
+    });
+    const post = d.post_issue_entry_telemetry || {};
+    const postKeys = Object.keys(post);
+    if (postKeys.length) {
+        lines.push('');
+        lines.push('post_issue (после последнего bad status):');
+        postKeys.forEach(function (k) {
+            const row = post[k];
+            lines.push('  ' + k + ': buys_since=' + (row.buys_since_last_bad != null ? row.buys_since_last_bad : '?') +
+                ', ok_since=' + (row.ok_since_last_bad != null ? row.ok_since_last_bad : '?') +
+                ', last_bad=' + (row.last_bad_status_at ? row.last_bad_status_at.slice(0, 10) : '—'));
+        });
+    }
+    const refreshFlags = d.ml_refresh_artifact_flags || [];
+    if (refreshFlags.length) {
+        lines.push('');
+        lines.push('ml_refresh flags (' + refreshFlags.length + '):');
+        refreshFlags.slice(0, 6).forEach(function (f) {
+            lines.push('  ' + (f.contour_id || f.artifact) + ': ' + (f.issue || '?'));
+        });
+    }
+    if (d.ops_note_ru) {
+        lines.push('');
+        lines.push(d.ops_note_ru);
+    }
+    el.textContent = lines.join('\n');
+}
+
 function renderMlArbiterBlock(data) {
     const el = document.getElementById('mlArbiterBlock');
     if (!el) {
@@ -2306,6 +2369,10 @@ async function runAnalyzer() {
     if (catboostFusionBlock) {
         catboostFusionBlock.innerHTML = '—';
     }
+    const mlRuntimeReadinessBlock = document.getElementById('mlRuntimeReadinessBlock');
+    if (mlRuntimeReadinessBlock) {
+        mlRuntimeReadinessBlock.textContent = '—';
+    }
     if (multidayLrBlock) {
         multidayLrBlock.innerHTML = '—';
     }
@@ -2340,6 +2407,7 @@ async function runAnalyzer() {
         renderHoldToGapBlock(data);
         renderCatboostFusionBlock(data);
         renderCatboostBlock(data);
+        renderMlRuntimeReadinessBlock(data);
         renderMultidayLrBlock(data);
         renderMultidayGatesArbiterBlock(data);
         renderGapForecastArbiterBlock(data);

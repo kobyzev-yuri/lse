@@ -356,6 +356,167 @@ def _aggregate_exit_telemetry(
     return out
 
 
+_BAD_STATUSES = frozenset({"feature_mismatch", "predict_error", "load_error", "no_model_file", "bad_meta"})
+
+
+def _aggregate_post_issue_entry_telemetry(
+    engine: Engine,
+    *,
+    strategy: str,
+    days: int,
+) -> dict[str, dict[str, Any]]:
+    """Per entry contour: last bad status ts + BUY breakdown since then."""
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=max(1, int(days)))
+    out: dict[str, dict[str, Any]] = {}
+    with engine.connect() as conn:
+        for spec in _ENTRY_CONTOURS:
+            cid = spec["contour_id"]
+            st_field = spec["status_field"]
+            last_bad = conn.execute(
+                text(
+                    f"""
+                    SELECT MAX(ts) AS last_bad_at
+                    FROM trade_history
+                    WHERE strategy_name = :strat
+                      AND side = 'BUY'
+                      AND ts >= :since
+                      AND context_json->>'{st_field}' = ANY(:bad_statuses)
+                    """
+                ),
+                {"strat": strategy, "since": since, "bad_statuses": list(_BAD_STATUSES)},
+            ).scalar()
+            since_cut = last_bad if last_bad is not None else since
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT
+                      COALESCE(NULLIF(TRIM(context_json->>'{st_field}'), ''), '(missing)') AS status,
+                      COUNT(*) AS n
+                    FROM trade_history
+                    WHERE strategy_name = :strat
+                      AND side = 'BUY'
+                      AND ts > :since_cut
+                    GROUP BY 1
+                    ORDER BY n DESC
+                    """
+                ),
+                {"strat": strategy, "since_cut": since_cut},
+            ).mappings().all()
+            last_buy = conn.execute(
+                text(
+                    """
+                    SELECT MAX(ts) FROM trade_history
+                    WHERE strategy_name = :strat AND side = 'BUY'
+                    """
+                ),
+                {"strat": strategy},
+            ).scalar()
+            counts = {str(r["status"]): int(r["n"]) for r in rows}
+            buys_since = sum(counts.values())
+            ok_since = counts.get("ok", 0)
+            mismatch_since = sum(counts.get(s, 0) for s in _BAD_STATUSES)
+            narrative = _post_issue_narrative(
+                contour_id=cid,
+                last_bad_at=last_bad,
+                buys_since=buys_since,
+                ok_since=ok_since,
+                mismatch_since=mismatch_since,
+                last_buy_at=last_buy,
+            )
+            out[cid] = {
+                "last_bad_status_at": last_bad.isoformat() if last_bad is not None else None,
+                "buys_since_last_bad": buys_since,
+                "status_counts_since_last_bad": counts,
+                "ok_since_last_bad": ok_since,
+                "mismatch_since_last_bad": mismatch_since,
+                "last_buy_at": last_buy.isoformat() if last_buy is not None else None,
+                "stall_reason_ru": narrative,
+            }
+    return out
+
+
+def _post_issue_narrative(
+    *,
+    contour_id: str,
+    last_bad_at: datetime | None,
+    buys_since: int,
+    ok_since: int,
+    mismatch_since: int,
+    last_buy_at: datetime | None,
+) -> str:
+    if last_bad_at is None and buys_since == 0:
+        return f"{contour_id}: в окне нет BUY — telemetry не накапливается."
+    if last_bad_at is None and ok_since > 0:
+        return f"{contour_id}: telemetry ok на {ok_since} BUY; исторических mismatch в окне нет."
+    if last_bad_at is not None and mismatch_since > 0:
+        return (
+            f"{contour_id}: активная проблема — {mismatch_since} BUY после "
+            f"{last_bad_at.date()} со статусом ошибки."
+        )
+    if last_bad_at is not None and buys_since == 0:
+        return (
+            f"{contour_id}: последний сбой {last_bad_at.date()}, но новых BUY после него нет — "
+            "ждём сделок для проверки фикса."
+        )
+    if last_bad_at is not None and ok_since > 0:
+        return (
+            f"{contour_id}: после сбоя {last_bad_at.date()} накоплено {ok_since} ok BUY "
+            f"(всего {buys_since} после даты сбоя)."
+        )
+    if last_bad_at is not None:
+        return (
+            f"{contour_id}: после сбоя {last_bad_at.date()} — {buys_since} BUY, "
+            f"но ok=0 (доминирует missing/skipped)."
+        )
+    if last_buy_at is not None:
+        days_ago = (datetime.now(timezone.utc).replace(tzinfo=None) - last_buy_at).days
+        if days_ago >= 3:
+            return f"{contour_id}: последний BUY {days_ago} дн. назад — низкая частота сделок тормозит shadow."
+    return f"{contour_id}: сбор telemetry в процессе ({buys_since} BUY в post-issue окне)."
+
+
+def _scan_ml_refresh_artifacts(project_root: Path | None = None) -> list[dict[str, Any]]:
+    root = project_root or Path(__file__).resolve().parents[1]
+    q = Path("/app/logs/ml/ml_data_quality") if Path("/app/logs").exists() else root / "local" / "logs" / "ml_data_quality"
+    issues: list[dict[str, Any]] = []
+    if not q.is_dir():
+        return [{"kind": "missing_dir", "path": str(q)}]
+    for p in sorted(q.glob("last_*_ml_refresh.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            issues.append({"artifact": p.name, "issue": "parse_error", "hint": str(e)})
+            continue
+        if not isinstance(data, dict):
+            continue
+        contour = data.get("contour_id") or p.stem.replace("last_", "").replace("_ml_refresh", "")
+        if data.get("error"):
+            issues.append(
+                {
+                    "artifact": p.name,
+                    "contour_id": contour,
+                    "issue": "refresh_error",
+                    "error": data.get("error"),
+                    "hint": "Cron refresh упал — смотреть run_ml_refresh_dispatcher / contour train.",
+                }
+            )
+        elif data.get("skipped_no_trigger"):
+            phase = data.get("phase") or "?"
+            issues.append(
+                {
+                    "artifact": p.name,
+                    "contour_id": contour,
+                    "issue": "refresh_skipped_no_trigger",
+                    "phase": phase,
+                    "hint": (
+                        f"Refresh пропущен (нет триггера new_units/staleness). Фаза: {phase}. "
+                        "Прогресс train/apply зависит от накопления labeled units."
+                    ),
+                }
+            )
+    return issues
+
+
 def _telemetry_blockers(
     *,
     contour_id: str,
@@ -378,7 +539,7 @@ def _telemetry_blockers(
     if mismatch_n > 0:
         hint = _ERROR_HINTS.get("feature_mismatch", "")
         blockers.append(
-            f"{contour_id}: feature_mismatch на {mismatch_n} сделках — telemetry бесполезна. {hint}"
+            f"{contour_id}: feature_mismatch на {mismatch_n} сделках (история окна) — telemetry бесполезна. {hint}"
         )
     if present_n is not None and present_n == 0:
         blockers.append(
@@ -448,14 +609,21 @@ def build_ml_runtime_readiness_diagnostics(
     live_probes = probe_all_entry_shadow_contours()
     entry_telemetry: list[dict[str, Any]] = []
     exit_telemetry: list[dict[str, Any]] = []
+    post_issue: dict[str, dict[str, Any]] = {}
     if engine is not None:
         try:
             entry_telemetry = _aggregate_entry_telemetry(engine, strategy=strategy, days=days)
             exit_telemetry = _aggregate_exit_telemetry(engine, strategy=strategy, days=days)
+            post_issue = _aggregate_post_issue_entry_telemetry(engine, strategy=strategy, days=days)
+            for block in entry_telemetry:
+                cid = block.get("contour_id")
+                if cid and cid in post_issue:
+                    block["post_issue"] = post_issue[cid]
         except Exception as e:
             logger.warning("ml_runtime_readiness telemetry: %s", e)
             entry_telemetry = [{"error": str(e)}]
     artifact_issues = _scan_ml_quality_artifacts(project_root)
+    refresh_issues = _scan_ml_refresh_artifacts(project_root)
 
     priority_blockers: list[str] = []
     for block in entry_telemetry + exit_telemetry:
@@ -464,11 +632,28 @@ def build_ml_runtime_readiness_diagnostics(
 
     for probe in live_probes:
         st = probe.get("live_probe_status")
+        cid = probe.get("contour_id")
+        post = post_issue.get(str(cid), {}) if cid else {}
         if st and st != "ok":
             hint = _ERROR_HINTS.get(str(st), "")
             priority_blockers.append(
-                f"live_probe {probe.get('contour_id')}: {st}" + (f" — {hint}" if hint else "")
+                f"live_probe {cid}: {st}" + (f" — {hint}" if hint else "")
             )
+        elif st == "ok" and post.get("mismatch_since_last_bad", 0) > 0:
+            priority_blockers.append(
+                f"live_probe {cid}: ok сейчас, но после последнего сбоя ещё есть bad rows "
+                f"({post.get('mismatch_since_last_bad')}) — проверить деплой/кэш модели."
+            )
+        elif st == "ok" and post.get("last_bad_status_at") and post.get("buys_since_last_bad", 0) == 0:
+            priority_blockers.append(
+                f"{cid}: live_probe ok; исторический сбой {post.get('last_bad_status_at')[:10]}, "
+                "новых BUY для валидации фикса пока нет."
+            )
+
+    for post in post_issue.values():
+        narrative = post.get("stall_reason_ru")
+        if narrative and post.get("mismatch_since_last_bad", 0) > 0:
+            priority_blockers.append(narrative)
 
     # dedupe preserving order
     seen: set[str] = set()
@@ -478,28 +663,59 @@ def build_ml_runtime_readiness_diagnostics(
             seen.add(b)
             deduped.append(b)
 
+    active_live_schema = any(p.get("live_probe_status") in _BAD_STATUSES for p in live_probes)
+    active_post_mismatch = any(
+        (post_issue.get(spec["contour_id"]) or {}).get("mismatch_since_last_bad", 0) > 0
+        for spec in _ENTRY_CONTOURS
+    )
+    historical_mismatch_only = (
+        not active_live_schema
+        and not active_post_mismatch
+        and any("feature_mismatch" in b for b in deduped)
+    )
+
     overall = "healthy"
-    if any("feature_mismatch" in b for b in deduped):
+    if active_live_schema or active_post_mismatch:
         overall = "blocked_schema"
     elif any("нет ни одного ok" in b or "ни разу не записан" in b for b in deduped):
         overall = "blocked_telemetry"
-    elif deduped:
+    elif historical_mismatch_only or deduped:
         overall = "collecting"
+
+    progress_summary: list[str] = []
+    for spec in _ENTRY_CONTOURS:
+        post = post_issue.get(spec["contour_id"], {})
+        if post.get("stall_reason_ru"):
+            progress_summary.append(post["stall_reason_ru"])
+    for spec in _EXIT_CONTOURS:
+        block = next((x for x in exit_telemetry if x.get("contour_id") == spec["contour_id"]), {})
+        blockers = block.get("progress_blockers") or []
+        if blockers:
+            progress_summary.append(blockers[0])
+        elif block.get("ok_rate") == 1.0 and (block.get("rows_with_block") or 0) > 0:
+            progress_summary.append(
+                f"{spec['contour_id']}: telemetry ok ({block.get('rows_with_block')} rows), gate: {spec.get('promotion_gate')}."
+            )
 
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "strategy": strategy,
         "window_days": days,
         "overall_runtime_health": overall,
-        "priority_blockers": deduped[:12],
+        "historical_schema_issue_only": historical_mismatch_only,
+        "priority_blockers": deduped[:15],
+        "progress_summary_ru": progress_summary[:10],
         "live_entry_probes": live_probes,
         "entry_telemetry": entry_telemetry,
         "exit_telemetry": exit_telemetry,
+        "post_issue_entry_telemetry": post_issue,
         "train_metrics_artifact_flags": artifact_issues,
+        "ml_refresh_artifact_flags": refresh_issues,
         "error_hints": _ERROR_HINTS,
         "ops_note_ru": (
-            "Сравните live_probe (сейчас) с entry_telemetry (история BUY). "
-            "Если live ok, а в истории feature_mismatch — фикс уже на новых сделках; старые не пересчитываются."
+            "Сравните live_probe (сейчас) с entry_telemetry (история BUY) и post_issue (после последнего сбоя). "
+            "Если live ok и mismatch_since_last_bad=0, но в окне есть старые mismatch — фикс на новых сделках; "
+            "старые строки не пересчитываются."
         ),
     }
 

@@ -32,7 +32,24 @@ def test_build_diagnostics_without_engine():
     out = build_ml_runtime_readiness_diagnostics(None, days=7)
     assert "live_entry_probes" in out
     assert "priority_blockers" in out
+    assert "progress_summary_ru" in out
+    assert "ml_refresh_artifact_flags" in out
     assert out["overall_runtime_health"] in ("healthy", "blocked_schema", "blocked_telemetry", "collecting")
+
+
+def test_post_issue_narrative_waiting_for_buys():
+    from services.ml_runtime_readiness import _post_issue_narrative
+    from datetime import datetime
+
+    msg = _post_issue_narrative(
+        contour_id="catboost_entry_bar_v2",
+        last_bad_at=datetime(2026, 6, 25),
+        buys_since=0,
+        ok_since=0,
+        mismatch_since=0,
+        last_buy_at=datetime(2026, 6, 25),
+    )
+    assert "новых BUY" in msg
 
 
 def test_probe_all_entry_shadow_contours_structure():

@@ -220,7 +220,8 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
     ),
     "ml_runtime_readiness_diagnostics": (
         "Сводка live ML probes + telemetry в trade_history: feature_mismatch, missing status, мало ok rows. "
-        "Объясняет, почему shadow/apply не прогрессирует (см. services/ml_runtime_readiness.py)."
+        "post_issue — BUY после последнего bad status; progress_summary_ru — почему shadow/apply стоит. "
+        "См. services/ml_runtime_readiness.py."
     ),
     "game5m_oracle_exit_ceiling": (
         "Offline ceiling: доля захваченного upside vs лучший RTH high между entry и exit (5m OHLC, 09:30–16:00 ET). "
