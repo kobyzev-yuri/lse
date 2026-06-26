@@ -35,11 +35,9 @@ def _is_equity_earnings_symbol(sym: str) -> bool:
 
 
 def _yfinance_earnings_ticker_list() -> List[str]:
-    raw = (get_config_value("YFINANCE_EARNINGS_TICKERS", "") or "").strip()
-    if raw:
-        return [t.strip().upper() for t in raw.split(",") if t.strip() and _is_equity_earnings_symbol(t.strip())]
-    raw2 = get_config_value("EARNINGS_TRACK_TICKERS", "MSFT,SNDK,MU,LITE,ALAB,TER") or ""
-    return [t.strip().upper() for t in raw2.split(",") if t.strip() and _is_equity_earnings_symbol(t.strip())]
+    from services.earnings_intelligence_universe import get_earnings_calendar_tickers
+
+    return get_earnings_calendar_tickers()
 
 
 def _report_datetime_from_index(ts: Any) -> Optional[datetime]:

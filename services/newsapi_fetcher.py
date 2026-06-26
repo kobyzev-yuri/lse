@@ -338,11 +338,12 @@ def fetch_equity_news(api_key: str) -> Tuple[List[Dict], bool]:
         return [], False
 
     tickers_src = (get_config_value("NEWSAPI_EQUITY_TICKERS", "") or "").strip()
-    if not tickers_src:
-        tickers_src = (get_config_value("EARNINGS_TRACK_TICKERS", "") or "").strip()
-    if not tickers_src:
-        tickers_src = (get_config_value("TICKERS_FAST", "SNDK,MU,MSFT") or "").strip()
-    tickers = [t.strip() for t in tickers_src.split(",") if t.strip()][:12]
+    if tickers_src:
+        tickers = [t.strip() for t in tickers_src.split(",") if t.strip()][:12]
+    else:
+        from services.earnings_intelligence_universe import get_earnings_calendar_tickers
+
+        tickers = get_earnings_calendar_tickers()[:12]
 
     parts: List[str] = []
     for t in tickers:

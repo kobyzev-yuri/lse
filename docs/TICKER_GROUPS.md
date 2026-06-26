@@ -100,8 +100,9 @@ all_ = get_all_ticker_groups()  # быстрые → средние → долг
 
 - **Alpha Vantage:** в `config.env` добавьте тикер в список для новостей:
   ```bash
-  EARNINGS_TRACK_TICKERS=MSFT,SNDK,MU,LITE,ALAB,TER,AMD
+  EARNINGS_TRACK_TICKERS=MSFT,SNDK,MU,LITE,ALAB,TER,AMD,NVDA
   ```
+  Если `EARNINGS_TRACK_TICKERS` задан — Yahoo earnings calendar всё равно **добавляет union** из `get_earnings_intelligence_universe()` (NVDA, DELL, GOOGL, …). Полный дефолт: `DEFAULT_EARNINGS_TRACK_TICKERS` в `services/earnings_intelligence_universe.py`.
 
 - **LLM-новости** (если используете): добавьте в
   ```bash

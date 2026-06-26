@@ -1,6 +1,7 @@
 """Ticker universe for earnings intelligence (GAME_5M + portfolio + spillover context)."""
 from __future__ import annotations
 
+from config_loader import get_config_value
 from services.ticker_groups import (
     get_config_ticker_symbols_upper_unique,
     get_game_5m_correlation_context,
@@ -12,6 +13,7 @@ from services.ticker_groups import (
 # Always include major spillover names even if absent from config.env universe.
 _EXTRA_EQUITY_SYMBOLS: tuple[str, ...] = (
     "NVDA",
+    "TSM",
     "GOOGL",
     "AVGO",
     "ANET",
@@ -19,6 +21,14 @@ _EXTRA_EQUITY_SYMBOLS: tuple[str, ...] = (
     "PLTR",
     "ARM",
     "INTC",
+)
+
+# Default yfinance earnings calendar when EARNINGS_TRACK_TICKERS / YFINANCE_EARNINGS_TICKERS unset.
+# GAME_5M names + megacap / semi market movers (NVDA, TSM, …).
+DEFAULT_EARNINGS_TRACK_TICKERS: str = (
+    "SNDK,NBIS,ASML,MU,LITE,CIEN,ALAB,TER,"
+    "NVDA,AMD,AVGO,INTC,ARM,ANET,DELL,TSM,"
+    "MSFT,META,GOOGL,AMZN,ORCL,PLTR"
 )
 
 # ETFs / macro / forex — useful for correlation, not earnings material ingest.
@@ -88,6 +98,38 @@ def get_earnings_intelligence_universe(*, include_correlation_context: bool = Tr
 
 def universe_symbols_csv(*, include_correlation_context: bool = True) -> str:
     return ",".join(get_earnings_intelligence_universe(include_correlation_context=include_correlation_context))
+
+
+def _parse_ticker_csv(raw: str) -> list[str]:
+    return [t.strip() for t in (raw or "").split(",") if t.strip()]
+
+
+def get_earnings_calendar_tickers() -> list[str]:
+    """
+    Tickers for Yahoo/yfinance earnings KB seeding (and NewsAPI equity fallback).
+
+    Union of:
+    - YFINANCE_EARNINGS_TICKERS or EARNINGS_TRACK_TICKERS from config (if set)
+    - else DEFAULT_EARNINGS_TRACK_TICKERS
+    - always: equities from get_earnings_intelligence_universe (NVDA, DELL, … even when config is slim)
+    """
+    yf_raw = (get_config_value("YFINANCE_EARNINGS_TICKERS", "") or "").strip()
+    if yf_raw:
+        explicit = _parse_ticker_csv(yf_raw)
+    else:
+        track_raw = (get_config_value("EARNINGS_TRACK_TICKERS", "") or "").strip()
+        explicit = _parse_ticker_csv(track_raw) if track_raw else _parse_ticker_csv(DEFAULT_EARNINGS_TRACK_TICKERS)
+
+    candidates = list(explicit) + list(get_earnings_intelligence_universe(include_correlation_context=False))
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in candidates:
+        sym = str(raw).strip().upper()
+        if not is_equity_symbol(sym) or sym in seen:
+            continue
+        seen.add(sym)
+        out.append(sym)
+    return sorted(out)
 
 
 def get_event_reaction_symbol_allowlist() -> list[str]:

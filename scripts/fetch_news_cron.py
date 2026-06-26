@@ -86,8 +86,9 @@ def fetch_all_news_sources(mode: str = "all"):
         try:
             logger.info("\n📊 Источник core-fast 2/3: Alpha Vantage API")
             # Получаем тикеры из конфига или используем дефолтные (get_config_value — импорт на уровне модуля)
-            tickers_str = get_config_value('EARNINGS_TRACK_TICKERS', 'MSFT,SNDK,MU,LITE,ALAB,TER')
-            tickers = [t.strip() for t in tickers_str.split(',')]
+            from services.earnings_intelligence_universe import get_earnings_calendar_tickers
+
+            tickers = get_earnings_calendar_tickers()
 
             # По умолчанию выключено: бесплатный план Alpha Vantage — 25 запросов/день и 1 запрос/сек;
             # экономические и технические индикаторы быстро сжигают лимит. Включите в config.env при необходимости.
