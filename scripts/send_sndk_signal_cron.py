@@ -1301,7 +1301,7 @@ def main():
             sys.exit(0)
         if phase == "PRE_MARKET":
             from config_loader import get_config_value as _cfg_pm
-            from services.game5m_overnight_policy import should_premarket_auto_flat
+            from services.game5m_overnight_policy import evaluate_premarket_flat_decision
 
             pm_flat_enabled = (_cfg_pm("GAME_5M_PREMARKET_AUTO_FLAT_ENABLED", "false") or "false").strip().lower() in (
                 "1",
@@ -1333,10 +1333,32 @@ def main():
                         continue
                     pm_ctx = get_premarket_context(ticker)
                     gap_pm = pm_ctx.get("premarket_gap_pct") if isinstance(pm_ctx, dict) else None
-                    do_flat, flat_reason = should_premarket_auto_flat(d5_pm, premarket_gap_pct=gap_pm)
-                    if not do_flat:
-                        continue
                     price_pm = float(d5_pm["price"])
+                    entry_price_pm = open_pos.get("entry_price")
+                    pnl_pm = None
+                    if isinstance(entry_price_pm, (int, float)) and float(entry_price_pm) > 0:
+                        pnl_pm = (price_pm - float(entry_price_pm)) / float(entry_price_pm) * 100.0
+                    strat_nm_pm = (open_pos.get("strategy_name") or "GAME_5M").strip() or "GAME_5M"
+                    entry_ctx_pm = get_latest_buy_context_json(ticker, strat_nm_pm)
+                    pm_eval = evaluate_premarket_flat_decision(
+                        d5_pm,
+                        premarket_gap_pct=gap_pm,
+                        pnl_current_pct=pnl_pm,
+                        entry_ctx=entry_ctx_pm,
+                        open_position=open_pos,
+                        current_price=price_pm,
+                    )
+                    do_flat = bool(pm_eval.get("should_flat"))
+                    flat_reason = pm_eval.get("flat_reason") or "; ".join(pm_eval.get("flat_reasons") or [])
+                    if not do_flat:
+                        if pm_eval.get("hold_reasons"):
+                            logger.info(
+                                "PRE_MARKET %s: premarket flat deferred — %s (triggers: %s)",
+                                ticker,
+                                pm_eval.get("defer_reason"),
+                                "; ".join(pm_eval.get("flat_reasons") or []),
+                            )
+                        continue
                     close_ctx_pm = build_5m_close_context(d5_pm)
                     decision_pm = d5_pm.get("technical_decision_core") or d5_pm.get("decision", "HOLD")
                     should_close_pm, exit_type_pm, exit_detail_pm = should_close_position(
@@ -1355,7 +1377,6 @@ def main():
                         should_close_pm, exit_type_pm, exit_detail_pm = True, "TIME_EXIT", "overnight_premarket_flat"
                     exit_price_pm = price_pm
                     strat_nm = (open_pos.get("strategy_name") or "GAME_5M").strip() or "GAME_5M"
-                    entry_ctx_pm = get_latest_buy_context_json(ticker, strat_nm)
                     close_ctx_enriched_pm = merge_close_context_with_trade_narrative(
                         close_ctx_pm,
                         d5=d5_pm,
@@ -1370,6 +1391,7 @@ def main():
                     close_ctx_enriched_pm["overnight_premarket_flat"] = {
                         "reason": flat_reason,
                         "premarket_gap_pct": gap_pm,
+                        "policy": pm_eval,
                     }
                     try:
                         from services.game5m_active_tactic import enrich_context_with_active_tactic
