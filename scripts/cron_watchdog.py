@@ -148,6 +148,28 @@ def _parse_log_line_ts_utc(line: str) -> datetime | None:
             return None
 
 
+def _last_success_line_idx(lines: list[str]) -> int:
+    """Last line with a successful cron completion marker (append-only job logs)."""
+    pat = re.compile(r"\bINFO\b.*\bГотово:", re.IGNORECASE)
+    for i in range(len(lines) - 1, -1, -1):
+        line = lines[i]
+        if pat.search(line) and _parse_log_line_ts_utc(line) is not None:
+            return i
+    return -1
+
+
+def _line_in_recent_context(lines: list[str], idx: int, cutoff: datetime | None) -> bool:
+    """Timestamped line or traceback block tied to a recent parent line."""
+    ts = _parse_log_line_ts_utc(lines[idx])
+    if ts is not None:
+        return cutoff is None or ts >= cutoff
+    for j in range(idx, max(-1, idx - 40), -1):
+        ts_back = _parse_log_line_ts_utc(lines[j])
+        if ts_back is not None:
+            return cutoff is None or ts_back >= cutoff
+    return False
+
+
 def scan_log_dir(
     logs_dir: Path,
     tail: int,
@@ -176,15 +198,17 @@ def scan_log_dir(
             continue
         log_path = logs_dir / log_name
         lines = tail_lines(log_path, tail)
+        last_ok_idx = _last_success_line_idx(lines)
         for i, line in enumerate(lines, start=1):
             # i — номер строки в прочитанном хвосте (последние tail строк файла)
             line_stripped = line.rstrip("\n\r")
             if not line_stripped.strip():
                 continue
-            if cutoff is not None:
-                ts = _parse_log_line_ts_utc(line_stripped)
-                if ts is not None and ts < cutoff:
-                    continue
+            line_idx0 = i - 1
+            if last_ok_idx >= 0 and line_idx0 < last_ok_idx:
+                continue
+            if not _line_in_recent_context(lines, line_idx0, cutoff):
+                continue
             if line_matches_error(line_stripped, include_warnings):
                 # храним: имя файла, номер строки (примерный), текст (обрезанный)
                 short = line_stripped[:500] + ("..." if len(line_stripped) > 500 else "")

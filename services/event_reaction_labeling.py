@@ -801,9 +801,15 @@ def load_peer_graph_targets(
     return out
 
 
-def enrich_features_with_peer_graph(base: Dict[str, Any], *, source_symbol: str) -> Dict[str, Any]:
+def enrich_features_with_peer_graph(
+    base: Dict[str, Any],
+    *,
+    source_symbol: str,
+    peer_edges: Optional[list[tuple[str, float]]] = None,
+    db: Optional[LabelingDb] = None,
+) -> Dict[str, Any]:
     out = dict(base)
-    edges = load_peer_graph_targets(source_symbol)
+    edges = peer_edges if peer_edges is not None else load_peer_graph_targets(source_symbol, db=db)
     if not edges:
         out["peer_graph_present"] = 0.0
         out["peer_graph_out_degree"] = 0.0
@@ -899,7 +905,7 @@ def build_features_before(
         )
         out = enrich_features_with_earnings_detail(out, detail)
         peer_edges = load_peer_graph_targets(sym_u, db=db)
-        out = enrich_features_with_peer_graph(out, source_symbol=sym_u)
+        out = enrich_features_with_peer_graph(out, source_symbol=sym_u, peer_edges=peer_edges, db=db)
         out = enrich_features_with_peer_momentum(
             out,
             as_of_d=dates[i],

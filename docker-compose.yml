@@ -10,6 +10,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lse_pg_pass}
       POSTGRES_DB: lse_trading
+    command: ["postgres", "-c", "max_connections=150"]
     volumes:
       - lse_pgdata:/var/lib/postgresql/data
     ports:
@@ -45,6 +46,8 @@ services:
       - ./local:/app/local
     environment:
       TZ: Europe/Moscow
+      LSE_RUNTIME: web
+      LSE_DB_ENGINE_POOL: pooled
       GAME5M_TUNING_LEDGER: /app/local/game5m_tuning_ledger.json
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-lse_pg_pass}@postgres:5432/lse_trading?options=-c%20timezone%3DEurope%2FMoscow
     depends_on:

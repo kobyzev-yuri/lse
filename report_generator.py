@@ -5,7 +5,7 @@ from typing import Any, Optional, Dict, List
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
 from config_loader import get_database_url
 
@@ -131,21 +131,11 @@ class OpenPosition:
     buy_leg_count: int = 1  # число BUY подряд в текущей открытой позиции (до полного SELL)
 
 
-_engine = None
-
-
 def get_engine():
     """Shared SQLAlchemy engine (one pool per process)."""
-    global _engine
-    if _engine is None:
-        _engine = create_engine(
-            get_database_url(),
-            pool_pre_ping=True,
-            pool_size=3,
-            max_overflow=5,
-            pool_recycle=3600,
-        )
-    return _engine
+    from services.db_engine import get_db_engine
+
+    return get_db_engine()
 
 
 def load_trade_history(engine, strategy_name: Optional[str] = None) -> pd.DataFrame:

@@ -28,11 +28,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResp
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
 import numpy as np
 
 from analyst_agent import AnalystAgent
+from services.db_engine import get_db_engine
 from config_loader import (
     get_database_url,
     get_use_llm_for_analyst,
@@ -356,7 +357,7 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 # Инициализация агентов
 db_url = get_database_url()
-engine = create_engine(db_url)
+engine = get_db_engine()
 
 
 def _now_et() -> datetime:

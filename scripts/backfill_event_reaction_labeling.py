@@ -214,6 +214,7 @@ def main() -> int:
     skip_reasons: Counter[str] = Counter()
 
     with LabelingDb(engine) as ldb:
+        conn = ldb.connection()
         for r in rows:
             d = _row_from_db(r)
             rid = int(d["id"])
@@ -242,9 +243,10 @@ def main() -> int:
                 logger.info("dry-run id=%s keys=%s", rid, list(upd.keys()))
                 updated += 1
                 continue
-            with engine.begin() as conn:
-                _apply_update(conn, rid, upd, json_dumps_obj)
+            _apply_update(conn, rid, upd, json_dumps_obj)
             updated += 1
+        if not args.dry_run and updated:
+            conn.commit()
 
     logger.info(
         "Готово: candidates=%s updated/would=%s skipped_empty=%s partial_warnings=%s dry_run=%s",
