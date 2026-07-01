@@ -61,12 +61,22 @@
     }
 
     let configEnvData = [];
+
+    function apiUrl(path) {
+        try {
+            return new URL(path, window.location.origin).href;
+        } catch (err) {
+            return path;
+        }
+    }
+
     async function loadConfigEnv() {
         const tbody = document.getElementById('configEnvTableBody');
         try {
-            const resp = await fetch('/api/config/env');
+            const resp = await fetch(apiUrl('/api/config/env'));
             const data = await resp.json();
-            if (!resp.ok) throw new Error(data.detail || 'Ошибка загрузки');
+            if (!resp.ok) throw new Error(data.detail || ('HTTP ' + resp.status));
+            if (!Array.isArray(data)) throw new Error(data.detail || 'Неверный формат ответа API');
             configEnvData = data;
             tbody.innerHTML = '';
             data.forEach(function(row, idx) {
@@ -90,7 +100,8 @@
                 });
             });
         } catch (e) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-danger">Ошибка загрузки config.env</td></tr>';
+            const msg = (e && e.message) ? e.message : String(e);
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-danger">Ошибка загрузки config.env: ' + escapeHtml(msg) + '<br><span class="muted" style="font-size:0.85rem;">Откройте страницу без логина в URL: <code>http://' + escapeHtml(window.location.host || 'HOST:8080') + '/parameters</code></span></td></tr>';
         }
     }
 
@@ -112,7 +123,7 @@
             const fd = new FormData();
             fd.append('key', key);
             fd.append('value', value);
-            const resp = await fetch('/api/config/env', { method: 'POST', body: fd });
+            const resp = await fetch(apiUrl('/api/config/env'), { method: 'POST', body: fd });
             const res = await resp.json();
             if (resp.ok && res.status === 'success') {
                 closeConfigEnvModal();
@@ -132,7 +143,7 @@
         statusEl.textContent = 'Выполняю перезапуск…';
         statusEl.classList.remove('muted', 'positive', 'negative');
         try {
-            const resp = await fetch('/api/config/restart', { method: 'POST' });
+            const resp = await fetch(apiUrl('/api/config/restart'), { method: 'POST' });
             const res = await resp.json();
             if (res.ok) {
                 statusEl.textContent = res.message || 'Перезапуск выполнен. Страница может перезагрузиться.';
