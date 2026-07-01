@@ -1,0 +1,16 @@
+<script>
+(function () {
+    if (!window.location.origin) return;
+    var nativeFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+        if (typeof input === 'string' && input.charAt(0) === '/') {
+            input = new URL(input, window.location.origin).href;
+        }
+        return nativeFetch(input, init);
+    };
+    window.lseApiUrl = function (path) {
+        try { return new URL(path, window.location.origin).href; }
+        catch (e) { return path; }
+    };
+})();
+</script>
