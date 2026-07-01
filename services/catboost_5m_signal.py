@@ -283,6 +283,16 @@ def predict_entry_favorability_from_saved_context(ticker: str, entry_context: An
     return out
 
 
+def catboost_entry_dataset_version() -> str:
+    """trade = closed-trade v1 model; bar = entry_bar_v2 triple-barrier model."""
+    from config_loader import get_config_value
+
+    raw = (get_config_value("GAME_5M_CATBOOST_DATASET_VERSION", "trade") or "trade").strip().lower()
+    if raw in ("bar", "v2", "bar_v2", "entry_bar_v2"):
+        return "bar"
+    return "trade"
+
+
 def _default_bar_v2_model_path() -> str:
     from config_loader import get_config_value
 
@@ -301,28 +311,32 @@ def _bar_v2_log_enabled() -> bool:
     return raw in ("1", "true", "yes")
 
 
+def _price_to_low5d_ratio(d5: Dict[str, Any]) -> float:
+    high_5d = _safe_float(d5.get("high_5d"), 0.0)
+    low_5d = _safe_float(d5.get("low_5d"), 0.0)
+    price = _safe_float(d5.get("price"), 0.0)
+    if high_5d > low_5d and price > 0:
+        return (price - low_5d) / (high_5d - low_5d)
+    return 0.5
+
+
 def build_catboost_bar_v2_feature_row(
     ticker: str,
     d5: Dict[str, Any],
     *,
     mode: str = "tech",
 ) -> Tuple[List[str], List[Any]]:
-    """Feature row for bar-level entry v2 (subset of live 5m payload)."""
+    """Feature row for bar-level entry v2 (tech + optional T+N+C context)."""
     from services.game5m_entry_bar_dataset import (
         FeatureMode,
         get_bar_train_feature_schema,
         row_from_bar_dataset_dict,
     )
 
-    high_5d = _safe_float(d5.get("high_5d"), 0.0)
-    low_5d = _safe_float(d5.get("low_5d"), 0.0)
-    price = _safe_float(d5.get("price"), 0.0)
-    if high_5d > low_5d and price > 0:
-        price_to_low5d_ratio = (price - low_5d) / (high_5d - low_5d)
-    else:
-        price_to_low5d_ratio = 0.5
-    row_dict = {
-        "ticker": ticker,
+    sym = str(ticker or "").strip().upper()
+    feat_mode: FeatureMode = "full" if mode == "full" else "tech"
+    row_dict: Dict[str, Any] = {
+        "ticker": sym,
         "rsi_5m": d5.get("rsi_5m"),
         "momentum_2h_pct": d5.get("momentum_2h_pct"),
         "momentum_rth_today_pct": d5.get("momentum_rth_today_pct"),
@@ -330,16 +344,43 @@ def build_catboost_bar_v2_feature_row(
         "pullback_from_high_pct": d5.get("pullback_from_high_pct"),
         "bars_count": d5.get("bars_count"),
         "momentum_rth_today_bars": d5.get("momentum_rth_today_bars"),
-        "price_to_low5d_ratio": price_to_low5d_ratio,
+        "price_to_low5d_ratio": _price_to_low5d_ratio(d5),
+        "prob_up": d5.get("prob_up"),
+        "prob_down": d5.get("prob_down"),
+        "macro_risk_level": d5.get("macro_risk_level"),
+        "ndx_gap_pct": d5.get("ndx_gap_pct"),
+        "spy_gap_pct": d5.get("spy_gap_pct"),
+        "premarket_gap_pct": d5.get("premarket_gap_pct"),
+        "llm_sentiment": d5.get("llm_sentiment"),
     }
-    feat_mode: FeatureMode = "full" if mode == "full" else "tech"
+    if feat_mode == "full":
+        ms = d5.get("market_session") or {}
+        bar_ts = (
+            d5.get("decision_5m_bar_open_et")
+            or d5.get("bar_ts_et")
+            or ms.get("now_et")
+            or ""
+        )
+        if bar_ts:
+            try:
+                from services.game5m_ml_context_features import build_entry_context_features
+
+                ctx = build_entry_context_features(
+                    ticker=sym,
+                    bar_ts_et=str(bar_ts),
+                    features=row_dict,
+                    entry_context=d5,
+                )
+                row_dict.update(ctx)
+            except Exception as e:
+                logger.debug("bar v2 context enrich %s: %s", sym, e)
     colnames, _ = get_bar_train_feature_schema(feat_mode)
-    return colnames, row_from_bar_dataset_dict(row_dict, ticker, mode=feat_mode)
+    return colnames, row_from_bar_dataset_dict(row_dict, sym, mode=feat_mode)
 
 
-def _catboost_bar_v2_runtime_guards() -> Tuple[str, str, Optional[str], Optional[Tuple[Any, Dict[str, Any]]]]:
-    """Shadow v2 path: does not require GAME_5M_CATBOOST_ENABLED."""
-    if not _bar_v2_log_enabled():
+def _catboost_bar_v2_runtime_guards(*, require_log_flag: bool = True) -> Tuple[str, str, Optional[str], Optional[Tuple[Any, Dict[str, Any]]]]:
+    """Load bar v2 model. require_log_flag=False when fusion path uses GAME_5M_CATBOOST_ENABLED."""
+    if require_log_flag and not _bar_v2_log_enabled():
         return "disabled", "Bar v2 log_only выключен (GAME_5M_CATBOOST_BAR_V2_LOG_ENABLED).", None, None
 
     try:
@@ -364,35 +405,65 @@ def _catboost_bar_v2_runtime_guards() -> Tuple[str, str, Optional[str], Optional
     return "ready", "", model_path, bundle
 
 
+def _predict_catboost_bar_v2(
+    ticker: str,
+    d5: Dict[str, Any],
+    *,
+    require_log_flag: bool = True,
+) -> Tuple[str, Optional[float], str, str]:
+    """Returns (status, p_good, note, model_path)."""
+    st_g, note_g, model_path, bundle = _catboost_bar_v2_runtime_guards(require_log_flag=require_log_flag)
+    if st_g != "ready" or bundle is None:
+        return st_g, None, note_g, model_path or ""
+
+    model, meta = bundle
+    from services.game5m_entry_bar_dataset import resolve_bar_v2_feature_mode
+
+    feat_mode = resolve_bar_v2_feature_mode(meta)
+    colnames, row = build_catboost_bar_v2_feature_row(ticker, d5, mode=feat_mode)
+    p_st, p_good, p_note = _catboost_predict_proba_row(model, meta, colnames, row)
+    return p_st, p_good, p_note, model_path or ""
+
+
+def _set_bar_v2_predict_fields(
+    out: Dict[str, Any],
+    *,
+    p_st: str,
+    p_good: Optional[float],
+    p_note: str,
+    fusion_active: bool,
+) -> None:
+    out["catboost_bar_v2_signal_status"] = p_st
+    out["catboost_entry_proba_good_v2"] = p_good
+    out["catboost_dataset_version"] = "bar"
+    if p_st != "ok":
+        out["catboost_bar_v2_signal_note"] = p_note
+        return
+    if fusion_active:
+        out["catboost_bar_v2_signal_note"] = (
+            f"CatBoost bar v2 (fusion): P(upper barrier first)≈{p_good:.2f}."
+        )
+    else:
+        out["catboost_bar_v2_signal_note"] = (
+            f"CatBoost bar v2 (shadow): P(upper barrier first)≈{p_good:.2f} — log_only."
+        )
+
+
 def attach_catboost_bar_v2_signal(out: Dict[str, Any], ticker: str) -> None:
     """
-    Shadow telemetry for bar-level entry CatBoost v2 (log_only; never changes decision/fusion).
+    Bar-level entry CatBoost v2 telemetry. When fusion already ran via attach_catboost_signal
+    (GAME_5M_CATBOOST_DATASET_VERSION=bar), skips duplicate predict.
     """
     out.setdefault("catboost_bar_v2_signal_status", "skipped")
     out.setdefault("catboost_bar_v2_signal_note", "")
     out.setdefault("catboost_entry_proba_good_v2", None)
 
-    st_g, note_g, _mp, bundle = _catboost_bar_v2_runtime_guards()
-    if st_g != "ready" or bundle is None:
-        out["catboost_bar_v2_signal_status"] = st_g
-        out["catboost_bar_v2_signal_note"] = note_g
+    if out.get("catboost_bar_v2_signal_status") == "ok" and out.get("catboost_entry_proba_good_v2") is not None:
         return
 
-    model, meta = bundle
     try:
-        from services.game5m_entry_bar_dataset import resolve_bar_v2_feature_mode
-
-        feat_mode = resolve_bar_v2_feature_mode(meta)
-        colnames, row = build_catboost_bar_v2_feature_row(ticker, out, mode=feat_mode)
-        p_st, p_good, p_note = _catboost_predict_proba_row(model, meta, colnames, row)
-        out["catboost_bar_v2_signal_status"] = p_st
-        out["catboost_entry_proba_good_v2"] = p_good
-        if p_st != "ok":
-            out["catboost_bar_v2_signal_note"] = p_note
-            return
-        out["catboost_bar_v2_signal_note"] = (
-            f"CatBoost bar v2 (shadow): P(upper barrier first)≈{p_good:.2f} — log_only, правила входа не меняются."
-        )
+        p_st, p_good, p_note, _mp = _predict_catboost_bar_v2(ticker, out, require_log_flag=True)
+        _set_bar_v2_predict_fields(out, p_st=p_st, p_good=p_good, p_note=p_note, fusion_active=False)
     except Exception as e:
         logger.warning("CatBoost bar v2 predict: %s", e)
         out["catboost_bar_v2_signal_status"] = "predict_error"
@@ -402,8 +473,38 @@ def attach_catboost_bar_v2_signal(out: Dict[str, Any], ticker: str) -> None:
 def attach_catboost_signal(out: Dict[str, Any], ticker: str) -> None:
     """
     Добавляет в out поля catboost_*; не бросает исключений наружу.
+
+    GAME_5M_CATBOOST_DATASET_VERSION=bar → entry_bar_v2 model (triple-barrier y_entry_good).
     """
     from config_loader import get_config_value
+
+    if catboost_entry_dataset_version() == "bar":
+        out.setdefault("catboost_signal_status", "skipped")
+        out.setdefault("catboost_signal_note", "")
+        out.setdefault("catboost_entry_proba_good", None)
+        try:
+            p_st, p_good, p_note, _mp = _predict_catboost_bar_v2(ticker, out, require_log_flag=False)
+            out["catboost_signal_status"] = p_st
+            out["catboost_entry_proba_good"] = p_good
+            _set_bar_v2_predict_fields(out, p_st=p_st, p_good=p_good, p_note=p_note, fusion_active=True)
+            if p_st != "ok":
+                out["catboost_signal_note"] = p_note
+                return
+            out["catboost_signal_note"] = (
+                f"CatBoost bar v2: P(upper barrier first)≈{p_good:.2f} — "
+                f"метка triple-barrier (y_entry_good)."
+            )
+            raw_append = (get_config_value("GAME_5M_CATBOOST_APPEND_REASONING", "false") or "false").strip().lower()
+            if raw_append in ("1", "true", "yes") and out.get("reasoning"):
+                out["reasoning"] = (
+                    str(out["reasoning"]).rstrip()
+                    + f" [CatBoost bar v2 P≈{p_good:.2f}]"
+                )
+        except Exception as e:
+            logger.warning("CatBoost bar v2 fusion predict: %s", e)
+            out["catboost_signal_status"] = "predict_error"
+            out["catboost_signal_note"] = str(e)
+        return
 
     st_g, note_g, _mp, bundle = _catboost_runtime_guards()
     if st_g != "ready" or bundle is None:
@@ -420,8 +521,9 @@ def attach_catboost_signal(out: Dict[str, Any], ticker: str) -> None:
         if p_st != "ok":
             out["catboost_signal_note"] = p_note
             return
+        out["catboost_dataset_version"] = "trade"
         out["catboost_signal_note"] = (
-            f"CatBoost: оценка P(благоприятный исход по истории)≈{p_good:.2f} — "
+            f"CatBoost trade v1: P(net_pnl>0)≈{p_good:.2f} — "
             f"только справочно, правила входа не меняются."
         )
         raw_append = (get_config_value("GAME_5M_CATBOOST_APPEND_REASONING", "false") or "false").strip().lower()
@@ -452,9 +554,12 @@ def finalize_technical_decision_with_catboost(out: Dict[str, Any]) -> None:
 
     fusion = (get_config_value("GAME_5M_CATBOOST_FUSION", "none") or "none").strip().lower()
     out["catboost_fusion_mode"] = fusion
+    ds_ver = catboost_entry_dataset_version()
+    out["catboost_dataset_version"] = out.get("catboost_dataset_version") or ds_ver
 
     effective = core
     note: Optional[str] = None
+    model_label = "bar v2" if ds_ver == "bar" else "trade v1"
 
     if fusion == "hold_if_buy_below_p":
         try:
@@ -470,7 +575,7 @@ def finalize_technical_decision_with_catboost(out: Dict[str, Any]) -> None:
             and float(p) < p_min
         ):
             effective = "HOLD"
-            note = f"P={float(p):.2f} < {p_min} (CatBoost) → HOLD"
+            note = f"P={float(p):.2f} < {p_min} (CatBoost {model_label}) → HOLD"
     elif fusion not in ("none", ""):
         note = f"Неизвестный GAME_5M_CATBOOST_FUSION={fusion!r} — итог = базовое решение"
 

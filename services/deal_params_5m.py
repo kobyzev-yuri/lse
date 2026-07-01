@@ -53,6 +53,7 @@ FULL_ENTRY_KEYS = (
     "catboost_signal_status",
     "catboost_entry_proba_good",
     "catboost_signal_note",
+    "catboost_dataset_version",
     "catboost_entry_proba_good_v2",
     "catboost_bar_v2_signal_status",
     "catboost_bar_v2_signal_note",

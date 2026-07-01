@@ -484,6 +484,8 @@ def _collect_catboost_contribution(d5: Dict[str, Any]) -> Optional[Dict[str, Any
             "catboost_entry_proba_good": p,
             "catboost_fusion_mode": fusion_mode,
             "catboost_signal_status": d5.get("catboost_signal_status"),
+            "catboost_dataset_version": d5.get("catboost_dataset_version"),
+            "catboost_entry_proba_good_v2": d5.get("catboost_entry_proba_good_v2"),
             "gate_mode": stack_gm,
             "would_downgrade": would_down,
             "trust_score": trust_score_for_contour(cid),
