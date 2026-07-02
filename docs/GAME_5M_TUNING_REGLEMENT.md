@@ -4,6 +4,8 @@
 
 **Оперативный журнал агента (Cursor):** [GAME_5M_AGENT_TUNING_LOG.md](GAME_5M_AGENT_TUNING_LOG.md) — предложения, что применено на прод до следующего прогона анализатора, post-session review.
 
+**Типовой анализ после каждой сессии:** [GAME_5M_SESSION_ANALYSIS_PLAYBOOK.md](GAME_5M_SESSION_ANALYSIS_PLAYBOOK.md) — чеклист, отчёты, порядок работы с анализатором и post-mortem.
+
 **Песочница (prod VM):** тактические пакеты (`game5m_tuning_bundles.py`) — **apply-first**, один смысловой bundle за раз; `log_only` только для чистого ML-shadow. Подробности режимов входа/выхода: [GAME_5M_DECISION_ARCHITECTURE.md](GAME_5M_DECISION_ARCHITECTURE.md) §3.1.
 
 **Центральная система принятия решений о настройке** — **анализатор эффективности сделок** (`services/trade_effectiveness_analyzer.py`): единый расчёт метрик по закрытым сделкам и снимку правил из `config.env`, доступный с веба, из Telegram и из CLI. Replay proposals и nightly ML **питаются теми же фактами** (закрытые GAME_5M, `context_json`, бары), но **не заменяют** анализатор: они дают узкие срезы (реплей выхода / обучение входа). Ниже §2 расписывает пайплайны анализатора; §3+ — как подключать replay и live-apply к этому циклу.

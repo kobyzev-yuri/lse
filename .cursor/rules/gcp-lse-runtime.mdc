@@ -6,10 +6,10 @@ alwaysApply: true
 # Live Runtime Access
 
 - For factual database, trade history, cron, and container checks, use the **live GCP VM** instead of local PostgreSQL.
-- **SSH (explicit):** `ssh ai8049520@104.154.205.58` — use this when no `Host` alias is configured.
+- **SSH (explicit):** `ssh ai8049520@104.197.166.185` — use this when no `Host` alias is configured.
 - **SSH (alias):** if `~/.ssh/config` defines e.g. `Host gcp-lse` with the same machine, `ssh gcp-lse` is equivalent.
 - The project runtime is in Docker containers on that host, especially `lse-bot` and `lse-postgres`.
-- Prefer: `ssh ai8049520@104.154.205.58 "docker exec lse-bot ..."` for Python/app checks and `ssh ai8049520@104.154.205.58 "docker exec lse-postgres ..."` for direct PostgreSQL checks.
+- Prefer: `ssh ai8049520@104.197.166.185 "docker exec lse-bot ..."` for Python/app checks and `ssh ai8049520@104.197.166.185 "docker exec lse-postgres ..."` for direct PostgreSQL checks.
 - Do not assume local `localhost:5432` has the production data.
 
 ## Deploy / “why my new file isn’t in the container”
@@ -17,7 +17,7 @@ alwaysApply: true
 - `lse-bot` runs from the Docker image filesystem (`/app/...`). **New repo files are not visible inside the container** until you **rebuild/redeploy the image**.
 - **Default deploy path — always GitHub push, never `scp` for code changes**:
   1. **Local**: commit + `git push origin main`
-  2. **GCP VM**: `ssh ai8049520@104.154.205.58 "cd /home/ai8049520/lse && ./scripts/deploy_from_github.sh"`
+  2. **GCP VM**: `ssh ai8049520@104.197.166.185 "cd /home/ai8049520/lse && ./scripts/deploy_from_github.sh"`
   - Reason: VM pulls from GitHub and rebuilds/restarts the runtime consistently; local has GitHub auth.
   - **Do not** deploy updated services/scripts to prod via `scp` + `docker cp` — that bypasses git, drifts from the image, and is lost on the next rebuild.
 - **`scp` / `docker cp` only for one-off ops** (uncommitted debug probe, emergency hotfix probe) — not for shipping feature work. After a probe, still push + `deploy_from_github.sh` so prod matches git.

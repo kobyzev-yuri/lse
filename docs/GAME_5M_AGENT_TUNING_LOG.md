@@ -11,6 +11,8 @@
 
 **Ежедневный отчёт:**
 - Скрипт: `scripts/game5m_daily_session_review.py` → `last_game5m_daily_session_review.json`
+- Post-mortem: `scripts/game5m_trade_postmortem.py` → JSONL + `last_game5m_postmortem_tactics.json` (cron вместе с review)
+- **Чеклист оператора:** [GAME_5M_SESSION_ANALYSIS_PLAYBOOK.md](GAME_5M_SESSION_ANALYSIS_PLAYBOOK.md)
 - Cron на VM: **включён** `35 23 * * 1-5` → `scripts/cron_game5m_daily_session_review.sh` (с 12.06.2026)
 - В отчёте: late-buy cutoff из config (90 мин → MSK), EOD-flat `distance_to_take`, rolling gap PM vs ML 14/30d
 

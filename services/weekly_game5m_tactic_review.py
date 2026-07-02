@@ -194,6 +194,18 @@ def build_weekly_game5m_tactic_review(
         by_bundle=by_bundle,
     )
 
+    postmortem_recs: List[str] = []
+    postmortem_tactics: Dict[str, Any] = {}
+    try:
+        from services.game5m_trade_postmortem import load_tactics_aggregate, recommendations_ru_from_tactics
+
+        postmortem_tactics = load_tactics_aggregate()
+        if postmortem_tactics:
+            postmortem_recs = recommendations_ru_from_tactics(postmortem_tactics)
+            recs = postmortem_recs + [r for r in recs if r not in postmortem_recs]
+    except Exception:
+        pass
+
     return {
         "mode": "weekly_game5m_tactic_review",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -213,6 +225,8 @@ def build_weekly_game5m_tactic_review(
         "multiday_lr_gates_arbiter": multiday_gates,
         "trades_by_bundle": by_bundle,
         "recommendations_ru": recs,
+        "postmortem_tactics": postmortem_tactics,
+        "postmortem_recommendations_ru": postmortem_recs,
         "tactic_context_keys": list(TACTIC_CONTEXT_KEYS),
         "ledger_path": str(ledger_raw or "default"),
     }

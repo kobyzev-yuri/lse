@@ -1682,12 +1682,21 @@ async def analyzer_tuning_status(top_n: int = 8):
     """GAME_5M tuning ledger status for Analyzer UI."""
     ledger = load_game5m_tuning_ledger()
     latest = ledger.get("latest_proposals") if isinstance(ledger.get("latest_proposals"), dict) else {}
+    postmortem_tactics = ledger.get("postmortem_tactics") if isinstance(ledger.get("postmortem_tactics"), dict) else {}
+    if not postmortem_tactics:
+        try:
+            from services.game5m_trade_postmortem import load_tactics_aggregate
+
+            postmortem_tactics = load_tactics_aggregate()
+        except Exception:
+            postmortem_tactics = {}
     return _to_jsonable(
         {
             "ok": True,
             "ledger": str(game5m_tuning_ledger_path()),
             "reglement": GAME5M_TUNING_REGLEMENT,
             "active_experiment": ledger.get("active_experiment"),
+            "postmortem_tactics": postmortem_tactics,
             "latest_generated_at_utc": latest.get("generated_at_utc"),
             "latest_selection": latest.get("selection"),
             "latest_proposal_count": len(latest.get("proposals") or []),
@@ -1698,6 +1707,37 @@ async def analyzer_tuning_status(top_n: int = 8):
                 "GAME_5M_TAKE_PROFIT_PCT": current_config_value("GAME_5M_TAKE_PROFIT_PCT"),
                 "GAME_5M_MAX_POSITION_DAYS": current_config_value("GAME_5M_MAX_POSITION_DAYS"),
             },
+        }
+    )
+
+
+@app.get("/api/game5m/postmortem-tactics", response_class=JSONResponse)
+async def api_game5m_postmortem_tactics(window_days: int = 14):
+    """Rolling post-mortem tactics (JSONL aggregate) for entry/exit decision queue."""
+    from services.game5m_trade_postmortem import load_tactics_aggregate, load_postmortem_sessions, last_session_snapshot_path
+
+    tactics = load_tactics_aggregate()
+    if not tactics:
+        sessions = load_postmortem_sessions()
+        if sessions:
+            from services.game5m_trade_postmortem import build_tactics_payload
+
+            tactics = build_tactics_payload(sessions, window_days=max(1, min(int(window_days), 90)))
+    last_sess = {}
+    snap = last_session_snapshot_path()
+    if snap.is_file():
+        try:
+            import json as _json
+
+            last_sess = _json.loads(snap.read_text(encoding="utf-8"))
+        except Exception:
+            last_sess = {}
+    return _to_jsonable(
+        {
+            "ok": True,
+            "window_days": window_days,
+            "last_session": last_sess,
+            "tactics": tactics,
         }
     )
 

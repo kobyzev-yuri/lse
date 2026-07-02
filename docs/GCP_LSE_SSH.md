@@ -8,8 +8,9 @@
 
 ```ssh-config
 # Новый хост GCP для LSE — внешний IP см. HostName; ключ в authorized_keys на VM
+# После stop/start ephemeral IP может смениться (проверьте в Cloud Console).
 Host gcp-lse
-    HostName 104.154.205.58
+    HostName 104.197.166.185
     User ai8049520
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null

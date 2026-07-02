@@ -1277,6 +1277,20 @@ function renderTuningStatus(data) {
     } else {
         html += '<span class="muted">Active experiment отсутствует. Можно применить bundle или один параметр.</span>';
     }
+    const pm = (data && data.postmortem_tactics) || null;
+    if (pm && (pm.training_focus || pm.tactic_recommendations)) {
+        html += '<br><strong>Post-mortem (' + esc(pm.training_focus || '—') + ')</strong>';
+        if (pm.tag_counts_rolling) {
+            html += ' · A=' + esc(pm.tag_counts_rolling.A || 0);
+            html += ' B=' + esc(pm.tag_counts_rolling.B || 0);
+            html += ' C=' + esc(pm.tag_counts_rolling.C || 0);
+        }
+        html += '<ul style="margin:0.35rem 0 0 1rem;padding:0;">';
+        (pm.tactic_recommendations || []).slice(0, 4).forEach(function (rec) {
+            html += '<li><span class="muted">[' + esc(rec.priority || '') + ']</span> ' + esc(rec.rationale_ru || '') + '</li>';
+        });
+        html += '</ul>';
+    }
     statusEl.innerHTML = html;
 
     const bundles = data && Array.isArray(data.bundles) ? data.bundles : [];

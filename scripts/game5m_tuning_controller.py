@@ -91,6 +91,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         "ok": True,
         "ledger": _ledger_display(ledger_raw),
         "active_experiment": ledger.get("active_experiment"),
+        "postmortem_tactics": ledger.get("postmortem_tactics"),
         "latest_generated_at_utc": latest.get("generated_at_utc"),
         "latest_proposal_count": len(latest.get("proposals") or []),
         "top_proposals": (latest.get("proposals") or [])[: args.top_n],

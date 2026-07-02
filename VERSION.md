@@ -6,7 +6,7 @@
 | **Кодовое имя** | ML Consolidation |
 | **Дата релиза документации** | 2026-06-09 |
 | **Ветка** | `main` (единственная рабочая; feature-веток на remote нет) |
-| **Prod runtime** | GCP VM `104.154.205.58`, Docker `lse-bot` + `lse-postgres` |
+| **Prod runtime** | GCP VM `104.197.166.185`, Docker `lse-bot` + `lse-postgres` |
 
 ---
 
