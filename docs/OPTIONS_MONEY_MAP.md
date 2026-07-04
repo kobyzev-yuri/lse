@@ -330,7 +330,7 @@ docker exec lse-postgres psql -U postgres -d lse_trading -c \
    WHERE ticker='MU' GROUP BY 1 ORDER BY 1 DESC;"
 ```
 
-Watchlist по умолчанию: **GAME_5M + portfolio** (акции; без `^VIX`, `CL=F`, forex). Override: `OPTIONS_OI_WATCHLIST` в config.env.
+Watchlist по умолчанию: **DEFAULT_OPTIONS_OI_WATCHLIST** (42 semis/tech) + **GAME_5M + portfolio** (акции; без `^VIX`, `CL=F`, forex). Override: `OPTIONS_OI_WATCHLIST` в config.env.
 
 ```bash
 curl -s http://127.0.0.1:8080/api/options/tickers | python3 -m json.tool

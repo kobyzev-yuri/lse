@@ -661,10 +661,13 @@ def test_options_oi_watchlist_filters_macro(monkeypatch):
     from services.options_tickers import get_options_oi_watchlist, list_options_ui_tickers
 
     wl = get_options_oi_watchlist()
-    assert wl == ["AMD", "MU", "NVDA", "SNDK"]
+    assert {"AMD", "MU", "NVDA", "SNDK", "AAOI"}.issubset(set(wl))
+    assert "^VIX" not in wl
+    assert "CL=F" not in wl
     ui = list_options_ui_tickers()
     assert "MU" in ui["tickers"]
-    assert ui["by_ticker"]["MU"]["groups"] == ["game_5m"]
+    assert "game_5m" in ui["by_ticker"]["MU"]["groups"]
+    assert "options_default" in ui["by_ticker"]["AAOI"]["groups"]
 
 
 def test_yfinance_sentiment_report(monkeypatch):

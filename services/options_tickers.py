@@ -6,8 +6,51 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Set
 
-# Явный override в config.env (если пусто — авто из 5m + portfolio).
-DEFAULT_OPTIONS_OI_WATCHLIST: tuple[str, ...] = ()
+# Явный override в config.env (если пусто — DEFAULT + GAME_5M + portfolio).
+DEFAULT_OPTIONS_OI_WATCHLIST: tuple[str, ...] = (
+    "AAOI",
+    "AEIS",
+    "ALAB",
+    "AMD",
+    "AMKR",
+    "AMZN",
+    "ANET",
+    "ARM",
+    "ASML",
+    "AVGO",
+    "CDNS",
+    "CIEN",
+    "COHR",
+    "CRDO",
+    "CRWV",
+    "DDOG",
+    "DELL",
+    "ENTG",
+    "GOOGL",
+    "INTC",
+    "INTU",
+    "KLAC",
+    "LITE",
+    "LRCX",
+    "META",
+    "MRVL",
+    "MSFT",
+    "MU",
+    "MXL",
+    "NBIS",
+    "NOW",
+    "NVDA",
+    "ONTO",
+    "ORCL",
+    "PLTR",
+    "QCOM",
+    "RBLX",
+    "SMCI",
+    "SNDK",
+    "SNPS",
+    "TSM",
+    "WDC",
+)
 
 
 def _is_options_underlying_symbol(ticker: str) -> bool:
@@ -43,7 +86,7 @@ def get_options_oi_watchlist_sources() -> Dict[str, List[str]]:
         raw = (get_config_value("OPTIONS_OI_WATCHLIST", "") or "").strip()
         if raw:
             manual = sorted({t.strip().upper() for t in raw.split(",") if t.strip()})
-            return {"manual": manual, "game_5m": [], "portfolio": []}
+            return {"manual": manual, "game_5m": [], "portfolio": [], "default": []}
     except Exception:
         pass
 
@@ -51,7 +94,8 @@ def get_options_oi_watchlist_sources() -> Dict[str, List[str]]:
 
     game = _merge_unique_tickers(get_tickers_game_5m())
     portfolio = _merge_unique_tickers(get_tickers_for_portfolio_game())
-    return {"manual": [], "game_5m": game, "portfolio": portfolio}
+    default = _merge_unique_tickers(list(DEFAULT_OPTIONS_OI_WATCHLIST))
+    return {"manual": [], "game_5m": game, "portfolio": portfolio, "default": default}
 
 
 def get_options_oi_watchlist() -> List[str]:
@@ -59,7 +103,11 @@ def get_options_oi_watchlist() -> List[str]:
     sources = get_options_oi_watchlist_sources()
     if sources["manual"]:
         return sources["manual"]
-    return _merge_unique_tickers(sources["game_5m"], sources["portfolio"])
+    return _merge_unique_tickers(
+        sources.get("default") or [],
+        sources["game_5m"],
+        sources["portfolio"],
+    )
 
 
 def _snapshot_ticker_stats() -> Dict[str, Dict[str, Any]]:
@@ -98,6 +146,7 @@ def list_options_ui_tickers() -> Dict[str, Any]:
     watch_set = set(watchlist)
     game_set = set(sources.get("game_5m") or [])
     pf_set = set(sources.get("portfolio") or [])
+    default_set = set(sources.get("default") or [])
     by_ticker: Dict[str, Dict[str, Any]] = {}
     with_snapshot: List[str] = []
     for t in merged:
@@ -108,6 +157,8 @@ def list_options_ui_tickers() -> Dict[str, Any]:
             groups.append("game_5m")
         if t in pf_set:
             groups.append("portfolio")
+        if t in default_set:
+            groups.append("options_default")
         if sources.get("manual"):
             groups = ["manual"]
         entry = {
