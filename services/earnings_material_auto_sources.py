@@ -1,4 +1,4 @@
-"""Auto-discover earnings material URLs (SEC 8-K, Motley Fool transcripts)."""
+"""Auto-discover earnings material URLs (SEC 8-K/6-K, Motley Fool transcripts)."""
 from __future__ import annotations
 
 import logging
@@ -37,6 +37,12 @@ TICKER_CIK: dict[str, str] = {
     "AVGO": "1730168",
     "PLTR": "1321655",
     "SNDK": "2026474",
+    "TSM": "1046179",
+}
+
+# Foreign ADRs file earnings on 6-K; domestic issuers use 8-K.
+TICKER_EDGAR_FORMS: dict[str, tuple[str, ...]] = {
+    "TSM": ("6-K",),
 }
 
 # Motley Fool slug hints: company slug prefix in transcript URL path.
@@ -62,6 +68,11 @@ FOOL_SLUG_HINTS: dict[str, tuple[str, ...]] = {
     "PLTR": ("palantir-pltr", "palantir-technologies-pltr"),
     "ANET": ("arista-networks-anet", "arista-anet"),
     "ARM": ("arm-holdings-arm", "arm-arm"),
+    "TSM": (
+        "taiwan-semiconductor-manufacturing-tsm",
+        "taiwan-semiconductor-tsm",
+        "tsmc-tsm",
+    ),
 }
 
 
@@ -97,13 +108,16 @@ def _load_sec_submissions(cik: str) -> dict | None:
         return None
 
 
-def sec_8k_filings_near_date(
+def _edgar_forms_for_symbol(symbol: str) -> tuple[str, ...]:
+    sym = symbol.strip().upper()
+    return TICKER_EDGAR_FORMS.get(sym, ("8-K",))
+
+
+def _sec_edgar_filings_near_date(
     symbol: str,
     event_date: date,
     *,
-    # SEC 8-K filing dates around an "earnings event" can drift by weeks:
-    # e.g., CIEN earnings calendar date (2026-06-04) has nearest 8-K at 2026-05-07.
-    # A wider window increases material discovery coverage and unblocks LLM label accumulation.
+    forms: tuple[str, ...],
     window_days: int = 40,
 ) -> list[CatalogMaterial]:
     sym = symbol.strip().upper()
@@ -114,15 +128,19 @@ def sec_8k_filings_near_date(
     if not payload:
         return []
     recent = (payload.get("filings") or {}).get("recent") or {}
-    forms = recent.get("form") or []
+    filing_forms = recent.get("form") or []
     filing_dates = recent.get("filingDate") or []
     accession_numbers = recent.get("accessionNumber") or []
     primary_docs = recent.get("primaryDocument") or []
+    allowed = {str(f).upper() for f in forms}
     out: list[CatalogMaterial] = []
     lo = event_date - timedelta(days=window_days)
     hi = event_date + timedelta(days=window_days)
-    for form, fdate_s, accession, primary in zip(forms, filing_dates, accession_numbers, primary_docs):
-        if str(form).upper() != "8-K":
+    for form, fdate_s, accession, primary in zip(
+        filing_forms, filing_dates, accession_numbers, primary_docs
+    ):
+        form_u = str(form).upper()
+        if form_u not in allowed:
             continue
         try:
             fdate = date.fromisoformat(str(fdate_s)[:10])
@@ -134,6 +152,7 @@ def sec_8k_filings_near_date(
         if not doc:
             continue
         url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{_accession_no_dashes(accession)}/{doc}"
+        auto_source = "sec_6k" if form_u == "6-K" else "sec_8k"
         out.append(
             CatalogMaterial(
                 symbol=sym,
@@ -142,11 +161,43 @@ def sec_8k_filings_near_date(
                 material_type="sec_filing",
                 source_name="SEC EDGAR",
                 source_url=url,
-                title=f"{sym} 8-K filed {fdate.isoformat()} (earnings window)",
-                meta={"auto_source": "sec_8k", "filing_date": fdate.isoformat(), "accession": accession},
+                title=f"{sym} {form_u} filed {fdate.isoformat()} (earnings window)",
+                meta={"auto_source": auto_source, "filing_date": fdate.isoformat(), "accession": accession},
             )
         )
     return out
+
+
+def sec_8k_filings_near_date(
+    symbol: str,
+    event_date: date,
+    *,
+    # SEC filing dates around an "earnings event" can drift by weeks:
+    # e.g., CIEN earnings calendar date (2026-06-04) has nearest 8-K at 2026-05-07.
+    # A wider window increases material discovery coverage and unblocks LLM label accumulation.
+    window_days: int = 40,
+) -> list[CatalogMaterial]:
+    return _sec_edgar_filings_near_date(
+        symbol,
+        event_date,
+        forms=("8-K",),
+        window_days=window_days,
+    )
+
+
+def sec_edgar_filings_near_date(
+    symbol: str,
+    event_date: date,
+    *,
+    window_days: int = 40,
+) -> list[CatalogMaterial]:
+    sym = symbol.strip().upper()
+    return _sec_edgar_filings_near_date(
+        sym,
+        event_date,
+        forms=_edgar_forms_for_symbol(sym),
+        window_days=window_days,
+    )
 
 
 def _fool_day_window() -> int:
@@ -242,13 +293,14 @@ def _sec_filing_index_url(cik: str, accession: str) -> str | None:
     return None
 
 
-def sec_8k_exhibit_materials_near_date(
+def _sec_edgar_exhibit_materials_near_date(
     symbol: str,
     event_date: date,
     *,
+    forms: tuple[str, ...],
     window_days: int = 40,
 ) -> list[CatalogMaterial]:
-    """Parse SEC 8-K filing index for exhibit .htm/.txt transcripts (not only primary 8-K body)."""
+    """Parse SEC filing index for exhibit .htm/.txt transcripts (not only primary body)."""
     sym = symbol.strip().upper()
     cik = TICKER_CIK.get(sym)
     if not cik:
@@ -257,16 +309,19 @@ def sec_8k_exhibit_materials_near_date(
     if not payload:
         return []
     recent = (payload.get("filings") or {}).get("recent") or {}
-    forms = recent.get("form") or []
+    filing_forms = recent.get("form") or []
     filing_dates = recent.get("filingDate") or []
     accession_numbers = recent.get("accessionNumber") or []
-    primary_docs = recent.get("primaryDocument") or []
+    allowed = {str(f).upper() for f in forms}
     lo = event_date - timedelta(days=window_days)
     hi = event_date + timedelta(days=window_days)
     out: list[CatalogMaterial] = []
     seen_urls: set[str] = set()
-    for form, fdate_s, accession, primary in zip(forms, filing_dates, accession_numbers, primary_docs):
-        if str(form).upper() != "8-K":
+    for form, fdate_s, accession, _primary in zip(
+        filing_forms, filing_dates, accession_numbers, recent.get("primaryDocument") or []
+    ):
+        form_u = str(form).upper()
+        if form_u not in allowed:
             continue
         try:
             fdate = date.fromisoformat(str(fdate_s)[:10])
@@ -286,6 +341,7 @@ def sec_8k_exhibit_materials_near_date(
             logger.debug("SEC index fetch failed %s: %s", index_url, e)
             continue
         base_folder = index_url.rsplit("/", 1)[0] + "/"
+        auto_source = "sec_6k_exhibit" if form_u == "6-K" else "sec_8k_exhibit"
         for m in _EXHIBIT_LINK_RE.finditer(html):
             href = (m.group(1) or "").strip()
             if not href or href.startswith("#"):
@@ -312,11 +368,40 @@ def sec_8k_exhibit_materials_near_date(
                     material_type="transcript",
                     source_name="SEC EDGAR exhibit",
                     source_url=url,
-                    title=f"{sym} 8-K exhibit transcript ({fdate.isoformat()})",
-                    meta={"auto_source": "sec_8k_exhibit", "filing_date": fdate.isoformat(), "accession": accession},
+                    title=f"{sym} {form_u} exhibit transcript ({fdate.isoformat()})",
+                    meta={"auto_source": auto_source, "filing_date": fdate.isoformat(), "accession": accession},
                 )
             )
     return out
+
+
+def sec_8k_exhibit_materials_near_date(
+    symbol: str,
+    event_date: date,
+    *,
+    window_days: int = 40,
+) -> list[CatalogMaterial]:
+    return _sec_edgar_exhibit_materials_near_date(
+        symbol,
+        event_date,
+        forms=("8-K",),
+        window_days=window_days,
+    )
+
+
+def sec_edgar_exhibit_materials_near_date(
+    symbol: str,
+    event_date: date,
+    *,
+    window_days: int = 40,
+) -> list[CatalogMaterial]:
+    sym = symbol.strip().upper()
+    return _sec_edgar_exhibit_materials_near_date(
+        sym,
+        event_date,
+        forms=_edgar_forms_for_symbol(sym),
+        window_days=window_days,
+    )
 
 
 def _fool_cooldown_file() -> Path:
@@ -434,10 +519,10 @@ def auto_materials_for_event(
         for cm in catalog_for_event(sym, event_date):
             add(cm)
     if include_sec:
-        for cm in sec_8k_filings_near_date(sym, event_date):
+        for cm in sec_edgar_filings_near_date(sym, event_date):
             add(cm)
     if include_sec_exhibits:
-        for cm in sec_8k_exhibit_materials_near_date(sym, event_date):
+        for cm in sec_edgar_exhibit_materials_near_date(sym, event_date):
             add(cm)
     if include_fool:
         add(fool_transcript_near_date(sym, event_date, max_probe=fool_max_probe))

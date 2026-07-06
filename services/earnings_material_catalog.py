@@ -35,6 +35,7 @@ PRIORITY_SYMBOLS: tuple[str, ...] = (
     "ORCL",
     "ALAB",
     "NBIS",
+    "TSM",
 )
 
 CATALOG_MATERIALS: tuple[CatalogMaterial, ...] = (
@@ -435,6 +436,38 @@ CATALOG_MATERIALS: tuple[CatalogMaterial, ...] = (
         source_url="https://www.asml.com/investors/financial-results/q4-2025",
         title="ASML Q4 2025 financial results",
         meta={"note": "yfinance duplicate KB date; same release as 2026-01-28"},
+    ),
+    # TSM Q4 2025 — reported 2026-01-15 (ADR 6-K + TSMC IR).
+    CatalogMaterial(
+        symbol="TSM",
+        event_date=date(2026, 1, 15),
+        fiscal_period="Q4 2025",
+        material_type="ir_event_page",
+        source_name="TSMC Investor Relations",
+        source_url="https://investor.tsmc.com/english/quarterly-results/2025/q4",
+        title="TSMC Q4 2025 quarterly results",
+        meta={"mvp_case": "TSM semis anchor; foreign issuer 6-K"},
+    ),
+    # TSM Q1 2026 — reported 2026-04-15 (yfinance duplicate also on 2026-04-16).
+    CatalogMaterial(
+        symbol="TSM",
+        event_date=date(2026, 4, 15),
+        fiscal_period="Q1 2026",
+        material_type="ir_event_page",
+        source_name="TSMC Investor Relations",
+        source_url="https://investor.tsmc.com/english/quarterly-results/2026/q1",
+        title="TSMC Q1 2026 quarterly results",
+        meta={"mvp_case": "TSM semis anchor; foreign issuer 6-K"},
+    ),
+    CatalogMaterial(
+        symbol="TSM",
+        event_date=date(2026, 4, 16),
+        fiscal_period="Q1 2026",
+        material_type="ir_event_page",
+        source_name="TSMC Investor Relations",
+        source_url="https://investor.tsmc.com/english/quarterly-results/2026/q1",
+        title="TSMC Q1 2026 quarterly results",
+        meta={"note": "yfinance duplicate KB date; same release as 2026-04-15"},
     ),
 )
 
