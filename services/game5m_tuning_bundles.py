@@ -71,6 +71,23 @@ INTRADAY_REGIME_V1 = Game5mTuningBundle(
 
 BUNDLES["intraday_regime_v1"] = INTRADAY_REGIME_V1
 
+# Post-mortem 2026-07-06: fusion FP at P≈0.51–0.52, weak buy_premarket_momentum (MU/TER).
+ENTRY_FUSION_TIGHTEN_V1 = Game5mTuningBundle(
+    bundle_id="entry_fusion_tighten_v1",
+    description_ru="Ужесточение входа: CatBoost fusion + премаркет-импульс",
+    rationale_ru=(
+        "Rolling 14d: A=5, fusion false positive=3. Поднять HOLD_BELOW_P с 0.45→0.50; "
+        "premarket momentum buy min 0.5→1.0 (слабый дрейф премаркета не даёт BUY)."
+    ),
+    observe_days_default=5,
+    changes={
+        "GAME_5M_CATBOOST_HOLD_BELOW_P": "0.50",
+        "GAME_5M_PREMARKET_MOMENTUM_BUY_MIN": "1.0",
+    },
+)
+
+BUNDLES[ENTRY_FUSION_TIGHTEN_V1.bundle_id] = ENTRY_FUSION_TIGHTEN_V1
+
 
 def get_bundle(bundle_id: str) -> Game5mTuningBundle:
     bid = str(bundle_id or "").strip()

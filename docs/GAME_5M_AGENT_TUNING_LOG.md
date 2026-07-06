@@ -192,6 +192,41 @@ GAME_5M_INTRADAY_REGIME_GATE_MODE=apply
 
 ---
 
+## Сессия 2026-07-06 — pre-session: rollback overnight + entry fusion tighten
+
+**Контекст:** post-mortem 3 сессий (01–03.07), rolling A=5 fusion_fp=3; MU/TER `buy_premarket_momentum` P≈0.515.
+
+### Pre-session (до RTH 06.07)
+
+| Действие | Результат |
+|----------|-----------|
+| **Rollback** `overnight_multiday_v1` (pending 19d, observe 5d log-ret −0.32) | `rolled_back` |
+| **Apply** `entry_fusion_tighten_v1` | `pending_effect` |
+
+**Изменения config.env (prod):**
+
+| Ключ | Было | Стало |
+|------|------|-------|
+| `GAME_5M_CATBOOST_HOLD_BELOW_P` | 0.45 | **0.50** |
+| `GAME_5M_PREMARKET_MOMENTUM_BUY_MIN` | (default 0.5) | **1.0** |
+
+**Откат overnight bundle восстановил:**
+
+| Ключ | После rollback |
+|------|----------------|
+| `GAME_5M_EOD_FLATTEN_ALWAYS` | **true** |
+| `GAME_5M_MULTIDAY_HOLD_GATE_MODE` | **log_only** |
+
+**Не меняли (следующий цикл):** exit bundle / `TAKE_PROFIT_MIN_PCT` replay propose.
+
+**Открытые позиции на утро:** LITE, TER (BUY 02.07 22:55).
+
+**Следующая проверка:** observe после ≥8 закрытий; вечерний post-mortem cron 23:35 MSK.
+
+**Experiment id:** `bundle:entry_fusion_tighten_v1@2026-07-06T12:40:11Z`
+
+---
+
 ## Шаблон следующей записи
 
 ```markdown
