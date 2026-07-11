@@ -1430,6 +1430,10 @@ TECHNICAL_SIGNAL_KEYS = (
     "multiday_lr_entry_gate_would_hold",
     "multiday_lr_entry_gate_applied",
     "multiday_lr_entry_gate_note",
+    "game5m_entry_advice_entry_guard",
+    "game5m_premarket_gap_entry_guard",
+    "game5m_entry_guard_applied",
+    "game5m_entry_guard_note",
     # Unified decision stack / product verdict
     "decision_effective",
     "decision_stack_version",
@@ -2994,6 +2998,13 @@ def get_decision_5m(
             finalize_technical_decision_with_multiday(out)
         except Exception as e:
             logger.warning("finalize_technical_decision_with_multiday(%s): %s", ticker, e)
+
+        try:
+            from services.game5m_entry_guards import finalize_technical_decision_with_entry_guards
+
+            finalize_technical_decision_with_entry_guards(out)
+        except Exception as e:
+            logger.warning("finalize_technical_decision_with_entry_guards(%s): %s", ticker, e)
 
     dec_eff = out.get("decision")
     branch = out.get("technical_entry_branch")

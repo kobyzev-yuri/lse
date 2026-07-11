@@ -55,6 +55,13 @@ def apply_game5m_policy_gates(d5: Dict[str, Any], ticker: str) -> None:
         logger.warning("decision_stack multiday %s: %s", t, e)
 
     try:
+        from services.game5m_entry_guards import finalize_technical_decision_with_entry_guards
+
+        finalize_technical_decision_with_entry_guards(d5)
+    except Exception as e:
+        logger.warning("decision_stack entry_guards %s: %s", t, e)
+
+    try:
         from services.catboost_5m_signal import attach_catboost_bar_v2_signal
 
         attach_catboost_bar_v2_signal(d5, t)

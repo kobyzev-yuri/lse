@@ -77,6 +77,10 @@ FULL_ENTRY_KEYS = (
     "multiday_lr_entry_gate_would_hold",
     "multiday_lr_entry_gate_applied",
     "multiday_lr_entry_gate_note",
+    "game5m_entry_advice_entry_guard",
+    "game5m_premarket_gap_entry_guard",
+    "game5m_entry_guard_applied",
+    "game5m_entry_guard_note",
     # Decision stack (единая точка сигналов, фаза 1 — mirror legacy effective)
     "decision_effective",
     "decision_stack_version",

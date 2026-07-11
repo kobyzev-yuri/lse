@@ -30,6 +30,7 @@
   DAILY_ML_MIN_CATBOOST_ROWS  — порог строк для legacy train (default: 35)
   DAILY_ML_REPORT_JSONL       — путь к JSONL-отчёту (default: local/logs/game5m_daily_ml_report.jsonl)
   DAILY_ML_DATASETS_DRY_RUN   — 1/true: только --dry-run у датасетов (без записи CSV)
+  DAILY_ML_RUN_ENTRY_BAR_V2_APPLY — 1/true (default): инкремент bar v2 dataset после сессии
 """
 from __future__ import annotations
 
@@ -141,6 +142,25 @@ def main() -> int:
         logger.error("build_game5m_continuation_dataset завершился с кодом %s", rc_cont)
         return rc_cont
 
+    bar_v2_summary: Dict[str, Any] = {"skipped": True}
+    run_bar_v2 = _env_bool("DAILY_ML_RUN_ENTRY_BAR_V2_APPLY", True)
+    if run_bar_v2 and not datasets_dry:
+        bar_v2_summary = {"skipped": False}
+        rc_bar = _run(
+            [py, str(root / "scripts" / "run_game5m_entry_bar_v2_ml_refresh.py"), "--apply-data"],
+            cwd=root,
+        )
+        bar_v2_summary["exit_code"] = rc_bar
+        if rc_bar != 0:
+            logger.warning("entry bar v2 apply-data завершился с кодом %s", rc_bar)
+            bar_v2_summary["note"] = "apply-data error (weekly train via dispatcher)"
+        else:
+            bar_v2_summary["note"] = "apply-data ok"
+    elif datasets_dry:
+        bar_v2_summary["note"] = "skipped (datasets dry-run)"
+    else:
+        bar_v2_summary["note"] = "skipped (DAILY_ML_RUN_ENTRY_BAR_V2_APPLY=0)"
+
     catboost_summary: Dict[str, Any] = {"skipped": not run_cb}
     if run_cb:
         rc_cb = _run(
@@ -175,6 +195,7 @@ def main() -> int:
         "datasets_dry_run": datasets_dry,
         "stuck_dataset": _load_json(stuck_meta),
         "continuation_dataset": _load_json(cont_meta),
+        "entry_bar_v2": bar_v2_summary,
         "catboost_entry": catboost_summary,
         "paths": {
             "stuck_csv": str(stuck_out),

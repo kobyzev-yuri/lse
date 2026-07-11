@@ -227,6 +227,25 @@ GAME_5M_INTRADAY_REGIME_GATE_MODE=apply
 
 ---
 
+## Сессия 2026-07-11 — market_adapt_v1: legacy guards + bar v2 learning
+
+**Контекст:** analyzer 7d — 8/11 loss days с gap ≤ −2%; stack `premarket_gap_baseline` HOLD, legacy BUY (RESOLVE=false). Bar v2 на fusion (P≈0.51) — fusion ineffective.
+
+### Изменения кода
+
+| Компонент | Что |
+|-----------|-----|
+| `services/game5m_entry_guards.py` | Legacy apply: `GAME_5M_PREMARKET_GAP_BASELINE_GATE_MODE`, `GAME_5M_ENTRY_ADVICE_GATE_MODE` |
+| `recommend_5m.py` / `game5m_policy.py` | Вызов после multiday |
+| Bundle `market_adapt_v1` | gap/advice apply + intraday_regime + `TAKE_PROFIT_MIN_PCT=1.5` |
+| Daily ML pipeline | `run_game5m_entry_bar_v2_ml_refresh.py --apply-data` (train — weekly dispatcher) |
+
+**Apply на prod:** `game5m_tuning_controller.py apply --bundle-id market_adapt_v1`
+
+**Observe:** ≥5 сессий; counterfactual 07.07 (CIEN/AMD/MU/TER/LITE при gap ≤ −2% → HOLD).
+
+---
+
 ## Шаблон следующей записи
 
 ```markdown

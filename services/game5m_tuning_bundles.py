@@ -88,6 +88,35 @@ ENTRY_FUSION_TIGHTEN_V1 = Game5mTuningBundle(
 
 BUNDLES[ENTRY_FUSION_TIGHTEN_V1.bundle_id] = ENTRY_FUSION_TIGHTEN_V1
 
+# Post-mortem 2026-07-11: gap-down regime — legacy ignored stack premarket/advice gates.
+MARKET_ADAPT_V1 = Game5mTuningBundle(
+    bundle_id="market_adapt_v1",
+    description_ru="Адаптация к gap-down: legacy entry guards + режим + тейк",
+    rationale_ru=(
+        "07.07: 5 BUY при gap ≤ −2% (stack HOLD, legacy BUY). "
+        "Включить apply на legacy: premarket_gap_baseline + entry_advice; "
+        "intraday_regime apply; TAKE_PROFIT_MIN 4→1.5% для захвата импульса. "
+        "Bar v2 обучение — без изменений (DATASET_VERSION=bar, weekly refresh)."
+    ),
+    observe_days_default=5,
+    changes={
+        "GAME_5M_PREMARKET_GAP_BASELINE_GATE_MODE": "apply",
+        "GAME_5M_ENTRY_ADVICE_GATE_MODE": "apply",
+        "GAME_5M_INTRADAY_REGIME_ENABLED": "true",
+        "GAME_5M_INTRADAY_REGIME_GATE_MODE": "apply",
+        "GAME_5M_INTRADAY_REGIME_CHOP_ENTRY_MOMENTUM_BUY_MIN": "1.5",
+        "GAME_5M_INTRADAY_REGIME_CHOP_TAKE_CAP_MULT": "0.85",
+        "GAME_5M_INTRADAY_REGIME_CHOP_MOMENTUM_FACTOR_MULT": "0.9",
+        "GAME_5M_INTRADAY_REGIME_CHOP_SOFT_TAKE_MIN_PCT": "2.0",
+        "GAME_5M_INTRADAY_REGIME_CHOP_SOFT_TAKE_REGULAR_ENABLED": "true",
+        "GAME_5M_INTRADAY_REGIME_IMPULSE_MOMENTUM_FACTOR_MULT": "1.15",
+        "GAME_5M_RTH_MOMENTUM_BUY_MIN": "1.2",
+        "GAME_5M_TAKE_PROFIT_MIN_PCT": "1.5",
+    },
+)
+
+BUNDLES[MARKET_ADAPT_V1.bundle_id] = MARKET_ADAPT_V1
+
 
 def get_bundle(bundle_id: str) -> Game5mTuningBundle:
     bid = str(bundle_id or "").strip()
