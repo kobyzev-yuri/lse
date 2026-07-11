@@ -186,17 +186,27 @@ docker exec lse-bot python3 /app/scripts/game5m_tuning_controller.py apply --pro
 |-------|-----|----------|
 | **Вс 06:35** | Replay **propose** (exit-сетка) | `game5m_tuning_ledger.json` → `latest_proposals` |
 | **Вс 06:40** | Weekly tactic review | `last_weekly_game5m_tactic_review.json` |
+| **Вс 06:45** | Light analyzer 7d (без OHLC) | `analyzer_7d_light.json` |
 | **Пн–пт 23:40** | Tuning observe | ledger `observations[]` |
 
 Раз в неделю (15 мин):
 
-1. `GET /api/analyzer?strategy=GAME_5M&days=14`
+1. Прочитать `analyzer_7d_light.json` — `summary`, `decision_stack_shadow_diff`, `market_adapt_guard_review`, `game5m_catboost_fusion_entry_review`
 2. Прочитать `last_weekly_game5m_tactic_review.json` — `recommendations_ru`, `postmortem_recommendations_ru`
 3. Сверить с rolling `last_game5m_postmortem_tactics.json`
 4. Если `propose` дал сильный кандидат — запланировать **один** apply на следующую неделю
 
+Полный `/api/analyzer?days=14&light=0` — только при достаточной памяти контейнера; иначе light analyzer + post-mortem.
+
 ```bash
+docker exec lse-bot cat /app/logs/ml/ml_data_quality/analyzer_7d_light.json | python3 -m json.tool
 docker exec lse-bot cat /app/logs/ml/ml_data_quality/last_weekly_game5m_tactic_review.json | python3 -m json.tool
+```
+
+Ручной пересчёт (после спорной недели или смены bundle):
+
+```bash
+docker exec lse-bot python3 /app/scripts/run_game5m_light_analyzer.py --days 7
 ```
 
 ---
@@ -215,9 +225,10 @@ docker exec lse-bot cat /app/logs/ml/ml_data_quality/last_weekly_game5m_tactic_r
 
 ### 6.2. Анализатор (по запросу)
 
-| Отчёт | API / UI | Контур |
-|-------|----------|--------|
-| Полный | `/api/analyzer?days=N&strategy=GAME_5M` | сводка + GAME_5M блоки |
+| Отчёт | API / UI / скрипт | Контур |
+|-------|-------------------|--------|
+| Полный | `/api/analyzer?days=N&strategy=GAME_5M&light=0` | сводка + OHLC-backtest (тяжёлый; OOM на lse-bot) |
+| **Light 7d (cron вс)** | `scripts/run_game5m_light_analyzer.py` → `analyzer_7d_light.json` | shadow diff, fusion, market_adapt counterfactual |
 | Узкий | `/api/analyzer/focused?tickers=&trade_ids=` | расследование |
 | ML arbiters | `sections=ml_arbiters` | multiday / gap / product ideas |
 | Экспорт | `scripts/export_analyzer_report.py` | офлайн JSON |
@@ -226,6 +237,7 @@ docker exec lse-bot cat /app/logs/ml/ml_data_quality/last_weekly_game5m_tactic_r
 
 | Отчёт | Путь | Контур |
 |-------|------|--------|
+| Light analyzer 7d | `analyzer_7d_light.json` | weekly shadow/fusion/guards (cron вс 06:45 MSK) |
 | Weekly tactic review | `last_weekly_game5m_tactic_review.json` | bundle, hold-to-gap |
 | Replay proposals | `game5m_tuning_ledger.json` → `latest_proposals` | выходные пороги |
 | ML train readiness | `ml_train_readiness.jsonl` | готовность контуров |

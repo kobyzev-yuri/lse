@@ -99,6 +99,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 40 23 * * 1-5 flock -n /tmp/lse_game5m_tuning_observe.lock /home/ai8049520/lse/scripts/cron_game5m_tuning.sh observe >> /home/ai8049520/lse/logs/game5m_tuning.log 2>&1
 35 6 * * 0 flock -n /tmp/lse_game5m_tuning_propose.lock /home/ai8049520/lse/scripts/cron_game5m_tuning.sh propose >> /home/ai8049520/lse/logs/game5m_tuning.log 2>&1
 40 6 * * 0 flock -n /tmp/lse_weekly_game5m_tactic_review.lock /home/ai8049520/lse/scripts/cron_weekly_game5m_tactic_review.sh >> /home/ai8049520/lse/logs/weekly_game5m_tactic_review.log 2>&1
+# GAME_5M light analyzer 7d (no OHLC; shadow/fusion/market_adapt counterfactual). docs/GAME_5M_SESSION_ANALYSIS_PLAYBOOK.md §5
+45 6 * * 0 flock -n /tmp/lse_game5m_light_analyzer_weekly.lock /home/ai8049520/lse/scripts/cron_weekly_game5m_light_analyzer.sh >> /home/ai8049520/lse/logs/game5m_light_analyzer_weekly.log 2>&1
 # Gap forecast rolling metrics refresh (after open ingest; updates last_gap_forecast_metrics.json).
 50 16 * * 1-5 flock -n /tmp/lse_gap_analyze_daily.lock docker exec lse-bot python3 /app/scripts/analyze_game5m_gap_forecast.py --days 90 --json-metrics-out /app/logs/ml/ml_data_quality/last_gap_forecast_metrics.json >> /home/ai8049520/lse/logs/game5m_gap_forecast.log 2>&1
 
