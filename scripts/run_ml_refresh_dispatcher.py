@@ -26,13 +26,15 @@ sys.path.insert(0, str(project_root))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Contours frozen 2026-07-12 (B1–B6 + entry bar ML research closed). See ml_freeze_b_contours_v1.
+# Contours frozen 2026-07-12 — список A (застой). B (continuation, earnings_grid) остаются в refresh.
 ML_FROZEN_REFRESH_CONTOURS: frozenset[str] = frozenset(
     {
         "game5m_entry",
         "game5m_entry_bar_v2",
-        "game5m_continuation",
-        "earnings_grid",
+        "recovery",
+        "gap_forecast",
+        "open_path",
+        "event_reaction_regression",
     }
 )
 

@@ -18,7 +18,23 @@
 
 ---
 
-## Сессия 2026-07-12 — freeze B1–B6 ML (no-go)
+## Сессия 2026-07-12 — freeze список A (исправление ошибки)
+
+**Ошибка:** по ошибке применён `ml_freeze_b_contours_v1` (закрыл B вместо A).
+
+**Исправление на prod:**
+1. `ml_restore_b_development_v1` — вернуть B1–B3 в log_only
+2. `ml_freeze_a_contours_v1` — только список A: `FUSION=none`, `RECOVERY_ML=false`
+3. Dispatcher frozen: `game5m_entry`, `bar_v2`, `recovery`, `gap_forecast`, `open_path`, `event_reaction`
+4. Cron: continuation dataset on, light analyzer on, earnings eval on; open_path weekly train off
+
+**Список A (стоп):** entry v1, bar v2 fusion, recovery, gap ML, event_reaction, open_path, peer_spillover, chart ML.
+
+**Список B (разработка):** hold H3, continuation, multiday hold, entry PnL-label, earnings labels, light analyzer.
+
+---
+
+## Сессия 2026-07-12 — freeze B1–B6 ML (no-go) [ОТМЕНЕНО — см. выше]
 
 **Решение:** bar v2 fusion sweep no-go; B1–B6 без PnL-edge — закрыты.
 

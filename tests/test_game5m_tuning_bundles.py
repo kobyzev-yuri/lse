@@ -45,11 +45,12 @@ class TestTuningBundles(unittest.TestCase):
         self.assertTrue(ok, reason)
         self.assertGreater(len(vals), 0)
 
-    def test_ml_freeze_b_bundle_keys(self):
-        b = get_bundle("ml_freeze_b_contours_v1")
-        self.assertIn("GAME_5M_CATBOOST_FUSION", b.changes)
-        self.assertEqual(b.changes["GAME_5M_CATBOOST_FUSION"], "none")
-        self.assertIn("GAME_5M_CONTINUATION_ML_ENABLED", b.changes)
+    def test_ml_freeze_a_and_restore_b_bundle_keys(self):
+        a = get_bundle("ml_freeze_a_contours_v1")
+        self.assertEqual(a.changes["GAME_5M_CATBOOST_FUSION"], "none")
+        b = get_bundle("ml_restore_b_development_v1")
+        self.assertEqual(b.changes["GAME_5M_CONTINUATION_ML_ENABLED"], "true")
+        self.assertEqual(b.changes["GAME_5M_MULTIDAY_HOLD_GATE_MODE"], "log_only")
 
     @patch("services.game5m_tuning_policy.update_config_key", return_value=True)
     def test_apply_bundle_dry_run(self, _mock_update):
