@@ -3,6 +3,7 @@
 Регулярный чеклист **после каждой US RTH-сессии** (пн–пт): что смотреть, в каком порядке, какие отчёты использовать для оптимизации входа и удержания.
 
 **Связанные документы:**
+- [GAME_5M_ML_STRATEGY_PLAN.md](GAME_5M_ML_STRATEGY_PLAN.md) — **актуальный план ML: список A (стоп) / B (разработка)**.
 - [GAME_5M_TUNING_REGLEMENT.md](GAME_5M_TUNING_REGLEMENT.md) — правила live-экспериментов (один bundle, observe, rollback).
 - [GAME_5M_AGENT_TUNING_LOG.md](GAME_5M_AGENT_TUNING_LOG.md) — журнал применённых изменений на проде.
 - [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md) — поля анализатора.
@@ -32,7 +33,7 @@
 | **23:35** | Session review + **trade post-mortem** + snapshot анализатора (1d) | `logs/game5m_daily_review.log` |
 | **23:30** | `analyzer_autotune` (без auto-apply) | `logs/autotune.log` |
 | **23:40** | Tuning **observe** (если есть active experiment) | `logs/game5m_tuning.log` |
-| **23:48** | Дневной ML pipeline (датасеты entry) | `logs/game5m_daily_ml_pipeline.log` |
+| **23:48** | Дневной ML pipeline (stuck + continuation; bar v2 apply off — список A) | `logs/game5m_daily_ml_pipeline.log` |
 
 **Утром аналитика** начинается с уже готовых файлов в `/app/logs/ml/ml_data_quality/` (в контейнере `lse-bot`).
 

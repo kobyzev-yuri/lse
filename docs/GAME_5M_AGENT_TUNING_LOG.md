@@ -7,7 +7,7 @@
 2. **Этот лог** — оперативные решения агента до/между прогонами анализатора; при расхождении приоритет у проверенных live-фактов + WF/OOS.
 3. **Песочница (prod VM):** эксперименты **apply-first** — без лишних фаз `log_only`/observe, если гипотеза ясна и откат тривиален. `log_only` только для чистого ML-shadow без влияния на PnL. Один **смысловой** пакет за раз (bundle), не один ключ в вакууме.
 
-**Связанные артефакты:** `local/game5m_tuning_ledger.json` (controller/replay), `last_multiday_wf_game5m.json` (WF v3nm).
+**Связанные артефакты:** `local/game5m_tuning_ledger.json` (controller/replay), `last_multiday_wf_game5m.json` (WF v3nm). **Стратегия ML A/B:** [GAME_5M_ML_STRATEGY_PLAN.md](GAME_5M_ML_STRATEGY_PLAN.md).
 
 **Ежедневный отчёт:**
 - Скрипт: `scripts/game5m_daily_session_review.py` → `last_game5m_daily_session_review.json`
@@ -15,6 +15,16 @@
 - **Чеклист оператора:** [GAME_5M_SESSION_ANALYSIS_PLAYBOOK.md](GAME_5M_SESSION_ANALYSIS_PLAYBOOK.md)
 - Cron на VM: **включён** `35 23 * * 1-5` → `scripts/cron_game5m_daily_session_review.sh` (с 12.06.2026)
 - В отчёте: late-buy cutoff из config (90 мин → MSK), EOD-flat `distance_to_take`, rolling gap PM vs ML 14/30d
+
+---
+
+## Сессия 2026-07-12 — bar v2 BUY calibration + стратегия A/B
+
+**Калибровка:** BUY-only retrain (4296 rows), Platt, `fusion_calibration_ready=true` на valid; live sweep **no-go** (Spearman≈0.03).
+
+**Стратегия зафиксирована:** [GAME_5M_ML_STRATEGY_PLAN.md](GAME_5M_ML_STRATEGY_PLAN.md).
+
+**Prod bundles (итог):** `ml_restore_b_development_v1` + `ml_freeze_a_contours_v1` (`515b522`).
 
 ---
 
