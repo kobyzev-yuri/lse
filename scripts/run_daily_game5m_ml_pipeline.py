@@ -31,6 +31,7 @@
   DAILY_ML_REPORT_JSONL       — путь к JSONL-отчёту (default: local/logs/game5m_daily_ml_report.jsonl)
   DAILY_ML_DATASETS_DRY_RUN   — 1/true: только --dry-run у датасетов (без записи CSV)
   DAILY_ML_RUN_ENTRY_BAR_V2_APPLY — 1/true (default): инкремент bar v2 dataset после сессии
+  DAILY_ML_RUN_CONTINUATION_DATASET — 1/true (default): continuation CSV; 0 — freeze B2
 """
 from __future__ import annotations
 
@@ -118,8 +119,8 @@ def main() -> int:
     cont_out = datasets_dir / "game5m_continuation_dataset.csv"
     cb_out = models_dir / "game5m_entry_catboost.cbm"
 
-    stuck_meta = stuck_out.with_suffix(stuck_out.suffix + ".meta.json")
-    cont_meta = cont_out.with_suffix(cont_out.suffix + ".meta.json")
+    stuck_meta_path = stuck_out.with_suffix(stuck_out.suffix + ".meta.json")
+    cont_meta_path = cont_out.with_suffix(cont_out.suffix + ".meta.json")
     cb_meta = cb_out.with_suffix(".meta.json")
 
     ds_flags: List[str] = []
@@ -134,13 +135,22 @@ def main() -> int:
         logger.error("build_game5m_stuck_dataset завершился с кодом %s", rc_stuck)
         return rc_stuck
 
-    rc_cont = _run(
-        [py, str(root / "scripts" / "build_game5m_continuation_dataset.py"), "--out", str(cont_out)] + ds_flags,
-        cwd=root,
-    )
-    if rc_cont != 0:
-        logger.error("build_game5m_continuation_dataset завершился с кодом %s", rc_cont)
-        return rc_cont
+    rc_cont = 0
+    continuation_summary: Dict[str, Any] = {"skipped": True}
+    run_cont = _env_bool("DAILY_ML_RUN_CONTINUATION_DATASET", True)
+    if run_cont:
+        continuation_summary = {"skipped": False}
+        rc_cont = _run(
+            [py, str(root / "scripts" / "build_game5m_continuation_dataset.py"), "--out", str(cont_out)] + ds_flags,
+            cwd=root,
+        )
+        if rc_cont != 0:
+            logger.error("build_game5m_continuation_dataset завершился с кодом %s", rc_cont)
+            return rc_cont
+        continuation_summary = _load_json(cont_meta_path) or {"skipped": False}
+    else:
+        logger.info("continuation dataset skipped (DAILY_ML_RUN_CONTINUATION_DATASET=0)")
+        continuation_summary = {"skipped": True, "note": "frozen ml_freeze_b_contours_v1"}
 
     bar_v2_summary: Dict[str, Any] = {"skipped": True}
     run_bar_v2 = _env_bool("DAILY_ML_RUN_ENTRY_BAR_V2_APPLY", True)
@@ -193,8 +203,8 @@ def main() -> int:
     record = {
         "ts_utc": datetime.now(timezone.utc).isoformat(),
         "datasets_dry_run": datasets_dry,
-        "stuck_dataset": _load_json(stuck_meta),
-        "continuation_dataset": _load_json(cont_meta),
+        "stuck_dataset": _load_json(stuck_meta_path),
+        "continuation_dataset": continuation_summary,
         "entry_bar_v2": bar_v2_summary,
         "catboost_entry": catboost_summary,
         "paths": {

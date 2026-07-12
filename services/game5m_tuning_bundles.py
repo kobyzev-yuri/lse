@@ -117,6 +117,33 @@ MARKET_ADAPT_V1 = Game5mTuningBundle(
 
 BUNDLES[MARKET_ADAPT_V1.bundle_id] = MARKET_ADAPT_V1
 
+# 2026-07-12: B1–B6 no-go (bar v2 fusion sweep + exit ML без PnL-edge) — freeze telemetry/train.
+ML_FREEZE_B_CONTOURS_V1 = Game5mTuningBundle(
+    bundle_id="ml_freeze_b_contours_v1",
+    description_ru="Freeze B-контуров: hold/continuation/multiday-hold/earnings-grid/light-path",
+    rationale_ru=(
+        "bar_v2 fusion no-go (Spearman≈0, precision~0.45); B1–B6 без перспективы на hot path. "
+        "Отключить ML-телеметрию exit/continuation, train/cron для bar v2/continuation/earnings_grid; "
+        "multiday entry и market_adapt guards не трогаем."
+    ),
+    observe_days_default=0,
+    changes={
+        "GAME_5M_CATBOOST_FUSION": "none",
+        "GAME_5M_HOLD_QUALITY_LOG_ENABLED": "false",
+        "GAME_5M_CONTINUATION_ML_ENABLED": "false",
+        "GAME_5M_CONTINUATION_ML_LOG_ONLY": "true",
+        "GAME_5M_CONTINUATION_ML_GATE_MODE": "none",
+        "GAME_5M_CONTINUATION_GATE_ENABLED": "false",
+        "GAME_5M_MULTIDAY_HOLD_GATE_MODE": "none",
+        "DAILY_ML_RUN_ENTRY_BAR_V2_APPLY": "0",
+        "DAILY_ML_RUN_CONTINUATION_DATASET": "0",
+        "ML_READINESS_SKIP_GAME5M": "1",
+        "ML_READINESS_SKIP_EARNINGS_INTELLIGENCE": "1",
+    },
+)
+
+BUNDLES[ML_FREEZE_B_CONTOURS_V1.bundle_id] = ML_FREEZE_B_CONTOURS_V1
+
 
 def get_bundle(bundle_id: str) -> Game5mTuningBundle:
     bid = str(bundle_id or "").strip()

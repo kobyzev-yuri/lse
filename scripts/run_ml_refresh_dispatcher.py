@@ -26,32 +26,59 @@ sys.path.insert(0, str(project_root))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Contours frozen 2026-07-12 (B1–B6 + entry bar ML research closed). See ml_freeze_b_contours_v1.
+ML_FROZEN_REFRESH_CONTOURS: frozenset[str] = frozenset(
+    {
+        "game5m_entry",
+        "game5m_entry_bar_v2",
+        "game5m_continuation",
+        "earnings_grid",
+    }
+)
+
 # Contours with implemented refresh scripts (others: registry-only / manual train).
-ACTIVE_REFRESH_CONTOURS: tuple[str, ...] = (
-    "open_path",
-    "earnings_grid",
-    "game5m_entry",
-    "game5m_entry_bar_v2",
-    "game5m_continuation",
-    "portfolio",
-    "event_reaction_regression",
-    "multiday_lr",
-    "recovery",
-    "gap_forecast",
+ACTIVE_REFRESH_CONTOURS: tuple[str, ...] = tuple(
+    cid for cid in (
+        "open_path",
+        "earnings_grid",
+        "game5m_entry",
+        "game5m_entry_bar_v2",
+        "game5m_continuation",
+        "portfolio",
+        "event_reaction_regression",
+        "multiday_lr",
+        "recovery",
+        "gap_forecast",
+    )
+    if cid not in ML_FROZEN_REFRESH_CONTOURS
 )
 
 # Nightly slot (after ERD build + open-path labels cron). Order matters.
-NIGHTLY_SEQUENCE: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("game5m_entry", ("--full",)),
-    ("open_path", ("--apply-data", "--incremental-train", "--skip-labels")),
-    ("event_reaction_regression", ("--full",)),
-    ("earnings_grid", ("--full",)),
-    ("portfolio", ()),
-    ("gap_forecast", ("--full",)),
+NIGHTLY_SEQUENCE: tuple[tuple[str, tuple[str, ...]], ...] = tuple(
+    item
+    for item in (
+        ("game5m_entry", ("--full",)),
+        ("open_path", ("--apply-data", "--incremental-train", "--skip-labels")),
+        ("event_reaction_regression", ("--full",)),
+        ("earnings_grid", ("--full",)),
+        ("portfolio", ()),
+        ("gap_forecast", ("--full",)),
+    )
+    if item[0] not in ML_FROZEN_REFRESH_CONTOURS
 )
 
 WEEKLY_FULL_CONTOURS: frozenset[str] = frozenset(
-    {"open_path", "game5m_entry", "game5m_entry_bar_v2", "game5m_continuation", "multiday_lr", "recovery", "gap_forecast"}
+    cid
+    for cid in (
+        "open_path",
+        "game5m_entry",
+        "game5m_entry_bar_v2",
+        "game5m_continuation",
+        "multiday_lr",
+        "recovery",
+        "gap_forecast",
+    )
+    if cid not in ML_FROZEN_REFRESH_CONTOURS
 )
 
 _FLOCK_BIN: str | None = shutil.which("flock")

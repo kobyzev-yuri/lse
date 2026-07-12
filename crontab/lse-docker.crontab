@@ -61,22 +61,22 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Earnings intelligence layer: overwrite features on earnings universe (superset of quotes_regime_v1).
 43 23 * * 1-5 flock /tmp/lse_erd_nightly.lock docker exec -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/backfill_event_reaction_labeling.py --dataset-version v0_expanded_baseline --only-features --force-features --include-earnings-universe --limit 800 >> /home/ai8049520/lse/logs/event_reaction_earnings_labeling.log 2>&1
 45 23 * * 1-5 flock -n /tmp/lse_erd_labeling_gaps.lock docker exec lse-bot python scripts/check_erd_labeling_gaps_cron.py --execute --telegram >> /home/ai8049520/lse/logs/erd_labeling_gaps.log 2>&1
-# GAME_5M ML datasets only (stuck + continuation CSV + JSONL). Train: dispatcher nightly 23:47.
-48 23 * * 1-5 flock -n /tmp/lse_game5m_daily_ml.lock docker exec lse-bot python scripts/run_daily_game5m_ml_pipeline.py >> /home/ai8049520/lse/logs/game5m_daily_ml_pipeline.log 2>&1
+# GAME_5M ML datasets only (stuck CSV; continuation frozen 2026-07-12). Train: dispatcher nightly 23:55.
+48 23 * * 1-5 flock -n /tmp/lse_game5m_daily_ml.lock docker exec -e DAILY_ML_RUN_CONTINUATION_DATASET=0 -e DAILY_ML_RUN_ENTRY_BAR_V2_APPLY=0 lse-bot python scripts/run_daily_game5m_ml_pipeline.py >> /home/ai8049520/lse/logs/game5m_daily_ml_pipeline.log 2>&1
 # Open-path labels (before nightly ML refresh).
 52 23 * * 1-5 flock -n /tmp/lse_open_path_labels.lock docker exec lse-bot python scripts/label_open_path_scenarios.py --ensure-table >> /home/ai8049520/lse/logs/open_path_labels.log 2>&1
 # Unified ML nightly refresh: game5m_entry, open_path, event_reaction, earnings_grid, portfolio. See docs/ML_AND_DECISION_ARCHITECTURE.md §5.3
 55 23 * * 1-5 flock -n /tmp/lse_ml_refresh_nightly.lock docker exec -e ML_READINESS_TRAIN_MODE=full lse-bot python scripts/run_ml_refresh_dispatcher.py --slot nightly >> /home/ai8049520/lse/logs/ml_refresh_nightly.log 2>&1
-# ML train readiness (dry-run gates): after nightly refresh. -e включает event + earnings в overall.
-58 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0 -e ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
+# ML train readiness (dry-run gates): after nightly refresh.
+58 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0 -e ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=1 -e ML_READINESS_SKIP_GAME5M=1 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
 # Legacy per-contour nightly (replaced by dispatcher --slot nightly 23:47):
 # 46 open_path | 51 event_reaction --full | 52 earnings_grid --full
 # Open-path */6 poll — via run_ml_refresh_dispatcher.py (15 */6)
 48 23 * * 0 flock -n /tmp/lse_open_path_ml_full.lock docker exec -e ML_READINESS_OPEN_PATH_TRAIN_MODE=full -e OPEN_PATH_ML_REFRESH_APPLY_DATA=1 -e OPEN_PATH_ML_CONTINUOUS_TRAIN=1 lse-bot python scripts/run_open_path_ml_refresh.py --full >> /home/ai8049520/lse/logs/open_path_ml_full.log 2>&1
 # Weekly ML full refresh: multiday_lr, recovery, gap_forecast (+ open_path, game5m_entry, game5m_entry_bar_v2).
 5 6 * * 0 flock -n /tmp/lse_ml_refresh_weekly.lock docker exec -e ML_READINESS_TRAIN_MODE=full lse-bot python scripts/run_ml_refresh_dispatcher.py --slot weekly_full >> /home/ai8049520/lse/logs/ml_refresh_weekly.log 2>&1
-# Weekly earnings prod eval: полный end-to-end (materials + ERD + ML full + shadow).
-0 6 * * 0 flock -n /tmp/lse_earnings_prod_eval.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e EARNINGS_ML_REFRESH_APPLY_DATA=1 -e EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN=1 lse-bot python scripts/run_earnings_intelligence_prod_eval.py >> /home/ai8049520/lse/logs/earnings_prod_eval.log 2>&1
+# Weekly earnings prod eval — FROZEN 2026-07-12 (B5 earnings_grid closed).
+# 0 6 * * 0 flock -n /tmp/lse_earnings_prod_eval.lock docker exec -e ML_READINESS_TRAIN_MODE=full -e EARNINGS_ML_REFRESH_APPLY_DATA=1 -e EARNINGS_ML_REFRESH_INCREMENTAL_TRAIN=1 lse-bot python scripts/run_earnings_intelligence_prod_eval.py >> /home/ai8049520/lse/logs/earnings_prod_eval.log 2>&1
 # Quotes gaps for ERD (no_quotes backlog) — воскресенье: deep backfill earnings universe.
 25 5 * * 0 flock -n /tmp/lse_erd_seed_quotes_weekly.lock docker exec lse-bot python scripts/seed_quotes_for_event_reaction_dataset.py --dataset-version v0_expanded_baseline --include-earnings-universe --all-symbols --days 450 >> /home/ai8049520/lse/logs/erd_seed_quotes.log 2>&1
 # Отчёт качества данных без LLM и без профилирования local/datasets/*.csv.
@@ -99,8 +99,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 40 23 * * 1-5 flock -n /tmp/lse_game5m_tuning_observe.lock /home/ai8049520/lse/scripts/cron_game5m_tuning.sh observe >> /home/ai8049520/lse/logs/game5m_tuning.log 2>&1
 35 6 * * 0 flock -n /tmp/lse_game5m_tuning_propose.lock /home/ai8049520/lse/scripts/cron_game5m_tuning.sh propose >> /home/ai8049520/lse/logs/game5m_tuning.log 2>&1
 40 6 * * 0 flock -n /tmp/lse_weekly_game5m_tactic_review.lock /home/ai8049520/lse/scripts/cron_weekly_game5m_tactic_review.sh >> /home/ai8049520/lse/logs/weekly_game5m_tactic_review.log 2>&1
-# GAME_5M light analyzer 7d (no OHLC; shadow/fusion/market_adapt counterfactual). docs/GAME_5M_SESSION_ANALYSIS_PLAYBOOK.md §5
-45 6 * * 0 flock -n /tmp/lse_game5m_light_analyzer_weekly.lock /home/ai8049520/lse/scripts/cron_weekly_game5m_light_analyzer.sh >> /home/ai8049520/lse/logs/game5m_light_analyzer_weekly.log 2>&1
+# GAME_5M light analyzer 7d — FROZEN 2026-07-12 (B6 closed; playbook остаётся в docs).
+# 45 6 * * 0 flock -n /tmp/lse_game5m_light_analyzer_weekly.lock /home/ai8049520/lse/scripts/cron_weekly_game5m_light_analyzer.sh >> /home/ai8049520/lse/logs/game5m_light_analyzer_weekly.log 2>&1
 # Gap forecast rolling metrics refresh (after open ingest; updates last_gap_forecast_metrics.json).
 50 16 * * 1-5 flock -n /tmp/lse_gap_analyze_daily.lock docker exec lse-bot python3 /app/scripts/analyze_game5m_gap_forecast.py --days 90 --json-metrics-out /app/logs/ml/ml_data_quality/last_gap_forecast_metrics.json >> /home/ai8049520/lse/logs/game5m_gap_forecast.log 2>&1
 

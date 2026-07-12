@@ -18,6 +18,24 @@
 
 ---
 
+## Сессия 2026-07-12 — freeze B1–B6 ML (no-go)
+
+**Решение:** bar v2 fusion sweep no-go; B1–B6 без PnL-edge — закрыты.
+
+**Bundle `ml_freeze_b_contours_v1` на prod:**
+- `GAME_5M_CATBOOST_FUSION=none`
+- `GAME_5M_HOLD_QUALITY_LOG_ENABLED=false` (B1)
+- `GAME_5M_CONTINUATION_ML_ENABLED=false`, `GATE_MODE=none` (B2)
+- `GAME_5M_MULTIDAY_HOLD_GATE_MODE=none` (B3)
+- `DAILY_ML_RUN_ENTRY_BAR_V2_APPLY=0`, `DAILY_ML_RUN_CONTINUATION_DATASET=0`
+- `ML_READINESS_SKIP_GAME5M=1`, `ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=1`
+
+**Cron отключён:** light analyzer (B6), earnings_prod_eval (B5), dispatcher frozen contours (entry/bar_v2/continuation/earnings_grid).
+
+**Остаётся в prod:** `market_adapt_v1` guards, multiday **entry** apply, portfolio CatBoost.
+
+---
+
 ## Сессия 2026-06-20 — continuation ML telemetry ON (prod)
 
 **Включено на VM (`config.env`):**
