@@ -195,6 +195,9 @@ def validate_game5m_update(
     if key.endswith("_GATE_MODE") and proposed_s.lower() in ("none", "log_only", "apply"):
         return ValidationResult(True, "ok", key, proposed_s, current_s)
 
+    if key == "GAME_5M_CATBOOST_FUSION" and proposed_s.lower() in ("none", "hold_if_buy_below_p"):
+        return ValidationResult(True, "ok", key, proposed_s, current_s)
+
     proposed_f = coerce_float(proposed_s)
     if proposed_f is None:
         return ValidationResult(False, "non_numeric_value", key, proposed_s, current_s)
