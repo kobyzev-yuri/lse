@@ -19,6 +19,8 @@
 - `GAME_5M_CATBOOST_FUSION` (по умолчанию `none`):
   - **`none`** — `technical_decision_effective` = `decision`.
   - **`hold_if_buy_below_p`** — если правила дали `BUY`/`STRONG_BUY`, CatBoost в статусе `ok` и `catboost_entry_proba_good` **ниже** `GAME_5M_CATBOOST_HOLD_BELOW_P` (по умолчанию `0.45`), то **effective** = `HOLD` (рассылка входа не уйдёт).
+
+**Статус prod (2026-07):** entry fusion **закрыт** (список A, `GAME_5M_CATBOOST_FUSION=none`). Bar v2 модель и калибровка остаются для telemetry; sweep показал no-go (см. `docs/GAME_5M_ML_STRATEGY_PLAN.md`).
 - При отсутствии модели, `feature_mismatch`, `predict_error` и т.д. слияние **не** понижает сигнал (остаётся базовое решение).
 
 ## LLM (`GAME_5M_ENTRY_STRATEGY=llm`)

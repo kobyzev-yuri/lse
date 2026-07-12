@@ -58,12 +58,12 @@ CONTOUR_PRODUCT_SPECS: tuple[ContourProductSpec, ...] = (
         display_name="GAME_5M entry CatBoost (bar v2)",
         surface="GAME_5M",
         l1_refresh="run_game5m_entry_bar_v2_ml_refresh.py",
-        product_tier="legacy_apply",
+        product_tier="telemetry",
         legacy_flag="GAME_5M_CATBOOST_ENABLED",
         legacy_default="false",
         stack_contour_id="catboost_entry_5m",
         resolve_required=False,
-        notes="Promotion: GAME_5M_CATBOOST_DATASET_VERSION=bar + fusion hold_if_buy_below_p; AUC valid ~0.62.",
+        notes="Список A (freeze 2026-07): fusion=none, dispatcher refresh off; модель telemetry only.",
     ),
     ContourProductSpec(
         contour_id="recovery",
@@ -87,7 +87,7 @@ CONTOUR_PRODUCT_SPECS: tuple[ContourProductSpec, ...] = (
         legacy_default="false",
         stack_contour_id="continuation_ml",
         resolve_required=False,
-        notes="Phase 2.4 log_only telemetry continuation_ml; apply via GAME_5M_CONTINUATION_ML_GATE_MODE after sign-off.",
+        notes="Список B2: log_only telemetry; apply после sign-off ~14.07 (GAME_5M_CONTINUATION_ML_GATE_MODE).",
     ),
     ContourProductSpec(
         contour_id="gap_forecast",

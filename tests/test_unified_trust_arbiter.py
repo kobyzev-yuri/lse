@@ -167,3 +167,19 @@ def test_build_unified_trust_includes_entry_bar_v2(tmp_path, monkeypatch):
     bar = next(c for c in game if c.get("contour_id") == "catboost_entry_bar_v2")
     assert bar.get("recommended_gate_mode") == "log_only"
     assert "bar v2" in format_operator_digest_ru(arb).lower()
+
+
+def test_entry_bar_v2_frozen_when_fusion_none(monkeypatch):
+    from services.unified_trust_arbiter import _contour_from_entry_bar_v2, CONTOUR_TRUST_SPECS
+
+    monkeypatch.setattr(
+        "config_loader.get_config_value",
+        lambda key, default=None: "none" if key == "GAME_5M_CATBOOST_FUSION" else default,
+    )
+    out = _contour_from_entry_bar_v2(
+        CONTOUR_TRUST_SPECS["catboost_entry_bar_v2"],
+        {"n_valid": 100, "dataset_n_rows": 5000, "auc_valid": 0.56, "model_file_exists": True},
+    )
+    assert out["product_status"] == "frozen_list_a"
+    assert out["recommended_gate_mode"] == "log_only"
+    assert "fusion closed" in out["conclusion_ru"]

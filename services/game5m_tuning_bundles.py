@@ -136,7 +136,7 @@ ML_FREEZE_A_CONTOURS_V1 = Game5mTuningBundle(
 ML_RESTORE_B_DEVELOPMENT_V1 = Game5mTuningBundle(
     bundle_id="ml_restore_b_development_v1",
     description_ru="Восстановить B-контуры в режим разработки (log_only)",
-    rationale_ru="Ошибочно применён ml_freeze_b_contours_v1 — откат hold/continuation/multiday-hold.",
+    rationale_ru="Ошибочный freeze B (2026-07-12) — откат hold/continuation/multiday-hold.",
     observe_days_default=0,
     changes={
         "GAME_5M_HOLD_QUALITY_LOG_ENABLED": "true",
@@ -148,18 +148,8 @@ ML_RESTORE_B_DEVELOPMENT_V1 = Game5mTuningBundle(
     },
 )
 
-# DEPRECATED: ошибочно заморозил B вместо A. Оставлен для истории ledger.
-ML_FREEZE_B_CONTOURS_V1 = Game5mTuningBundle(
-    bundle_id="ml_freeze_b_contours_v1",
-    description_ru="[DEPRECATED] Ошибочный freeze B — использовать ml_freeze_a + ml_restore_b",
-    rationale_ru="Не применять повторно.",
-    observe_days_default=0,
-    changes={},
-)
-
 BUNDLES[ML_FREEZE_A_CONTOURS_V1.bundle_id] = ML_FREEZE_A_CONTOURS_V1
 BUNDLES[ML_RESTORE_B_DEVELOPMENT_V1.bundle_id] = ML_RESTORE_B_DEVELOPMENT_V1
-BUNDLES[ML_FREEZE_B_CONTOURS_V1.bundle_id] = ML_FREEZE_B_CONTOURS_V1
 
 
 def get_bundle(bundle_id: str) -> Game5mTuningBundle:

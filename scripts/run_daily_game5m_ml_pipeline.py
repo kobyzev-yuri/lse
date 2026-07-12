@@ -150,7 +150,7 @@ def main() -> int:
         continuation_summary = _load_json(cont_meta_path) or {"skipped": False}
     else:
         logger.info("continuation dataset skipped (DAILY_ML_RUN_CONTINUATION_DATASET=0)")
-        continuation_summary = {"skipped": True, "note": "frozen ml_freeze_b_contours_v1"}
+        continuation_summary = {"skipped": True, "note": "skipped (DAILY_ML_RUN_CONTINUATION_DATASET=0)"}
 
     bar_v2_summary: Dict[str, Any] = {"skipped": True}
     run_bar_v2 = _env_bool("DAILY_ML_RUN_ENTRY_BAR_V2_APPLY", True)

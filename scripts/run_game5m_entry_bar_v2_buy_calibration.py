@@ -56,6 +56,20 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+def _realized_pct_from_trade(t) -> float | None:
+    """% PnL от cost basis (entry_price × qty), как в trade_effectiveness_analyzer."""
+    try:
+        ep = float(t.entry_price)
+        qty = abs(float(t.quantity))
+        net = float(t.net_pnl)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    cost = ep * qty
+    if cost <= 0:
+        return None
+    return (net / cost) * 100.0
+
+
 def _closed_trade_backtest(*, days: int, hold_below_p: float) -> dict:
     from services.deal_params_5m import normalize_entry_context
     from services.catboost_5m_signal import attach_catboost_signal, finalize_technical_decision_with_catboost
@@ -78,7 +92,7 @@ def _closed_trade_backtest(*, days: int, hold_below_p: float) -> dict:
         p = d5.get("catboost_entry_proba_good")
         p_raw = d5.get("catboost_entry_proba_good_raw")
         eff = d5.get("technical_decision_effective")
-        pnl = getattr(t, "net_pnl_pct", None)
+        pnl = _realized_pct_from_trade(t)
         rows.append(
             {
                 "trade_id": getattr(t, "trade_id", None),
@@ -89,14 +103,14 @@ def _closed_trade_backtest(*, days: int, hold_below_p: float) -> dict:
                 "p_fusion": float(p) if p is not None else None,
                 "p_raw": float(p_raw) if p_raw is not None else None,
                 "would_hold": eff == "HOLD",
-                "net_pnl_pct": float(pnl) if pnl is not None else None,
+                "realized_pct": pnl,
             }
         )
 
     ps = [r["p_fusion"] for r in rows if r["p_fusion"] is not None]
     would_hold = [r for r in rows if r["would_hold"]]
-    wins = [r for r in rows if (r.get("net_pnl_pct") or 0) > 0]
-    blocked_wins = [r for r in would_hold if (r.get("net_pnl_pct") or 0) > 0]
+    wins = [r for r in rows if (r.get("realized_pct") or 0) > 0]
+    blocked_wins = [r for r in would_hold if (r.get("realized_pct") or 0) > 0]
     fusion_mode = (get_config_value("GAME_5M_CATBOOST_FUSION", "none") or "none").strip()
 
     return {

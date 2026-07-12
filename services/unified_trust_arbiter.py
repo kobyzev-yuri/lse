@@ -455,8 +455,19 @@ def _contour_from_entry_bar_v2(spec: dict[str, Any], metrics: dict[str, Any]) ->
         gate = recommended_gate_mode(label, l2_ready=False)
     if auc_f is not None and auc_f < promo_auc:
         gate = "log_only"
+    try:
+        from config_loader import get_config_value
+
+        fusion_mode = (get_config_value("GAME_5M_CATBOOST_FUSION", "none") or "none").strip().lower()
+    except Exception:
+        fusion_mode = "none"
+    product_status = "active"
+    if fusion_mode in ("", "none", "off", "disabled"):
+        gate = "log_only"
+        product_status = "frozen_list_a"
     auc_note = f"AUC valid {auc_f:.2f}" if auc_f is not None else "AUC n/a"
     ds_note = f"dataset {n_rows} rows" if n_rows else "dataset n/a"
+    status_note = "fusion closed (список A)" if product_status == "frozen_list_a" else "shadow"
     return {
         "contour_id": "catboost_entry_bar_v2",
         "trust_score": trust_score,
@@ -466,7 +477,11 @@ def _contour_from_entry_bar_v2(spec: dict[str, Any], metrics: dict[str, Any]) ->
         "n_matured": n_valid,
         "dataset_n_rows": n_rows,
         "shadow_only": True,
-        "conclusion_ru": f"CatBoost entry bar v2 (shadow): {label} {trust_score:.2f}, {gate}, {auc_note}, {ds_note}",
+        "product_status": product_status,
+        "fusion_mode_config": fusion_mode,
+        "conclusion_ru": (
+            f"CatBoost entry bar v2 ({status_note}): {label} {trust_score:.2f}, {gate}, {auc_note}, {ds_note}"
+        ),
     }
 
 
@@ -553,7 +568,7 @@ _CONTOUR_DIGEST_META: dict[str, dict[str, str]] = {
         "title": "CatBoost вход bar v2 (shadow)",
         "role": "bar-level + triple barrier; telemetry catboost_entry_proba_good_v2",
         "unit": "valid rows",
-        "apply_note": "Shadow only: prod v1 без изменений до AUC≥0.545 (promotion gate) и sign-off.",
+        "apply_note": "Список A (2026-07): fusion закрыт, refresh frozen; telemetry/log_only only.",
     },
     "continuation_ml": {
         "title": "Continuation ML (TAKE shadow)",
