@@ -20,6 +20,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def _env_str(key: str, default: str) -> str:
+    raw = (os.environ.get(key) or "").strip()
+    if not raw:
+        from config_loader import get_config_value
+
+        raw = (get_config_value(key, "") or "").strip()
+    return raw or default
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    raw = _env_str(key, "1" if default else "0").lower()
+    return raw in ("1", "true", "yes")
+
+
 def _env_int(key: str, default: int) -> int:
     raw = (os.environ.get(key) or "").strip()
     if not raw:
@@ -103,6 +117,10 @@ def main() -> int:
     stats_out = datasets_dir / "game5m_entry_bar_dataset_stats.json"
     train_json_out = datasets_dir / "game5m_entry_bar_v2_train.json"
     days = _env_int("GAME_5M_ENTRY_BAR_BUILD_DAYS", 90)
+    train_population = _env_str("GAME_5M_ENTRY_BAR_V2_TRAIN_POPULATION", "buy_only").lower()
+    if train_population not in ("all", "buy_only"):
+        train_population = "buy_only"
+    do_calibrate = _env_bool("GAME_5M_ENTRY_BAR_V2_CALIBRATE", True)
 
     datasets_ran = False
     if apply_data and not args.skip_datasets and not data_dry_run:
@@ -135,9 +153,13 @@ def main() -> int:
             str(csv_out),
             "--out",
             str(cb_out),
+            "--train-population",
+            train_population,
             "--json-metrics-out",
             str(metrics_path),
         ]
+        if do_calibrate:
+            train_cmd.append("--calibrate")
         alt_metrics = train_json_out
         if train_dry_run:
             train_cmd.append("--dry-run")

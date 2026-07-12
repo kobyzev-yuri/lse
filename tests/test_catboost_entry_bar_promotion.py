@@ -43,7 +43,7 @@ def test_catboost_entry_dataset_version_bar_aliases(monkeypatch):
 @patch("services.catboost_5m_signal._predict_catboost_bar_v2")
 def test_attach_catboost_signal_bar_sets_fusion_fields(mock_predict, monkeypatch):
     monkeypatch.setenv("GAME_5M_CATBOOST_DATASET_VERSION", "bar")
-    mock_predict.return_value = ("ok", 0.72, "", "/tmp/model.cbm")
+    mock_predict.return_value = ("ok", 0.72, "", "/tmp/model.cbm", 0.68, True)
     out = _sample_d5()
     attach_catboost_signal(out, "AMD")
     assert out["catboost_signal_status"] == "ok"
@@ -57,7 +57,7 @@ def test_attach_catboost_signal_bar_sets_fusion_fields(mock_predict, monkeypatch
 @patch("services.catboost_5m_signal._predict_catboost_bar_v2")
 def test_attach_catboost_bar_v2_skips_duplicate_after_fusion(mock_predict, monkeypatch):
     monkeypatch.setenv("GAME_5M_CATBOOST_DATASET_VERSION", "bar")
-    mock_predict.return_value = ("ok", 0.72, "", "/tmp/model.cbm")
+    mock_predict.return_value = ("ok", 0.72, "", "/tmp/model.cbm", 0.68, True)
     out = _sample_d5()
     attach_catboost_signal(out, "AMD")
     attach_catboost_bar_v2_signal(out, "AMD")
@@ -69,7 +69,7 @@ def test_finalize_fusion_hold_below_p_uses_bar_proba(mock_predict, monkeypatch):
     monkeypatch.setenv("GAME_5M_CATBOOST_DATASET_VERSION", "bar")
     monkeypatch.setenv("GAME_5M_CATBOOST_FUSION", "hold_if_buy_below_p")
     monkeypatch.setenv("GAME_5M_CATBOOST_HOLD_BELOW_P", "0.45")
-    mock_predict.return_value = ("ok", 0.30, "", "/tmp/model.cbm")
+    mock_predict.return_value = ("ok", 0.30, "", "/tmp/model.cbm", 0.35, False)
     out = _sample_d5()
     attach_catboost_signal(out, "AMD")
     finalize_technical_decision_with_catboost(out)

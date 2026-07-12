@@ -405,24 +405,56 @@ def _catboost_bar_v2_runtime_guards(*, require_log_flag: bool = True) -> Tuple[s
     return "ready", "", model_path, bundle
 
 
+def _apply_bar_v2_calibration(
+    p_raw: Optional[float],
+    meta: Dict[str, Any],
+) -> Tuple[Optional[float], Optional[float], str, bool]:
+    """
+    Returns (p_for_fusion, p_raw, calibration_note, calibration_active).
+    Fusion uses calibrated P only when meta fusion_calibration_ready is true.
+    """
+    if p_raw is None:
+        return None, None, "", False
+
+    calibration = meta.get("calibration") if isinstance(meta.get("calibration"), dict) else None
+    if not calibration:
+        return float(p_raw), float(p_raw), "calibration_missing_use_raw", False
+
+    from services.game5m_entry_bar_v2_calibration import apply_calibrator
+
+    calibrator = calibration.get("calibrator") if isinstance(calibration.get("calibrator"), dict) else None
+    p_cal = apply_calibrator(float(p_raw), calibrator)
+    fusion_ready = bool(meta.get("fusion_calibration_ready") or calibration.get("fusion_calibration_ready"))
+    if fusion_ready:
+        return round(p_cal, 4), round(float(p_raw), 4), "calibrated_p_for_fusion", True
+    return float(p_raw), round(float(p_raw), 4), "calibration_gates_not_ready_use_raw", False
+
+
 def _predict_catboost_bar_v2(
     ticker: str,
     d5: Dict[str, Any],
     *,
     require_log_flag: bool = True,
-) -> Tuple[str, Optional[float], str, str]:
-    """Returns (status, p_good, note, model_path)."""
+) -> Tuple[str, Optional[float], str, str, Optional[float], bool]:
+    """Returns (status, p_fusion, note, model_path, p_raw, calibration_active)."""
     st_g, note_g, model_path, bundle = _catboost_bar_v2_runtime_guards(require_log_flag=require_log_flag)
     if st_g != "ready" or bundle is None:
-        return st_g, None, note_g, model_path or ""
+        return st_g, None, note_g, model_path or "", None, False
 
     model, meta = bundle
     from services.game5m_entry_bar_dataset import resolve_bar_v2_feature_mode
 
     feat_mode = resolve_bar_v2_feature_mode(meta)
     colnames, row = build_catboost_bar_v2_feature_row(ticker, d5, mode=feat_mode)
-    p_st, p_good, p_note = _catboost_predict_proba_row(model, meta, colnames, row)
-    return p_st, p_good, p_note, model_path or ""
+    p_st, p_raw, p_note = _catboost_predict_proba_row(model, meta, colnames, row)
+    if p_st != "ok" or p_raw is None:
+        return p_st, None, p_note, model_path or "", None, False
+
+    p_fusion, p_raw_out, cal_note, cal_active = _apply_bar_v2_calibration(p_raw, meta)
+    note_parts = [p_note] if p_note else []
+    if cal_note:
+        note_parts.append(cal_note)
+    return p_st, p_fusion, "; ".join(note_parts), model_path or "", p_raw_out, cal_active
 
 
 def _set_bar_v2_predict_fields(
@@ -432,20 +464,26 @@ def _set_bar_v2_predict_fields(
     p_good: Optional[float],
     p_note: str,
     fusion_active: bool,
+    p_raw: Optional[float] = None,
+    calibration_active: bool = False,
 ) -> None:
     out["catboost_bar_v2_signal_status"] = p_st
     out["catboost_entry_proba_good_v2"] = p_good
+    if p_raw is not None:
+        out["catboost_entry_proba_good_raw_v2"] = p_raw
+    out["catboost_bar_v2_calibration_active"] = calibration_active
     out["catboost_dataset_version"] = "bar"
     if p_st != "ok":
         out["catboost_bar_v2_signal_note"] = p_note
         return
+    cal_tag = "calibrated" if calibration_active else "raw"
     if fusion_active:
         out["catboost_bar_v2_signal_note"] = (
-            f"CatBoost bar v2 (fusion): P(upper barrier first)≈{p_good:.2f}."
+            f"CatBoost bar v2 (fusion, {cal_tag}): P(upper barrier first)≈{p_good:.2f}."
         )
     else:
         out["catboost_bar_v2_signal_note"] = (
-            f"CatBoost bar v2 (shadow): P(upper barrier first)≈{p_good:.2f} — log_only."
+            f"CatBoost bar v2 (shadow, {cal_tag}): P(upper barrier first)≈{p_good:.2f} — log_only."
         )
 
 
@@ -462,8 +500,16 @@ def attach_catboost_bar_v2_signal(out: Dict[str, Any], ticker: str) -> None:
         return
 
     try:
-        p_st, p_good, p_note, _mp = _predict_catboost_bar_v2(ticker, out, require_log_flag=True)
-        _set_bar_v2_predict_fields(out, p_st=p_st, p_good=p_good, p_note=p_note, fusion_active=False)
+        p_st, p_good, p_note, _mp, p_raw, cal_active = _predict_catboost_bar_v2(ticker, out, require_log_flag=True)
+        _set_bar_v2_predict_fields(
+            out,
+            p_st=p_st,
+            p_good=p_good,
+            p_note=p_note,
+            fusion_active=False,
+            p_raw=p_raw,
+            calibration_active=cal_active,
+        )
     except Exception as e:
         logger.warning("CatBoost bar v2 predict: %s", e)
         out["catboost_bar_v2_signal_status"] = "predict_error"
@@ -483,10 +529,21 @@ def attach_catboost_signal(out: Dict[str, Any], ticker: str) -> None:
         out.setdefault("catboost_signal_note", "")
         out.setdefault("catboost_entry_proba_good", None)
         try:
-            p_st, p_good, p_note, _mp = _predict_catboost_bar_v2(ticker, out, require_log_flag=False)
+            p_st, p_good, p_note, _mp, p_raw, cal_active = _predict_catboost_bar_v2(ticker, out, require_log_flag=False)
             out["catboost_signal_status"] = p_st
             out["catboost_entry_proba_good"] = p_good
-            _set_bar_v2_predict_fields(out, p_st=p_st, p_good=p_good, p_note=p_note, fusion_active=True)
+            if p_raw is not None:
+                out["catboost_entry_proba_good_raw"] = p_raw
+            out["catboost_bar_v2_calibration_active"] = cal_active
+            _set_bar_v2_predict_fields(
+                out,
+                p_st=p_st,
+                p_good=p_good,
+                p_note=p_note,
+                fusion_active=True,
+                p_raw=p_raw,
+                calibration_active=cal_active,
+            )
             if p_st != "ok":
                 out["catboost_signal_note"] = p_note
                 return

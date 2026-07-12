@@ -124,8 +124,11 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
 
     from config_loader import get_config_value
     from services.game5m_entry_bar_dataset import FeatureMode, get_bar_train_feature_schema, row_from_bar_dataset_dict
+    from services.game5m_entry_bar_v2_calibration import build_calibration_block, is_buy_bar_row
 
     feature_mode: FeatureMode = "full" if getattr(args, "feature_mode", "full") == "full" else "tech"
+    train_population = (getattr(args, "train_population", "all") or "all").strip().lower()
+    do_calibrate = bool(getattr(args, "calibrate", False))
 
     csv_path = (args.bar_csv or "").strip()
     if not csv_path:
@@ -160,10 +163,16 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
     rows: list[list] = []
     labels: list[int] = []
     meta_rows: list[tuple] = []
+    n_rows_all = 0
+    n_skipped_non_buy = 0
 
     with open(path, newline="", encoding="utf-8") as f:
         for raw in csv.DictReader(f):
+            n_rows_all += 1
             if str(raw.get("tb_label") or "") == "insufficient_data":
+                continue
+            if train_population == "buy_only" and not is_buy_bar_row(raw):
+                n_skipped_non_buy += 1
                 continue
             try:
                 row = row_from_bar_dataset_dict(raw, mode=feature_mode)
@@ -179,7 +188,16 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
 
     n_total = len(rows)
     pos = sum(labels)
-    logger.info("Bar dataset %s: rows=%s (y=1: %s, y=0: %s)", path, n_total, pos, n_total - pos)
+    logger.info(
+        "Bar dataset %s: population=%s rows=%s (all=%s skipped_non_buy=%s y=1: %s y=0: %s)",
+        path,
+        train_population,
+        n_total,
+        n_rows_all,
+        n_skipped_non_buy,
+        pos,
+        n_total - pos,
+    )
 
     if n_total < min_rows:
         logger.warning("Строк меньше порога %s — v2 модель не пишем.", min_rows)
@@ -230,14 +248,38 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
     )
     model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
 
+    proba_valid: list[float] = []
     try:
-        from sklearn.metrics import roc_auc_score
+        proba_valid = [float(p) for p in model.predict_proba(valid_pool)[:, 1]]
+    except Exception as e:
+        logger.warning("Bar v2 valid predict_proba failed: %s", e)
 
-        proba = model.predict_proba(valid_pool)[:, 1]
-        auc = roc_auc_score(valid_y, proba) if len(set(valid_y)) > 1 else float("nan")
-    except Exception:
-        auc = float("nan")
+    auc = float("nan")
+    if proba_valid and len(set(valid_y)) > 1:
+        try:
+            from sklearn.metrics import roc_auc_score
+
+            auc = float(roc_auc_score(valid_y, proba_valid))
+        except Exception:
+            from services.game5m_entry_bar_v2_calibration import roc_auc_score_safe
+
+            auc = roc_auc_score_safe(valid_y, proba_valid)
     logger.info("Bar v2 Train=%s Valid=%s AUC(valid)≈%s", n_train, n_valid, auc if auc == auc else "n/a")
+
+    calibration: dict | None = None
+    if do_calibrate and proba_valid:
+        calibration = build_calibration_block(
+            raw_probs_valid=proba_valid,
+            labels_valid=valid_y,
+            auc_valid_all=round(auc, 4) if auc == auc else None,
+        )
+        logger.info(
+            "Bar v2 calibration: fusion_ready=%s std_cal=%s ece_cal=%s auc_buy=%s",
+            calibration.get("fusion_calibration_ready"),
+            calibration.get("std_p_calibrated_valid"),
+            calibration.get("ece_calibrated_valid"),
+            calibration.get("auc_valid_buy_only"),
+        )
 
     out_path = Path(out_final)
     meta_path = out_path.with_suffix(".meta.json")
@@ -252,6 +294,9 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
         "n_train": n_train,
         "n_valid": n_valid,
         "n_total": n_total,
+        "n_rows_all": n_rows_all,
+        "n_skipped_non_buy": n_skipped_non_buy,
+        "train_population": train_population,
         "y_pos": pos,
         "label": "y_entry_good",
         "feature_mode": feature_mode,
@@ -261,6 +306,9 @@ def _train_bar_dataset(args: argparse.Namespace) -> int:
         "out_model_path": str(out_path),
         "promotion_note": "Shadow only until AUC valid >= promotion gate (default 0.545) and trust sign-off; prod uses dataset=trade v1",
     }
+    if calibration:
+        meta["calibration"] = calibration
+        meta["fusion_calibration_ready"] = calibration.get("fusion_calibration_ready")
     _write_metrics_json(args.json_metrics_out, meta)
 
     if args.dry_run:
@@ -316,6 +364,17 @@ def main() -> int:
         choices=("tech", "full"),
         default="full",
         help="bar dataset: tech=BAR_TRAIN_NUMERIC_KEYS only; full=+news/calendar (default)",
+    )
+    parser.add_argument(
+        "--train-population",
+        choices=("all", "buy_only"),
+        default="all",
+        help="bar dataset: all rows or BUY/STRONG_BUY bars only (deployment population)",
+    )
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Fit Platt calibrator on valid split; store gates in meta.json",
     )
     args = parser.parse_args()
 
