@@ -124,11 +124,14 @@ GAME_5M_MULTIDAY_HOLD_GATE_MODE=log_only
 
 | Дата | Действие |
 |------|----------|
-| **~14.07** | B2 continuation: review `continuation_ml_live_review`, решение apply/none |
+| **14.07 07:15 MSK** | **B2 continuation go/no-go #1** — cron + `run_game5m_b2_continuation_gonogo_review.py` |
 | **15–21.07** | B1 hold H3 + B3 multiday hold: counterfactual bake-off |
+| **21.07 07:15 MSK** | B2 backup review (если 14.07 defer) |
 | **конец июля** | Итог: один exit-контур в apply (B2 или B1, не оба сразу без теста) |
 | **август** | B4 entry PnL-label dataset + train (если exit дал эффект) |
 
+**Операционный календарь (команды, cron, чеклисты):** [GAME_5M_B_LIST_RUN_SCHEDULE.md](GAME_5M_B_LIST_RUN_SCHEDULE.md).
+
 ---
 
-*Последнее обновление: 2026-07-12, prod VM `515b522`.*
+*Последнее обновление: 2026-07-13, prod VM `9e24131`.*

@@ -102,6 +102,9 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 40 6 * * 0 flock -n /tmp/lse_weekly_game5m_tactic_review.lock /home/ai8049520/lse/scripts/cron_weekly_game5m_tactic_review.sh >> /home/ai8049520/lse/logs/weekly_game5m_tactic_review.log 2>&1
 # GAME_5M light analyzer 7d (B6 observability). docs/GAME_5M_SESSION_ANALYSIS_PLAYBOOK.md §5
 45 6 * * 0 flock -n /tmp/lse_game5m_light_analyzer_weekly.lock /home/ai8049520/lse/scripts/cron_weekly_game5m_light_analyzer.sh >> /home/ai8049520/lse/logs/game5m_light_analyzer_weekly.log 2>&1
+# B2 continuation go/no-go (список B): 14.07 primary, 21.07 backup — docs/GAME_5M_B_LIST_RUN_SCHEDULE.md
+15 7 14 7 * flock -n /tmp/lse_b2_gonogo.lock /home/ai8049520/lse/scripts/cron_game5m_b2_continuation_gonogo.sh
+15 7 21 7 * flock -n /tmp/lse_b2_gonogo.lock /home/ai8049520/lse/scripts/cron_game5m_b2_continuation_gonogo.sh
 # Gap forecast rolling metrics refresh (after open ingest; updates last_gap_forecast_metrics.json).
 50 16 * * 1-5 flock -n /tmp/lse_gap_analyze_daily.lock docker exec lse-bot python3 /app/scripts/analyze_game5m_gap_forecast.py --days 90 --json-metrics-out /app/logs/ml/ml_data_quality/last_gap_forecast_metrics.json >> /home/ai8049520/lse/logs/game5m_gap_forecast.log 2>&1
 

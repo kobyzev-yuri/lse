@@ -4,6 +4,7 @@
 
 **Связанные документы:**
 - [GAME_5M_ML_STRATEGY_PLAN.md](GAME_5M_ML_STRATEGY_PLAN.md) — **актуальный план ML: список A (стоп) / B (разработка)**.
+- [GAME_5M_B_LIST_RUN_SCHEDULE.md](GAME_5M_B_LIST_RUN_SCHEDULE.md) — **расписание прогонов B (B2 go/no-go 14.07, bake-off B1)**.
 - [GAME_5M_TUNING_REGLEMENT.md](GAME_5M_TUNING_REGLEMENT.md) — правила live-экспериментов (один bundle, observe, rollback).
 - [GAME_5M_AGENT_TUNING_LOG.md](GAME_5M_AGENT_TUNING_LOG.md) — журнал применённых изменений на проде.
 - [TRADE_EFFECTIVENESS_ANALYZER.md](TRADE_EFFECTIVENESS_ANALYZER.md) — поля анализатора.

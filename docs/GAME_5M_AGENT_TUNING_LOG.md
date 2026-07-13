@@ -18,7 +18,19 @@
 
 ---
 
-## Сессия 2026-07-12 — bar v2 BUY calibration + стратегия A/B
+## Сессия 2026-07-13 — расписание прогонов списка B
+
+**Запланировано:** [GAME_5M_B_LIST_RUN_SCHEDULE.md](GAME_5M_B_LIST_RUN_SCHEDULE.md).
+
+| Дата MSK | Прогон |
+|----------|--------|
+| 14.07 07:15 | B2 continuation go/no-go #1 (`run_game5m_b2_continuation_gonogo_review.py`, cron) |
+| 18.07 | Старт bake-off B1 hold H3 + B3 multiday |
+| 21.07 07:15 | B2 backup review |
+
+**Артефакт:** `last_game5m_b2_continuation_gonogo.json`.
+
+---
 
 **Калибровка:** BUY-only retrain (4296 rows), Platt, `fusion_calibration_ready=true` на valid; live sweep **no-go** (Spearman≈0.03).
 
