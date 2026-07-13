@@ -24,7 +24,9 @@ from services.trade_effectiveness_analyzer import (  # noqa: E402
     _build_continuation_ml_live_review,
     _build_continuation_take_delay_backtest,
     _estimate_trade_effects,
+    _filter_effects_for_strategy,
     _load_closed_trades,
+    _prepare_ohlc_cache,
 )
 
 DEFAULT_MIN_TAKE_TELEMETRY = 8
@@ -140,8 +142,12 @@ def evaluate_b2_gonogo_gates(
 
 
 def build_b2_continuation_gonogo_report(*, days: int, strategy: str = "GAME_5M") -> Dict[str, Any]:
+    days = max(7, min(int(days), 30))
     closed = _load_closed_trades(days, strategy)
-    effects, cache = _estimate_trade_effects(closed, strategy=strategy, include_ohlc=True)
+    tickers = [str(t.ticker) for t in closed if getattr(t, "ticker", None)]
+    cache = _prepare_ohlc_cache(tickers=tickers, days=days)
+    effects = _estimate_trade_effects(closed, cache)
+    effects = _filter_effects_for_strategy(effects, closed, strategy)
     live = _build_continuation_ml_live_review(effects)
     backtest = _build_continuation_take_delay_backtest(effects, cache, strategy=strategy)
     gates = evaluate_b2_gonogo_gates(live, backtest)
