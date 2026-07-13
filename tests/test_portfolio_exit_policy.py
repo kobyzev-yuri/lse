@@ -23,13 +23,29 @@ class TestPortfolioExitPolicy(unittest.TestCase):
         from unittest.mock import patch
 
         with patch(
-            "services.portfolio_exit_policy.trailing_take_params",
+            "services.portfolio_exit_policy.trailing_take_params_for_regime",
             return_value=(True, 8.0, 3.0),
         ):
             ok, _ = trailing_take_should_close(12.0, 16.0)
             self.assertTrue(ok)
             ok2, _ = trailing_take_should_close(14.0, 16.0)
             self.assertFalse(ok2)
+
+    def test_melt_up_wider_trailing(self):
+        from unittest.mock import patch
+
+        with patch(
+            "services.portfolio_exit_policy.trailing_take_params_for_regime",
+            return_value=(True, 14.0, 7.0),
+        ):
+            ok, _ = trailing_take_should_close(12.0, 18.0, regime="melt_up")
+            self.assertFalse(ok)
+            ok2, _ = trailing_take_should_close(10.0, 18.0, regime="melt_up")
+            self.assertTrue(ok2)
+
+    def test_ml_take_melt_up_cap(self):
+        eff, _ = compute_ml_adjusted_take(10.0, 8.0, regime="melt_up")
+        self.assertGreaterEqual(eff, 12.0)
 
 
 if __name__ == "__main__":

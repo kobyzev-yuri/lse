@@ -80,6 +80,17 @@ def portfolio_indicator_blocks_buy(ticker: str) -> Tuple[bool, str]:
     return False, ""
 
 
+def portfolio_trend_blocks_buy(ticker: str) -> Tuple[bool, str]:
+    """Late-chase guard у 20d high после сильного ралли."""
+    try:
+        from services.portfolio_trend_regime import portfolio_trend_late_chase_blocks_buy
+
+        return portfolio_trend_late_chase_blocks_buy(ticker)
+    except Exception as e:
+        logger.debug("portfolio_trend_blocks_buy %s: %s", ticker, e)
+        return False, ""
+
+
 def merge_portfolio_buy_context(
     context_json: Optional[Dict[str, Any]],
     ticker: str,
@@ -113,6 +124,15 @@ def merge_portfolio_buy_context(
                 base[k] = v
     except Exception as e:
         logger.debug("event_reaction snapshot %s: %s", ticker, e)
+    try:
+        from services.portfolio_trend_regime import portfolio_trend_regime_snapshot
+
+        tr = portfolio_trend_regime_snapshot(ticker)
+        for k, v in tr.items():
+            if k.startswith("portfolio_trend_"):
+                base[k] = v
+    except Exception as e:
+        logger.debug("portfolio trend snapshot %s: %s", ticker, e)
     if base_take_profit is not None and base_take_profit > 0:
         try:
             from services.portfolio_exit_policy import compute_entry_effective_take_for_ticker

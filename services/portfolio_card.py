@@ -204,6 +204,14 @@ def portfolio_card_payload(
     except Exception as e:
         logger.debug("risk_limits for portfolio card: %s", e)
         out["risk_limits"] = None
+    try:
+        from services.portfolio_trend_regime import portfolio_trend_regime_snapshot
+
+        for k, v in portfolio_trend_regime_snapshot(ticker).items():
+            if k.startswith("portfolio_trend_"):
+                out[k] = v
+    except Exception as e:
+        logger.debug("portfolio_trend card %s: %s", ticker, e)
     return out
 
 

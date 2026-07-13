@@ -202,6 +202,10 @@ ANALYZER_METRIC_DEFINITIONS: Dict[str, str] = {
         "Разбор выходов портфельной игры: take_profit на BUY, portfolio_effective_take_pct_at_entry, сигналы TAKE_PROFIT / trailing; "
         "сводка по exit_signal и ранние тейки с крупным missed_upside (5m-окно)."
     ),
+    "portfolio_trend_regime_review": (
+        "Rule-based 20d режим тренда (melt_up/trend_up/neutral/breakdown) по universe портфеля: ret_20d, near_20d_high, "
+        "late-chase блоки. MVP до CatBoost horizon=20d; снимок на BUY в context_json.portfolio_trend_*."
+    ),
     "portfolio_config_grid": (
         "Текущие PORTFOLIO_* из config: сетка параметров (стратегические тейки, fallback, ML entry/exit). "
         "Авто-реплей как game5m_replay_proposals для портфеля не выполняется — ручная настройка."
@@ -450,6 +454,11 @@ PORTFOLIO_CONFIG_GRID_ROWS: List[Tuple[str, str, str]] = [
     ("PORTFOLIO_TRAILING_TAKE_ENABLED", "trailing", "portfolio_exit_policy"),
     ("PORTFOLIO_TRAILING_MIN_PROFIT_PCT", "trailing", "arm trailing после +N%"),
     ("PORTFOLIO_TRAILING_PULLBACK_PCT", "trailing", "выход при откате от пика"),
+    ("PORTFOLIO_TREND_REGIME_ENABLED", "trend_20d", "portfolio_trend_regime snapshot"),
+    ("PORTFOLIO_TREND_LATE_CHASE_BLOCK_ENABLED", "trend_20d", "portfolio_trend_blocks_buy"),
+    ("PORTFOLIO_TREND_LATE_CHASE_MIN_RET_20D_PCT", "trend_20d", "late chase ret_20d порог"),
+    ("PORTFOLIO_TREND_MELT_UP_TRAILING_MIN_PROFIT_PCT", "trend_20d", "melt_up arm trailing"),
+    ("PORTFOLIO_TREND_MELT_UP_TRAILING_PULLBACK_PCT", "trend_20d", "melt_up pullback"),
     ("PORTFOLIO_STOP_LOSS_ENABLED", "risk", "strategy_parameters / config"),
     ("PORTFOLIO_EXIT_ONLY_TAKE", "risk", "только тейк, без стопа"),
 ]
@@ -684,6 +693,33 @@ def _build_portfolio_exit_policy_review(closed: List[Any], effects: List[TradeEf
     }
 
 
+def _build_portfolio_trend_regime_review() -> Dict[str, Any]:
+    try:
+        from services.portfolio_card import get_portfolio_trade_tickers
+        from services.portfolio_trend_regime import build_portfolio_trend_regime_review
+
+        tickers = list(get_portfolio_trade_tickers() or [])
+        if not tickers:
+            return {"mode": "skipped", "note": "Нет тикеров portfolio universe"}
+        review = build_portfolio_trend_regime_review(tickers)
+        review["mode"] = "portfolio_trend_regime"
+        late = [
+            t
+            for t in review.get("tickers") or []
+            if t.get("portfolio_trend_near_20d_high")
+            and (t.get("portfolio_trend_ret_20d_pct") or 0) >= float(
+                (get_config_value("PORTFOLIO_TREND_LATE_CHASE_MIN_RET_20D_PCT", "25") or "25").strip()
+            )
+        ]
+        review["late_chase_candidates"] = [
+            {"ticker": x.get("ticker"), "ret_20d_pct": x.get("portfolio_trend_ret_20d_pct")}
+            for x in late[:20]
+        ]
+        return review
+    except Exception as e:
+        return {"mode": "error", "note": str(e)}
+
+
 def _attach_portfolio_analyzer_blocks(
     payload: Dict[str, Any],
     *,
@@ -696,6 +732,7 @@ def _attach_portfolio_analyzer_blocks(
     if su in ("PORTFOLIO", "ALL"):
         payload["portfolio_ml_entry_review"] = _build_portfolio_ml_entry_review(strategy, closed, effects)
         payload["portfolio_exit_policy_review"] = _build_portfolio_exit_policy_review(closed, effects)
+        payload["portfolio_trend_regime_review"] = _build_portfolio_trend_regime_review()
         payload["portfolio_config_grid"] = _build_portfolio_config_grid()
         meta = payload.get("meta")
         if isinstance(meta, dict):
@@ -709,6 +746,7 @@ def _attach_portfolio_analyzer_blocks(
         skip = "Только при strategy=PORTFOLIO или ALL."
         payload["portfolio_ml_entry_review"] = {"mode": "skipped", "note": skip}
         payload["portfolio_exit_policy_review"] = {"mode": "skipped", "note": skip}
+        payload["portfolio_trend_regime_review"] = {"mode": "skipped", "note": skip}
         payload["portfolio_config_grid"] = {"mode": "skipped", "note": skip}
 
 
@@ -4193,6 +4231,8 @@ def _compact_report_for_llm(payload: Dict[str, Any]) -> Dict[str, Any]:
         out["portfolio_ml_entry_review"] = payload["portfolio_ml_entry_review"]
     if isinstance(payload.get("portfolio_exit_policy_review"), dict):
         out["portfolio_exit_policy_review"] = payload["portfolio_exit_policy_review"]
+    if isinstance(payload.get("portfolio_trend_regime_review"), dict):
+        out["portfolio_trend_regime_review"] = payload["portfolio_trend_regime_review"]
     if isinstance(payload.get("portfolio_config_grid"), dict):
         out["portfolio_config_grid"] = {"note": "см. UI / полный JSON"}
     return {k: v for k, v in out.items() if v is not None}
@@ -7310,6 +7350,17 @@ def _append_portfolio_analyzer_text_lines(lines: List[str], report: Dict[str, An
             f"• effective_take в context: {pe.get('n_with_effective_take_snapshot')}, "
             f"ранние тейки (missed≥2%): {pe.get('n_early_take_on_wins_missed_ge_2pct')}"
         )
+    pt = report.get("portfolio_trend_regime_review") or {}
+    if pt.get("mode") == "portfolio_trend_regime":
+        lines.append("")
+        lines.append("Portfolio 20d trend (rule MVP):")
+        rc = pt.get("regime_counts") or {}
+        if rc:
+            parts = [f"{k}={v}" for k, v in sorted(rc.items(), key=lambda kv: -int(kv[1]))]
+            lines.append("• regime_counts: " + ", ".join(parts))
+        late = pt.get("late_chase_candidates") or []
+        if late:
+            lines.append(f"• late_chase_candidates: {len(late)} (блок BUY при включённом guard)")
 
 
 def _append_multiday_lr_and_arbiter_text_lines(lines: List[str], report: Dict[str, Any]) -> None:

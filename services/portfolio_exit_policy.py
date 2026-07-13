@@ -10,6 +10,7 @@ import math
 from typing import Any, Dict, Optional, Tuple
 
 from config_loader import get_config_value
+from services.portfolio_trend_regime import regime_from_context
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,16 @@ def ml_take_params() -> Tuple[bool, float, float, float]:
     )
 
 
+def ml_take_params_for_regime(regime: str | None = None) -> Tuple[bool, float, float, float]:
+    enabled, factor, floor_p, cap_p = ml_take_params()
+    r = (regime or "neutral").strip().lower()
+    if r == "melt_up":
+        cap_p = max(cap_p, _float_cfg("PORTFOLIO_TREND_MELT_UP_TAKE_CAP_PCT", 35.0))
+    elif r == "breakdown":
+        cap_p = min(cap_p, _float_cfg("PORTFOLIO_TREND_BREAKDOWN_TAKE_CAP_PCT", 12.0))
+    return enabled, factor, floor_p, cap_p
+
+
 def trailing_take_params() -> Tuple[bool, float, float]:
     """enabled, min_profit_to_arm, pullback_from_peak_pct."""
     if not _truthy("PORTFOLIO_TRAILING_TAKE_ENABLED", "true"):
@@ -50,6 +61,18 @@ def trailing_take_params() -> Tuple[bool, float, float]:
         _float_cfg("PORTFOLIO_TRAILING_MIN_PROFIT_PCT", 8.0),
         _float_cfg("PORTFOLIO_TRAILING_PULLBACK_PCT", 3.0),
     )
+
+
+def trailing_take_params_for_regime(regime: str | None = None) -> Tuple[bool, float, float]:
+    enabled, min_arm, pullback = trailing_take_params()
+    r = (regime or "neutral").strip().lower()
+    if r == "melt_up":
+        min_arm = _float_cfg("PORTFOLIO_TREND_MELT_UP_TRAILING_MIN_PROFIT_PCT", 14.0)
+        pullback = _float_cfg("PORTFOLIO_TREND_MELT_UP_TRAILING_PULLBACK_PCT", 7.0)
+    elif r == "breakdown":
+        min_arm = _float_cfg("PORTFOLIO_TREND_BREAKDOWN_TRAILING_MIN_PROFIT_PCT", 5.0)
+        pullback = _float_cfg("PORTFOLIO_TREND_BREAKDOWN_TRAILING_PULLBACK_PCT", 2.0)
+    return enabled, min_arm, pullback
 
 
 def _parse_context(context_json: Any) -> Dict[str, Any]:
@@ -77,9 +100,14 @@ def ml_expected_pct_from_context(ctx: Dict[str, Any]) -> Optional[float]:
         return None
 
 
-def compute_ml_adjusted_take(base_take: float, ml_expected_pct: Optional[float]) -> Tuple[float, str]:
+def compute_ml_adjusted_take(
+    base_take: float,
+    ml_expected_pct: Optional[float],
+    *,
+    regime: str | None = None,
+) -> Tuple[float, str]:
     """Поднять тейк по снимку ML на входе (не пересчитывать на выходе)."""
-    enabled, factor, floor_p, cap_p = ml_take_params()
+    enabled, factor, floor_p, cap_p = ml_take_params_for_regime(regime)
     if not enabled or base_take <= 0:
         return base_take, "base"
     if ml_expected_pct is None or ml_expected_pct <= 0:
@@ -106,7 +134,7 @@ def compute_entry_effective_take_for_ticker(
             if k.startswith("portfolio_ml_"):
                 ctx[k] = v
         ml_pct = ml_expected_pct_from_context(ctx)
-    eff, note = compute_ml_adjusted_take(float(base_take), ml_pct)
+    eff, note = compute_ml_adjusted_take(float(base_take), ml_pct, regime=regime_from_context(ctx))
     return eff, note
 
 
@@ -146,8 +174,10 @@ def peak_pnl_pct_since_entry(
 def trailing_take_should_close(
     pnl_pct: float,
     peak_pnl_pct: Optional[float],
+    *,
+    regime: str | None = None,
 ) -> Tuple[bool, str]:
-    enabled, min_arm, pullback = trailing_take_params()
+    enabled, min_arm, pullback = trailing_take_params_for_regime(regime)
     if not enabled or peak_pnl_pct is None:
         return False, ""
     if peak_pnl_pct < min_arm:
@@ -192,7 +222,7 @@ def resolve_effective_take_pct(
         return 0.0, "none"
 
     ml_pct = ml_expected_pct_from_context(ctx)
-    eff, note = compute_ml_adjusted_take(float(base), ml_pct)
+    eff, note = compute_ml_adjusted_take(float(base), ml_pct, regime=regime_from_context(ctx))
     if from_config_fallback:
         return eff, f"config_fallback;{note}"
     return eff, note
@@ -212,9 +242,11 @@ def evaluate_portfolio_exit(
     Returns: (should_close, human_reason, signal_type)
     signal_type: TAKE_PROFIT | TRAILING_TAKE
     """
+    ctx = _parse_context(context_json)
+    regime = regime_from_context(ctx)
     pnl_pct = (current_price - entry_price) / entry_price * 100.0
     peak = peak_pnl_pct_since_entry(engine, ticker, entry_price, entry_ts)
-    trail_close, trail_reason = trailing_take_should_close(pnl_pct, peak)
+    trail_close, trail_reason = trailing_take_should_close(pnl_pct, peak, regime=regime)
     if trail_close:
         return True, trail_reason, "TRAILING_TAKE"
 

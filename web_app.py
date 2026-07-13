@@ -3309,7 +3309,16 @@ def _build_portfolio_daily_chart_data(ticker: str, days: int) -> Dict[str, Any]:
             "rsi": _to_jsonable(row.get("rsi")),
             "volatility_5": _to_jsonable(row.get("volatility_5")),
         })
-    return {"ticker": ticker, "interval": "1d", "source": "quotes", "bars": records, "trades": trades, "position": position}
+    return {"ticker": ticker, "interval": "1d", "source": "quotes", "bars": records, "trades": trades, "position": position, "trend_overlay": _portfolio_chart_trend_overlay(ticker)}
+
+
+def _portfolio_chart_trend_overlay(ticker: str) -> Dict[str, Any]:
+    try:
+        from services.portfolio_trend_regime import portfolio_trend_regime_snapshot
+
+        return portfolio_trend_regime_snapshot(ticker)
+    except Exception:
+        return {"portfolio_trend_status": "error"}
 
 
 def _build_portfolio_daily_charts_bulk(days: int) -> Dict[str, Any]:
