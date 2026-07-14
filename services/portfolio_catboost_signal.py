@@ -45,21 +45,38 @@ def _load_model_bundle(model_path: str, model_mtime: float) -> Tuple[Any, Dict[s
     return model, meta
 
 
-def _default_model_path() -> str:
+def _default_model_path(*, horizon_days: int = 5) -> str:
     root = Path(__file__).resolve().parents[1]
+    if int(horizon_days) == 20:
+        if Path("/app/logs").exists():
+            return "/app/logs/ml/models/portfolio_return_catboost_20d.cbm"
+        return str(root / "local" / "models" / "portfolio_return_catboost_20d.cbm")
     return str(root / "local" / "models" / "portfolio_return_catboost.cbm")
 
 
-def _runtime_guards() -> Tuple[str, str, Optional[str], Optional[Tuple[Any, Dict[str, Any]]]]:
-    raw = (get_config_value("PORTFOLIO_CATBOOST_ENABLED", "false") or "false").strip().lower()
+def _runtime_guards(
+    *,
+    horizon_days: int = 5,
+) -> Tuple[str, str, Optional[str], Optional[Tuple[Any, Dict[str, Any]]]]:
+    if int(horizon_days) == 20:
+        enabled_key = "PORTFOLIO_CATBOOST_20D_ENABLED"
+        path_key = "PORTFOLIO_CATBOOST_20D_MODEL_PATH"
+        # Default on: shadow log_only on BUY/cards when .cbm exists.
+        default_enabled = "true"
+    else:
+        enabled_key = "PORTFOLIO_CATBOOST_ENABLED"
+        path_key = "PORTFOLIO_CATBOOST_MODEL_PATH"
+        default_enabled = "false"
+
+    raw = (get_config_value(enabled_key, default_enabled) or default_enabled).strip().lower()
     if raw not in ("1", "true", "yes"):
-        return "disabled", "Portfolio CatBoost выключен (PORTFOLIO_CATBOOST_ENABLED).", None, None
+        return "disabled", f"Portfolio CatBoost выключен ({enabled_key}).", None, None
     try:
         import catboost  # noqa: F401
     except ImportError:
         return "no_package", "Пакет catboost не установлен (pip install -r requirements-catboost.txt).", None, None
 
-    model_path = (get_config_value("PORTFOLIO_CATBOOST_MODEL_PATH", "") or "").strip() or _default_model_path()
+    model_path = (get_config_value(path_key, "") or "").strip() or _default_model_path(horizon_days=horizon_days)
     if not os.path.isfile(model_path):
         return "no_model_file", f"Нет файла модели: {model_path}", model_path, None
     try:
@@ -74,7 +91,12 @@ def _runtime_guards() -> Tuple[str, str, Optional[str], Optional[Tuple[Any, Dict
     return "ready", "", model_path, bundle
 
 
-def _score_from_expected_log_return(value: Optional[float], threshold_log: float) -> Optional[float]:
+def _score_from_expected_log_return(
+    value: Optional[float],
+    threshold_log: float,
+    *,
+    scale: float = 0.05,
+) -> Optional[float]:
     if value is None:
         return None
     try:
@@ -83,22 +105,34 @@ def _score_from_expected_log_return(value: Optional[float], threshold_log: float
         return None
     if not math.isfinite(x):
         return None
-    # 50 = roughly threshold; +5% log excess saturates near 100, -5% near 0.
-    score = 50.0 + ((x - threshold_log) / 0.05) * 50.0
+    sc = max(1e-6, float(scale))
+    # 50 = roughly threshold; +scale log excess saturates near 100.
+    score = 50.0 + ((x - threshold_log) / sc) * 50.0
     return round(max(0.0, min(100.0, score)), 1)
 
 
-def predict_portfolio_expected_returns(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
-    """
-    Batch prediction for portfolio cards.
+def _field_prefix(horizon_days: int) -> str:
+    return "portfolio_ml_20d" if int(horizon_days) == 20 else "portfolio_ml"
 
-    Returns dict[ticker] with ml_* fields. Missing tickers receive no row.
+
+def predict_portfolio_expected_returns(
+    tickers: List[str],
+    *,
+    horizon_days: int = 5,
+) -> Dict[str, Dict[str, Any]]:
     """
-    status, note, model_path, bundle = _runtime_guards()
+    Batch prediction for portfolio cards / BUY context.
+
+    horizon_days=5 → portfolio_ml_* fields (take/entry).
+    horizon_days=20 → portfolio_ml_20d_* fields (log_only trend overlay).
+    """
+    prefix = _field_prefix(horizon_days)
+    status, note, model_path, bundle = _runtime_guards(horizon_days=horizon_days)
     base = {
-        "portfolio_ml_status": status,
-        "portfolio_ml_note": note,
-        "portfolio_ml_model_path": model_path,
+        f"{prefix}_status": status,
+        f"{prefix}_note": note,
+        f"{prefix}_model_path": model_path,
+        f"{prefix}_horizon_days": int(horizon_days),
     }
     wanted = [str(t or "").strip().upper() for t in tickers if str(t or "").strip()]
     if status != "ready" or bundle is None:
@@ -112,19 +146,28 @@ def predict_portfolio_expected_returns(tickers: List[str]) -> Dict[str, Dict[str
     try:
         df = build_latest_portfolio_ml_features(wanted, corr_window_days=corr_window)
     except Exception as e:
-        logger.warning("Portfolio CatBoost features: %s", e)
-        err = {**base, "portfolio_ml_status": "feature_error", "portfolio_ml_note": str(e)}
+        logger.warning("Portfolio CatBoost features h=%s: %s", horizon_days, e)
+        err = {**base, f"{prefix}_status": "feature_error", f"{prefix}_note": str(e)}
         return {t: dict(err) for t in wanted}
     if df.empty:
-        empty = {**base, "portfolio_ml_status": "no_features", "portfolio_ml_note": "Нет daily feature rows."}
+        empty = {
+            **base,
+            f"{prefix}_status": "no_features",
+            f"{prefix}_note": "Нет daily feature rows.",
+        }
         return {t: dict(empty) for t in wanted}
 
     colnames, cat_idx, rows = feature_frame_to_rows(df)
     expected = meta.get("feature_names")
     if list(expected or []) != colnames:
         msg = "Список признаков не совпадает с meta.json — переобучите portfolio CatBoost."
-        logger.warning("Portfolio CatBoost feature mismatch meta=%s current=%s", expected, colnames)
-        mismatch = {**base, "portfolio_ml_status": "feature_mismatch", "portfolio_ml_note": msg}
+        logger.warning(
+            "Portfolio CatBoost feature mismatch h=%s meta=%s current=%s",
+            horizon_days,
+            expected,
+            colnames,
+        )
+        mismatch = {**base, f"{prefix}_status": "feature_mismatch", f"{prefix}_note": msg}
         return {t: dict(mismatch) for t in wanted}
     try:
         from catboost import Pool
@@ -132,15 +175,30 @@ def predict_portfolio_expected_returns(tickers: List[str]) -> Dict[str, Dict[str
         pool = Pool(rows, cat_features=cat_idx)
         preds = model.predict(pool)
     except Exception as e:
-        logger.warning("Portfolio CatBoost predict: %s", e)
-        err = {**base, "portfolio_ml_status": "predict_error", "portfolio_ml_note": str(e)}
+        logger.warning("Portfolio CatBoost predict h=%s: %s", horizon_days, e)
+        err = {**base, f"{prefix}_status": "predict_error", f"{prefix}_note": str(e)}
         return {t: dict(err) for t in wanted}
 
     try:
-        horizon = int(meta.get("horizon_days") or 5)
+        horizon = int(meta.get("horizon_days") or horizon_days)
     except (TypeError, ValueError):
-        horizon = 5
+        horizon = int(horizon_days)
     threshold_log = float(meta.get("threshold_log_return") or portfolio_ml_threshold_log())
+    try:
+        score_scale = float(
+            (
+                get_config_value(
+                    "PORTFOLIO_CATBOOST_20D_SCORE_SCALE_LOG",
+                    "0.12",
+                )
+                if int(horizon_days) == 20
+                else "0.05"
+            )
+            or ("0.12" if int(horizon_days) == 20 else "0.05")
+        )
+    except (TypeError, ValueError):
+        score_scale = 0.12 if int(horizon_days) == 20 else 0.05
+
     out: Dict[str, Dict[str, Any]] = {}
     for i, (_, r) in enumerate(df.iterrows()):
         t = str(r.get("ticker") or "").strip().upper()
@@ -149,25 +207,68 @@ def predict_portfolio_expected_returns(tickers: List[str]) -> Dict[str, Dict[str
         except (TypeError, ValueError, IndexError):
             pred_log = float("nan")
         if not math.isfinite(pred_log):
-            out[t] = {**base, "portfolio_ml_status": "bad_prediction", "portfolio_ml_note": "Модель вернула NaN."}
+            out[t] = {
+                **base,
+                f"{prefix}_status": "bad_prediction",
+                f"{prefix}_note": "Модель вернула NaN.",
+            }
             continue
         pred_pct = (math.exp(pred_log) - 1.0) * 100.0
         out[t] = {
             **base,
-            "portfolio_ml_status": "ok",
-            "portfolio_ml_note": "",
-            "portfolio_ml_horizon_days": horizon,
-            "portfolio_ml_expected_log_return": round(pred_log, 6),
-            "portfolio_ml_expected_return_pct": round(pred_pct, 2),
-            "portfolio_ml_entry_score": _score_from_expected_log_return(pred_log, threshold_log),
-            "portfolio_ml_threshold_pct": round((math.exp(threshold_log) - 1.0) * 100.0, 2),
-            "portfolio_ml_cluster_role": str(r.get("cluster_role") or "unassigned"),
+            f"{prefix}_status": "ok",
+            f"{prefix}_note": "",
+            f"{prefix}_horizon_days": horizon,
+            f"{prefix}_expected_log_return": round(pred_log, 6),
+            f"{prefix}_expected_return_pct": round(pred_pct, 2),
+            f"{prefix}_entry_score": _score_from_expected_log_return(
+                pred_log, threshold_log, scale=score_scale
+            ),
+            f"{prefix}_threshold_pct": round((math.exp(threshold_log) - 1.0) * 100.0, 2),
+            f"{prefix}_cluster_role": str(r.get("cluster_role") or "unassigned"),
+            f"{prefix}_gate_mode": "log_only",
         }
     for t in wanted:
-        out.setdefault(t, {**base, "portfolio_ml_status": "no_features", "portfolio_ml_note": "Нет feature row для тикера."})
+        out.setdefault(
+            t,
+            {
+                **base,
+                f"{prefix}_status": "no_features",
+                f"{prefix}_note": "Нет feature row для тикера.",
+            },
+        )
     return out
 
 
 def predict_portfolio_expected_return(ticker: str) -> Dict[str, Any]:
     t = str(ticker or "").strip().upper()
     return predict_portfolio_expected_returns([t]).get(t, {})
+
+
+def predict_portfolio_expected_returns_20d(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
+    return predict_portfolio_expected_returns(tickers, horizon_days=20)
+
+
+def predict_portfolio_expected_return_20d(ticker: str) -> Dict[str, Any]:
+    t = str(ticker or "").strip().upper()
+    return predict_portfolio_expected_returns_20d([t]).get(t, {})
+
+
+def portfolio_ml_20d_regime_hint(score: Optional[float], rule_regime: Optional[str]) -> str:
+    """Soft fusion note: CatBoost 20d vs rule regime (log_only, no apply)."""
+    reg = (rule_regime or "neutral").strip().lower()
+    try:
+        sc = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        sc = None
+    if sc is None:
+        return "no_score"
+    if sc >= 62 and reg in ("melt_up", "trend_up"):
+        return "align_uptrend"
+    if sc >= 62 and reg == "breakdown":
+        return "conflict_long_in_breakdown"
+    if sc <= 40 and reg in ("melt_up", "trend_up"):
+        return "conflict_weak_ml_vs_uptrend"
+    if sc <= 40 and reg == "breakdown":
+        return "align_breakdown"
+    return "neutral"

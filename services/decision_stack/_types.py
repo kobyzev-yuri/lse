@@ -125,6 +125,7 @@ def default_readiness(contour_id: str) -> str:
         "catboost_entry_5m",
         "multiday_lr",
         "portfolio_catboost",
+        "portfolio_trend_catboost",
         "event_reaction",
         "recovery_ml",
         "catboost_entry_bar_e3",
@@ -176,6 +177,7 @@ def readiness_from_latest_report(contour_id: str) -> Optional[str]:
         return None
     aliases = {
         "portfolio_catboost": ("portfolio",),
+        "portfolio_trend_catboost": ("portfolio_20d", "portfolio_trend"),
         "catboost_entry_5m": ("game5m", "entry_catboost", "catboost_entry"),
         "multiday_lr": ("multiday_lr", "game5m_multiday"),
         "recovery_ml": ("recovery", "game5m_recovery"),

@@ -42,35 +42,35 @@
 
 ---
 
-## Фаза 1 — CatBoost horizon 20d (обучение)
+## Фаза 1 — CatBoost horizon 20d (обучение) — **сделано (shadow .cbm)**
 
 По схеме `portfolio_catboost` (5d), расширить горизонт до **20 торговых дней** (~1 месяц).
 
-| Шаг | Файл | Действие |
-|-----|------|----------|
-| 1.1 | `services/portfolio_ml_features.py` | label `forward_return_20d` (log-return, costs) |
-| 1.2 | `scripts/train_portfolio_catboost.py` | `--horizon-days 20`, отдельный `.cbm` / meta |
-| 1.3 | `config.env.example` | `PORTFOLIO_CATBOOST_20D_MODEL_PATH`, `PORTFOLIO_CATBOOST_20D_ENABLED` |
-| 1.4 | JSONL | append metrics в `PORTFOLIO_ML_REPORT_JSONL` с `horizon=20` |
+| Шаг | Файл | Действие | Статус |
+|-----|------|----------|--------|
+| 1.1 | `services/portfolio_ml_features.py` | label `forward_return_20d` (log-return) | ok (`--horizon-days`) |
+| 1.2 | `scripts/train_portfolio_catboost.py` | `--horizon-days 20`, отдельный `.cbm` / meta | ok |
+| 1.3 | `config.env.example` | `PORTFOLIO_CATBOOST_20D_*` | ok |
+| 1.4 | JSONL | append metrics с `horizon=20` | ok |
 
-Гейты обучения: те же что 5d (`ML_READINESS_*`), min-rows ≥ 300, RMSE/top-decile в meta.
-
----
-
-## Фаза 2 — readiness + dispatcher
-
-| Шаг | Компонент |
-|-----|-----------|
-| 2.1 | `scripts/run_ml_train_readiness_cron.py` — train 20d после 5d или по `ML_READINESS_SKIP_PORTFOLIO_20D` |
-| 2.2 | `services/decision_stack` — contour `portfolio_trend_catboost` (readiness gate) |
-| 2.3 | `services/portfolio_catboost_signal.py` — `predict_portfolio_expected_return_20d()` |
-| 2.4 | Fusion: expected_20d → regime hint (melt_up если score high + ret_20d ok) |
-
-Readiness JSON: `last_portfolio_trend_catboost_readiness.json` (по аналогии с portfolio_catboost).
+Прод shadow: `/app/logs/ml/models/portfolio_return_catboost_20d.cbm` (2026-07-13).
 
 ---
 
-## Фаза 3 — analyzer + карточки
+## Фаза 2 — readiness + runtime log_only — **в коде**
+
+| Шаг | Компонент | Статус |
+|-----|-----------|--------|
+| 2.1 | `run_ml_train_readiness_cron.py` — train 20d + `ML_READINESS_PORTFOLIO_20D_*` | ok |
+| 2.2 | decision_stack contour `portfolio_trend_catboost` (telemetry) | ok |
+| 2.3 | `predict_portfolio_expected_return_20d()` → `portfolio_ml_20d_*` | ok |
+| 2.4 | soft regime hint vs rule (log_only, no apply) | ok |
+
+BUY context / карточки / analyzer `portfolio_trend_regime_review` пишут 20d snapshot. **Без block/exit fusion.**
+
+---
+
+## Фаза 3 — analyzer + карточки (расширение)
 
 | Блок analyzer | Содержание |
 |---------------|------------|

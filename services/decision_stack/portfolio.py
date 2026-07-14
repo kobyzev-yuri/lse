@@ -106,6 +106,42 @@ def collect_portfolio_contributions(
                 },
             )
         )
+
+    score20 = pm.get("portfolio_ml_20d_entry_score")
+    status20 = pm.get("portfolio_ml_20d_status")
+    if score20 is not None or status20:
+        readiness20 = stack_readiness("portfolio_trend_catboost")
+        try:
+            sc20 = float(score20)
+            strength20 = (sc20 - 50.0) / 50.0
+        except (TypeError, ValueError):
+            sc20 = None
+            strength20 = 0.0
+        gm20 = gate_mode("DECISION_STACK_PORTFOLIO_TREND_CATBOOST_GATE_MODE", "log_only")
+        # Phase 2: always telemetry (log_only). Apply fusion — later phase.
+        out.append(
+            make_contribution(
+                contour_id="portfolio_trend_catboost",
+                role="model_eval",
+                readiness=readiness20,
+                strength=max(-1.0, min(1.0, strength20)),
+                weight=effective_stack_weight("portfolio_trend_catboost", readiness20),
+                action="telemetry",
+                detail=(
+                    pm.get("portfolio_ml_20d_note")
+                    or f"20d score={score20}, status={status20}, hint={pm.get('portfolio_ml_20d_regime_hint')}"
+                ),
+                metrics={
+                    "portfolio_ml_20d_entry_score": score20,
+                    "portfolio_ml_20d_expected_return_pct": pm.get("portfolio_ml_20d_expected_return_pct"),
+                    "portfolio_ml_20d_status": status20,
+                    "portfolio_ml_20d_regime_hint": pm.get("portfolio_ml_20d_regime_hint"),
+                    "portfolio_ml_20d_rule_regime": pm.get("portfolio_ml_20d_rule_regime"),
+                    "gate_mode": gm20,
+                    "trust_score": trust_score_for_contour("portfolio_trend_catboost"),
+                },
+            )
+        )
     er = event_reaction or {}
     er_status = er.get("event_reaction_ml_status")
     er_score = er.get("event_reaction_ml_entry_score")
@@ -288,9 +324,18 @@ def build_portfolio_decision_snapshot(
         "conflicts": conflicts,
         "gate_modes": {
             "portfolio_catboost": gate_mode("DECISION_STACK_PORTFOLIO_CATBOOST_GATE_MODE", "log_only"),
+            "portfolio_trend_catboost": gate_mode(
+                "DECISION_STACK_PORTFOLIO_TREND_CATBOOST_GATE_MODE", "log_only"
+            ),
             "event_reaction": gate_mode("DECISION_STACK_EVENT_REACTION_GATE_MODE", "log_only"),
         },
-        "llm_eligible": ["news_fusion", "cluster_context", "boss_brief", "portfolio_catboost"],
+        "llm_eligible": [
+            "news_fusion",
+            "cluster_context",
+            "boss_brief",
+            "portfolio_catboost",
+            "portfolio_trend_catboost",
+        ],
         "legacy": {
             "decision": decision.get("decision"),
             "decision_fused": decision.get("decision_fused"),

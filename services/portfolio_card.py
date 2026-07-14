@@ -212,6 +212,22 @@ def portfolio_card_payload(
                 out[k] = v
     except Exception as e:
         logger.debug("portfolio_trend card %s: %s", ticker, e)
+    try:
+        from services.portfolio_catboost_signal import (
+            predict_portfolio_expected_return_20d,
+            portfolio_ml_20d_regime_hint,
+        )
+
+        ml20 = predict_portfolio_expected_return_20d(ticker)
+        for k, v in ml20.items():
+            if k.startswith("portfolio_ml_20d_"):
+                out[k] = v
+        out["portfolio_ml_20d_regime_hint"] = portfolio_ml_20d_regime_hint(
+            out.get("portfolio_ml_20d_entry_score"),
+            out.get("portfolio_trend_regime"),
+        )
+    except Exception as e:
+        logger.debug("portfolio_ml_20d card %s: %s", ticker, e)
     return out
 
 

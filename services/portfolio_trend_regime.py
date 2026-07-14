@@ -203,18 +203,45 @@ def portfolio_trend_late_chase_blocks_buy(ticker: str, *, engine=None) -> tuple[
 
 
 def build_portfolio_trend_regime_review(tickers: Sequence[str], *, engine=None) -> Dict[str, Any]:
-    """Сводка для карточек / analyzer (rule-based MVP)."""
+    """Сводка для карточек / analyzer: rule + CatBoost 20d log_only."""
     rows: List[Dict[str, Any]] = []
     counts: Dict[str, int] = {}
+    hint_counts: Dict[str, int] = {}
+    ml_ok = 0
     for t in tickers:
         snap = portfolio_trend_regime_snapshot(t, engine=engine)
         reg = str(snap.get("portfolio_trend_regime") or "n/a")
         counts[reg] = counts.get(reg, 0) + 1
-        rows.append({"ticker": t, **snap})
+        row: Dict[str, Any] = {"ticker": t, **snap}
+        try:
+            from services.portfolio_catboost_signal import (
+                portfolio_ml_20d_regime_hint,
+                predict_portfolio_expected_return_20d,
+            )
+
+            ml20 = predict_portfolio_expected_return_20d(t)
+            for k, v in ml20.items():
+                if k.startswith("portfolio_ml_20d_"):
+                    row[k] = v
+            if ml20.get("portfolio_ml_20d_status") == "ok":
+                ml_ok += 1
+            hint = portfolio_ml_20d_regime_hint(
+                ml20.get("portfolio_ml_20d_entry_score"),
+                reg,
+            )
+            row["portfolio_ml_20d_regime_hint"] = hint
+            hint_counts[hint] = hint_counts.get(hint, 0) + 1
+        except Exception as e:
+            row["portfolio_ml_20d_status"] = "error"
+            row["portfolio_ml_20d_note"] = str(e)
+        rows.append(row)
     return {
-        "mode": "rule_based_20d",
+        "mode": "rule_plus_catboost_20d_log_only",
         "status": "ok",
         "regime_counts": counts,
+        "ml_20d_ok_count": ml_ok,
+        "regime_hint_counts": hint_counts,
         "tickers": rows,
-        "catboost_horizon_plan": "20d expected return (phase 2)",
+        "catboost_horizon": 20,
+        "gate_mode": "log_only",
     }

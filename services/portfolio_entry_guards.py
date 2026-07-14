@@ -18,14 +18,33 @@ def _truthy(raw: str) -> bool:
 
 
 def portfolio_ml_snapshot(ticker: str) -> Dict[str, Any]:
-    """Поля CatBoost для context_json (без исключений наружу)."""
+    """Поля CatBoost 5d + 20d для context_json (без исключений наружу)."""
+    out: Dict[str, Any] = {}
     try:
-        from services.portfolio_catboost_signal import predict_portfolio_expected_return
+        from services.portfolio_catboost_signal import (
+            predict_portfolio_expected_return,
+            predict_portfolio_expected_return_20d,
+            portfolio_ml_20d_regime_hint,
+        )
 
-        return dict(predict_portfolio_expected_return(ticker) or {})
+        out.update(dict(predict_portfolio_expected_return(ticker) or {}))
+        out.update(dict(predict_portfolio_expected_return_20d(ticker) or {}))
+        try:
+            from services.portfolio_trend_regime import portfolio_trend_regime_snapshot
+
+            reg = portfolio_trend_regime_snapshot(ticker).get("portfolio_trend_regime")
+            out["portfolio_ml_20d_regime_hint"] = portfolio_ml_20d_regime_hint(
+                out.get("portfolio_ml_20d_entry_score"),
+                str(reg) if reg is not None else None,
+            )
+            out["portfolio_ml_20d_rule_regime"] = reg
+        except Exception:
+            out.setdefault("portfolio_ml_20d_regime_hint", "no_regime")
     except Exception as e:
         logger.debug("portfolio_ml_snapshot %s: %s", ticker, e)
-        return {"portfolio_ml_status": "error", "portfolio_ml_note": str(e)}
+        out.setdefault("portfolio_ml_status", "error")
+        out.setdefault("portfolio_ml_note", str(e))
+    return out
 
 
 def portfolio_catboost_blocks_buy(ticker: str) -> Tuple[bool, str]:

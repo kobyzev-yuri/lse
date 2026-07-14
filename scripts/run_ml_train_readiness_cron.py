@@ -16,6 +16,8 @@
   ML_READINESS_TRAIN_MODE  — dry_run | full
   ML_READINESS_SKIP_GAME5M — 1 — не вызывать train_game5m_catboost
   ML_READINESS_SKIP_PORTFOLIO — 1 — не вызывать train_portfolio_catboost
+  ML_READINESS_SKIP_PORTFOLIO_20D — 1 — не вызывать train --horizon-days 20
+  ML_READINESS_PORTFOLIO_20D_RMSE_MAX — default 0.20
   ML_READINESS_SKIP_EVENT_REACTION — 1 (по умолчанию) — не вызывать train_event_reaction_catboost; 0 — включить
     (на VM ночной cron может задать 0 через `docker exec -e ML_READINESS_SKIP_EVENT_REACTION=0`, см. crontab/lse-docker.crontab)
   ML_READINESS_EVENT_REACTION_RMSE_MAX — макс. RMSE valid (default 0.12)
@@ -241,6 +243,41 @@ def _gate_portfolio(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {"ready": len(reasons) == 0, "reasons": reasons, "rmse_valid": rmse, "n_train": nt}
 
 
+def _gate_portfolio_20d(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """20d horizon: wider RMSE gate; advisory / log_only until Phase 4."""
+    reasons: list[str] = []
+    if not data:
+        return {"ready": False, "reasons": ["no_metrics_file"]}
+    st = data.get("status")
+    if st != "ok":
+        reasons.append(f"status={st}")
+    try:
+        rmse_max = float((get_config_value("ML_READINESS_PORTFOLIO_20D_RMSE_MAX") or "0.20").strip())
+    except (ValueError, TypeError):
+        rmse_max = 0.20
+    mets = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+    rmse = mets.get("rmse_valid")
+    if rmse is None or (isinstance(rmse, (int, float)) and float(rmse) > rmse_max):
+        reasons.append(f"rmse_valid>{rmse_max}")
+    try:
+        nt_min = int((get_config_value("ML_READINESS_PORTFOLIO_20D_MIN_TRAIN") or "80").strip())
+    except (ValueError, TypeError):
+        nt_min = 80
+    nt = int(data.get("n_train") or 0)
+    if nt < nt_min:
+        reasons.append(f"n_train<{nt_min}")
+    hz = data.get("horizon_days")
+    if hz is not None and int(hz) != 20:
+        reasons.append(f"horizon_days={hz}")
+    return {
+        "ready": len(reasons) == 0,
+        "reasons": reasons,
+        "rmse_valid": rmse,
+        "n_train": nt,
+        "shadow_only": True,
+    }
+
+
 def _gate_earnings_intelligence(
     readiness_bundle: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -286,11 +323,13 @@ def main() -> int:
     bar_v2_path = q_dir / "last_game5m_entry_bar_v2_train_metrics.json"
     cont_path = q_dir / "last_game5m_continuation_train_metrics.json"
     pf_path = q_dir / "last_portfolio_train_metrics.json"
+    pf20_path = q_dir / "last_portfolio_20d_train_metrics.json"
     er_path = q_dir / "last_event_reaction_train_metrics.json"
     ei_readiness_path = q_dir / "last_earnings_intelligence_readiness.json"
 
     skip_g5 = _readiness_bool("ML_READINESS_SKIP_GAME5M", False)
     skip_pf = _readiness_bool("ML_READINESS_SKIP_PORTFOLIO", False)
+    skip_pf20 = _readiness_bool("ML_READINESS_SKIP_PORTFOLIO_20D", False)
     skip_er = (get_config_value("ML_READINESS_SKIP_EVENT_REACTION", "1") or "1").strip().lower() not in (
         "0",
         "false",
@@ -322,6 +361,34 @@ def main() -> int:
         pf_inv = {"cmd": cmd_pf, "returncode": p2.returncode}
     else:
         pf_inv = {"skipped": True}
+
+    pf20_inv: Dict[str, Any] = {}
+    if not skip_pf20:
+        pf20_out = (get_config_value("PORTFOLIO_CATBOOST_20D_MODEL_PATH") or "").strip()
+        if not pf20_out:
+            pf20_out = (
+                "/app/logs/ml/models/portfolio_return_catboost_20d.cbm"
+                if Path("/app/logs").exists()
+                else str(root / "local" / "models" / "portfolio_return_catboost_20d.cbm")
+            )
+        cmd_pf20 = [
+            py,
+            str(root / "scripts" / "train_portfolio_catboost.py"),
+            "--horizon-days",
+            "20",
+            "--min-rows",
+            "300",
+            "--out",
+            pf20_out,
+        ]
+        if not full_train:
+            cmd_pf20.append("--dry-run")
+        cmd_pf20 += ["--json-metrics-out", str(pf20_path)]
+        logger.info("Portfolio 20d: %s", " ".join(cmd_pf20))
+        p2b = subprocess.run(cmd_pf20, cwd=str(root))
+        pf20_inv = {"cmd": cmd_pf20, "returncode": p2b.returncode}
+    else:
+        pf20_inv = {"skipped": True}
 
     er_inv: Dict[str, Any] = {}
     if not skip_er:
@@ -356,11 +423,13 @@ def main() -> int:
     bar_v2_data = _load_json(bar_v2_path)
     cont_data = _load_json(cont_path)
     pf_data = _load_json(pf_path)
+    pf20_data = _load_json(pf20_path)
     er_data = _load_json(er_path)
     g5_gate = _gate_game5m(g5_data) if not skip_g5 else {"ready": None, "reasons": ["skipped"]}
     bar_v2_gate = _gate_entry_bar_v2(bar_v2_data)
     cont_gate = _gate_continuation(cont_data)
     pf_gate = _gate_portfolio(pf_data) if not skip_pf else {"ready": None, "reasons": ["skipped"]}
+    pf20_gate = _gate_portfolio_20d(pf20_data) if not skip_pf20 else {"ready": None, "reasons": ["skipped"]}
     er_gate = _gate_event_reaction(er_data) if not skip_er else {"ready": None, "reasons": ["skipped"]}
     ei_data = _load_json(ei_readiness_path)
     ei_gate = _gate_earnings_intelligence(ei_data) if not skip_ei else {"ready": None, "reasons": ["skipped"]}
@@ -415,6 +484,20 @@ def main() -> int:
             "shadow_only": True,
         },
         "portfolio": {"invocation": pf_inv, "metrics_path": str(pf_path), "gate": pf_gate, "metrics": pf_data},
+        "portfolio_20d": {
+            "invocation": pf20_inv,
+            "metrics_path": str(pf20_path),
+            "gate": pf20_gate,
+            "metrics": pf20_data,
+            "shadow_only": True,
+        },
+        "portfolio_trend": {
+            "invocation": pf20_inv,
+            "metrics_path": str(pf20_path),
+            "gate": pf20_gate,
+            "metrics": pf20_data,
+            "shadow_only": True,
+        },
         "event_reaction": {"invocation": er_inv, "metrics_path": str(er_path), "gate": er_gate, "metrics": er_data},
         "earnings_intelligence": {
             "invocation": ei_inv,
