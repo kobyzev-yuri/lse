@@ -65,10 +65,12 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 48 23 * * 1-5 flock -n /tmp/lse_game5m_daily_ml.lock docker exec -e DAILY_ML_RUN_ENTRY_BAR_V2_APPLY=0 lse-bot python scripts/run_daily_game5m_ml_pipeline.py >> /home/ai8049520/lse/logs/game5m_daily_ml_pipeline.log 2>&1
 # Open-path labels (before nightly ML refresh).
 52 23 * * 1-5 flock -n /tmp/lse_open_path_labels.lock docker exec lse-bot python scripts/label_open_path_scenarios.py --ensure-table >> /home/ai8049520/lse/logs/open_path_labels.log 2>&1
-# Unified ML nightly refresh: game5m_entry, open_path, event_reaction, earnings_grid, portfolio. See docs/ML_AND_DECISION_ARCHITECTURE.md §5.3
+# Unified ML nightly refresh: game5m_entry, open_path, event_reaction, earnings_grid, portfolio (+ 20d in portfolio refresh). See docs/ML_AND_DECISION_ARCHITECTURE.md §5.3
 55 23 * * 1-5 flock -n /tmp/lse_ml_refresh_nightly.lock docker exec -e ML_READINESS_TRAIN_MODE=full lse-bot python scripts/run_ml_refresh_dispatcher.py --slot nightly >> /home/ai8049520/lse/logs/ml_refresh_nightly.log 2>&1
-# ML train readiness: skip A contours (game5m v1, event_reaction); B earnings grid stays on.
+# ML train readiness: skip A contours (game5m v1, event_reaction); B earnings grid stays on; portfolio 20d nightly write via PORTFOLIO_CATBOOST_20D_NIGHTLY_WRITE.
 58 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=1 -e ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0 -e ML_READINESS_SKIP_GAME5M=1 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
+# Portfolio 20d session probe (log_only observe vs game) after readiness.
+5 0 * * 2-6 flock -n /tmp/lse_portfolio_20d_probe.lock docker exec lse-bot python scripts/run_portfolio_20d_session_probe.py >> /home/ai8049520/lse/logs/portfolio_20d_session_probe.log 2>&1
 # Legacy per-contour nightly (replaced by dispatcher --slot nightly 23:47):
 # 46 open_path | 51 event_reaction --full | 52 earnings_grid --full
 # Open-path */6 poll — via run_ml_refresh_dispatcher.py (15 */6)

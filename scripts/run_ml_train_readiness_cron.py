@@ -371,6 +371,13 @@ def main() -> int:
                 if Path("/app/logs").exists()
                 else str(root / "local" / "models" / "portfolio_return_catboost_20d.cbm")
             )
+        # Nightly write for 20d overlay even when readiness is dry_run for other contours.
+        write_20d = (get_config_value("PORTFOLIO_CATBOOST_20D_NIGHTLY_WRITE", "true") or "true").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         cmd_pf20 = [
             py,
             str(root / "scripts" / "train_portfolio_catboost.py"),
@@ -381,12 +388,16 @@ def main() -> int:
             "--out",
             pf20_out,
         ]
-        if not full_train:
+        if not (full_train or write_20d):
             cmd_pf20.append("--dry-run")
         cmd_pf20 += ["--json-metrics-out", str(pf20_path)]
         logger.info("Portfolio 20d: %s", " ".join(cmd_pf20))
         p2b = subprocess.run(cmd_pf20, cwd=str(root))
-        pf20_inv = {"cmd": cmd_pf20, "returncode": p2b.returncode}
+        pf20_inv = {
+            "cmd": cmd_pf20,
+            "returncode": p2b.returncode,
+            "wrote_model": bool(full_train or write_20d),
+        }
     else:
         pf20_inv = {"skipped": True}
 

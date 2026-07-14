@@ -69,6 +69,7 @@ def main() -> int:
 
     q_dir = _default_q_dir()
     metrics_path = q_dir / "last_portfolio_train_metrics.json"
+    metrics_20d_path = q_dir / "last_portfolio_20d_train_metrics.json"
     py = sys.executable
     train_cmd = [
         py,
@@ -86,6 +87,43 @@ def main() -> int:
     )
     train_rc = subprocess.call(train_cmd, cwd=str(project_root)) if do_train else 0
 
+    # 20d trend overlay: same write gate as 5d (or explicit PORTFOLIO_CATBOOST_20D_CONTINUOUS_TRAIN).
+    train_20d = (get_config_value("PORTFOLIO_CATBOOST_20D_CONTINUOUS_TRAIN", "true") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    train_rc_20d = 0
+    if do_train and train_20d:
+        out_20d = (get_config_value("PORTFOLIO_CATBOOST_20D_MODEL_PATH") or "").strip()
+        if not out_20d:
+            out_20d = (
+                "/app/logs/ml/models/portfolio_return_catboost_20d.cbm"
+                if Path("/app/logs").exists()
+                else str(project_root / "local" / "models" / "portfolio_return_catboost_20d.cbm")
+            )
+        train_cmd_20d = [
+            py,
+            str(project_root / "scripts/train_portfolio_catboost.py"),
+            "--horizon-days",
+            "20",
+            "--min-rows",
+            "300",
+            "--out",
+            out_20d,
+            "--json-metrics-out",
+            str(metrics_20d_path),
+        ]
+        if train_dry_run:
+            train_cmd_20d.append("--dry-run")
+        logger.info(
+            "Portfolio 20d refresh train writes_cbm=%s out=%s",
+            writes_cbm,
+            out_20d,
+        )
+        train_rc_20d = subprocess.call(train_cmd_20d, cwd=str(project_root))
+
     finalize_contour_refresh(
         project_root,
         "portfolio",
@@ -93,9 +131,18 @@ def main() -> int:
         apply_ran=True,
         train_ran=writes_cbm and train_rc == 0,
         full=full_train,
-        extra={"train_rc": train_rc},
+        extra={
+            "train_rc": train_rc,
+            "train_rc_20d": train_rc_20d,
+            "train_20d": bool(train_20d and do_train),
+            "writes_cbm_20d": bool(writes_cbm and train_20d and do_train and train_rc_20d == 0),
+        },
     )
-    return 0 if train_rc == 0 else train_rc
+    if train_rc != 0:
+        return train_rc
+    if train_20d and do_train and train_rc_20d != 0:
+        return train_rc_20d
+    return 0
 
 
 if __name__ == "__main__":

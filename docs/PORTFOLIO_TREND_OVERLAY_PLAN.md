@@ -97,11 +97,53 @@ BUY context / карточки / analyzer `portfolio_trend_regime_review` пиш
 
 ## Приоритет внедрения
 
-1. **Сейчас:** Фаза 0 deploy + мониторинг `portfolio_trend_regime_review`
-2. **Неделя 1:** Фаза 1 train 20d dry-run + meta
-3. **Неделя 2:** Фаза 2 readiness cron, log_only predict на BUY
-4. **Неделя 3:** Фаза 3 analyzer, карточки
-5. **После bake-off:** Фаза 4 — block/exit fusion apply
+1. ~~Фаза 0 deploy~~ / ~~Фаза 1 train~~ / ~~Фаза 2 log_only runtime~~
+2. **Регулярное дообучение 20d (включено):** nightly write + probe
+3. **Неделя 3:** richer analyzer / bake-off metrics
+4. **После bake-off:** Фаза 4 — block/exit fusion apply
+
+---
+
+## Регулярное дообучение 20d (ops)
+
+| Когда | Что |
+|-------|-----|
+| **23:55 MSK** будни | `run_ml_refresh_dispatcher` → `run_portfolio_ml_refresh` пишет **5d + 20d** (если continuous/trigger) |
+| **23:58 MSK** будни | `run_ml_train_readiness_cron` — **всегда пишет 20d** при `PORTFOLIO_CATBOOST_20D_NIGHTLY_WRITE=true` (даже если readiness dry_run) |
+| **00:05 MSK** вт–сб | `run_portfolio_20d_session_probe.py` → `last_portfolio_20d_session_probe.json` (extremes + regimes) |
+
+Ключи: `PORTFOLIO_CATBOOST_20D_CONTINUOUS_TRAIN`, `PORTFOLIO_CATBOOST_20D_NIGHTLY_WRITE`.
+
+**Как смотреть влияние на игру:** analyzer `portfolio_trend_regime_review.session_probe` + BUY `context_json.portfolio_ml_20d_*` vs фактические exits (пока log_only — корреляции вручную / bake-off).
+
+---
+
+## Предложения улучшения: portfolio дневка (5d)
+
+| # | Изменение | Зачем |
+|---|-----------|--------|
+| **D1** | `--drop-price-level` для horizon=5 (как 20d) | убрать close/log_close (~13% importance), поднять ranking |
+| **D2** | гейт по **Spearman IC** + `pred_std_valid` в readiness | не пропускать модели с hit top-decile < baseline |
+| **D3** | исключить FX (`EURUSD=X`…) из train universe 5d/20d | шум для equity game |
+| **D4** | отдельно калибровать score scale 5d vs hold threshold 42 | сейчас score сжат 42–54 |
+
+Сначала D1+D2 (одна переобучка + compare spread/hit), потом D3.
+
+---
+
+## Предложения улучшения: GAME_5M (5м)
+
+Не та же болезнь (нет absolute close). Слабое место — **качество сигнала**, не коллапс.
+
+| # | Изменение | Зачем |
+|---|-----------|--------|
+| **G1** | Не опираться на entry **v1** (AUC≈0.46); держать freeze A / shadow v2 | v1 хуже random |
+| **G2** | Promotion v2 только после G2 go/no-go + trust (уже в B-list) | AUC 0.56 мало для apply |
+| **G3** | Bar-level features: явный **ret_vs_SMA / vol-normalized momentum**, без сырого price | усилить разделение сетапов |
+| **G4** | Per-ticker калибровка / isotonic на out-of-fold P | равный P не значит равный edge по тикеру |
+| **G5** | Observer: сравнивать P(v2) distribution по тикерам weekly (как 20d probe) | рано ловить коллапс |
+
+Пока список A frozen — G1/G5 бесплатны; G2 ждёт B2 backlog.
 
 ---
 
@@ -111,11 +153,14 @@ BUY context / карточки / analyzer `portfolio_trend_regime_review` пиш
 # Локально
 pytest tests/test_portfolio_trend_regime.py tests/test_portfolio_exit_policy.py -q
 
-# Deploy (после push main)
-ssh ai8049520@104.154.205.58 "cd /home/ai8049520/lse && ./scripts/deploy_from_github.sh"
+# Deploy
+ssh ai8049520@104.197.166.185 "cd /home/ai8049520/lse && ./scripts/deploy_from_github.sh"
 
-# Analyzer
-curl -s 'http://localhost:8080/api/analyzer?strategy=PORTFOLIO&days=30' | jq '.portfolio_trend_regime_review'
+# Analyzer + probe
+curl -s 'http://localhost:8080/api/analyzer?strategy=PORTFOLIO&days=30' | jq '.portfolio_trend_regime_review | {mode,ml_20d_ok_count,regime_hint_counts,session_probe:.session_probe.extreme_score_rows}'
+
+# Ручной probe
+docker exec lse-bot python scripts/run_portfolio_20d_session_probe.py
 ```
 
 Связанные документы: `docs/ML_PORTFOLIO_CATBOOST.md`, `docs/GAME_5M_ML_STRATEGY_PLAN.md` (паттерн readiness→analyzer).

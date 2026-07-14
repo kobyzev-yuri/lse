@@ -716,6 +716,19 @@ def _build_portfolio_trend_regime_review() -> Dict[str, Any]:
             {"ticker": x.get("ticker"), "ret_20d_pct": x.get("portfolio_trend_ret_20d_pct")}
             for x in late[:20]
         ]
+        try:
+            probe_path = Path(
+                (get_config_value("PORTFOLIO_20D_SESSION_PROBE_PATH", "") or "").strip()
+                or (
+                    "/app/logs/ml/ml_data_quality/last_portfolio_20d_session_probe.json"
+                    if Path("/app/logs").exists()
+                    else str(Path(__file__).resolve().parents[1] / "local" / "logs" / "ml_data_quality" / "last_portfolio_20d_session_probe.json")
+                )
+            )
+            if probe_path.is_file():
+                review["session_probe"] = json.loads(probe_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
         return review
     except Exception as e:
         return {"mode": "error", "note": str(e)}
