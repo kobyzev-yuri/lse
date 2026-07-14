@@ -99,8 +99,13 @@ BUY context / карточки / analyzer `portfolio_trend_regime_review` пиш
 
 1. ~~Фаза 0 deploy~~ / ~~Фаза 1 train~~ / ~~Фаза 2 log_only runtime~~
 2. **Регулярное дообучение 20d (включено):** nightly write + probe
-3. **Неделя 3:** richer analyzer / bake-off metrics
-4. **После bake-off:** Фаза 4 — block/exit fusion apply
+3. **20d в решении (apply):** prospect tiers + block avoid/weak
+4. **После bake-off:** ужесточение take/fusion из 20d
+
+### Почему раньше не влияло на игру
+
+Gate был `DECISION_STACK_PORTFOLIO_TREND_CATBOOST_GATE_MODE=log_only` — только telemetry в snapshot.
+Теперь `apply`: veto/block на `avoid` / слабый 20d score; `prefer` — приоритетные тикеры (см. analyzer `priority_top`).
 
 ---
 

@@ -34,6 +34,7 @@ PORTFOLIO_VETO_ORDER = (
     "session",
     "cluster_context",
     "multiday_lr",
+    "portfolio_trend_catboost",
     "portfolio_catboost",
     "event_reaction",
 )

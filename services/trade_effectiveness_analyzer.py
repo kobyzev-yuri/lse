@@ -7365,23 +7365,32 @@ def _append_portfolio_analyzer_text_lines(lines: List[str], report: Dict[str, An
             f"ранние тейки (missed≥2%): {pe.get('n_early_take_on_wins_missed_ge_2pct')}"
         )
     pt = report.get("portfolio_trend_regime_review") or {}
-    if pt.get("mode") in ("portfolio_trend_regime", "rule_plus_catboost_20d_log_only"):
+    if pt.get("mode") in (
+        "portfolio_trend_regime",
+        "rule_plus_catboost_20d_log_only",
+        "rule_plus_catboost_20d_prospect",
+    ):
         lines.append("")
-        lines.append("Portfolio 20d trend (rule + CatBoost log_only):")
+        lines.append("Portfolio 20d trend + prospect:")
         rc = pt.get("regime_counts") or {}
         if rc:
             parts = [f"{k}={v}" for k, v in sorted(rc.items(), key=lambda kv: -int(kv[1]))]
             lines.append("• regime_counts: " + ", ".join(parts))
+        tc = pt.get("prospect_tier_counts") or {}
+        if tc:
+            parts = [f"{k}={v}" for k, v in sorted(tc.items(), key=lambda kv: -int(kv[1]))]
+            lines.append("• prospect_tiers: " + ", ".join(parts))
+        top = pt.get("priority_top") or []
+        if top:
+            lines.append(
+                "• priority_top: "
+                + ", ".join(
+                    f"{x.get('ticker')}[{x.get('tier')}/{x.get('priority')}]" for x in top[:5]
+                )
+            )
         lines.append(
             f"• ml_20d_ok={pt.get('ml_20d_ok_count')}, gate={pt.get('gate_mode') or 'log_only'}"
         )
-        hints = pt.get("regime_hint_counts") or {}
-        if hints:
-            parts = [f"{k}={v}" for k, v in sorted(hints.items(), key=lambda kv: -int(kv[1]))[:6]]
-            lines.append("• regime_hints: " + ", ".join(parts))
-        late = pt.get("late_chase_candidates") or []
-        if late:
-            lines.append(f"• late_chase_candidates: {len(late)} (блок BUY при включённом guard)")
 
 
 def _append_multiday_lr_and_arbiter_text_lines(lines: List[str], report: Dict[str, Any]) -> None:

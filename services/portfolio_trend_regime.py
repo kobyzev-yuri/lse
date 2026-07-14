@@ -180,6 +180,144 @@ def regime_from_context(ctx: Optional[Dict[str, Any]]) -> str:
     return r if r in REGIMES else "neutral"
 
 
+def compute_portfolio_prospect_priority(
+    *,
+    regime: Optional[str],
+    ret_20d_pct: Optional[float],
+    score_20d: Optional[float],
+    exp_20d_pct: Optional[float],
+    hint: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Сводка «перспективности» для приоритета портфельной игры.
+    Выше — предпочтительнее для нового BUY; ниже — избегать.
+    """
+    reg = (regime or "neutral").strip().lower()
+    try:
+        sc = float(score_20d) if score_20d is not None else None
+    except (TypeError, ValueError):
+        sc = None
+    try:
+        exp = float(exp_20d_pct) if exp_20d_pct is not None else None
+    except (TypeError, ValueError):
+        exp = None
+    try:
+        ret = float(ret_20d_pct) if ret_20d_pct is not None else None
+    except (TypeError, ValueError):
+        ret = None
+
+    pri = 0.0
+    if sc is not None:
+        pri += (sc - 50.0) / 10.0
+    if exp is not None:
+        pri += exp / 2.0
+    if ret is not None:
+        pri += ret / 10.0
+    if reg == "melt_up":
+        pri += 1.5
+    elif reg == "trend_up":
+        pri += 1.0
+    elif reg == "breakdown":
+        pri -= 1.5
+    h = (hint or "").strip().lower()
+    if "align_uptrend" in h:
+        pri += 1.0
+    if "align_breakdown" in h:
+        pri -= 1.0
+    if "conflict" in h:
+        pri -= 0.5
+
+    prefer_min = _float_cfg("PORTFOLIO_PROSPECT_PREFER_MIN", 1.5)
+    avoid_max = _float_cfg("PORTFOLIO_PROSPECT_AVOID_MAX", -0.5)
+    if pri >= prefer_min:
+        tier = "prefer"
+    elif pri <= avoid_max:
+        tier = "avoid"
+    else:
+        tier = "allow"
+
+    return {
+        "portfolio_prospect_priority": round(pri, 3),
+        "portfolio_prospect_tier": tier,
+        "portfolio_prospect_note_ru": {
+            "prefer": "Перспективный: приоритет для портфельного BUY",
+            "allow": "Нейтральный: вход по стратегии без бонуса",
+            "avoid": "Слабая перспектива 20d/regime: новый BUY нежелателен",
+        }.get(tier, ""),
+    }
+
+
+def portfolio_trend_20d_blocks_buy(ticker: str, *, engine=None) -> tuple[bool, str]:
+    """
+    Apply-гейт: не открывать BUY по слабой 20d перспективе.
+    Включается PORTFOLIO_TREND_20D_BLOCK_BUY_ON_WEAK + gate apply (или явный block flag).
+    """
+    if not _truthy("PORTFOLIO_TREND_20D_BLOCK_BUY_ON_WEAK", "true"):
+        return False, ""
+    # Soft on by default once block flag is true; stack gate may still be log_only for resolve path.
+    try:
+        from services.decision_stack._types import gate_mode
+
+        gm = gate_mode("DECISION_STACK_PORTFOLIO_TREND_CATBOOST_GATE_MODE", "log_only")
+        if gm == "none":
+            return False, ""
+        # log_only: still allow hard block via PORTFOLIO_TREND_20D_BLOCK_BUY_ON_WEAK when apply-ish.
+        # Require gate apply OR explicit FORCE.
+        force = _truthy("PORTFOLIO_TREND_20D_FORCE_BLOCK", "false")
+        if gm != "apply" and not force:
+            return False, ""
+    except Exception:
+        pass
+
+    snap = portfolio_trend_regime_snapshot(ticker, engine=engine)
+    try:
+        from services.portfolio_catboost_signal import (
+            portfolio_ml_20d_regime_hint,
+            predict_portfolio_expected_return_20d,
+        )
+
+        ml20 = predict_portfolio_expected_return_20d(ticker)
+    except Exception as e:
+        logger.debug("portfolio_trend_20d_blocks_buy predict %s: %s", ticker, e)
+        return False, ""
+
+    if ml20.get("portfolio_ml_20d_status") != "ok":
+        return False, ""
+
+    regime = snap.get("portfolio_trend_regime")
+    hint = portfolio_ml_20d_regime_hint(ml20.get("portfolio_ml_20d_entry_score"), str(regime) if regime else None)
+    prospect = compute_portfolio_prospect_priority(
+        regime=str(regime) if regime else None,
+        ret_20d_pct=snap.get("portfolio_trend_ret_20d_pct"),
+        score_20d=ml20.get("portfolio_ml_20d_entry_score"),
+        exp_20d_pct=ml20.get("portfolio_ml_20d_expected_return_pct"),
+        hint=hint,
+    )
+    try:
+        min_score = float((get_config_value("PORTFOLIO_TREND_20D_HOLD_BELOW_SCORE", "48") or "48").strip())
+    except (TypeError, ValueError):
+        min_score = 48.0
+    try:
+        sc = float(ml20.get("portfolio_ml_20d_entry_score"))
+    except (TypeError, ValueError):
+        sc = None
+
+    reasons: List[str] = []
+    if prospect.get("portfolio_prospect_tier") == "avoid":
+        reasons.append(
+            f"prospect_tier=avoid (priority={prospect.get('portfolio_prospect_priority')})"
+        )
+    if sc is not None and sc < min_score and str(regime).lower() in ("breakdown", "neutral", "insufficient"):
+        reasons.append(f"20d_score={sc:.1f} < {min_score:.1f} regime={regime}")
+    if not reasons:
+        return False, ""
+    return True, (
+        "20d prospect gate: "
+        + "; ".join(reasons)
+        + " (PORTFOLIO_TREND_20D_BLOCK_BUY_ON_WEAK)"
+    )
+
+
 def portfolio_trend_late_chase_blocks_buy(ticker: str, *, engine=None) -> tuple[bool, str]:
     """Блок входа у 20d high после сильного ралли (INTC Jun-24 кейс)."""
     if not _truthy("PORTFOLIO_TREND_LATE_CHASE_BLOCK_ENABLED", "true"):
@@ -203,10 +341,11 @@ def portfolio_trend_late_chase_blocks_buy(ticker: str, *, engine=None) -> tuple[
 
 
 def build_portfolio_trend_regime_review(tickers: Sequence[str], *, engine=None) -> Dict[str, Any]:
-    """Сводка для карточек / analyzer: rule + CatBoost 20d log_only."""
+    """Сводка для карточек / analyzer: rule + CatBoost 20d + prospect tiers."""
     rows: List[Dict[str, Any]] = []
     counts: Dict[str, int] = {}
     hint_counts: Dict[str, int] = {}
+    tier_counts: Dict[str, int] = {}
     ml_ok = 0
     for t in tickers:
         snap = portfolio_trend_regime_snapshot(t, engine=engine)
@@ -231,17 +370,50 @@ def build_portfolio_trend_regime_review(tickers: Sequence[str], *, engine=None) 
             )
             row["portfolio_ml_20d_regime_hint"] = hint
             hint_counts[hint] = hint_counts.get(hint, 0) + 1
+            prospect = compute_portfolio_prospect_priority(
+                regime=reg,
+                ret_20d_pct=snap.get("portfolio_trend_ret_20d_pct"),
+                score_20d=ml20.get("portfolio_ml_20d_entry_score"),
+                exp_20d_pct=ml20.get("portfolio_ml_20d_expected_return_pct"),
+                hint=hint,
+            )
+            row.update(prospect)
+            tier = str(prospect.get("portfolio_prospect_tier") or "n/a")
+            tier_counts[tier] = tier_counts.get(tier, 0) + 1
         except Exception as e:
             row["portfolio_ml_20d_status"] = "error"
             row["portfolio_ml_20d_note"] = str(e)
         rows.append(row)
-    return {
-        "mode": "rule_plus_catboost_20d_log_only",
+    rows_sorted = sorted(
+        rows,
+        key=lambda r: float(r.get("portfolio_prospect_priority") or -999),
+        reverse=True,
+    )
+    out: Dict[str, Any] = {
+        "mode": "rule_plus_catboost_20d_prospect",
         "status": "ok",
         "regime_counts": counts,
         "ml_20d_ok_count": ml_ok,
         "regime_hint_counts": hint_counts,
-        "tickers": rows,
+        "prospect_tier_counts": tier_counts,
+        "tickers": rows_sorted,
+        "priority_top": [
+            {
+                "ticker": r.get("ticker"),
+                "priority": r.get("portfolio_prospect_priority"),
+                "tier": r.get("portfolio_prospect_tier"),
+                "regime": r.get("portfolio_trend_regime"),
+                "score_20d": r.get("portfolio_ml_20d_entry_score"),
+            }
+            for r in rows_sorted[:8]
+        ],
         "catboost_horizon": 20,
         "gate_mode": "log_only",
     }
+    try:
+        from services.decision_stack._types import gate_mode
+
+        out["gate_mode"] = gate_mode("DECISION_STACK_PORTFOLIO_TREND_CATBOOST_GATE_MODE", "log_only")
+    except Exception:
+        pass
+    return out

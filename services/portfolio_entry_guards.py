@@ -18,7 +18,7 @@ def _truthy(raw: str) -> bool:
 
 
 def portfolio_ml_snapshot(ticker: str) -> Dict[str, Any]:
-    """Поля CatBoost 5d + 20d для context_json (без исключений наружу)."""
+    """Поля CatBoost 5d + 20d + prospect для context_json (без исключений наружу)."""
     out: Dict[str, Any] = {}
     try:
         from services.portfolio_catboost_signal import (
@@ -30,14 +30,28 @@ def portfolio_ml_snapshot(ticker: str) -> Dict[str, Any]:
         out.update(dict(predict_portfolio_expected_return(ticker) or {}))
         out.update(dict(predict_portfolio_expected_return_20d(ticker) or {}))
         try:
-            from services.portfolio_trend_regime import portfolio_trend_regime_snapshot
+            from services.portfolio_trend_regime import (
+                compute_portfolio_prospect_priority,
+                portfolio_trend_regime_snapshot,
+            )
 
-            reg = portfolio_trend_regime_snapshot(ticker).get("portfolio_trend_regime")
-            out["portfolio_ml_20d_regime_hint"] = portfolio_ml_20d_regime_hint(
+            snap = portfolio_trend_regime_snapshot(ticker)
+            reg = snap.get("portfolio_trend_regime")
+            hint = portfolio_ml_20d_regime_hint(
                 out.get("portfolio_ml_20d_entry_score"),
                 str(reg) if reg is not None else None,
             )
+            out["portfolio_ml_20d_regime_hint"] = hint
             out["portfolio_ml_20d_rule_regime"] = reg
+            out.update(
+                compute_portfolio_prospect_priority(
+                    regime=str(reg) if reg is not None else None,
+                    ret_20d_pct=snap.get("portfolio_trend_ret_20d_pct"),
+                    score_20d=out.get("portfolio_ml_20d_entry_score"),
+                    exp_20d_pct=out.get("portfolio_ml_20d_expected_return_pct"),
+                    hint=hint,
+                )
+            )
         except Exception:
             out.setdefault("portfolio_ml_20d_regime_hint", "no_regime")
     except Exception as e:
@@ -100,11 +114,17 @@ def portfolio_indicator_blocks_buy(ticker: str) -> Tuple[bool, str]:
 
 
 def portfolio_trend_blocks_buy(ticker: str) -> Tuple[bool, str]:
-    """Late-chase guard у 20d high после сильного ралли."""
+    """Late-chase + 20d prospect apply-гейт."""
     try:
-        from services.portfolio_trend_regime import portfolio_trend_late_chase_blocks_buy
+        from services.portfolio_trend_regime import (
+            portfolio_trend_20d_blocks_buy,
+            portfolio_trend_late_chase_blocks_buy,
+        )
 
-        return portfolio_trend_late_chase_blocks_buy(ticker)
+        blocked, reason = portfolio_trend_late_chase_blocks_buy(ticker)
+        if blocked:
+            return True, reason
+        return portfolio_trend_20d_blocks_buy(ticker)
     except Exception as e:
         logger.debug("portfolio_trend_blocks_buy %s: %s", ticker, e)
         return False, ""
@@ -123,7 +143,7 @@ def merge_portfolio_buy_context(
     base = dict(context_json) if isinstance(context_json, dict) else {}
     ml = dict(portfolio_ml) if isinstance(portfolio_ml, dict) else portfolio_ml_snapshot(ticker)
     for k, v in ml.items():
-        if k.startswith("portfolio_ml_"):
+        if k.startswith("portfolio_ml_") or k.startswith("portfolio_prospect_"):
             base[k] = v
     try:
         from services.portfolio_multiday_signal import portfolio_multiday_snapshot

@@ -118,18 +118,44 @@ def collect_portfolio_contributions(
             sc20 = None
             strength20 = 0.0
         gm20 = gate_mode("DECISION_STACK_PORTFOLIO_TREND_CATBOOST_GATE_MODE", "log_only")
-        # Phase 2: always telemetry (log_only). Apply fusion — later phase.
+        try:
+            from config_loader import get_config_value
+
+            min_score20 = float(
+                (get_config_value("PORTFOLIO_TREND_20D_HOLD_BELOW_SCORE", "48") or "48").strip()
+            )
+        except Exception:
+            min_score20 = 48.0
+        tier = str(pm.get("portfolio_prospect_tier") or "")
+        would_veto20 = status20 == "ok" and (
+            tier == "avoid"
+            or (
+                sc20 is not None
+                and sc20 < min_score20
+                and str(pm.get("portfolio_ml_20d_rule_regime") or "").lower()
+                in ("breakdown", "neutral", "insufficient")
+            )
+        )
+        action20 = "telemetry"
+        if would_veto20 and gm20 == "apply":
+            # caution readiness OK for soft prospect veto (user opted into game overlay).
+            action20 = "veto"
+        elif tier == "prefer" and gm20 == "apply" and sc20 is not None and sc20 >= 55:
+            action20 = "signal"
         out.append(
             make_contribution(
                 contour_id="portfolio_trend_catboost",
-                role="model_eval",
+                role="policy_gate",
                 readiness=readiness20,
                 strength=max(-1.0, min(1.0, strength20)),
                 weight=effective_stack_weight("portfolio_trend_catboost", readiness20),
-                action="telemetry",
+                action=action20,
                 detail=(
                     pm.get("portfolio_ml_20d_note")
-                    or f"20d score={score20}, status={status20}, hint={pm.get('portfolio_ml_20d_regime_hint')}"
+                    or (
+                        f"20d score={score20}, tier={tier or 'n/a'}, "
+                        f"hint={pm.get('portfolio_ml_20d_regime_hint')}, status={status20}"
+                    )
                 ),
                 metrics={
                     "portfolio_ml_20d_entry_score": score20,
@@ -137,7 +163,11 @@ def collect_portfolio_contributions(
                     "portfolio_ml_20d_status": status20,
                     "portfolio_ml_20d_regime_hint": pm.get("portfolio_ml_20d_regime_hint"),
                     "portfolio_ml_20d_rule_regime": pm.get("portfolio_ml_20d_rule_regime"),
+                    "portfolio_prospect_priority": pm.get("portfolio_prospect_priority"),
+                    "portfolio_prospect_tier": tier,
                     "gate_mode": gm20,
+                    "min_score": min_score20,
+                    "would_veto": would_veto20,
                     "trust_score": trust_score_for_contour("portfolio_trend_catboost"),
                 },
             )
