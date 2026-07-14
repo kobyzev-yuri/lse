@@ -3601,6 +3601,43 @@ async def get_portfolio_charts_bulk(days: int = 180):
         raise HTTPException(status_code=500, detail=f"Ошибка графиков портфеля: {e!s}")
 
 
+@app.get("/api/portfolio/prospect-monthly", response_class=JSONResponse)
+async def get_portfolio_prospect_monthly(refresh: int = 0):
+    """
+    Месячный отчёт: куда в портфеле фокус в первую очередь и какой порядок прибыли
+    (рынок ~6м / capture band / 20d). Артефакт cron; refresh=1 пересчитывает сейчас.
+    """
+    def _load_or_build(force: bool) -> Dict[str, Any]:
+        from services.portfolio_prospect_monthly import (
+            build_portfolio_prospect_monthly_report,
+            load_last_monthly_review,
+            write_monthly_review_artifact,
+        )
+
+        if not force:
+            cached = load_last_monthly_review()
+            if cached:
+                cached = dict(cached)
+                cached["source"] = "artifact"
+                return cached
+        from services.portfolio_card import get_portfolio_trade_tickers
+
+        tickers = list(get_portfolio_trade_tickers() or [])
+        payload = build_portfolio_prospect_monthly_report(tickers)
+        write_monthly_review_artifact(payload)
+        payload = dict(payload)
+        payload["source"] = "live_refresh" if force else "built_missing_artifact"
+        return payload
+
+    try:
+        force = int(refresh or 0) == 1
+        payload = await asyncio.to_thread(_load_or_build, force)
+        return JSONResponse(content=_api_json_body(payload))
+    except Exception as e:
+        logger.exception("GET /api/portfolio/prospect-monthly: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка monthly prospect: {e!s}")
+
+
 @app.get("/api/portfolio/chart/{ticker}", response_class=JSONResponse)
 async def get_portfolio_chart(ticker: str, days: int = 180):
     """API: дневные бары из quotes для графика (не 5m)."""

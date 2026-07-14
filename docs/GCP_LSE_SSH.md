@@ -10,7 +10,7 @@
 # Новый хост GCP для LSE — внешний IP см. HostName; ключ в authorized_keys на VM
 # После stop/start ephemeral IP может смениться (проверьте в Cloud Console).
 Host gcp-lse
-    HostName 104.197.166.185
+    HostName 35.193.21.44
     User ai8049520
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null

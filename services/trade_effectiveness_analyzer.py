@@ -729,6 +729,31 @@ def _build_portfolio_trend_regime_review() -> Dict[str, Any]:
                 review["session_probe"] = json.loads(probe_path.read_text(encoding="utf-8"))
         except Exception:
             pass
+        try:
+            from services.portfolio_prospect_monthly import load_last_monthly_review
+
+            monthly = load_last_monthly_review()
+            if monthly:
+                review["monthly_allocation"] = {
+                    "generated_at_utc": monthly.get("generated_at_utc"),
+                    "bucket_counts": monthly.get("bucket_counts"),
+                    "headline_top": monthly.get("headline_top"),
+                    "invest_first": [
+                        {
+                            "ticker": r.get("ticker"),
+                            "strategic_bucket": r.get("strategic_bucket"),
+                            "allocation_rank": r.get("allocation_rank"),
+                            "market_move_6m_pct": r.get("market_move_6m_pct"),
+                            "capture_proxy_lo_pct": r.get("capture_proxy_lo_pct"),
+                            "capture_proxy_hi_pct": r.get("capture_proxy_hi_pct"),
+                            "exp_20d_pct": r.get("exp_20d_pct"),
+                        }
+                        for r in (monthly.get("invest_first") or [])[:12]
+                    ],
+                    "ui": "/portfolio/daily",
+                }
+        except Exception:
+            pass
         return review
     except Exception as e:
         return {"mode": "error", "note": str(e)}

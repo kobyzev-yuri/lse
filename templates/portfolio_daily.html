@@ -15,13 +15,26 @@
         .chart-section { position: relative; height: 300px; margin-top: 1rem; }
         .chart-section h2 { font-size: 0.95rem; margin: 0 0 0.35rem 0; color: #cbd5e1; }
         #statusLine { font-size: 0.8rem; color: #94a3b8; min-height: 1.2em; margin-top: 0.5rem; }
+        #prospectReport { margin: 1rem 0 1.25rem; padding: 0.85rem 1rem; background: #12182a; border: 1px solid #334155; border-radius: 8px; }
+        #prospectReport h2 { font-size: 1rem; margin: 0 0 0.35rem; color: #e2e8f0; }
+        #prospectReport .note { font-size: 0.8rem; color: #94a3b8; margin: 0 0 0.75rem; line-height: 1.35; }
+        #prospectReport table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+        #prospectReport th, #prospectReport td { text-align: left; padding: 0.35rem 0.4rem; border-bottom: 1px solid #1e293b; vertical-align: top; }
+        #prospectReport th { color: #94a3b8; font-weight: 600; }
+        #prospectReport tr.bucket-core td:first-child { color: #4ade80; font-weight: 600; }
+        #prospectReport tr.bucket-watch td:first-child { color: #7dd3fc; }
+        #prospectReport tr.bucket-avoid td:first-child { color: #fbbf24; }
+        #prospectReport tr.bucket-weak td:first-child { color: #f87171; }
+        #prospectReport .meta { font-size: 0.75rem; color: #64748b; margin-top: 0.55rem; }
+        #prospectReport .action { color: #cbd5e1; max-width: 22rem; }
+        #prospectReport button.refresh { margin-top: 0.5rem; font-size: 0.75rem; }
     </style>
     {% include "partials/lse_fetch_shim.html" %}
 </head>
 <body>
 {% include "partials/site_nav_standalone.html" %}
     <h1>Daily — quotes</h1>
-    <p class="muted">Интервал <strong>1d</strong> из таблицы <code>quotes</code>. <strong>Все</strong> — график по каждому тикеру портфельной игры; иначе выберите тикер в списке. Ссылка с карточки <code>?ticker=…</code> выставляет список. Маркеры сделок (не GAME_5M): <strong>*</strong> вход (BUY), <strong>▲</strong> выход в плюс к средней, <strong>▼</strong> в минус, серый ▲ без базы для P/L.</p>
+    <p class="muted">Интервал <strong>1d</strong> из таблицы <code>quotes</code>. Сверху — месячный отчёт приоритета капитала (рынок ~6м / capture / 20d); ниже графики. <strong>Все</strong> — график по каждому тикеру портфельной игры; иначе выберите тикер в списке. Ссылка с карточки <code>?ticker=…</code> выставляет список. Маркеры сделок (не GAME_5M): <strong>*</strong> вход (BUY), <strong>▲</strong> выход в плюс к средней, <strong>▼</strong> в минус, серый ▲ без базы для P/L.</p>
     <div>
         <label>Тикер</label>
         <select id="tickerPortfolioFilter">
@@ -31,6 +44,13 @@
         <button type="button" id="loadBtn">Показать</button>
     </div>
     <script type="application/json" id="portfolioTickersList">{{ portfolio_trade_tickers_json or "[]" }}</script>
+    <div id="prospectReport" aria-live="polite">
+        <h2>Куда инвестировать в первую очередь</h2>
+        <p class="note" id="prospectNote">Загрузка месячного отчёта…</p>
+        <div id="prospectTableWrap"></div>
+        <p class="meta" id="prospectMeta"></p>
+        <button type="button" class="refresh" id="prospectRefreshBtn">Пересчитать сейчас</button>
+    </div>
     <div id="statusLine"></div>
     <div id="chartsRoot"></div>
     <script>
@@ -252,6 +272,79 @@
             });
         }
 
+        function bucketClass(b) {
+            if (b === 'core_prospect') return 'bucket-core';
+            if (b === 'watch_long') return 'bucket-watch';
+            if (b === 'tactical_avoid') return 'bucket-avoid';
+            if (b === 'structurally_weak') return 'bucket-weak';
+            return '';
+        }
+
+        function fmtPct(v, digits) {
+            if (v == null || !Number.isFinite(Number(v))) return '—';
+            var n = Number(v);
+            var d = digits == null ? 0 : digits;
+            return (n >= 0 ? '+' : '') + n.toFixed(d) + '%';
+        }
+
+        function renderProspectReport(pack) {
+            var noteEl = document.getElementById('prospectNote');
+            var wrap = document.getElementById('prospectTableWrap');
+            var metaEl = document.getElementById('prospectMeta');
+            if (!pack || !Array.isArray(pack.tickers)) {
+                noteEl.textContent = 'Нет артефакта месячного отчёта. Нажмите «Пересчитать сейчас» или дождитесь cron (1-е число).';
+                wrap.innerHTML = '';
+                metaEl.textContent = '';
+                return;
+            }
+            noteEl.textContent = pack.note_ru || '';
+            var rows = pack.tickers || [];
+            var html = '<table><thead><tr>' +
+                '<th>#</th><th>Тикер</th><th>Bucket</th><th>Рынок ~6м</th><th>Capture</th><th>До хая</th><th>20d</th><th>Tier</th><th>Действие</th>' +
+                '</tr></thead><tbody>';
+            rows.forEach(function(r) {
+                var lo = r.capture_proxy_lo_pct, hi = r.capture_proxy_hi_pct;
+                var cap = (lo != null && hi != null) ? (Number(lo).toFixed(0) + '…' + Number(hi).toFixed(0) + '%') : '—';
+                html += '<tr class="' + bucketClass(r.strategic_bucket) + '">' +
+                    '<td>' + (r.allocation_rank != null ? r.allocation_rank : '—') + '</td>' +
+                    '<td>' + (r.ticker || '—') + '</td>' +
+                    '<td>' + (r.strategic_bucket || '—') + '</td>' +
+                    '<td>' + fmtPct(r.market_move_6m_pct, 0) + '</td>' +
+                    '<td>' + cap + '</td>' +
+                    '<td>' + fmtPct(r.dist_from_6m_high_pct, 1) + '</td>' +
+                    '<td>' + fmtPct(r.exp_20d_pct, 1) + '</td>' +
+                    '<td>' + (r.prospect_tier || '—') + '</td>' +
+                    '<td class="action">' + (r.focus_action_ru || '') + '</td>' +
+                    '</tr>';
+            });
+            html += '</tbody></table>';
+            wrap.innerHTML = html;
+            var bc = pack.bucket_counts || {};
+            var bcParts = Object.keys(bc).map(function(k) { return k + '=' + bc[k]; });
+            metaEl.textContent = 'Обновлено: ' + (pack.generated_at_utc || '—') +
+                ' · источник: ' + (pack.source || 'artifact') +
+                ' · lookback ' + (pack.lookback_trading_days || 126) + 'd' +
+                (bcParts.length ? ' · ' + bcParts.join(', ') : '') +
+                ' · cron: 1-е 07:20 MSK';
+        }
+
+        async function loadProspectReport(forceRefresh) {
+            var noteEl = document.getElementById('prospectNote');
+            try {
+                noteEl.textContent = forceRefresh ? 'Пересчёт…' : 'Загрузка месячного отчёта…';
+                var url = '/api/portfolio/prospect-monthly' + (forceRefresh ? '?refresh=1' : '');
+                var r = await fetch(url);
+                if (!r.ok) {
+                    var err = await r.json().catch(function() { return {}; });
+                    noteEl.textContent = err.detail || r.statusText || 'Ошибка отчёта';
+                    return;
+                }
+                renderProspectReport(await r.json());
+            } catch (e) {
+                noteEl.textContent = 'Ошибка: ' + (e.message || String(e));
+            }
+        }
+
         async function loadChart() {
             var statusEl = document.getElementById('statusLine');
             var root = document.getElementById('chartsRoot');
@@ -365,6 +458,9 @@
             document.getElementById('daysSel').addEventListener('change', loadChart);
             var tf = document.getElementById('tickerPortfolioFilter');
             if (tf) tf.addEventListener('change', loadChart);
+            var pr = document.getElementById('prospectRefreshBtn');
+            if (pr) pr.addEventListener('click', function() { loadProspectReport(true); });
+            loadProspectReport(false);
             loadChart();
         })();
     </script>

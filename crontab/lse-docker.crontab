@@ -71,7 +71,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 58 23 * * 1-5 flock -n /tmp/lse_ml_train_readiness.lock docker exec -e ML_READINESS_SKIP_EVENT_REACTION=1 -e ML_READINESS_SKIP_EARNINGS_INTELLIGENCE=0 -e ML_READINESS_SKIP_GAME5M=1 -e EVENT_REACTION_DATASET_VERSION=v0_expanded_baseline -e EVENT_REACTION_FEATURE_BUILDER_VERSION=quotes_regime_earnings_v1 lse-bot python scripts/run_ml_train_readiness_cron.py >> /home/ai8049520/lse/logs/ml_train_readiness_cron.log 2>&1
 # Portfolio 20d session probe (log_only observe vs game) after readiness.
 5 0 * * 2-6 flock -n /tmp/lse_portfolio_20d_probe.lock docker exec lse-bot python scripts/run_portfolio_20d_session_probe.py >> /home/ai8049520/lse/logs/portfolio_20d_session_probe.log 2>&1
-# Monthly strategic prospectivity (~6m path + current 20d) — 1-е число, 07:20 MSK.
+# Monthly portfolio allocation report (~6m path + capture + 20d) → /portfolio/daily above charts. 1-е 07:20 MSK.
 20 7 1 * * flock -n /tmp/lse_portfolio_prospect_monthly.lock docker exec lse-bot python scripts/run_portfolio_prospect_monthly_review.py >> /home/ai8049520/lse/logs/portfolio_prospect_monthly.log 2>&1
 # Legacy per-contour nightly (replaced by dispatcher --slot nightly 23:47):
 # 46 open_path | 51 event_reaction --full | 52 earnings_grid --full
