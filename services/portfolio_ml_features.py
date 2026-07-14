@@ -79,11 +79,45 @@ class PortfolioMLUniverse:
     core: List[str]
 
 
-def get_portfolio_ml_feature_schema() -> Tuple[List[str], List[int], List[str]]:
+def get_portfolio_ml_feature_schema(
+    *,
+    drop_price_level: bool = False,
+) -> Tuple[List[str], List[int], List[str]]:
     """Return feature names, categorical indices, and numeric feature names."""
-    colnames = list(CATEGORICAL_FEATURE_KEYS) + list(NUMERIC_FEATURE_KEYS)
+    numeric = list(NUMERIC_FEATURE_KEYS)
+    if drop_price_level:
+        # Absolute price dominates RMSE but collapses cross-ticker separation for return models.
+        numeric = [c for c in numeric if c not in ("close", "log_close")]
+    colnames = list(CATEGORICAL_FEATURE_KEYS) + numeric
     cat_idx = list(range(len(CATEGORICAL_FEATURE_KEYS)))
-    return colnames, cat_idx, list(NUMERIC_FEATURE_KEYS)
+    return colnames, cat_idx, numeric
+
+
+def feature_frame_to_rows(
+    df: pd.DataFrame,
+    *,
+    feature_names: Optional[List[str]] = None,
+) -> Tuple[List[str], List[int], List[List[Any]]]:
+    """Convert a feature dataframe to CatBoost row order."""
+    if feature_names:
+        colnames = list(feature_names)
+        cat_idx = [i for i, c in enumerate(colnames) if c in CATEGORICAL_FEATURE_KEYS]
+    else:
+        colnames, cat_idx, _ = get_portfolio_ml_feature_schema()
+    rows: List[List[Any]] = []
+    for _, r in df.iterrows():
+        row: List[Any] = []
+        for c in colnames:
+            if c in CATEGORICAL_FEATURE_KEYS:
+                row.append(str(r.get(c) or "unassigned"))
+            else:
+                try:
+                    x = float(r.get(c, 0.0))
+                    row.append(x if math.isfinite(x) else 0.0)
+                except (TypeError, ValueError):
+                    row.append(0.0)
+        rows.append(row)
+    return colnames, cat_idx, rows
 
 
 def _dedupe_upper(items: Iterable[str]) -> List[str]:
@@ -377,21 +411,3 @@ def build_latest_portfolio_ml_features(
     idx = df.groupby("ticker")["date"].idxmax()
     return df.loc[idx].sort_values("ticker").reset_index(drop=True)
 
-
-def feature_frame_to_rows(df: pd.DataFrame) -> Tuple[List[str], List[int], List[List[Any]]]:
-    """Convert a feature dataframe to CatBoost row order."""
-    colnames, cat_idx, _ = get_portfolio_ml_feature_schema()
-    rows: List[List[Any]] = []
-    for _, r in df.iterrows():
-        row: List[Any] = []
-        for c in colnames:
-            if c in CATEGORICAL_FEATURE_KEYS:
-                row.append(str(r.get(c) or "unassigned"))
-            else:
-                try:
-                    x = float(r.get(c, 0.0))
-                    row.append(x if math.isfinite(x) else 0.0)
-                except (TypeError, ValueError):
-                    row.append(0.0)
-        rows.append(row)
-    return colnames, cat_idx, rows

@@ -50,12 +50,28 @@ def _rank_metrics(y_true: np.ndarray, y_pred: np.ndarray, threshold_log: float) 
     top = y_true[order[:n_top]]
     all_hit = float(np.mean(y_true > threshold_log))
     top_hit = float(np.mean(top > threshold_log))
+    # Spearman / Pearson on valid for separation quality (not just RMSE).
+    spearman = float("nan")
+    pearson = float("nan")
+    pred_std = float(np.std(y_pred)) if y_pred.size else float("nan")
+    try:
+        if y_true.size >= 5 and np.std(y_true) > 1e-12 and np.std(y_pred) > 1e-12:
+            from scipy.stats import spearmanr, pearsonr
+
+            spearman = float(spearmanr(y_true, y_pred).correlation)
+            pearson = float(pearsonr(y_true, y_pred)[0])
+    except Exception:
+        pass
     return {
         "top_decile_n": int(n_top),
         "top_decile_mean_log_return": float(np.mean(top)),
         "top_decile_mean_simple_pct": float((np.exp(np.mean(top)) - 1.0) * 100.0),
         "top_decile_hit_rate_pct": round(top_hit * 100.0, 2),
         "all_valid_hit_rate_pct": round(all_hit * 100.0, 2),
+        "spearman_ic_valid": round(spearman, 6) if math.isfinite(spearman) else None,
+        "pearson_ic_valid": round(pearson, 6) if math.isfinite(pearson) else None,
+        "pred_std_valid": round(pred_std, 8) if math.isfinite(pred_std) else None,
+        "top_minus_mean_log": float(np.mean(top) - np.mean(y_true)),
     }
 
 
@@ -72,6 +88,11 @@ def main() -> int:
         type=str,
         default="",
         help="Output .cbm path (meta written alongside as .meta.json)",
+    )
+    parser.add_argument(
+        "--drop-price-level",
+        action="store_true",
+        help="Drop close/log_close features (recommended for horizon>=20 to improve cross-ticker separation)",
     )
     parser.add_argument(
         "--json-metrics-out",
@@ -175,11 +196,17 @@ def main() -> int:
         )
         return 2
 
-    feature_names, cat_features, _ = get_portfolio_ml_feature_schema()
-    colnames, cat_idx, rows = feature_frame_to_rows(df)
+    drop_price = bool(args.drop_price_level) or int(args.horizon_days) >= 20
+    model_version = MODEL_VERSION
+    if drop_price:
+        model_version = f"{MODEL_VERSION}_noprice"
+    feature_names, cat_features, _ = get_portfolio_ml_feature_schema(drop_price_level=drop_price)
+    colnames, cat_idx, rows = feature_frame_to_rows(df, feature_names=feature_names)
     if colnames != feature_names or cat_idx != cat_features:
         logger.error("Feature schema mismatch inside training script.")
         return 3
+    if drop_price:
+        logger.info("Using drop_price_level feature set (n_features=%s)", len(feature_names))
     y = df[target_col].astype(float).to_numpy()
 
     n_valid = max(1, int(n_total * float(args.valid_ratio)))
@@ -193,16 +220,30 @@ def main() -> int:
     train_pool = Pool(train_X, label=train_y, cat_features=cat_features, feature_names=feature_names)
     valid_pool = Pool(valid_X, label=valid_y, cat_features=cat_features, feature_names=feature_names)
 
-    model = CatBoostRegressor(
-        iterations=500,
-        learning_rate=0.04,
-        depth=6,
-        loss_function="RMSE",
-        eval_metric="RMSE",
-        random_seed=42,
-        verbose=False,
-        early_stopping_rounds=60,
-    )
+    # 20d: slightly deeper + lower L2 to allow more cross-sectional discrimination.
+    if int(args.horizon_days) >= 20:
+        model = CatBoostRegressor(
+            iterations=800,
+            learning_rate=0.03,
+            depth=7,
+            l2_leaf_reg=2.0,
+            loss_function="RMSE",
+            eval_metric="RMSE",
+            random_seed=42,
+            verbose=False,
+            early_stopping_rounds=80,
+        )
+    else:
+        model = CatBoostRegressor(
+            iterations=500,
+            learning_rate=0.04,
+            depth=6,
+            loss_function="RMSE",
+            eval_metric="RMSE",
+            random_seed=42,
+            verbose=False,
+            early_stopping_rounds=60,
+        )
     model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
     pred = np.asarray(model.predict(valid_pool), dtype=float)
     threshold_log = portfolio_ml_threshold_log()
@@ -211,23 +252,26 @@ def main() -> int:
         "mae_valid": _mae(valid_y, pred),
         "mean_target_valid_log_return": float(np.mean(valid_y)) if valid_y.size else None,
         "threshold_log_return": threshold_log,
+        "drop_price_level": drop_price,
         **_rank_metrics(valid_y, pred, threshold_log),
     }
     logger.info(
-        "Train=%s Valid=%s RMSE=%.5f MAE=%.5f top_decile_mean=%.2f%% hit=%.1f%%",
+        "Train=%s Valid=%s RMSE=%.5f MAE=%.5f top_decile_mean=%.2f%% hit=%.1f%% spearman=%.3f pred_std=%.4f",
         n_train,
         n_valid,
         metrics["rmse_valid"],
         metrics["mae_valid"],
         metrics.get("top_decile_mean_simple_pct", float("nan")),
         metrics.get("top_decile_hit_rate_pct", float("nan")),
+        metrics.get("spearman_ic_valid") or float("nan"),
+        metrics.get("pred_std_valid") or float("nan"),
     )
 
     metrics_blob = {
         "script": "train_portfolio_catboost",
         "status": "ok",
         "dry_run": bool(args.dry_run),
-        "model_version": MODEL_VERSION,
+        "model_version": model_version,
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "n_train": n_train,
         "n_valid": n_valid,
@@ -236,6 +280,7 @@ def main() -> int:
         "horizon_days": int(args.horizon_days),
         "corr_window_days": int(args.corr_window_days),
         "min_rows_config": int(args.min_rows),
+        "drop_price_level": drop_price,
         "metrics": {k: (round(v, 8) if isinstance(v, float) and math.isfinite(v) else v) for k, v in metrics.items()},
         "out_model_path": out_final,
         "portfolio_tickers": universe.portfolio_tickers,
@@ -269,7 +314,7 @@ def main() -> int:
     model.save_model(str(out_path))
 
     meta = {
-        "model_version": MODEL_VERSION,
+        "model_version": model_version,
         "feature_names": feature_names,
         "cat_feature_indices": cat_features,
         "trained_at": datetime.now(timezone.utc).isoformat(),
@@ -278,13 +323,14 @@ def main() -> int:
         "n_total": n_total,
         "horizon_days": int(args.horizon_days),
         "corr_window_days": int(args.corr_window_days),
+        "drop_price_level": drop_price,
         "target": "forward_log_return",
         "threshold_log_return": threshold_log,
         "metrics": {k: (round(v, 6) if isinstance(v, float) and math.isfinite(v) else v) for k, v in metrics.items()},
         "portfolio_tickers": universe.portfolio_tickers,
         "game5m_tickers": universe.game5m_tickers,
         "leader_tickers": universe.leaders,
-        "note": "Daily advisory model for portfolio game; 5m tickers are correlation/context features.",
+        "note": "Daily advisory model for portfolio game; 20d drops close/log_close for cross-ticker separation.",
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)

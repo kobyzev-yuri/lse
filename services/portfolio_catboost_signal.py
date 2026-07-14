@@ -159,16 +159,19 @@ def predict_portfolio_expected_returns(
 
     colnames, cat_idx, rows = feature_frame_to_rows(df)
     expected = meta.get("feature_names")
-    if list(expected or []) != colnames:
-        msg = "Список признаков не совпадает с meta.json — переобучите portfolio CatBoost."
-        logger.warning(
-            "Portfolio CatBoost feature mismatch h=%s meta=%s current=%s",
-            horizon_days,
-            expected,
-            colnames,
-        )
-        mismatch = {**base, f"{prefix}_status": "feature_mismatch", f"{prefix}_note": msg}
-        return {t: dict(mismatch) for t in wanted}
+    # Prefer exact meta schema (allows 20d drop_price_level subsets).
+    if expected and list(expected) != colnames:
+        colnames, cat_idx, rows = feature_frame_to_rows(df, feature_names=list(expected))
+        if list(expected) != colnames:
+            msg = "Список признаков не совпадает с meta.json — переобучите portfolio CatBoost."
+            logger.warning(
+                "Portfolio CatBoost feature mismatch h=%s meta=%s current=%s",
+                horizon_days,
+                expected,
+                colnames,
+            )
+            mismatch = {**base, f"{prefix}_status": "feature_mismatch", f"{prefix}_note": msg}
+            return {t: dict(mismatch) for t in wanted}
     try:
         from catboost import Pool
 
