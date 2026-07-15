@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Портфель — daily график</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    {# Local Chart.js — avoid blocking hang on jsdelivr CDN #}
+    <script src="/static/vendor/chart.umd.min.js"></script>
     <style>
         body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e2e8f0; margin: 0; padding: 1rem; max-width: 960px; margin-left: auto; margin-right: auto; }
         a { color: #7dd3fc; }

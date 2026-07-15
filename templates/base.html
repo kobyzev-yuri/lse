@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>{% block title %}LSE Trading System{% endblock %}</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    {# Local Chart.js — CDN (jsdelivr) often hangs for RU clients and blocks the whole page #}
+    <script src="/static/vendor/chart.umd.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         /* Ширина контента под телефон / планшет / десктоп (без «вечной» колонки 480px) */
