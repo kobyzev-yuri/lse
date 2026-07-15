@@ -506,6 +506,42 @@ def _disk_save(path: Path, payload: Dict[str, Any]) -> None:
         pass
 
 
+def _empty_shape_cluster_report(
+    *,
+    tickers: Sequence[str],
+    lookback_trading_days: int,
+    corr_min: float,
+    method: str,
+    mode: str,
+    max_clusters: int,
+    distance_threshold: float,
+    cache_source: str = "none",
+    note_ru: str = "",
+) -> Dict[str, Any]:
+    return {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "mode": mode,
+        "method": method,
+        "lookback_trading_days": int(lookback_trading_days),
+        "corr_min": float(corr_min),
+        "distance_threshold": float(distance_threshold),
+        "max_clusters": int(max_clusters),
+        "cut": "maxclust" if int(max_clusters) >= 2 else "distance",
+        "n_tickers_requested": len([t for t in tickers if str(t).strip()]),
+        "n_tickers_ok": 0,
+        "n_clusters": 0,
+        "clusters": [],
+        "spark_closes": {},
+        "top_pairs": [],
+        "missing_or_short": [],
+        "cache_hit": False,
+        "cache_source": cache_source,
+        "method_ru": shape_cluster_method_ru(),
+        "note_ru": note_ru
+        or "Карта ещё не в кэше — клиент догрузит через API (без блокировки HTML).",
+    }
+
+
 def build_shape_cluster_page_payload(
     engine,
     *,
@@ -518,6 +554,7 @@ def build_shape_cluster_page_payload(
     max_clusters: int = 8,
     distance_threshold: float = 0.12,
     force_refresh: bool = False,
+    cache_only: bool = False,
 ) -> Dict[str, Any]:
     from services.shape_cluster_universe import shape_cluster_tickers
 
@@ -556,6 +593,19 @@ def build_shape_cluster_page_payload(
                 report["cache_source"] = "disk"
                 _cache_put(cache_key, {k: v for k, v in report.items() if k not in ("cache_hit", "cache_source")})
             # иначе ниже пересчитаем; disk без spark — не используем как hit
+
+    if report is None and cache_only:
+        # HTML boot path: never block page SSR on live SQL (~1s+).
+        report = _empty_shape_cluster_report(
+            tickers=tickers,
+            lookback_trading_days=lookback_trading_days,
+            corr_min=corr_min,
+            method=method,
+            mode=mode,
+            max_clusters=max_clusters,
+            distance_threshold=distance_threshold,
+            cache_source="cache_miss",
+        )
 
     if report is None:
         try:

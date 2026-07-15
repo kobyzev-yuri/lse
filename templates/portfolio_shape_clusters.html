@@ -136,8 +136,9 @@
     </div>
 
     <div id="metaLine"></div>
-    <div id="statusLine">boot</div>
+    <div id="statusLine">parsing…</div>
     <noscript><p class="muted">JavaScript required</p></noscript>
+    <script>try{document.getElementById("statusLine").textContent="loading script…";}catch(e){}</script>
 
     <div id="clusterBoard"></div>
     <h2 id="detailHead"></h2>
@@ -153,10 +154,10 @@
         st("js-0");
         
         var BOOT_REPORT = {{ (boot_report or {}) | tojson }};
-        var METHOD_FALLBACK = {{ (boot_report.method_ru if boot_report and boot_report.method_ru else '') | tojson }} ||
-            "Метод: дневные close → P′=close/close_first → Pearson corr(P′_A,P′_B). " +
-            "Кластеры: hierarchical average-linkage, d=1−corr. Ползунок S% → cut d=1−S/100. " +
-            "Пары на карточке — факт. corr топ-3, не порог. Не cosine.";
+        // Short fallback only — full method_ru lives in BOOT_REPORT / API (avoid duplicating ~1KB in HTML).
+        var METHOD_FALLBACK =
+            "Метод: close → P'=close/close_first → Pearson. Hierarchical d=1-corr. " +
+            "Пары на карточке — факт. corr, не порог. Не cosine.";
 try {
         var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
         var lastReport = null;
@@ -680,11 +681,11 @@ try {
                 st("js-2");
         if (mapUsableBoot(BOOT_REPORT)) {
             applyMapReport(BOOT_REPORT, distFromSim(simPct()));
-            st("Map ready (boot) - click a cluster");
+            st("Map ready (boot/" + ((BOOT_REPORT && BOOT_REPORT.cache_source) || "?") + ") - click a cluster");
             // optional silent refresh — never block UI; 1 attempt, no retry spam
             softRefreshMap();
         } else {
-            st("js-2 fetching map");
+            st("js-2 fetching map (SSR cache miss)");
             loadBoard(false);
         }
         } catch (err) {

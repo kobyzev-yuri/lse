@@ -3821,7 +3821,8 @@ async def portfolio_shape_clusters_page(request: Request):
     """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
 
     def _boot() -> Dict[str, Any]:
-        # Embed map JSON in HTML — client secondary fetch often hangs (~60KB body).
+        # SSR embeds map only from memory/disk — never block HTML on live SQL rebuild.
+        # Client loadBoard() rebuilds via API when cache_miss.
         try:
             from report_generator import get_engine
             from services.portfolio_shape_clusters import build_shape_cluster_page_payload
@@ -3832,6 +3833,7 @@ async def portfolio_shape_clusters_page(request: Request):
                 max_clusters=0,
                 distance_threshold=0.12,
                 force_refresh=False,
+                cache_only=True,
             )
         except Exception as e:
             logger.warning("shape-clusters page boot payload failed: %s", e)

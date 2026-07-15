@@ -7,6 +7,7 @@ import pandas as pd
 from services.portfolio_shape_clusters import (
     _clusters_from_corr_threshold,
     _clusters_hierarchical,
+    _empty_shape_cluster_report,
     correlation_matrix,
     downsample_closes,
     normalize_paths,
@@ -57,6 +58,22 @@ class TestShapeClusters(unittest.TestCase):
         self.assertIn("Пирсона", text)
         self.assertIn("не cosine", text.lower())
         self.assertIn("1 − corr", text)
+
+    def test_empty_report_for_cache_only_ssr(self):
+        empty = _empty_shape_cluster_report(
+            tickers=["AAA", "BBB"],
+            lookback_trading_days=126,
+            corr_min=0.88,
+            method="hierarchical",
+            mode="shape",
+            max_clusters=0,
+            distance_threshold=0.12,
+            cache_source="cache_miss",
+        )
+        self.assertEqual(empty["n_tickers_ok"], 0)
+        self.assertEqual(empty["clusters"], [])
+        self.assertEqual(empty["cache_source"], "cache_miss")
+        self.assertTrue(empty.get("method_ru"))
 
 
 if __name__ == "__main__":
