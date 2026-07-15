@@ -6,6 +6,7 @@ import pandas as pd
 
 from services.portfolio_shape_clusters import (
     _clusters_from_corr_threshold,
+    _clusters_hierarchical,
     correlation_matrix,
     normalize_paths,
 )
@@ -23,6 +24,16 @@ class TestShapeClusters(unittest.TestCase):
         self.assertGreater(float(corr.loc["AAA", "BBB"]), 0.99)
         groups = _clusters_from_corr_threshold(corr, 0.9)
         # AAA+BBB together, CCC alone (or opposite cluster)
+        joined = {frozenset(g) for g in groups}
+        self.assertIn(frozenset({"AAA", "BBB"}), joined)
+
+    def test_hierarchical_distance_cut(self):
+        idx = pd.date_range("2025-01-01", periods=80, freq="B")
+        a = pd.Series(range(1, 81), index=idx, dtype=float)
+        b = a * 1.5 + 10
+        c = pd.Series(reversed(range(1, 81)), index=idx, dtype=float)
+        corr = correlation_matrix(normalize_paths({"AAA": a, "BBB": b, "CCC": c}))
+        groups = _clusters_hierarchical(corr, distance_threshold=0.12, max_clusters=None)
         joined = {frozenset(g) for g in groups}
         self.assertIn(frozenset({"AAA", "BBB"}), joined)
 

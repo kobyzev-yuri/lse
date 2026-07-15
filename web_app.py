@@ -3712,7 +3712,8 @@ async def api_portfolio_shape_clusters(
             mode=(mode or "shape").strip().lower(),
             cluster_id=int(cluster_id) if cluster_id is not None else None,
             include_overlay=int(include_overlay or 0) == 1,
-            max_clusters=min(max(2, int(max_clusters)), 20),
+            # 0 = cut by distance_threshold (slider); >=2 = fixed k groups
+            max_clusters=min(max(0, int(max_clusters)), 20),
             distance_threshold=min(max(0.02, float(distance_threshold)), 1.0),
             force_refresh=int(refresh or 0) == 1,
         )

@@ -147,6 +147,7 @@ def _clusters_hierarchical(
     np.fill_diagonal(dist, 0.0)
     condensed = squareform(dist, checks=False)
     z = linkage(condensed, method="average")
+    # max_clusters <= 0 → cut by distance threshold (UI slider); else fixed k groups.
     if max_clusters is not None and int(max_clusters) >= 2:
         k = min(int(max_clusters), max(2, len(tickers)))
         labels = fcluster(z, t=k, criterion="maxclust")
@@ -210,7 +211,8 @@ def build_shape_clusters(
 ) -> Dict[str, Any]:
     """
     mode=shape: corr of normalized prices (path similarity).
-    method=hierarchical (default): average linkage, cut by max_clusters.
+    method=hierarchical (default): average linkage.
+      max_clusters>=2 → fixed k; max_clusters<=0 → cut by distance_threshold (1−corr).
     method=components: union-find on corr>=corr_min (transitivity → megaclusters).
     """
     mode_u = (mode or "shape").strip().lower()
@@ -233,6 +235,7 @@ def build_shape_clusters(
             "corr_min": float(corr_min),
             "distance_threshold": float(distance_threshold),
             "max_clusters": int(max_clusters),
+            "cut": "maxclust" if int(max_clusters) >= 2 else "distance",
             "n_tickers_ok": 0,
             "missing_or_short": missing,
             "clusters": [],
@@ -243,10 +246,11 @@ def build_shape_clusters(
         groups = _clusters_from_corr_threshold(corr, float(corr_min))
     else:
         try:
+            mc = int(max_clusters)
             groups = _clusters_hierarchical(
                 corr,
                 distance_threshold=float(distance_threshold),
-                max_clusters=int(max_clusters) if max_clusters else None,
+                max_clusters=mc if mc >= 2 else None,
             )
             method_u = "hierarchical"
         except Exception:
@@ -281,6 +285,7 @@ def build_shape_clusters(
                 top_pairs.append({"a": a, "b": b, "corr": round(v, 3)})
     top_pairs.sort(key=lambda x: -float(x["corr"]))
 
+    cut = "maxclust" if int(max_clusters) >= 2 else "distance"
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "mode": mode_u,
@@ -289,6 +294,7 @@ def build_shape_clusters(
         "corr_min": float(corr_min),
         "distance_threshold": float(distance_threshold),
         "max_clusters": int(max_clusters),
+        "cut": cut,
         "n_tickers_requested": len([t for t in tickers if str(t).strip()]),
         "n_tickers_ok": int(norm.shape[1]),
         "n_bars_aligned": int(norm.shape[0]),
@@ -297,8 +303,9 @@ def build_shape_clusters(
         "clusters": clusters,
         "top_pairs": top_pairs[:15],
         "note_ru": (
-            "Кластеры по похожести формы 6м (норм. цена). По умолчанию hierarchical "
-            "average-linkage с max_clusters. Клик по карточке группы → оверлей + дневные графики."
+            "Кластеры по похожести формы (норм. цена, average-linkage). "
+            "Порог = distance cut (ниже порог похожести → строже группы). "
+            "Клик по карточке → оверлей + дневные."
         ),
     }
 
@@ -395,19 +402,14 @@ def build_shape_cluster_page_payload(
             report["cache_hit"] = True
             report["cache_source"] = "memory"
         else:
-            # Prefer disk for default hierarchical map (survives worker restart).
-            if (
-                method == "hierarchical"
-                and int(lookback_trading_days) == 126
-                and int(max_clusters) == 8
-            ):
-                disk = _disk_load(disk_path)
-                if disk and disk.get("cache_key") == cache_key and isinstance(disk.get("clusters"), list):
-                    report = dict(disk)
-                    report.pop("cache_key", None)
-                    report["cache_hit"] = True
-                    report["cache_source"] = "disk"
-                    _cache_put(cache_key, {k: v for k, v in report.items() if k not in ("cache_hit", "cache_source")})
+            # Disk cache for matching params (survives worker restart).
+            disk = _disk_load(disk_path)
+            if disk and disk.get("cache_key") == cache_key and isinstance(disk.get("clusters"), list):
+                report = dict(disk)
+                report.pop("cache_key", None)
+                report["cache_hit"] = True
+                report["cache_source"] = "disk"
+                _cache_put(cache_key, {k: v for k, v in report.items() if k not in ("cache_hit", "cache_source")})
 
     if report is None:
         report = build_shape_clusters(

@@ -10,7 +10,13 @@
         h1 { font-size: 1.15rem; margin: 0.5rem 0 0.35rem; }
         .muted { color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.75rem; line-height: 1.35; }
         select, button { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; padding: 0.35rem 0.6rem; border-radius: 6px; margin-right: 0.4rem; }
-        .controls { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.75rem; }
+        .controls { display: flex; flex-wrap: wrap; gap: 0.65rem 1rem; align-items: center; margin-bottom: 0.75rem; }
+        .controls label { font-size: 0.82rem; color: #cbd5e1; display: inline-flex; align-items: center; gap: 0.35rem; }
+        .thresh-wrap { flex: 1 1 220px; min-width: 200px; max-width: 360px; display: flex; flex-direction: column; gap: 0.2rem; }
+        .thresh-wrap .row { display: flex; align-items: center; gap: 0.5rem; }
+        .thresh-wrap input[type=range] { flex: 1; accent-color: #38bdf8; }
+        .thresh-wrap .hint { font-size: 0.72rem; color: #64748b; }
+        #simVal { font-variant-numeric: tabular-nums; color: #7dd3fc; min-width: 3.2em; }
         #metaLine { font-size: 0.78rem; color: #64748b; margin-bottom: 0.75rem; }
         #statusLine { font-size: 0.8rem; color: #94a3b8; min-height: 1.2em; margin: 0.5rem 0; }
         #clusterBoard {
@@ -39,9 +45,11 @@
         }
         .cluster-card .tickers span.medoid { border-color: #38bdf8; color: #7dd3fc; }
         #detailHead { font-size: 1rem; margin: 1rem 0 0.35rem; color: #e2e8f0; display: none; }
-        .chart-section { position: relative; height: 280px; margin-top: 1rem; }
-        .chart-section.overlay { height: 340px; }
+        .chart-section { margin-top: 1rem; }
         .chart-section h2 { font-size: 0.95rem; margin: 0 0 0.35rem 0; color: #cbd5e1; }
+        .chart-wrap { position: relative; height: 260px; }
+        .chart-section.overlay .chart-wrap { height: 320px; }
+        .chart-wrap canvas { display: block; }
         .pair { color: #94a3b8; font-size: 0.78rem; margin-top: 0.25rem; }
     </style>
     {% include "partials/lse_fetch_shim.html" %}
@@ -49,24 +57,24 @@
 <body>
 {% include "partials/site_nav_standalone.html" %}
     <h1>Похожесть графиков · кластеры</h1>
-    <p class="muted">Сначала карта <strong>групп</strong>. Клик по карточке → оверлей и дневные графики. Chart.js подгружается только при открытии группы (карта от CDN не зависит).</p>
+    <p class="muted">Карта групп по форме цены. Ползунок — насколько похожими должны быть ряды, чтобы попасть в одну группу. Клик по карточке → оверлей и дневные.</p>
 
     <div class="controls">
-        <label>Lookback
+        <label>Окно
             <select id="lookbackSel">
                 <option value="63">63д</option>
                 <option value="126" selected>126д (~6м)</option>
                 <option value="189">189д</option>
             </select>
         </label>
-        <label>Групп ~
-            <select id="maxClustersSel">
-                <option value="6">6</option>
-                <option value="8" selected>8</option>
-                <option value="10">10</option>
-                <option value="12">12</option>
-            </select>
-        </label>
+        <div class="thresh-wrap">
+            <div class="row">
+                <span>Порог похожести</span>
+                <strong id="simVal">88%</strong>
+            </div>
+            <input type="range" id="simSlider" min="70" max="95" step="1" value="88">
+            <div class="hint">← мягче (крупнее группы) · строже (больше соло) →</div>
+        </div>
         <label>Дней графика
             <select id="daysSel">
                 <option value="90">90</option>
@@ -74,8 +82,7 @@
                 <option value="270">270</option>
             </select>
         </label>
-        <button type="button" id="reloadBtn">Пересчитать карту</button>
-        <button type="button" id="retryBtn">Повторить</button>
+        <button type="button" id="reloadBtn" title="Сбросить кэш и пересчитать из quotes">Обновить из БД</button>
     </div>
 
     <div id="metaLine"></div>
@@ -90,11 +97,46 @@
         var lastReport = null;
         var mapHeartbeat = null;
         var chartJsPromise = null;
+        var chartsBusy = false;
+        var pendingClusterId = null;
         var COLORS = ['#38bdf8','#4ade80','#fbbf24','#f472b6','#a78bfa','#fb923c','#22d3ee','#e879f9','#86efac','#f87171','#c084fc','#2dd4bf'];
 
         function destroyCharts() {
             chartInstances.forEach(function(ch) { try { ch.destroy(); } catch (e) {} });
             chartInstances = [];
+        }
+
+        function clearChartsRoot() {
+            destroyCharts();
+            var root = document.getElementById('chartsRoot');
+            if (root) root.innerHTML = '';
+        }
+
+        function mountCanvas(section) {
+            var wrap = document.createElement('div');
+            wrap.className = 'chart-wrap';
+            var cv = document.createElement('canvas');
+            wrap.appendChild(cv);
+            section.appendChild(wrap);
+            return cv;
+        }
+
+        function safeCreateChart(canvas, factory) {
+            try {
+                if (window.Chart && typeof Chart.getChart === 'function') {
+                    var prev = Chart.getChart(canvas);
+                    if (prev) {
+                        try { prev.destroy(); } catch (e0) {}
+                        chartInstances = chartInstances.filter(function(ch) { return ch !== prev; });
+                    }
+                }
+                var ch = factory();
+                if (ch) chartInstances.push(ch);
+                return ch;
+            } catch (e) {
+                console.warn('chart create failed', e);
+                return null;
+            }
         }
 
         function colorFor(i) { return COLORS[i % COLORS.length]; }
@@ -125,8 +167,27 @@
                 var s = document.createElement('script');
                 s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
                 s.async = true;
-                s.onload = function() { resolve(); };
-                s.onerror = function() { reject(new Error('Chart.js CDN недоступен')); };
+                var done = false;
+                var timer = setTimeout(function() {
+                    if (done) return;
+                    done = true;
+                    chartJsPromise = null;
+                    try { s.remove(); } catch (e0) {}
+                    reject(new Error('Chart.js timeout'));
+                }, 15000);
+                s.onload = function() {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    resolve();
+                };
+                s.onerror = function() {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    chartJsPromise = null;
+                    reject(new Error('Chart.js CDN недоступен'));
+                };
                 document.head.appendChild(s);
             });
             return chartJsPromise;
@@ -134,13 +195,18 @@
 
         async function fetchJsonTimeout(url, ms) {
             var ctrl = new AbortController();
-            var timer = setTimeout(function() { ctrl.abort(); }, ms || 12000);
+            var timer = setTimeout(function() {
+                try { ctrl.abort(); } catch (e) {}
+            }, ms || 12000);
             try {
                 var r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
                 clearTimeout(timer);
                 return r;
             } catch (e) {
                 clearTimeout(timer);
+                if (e && e.name === 'AbortError') {
+                    throw new Error('timeout ' + (ms || 12000) + 'ms');
+                }
                 throw e;
             }
         }
@@ -148,55 +214,61 @@
         function buildOverlayChart(canvas, overlay) {
             var labels = overlay.labels || [];
             var series = overlay.series || [];
-            return new Chart(canvas, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: series.map(function(s, i) {
-                        return {
-                            label: s.ticker,
-                            data: s.values || [],
-                            borderColor: colorFor(i),
-                            tension: 0.1,
-                            spanGaps: true,
-                            pointRadius: 0,
-                            borderWidth: 1.6
-                        };
-                    })
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        title: { display: true, text: 'Норм. цена (1.0 = старт lookback)', color: '#94a3b8', font: { size: 11 } },
-                        legend: { labels: { color: '#cbd5e1', boxWidth: 10, font: { size: 10 } } }
+            return safeCreateChart(canvas, function() {
+                return new Chart(canvas, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: series.map(function(s, i) {
+                            return {
+                                label: s.ticker,
+                                data: s.values || [],
+                                borderColor: colorFor(i),
+                                tension: 0.1,
+                                spanGaps: true,
+                                pointRadius: 0,
+                                borderWidth: 1.6
+                            };
+                        })
                     },
-                    scales: {
-                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 } },
-                        y: { ticks: { color: '#94a3b8' } }
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        plugins: {
+                            title: { display: true, text: 'Норм. цена (1.0 = старт окна)', color: '#94a3b8', font: { size: 11 } },
+                            legend: { labels: { color: '#cbd5e1', boxWidth: 10, font: { size: 10 } } }
+                        },
+                        scales: {
+                            x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 } },
+                            y: { ticks: { color: '#94a3b8' } }
+                        }
                     }
-                }
+                });
             });
         }
 
         function buildPriceChart(canvas, bars) {
             var labels = bars.map(function(b) { return String(b.date).slice(0, 10); });
             var closes = bars.map(function(b) { return b.close != null ? Number(b.close) : null; });
-            return new Chart(canvas, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{ label: 'Close', data: closes, borderColor: '#38bdf8', tension: 0.1, spanGaps: true, pointRadius: 0 }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 } },
-                        y: { ticks: { color: '#94a3b8' } }
+            return safeCreateChart(canvas, function() {
+                return new Chart(canvas, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{ label: 'Close', data: closes, borderColor: '#38bdf8', tension: 0.1, spanGaps: true, pointRadius: 0 }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 } },
+                            y: { ticks: { color: '#94a3b8' } }
+                        }
                     }
-                }
+                });
             });
         }
 
@@ -254,59 +326,125 @@
             });
         }
 
-        async function loadPriceChartsBatched(tickers, days) {
-            var root = document.getElementById('chartsRoot');
-            var batchSize = 6;
-            var loaded = 0;
-            for (var i = 0; i < tickers.length; i += batchSize) {
-                var batch = tickers.slice(i, i + batchSize);
-                setStatus('Дневные ' + (loaded + 1) + '–' +
-                    Math.min(loaded + batch.length, tickers.length) + ' / ' + tickers.length);
-                var cr = await fetchJsonTimeout(
-                    '/api/portfolio/shape-clusters/charts?days=' + encodeURIComponent(days) +
-                    '&tickers=' + encodeURIComponent(batch.join(',')),
-                    25000
-                );
-                if (!cr.ok) {
-                    setStatus('Ошибка графиков ' + cr.status);
-                    return;
-                }
-                var pack = await cr.json();
-                (pack.charts || []).forEach(function(item) {
-                    var sec = document.createElement('div');
-                    sec.className = 'chart-section';
-                    var h = document.createElement('h2');
-                    h.textContent = item.ticker || '—';
-                    var cv = document.createElement('canvas');
-                    sec.appendChild(h);
-                    sec.appendChild(cv);
-                    root.appendChild(sec);
-                    if (!(item.bars || []).length) {
-                        var miss = document.createElement('p');
-                        miss.className = 'muted';
-                        miss.textContent = 'Нет quotes';
-                        sec.appendChild(miss);
-                        return;
-                    }
-                    chartInstances.push(buildPriceChart(cv, item.bars));
+        function buildOverlayFromCharts(items, maxSeries) {
+            var byTicker = {};
+            var allDates = {};
+            (items || []).forEach(function(it) {
+                var bars = it.bars || [];
+                if (!bars.length) return;
+                var first = null;
+                var map = {};
+                bars.forEach(function(b) {
+                    var d = String(b.date || '').slice(0, 10);
+                    var c = Number(b.close);
+                    if (!d || !Number.isFinite(c) || c <= 0) return;
+                    if (first == null) first = c;
+                    map[d] = c / first;
+                    allDates[d] = true;
                 });
-                loaded += batch.length;
-            }
-            setStatus('Готово · ' + tickers.length + ' графиков');
+                if (first != null) byTicker[it.ticker] = map;
+            });
+            var labels = Object.keys(allDates).sort();
+            var tickers = Object.keys(byTicker);
+            if (tickers.length > (maxSeries || 12)) tickers = tickers.slice(0, maxSeries || 12);
+            return {
+                labels: labels,
+                series: tickers.map(function(t) {
+                    return {
+                        ticker: t,
+                        values: labels.map(function(d) {
+                            var v = byTicker[t][d];
+                            return (v == null || !Number.isFinite(v)) ? null : v;
+                        })
+                    };
+                })
+            };
         }
 
-        async function selectCluster(clusterId) {
-            currentClusterId = clusterId;
-            markActiveCard();
+        async function fetchChartsBatch(tickers, days) {
+            var url = '/api/portfolio/shape-clusters/charts?days=' + encodeURIComponent(days) +
+                '&tickers=' + encodeURIComponent(tickers.join(','));
+            var lastErr = null;
+            for (var attempt = 0; attempt < 2; attempt++) {
+                try {
+                    var cr = await fetchJsonTimeout(url, 30000);
+                    if (!cr.ok) {
+                        lastErr = new Error('HTTP ' + cr.status);
+                        continue;
+                    }
+                    var pack = await cr.json();
+                    return pack.charts || [];
+                } catch (e) {
+                    lastErr = e;
+                }
+            }
+            throw lastErr || new Error('charts fetch failed');
+        }
+
+        async function loadClusterCharts(tickers, days, withOverlay) {
             var root = document.getElementById('chartsRoot');
+            var batchSize = 6;
+            var collected = [];
+
+            for (var i = 0; i < tickers.length; i += batchSize) {
+                var batch = tickers.slice(i, i + batchSize);
+                setStatus('Загрузка рядов ' + (i + 1) + '–' +
+                    Math.min(i + batch.length, tickers.length) + ' / ' + tickers.length);
+                var items = await fetchChartsBatch(batch, days);
+                // Если кликнули другой кластер — бросаем текущую загрузку (есть pending)
+                if (pendingClusterId != null) return false;
+                collected = collected.concat(items);
+            }
+
+            if (pendingClusterId != null) return false;
+
+            clearChartsRoot();
+            if (pendingClusterId != null) return false;
+
+            if (withOverlay) {
+                var ovSec = document.createElement('div');
+                ovSec.className = 'chart-section overlay';
+                var ovTitle = document.createElement('h2');
+                ovTitle.textContent = 'Оверлей формы (из дневных рядов)';
+                ovSec.appendChild(ovTitle);
+                var ovCanvas = mountCanvas(ovSec);
+                root.appendChild(ovSec);
+                var ov = buildOverlayFromCharts(collected, 12);
+                if (ov.series.length >= 2) {
+                    if (!buildOverlayChart(ovCanvas, ov)) {
+                        ovTitle.textContent = 'Оверлей: ошибка отрисовки — дневные ниже';
+                    }
+                } else {
+                    ovTitle.textContent = 'Оверлей: недостаточно рядов';
+                }
+            }
+
+            var drawn = 0;
+            collected.forEach(function(item) {
+                var sec = document.createElement('div');
+                sec.className = 'chart-section';
+                var h = document.createElement('h2');
+                h.textContent = item.ticker || '—';
+                sec.appendChild(h);
+                root.appendChild(sec);
+                if (!(item.bars || []).length) {
+                    var miss = document.createElement('p');
+                    miss.className = 'muted';
+                    miss.textContent = 'Нет quotes';
+                    sec.appendChild(miss);
+                    return;
+                }
+                var cv = mountCanvas(sec);
+                if (buildPriceChart(cv, item.bars)) drawn += 1;
+            });
+            setStatus('Готово · ' + drawn + '/' + collected.length + ' графиков' +
+                (withOverlay ? ' + оверлей' : ''));
+            return true;
+        }
+
+        async function runClusterLoad(clusterId) {
             var head = document.getElementById('detailHead');
-            var lookback = document.getElementById('lookbackSel').value;
-            var maxCl = document.getElementById('maxClustersSel').value;
             var days = document.getElementById('daysSel').value;
-
-            destroyCharts();
-            root.innerHTML = '';
-
             var selected = null;
             ((lastReport && lastReport.clusters) || []).forEach(function(c) {
                 if (Number(c.cluster_id) === Number(clusterId)) selected = c;
@@ -316,73 +454,98 @@
                 return;
             }
 
+            currentClusterId = clusterId;
+            markActiveCard();
             head.style.display = 'block';
             head.textContent = 'Графики · ' + (selected.label || '') + ' · ' + (selected.tickers || []).join(', ');
             head.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            setStatus('Готовлю графики…');
 
             try {
                 await ensureChartJs();
             } catch (e) {
-                setStatus('Не удалось загрузить Chart.js (CDN). Карта есть, графики нет.');
+                setStatus('Не удалось загрузить Chart.js: ' + (e.message || String(e)));
                 return;
             }
 
+            // снова кликнули — этот прогон не рисуем, возьмём pending в цикле
+            if (pendingClusterId != null) return;
+
             var members = selected.tickers || [];
             var isSolo = members.length <= 1;
+            try {
+                await loadClusterCharts(members, days, !isSolo);
+            } catch (e) {
+                if (pendingClusterId != null) return;
+                setStatus('Ошибка загрузки графиков: ' + (e.message || String(e)));
+            }
+        }
 
-            if (!isSolo) {
-                setStatus('Оверлей формы…');
-                var ovSec = document.createElement('div');
-                ovSec.className = 'chart-section overlay';
-                var ovH = document.createElement('h2');
-                ovH.textContent = 'Оверлей формы';
-                var ovCv = document.createElement('canvas');
-                ovSec.appendChild(ovH);
-                ovSec.appendChild(ovCv);
-                root.appendChild(ovSec);
-
-                try {
-                    var qOv = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
-                        '&max_clusters=' + encodeURIComponent(maxCl) +
-                        '&method=hierarchical&mode=shape&include_overlay=1' +
-                        '&cluster_id=' + encodeURIComponent(clusterId);
-                    var rOv = await fetchJsonTimeout(qOv, 20000);
-                    if (rOv.ok) {
-                        var withOv = await rOv.json();
-                        var overlay = withOv.overlay || { labels: [], series: [] };
-                        if ((overlay.series || []).length) {
-                            chartInstances.push(buildOverlayChart(ovCv, overlay));
-                        } else {
-                            ovH.textContent = 'Оверлей формы (нет overlapping ряда)';
-                        }
-                    }
-                } catch (e) {
-                    ovH.textContent = 'Оверлей не загрузился — дневные ниже';
+        async function selectCluster(clusterId) {
+            // Последний клик побеждает: не глушим отрисовку seq-ами, а ставим в очередь
+            pendingClusterId = Number(clusterId);
+            currentClusterId = Number(clusterId);
+            markActiveCard();
+            if (chartsBusy) {
+                setStatus('Переключаю на C' + clusterId + '…');
+                return;
+            }
+            chartsBusy = true;
+            try {
+                while (pendingClusterId != null) {
+                    var id = pendingClusterId;
+                    pendingClusterId = null;
+                    await runClusterLoad(id);
+                }
+            } finally {
+                chartsBusy = false;
+                // клик во время finally
+                if (pendingClusterId != null) {
+                    selectCluster(pendingClusterId);
                 }
             }
+        }
 
-            setStatus(isSolo ? 'Дневной график…' : 'Дневные графики…');
-            await loadPriceChartsBatched(members, days);
+        var boardLoadSeq = 0;
+        var simDebounce = null;
+
+        function simPct() {
+            return Number(document.getElementById('simSlider').value) || 88;
+        }
+
+        function distanceFromSim(pct) {
+            // hierarchical cut: distance = 1 − corr similarity
+            var d = 1 - (pct / 100);
+            return Math.max(0.02, Math.min(0.5, Math.round(d * 1000) / 1000));
+        }
+
+        function syncSimLabel() {
+            var el = document.getElementById('simVal');
+            if (el) el.textContent = simPct() + '%';
         }
 
         async function loadBoard(forceRefresh) {
             var head = document.getElementById('detailHead');
-            var root = document.getElementById('chartsRoot');
             var lookback = document.getElementById('lookbackSel').value;
-            var maxCl = document.getElementById('maxClustersSel').value;
+            var dist = distanceFromSim(simPct());
+            var seq = ++boardLoadSeq;
+            // Сброс графиков только при пересборке карты — не трогаем seq кликов
+            pendingClusterId = null;
             currentClusterId = null;
-            destroyCharts();
-            root.innerHTML = '';
+            clearChartsRoot();
             head.style.display = 'none';
-            document.getElementById('clusterBoard').innerHTML = '';
-            startHeartbeat('Рисуем карту кластеров…');
+            startHeartbeat(forceRefresh ? 'Пересчёт из БД…' : 'Обновляем карту…');
 
             try {
+                // max_clusters=0 → cut по distance_threshold (ползунок)
                 var q = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
-                    '&max_clusters=' + encodeURIComponent(maxCl) +
+                    '&max_clusters=0' +
+                    '&distance_threshold=' + encodeURIComponent(String(dist)) +
                     '&method=hierarchical&mode=shape&include_overlay=0';
                 if (forceRefresh) q += '&refresh=1';
-                var r = await fetchJsonTimeout(q, 12000);
+                // кэш обычно <1с; live-пересчёт quotes может быть дольше
+                var r = await fetchJsonTimeout(q, forceRefresh ? 90000 : 60000);
+                if (seq !== boardLoadSeq) return;
                 if (!r.ok) {
                     stopHeartbeat();
                     var err = await r.json().catch(function() { return {}; });
@@ -390,30 +553,41 @@
                     return;
                 }
                 var report = await r.json();
+                if (seq !== boardLoadSeq) return;
                 stopHeartbeat();
                 lastReport = report;
                 renderBoard(report.clusters || []);
+                var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
                 document.getElementById('metaLine').textContent =
                     'ok=' + (report.n_tickers_ok || 0) + '/' + (report.n_tickers_requested || 0) +
-                    ' · clusters=' + (report.n_clusters || 0) +
-                    ' · method=' + (report.method || '') +
+                    ' · групп=' + (report.n_clusters || 0) +
+                    ' · порог≈' + simShow + '%' +
+                    ' · cut=' + (report.cut || 'distance') +
                     ' · cache=' + (report.cache_source || (report.cache_hit ? 'yes' : 'live')) +
                     ' · кликните карточку';
                 setStatus('Карта готова — выберите кластер');
             } catch (e) {
+                if (seq !== boardLoadSeq) return;
                 stopHeartbeat();
-                var msg = (e && e.name === 'AbortError')
-                    ? 'Таймаут карты (12с). Нажмите «Повторить».'
-                    : ('Ошибка карты: ' + (e.message || String(e)));
+                var em = (e && e.message) ? String(e.message) : String(e);
+                var msg = (em.indexOf('timeout') >= 0)
+                    ? 'Карта считается дольше обычного. Двиньте ползунок снова или «Обновить из БД».'
+                    : ('Ошибка карты: ' + em);
                 setStatus(msg);
             }
         }
 
+        function scheduleBoardReload() {
+            syncSimLabel();
+            if (simDebounce) clearTimeout(simDebounce);
+            simDebounce = setTimeout(function() { loadBoard(false); }, 350);
+        }
+
         document.getElementById('reloadBtn').addEventListener('click', function() { loadBoard(true); });
-        document.getElementById('retryBtn').addEventListener('click', function() { loadBoard(false); });
         document.getElementById('lookbackSel').addEventListener('change', function() { loadBoard(false); });
-        document.getElementById('maxClustersSel').addEventListener('change', function() { loadBoard(false); });
-        // Карта без Chart.js — сразу
+        document.getElementById('simSlider').addEventListener('input', syncSimLabel);
+        document.getElementById('simSlider').addEventListener('change', scheduleBoardReload);
+        syncSimLabel();
         loadBoard(false);
     </script>
 </body>
