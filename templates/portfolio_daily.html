@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Портфель — daily график</title>
-    {# Local Chart.js — avoid blocking hang on jsdelivr CDN #}
-    <script src="/static/vendor/chart.umd.min.js"></script>
     <style>
         body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e2e8f0; margin: 0; padding: 1rem; max-width: 960px; margin-left: auto; margin-right: auto; }
         a { color: #7dd3fc; }
@@ -31,6 +29,7 @@
         #prospectReport button.refresh { margin-top: 0.5rem; font-size: 0.75rem; }
     </style>
     {% include "partials/lse_fetch_shim.html" %}
+    {% include "partials/chart_js_async.html" %}
 </head>
 <body>
 {% include "partials/site_nav_standalone.html" %}
@@ -60,6 +59,20 @@
             return m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : '';
         }
         var chartInstances = [];
+
+        function waitForChart(timeoutMs) {
+            return new Promise(function (resolve, reject) {
+                if (window.Chart) { resolve(); return; }
+                var t0 = Date.now();
+                var iv = setInterval(function () {
+                    if (window.Chart) { clearInterval(iv); resolve(); return; }
+                    if (Date.now() - t0 > (timeoutMs || 20000)) {
+                        clearInterval(iv);
+                        reject(new Error("Chart.js timeout"));
+                    }
+                }, 50);
+            });
+        }
 
         function destroyCharts() {
             chartInstances.forEach(function(ch) { try { ch.destroy(); } catch (e) {} });
@@ -462,7 +475,10 @@
             var pr = document.getElementById('prospectRefreshBtn');
             if (pr) pr.addEventListener('click', function() { loadProspectReport(true); });
             loadProspectReport(false);
-            loadChart();
+            waitForChart(20000).then(loadChart).catch(function (e) {
+                var statusEl = document.getElementById('statusLine');
+                if (statusEl) statusEl.textContent = 'Chart.js: ' + (e && e.message ? e.message : String(e));
+            });
         })();
     </script>
 </body>

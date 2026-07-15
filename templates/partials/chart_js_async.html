@@ -1,0 +1,13 @@
+{# Non-blocking Chart.js — never put a sync script src in <head> (Range/206 hangs freeze the tab). #}
+<script>
+(function () {
+    if (window.Chart) return;
+    var s = document.createElement("script");
+    s.src = "/static/vendor/chart.umd.min.js";
+    s.async = true;
+    s.onerror = function () {
+        try { console.warn("Chart.js load failed"); } catch (e0) {}
+    };
+    (document.body || document.head).appendChild(s);
+})();
+</script>

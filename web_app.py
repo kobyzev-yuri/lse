@@ -84,6 +84,16 @@ from report_generator import (
 )
 
 app = FastAPI(title="LSE Trading System", version="1.0.0")
+
+
+@app.middleware("http")
+async def _strip_range_on_static(request: Request, call_next):
+    """Avoid stuck browser tabs on Accept-Ranges/206 for /static (seen on Chart.js)."""
+    path = request.url.path or ""
+    if path.startswith("/static/") and path.endswith((".js", ".css", ".map")):
+        scope_headers = request.scope.get("headers") or []
+        request.scope["headers"] = [(k, v) for k, v in scope_headers if k != b"range"]
+    return await call_next(request)
 logger = logging.getLogger(__name__)
 
 def _env_flag(name: str, default: bool = False) -> bool:
