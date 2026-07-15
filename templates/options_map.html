@@ -125,7 +125,14 @@
     <div class="grid-2" style="align-items:end;">
         <div>
             <label for="mapTicker">Тикер</label>
-            <select id="mapTicker"><option value="">— загрузка —</option></select>
+            <select id="mapTicker">
+                {% for t in options_tickers %}
+                <option value="{{ t }}"{% if t == options_ticker_default %} selected{% endif %}>{{ t }}</option>
+                {% else %}
+                <option value="">— нет тикеров —</option>
+                {% endfor %}
+            </select>
+            <script type="application/json" id="optionsTickersBoot">{{ options_tickers_boot_json|safe }}</script>
         </div>
         <div>
             <button type="button" id="btnMapLoad" style="width:100%;">Показать</button>
@@ -488,23 +495,50 @@
         return parts.join(' · ');
     }
 
-    async function loadOptionsTickerSelect() {
+    function applyTickersPayload(j, prev) {
         const sel = $('mapTicker');
         if (!sel) return;
-        const prev = sel.value || 'MU';
-        const r = await fetch('/api/options/tickers');
-        const j = await r.json();
-        optionsTickerMeta = j.by_ticker || {};
+        optionsTickerMeta = (j && j.by_ticker) || {};
+        const tickers = (j && j.tickers) || [];
+        if (!tickers.length) return;
         sel.innerHTML = '';
-        (j.tickers || []).forEach(t => {
+        tickers.forEach(t => {
             const o = document.createElement('option');
             o.value = t;
             o.textContent = formatTickerLabel(t);
             sel.appendChild(o);
         });
-        if (prev && (j.tickers || []).includes(prev)) sel.value = prev;
-        else if ((j.tickers || []).includes('MU')) sel.value = 'MU';
-        else if ((j.tickers || []).length) sel.value = j.tickers[0];
+        if (prev && tickers.includes(prev)) sel.value = prev;
+        else if (tickers.includes('MU')) sel.value = 'MU';
+        else sel.value = tickers[0];
+    }
+
+    function loadOptionsTickerSelectFromBoot() {
+        const sel = $('mapTicker');
+        const prev = sel ? (sel.value || 'MU') : 'MU';
+        try {
+            const bootEl = document.getElementById('optionsTickersBoot');
+            if (bootEl && bootEl.textContent) {
+                applyTickersPayload(JSON.parse(bootEl.textContent), prev);
+                return true;
+            }
+        } catch (e) {}
+        return false;
+    }
+
+    async function loadOptionsTickerSelect() {
+        const sel = $('mapTicker');
+        if (!sel) return;
+        const prev = sel.value || 'MU';
+        if (loadOptionsTickerSelectFromBoot()) {
+            try {
+                const r = await fetch('/api/options/tickers');
+                if (r.ok) applyTickersPayload(await r.json(), prev);
+            } catch (e) {}
+            return;
+        }
+        const r = await fetch('/api/options/tickers');
+        applyTickersPayload(await r.json(), prev);
     }
 
     function renderPlates(listId, items, leg) {

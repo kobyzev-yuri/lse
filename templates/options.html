@@ -90,7 +90,14 @@
     <p id="pageIntroCalc" class="muted intro-tab hidden">Две колонки Polygon и yfinance: chain (PCR, OI, Vol), премии с доски, ниже — P/L по сценариям.</p>
     <div style="margin-top:0.75rem;max-width:360px;">
         <label for="optTicker">Тикер</label>
-        <select id="optTicker"><option value="">— загрузка —</option></select>
+        <select id="optTicker">
+            {% for t in options_tickers %}
+            <option value="{{ t }}"{% if t == options_ticker_default %} selected{% endif %}>{{ t }}</option>
+            {% else %}
+            <option value="">— нет тикеров —</option>
+            {% endfor %}
+        </select>
+        <script type="application/json" id="optionsTickersBoot">{{ options_tickers_boot_json|safe }}</script>
         <p id="optTickerHint" class="muted" style="font-size:0.78rem;margin-top:0.35rem;"></p>
     </div>
 </div>
@@ -432,24 +439,53 @@ P/L(S) = Value(S) − Entry</div>
         }
     }
 
-    async function loadOptionsTickerSelect() {
+    function applyTickersPayload(j, prev) {
         const sel = $('optTicker');
         if (!sel) return;
-        const prev = sel.value || 'MU';
-        const r = await fetch('/api/options/tickers');
-        const j = await r.json();
-        optionsTickerMeta = j.by_ticker || {};
+        optionsTickerMeta = (j && j.by_ticker) || {};
+        const tickers = (j && j.tickers) || [];
+        if (!tickers.length) return;
         sel.innerHTML = '';
-        (j.tickers || []).forEach(t => {
+        tickers.forEach(t => {
             const o = document.createElement('option');
             o.value = t;
             o.textContent = formatTickerLabel(t);
             sel.appendChild(o);
         });
-        if (prev && (j.tickers || []).includes(prev)) sel.value = prev;
-        else if ((j.tickers || []).includes('MU')) sel.value = 'MU';
-        else if ((j.tickers || []).length) sel.value = j.tickers[0];
+        if (prev && tickers.includes(prev)) sel.value = prev;
+        else if (tickers.includes('MU')) sel.value = 'MU';
+        else sel.value = tickers[0];
         updateTickerHint(sel.value);
+    }
+
+    function loadOptionsTickerSelectFromBoot() {
+        const sel = $('optTicker');
+        const prev = sel ? (sel.value || 'MU') : 'MU';
+        try {
+            const bootEl = document.getElementById('optionsTickersBoot');
+            if (bootEl && bootEl.textContent) {
+                applyTickersPayload(JSON.parse(bootEl.textContent), prev);
+                return true;
+            }
+        } catch (e) {}
+        return false;
+    }
+
+    async function loadOptionsTickerSelect() {
+        const sel = $('optTicker');
+        if (!sel) return;
+        const prev = sel.value || 'MU';
+        if (loadOptionsTickerSelectFromBoot()) {
+            // refresh labels/meta in background; ignore network failure
+            try {
+                const r = await fetch('/api/options/tickers');
+                if (r.ok) applyTickersPayload(await r.json(), prev);
+            } catch (e) {}
+            return;
+        }
+        const r = await fetch('/api/options/tickers');
+        const j = await r.json();
+        applyTickersPayload(j, prev);
     }
 
     function showTab(name) {

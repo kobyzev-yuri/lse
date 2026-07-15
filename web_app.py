@@ -1205,11 +1205,41 @@ async def api_earnings_postmortem(symbol: str, event_date: str = ""):
         raise HTTPException(status_code=500, detail=f"earnings postmortem: {e!s}")
 
 
+def _options_tickers_page_context() -> Dict[str, Any]:
+    """SSR ticker list for options pages — does not depend on client fetch."""
+    from services.options_tickers import DEFAULT_OPTIONS_OI_WATCHLIST, list_options_ui_tickers
+
+    try:
+        payload = list_options_ui_tickers()
+    except Exception:
+        logger.exception("options tickers SSR fallback")
+        payload = {
+            "status": "error",
+            "tickers": sorted(DEFAULT_OPTIONS_OI_WATCHLIST),
+            "by_ticker": {},
+        }
+    tickers = list(payload.get("tickers") or [])
+    default = "MU" if "MU" in tickers else (tickers[0] if tickers else "")
+    boot = {
+        "tickers": tickers,
+        "by_ticker": payload.get("by_ticker") or {},
+        "status": payload.get("status") or "ok",
+    }
+    boot_json = json.dumps(boot, ensure_ascii=True).replace("<", "\\u003c")
+    return {
+        "options_tickers": tickers,
+        "options_ticker_default": default,
+        "options_tickers_boot_json": boot_json,
+    }
+
+
 @app.get("/options/map", response_class=HTMLResponse)
 async def options_money_map_page(request: Request):
     """Option Money Map — OI plates + expiration / snapshot sliders."""
+    ctx = {"request": request}
+    ctx.update(await asyncio.to_thread(_options_tickers_page_context))
     return HTMLResponse(
-        render_template("options_map.html", {"request": request}),
+        render_template("options_map.html", ctx),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
 
@@ -1217,8 +1247,10 @@ async def options_money_map_page(request: Request):
 @app.get("/options/tools", response_class=HTMLResponse)
 async def options_tools_page(request: Request):
     """Option chain sentiment (Polygon/yfinance) + Put / Put Spread calculator."""
+    ctx = {"request": request}
+    ctx.update(await asyncio.to_thread(_options_tickers_page_context))
     return HTMLResponse(
-        render_template("options.html", {"request": request}),
+        render_template("options.html", ctx),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
 
