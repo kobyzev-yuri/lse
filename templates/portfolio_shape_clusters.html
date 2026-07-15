@@ -94,7 +94,7 @@
 
     <script>
     (function () {
-      try {
+        // Важно: не оборачивать объявления async function в try{} — в ряде браузеров это SyntaxError и скрипт молча не стартует.
         var chartInstances = [];
         var currentClusterId = null;
         var lastReport = null;
@@ -650,15 +650,16 @@
             }
         }
 
-        setStatus('Старт JS…');
-        wireControls();
-        syncSimLabel();
-        loadBoard(false);
-      } catch (bootErr) {
-        var el = document.getElementById('statusLine');
-        if (el) el.textContent = 'Ошибка JS: ' + (bootErr && bootErr.message ? bootErr.message : String(bootErr));
-        console.error(bootErr);
-      }
+        try {
+            setStatus('Старт JS…');
+            wireControls();
+            syncSimLabel();
+            loadBoard(false);
+        } catch (bootErr) {
+            var el = document.getElementById('statusLine');
+            if (el) el.textContent = 'Ошибка JS: ' + (bootErr && bootErr.message ? bootErr.message : String(bootErr));
+            console.error(bootErr);
+        }
     })();
     </script>
 </body>
