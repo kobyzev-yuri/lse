@@ -3819,8 +3819,30 @@ async def portfolio_daily_chart_page(request: Request):
 @app.get("/portfolio/shape-clusters", response_class=HTMLResponse)
 async def portfolio_shape_clusters_page(request: Request):
     """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
+
+    def _boot() -> Dict[str, Any]:
+        # Embed map JSON in HTML — client secondary fetch often hangs (~60KB body).
+        try:
+            from report_generator import get_engine
+            from services.portfolio_shape_clusters import build_shape_cluster_page_payload
+
+            return build_shape_cluster_page_payload(
+                get_engine(),
+                lookback_trading_days=126,
+                max_clusters=0,
+                distance_threshold=0.12,
+                force_refresh=False,
+            )
+        except Exception as e:
+            logger.warning("shape-clusters page boot payload failed: %s", e)
+            return {}
+
+    boot = await asyncio.to_thread(_boot)
     return HTMLResponse(
-        render_template("portfolio_shape_clusters.html", {"request": request}),
+        render_template(
+            "portfolio_shape_clusters.html",
+            {"request": request, "boot_report": boot},
+        ),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
 
@@ -3830,13 +3852,80 @@ async def portfolio_shape_compare_page(request: Request):
     """UI: сравнить 2–3 тикера на глаз (норм. оверлей), отдельно от кластеров."""
     from services.shape_cluster_universe import shape_cluster_tickers
 
+    tickers = shape_cluster_tickers()
+
+    def _boot_sparks() -> Dict[str, Any]:
+        # Prefer cached map sparks so HTML is self-contained (no 2nd fetch — client hangs).
+        try:
+            from report_generator import get_engine
+            from services.portfolio_shape_clusters import build_shape_cluster_page_payload
+
+            rep = build_shape_cluster_page_payload(
+                get_engine(),
+                lookback_trading_days=126,
+                max_clusters=0,
+                distance_threshold=0.12,
+                force_refresh=False,
+            )
+            sc = rep.get("spark_closes") if isinstance(rep, dict) else None
+            return sc if isinstance(sc, dict) else {}
+        except Exception:
+            return {}
+
+    spark_closes = await asyncio.to_thread(_boot_sparks)
     return HTMLResponse(
         render_template(
             "portfolio_shape_compare.html",
-            {"request": request, "shape_tickers": shape_cluster_tickers()},
+            {
+                "request": request,
+                "shape_tickers": tickers,
+                "spark_closes": spark_closes,
+            },
         ),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
+
+
+@app.get("/api/portfolio/shape-clusters/sparks", response_class=JSONResponse)
+async def api_portfolio_shape_cluster_sparks(
+    lookback_days: int = 126,
+    tickers: str = "",
+):
+    """Только downsample closes для 2–3 тикеров — маленький JSON для вкладки «На глаз»."""
+
+    def _run() -> Dict[str, Any]:
+        from report_generator import get_engine
+        from services.portfolio_shape_clusters import (
+            downsample_closes,
+            fetch_close_series,
+        )
+        from services.shape_cluster_universe import shape_cluster_tickers
+
+        raw = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()][:8]
+        if not raw:
+            raw = shape_cluster_tickers()[:3]
+        days = min(max(40, int(lookback_days)), 400)
+        series = fetch_close_series(get_engine(), raw, trading_days=days)
+        out: Dict[str, Any] = {}
+        for t, s in series.items():
+            try:
+                vals = [float(x) for x in s.astype(float).tolist()]
+            except Exception:
+                continue
+            out[str(t).upper()] = downsample_closes(vals, max_points=80)
+        return {
+            "lookback_trading_days": days,
+            "tickers": raw,
+            "spark_closes": out,
+            "n": len(out),
+        }
+
+    try:
+        payload = await asyncio.to_thread(_run)
+        return JSONResponse(content=_api_json_body(payload))
+    except Exception as e:
+        logger.exception("GET /api/portfolio/shape-clusters/sparks: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка sparks: {e!s}")
 
 
 @app.get("/api/portfolio/shape-clusters/app.js")

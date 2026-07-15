@@ -115,7 +115,9 @@
             try { if (stEl) stEl.textContent = String(m); } catch (e0) {}
         }
         st("js-0");
-        try {
+        
+        var BOOT_REPORT = {{ (boot_report or {}) | tojson }};
+try {
         var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
         var lastReport = null;
         var currentClusterId = null;
@@ -451,6 +453,29 @@
             st(bits);
         }
 
+
+        function mapUsableBoot(report) {
+            if (!report) return false;
+            var ok = Number(report.n_tickers_ok || 0);
+            var cl = report.clusters || [];
+            return ok > 0 && cl.length > 0;
+        }
+
+        function softRefreshMap() {
+            var lookEl = document.getElementById("lookbackSel");
+            var lookback = lookEl ? lookEl.value : "126";
+            var dist = distFromSim(simPct());
+            var seq = boardSeq;
+            var url = mapQuery(lookback, dist, false);
+            fetchJson(url, 20000, false).then(function (pack) {
+                if (seq !== boardSeq) return;
+                if (pack && pack.ok && mapUsableBoot(pack.body)) {
+                    applyMapReport(pack.body, dist);
+                    st("Map ready - click a cluster");
+                }
+            }).catch(function () { /* keep boot map */ });
+        }
+
         function loadBoard(force) {
             var lookEl = document.getElementById("lookbackSel");
             var lookback = lookEl ? lookEl.value : "126";
@@ -545,7 +570,7 @@
             }
 
             startHb("Loading map...");
-            return fetchMap(qCached, 25000, 2).then(function (report) {
+            return fetchMap(qCached, 20000, 0).then(function (report) {
                 if (seq !== boardSeq) return;
                 if (mapUsable(report)) {
                     paint(report, "Map ready \u2014 click a cluster");
@@ -586,8 +611,16 @@
                 simDebounce = setTimeout(function () { loadBoard(false); }, 500);
             });
         }
-        st("js-2 fetching map");
-        loadBoard(false);
+                st("js-2");
+        if (mapUsableBoot(BOOT_REPORT)) {
+            applyMapReport(BOOT_REPORT, distFromSim(simPct()));
+            st("Map ready (boot) - click a cluster");
+            // optional silent refresh — never block UI; 1 attempt, no retry spam
+            softRefreshMap();
+        } else {
+            st("js-2 fetching map");
+            loadBoard(false);
+        }
         } catch (err) {
             st("js-error: " + (err && err.message ? err.message : String(err)));
             try { console.error(err); } catch (e1) {}

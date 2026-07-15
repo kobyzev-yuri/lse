@@ -35,7 +35,7 @@
         <a href="/portfolio/shape-clusters">Кластеры</a>
         <a class="active" href="/portfolio/shape-compare">На глаз</a>
     </div>
-    <p class="muted">2–3 тикера из списка анализа → нормированный оверлей (те же closes ~6м, без кластеров).</p>
+    <p class="muted">2–3 тикера из списка анализа → нормированный оверлей. Ряды уже в странице (без второго тяжёлого fetch).</p>
 
     <div class="controls">
         <label>Окно
@@ -45,7 +45,7 @@
                 <option value="189">189д</option>
             </select>
         </label>
-        <button type="button" id="reloadBtn">Обновить ряды</button>
+        <button type="button" id="reloadBtn">Обновить выбранные</button>
     </div>
     <div id="metaLine"></div>
     <div id="statusLine">boot</div>
@@ -77,15 +77,18 @@
     <script>
     (function () {
         var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
-        var SHAPE_UNIVERSE = {{ (shape_tickers or []) | tojson }};
-        var sparkCloses = {};
-        var loadSeq = 0;
+        var sparkCloses = {{ (spark_closes or {}) | tojson }};
         var stEl = document.getElementById("statusLine");
-        function st(m) { if (stEl) stEl.textContent = m; }
+        var metaEl = document.getElementById("metaLine");
+        function st(m) { try { if (stEl) stEl.textContent = String(m); } catch (e0) {} }
         function colorFor(i) { return COLORS[i % COLORS.length]; }
+        st("js-0 sparks=" + Object.keys(sparkCloses || {}).length);
+        if (metaEl) {
+            metaEl.textContent = "boot sparks=" + Object.keys(sparkCloses || {}).length + " (embedded)";
+        }
 
         function fetchJson(url, ms) {
-            ms = ms || 60000;
+            ms = ms || 20000;
             var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
             var timedOut = false;
             var timer = setTimeout(function () {
@@ -112,8 +115,7 @@
         }
 
         function sparkSvg(seriesList) {
-            var w = 640, h = 180, pad = 8;
-            var n = 0;
+            var w = 640, h = 180, pad = 8, n = 0;
             seriesList.forEach(function (s) {
                 if ((s.values || []).length > n) n = s.values.length;
             });
@@ -144,8 +146,7 @@
 
         function legendHtml(seriesList) {
             return "<div class='ov-legend'>" + seriesList.map(function (s) {
-                var c = s.color || colorFor(0);
-                return "<span><i style='background:" + c + "'></i>" + (s.ticker || "?") + "</span>";
+                return "<span><i style='background:" + (s.color || colorFor(0)) + "'></i>" + (s.ticker || "?") + "</span>";
             }).join("") + "</div>";
         }
 
@@ -160,25 +161,29 @@
             return out;
         }
 
-        function paintOverlay() {
-            var root = document.getElementById("compareRoot");
-            if (!root) return;
+        function picked() {
             var picks = ["cmpA", "cmpB", "cmpC"].map(function (id) {
                 var el = document.getElementById(id);
                 return el ? String(el.value || "").toUpperCase() : "";
             }).filter(Boolean);
             var seen = {};
-            picks = picks.filter(function (t) {
+            return picks.filter(function (t) {
                 if (seen[t]) return false;
                 seen[t] = true;
                 return true;
-            });
+            }).slice(0, 3);
+        }
+
+        function paintOverlay() {
+            var root = document.getElementById("compareRoot");
+            if (!root) return;
+            var picks = picked();
             if (picks.length < 2) {
-                root.innerHTML = "<p class='muted'>Выберите минимум 2 тикера.</p>";
+                root.innerHTML = "<p class='muted'>Select at least 2 tickers.</p>";
                 return;
             }
             var series = [], miss = [];
-            picks.slice(0, 3).forEach(function (t, idx) {
+            picks.forEach(function (t, idx) {
                 var closes = sparkCloses[t];
                 if (!closes || !closes.length) { miss.push(t); return; }
                 var vals = normCloses(closes);
@@ -186,53 +191,49 @@
                 series.push({ ticker: t, values: vals, color: colorFor(idx) });
             });
             if (series.length < 2) {
-                root.innerHTML = "<p class='muted'>Нет рядов: " + (miss.join(", ") || "—") +
-                    ". Нажмите «Обновить ряды».</p>";
+                root.innerHTML = "<p class='muted'>No series for: " + (miss.join(", ") || "-") +
+                    ". Press refresh for selected.</p>";
                 return;
             }
-            root.innerHTML = "<div class='chart-section'><h2>Сравнение (norm) · " +
+            root.innerHTML = "<div class='chart-section'><h2>Compare (norm) · " +
                 series.map(function (s) { return s.ticker; }).join(" · ") + "</h2>" +
                 sparkSvg(series) + legendHtml(series) +
-                (miss.length ? "<p class='muted'>нет данных: " + miss.join(", ") + "</p>" : "") +
+                (miss.length ? "<p class='muted'>missing: " + miss.join(", ") + "</p>" : "") +
                 "</div>";
             st("overlay " + series.map(function (s) { return s.ticker; }).join("/"));
         }
 
-        function loadSparks(force) {
+        function refreshSelected() {
+            var picks = picked();
             var lookEl = document.getElementById("lookbackSel");
             var lookback = lookEl ? lookEl.value : "126";
-            var seq = ++loadSeq;
-            var q = "/api/portfolio/shape-clusters?lookback_days=" + encodeURIComponent(lookback) +
-                "&max_clusters=0&distance_threshold=0.12&method=hierarchical&mode=shape&include_overlay=0";
-            if (force) q += "&refresh=1";
-            st("Loading series...");
-            return fetchJson(q, 90000).then(function (pack) {
-                if (seq !== loadSeq) return;
+            if (picks.length < 1) {
+                st("pick tickers first");
+                return;
+            }
+            var url = "/api/portfolio/shape-clusters/sparks?lookback_days=" + encodeURIComponent(lookback) +
+                "&tickers=" + encodeURIComponent(picks.join(","));
+            st("refresh " + picks.join(",") + "...");
+            fetchJson(url, 15000).then(function (pack) {
                 if (!pack.ok) throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
-                var body = pack.body || {};
-                sparkCloses = body.spark_closes || {};
-                var meta = document.getElementById("metaLine");
-                if (meta) {
-                    meta.textContent = "ok=" + (body.n_tickers_ok || 0) +
-                        " sparks=" + Object.keys(sparkCloses).length +
-                        " cache=" + (body.cache_source || (body.cache_hit ? "yes" : "live"));
+                var sc = (pack.body && pack.body.spark_closes) || {};
+                Object.keys(sc).forEach(function (t) { sparkCloses[t] = sc[t]; });
+                if (metaEl) {
+                    metaEl.textContent = "sparks=" + Object.keys(sparkCloses).length +
+                        " refreshed=" + Object.keys(sc).length;
                 }
-                st("Series ready — choose 2–3 tickers");
-                var root = document.getElementById("compareRoot");
-                if (root && root.querySelector(".chart-section")) paintOverlay();
+                st("refreshed " + Object.keys(sc).join(","));
+                paintOverlay();
             }).catch(function (e) {
-                if (seq !== loadSeq) return;
-                st("Load error: " + (e && e.message ? e.message : String(e)));
+                st("refresh fail: " + (e && e.message ? e.message : String(e)) + " (using embedded)");
+                paintOverlay();
             });
         }
 
-        st("js-1");
         var reloadBtn = document.getElementById("reloadBtn");
-        var lookbackSel = document.getElementById("lookbackSel");
         var cmpBtn = document.getElementById("cmpBtn");
         var cmpClearBtn = document.getElementById("cmpClearBtn");
-        if (reloadBtn) reloadBtn.addEventListener("click", function () { loadSparks(true); });
-        if (lookbackSel) lookbackSel.addEventListener("change", function () { loadSparks(false); });
+        if (reloadBtn) reloadBtn.addEventListener("click", refreshSelected);
         if (cmpBtn) cmpBtn.addEventListener("click", paintOverlay);
         if (cmpClearBtn) {
             cmpClearBtn.addEventListener("click", function () {
@@ -245,7 +246,7 @@
                 st("cleared");
             });
         }
-        loadSparks(false);
+        st("ready sparks=" + Object.keys(sparkCloses || {}).length + " - pick 2-3");
     })();
     </script>
 </body>

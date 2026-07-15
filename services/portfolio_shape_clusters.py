@@ -24,7 +24,10 @@ def downsample_closes(values: Sequence[Any], max_points: int = 80) -> List[Optio
     for v in values:
         try:
             f = float(v)
-            cleaned.append(f if math.isfinite(f) and f > 0 else None)
+            if math.isfinite(f) and f > 0:
+                cleaned.append(round(f, 4))
+            else:
+                cleaned.append(None)
         except (TypeError, ValueError):
             cleaned.append(None)
     n = len(cleaned)
@@ -332,7 +335,7 @@ def build_shape_clusters(
     cut = "maxclust" if int(max_clusters) >= 2 else "distance"
     # Embed sparklines in map JSON so UI click needs no second /charts fetch
     # (secondary fetches intermittently hang >20s for this client even at ~1KB).
-    spark_closes = spark_closes_from_series(series, max_points=80)
+    spark_closes = spark_closes_from_series(series, max_points=48)
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "mode": mode_u,
