@@ -1,4 +1,4 @@
-/* Shape clusters board — no async/await (parse-safe on older browsers). */
+/* shape-clusters UI: ASCII-only, no async/await */
 (function () {
     var chartInstances = [];
     var currentClusterId = null;
@@ -50,7 +50,6 @@
             if (ch) chartInstances.push(ch);
             return ch;
         } catch (e) {
-            if (window.console && console.warn) console.warn('chart create failed', e);
             return null;
         }
     }
@@ -69,10 +68,9 @@
     function startHeartbeat(base) {
         stopHeartbeat();
         var t0 = Date.now();
-        setStatus(base + ' 0с');
+        setStatus(base + ' 0s');
         mapHeartbeat = setInterval(function () {
-            var s = Math.round((Date.now() - t0) / 1000);
-            setStatus(base + ' ' + s + 'с');
+            setStatus(base + ' ' + Math.round((Date.now() - t0) / 1000) + 's');
         }, 500);
     }
 
@@ -113,18 +111,18 @@
             'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js'
         ];
         chartJsPromise = loadScript(urls[0], 12000).then(function () {
-            if (!window.Chart) throw new Error('no Chart global');
+            if (!window.Chart) throw new Error('no Chart');
         }).catch(function () {
             return loadScript(urls[1], 12000).then(function () {
-                if (!window.Chart) throw new Error('no Chart global');
+                if (!window.Chart) throw new Error('no Chart');
             });
         }).catch(function () {
             return loadScript(urls[2], 12000).then(function () {
-                if (!window.Chart) throw new Error('no Chart global');
+                if (!window.Chart) throw new Error('no Chart');
             });
         }).catch(function (err) {
             chartJsPromise = null;
-            throw err || new Error('Chart.js unavailable');
+            throw err || new Error('Chart.js fail');
         });
         return chartJsPromise;
     }
@@ -177,7 +175,7 @@
                     maintainAspectRatio: false,
                     animation: false,
                     plugins: {
-                        title: { display: true, text: 'Norm price (1.0 = window start)', color: '#94a3b8', font: { size: 11 } },
+                        title: { display: true, text: 'Norm price', color: '#94a3b8', font: { size: 11 } },
                         legend: { labels: { color: '#cbd5e1', boxWidth: 10, font: { size: 10 } } }
                     },
                     scales: {
@@ -229,7 +227,7 @@
 
             var meta = document.createElement('div');
             meta.className = 'meta';
-            meta.textContent = (c.size || 0) + ' тикер(ов) · клик → графики';
+            meta.textContent = (c.size || 0) + ' tickers - click for charts';
 
             var ticks = document.createElement('div');
             ticks.className = 'tickers';
@@ -246,7 +244,7 @@
 
             var pairs = (c.strong_pairs || []).map(function (p) {
                 return p.a + '-' + p.b + ' (' + p.corr + ')';
-            }).join(' · ');
+            }).join(' | ');
             if (pairs) {
                 var pEl = document.createElement('div');
                 pEl.className = 'pair';
@@ -342,12 +340,6 @@
             }
             var cv = mountCanvas(sec);
             if (buildPriceChart(cv, item.bars)) drawn += 1;
-            else {
-                var err = document.createElement('p');
-                err.className = 'muted';
-                err.textContent = 'Draw failed';
-                sec.appendChild(err);
-            }
         });
         return drawn;
     }
@@ -373,15 +365,13 @@
             ovSec.id = 'overlaySection';
             ovSec.className = 'chart-section overlay';
             var ovTitle = document.createElement('h2');
-            ovTitle.textContent = 'Shape overlay';
+            ovTitle.textContent = 'Overlay';
             ovSec.appendChild(ovTitle);
             var ovCanvas = mountCanvas(ovSec);
             if (root.firstChild) root.insertBefore(ovSec, root.firstChild);
             else root.appendChild(ovSec);
-            if (!buildOverlayChart(ovCanvas, ov)) ovTitle.textContent = 'Overlay draw failed';
-        } catch (e) {
-            if (window.console && console.warn) console.warn('overlay failed', e);
-        }
+            buildOverlayChart(ovCanvas, ov);
+        } catch (e) {}
     }
 
     function selectCluster(clusterId) {
@@ -402,10 +392,10 @@
         }
 
         head.style.display = 'block';
-        head.textContent = 'Charts · ' + (selected.label || '') + ' · ' + (selected.tickers || []).join(', ');
+        head.textContent = 'Charts: ' + (selected.label || '') + ' | ' + (selected.tickers || []).join(', ');
         clearChartsRoot();
-        head.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        setStatus('Loading Chart.js…');
+        try { head.scrollIntoView(true); } catch (e1) {}
+        setStatus('Loading Chart.js...');
 
         var members = selected.tickers || [];
         var withOverlay = members.length > 1;
@@ -415,24 +405,21 @@
 
         ensureChartJs().then(function () {
             if (!stillThisCluster(clusterId)) return null;
-            setStatus('Fetching ' + showMembers.length + ' series…');
+            setStatus('Fetching ' + showMembers.length + ' series...');
             return fetchChartsBatch(showMembers, days);
         }).then(function (items) {
             if (!items || !stillThisCluster(clusterId)) return;
-            setStatus('Drawing ' + items.length + ' charts…');
+            setStatus('Drawing ' + items.length + ' charts...');
             var drawn = appendDailyCharts(items, clusterId);
             if (!stillThisCluster(clusterId)) return;
             if (withOverlay) paintOverlay(items);
             if (hiddenN > 0) {
                 var more = document.createElement('p');
                 more.className = 'muted';
-                more.textContent = 'Showing first ' + showMembers.length + ' of ' + members.length +
-                    ' (' + members.slice(maxDaily).join(', ') + ')';
+                more.textContent = 'Showing first ' + showMembers.length + ' of ' + members.length;
                 document.getElementById('chartsRoot').appendChild(more);
             }
-            setStatus('Done · ' + drawn + '/' + items.length +
-                (withOverlay ? ' + overlay' : '') +
-                (hiddenN > 0 ? ' · +' + hiddenN : ''));
+            setStatus('Done: ' + drawn + '/' + items.length + (withOverlay ? ' + overlay' : ''));
         }).catch(function (e) {
             if (!stillThisCluster(clusterId)) return;
             setStatus('Charts error: ' + (e && e.message ? e.message : String(e)));
@@ -463,7 +450,7 @@
         currentClusterId = null;
         clearChartsRoot();
         if (head) head.style.display = 'none';
-        startHeartbeat(forceRefresh ? 'Пересчёт из БД…' : 'Обновляем карту…');
+        startHeartbeat(forceRefresh ? 'DB refresh...' : 'Loading map...');
 
         var q = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
             '&max_clusters=0' +
@@ -477,11 +464,11 @@
                 stopHeartbeat();
                 var em = lastErr && lastErr.message ? String(lastErr.message) : String(lastErr || '');
                 setStatus(em.indexOf('timeout') >= 0
-                    ? 'Карта не ответила. Нажмите «Обновить из БД».'
-                    : ('Ошибка карты: ' + em));
+                    ? 'Map timeout. Press DB refresh.'
+                    : ('Map error: ' + em));
                 return Promise.resolve();
             }
-            if (n > 0) startHeartbeat('Повтор карты (' + (n + 1) + '/3)…');
+            if (n > 0) startHeartbeat('Map retry ' + (n + 1) + '/3...');
             return fetchJsonTimeout(q, forceRefresh ? 60000 : 25000).then(function (r) {
                 if (seq !== boardLoadSeq) return null;
                 if (!r.ok) {
@@ -500,13 +487,11 @@
                 if (meta) {
                     meta.textContent =
                         'ok=' + (report.n_tickers_ok || 0) + '/' + (report.n_tickers_requested || 0) +
-                        ' · групп=' + (report.n_clusters || 0) +
-                        ' · порог≈' + simShow + '%' +
-                        ' · cut=' + (report.cut || 'distance') +
-                        ' · cache=' + (report.cache_source || (report.cache_hit ? 'yes' : 'live')) +
-                        ' · кликните карточку';
+                        ' groups=' + (report.n_clusters || 0) +
+                        ' thr~' + simShow + '%' +
+                        ' cache=' + (report.cache_source || (report.cache_hit ? 'yes' : 'live'));
                 }
-                setStatus('Карта готова — выберите кластер');
+                setStatus('Map ready - click a cluster');
             }).catch(function (e) {
                 return attempt(n + 1, e);
             });
@@ -533,8 +518,16 @@
         }
     }
 
-    setStatus('Старт JS…');
-    wireControls();
-    syncSimLabel();
-    loadBoard(false);
+    try {
+        setStatus('JS OK - starting map...');
+        wireControls();
+        syncSimLabel();
+        if (typeof Promise === 'undefined' || typeof fetch === 'undefined') {
+            setStatus('Browser too old: need fetch+Promise');
+            return;
+        }
+        loadBoard(false);
+    } catch (e) {
+        setStatus('Boot error: ' + (e && e.message ? e.message : String(e)));
+    }
 })();
