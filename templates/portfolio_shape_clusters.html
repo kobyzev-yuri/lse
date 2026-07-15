@@ -48,9 +48,20 @@
         #detailHead { font-size: 1rem; margin: 1rem 0 0.35rem; color: #e2e8f0; display: none; }
         .chart-section { margin-top: 1rem; background: #12182a; border: 1px solid #334155; border-radius: 10px; padding: 0.6rem 0.75rem; }
         .chart-section h2 { font-size: 0.9rem; margin: 0 0 0.35rem 0; color: #cbd5e1; }
+        .chart-section h2 .swatch {
+            display: inline-block; width: 0.7em; height: 0.7em; border-radius: 2px;
+            margin-right: 0.4em; vertical-align: -0.05em;
+        }
         .spark { width: 100%; height: 120px; display: block; background: #0b1020; border-radius: 6px; }
         .spark.overlay { height: 180px; }
         .chg { font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem; }
+        .ov-legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.65rem; margin-top: 0.45rem; }
+        .ov-legend span {
+            font-size: 0.72rem; color: #cbd5e1; display: inline-flex; align-items: center; gap: 0.3rem;
+        }
+        .ov-legend i {
+            display: inline-block; width: 12px; height: 3px; border-radius: 1px;
+        }
     </style>
     {% include "partials/lse_fetch_shim.html" %}
 </head>
@@ -128,25 +139,31 @@
             }, 500);
         }
         function abortLive() {
+            // Only used when leaving charts; map loads must NOT share this —
+            // aborting in-flight map fetch often surfaces as "Failed to fetch"
+            // on the next threshold request (same connection).
             liveCtrls.forEach(function (c) {
                 try { c.abort(); } catch (e0) {}
             });
             liveCtrls = [];
         }
 
-        function fetchJson(url, ms) {
-            // Timeout covers headers + body. Track controllers so map/refresh can cancel charts.
+        function fetchJson(url, ms, trackAbort) {
+            // Timeout covers headers + body. Per-request AbortController only
+            // (do not put map fetches on shared abortLive list).
             ms = ms || 25000;
             var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
-            if (ctrl) liveCtrls.push(ctrl);
+            if (ctrl && trackAbort) liveCtrls.push(ctrl);
+            var timedOut = false;
             var timer = setTimeout(function () {
+                timedOut = true;
                 try { if (ctrl) ctrl.abort(); } catch (e0) {}
             }, ms);
             var opts = { cache: "no-store" };
             if (ctrl) opts.signal = ctrl.signal;
             function dropCtrl() {
                 clearTimeout(timer);
-                if (!ctrl) return;
+                if (!ctrl || !trackAbort) return;
                 liveCtrls = liveCtrls.filter(function (c) { return c !== ctrl; });
             }
             return fetch(url, opts).then(function (r) {
@@ -159,8 +176,10 @@
                 });
             }).catch(function (e) {
                 dropCtrl();
-                var msg = (e && e.name === "AbortError") ? ("timeout " + ms + "ms") : (e && e.message ? e.message : String(e));
-                throw new Error(msg);
+                if (e && e.name === "AbortError") {
+                    throw new Error(timedOut ? ("timeout " + ms + "ms") : "aborted");
+                }
+                throw new Error(e && e.message ? e.message : String(e));
             });
         }
 
@@ -205,6 +224,7 @@
                 ymin = 0; ymax = 1;
             }
             var paths = seriesList.map(function (s, idx) {
+                var stroke = s.color || colorFor(s.colorIndex != null ? s.colorIndex : idx);
                 var pts = [];
                 (s.values || []).forEach(function (v, i) {
                     if (v == null || !isFinite(v)) return;
@@ -213,9 +233,17 @@
                     pts.push(x.toFixed(1) + "," + y.toFixed(1));
                 });
                 if (pts.length < 2) return "";
-                return "<polyline fill='none' stroke='" + colorFor(idx) + "' stroke-width='1.6' points='" + pts.join(" ") + "'/>";
+                return "<polyline fill='none' stroke='" + stroke + "' stroke-width='1.6' points='" + pts.join(" ") + "'/>";
             }).join("");
             return "<svg class='spark" + (overlay ? " overlay" : "") + "' viewBox='0 0 " + w + " " + h + "' preserveAspectRatio='none'>" + paths + "</svg>";
+        }
+
+        function overlayLegendHtml(seriesList) {
+            return "<div class='ov-legend'>" + seriesList.map(function (s) {
+                var c = s.color || colorFor(s.colorIndex || 0);
+                var label = s.ticker || "?";
+                return "<span><i style='background:" + c + "'></i>" + label + "</span>";
+            }).join("") + "</div>";
         }
 
         function seriesCloses(it) {
@@ -241,14 +269,18 @@
             return out;
         }
 
-        function appendChartItem(root, it, overlaySeries) {
+        function appendChartItem(root, it, overlaySeries, colorIndex) {
             var closes = seriesCloses(it);
             var vals = normCloses(closes);
-            if (vals.length >= 2) overlaySeries.push({ ticker: it.ticker, values: vals });
+            var ci = colorIndex == null ? 0 : Number(colorIndex);
+            var col = colorFor(ci);
+            if (vals.length >= 2) {
+                overlaySeries.push({ ticker: it.ticker, values: vals, colorIndex: ci, color: col });
+            }
             var sec = document.createElement("div");
             sec.className = "chart-section";
             var h = document.createElement("h2");
-            h.textContent = it.ticker || "-";
+            h.innerHTML = "<span class='swatch' style='background:" + col + "'></span>" + (it.ticker || "-");
             sec.appendChild(h);
             if (!closes.length) {
                 var miss = document.createElement("p");
@@ -256,7 +288,7 @@
                 miss.textContent = "No quotes";
                 sec.appendChild(miss);
             } else {
-                sec.innerHTML += sparkSvg([{ values: closes }], false);
+                sec.innerHTML += sparkSvg([{ values: closes, colorIndex: ci, color: col }], false);
                 var first = Number(closes[0]);
                 var last = Number(closes[closes.length - 1]);
                 var chg = document.createElement("div");
@@ -371,23 +403,27 @@
                 if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
                 overlayHost.innerHTML = "";
                 if (overlaySeries.length >= 2) {
+                    var ov = overlaySeries.slice(0, 12);
                     overlayHost.innerHTML = "<div class='chart-section'><h2>Overlay (norm)</h2>" +
-                        sparkSvg(overlaySeries.slice(0, 12), true) + "</div>";
+                        sparkSvg(ov, true) + overlayLegendHtml(ov) + "</div>";
                 }
             }
 
             // Map embeds only — never block overlay/dailies on /charts (body hang).
-            show.forEach(function (t) {
+            // colorIndex = position in show → same color on daily chart and overlay.
+            show.forEach(function (t, idx) {
                 var it = sparkItem(t);
                 if (it) {
-                    appendChartItem(root, it, overlaySeries);
+                    appendChartItem(root, it, overlaySeries, idx);
                     doneN += 1;
                     fromEmbed += 1;
                 } else {
                     miss.push(t);
+                    var col = colorFor(idx);
                     var sec = document.createElement("div");
                     sec.className = "chart-section";
-                    sec.innerHTML = "<h2>" + t + "</h2><p class='muted'>no spark in map</p>";
+                    sec.innerHTML = "<h2><span class='swatch' style='background:" + col + "'></span>" + t +
+                        "</h2><p class='muted'>no spark in map</p>";
                     root.appendChild(sec);
                 }
             });
@@ -413,7 +449,9 @@
             var seq = ++boardSeq;
             chartsSeq += 1;
             currentClusterId = null;
-            abortLive();
+            // Do not abortLive() here — it kills the previous map fetch and the
+            // browser often fails the next threshold request with "Failed to fetch".
+            // Stale responses are ignored via boardSeq.
             document.getElementById("chartsRoot").innerHTML = "";
             document.getElementById("detailHead").style.display = "none";
 
@@ -442,15 +480,29 @@
                         throw lastErr || new Error("map fail");
                     }
                     if (n > 0) startHb("Map retry " + n + "/" + retries + "...");
-                    return fetchJson(url, ms).then(function (pack) {
+                    return fetchJson(url, ms, false).then(function (pack) {
                         if (seq !== boardSeq) return null;
                         if (!pack.ok) throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
                         return pack.body;
                     }).catch(function (e) {
+                        if (seq !== boardSeq) return null;
+                        var msg = e && e.message ? e.message : String(e);
+                        // Don't retry cancels / connection drops from superseded loads
+                        if (msg === "aborted") return null;
                         return once(n + 1, e);
                     });
                 }
                 return once(0, null);
+            }
+
+            function mapFailStatus(e) {
+                var msg = e && e.message ? e.message : String(e);
+                if (msg === "aborted") return;
+                if (String(msg).indexOf("timeout") >= 0) {
+                    st("Map timeout. Press DB refresh.");
+                    return;
+                }
+                st("Map error: " + msg);
             }
 
             if (force) {
@@ -467,7 +519,7 @@
                     }).catch(function (e) {
                         if (seq !== boardSeq) return;
                         if (report) st("DB refresh failed, kept cache: " + (e && e.message ? e.message : String(e)));
-                        else st("Map error: " + (e && e.message ? e.message : String(e)));
+                        else mapFailStatus(e);
                     });
                 }).catch(function (e) {
                     if (seq !== boardSeq) return;
@@ -478,7 +530,7 @@
                     }).catch(function (e2) {
                         if (seq !== boardSeq) return;
                         stopHb();
-                        st("Map error: " + (e2 && e2.message ? e2.message : String(e2)));
+                        mapFailStatus(e2);
                     });
                 });
             }
@@ -500,9 +552,7 @@
             }).catch(function (e) {
                 if (seq !== boardSeq) return;
                 stopHb();
-                st((String(e && e.message || "").indexOf("timeout") >= 0)
-                    ? "Map timeout. Press DB refresh."
-                    : ("Map error: " + (e && e.message ? e.message : String(e))));
+                mapFailStatus(e);
             });
         }
 
@@ -524,7 +574,7 @@
             simSlider.addEventListener("change", function () {
                 syncSim();
                 if (simDebounce) clearTimeout(simDebounce);
-                simDebounce = setTimeout(function () { loadBoard(false); }, 350);
+                simDebounce = setTimeout(function () { loadBoard(false); }, 500);
             });
         }
         st("js-2 fetching map");
