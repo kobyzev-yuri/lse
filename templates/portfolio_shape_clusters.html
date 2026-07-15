@@ -97,8 +97,7 @@
         var lastReport = null;
         var mapHeartbeat = null;
         var chartJsPromise = null;
-        var chartsBusy = false;
-        var pendingClusterId = null;
+        var chartsGen = 0;
         var COLORS = ['#38bdf8','#4ade80','#fbbf24','#f472b6','#a78bfa','#fb923c','#22d3ee','#e879f9','#86efac','#f87171','#c084fc','#2dd4bf'];
 
         function destroyCharts() {
@@ -367,7 +366,7 @@
             var lastErr = null;
             for (var attempt = 0; attempt < 2; attempt++) {
                 try {
-                    var cr = await fetchJsonTimeout(url, 30000);
+                    var cr = await fetchJsonTimeout(url, 45000);
                     if (!cr.ok) {
                         lastErr = new Error('HTTP ' + cr.status);
                         continue;
@@ -381,46 +380,10 @@
             throw lastErr || new Error('charts fetch failed');
         }
 
-        async function loadClusterCharts(tickers, days, withOverlay) {
+        function appendDailyCharts(items) {
             var root = document.getElementById('chartsRoot');
-            var batchSize = 6;
-            var collected = [];
-
-            for (var i = 0; i < tickers.length; i += batchSize) {
-                var batch = tickers.slice(i, i + batchSize);
-                setStatus('Загрузка рядов ' + (i + 1) + '–' +
-                    Math.min(i + batch.length, tickers.length) + ' / ' + tickers.length);
-                var items = await fetchChartsBatch(batch, days);
-                // Если кликнули другой кластер — бросаем текущую загрузку (есть pending)
-                if (pendingClusterId != null) return false;
-                collected = collected.concat(items);
-            }
-
-            if (pendingClusterId != null) return false;
-
-            clearChartsRoot();
-            if (pendingClusterId != null) return false;
-
-            if (withOverlay) {
-                var ovSec = document.createElement('div');
-                ovSec.className = 'chart-section overlay';
-                var ovTitle = document.createElement('h2');
-                ovTitle.textContent = 'Оверлей формы (из дневных рядов)';
-                ovSec.appendChild(ovTitle);
-                var ovCanvas = mountCanvas(ovSec);
-                root.appendChild(ovSec);
-                var ov = buildOverlayFromCharts(collected, 12);
-                if (ov.series.length >= 2) {
-                    if (!buildOverlayChart(ovCanvas, ov)) {
-                        ovTitle.textContent = 'Оверлей: ошибка отрисовки — дневные ниже';
-                    }
-                } else {
-                    ovTitle.textContent = 'Оверлей: недостаточно рядов';
-                }
-            }
-
             var drawn = 0;
-            collected.forEach(function(item) {
+            (items || []).forEach(function(item) {
                 var sec = document.createElement('div');
                 sec.className = 'chart-section';
                 var h = document.createElement('h2');
@@ -437,12 +400,45 @@
                 var cv = mountCanvas(sec);
                 if (buildPriceChart(cv, item.bars)) drawn += 1;
             });
-            setStatus('Готово · ' + drawn + '/' + collected.length + ' графиков' +
-                (withOverlay ? ' + оверлей' : ''));
-            return true;
+            return drawn;
         }
 
-        async function runClusterLoad(clusterId) {
+        function paintOverlay(collected) {
+            var root = document.getElementById('chartsRoot');
+            var existing = document.getElementById('overlaySection');
+            if (existing) {
+                try {
+                    var oldCv = existing.querySelector('canvas');
+                    if (oldCv && window.Chart && Chart.getChart) {
+                        var oldCh = Chart.getChart(oldCv);
+                        if (oldCh) {
+                            try { oldCh.destroy(); } catch (e0) {}
+                            chartInstances = chartInstances.filter(function(ch) { return ch !== oldCh; });
+                        }
+                    }
+                } catch (e1) {}
+                existing.remove();
+            }
+            var ov = buildOverlayFromCharts(collected, 12);
+            if (ov.series.length < 2) return;
+            var ovSec = document.createElement('div');
+            ovSec.id = 'overlaySection';
+            ovSec.className = 'chart-section overlay';
+            var ovTitle = document.createElement('h2');
+            ovTitle.textContent = 'Оверлей формы';
+            ovSec.appendChild(ovTitle);
+            var ovCanvas = mountCanvas(ovSec);
+            // оверлей сверху
+            if (root.firstChild) root.insertBefore(ovSec, root.firstChild);
+            else root.appendChild(ovSec);
+            buildOverlayChart(ovCanvas, ov);
+        }
+
+        async function selectCluster(clusterId) {
+            var gen = ++chartsGen;
+            currentClusterId = Number(clusterId);
+            markActiveCard();
+
             var head = document.getElementById('detailHead');
             var days = document.getElementById('daysSel').value;
             var selected = null;
@@ -454,55 +450,47 @@
                 return;
             }
 
-            currentClusterId = clusterId;
-            markActiveCard();
             head.style.display = 'block';
             head.textContent = 'Графики · ' + (selected.label || '') + ' · ' + (selected.tickers || []).join(', ');
+            clearChartsRoot();
             head.scrollIntoView({ behavior: 'smooth', block: 'start' });
             setStatus('Готовлю графики…');
 
             try {
                 await ensureChartJs();
             } catch (e) {
+                if (gen !== chartsGen) return;
                 setStatus('Не удалось загрузить Chart.js: ' + (e.message || String(e)));
                 return;
             }
-
-            // снова кликнули — этот прогон не рисуем, возьмём pending в цикле
-            if (pendingClusterId != null) return;
+            if (gen !== chartsGen) return;
 
             var members = selected.tickers || [];
-            var isSolo = members.length <= 1;
+            var withOverlay = members.length > 1;
+            // Один запрос на весь кластер (сервер допускает до 60) — без «завис на 1–6»
+            setStatus('Загрузка ' + members.length + ' рядов…');
+            var collected = [];
+            var drawn = 0;
             try {
-                await loadClusterCharts(members, days, !isSolo);
+                // на всякий случай режем на пачки по 20, но рисуем сразу после каждой
+                var batchSize = 20;
+                for (var i = 0; i < members.length; i += batchSize) {
+                    if (gen !== chartsGen) return;
+                    var batch = members.slice(i, i + batchSize);
+                    setStatus('Загрузка ' + (i + 1) + '–' +
+                        Math.min(i + batch.length, members.length) + ' / ' + members.length);
+                    var items = await fetchChartsBatch(batch, days);
+                    if (gen !== chartsGen) return;
+                    collected = collected.concat(items);
+                    drawn += appendDailyCharts(items);
+                    if (withOverlay) paintOverlay(collected);
+                }
+                if (gen !== chartsGen) return;
+                setStatus('Готово · ' + drawn + '/' + collected.length + ' графиков' +
+                    (withOverlay ? ' + оверлей' : ''));
             } catch (e) {
-                if (pendingClusterId != null) return;
-                setStatus('Ошибка загрузки графиков: ' + (e.message || String(e)));
-            }
-        }
-
-        async function selectCluster(clusterId) {
-            // Последний клик побеждает: не глушим отрисовку seq-ами, а ставим в очередь
-            pendingClusterId = Number(clusterId);
-            currentClusterId = Number(clusterId);
-            markActiveCard();
-            if (chartsBusy) {
-                setStatus('Переключаю на C' + clusterId + '…');
-                return;
-            }
-            chartsBusy = true;
-            try {
-                while (pendingClusterId != null) {
-                    var id = pendingClusterId;
-                    pendingClusterId = null;
-                    await runClusterLoad(id);
-                }
-            } finally {
-                chartsBusy = false;
-                // клик во время finally
-                if (pendingClusterId != null) {
-                    selectCluster(pendingClusterId);
-                }
+                if (gen !== chartsGen) return;
+                setStatus('Ошибка графиков: ' + (e.message || String(e)));
             }
         }
 
@@ -529,8 +517,7 @@
             var lookback = document.getElementById('lookbackSel').value;
             var dist = distanceFromSim(simPct());
             var seq = ++boardLoadSeq;
-            // Сброс графиков только при пересборке карты — не трогаем seq кликов
-            pendingClusterId = null;
+            chartsGen += 1; // отменить фоновую загрузку графиков
             currentClusterId = null;
             clearChartsRoot();
             head.style.display = 'none';
@@ -543,8 +530,7 @@
                     '&distance_threshold=' + encodeURIComponent(String(dist)) +
                     '&method=hierarchical&mode=shape&include_overlay=0';
                 if (forceRefresh) q += '&refresh=1';
-                // кэш обычно <1с; live-пересчёт quotes может быть дольше
-                var r = await fetchJsonTimeout(q, forceRefresh ? 90000 : 60000);
+                var r = await fetchJsonTimeout(q, forceRefresh ? 120000 : 90000);
                 if (seq !== boardLoadSeq) return;
                 if (!r.ok) {
                     stopHeartbeat();

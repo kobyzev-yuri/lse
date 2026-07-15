@@ -3728,40 +3728,44 @@ async def api_portfolio_shape_clusters(
 
 @app.get("/api/portfolio/shape-clusters/charts", response_class=JSONResponse)
 async def api_portfolio_shape_cluster_charts(days: int = 180, tickers: str = ""):
-    """Лёгкие дневные close-ряды для кластера (без trades/position/trend — быстрее навигация)."""
+    """Лёгкие дневные close-ряды для кластера (один SQL на весь список)."""
 
     def _run() -> Dict[str, Any]:
-        raw = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()]
+        from sqlalchemy import bindparam
+
+        raw = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()][:60]
         days_clamped = min(max(10, int(days)), 730)
         cutoff = datetime.now() - timedelta(days=days_clamped)
-        charts: List[Dict[str, Any]] = []
-        with engine.connect() as conn:
-            for t in raw[:60]:
-                df = pd.read_sql(
-                    text(
-                        """
-                        SELECT date, close
-                        FROM quotes
-                        WHERE ticker = :ticker AND date >= :cutoff
-                        ORDER BY date ASC
-                        """
-                    ),
-                    conn,
-                    params={"ticker": t, "cutoff": cutoff},
+        by_ticker: Dict[str, List[Dict[str, Any]]] = {t: [] for t in raw}
+        if raw:
+            sql = text(
+                """
+                SELECT ticker, date, close
+                FROM quotes
+                WHERE ticker IN :tickers AND date >= :cutoff
+                ORDER BY ticker ASC, date ASC
+                """
+            ).bindparams(bindparam("tickers", expanding=True))
+            with engine.connect() as conn:
+                rows = conn.execute(sql, {"tickers": raw, "cutoff": cutoff}).fetchall()
+            for r in rows:
+                t = str(r[0] or "").strip().upper()
+                if t not in by_ticker:
+                    continue
+                d = r[1]
+                by_ticker[t].append(
+                    {
+                        "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+                        "close": _to_jsonable(r[2]),
+                    }
                 )
-                bars = []
-                for _, row in df.iterrows():
-                    d = row["date"]
-                    bars.append(
-                        {
-                            "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
-                            "close": _to_jsonable(row.get("close")),
-                        }
-                    )
-                entry: Dict[str, Any] = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
-                if not bars:
-                    entry["error"] = "no_data"
-                charts.append(entry)
+        charts: List[Dict[str, Any]] = []
+        for t in raw:
+            bars = by_ticker.get(t) or []
+            entry: Dict[str, Any] = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
+            if not bars:
+                entry["error"] = "no_data"
+            charts.append(entry)
         return {"days": days_clamped, "tickers": raw, "charts": charts, "lite": True}
 
     try:
