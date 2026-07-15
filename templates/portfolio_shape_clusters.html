@@ -347,10 +347,14 @@
 
             var head = document.getElementById("detailHead");
             var root = document.getElementById("chartsRoot");
-            var daysEl = document.getElementById("daysSel");
-            var days = daysEl ? daysEl.value : "180";
-            var members = selected.tickers || [];
-            var show = members.slice(0, 12);
+            var members = (selected.tickers || []).slice();
+            // Medoid first — easier to read large clusters
+            var med = selected.medoid;
+            if (med) {
+                members = [med].concat(members.filter(function (t) { return t !== med; }));
+            }
+            // Embed path is free/local — show all cluster members (was 12 + flaky /charts).
+            var show = members.slice(0, 40);
             head.style.display = "block";
             head.textContent = "Charts: " + (selected.label || "") + " | " + members.join(", ");
             root.innerHTML = "";
@@ -360,35 +364,19 @@
 
             var overlaySeries = [];
             var doneN = 0;
-            var failed = 0;
-            var needFetch = [];
             var fromEmbed = 0;
+            var miss = [];
 
             function paintOverlay() {
+                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
                 overlayHost.innerHTML = "";
                 if (overlaySeries.length >= 2) {
                     overlayHost.innerHTML = "<div class='chart-section'><h2>Overlay (norm)</h2>" +
-                        sparkSvg(overlaySeries.slice(0, 8), true) + "</div>";
+                        sparkSvg(overlaySeries.slice(0, 12), true) + "</div>";
                 }
             }
 
-            function finish() {
-                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
-                paintOverlay();
-                if (members.length > show.length) {
-                    var more = document.createElement("p");
-                    more.className = "muted";
-                    more.textContent = "Showing first " + show.length + " of " + members.length;
-                    root.appendChild(more);
-                }
-                var bits = "charts done: " + doneN + "/" + show.length;
-                if (fromEmbed) bits += " embed=" + fromEmbed;
-                if (failed) bits += " fail=" + failed;
-                st(bits);
-            }
-
-            // Always paint from map JSON first — /charts body often hangs for this client
-            // (server 200 ~30ms / ~1KB) while fetch never resolves.
+            // Map embeds only — never block overlay/dailies on /charts (body hang).
             show.forEach(function (t) {
                 var it = sparkItem(t);
                 if (it) {
@@ -396,58 +384,26 @@
                     doneN += 1;
                     fromEmbed += 1;
                 } else {
-                    needFetch.push(t);
+                    miss.push(t);
+                    var sec = document.createElement("div");
+                    sec.className = "chart-section";
+                    sec.innerHTML = "<h2>" + t + "</h2><p class='muted'>no spark in map</p>";
+                    root.appendChild(sec);
                 }
             });
             paintOverlay();
-            if (!needFetch.length) {
-                finish();
-                return;
+            if (members.length > show.length) {
+                var more = document.createElement("p");
+                more.className = "muted";
+                more.textContent = "Showing first " + show.length + " of " + members.length;
+                root.appendChild(more);
             }
-            st("charts: embed " + fromEmbed + ", fetch " + needFetch.length + "...");
-
-            function fetchOne(ticker, attempt) {
-                attempt = attempt || 1;
-                var url = "/api/portfolio/shape-clusters/charts?days=" + encodeURIComponent(days) +
-                    "&tickers=" + encodeURIComponent(ticker) +
-                    "&compact=1&max_points=80";
-                return fetchJson(url, 12000).then(function (pack) {
-                    if (!pack.ok) throw new Error("HTTP " + pack.status);
-                    var items = (pack.body && pack.body.charts) || [];
-                    if (!items.length) throw new Error("empty");
-                    return items[0];
-                }).catch(function (e) {
-                    if (attempt < 2) return fetchOne(ticker, attempt + 1);
-                    throw e;
-                });
-            }
-
-            function loadMissing(offset) {
-                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return Promise.resolve();
-                if (offset >= needFetch.length) {
-                    finish();
-                    return Promise.resolve();
-                }
-                var t = needFetch[offset];
-                st("charts: fetch " + (offset + 1) + "/" + needFetch.length + " " + t + "...");
-                return fetchOne(t).then(function (it) {
-                    if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
-                    appendChartItem(root, it, overlaySeries);
-                    doneN += 1;
-                    paintOverlay();
-                    return loadMissing(offset + 1);
-                }).catch(function (e) {
-                    if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
-                    failed += 1;
-                    var err = document.createElement("p");
-                    err.className = "muted";
-                    err.textContent = t + ": " + (e && e.message ? e.message : String(e));
-                    root.appendChild(err);
-                    return loadMissing(offset + 1);
-                });
-            }
-
-            loadMissing(0);
+            var bits = "charts done: " + doneN + "/" + show.length;
+            if (fromEmbed) bits += " embed=" + fromEmbed;
+            if (miss.length) bits += " miss=" + miss.length;
+            if (overlaySeries.length >= 2) bits += " overlay=" + Math.min(12, overlaySeries.length);
+            else bits += " overlay=0";
+            st(bits);
         }
 
         function loadBoard(force) {
@@ -463,6 +419,14 @@
 
             var qCached = mapQuery(lookback, dist, false);
             var qLive = mapQuery(lookback, dist, true);
+
+            function mapUsable(report) {
+                if (!report) return false;
+                var ok = Number(report.n_tickers_ok || 0);
+                var nCl = Number(report.n_clusters || 0);
+                var cl = report.clusters || [];
+                return ok > 0 && (nCl > 0 || cl.length > 0);
+            }
 
             function paint(report, note) {
                 if (seq !== boardSeq || !report) return;
@@ -522,7 +486,17 @@
             startHb("Loading map...");
             return fetchMap(qCached, 25000, 2).then(function (report) {
                 if (seq !== boardSeq) return;
-                if (report) paint(report, "Map ready — click a cluster");
+                if (mapUsable(report)) {
+                    paint(report, "Map ready — click a cluster");
+                    return;
+                }
+                // Empty live/cache (ok=0/0) — force rebuild once instead of fake "ready"
+                startHb("Map empty, DB rebuild...");
+                return fetchMap(qLive, 90000, 0).then(function (live) {
+                    if (seq !== boardSeq) return;
+                    if (mapUsable(live)) paint(live, "Map ready (DB) — click a cluster");
+                    else st("Map empty (ok=0). Press «Обновить из БД».");
+                });
             }).catch(function (e) {
                 if (seq !== boardSeq) return;
                 stopHb();

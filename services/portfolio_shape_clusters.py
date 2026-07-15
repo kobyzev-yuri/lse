@@ -277,9 +277,12 @@ def build_shape_clusters(
             "distance_threshold": float(distance_threshold),
             "max_clusters": int(max_clusters),
             "cut": "maxclust" if int(max_clusters) >= 2 else "distance",
+            "n_tickers_requested": len([t for t in tickers if str(t).strip()]),
             "n_tickers_ok": 0,
+            "n_clusters": 0,
             "missing_or_short": missing,
             "clusters": [],
+            "spark_closes": {},
             "note_ru": "Недостаточно overlapping quotes для кластеризации.",
         }
 
@@ -444,22 +447,32 @@ def build_shape_cluster_page_payload(
     disk_path = default_shape_clusters_path()
     report: Optional[Dict[str, Any]] = None
 
+    def _map_ok(payload: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        if int(payload.get("n_tickers_ok") or 0) <= 0:
+            return False
+        if not isinstance(payload.get("clusters"), list) or not payload.get("clusters"):
+            return False
+        # Require spark embeds so UI never falls back to flaky /charts
+        sc = payload.get("spark_closes")
+        return isinstance(sc, dict) and len(sc) > 0
+
     if not force_refresh:
         cached = _cache_get(cache_key)
-        if cached is not None:
-            report = dict(cached)
+        if _map_ok(cached):
+            report = dict(cached)  # type: ignore[arg-type]
             report["cache_hit"] = True
             report["cache_source"] = "memory"
         else:
             disk = _disk_load(disk_path)
-            if disk and isinstance(disk.get("clusters"), list):
-                if disk.get("cache_key") == cache_key:
-                    report = dict(disk)
-                    report.pop("cache_key", None)
-                    report["cache_hit"] = True
-                    report["cache_source"] = "disk"
-                    _cache_put(cache_key, {k: v for k, v in report.items() if k not in ("cache_hit", "cache_source")})
-                # иначе ниже пересчитаем; disk остаётся fallback только если live упадёт
+            if disk and disk.get("cache_key") == cache_key and _map_ok(disk):
+                report = dict(disk)
+                report.pop("cache_key", None)
+                report["cache_hit"] = True
+                report["cache_source"] = "disk"
+                _cache_put(cache_key, {k: v for k, v in report.items() if k not in ("cache_hit", "cache_source")})
+            # иначе ниже пересчитаем; disk без spark — не используем как hit
 
     if report is None:
         try:
@@ -473,18 +486,19 @@ def build_shape_cluster_page_payload(
                 max_clusters=max_clusters,
                 distance_threshold=distance_threshold,
             )
-            _cache_put(cache_key, report)
-            to_disk = dict(report)
-            to_disk["cache_key"] = cache_key
-            _disk_save(disk_path, to_disk)
+            if _map_ok(report):
+                _cache_put(cache_key, report)
+                to_disk = dict(report)
+                to_disk["cache_key"] = cache_key
+                _disk_save(disk_path, to_disk)
             report = dict(report)
             report["cache_hit"] = False
             report["cache_source"] = "live"
         except Exception:
             # После рестарта/нагрузки — отдать последний disk, чтобы UI не «висел»
             disk = _disk_load(disk_path)
-            if disk and isinstance(disk.get("clusters"), list):
-                report = dict(disk)
+            if _map_ok(disk):
+                report = dict(disk)  # type: ignore[arg-type]
                 report.pop("cache_key", None)
                 report["cache_hit"] = True
                 report["cache_source"] = "disk_fallback"
