@@ -3715,7 +3715,9 @@ async def api_portfolio_shape_clusters(
             max_clusters=min(max(2, int(max_clusters)), 20),
             distance_threshold=min(max(0.02, float(distance_threshold)), 1.0),
             force_refresh=int(refresh or 0) == 1,
-        )    try:
+        )
+
+    try:
         payload = await asyncio.to_thread(_run)
         return JSONResponse(content=_api_json_body(payload))
     except Exception as e:
