@@ -2991,28 +2991,39 @@ async def get_game5m(ticker: str = None, limit: int = 20):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/game5m/cards", response_class=JSONResponse)
-async def get_game5m_cards(days: int = 5):
-    """API: Карточки по всем тикерам игры 5m для веб-мониторинга (Telegram). Без LLM. Payload из get_5m_card_payload."""
-    try:
-        from services.ticker_groups import get_tickers_game_5m
-        from services.recommend_5m import get_decision_5m, get_5m_card_payload
-    except ImportError:
-        raise HTTPException(status_code=501, detail="Модули recommend_5m / ticker_groups недоступны")
+_GAME5M_CARDS_CACHE: Dict[str, Any] = {"key": None, "expires": 0.0, "payload": None}
+_GAME5M_CARDS_CACHE_TTL_SEC = 20.0
+
+
+def _compute_game5m_cards_sync(days: int) -> Dict[str, Any]:
+    """Heavy sync path for 5m cards — must not run on the asyncio event loop."""
+    import time as _time
+
+    from services.ticker_groups import get_tickers_game_5m
+    from services.recommend_5m import get_decision_5m, get_5m_card_payload
+
+    days = min(max(1, int(days or 5)), 7)
+    cache_key = f"d{days}"
+    now = _time.time()
+    if (
+        _GAME5M_CARDS_CACHE.get("key") == cache_key
+        and _GAME5M_CARDS_CACHE.get("payload") is not None
+        and float(_GAME5M_CARDS_CACHE.get("expires") or 0) > now
+    ):
+        return dict(_GAME5M_CARDS_CACHE["payload"])
+
     tickers = list(get_tickers_game_5m() or [])
     if not tickers:
-        return JSONResponse(
-            content=_to_jsonable(
-                {
-                    "tickers": [],
-                    "cards": [],
-                    "updated_at": None,
-                    "web_llm_enabled": web_llm_enabled(),
-                }
-            ),
-            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        payload = {
+            "tickers": [],
+            "cards": [],
+            "updated_at": None,
+            "web_llm_enabled": web_llm_enabled(),
+        }
+        _GAME5M_CARDS_CACHE.update(
+            {"key": cache_key, "expires": now + _GAME5M_CARDS_CACHE_TTL_SEC, "payload": payload}
         )
-    days = min(max(1, days), 7)
+        return dict(payload)
     cards = []
     for tkr in tickers:
         try:
@@ -3039,15 +3050,30 @@ async def get_game5m_cards(days: int = 5):
         session = (d5 or {}).get("market_session") or {}
         card["session_phase"] = session.get("session_phase")
         cards.append(card)
+    payload = {
+        "tickers": tickers,
+        "cards": cards,
+        "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
+        "web_llm_enabled": web_llm_enabled(),
+    }
+    _GAME5M_CARDS_CACHE.update(
+        {"key": cache_key, "expires": now + _GAME5M_CARDS_CACHE_TTL_SEC, "payload": payload}
+    )
+    return dict(payload)
+
+
+@app.get("/api/game5m/cards", response_class=JSONResponse)
+async def get_game5m_cards(days: int = 5):
+    """API: Карточки по всем тикерам игры 5m для веб-мониторинга (Telegram). Без LLM. Payload из get_5m_card_payload."""
+    try:
+        payload = await asyncio.to_thread(_compute_game5m_cards_sync, days)
+    except ImportError:
+        raise HTTPException(status_code=501, detail="Модули recommend_5m / ticker_groups недоступны")
+    except Exception as e:
+        logger.exception("GET /api/game5m/cards days=%s: %s", days, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка карточек 5m: {e!s}")
     return JSONResponse(
-        content=_to_jsonable(
-            {
-                "tickers": tickers,
-                "cards": cards,
-                "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
-                "web_llm_enabled": web_llm_enabled(),
-            }
-        ),
+        content=_to_jsonable(payload),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
 

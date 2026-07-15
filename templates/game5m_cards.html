@@ -702,7 +702,15 @@
         async function loadCards(silent) {
             const container = document.getElementById('cardsContainer');
             const updatedEl = document.getElementById('updatedAt');
-            if (!silent) container.innerHTML = '<div class="loading-llm" style="padding:1rem;">Загрузка…</div>';
+            var hb = null;
+            var t0 = Date.now();
+            if (!silent) {
+                container.innerHTML = '<div class="loading-llm" style="padding:1rem;">Загрузка… 0с</div>';
+                hb = setInterval(function () {
+                    var sec = Math.round((Date.now() - t0) / 1000);
+                    container.innerHTML = '<div class="loading-llm" style="padding:1rem;">Загрузка… ' + sec + 'с (сервер считает 5m)</div>';
+                }, 500);
+            }
             try {
                 const r = await fetch('/api/game5m/cards?days=5&_=' + Date.now(), { cache: 'no-store' });
                 if (!r.ok) { container.innerHTML = '<div style="color:#fca5a5;">Ошибка ' + r.status + '</div>'; return; }
@@ -714,6 +722,8 @@
                 container.innerHTML = (data.cards || []).map(renderCard).join('');
             } catch (e) {
                 container.innerHTML = '<div style="color:#fca5a5;">' + escapeHtml(e.message) + '</div>';
+            } finally {
+                if (hb) clearInterval(hb);
             }
             return Promise.resolve();
         }
