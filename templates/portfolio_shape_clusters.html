@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Похожесть графиков · кластеры</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e2e8f0; margin: 0; padding: 1rem; max-width: 1100px; margin-left: auto; margin-right: auto; }
+        a { color: #7dd3fc; }
+        h1 { font-size: 1.15rem; margin: 0.5rem 0 0.35rem; }
+        .muted { color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.75rem; line-height: 1.35; }
+        select, button, input { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; padding: 0.35rem 0.6rem; border-radius: 6px; margin-right: 0.4rem; }
+        .controls { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.75rem; }
+        .cluster-nav { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 1rem; }
+        .cluster-nav button {
+            background: #12182a; border: 1px solid #334155; color: #cbd5e1;
+            padding: 0.4rem 0.65rem; border-radius: 8px; cursor: pointer; font-size: 0.8rem;
+        }
+        .cluster-nav button.active { background: #0f3460; border-color: #38bdf8; color: #e0f2fe; }
+        .cluster-nav button.solo { opacity: 0.75; }
+        #metaLine { font-size: 0.78rem; color: #64748b; margin-bottom: 0.75rem; }
+        #clusterInfo { font-size: 0.85rem; color: #cbd5e1; margin-bottom: 0.75rem; }
+        .chart-section { position: relative; height: 280px; margin-top: 1rem; }
+        .chart-section.overlay { height: 340px; }
+        .chart-section h2 { font-size: 0.95rem; margin: 0 0 0.35rem 0; color: #cbd5e1; }
+        #statusLine { font-size: 0.8rem; color: #94a3b8; min-height: 1.2em; }
+        .pair { color: #94a3b8; font-size: 0.78rem; }
+    </style>
+    {% include "partials/lse_fetch_shim.html" %}
+</head>
+<body>
+{% include "partials/site_nav_standalone.html" %}
+    <h1>Похожесть графиков · кластеры (6м форма)</h1>
+    <p class="muted">Список Насти (~40 тикеров). Кластеры по корреляции <strong>нормированной цены</strong> (close/close₀) за lookback — похожесть <em>формы</em> пути. Число групп зависит от порога. Навигация по кластеру: оверлей нормализованных кривых + дневные графики как у портфеля.</p>
+
+    <div class="controls">
+        <label>Lookback (д.дней)
+            <select id="lookbackSel">
+                <option value="63">63 (~3м)</option>
+                <option value="126" selected>126 (~6м)</option>
+                <option value="189">189 (~9м)</option>
+            </select>
+        </label>
+        <label>corr ≥
+            <select id="corrMinSel">
+                <option value="0.65">0.65</option>
+                <option value="0.70">0.70</option>
+                <option value="0.75" selected>0.75</option>
+                <option value="0.80">0.80</option>
+                <option value="0.85">0.85</option>
+                <option value="0.90">0.90</option>
+            </select>
+        </label>
+        <label>Дней на графике
+            <select id="daysSel">
+                <option value="90">90</option>
+                <option value="180" selected>180</option>
+                <option value="270">270</option>
+            </select>
+        </label>
+        <button type="button" id="reloadBtn">Пересчитать</button>
+    </div>
+
+    <div id="metaLine"></div>
+    <div class="cluster-nav" id="clusterNav"></div>
+    <div id="clusterInfo"></div>
+    <div id="statusLine"></div>
+    <div id="chartsRoot"></div>
+
+    <script>
+        var chartInstances = [];
+        var currentClusterId = null;
+        var lastReport = null;
+
+        function destroyCharts() {
+            chartInstances.forEach(function(ch) { try { ch.destroy(); } catch (e) {} });
+            chartInstances = [];
+        }
+
+        function colorFor(i) {
+            var palette = ['#38bdf8','#4ade80','#fbbf24','#f472b6','#a78bfa','#fb923c','#22d3ee','#e879f9','#86efac','#f87171'];
+            return palette[i % palette.length];
+        }
+
+        function buildOverlayChart(canvas, overlay) {
+            var labels = overlay.labels || [];
+            var series = overlay.series || [];
+            var datasets = series.map(function(s, i) {
+                return {
+                    label: s.ticker,
+                    data: s.values || [],
+                    borderColor: colorFor(i),
+                    tension: 0.1,
+                    spanGaps: true,
+                    pointRadius: 0,
+                    borderWidth: 1.6
+                };
+            });
+            return new Chart(canvas, {
+                type: 'line',
+                data: { labels: labels, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: { display: true, text: 'Норм. цена (1.0 = старт lookback)', color: '#94a3b8', font: { size: 11 } },
+                        legend: { labels: { color: '#cbd5e1', boxWidth: 10, font: { size: 10 } } }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 } },
+                        y: { ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+
+        function buildPriceChart(canvas, title, bars) {
+            var labels = bars.map(function(b) { return String(b.date).slice(0, 10); });
+            var closes = bars.map(function(b) { return b.close != null ? Number(b.close) : null; });
+            return new Chart(canvas, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{ label: 'Close', data: closes, borderColor: '#38bdf8', tension: 0.1, spanGaps: true, pointRadius: 0 }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: { display: !!title, text: title || '', color: '#94a3b8', font: { size: 11 } },
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 } },
+                        y: { ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+
+        function renderNav(clusters) {
+            var nav = document.getElementById('clusterNav');
+            nav.innerHTML = '';
+            (clusters || []).forEach(function(c) {
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.textContent = c.label || ('C' + c.cluster_id);
+                btn.title = (c.tickers || []).join(', ');
+                if ((c.size || 0) <= 1) btn.classList.add('solo');
+                if (currentClusterId != null && Number(c.cluster_id) === Number(currentClusterId)) btn.classList.add('active');
+                btn.addEventListener('click', function() {
+                    currentClusterId = c.cluster_id;
+                    loadClusterView(false);
+                });
+                nav.appendChild(btn);
+            });
+        }
+
+        function renderClusterInfo(c, report) {
+            var el = document.getElementById('clusterInfo');
+            if (!c) { el.textContent = ''; return; }
+            var pairs = (c.strong_pairs || []).map(function(p) {
+                return p.a + '–' + p.b + ' (' + p.corr + ')';
+            }).join(' · ');
+            el.innerHTML = '<strong>' + (c.label || '') + '</strong>: ' +
+                (c.tickers || []).join(', ') +
+                (pairs ? '<div class="pair">Сильные пары: ' + pairs + '</div>' : '');
+        }
+
+        async function loadClusterView(fullReload) {
+            var statusEl = document.getElementById('statusLine');
+            var root = document.getElementById('chartsRoot');
+            var lookback = document.getElementById('lookbackSel').value;
+            var corrMin = document.getElementById('corrMinSel').value;
+            var days = document.getElementById('daysSel').value;
+            statusEl.textContent = 'Загрузка…';
+            destroyCharts();
+            root.innerHTML = '';
+
+            try {
+                var q = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
+                    '&corr_min=' + encodeURIComponent(corrMin) +
+                    '&method=components&mode=shape';
+                if (currentClusterId != null) q += '&cluster_id=' + encodeURIComponent(currentClusterId);
+                var r = await fetch(q);
+                if (!r.ok) {
+                    var err = await r.json().catch(function() { return {}; });
+                    statusEl.textContent = err.detail || r.statusText;
+                    return;
+                }
+                var report = await r.json();
+                lastReport = report;
+                if (fullReload || currentClusterId == null) {
+                    var sel = report.selected_cluster;
+                    currentClusterId = sel ? sel.cluster_id : null;
+                }
+                renderNav(report.clusters || []);
+                // re-mark active after nav rebuild
+                Array.prototype.forEach.call(document.querySelectorAll('#clusterNav button'), function(btn, idx) {
+                    var c = (report.clusters || [])[idx];
+                    if (c && Number(c.cluster_id) === Number(currentClusterId)) btn.classList.add('active');
+                    else btn.classList.remove('active');
+                });
+
+                var selected = null;
+                (report.clusters || []).forEach(function(c) {
+                    if (Number(c.cluster_id) === Number(currentClusterId)) selected = c;
+                });
+                if (!selected) selected = report.selected_cluster;
+                renderClusterInfo(selected, report);
+
+                document.getElementById('metaLine').textContent =
+                    'ok=' + (report.n_tickers_ok || 0) + '/' + (report.n_tickers_requested || 0) +
+                    ' · bars=' + (report.n_bars_aligned || 0) +
+                    ' · clusters=' + (report.n_clusters || 0) +
+                    ' · method=' + (report.method || '') +
+                    ' · corr≥' + (report.corr_min != null ? report.corr_min : '') +
+                    ' · ' + (report.generated_at_utc || '');
+
+                if (!selected) {
+                    statusEl.textContent = 'Нет кластеров';
+                    return;
+                }
+
+                // overlay
+                var ovSec = document.createElement('div');
+                ovSec.className = 'chart-section overlay';
+                var ovH = document.createElement('h2');
+                ovH.textContent = 'Оверлей формы · ' + (selected.label || '');
+                var ovCv = document.createElement('canvas');
+                ovSec.appendChild(ovH);
+                ovSec.appendChild(ovCv);
+                root.appendChild(ovSec);
+                var overlay = report.overlay || { labels: [], series: [] };
+                if ((overlay.series || []).length) {
+                    chartInstances.push(buildOverlayChart(ovCv, overlay));
+                } else {
+                    var p = document.createElement('p');
+                    p.className = 'muted';
+                    p.textContent = 'Нет overlapping ряда для оверлея';
+                    ovSec.appendChild(p);
+                }
+
+                // per-ticker price charts
+                var tickers = selected.tickers || [];
+                statusEl.textContent = 'Графики кластера: ' + tickers.join(', ');
+                var cr = await fetch('/api/portfolio/shape-clusters/charts?days=' + encodeURIComponent(days) +
+                    '&tickers=' + encodeURIComponent(tickers.join(',')));
+                if (!cr.ok) {
+                    statusEl.textContent += ' · ошибка графиков ' + cr.status;
+                    return;
+                }
+                var pack = await cr.json();
+                (pack.charts || []).forEach(function(item) {
+                    var sec = document.createElement('div');
+                    sec.className = 'chart-section';
+                    var h = document.createElement('h2');
+                    h.textContent = item.ticker || '—';
+                    var cv = document.createElement('canvas');
+                    sec.appendChild(h);
+                    sec.appendChild(cv);
+                    root.appendChild(sec);
+                    var bars = item.bars || [];
+                    if (!bars.length) {
+                        var miss = document.createElement('p');
+                        miss.className = 'muted';
+                        miss.textContent = 'Нет quotes';
+                        sec.appendChild(miss);
+                        return;
+                    }
+                    chartInstances.push(buildPriceChart(cv, '', bars));
+                });
+            } catch (e) {
+                statusEl.textContent = 'Ошибка: ' + (e.message || String(e));
+            }
+        }
+
+        document.getElementById('reloadBtn').addEventListener('click', function() {
+            currentClusterId = null;
+            loadClusterView(true);
+        });
+        document.getElementById('lookbackSel').addEventListener('change', function() {
+            currentClusterId = null;
+            loadClusterView(true);
+        });
+        document.getElementById('corrMinSel').addEventListener('change', function() {
+            currentClusterId = null;
+            loadClusterView(true);
+        });
+        document.getElementById('daysSel').addEventListener('change', function() {
+            loadClusterView(false);
+        });
+        loadClusterView(true);
+    </script>
+</body>
+</html>

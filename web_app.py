@@ -3680,6 +3680,68 @@ async def portfolio_daily_chart_page(request: Request):
     )
 
 
+@app.get("/portfolio/shape-clusters", response_class=HTMLResponse)
+async def portfolio_shape_clusters_page(request: Request):
+    """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
+    return HTMLResponse(render_template("portfolio_shape_clusters.html", {"request": request}))
+
+
+@app.get("/api/portfolio/shape-clusters", response_class=JSONResponse)
+async def api_portfolio_shape_clusters(
+    lookback_days: int = 126,
+    corr_min: float = 0.75,
+    method: str = "components",
+    mode: str = "shape",
+    cluster_id: Optional[int] = None,
+):
+    """Кластеры по форме пути (норм. цена). cluster_id — выбранная группа для overlay."""
+
+    def _run() -> Dict[str, Any]:
+        from report_generator import get_engine
+        from services.portfolio_shape_clusters import build_shape_cluster_page_payload
+
+        return build_shape_cluster_page_payload(
+            get_engine(),
+            lookback_trading_days=min(max(40, int(lookback_days)), 400),
+            corr_min=min(max(0.3, float(corr_min)), 0.99),
+            method=(method or "components").strip().lower(),
+            mode=(mode or "shape").strip().lower(),
+            cluster_id=int(cluster_id) if cluster_id is not None else None,
+        )
+
+    try:
+        payload = await asyncio.to_thread(_run)
+        return JSONResponse(content=_api_json_body(payload))
+    except Exception as e:
+        logger.exception("GET /api/portfolio/shape-clusters: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка shape-clusters: {e!s}")
+
+
+@app.get("/api/portfolio/shape-clusters/charts", response_class=JSONResponse)
+async def api_portfolio_shape_cluster_charts(days: int = 180, tickers: str = ""):
+    """Дневные графики для списка тикеров кластера (quotes)."""
+
+    def _run() -> Dict[str, Any]:
+        raw = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()]
+        days_clamped = min(max(10, int(days)), 730)
+        charts: List[Dict[str, Any]] = []
+        for t in raw[:60]:
+            one = _build_portfolio_daily_chart_data(t, days_clamped)
+            bars = one.get("bars") or []
+            entry: Dict[str, Any] = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
+            if not bars:
+                entry["error"] = "no_data"
+            charts.append(entry)
+        return {"days": days_clamped, "tickers": raw, "charts": charts}
+
+    try:
+        payload = await asyncio.to_thread(_run)
+        return JSONResponse(content=_api_json_body(payload))
+    except Exception as e:
+        logger.exception("GET /api/portfolio/shape-clusters/charts: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка shape-cluster charts: {e!s}")
+
+
 @app.get("/api/pnl", response_class=JSONResponse)
 async def get_pnl():
     """API: Получить PnL по закрытым сделкам для графика на странице Визуализация."""
