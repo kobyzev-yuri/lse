@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Похожесть графиков · кластеры</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e2e8f0; margin: 0; padding: 1rem; max-width: 1100px; margin-left: auto; margin-right: auto; }
+        a { color: #7dd3fc; }
+        h1 { font-size: 1.15rem; margin: 0.5rem 0 0.35rem; }
+        .muted { color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.75rem; line-height: 1.35; }
+        select, button { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; padding: 0.35rem 0.6rem; border-radius: 6px; margin-right: 0.4rem; }
+        .controls { display: flex; flex-wrap: wrap; gap: 0.65rem 1rem; align-items: center; margin-bottom: 0.75rem; }
+        .controls label { font-size: 0.82rem; color: #cbd5e1; display: inline-flex; align-items: center; gap: 0.35rem; }
+        .thresh-wrap { flex: 1 1 220px; min-width: 200px; max-width: 360px; display: flex; flex-direction: column; gap: 0.2rem; }
+        .thresh-wrap .row { display: flex; align-items: center; gap: 0.5rem; }
+        .thresh-wrap input[type=range] { flex: 1; accent-color: #38bdf8; }
+        .thresh-wrap .hint { font-size: 0.72rem; color: #64748b; }
+        #simVal { font-variant-numeric: tabular-nums; color: #7dd3fc; min-width: 3.2em; }
+        #metaLine { font-size: 0.78rem; color: #64748b; margin-bottom: 0.75rem; }
+        #statusLine { font-size: 0.8rem; color: #94a3b8; min-height: 1.2em; margin: 0.5rem 0; }
+        #clusterBoard {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 0.65rem;
+            margin: 0.75rem 0 1.25rem;
+        }
+        .cluster-card {
+            background: #12182a;
+            border: 1px solid #334155;
+            border-left-width: 5px;
+            border-radius: 10px;
+            padding: 0.7rem 0.75rem;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s, transform 0.1s;
+        }
+        .cluster-card:hover { background: #16213e; transform: translateY(-1px); }
+        .cluster-card.active { border-color: #38bdf8; background: #0f3460; box-shadow: 0 0 0 1px #38bdf8; }
+        .cluster-card .title { font-weight: 650; font-size: 0.92rem; margin-bottom: 0.2rem; }
+        .cluster-card .meta { font-size: 0.72rem; color: #94a3b8; margin-bottom: 0.45rem; }
+        .cluster-card .tickers { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+        .cluster-card .tickers span {
+            font-size: 0.7rem; background: #1a1a2e; border: 1px solid #334155;
+            border-radius: 999px; padding: 0.1rem 0.4rem; color: #cbd5e1;
+        }
+        .cluster-card .tickers span.medoid { border-color: #38bdf8; color: #7dd3fc; }
+        .pair { color: #94a3b8; font-size: 0.78rem; margin-top: 0.25rem; }
+        #detailHead { font-size: 1rem; margin: 1rem 0 0.35rem; color: #e2e8f0; display: none; }
+        .chart-section { margin-top: 1rem; background: #12182a; border: 1px solid #334155; border-radius: 10px; padding: 0.6rem 0.75rem; }
+        .chart-section h2 { font-size: 0.9rem; margin: 0 0 0.35rem 0; color: #cbd5e1; }
+        .spark { width: 100%; height: 120px; display: block; background: #0b1020; border-radius: 6px; }
+        .spark.overlay { height: 180px; }
+        .chg { font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem; }
+    </style>
+    {% include "partials/lse_fetch_shim.html" %}
+</head>
+<body>
+{% include "partials/site_nav_standalone.html" %}
+    <h1>Похожесть графиков · кластеры</h1>
+    <p class="muted">Карта групп по форме цены. Ползунок — порог похожести. Клик → оверлей и дневные (SVG, без Chart.js).</p>
+
+    <div class="controls">
+        <label>Окно
+            <select id="lookbackSel">
+                <option value="63">63д</option>
+                <option value="126" selected>126д (~6м)</option>
+                <option value="189">189д</option>
+            </select>
+        </label>
+        <div class="thresh-wrap">
+            <div class="row">
+                <span>Порог похожести</span>
+                <strong id="simVal">88%</strong>
+            </div>
+            <input type="range" id="simSlider" min="70" max="95" step="1" value="88">
+            <div class="hint">← мягче · строже →</div>
+        </div>
+        <label>Дней графика
+            <select id="daysSel">
+                <option value="90">90</option>
+                <option value="180" selected>180</option>
+                <option value="270">270</option>
+            </select>
+        </label>
+        <button type="button" id="reloadBtn">Обновить из БД</button>
+    </div>
+
+    <div id="metaLine"></div>
+    <div id="clusterBoard"></div>
+    <div id="statusLine">boot</div>
+    <noscript><p class="muted">JavaScript required</p></noscript>
+    <h2 id="detailHead"></h2>
+    <div id="chartsRoot"></div>
+
+    <script>
+    (function () {
+        var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
+        var lastReport = null;
+        var currentClusterId = null;
+        var boardSeq = 0;
+        var simDebounce = null;
+        var hb = null;
+        var stEl = document.getElementById("statusLine");
+
+        function st(m) { if (stEl) stEl.textContent = m; }
+        function colorFor(i) { return COLORS[i % COLORS.length]; }
+        function simPct() {
+            var el = document.getElementById("simSlider");
+            return Number(el && el.value) || 88;
+        }
+        function distFromSim(pct) {
+            var d = 1 - (pct / 100);
+            return Math.max(0.02, Math.min(0.5, Math.round(d * 1000) / 1000));
+        }
+        function syncSim() {
+            var el = document.getElementById("simVal");
+            if (el) el.textContent = simPct() + "%";
+        }
+        function stopHb() { if (hb) { clearInterval(hb); hb = null; } }
+        function startHb(base) {
+            stopHb();
+            var t0 = Date.now();
+            st(base + " 0s");
+            hb = setInterval(function () {
+                st(base + " " + Math.round((Date.now() - t0) / 1000) + "s");
+            }, 500);
+        }
+
+        function fetchJson(url, ms) {
+            ms = ms || 25000;
+            return new Promise(function (resolve, reject) {
+                var done = false;
+                var timer = setTimeout(function () {
+                    if (done) return;
+                    done = true;
+                    reject(new Error("timeout " + ms + "ms"));
+                }, ms);
+                fetch(url, { cache: "no-store" }).then(function (r) {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    resolve(r);
+                }).catch(function (e) {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    reject(e);
+                });
+            });
+        }
+
+        function sparkSvg(seriesList, overlay) {
+            var w = 640, h = overlay ? 180 : 120, pad = 8;
+            var n = 0;
+            seriesList.forEach(function (s) {
+                if ((s.values || []).length > n) n = s.values.length;
+            });
+            if (n < 2) return "<svg class='spark' viewBox='0 0 " + w + " " + h + "'></svg>";
+            var ymin = Infinity, ymax = -Infinity;
+            seriesList.forEach(function (s) {
+                (s.values || []).forEach(function (v) {
+                    if (v == null || !isFinite(v)) return;
+                    if (v < ymin) ymin = v;
+                    if (v > ymax) ymax = v;
+                });
+            });
+            if (!isFinite(ymin) || !isFinite(ymax) || ymin === ymax) {
+                ymin = 0; ymax = 1;
+            }
+            var paths = seriesList.map(function (s, idx) {
+                var pts = [];
+                (s.values || []).forEach(function (v, i) {
+                    if (v == null || !isFinite(v)) return;
+                    var x = pad + (i / (n - 1)) * (w - 2 * pad);
+                    var y = h - pad - ((v - ymin) / (ymax - ymin)) * (h - 2 * pad);
+                    pts.push(x.toFixed(1) + "," + y.toFixed(1));
+                });
+                if (pts.length < 2) return "";
+                return "<polyline fill='none' stroke='" + colorFor(idx) + "' stroke-width='1.6' points='" + pts.join(" ") + "'/>";
+            }).join("");
+            return "<svg class='spark" + (overlay ? " overlay" : "") + "' viewBox='0 0 " + w + " " + h + "' preserveAspectRatio='none'>" + paths + "</svg>";
+        }
+
+        function normCloses(bars) {
+            var out = [];
+            var first = null;
+            (bars || []).forEach(function (b) {
+                var c = Number(b.close);
+                if (!isFinite(c) || c <= 0) { out.push(null); return; }
+                if (first == null) first = c;
+                out.push(c / first);
+            });
+            return out;
+        }
+
+        function renderBoard(clusters) {
+            var board = document.getElementById("clusterBoard");
+            if (!board) return;
+            board.innerHTML = "";
+            (clusters || []).forEach(function (c, idx) {
+                var card = document.createElement("div");
+                card.className = "cluster-card" + (Number(c.cluster_id) === Number(currentClusterId) ? " active" : "");
+                card.style.borderLeftColor = colorFor(idx);
+                card.setAttribute("data-cid", String(c.cluster_id));
+
+                var title = document.createElement("div");
+                title.className = "title";
+                title.textContent = c.label || ("C" + c.cluster_id);
+
+                var meta = document.createElement("div");
+                meta.className = "meta";
+                meta.textContent = (c.size || 0) + " tickers — click";
+
+                var ticks = document.createElement("div");
+                ticks.className = "tickers";
+                (c.tickers || []).forEach(function (t) {
+                    var s = document.createElement("span");
+                    if (t === c.medoid) s.className = "medoid";
+                    s.textContent = t;
+                    ticks.appendChild(s);
+                });
+
+                card.appendChild(title);
+                card.appendChild(meta);
+                card.appendChild(ticks);
+
+                var pairs = (c.strong_pairs || []).map(function (p) {
+                    return p.a + "-" + p.b + " (" + p.corr + ")";
+                }).join(" | ");
+                if (pairs) {
+                    var pEl = document.createElement("div");
+                    pEl.className = "pair";
+                    pEl.textContent = pairs;
+                    card.appendChild(pEl);
+                }
+
+                card.addEventListener("click", function () {
+                    selectCluster(Number(c.cluster_id));
+                });
+                board.appendChild(card);
+            });
+        }
+
+        function markActive() {
+            Array.prototype.forEach.call(document.querySelectorAll(".cluster-card"), function (card) {
+                if (Number(card.getAttribute("data-cid")) === Number(currentClusterId)) {
+                    card.classList.add("active");
+                } else {
+                    card.classList.remove("active");
+                }
+            });
+        }
+
+        function selectCluster(cid) {
+            currentClusterId = cid;
+            markActive();
+            var selected = null;
+            ((lastReport && lastReport.clusters) || []).forEach(function (c) {
+                if (Number(c.cluster_id) === cid) selected = c;
+            });
+            if (!selected) { st("cluster not found"); return; }
+
+            var head = document.getElementById("detailHead");
+            var root = document.getElementById("chartsRoot");
+            var daysEl = document.getElementById("daysSel");
+            var days = daysEl ? daysEl.value : "180";
+            var members = selected.tickers || [];
+            var show = members.slice(0, 12);
+            head.style.display = "block";
+            head.textContent = "Charts: " + (selected.label || "") + " | " + members.join(", ");
+            root.innerHTML = "";
+            st("charts: fetch " + show.length + "...");
+
+            var url = "/api/portfolio/shape-clusters/charts?days=" + encodeURIComponent(days) +
+                "&tickers=" + encodeURIComponent(show.join(","));
+            fetchJson(url, 45000).then(function (r) {
+                if (!r.ok) throw new Error("HTTP " + r.status);
+                return r.json();
+            }).then(function (pack) {
+                if (Number(currentClusterId) !== cid) return;
+                var items = pack.charts || [];
+                var overlaySeries = [];
+                items.forEach(function (it) {
+                    var vals = normCloses(it.bars || []);
+                    if (vals.length >= 2) overlaySeries.push({ ticker: it.ticker, values: vals });
+                    var sec = document.createElement("div");
+                    sec.className = "chart-section";
+                    var h = document.createElement("h2");
+                    h.textContent = it.ticker || "-";
+                    sec.appendChild(h);
+                    if (!(it.bars || []).length) {
+                        var miss = document.createElement("p");
+                        miss.className = "muted";
+                        miss.textContent = "No quotes";
+                        sec.appendChild(miss);
+                    } else {
+                        sec.innerHTML += sparkSvg([{ values: (it.bars || []).map(function (b) { return Number(b.close); }) }], false);
+                        var first = Number(it.bars[0].close);
+                        var last = Number(it.bars[it.bars.length - 1].close);
+                        var chg = document.createElement("div");
+                        chg.className = "chg";
+                        if (isFinite(first) && first > 0 && isFinite(last)) {
+                            chg.textContent = "close " + last.toFixed(2) + " (" + (((last / first) - 1) * 100).toFixed(1) + "% window)";
+                        }
+                        sec.appendChild(chg);
+                    }
+                    root.appendChild(sec);
+                });
+                if (overlaySeries.length >= 2) {
+                    var ov = document.createElement("div");
+                    ov.className = "chart-section";
+                    ov.innerHTML = "<h2>Overlay (norm)</h2>" + sparkSvg(overlaySeries.slice(0, 8), true);
+                    root.insertBefore(ov, root.firstChild);
+                }
+                if (members.length > show.length) {
+                    var more = document.createElement("p");
+                    more.className = "muted";
+                    more.textContent = "Showing first " + show.length + " of " + members.length;
+                    root.appendChild(more);
+                }
+                st("charts done: " + items.length);
+            }).catch(function (e) {
+                if (Number(currentClusterId) !== cid) return;
+                st("charts error: " + (e && e.message ? e.message : String(e)));
+            });
+        }
+
+        function loadBoard(force) {
+            var lookEl = document.getElementById("lookbackSel");
+            var lookback = lookEl ? lookEl.value : "126";
+            var dist = distFromSim(simPct());
+            var seq = ++boardSeq;
+            currentClusterId = null;
+            document.getElementById("chartsRoot").innerHTML = "";
+            document.getElementById("detailHead").style.display = "none";
+            startHb(force ? "DB refresh..." : "Loading map...");
+
+            var q = "/api/portfolio/shape-clusters?lookback_days=" + encodeURIComponent(lookback) +
+                "&max_clusters=0&distance_threshold=" + encodeURIComponent(String(dist)) +
+                "&method=hierarchical&mode=shape&include_overlay=0";
+            if (force) q += "&refresh=1";
+
+            function attempt(n, lastErr) {
+                if (seq !== boardSeq) return Promise.resolve();
+                if (n >= 3) {
+                    stopHb();
+                    var em = lastErr && lastErr.message ? String(lastErr.message) : String(lastErr || "");
+                    st(em.indexOf("timeout") >= 0 ? "Map timeout. Press DB refresh." : ("Map error: " + em));
+                    return Promise.resolve();
+                }
+                if (n > 0) startHb("Map retry " + (n + 1) + "/3...");
+                return fetchJson(q, force ? 60000 : 25000).then(function (r) {
+                    if (seq !== boardSeq) return null;
+                    if (!r.ok) {
+                        return r.json().catch(function () { return {}; }).then(function (body) {
+                            throw new Error(body.detail || ("HTTP " + r.status));
+                        });
+                    }
+                    return r.json();
+                }).then(function (report) {
+                    if (!report || seq !== boardSeq) return;
+                    stopHb();
+                    lastReport = report;
+                    renderBoard(report.clusters || []);
+                    var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
+                    var meta = document.getElementById("metaLine");
+                    if (meta) {
+                        meta.textContent =
+                            "ok=" + (report.n_tickers_ok || 0) + "/" + (report.n_tickers_requested || 0) +
+                            " groups=" + (report.n_clusters || 0) +
+                            " thr~" + simShow + "%" +
+                            " cache=" + (report.cache_source || (report.cache_hit ? "yes" : "live"));
+                    }
+                    st("Map ready — click a cluster");
+                }).catch(function (e) {
+                    return attempt(n + 1, e);
+                });
+            }
+            return attempt(0, null);
+        }
+
+        st("js-1");
+        syncSim();
+        var reloadBtn = document.getElementById("reloadBtn");
+        var lookbackSel = document.getElementById("lookbackSel");
+        var simSlider = document.getElementById("simSlider");
+        if (reloadBtn) reloadBtn.addEventListener("click", function () { loadBoard(true); });
+        if (lookbackSel) lookbackSel.addEventListener("change", function () { loadBoard(false); });
+        if (simSlider) {
+            simSlider.addEventListener("input", syncSim);
+            simSlider.addEventListener("change", function () {
+                syncSim();
+                if (simDebounce) clearTimeout(simDebounce);
+                simDebounce = setTimeout(function () { loadBoard(false); }, 350);
+            });
+        }
+        st("js-2 fetching map");
+        loadBoard(false);
+    })();
+    </script>
+</body>
+</html>
