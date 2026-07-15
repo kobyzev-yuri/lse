@@ -63,33 +63,18 @@
             display: inline-block; width: 12px; height: 3px; border-radius: 1px;
         }
         .method-box {
-            background: #12182a;
-            border: 1px solid #334155;
-            border-radius: 10px;
-            padding: 0.55rem 0.75rem;
-            margin: 0.5rem 0 0.85rem;
-            font-size: 0.8rem;
-            color: #cbd5e1;
-            line-height: 1.4;
+            background: #12182a; border: 1px solid #334155; border-radius: 10px;
+            padding: 0.55rem 0.75rem; margin: 0.5rem 0 0.85rem;
+            font-size: 0.8rem; color: #cbd5e1; line-height: 1.4;
         }
-        .method-box summary {
-            cursor: pointer;
-            color: #7dd3fc;
-            font-weight: 600;
-            list-style: none;
-        }
+        .method-box summary { cursor: pointer; color: #7dd3fc; font-weight: 600; list-style: none; }
         .method-box summary::-webkit-details-marker { display: none; }
         .method-box summary::before { content: "▸ "; color: #64748b; }
         .method-box[open] summary::before { content: "▾ "; }
         .method-box .body { margin-top: 0.5rem; white-space: pre-wrap; color: #94a3b8; font-size: 0.78rem; }
         .method-inline {
-            font-size: 0.75rem;
-            color: #94a3b8;
-            margin: 0 0 0.65rem;
-            line-height: 1.35;
-            padding: 0.45rem 0.6rem;
-            background: #0b1020;
-            border-left: 3px solid #38bdf8;
+            font-size: 0.75rem; color: #94a3b8; margin: 0 0 0.65rem; line-height: 1.35;
+            padding: 0.45rem 0.6rem; background: #0b1020; border-left: 3px solid #38bdf8;
             border-radius: 0 6px 6px 0;
         }
     </style>
@@ -106,7 +91,7 @@
 
     <details class="method-box" id="methodBox">
         <summary>Метод расчёта (Pearson по нормированной форме, не cosine)</summary>
-        <div class="body" id="methodBody">{{ method_ru or 'Метод: close → P′=close/close_first → Pearson (не cosine). Hierarchical d=1−corr.' }}</div>
+        <div class="body" id="methodBody">{{ method_ru or 'P′=close/close_first → Pearson corr. Hierarchical d=1−corr. Пары на карточке — факт. corr, не порог.' }}</div>
     </details>
 
     <div class="controls">
@@ -136,8 +121,7 @@
     </div>
 
     <div id="metaLine"></div>
-    <div id="statusLine">html</div>
-    <script>try{document.getElementById("statusLine").textContent="html-ok";}catch(e0){}</script>
+    <div id="statusLine">boot</div>
     <noscript><p class="muted">JavaScript required</p></noscript>
 
     <div id="clusterBoard"></div>
@@ -152,9 +136,8 @@
             try { if (stEl) stEl.textContent = String(m); } catch (e0) {}
         }
         st("js-0");
-        // Light SSR: clusters only (no spark_closes). Full map/sparks via API.
+        
         var BOOT_REPORT = {{ (boot_report or {}) | tojson }};
-        var METHOD_FALLBACK = "Pearson shape corr; d=1-corr. Pair numbers are measured corr, not the cut.";
 try {
         var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
         var lastReport = null;
@@ -166,28 +149,6 @@ try {
         var liveCtrls = [];
 
         function colorFor(i) { return COLORS[i % COLORS.length]; }
-        function fillMethod(report) {
-            var body = document.getElementById("methodBody");
-            if (!body) return;
-            if (report && report.method_ru && !body.textContent.trim()) {
-                body.textContent = report.method_ru;
-            }
-        }
-        function showChartsMethodNote(selected) {
-            var el = document.getElementById("chartsMethodNote");
-            if (!el) return;
-            var thr = lastReport ? Math.round((1 - Number(lastReport.distance_threshold || 0.12)) * 100) : simPct();
-            var pairs = ((selected && selected.strong_pairs) || []).map(function (p) {
-                return p.a + "–" + p.b + " (" + p.corr + ")";
-            }).join(" · ");
-            el.style.display = "block";
-            el.textContent =
-                "Метрика кластера: Pearson по нормированной форме (P′=close/close_first), не cosine. " +
-                "Порог cut ≈ " + thr + "% (d=1−corr). " +
-                (pairs
-                    ? ("Топ-пары в группе: " + pairs + " — фактические corr, не порог.")
-                    : "Числа пар на карточке — фактические corr, не порог.");
-        }
         function simPct() {
             var el = document.getElementById("simSlider");
             return Number(el && el.value) || 88;
@@ -256,7 +217,6 @@ try {
 
         function applyMapReport(report, dist) {
             lastReport = report;
-            fillMethod(report);
             renderBoard(report.clusters || []);
             var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
             var meta = document.getElementById("metaLine");
@@ -265,7 +225,6 @@ try {
                     "ok=" + (report.n_tickers_ok || 0) + "/" + (report.n_tickers_requested || 0) +
                     " groups=" + (report.n_clusters || 0) +
                     " thr~" + simShow + "%" +
-                    " metric=Pearson(shape)" +
                     " cache=" + (report.cache_source || (report.cache_hit ? "yes" : "live"));
             }
         }
@@ -440,26 +399,39 @@ try {
             return { ticker: t, closes: closes, source: "map_embed" };
         }
 
-        function mergeSparks(sc) {
-            if (!lastReport) lastReport = { spark_closes: {}, clusters: [] };
-            if (!lastReport.spark_closes) lastReport.spark_closes = {};
-            Object.keys(sc || {}).forEach(function (t) {
-                lastReport.spark_closes[t] = sc[t];
+        function selectCluster(cid) {
+            currentClusterId = cid;
+            var cseq = ++chartsSeq;
+            markActive();
+            var selected = null;
+            ((lastReport && lastReport.clusters) || []).forEach(function (c) {
+                if (Number(c.cluster_id) === cid) selected = c;
             });
-        }
+            if (!selected) { st("cluster not found"); return; }
 
-        function paintClusterCharts(cid, selected, cseq) {
             var head = document.getElementById("detailHead");
             var root = document.getElementById("chartsRoot");
             var members = (selected.tickers || []).slice();
+            // Medoid first \u2014 easier to read large clusters
             var med = selected.medoid;
             if (med) {
                 members = [med].concat(members.filter(function (t) { return t !== med; }));
             }
+            // Embed path is free/local \u2014 show all cluster members (was 12 + flaky /charts).
             var show = members.slice(0, 40);
             head.style.display = "block";
             head.textContent = "Charts: " + (selected.label || "") + " | " + members.join(", ");
-            showChartsMethodNote(selected);
+            var cmn = document.getElementById("chartsMethodNote");
+            if (cmn) {
+                var thr = lastReport ? Math.round((1 - Number(lastReport.distance_threshold || 0.12)) * 100) : simPct();
+                var pairs = ((selected.strong_pairs || []).map(function (p) {
+                    return p.a + "-" + p.b + " (" + p.corr + ")";
+                })).join(" | ");
+                cmn.style.display = "block";
+                cmn.textContent =
+                    "Pearson по нормированной форме (не cosine). Порог cut ~" + thr + "%. " +
+                    (pairs ? ("Топ-пары: " + pairs + " — факт. corr, не порог.") : "");
+            }
             root.innerHTML = "";
             var overlayHost = document.createElement("div");
             overlayHost.id = "overlayHost";
@@ -467,6 +439,7 @@ try {
 
             var overlaySeries = [];
             var doneN = 0;
+            var fromEmbed = 0;
             var miss = [];
 
             function paintOverlay() {
@@ -479,57 +452,37 @@ try {
                 }
             }
 
+            // Map embeds only \u2014 never block overlay/dailies on /charts (body hang).
+            // colorIndex = position in show \u2192 same color on daily chart and overlay.
             show.forEach(function (t, idx) {
                 var it = sparkItem(t);
                 if (it) {
                     appendChartItem(root, it, overlaySeries, idx);
                     doneN += 1;
+                    fromEmbed += 1;
                 } else {
                     miss.push(t);
                     var col = colorFor(idx);
                     var sec = document.createElement("div");
                     sec.className = "chart-section";
                     sec.innerHTML = "<h2><span class='swatch' style='background:" + col + "'></span>" + t +
-                        "</h2><p class='muted'>no spark yet</p>";
+                        "</h2><p class='muted'>no spark in map</p>";
                     root.appendChild(sec);
                 }
             });
             paintOverlay();
-            var bits = "charts " + doneN + "/" + show.length;
+            if (members.length > show.length) {
+                var more = document.createElement("p");
+                more.className = "muted";
+                more.textContent = "Showing first " + show.length + " of " + members.length;
+                root.appendChild(more);
+            }
+            var bits = "charts done: " + doneN + "/" + show.length;
+            if (fromEmbed) bits += " embed=" + fromEmbed;
             if (miss.length) bits += " miss=" + miss.length;
             if (overlaySeries.length >= 2) bits += " overlay=" + Math.min(12, overlaySeries.length);
+            else bits += " overlay=0";
             st(bits);
-            return { show: show, miss: miss };
-        }
-
-        function selectCluster(cid) {
-            currentClusterId = cid;
-            var cseq = ++chartsSeq;
-            markActive();
-            var selected = null;
-            ((lastReport && lastReport.clusters) || []).forEach(function (c) {
-                if (Number(c.cluster_id) === cid) selected = c;
-            });
-            if (!selected) { st("cluster not found"); return; }
-
-            var painted = paintClusterCharts(cid, selected, cseq);
-            if (!painted.miss.length) return;
-
-            // SSR light map has no sparks — fetch only missing tickers (small JSON).
-            var lookEl = document.getElementById("lookbackSel");
-            var lookback = lookEl ? lookEl.value : "126";
-            var url = "/api/portfolio/shape-clusters/sparks?lookback_days=" + encodeURIComponent(lookback) +
-                "&tickers=" + encodeURIComponent(painted.miss.slice(0, 40).join(","));
-            st("sparks fetch " + painted.miss.length + "...");
-            fetchJson(url, 20000, true).then(function (pack) {
-                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
-                if (!pack.ok) throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
-                mergeSparks((pack.body && pack.body.spark_closes) || {});
-                paintClusterCharts(cid, selected, cseq);
-            }).catch(function (e) {
-                if (cseq !== chartsSeq) return;
-                st("sparks fail: " + (e && e.message ? e.message : String(e)));
-            });
         }
 
 
@@ -567,8 +520,8 @@ try {
             // Stale responses are ignored via boardSeq.
             document.getElementById("chartsRoot").innerHTML = "";
             document.getElementById("detailHead").style.display = "none";
-            var cmn = document.getElementById("chartsMethodNote");
-            if (cmn) { cmn.style.display = "none"; cmn.textContent = ""; }
+            var cmn0 = document.getElementById("chartsMethodNote");
+            if (cmn0) { cmn0.style.display = "none"; cmn0.textContent = ""; }
 
             var qCached = mapQuery(lookback, dist, false);
             var qLive = mapQuery(lookback, dist, true);
@@ -673,7 +626,6 @@ try {
 
         st("js-1");
         syncSim();
-        fillMethod(BOOT_REPORT);
         var reloadBtn = document.getElementById("reloadBtn");
         var lookbackSel = document.getElementById("lookbackSel");
         var daysSel = document.getElementById("daysSel");
@@ -694,11 +646,10 @@ try {
             });
         }
                 st("js-2");
-        fillMethod(BOOT_REPORT);
         if (mapUsableBoot(BOOT_REPORT)) {
             applyMapReport(BOOT_REPORT, distFromSim(simPct()));
-            st("Map ready (light SSR) - loading sparks...");
-            // Upgrade sparks/cache in background; board already visible.
+            st("Map ready (boot) - click a cluster");
+            // optional silent refresh — never block UI; 1 attempt, no retry spam
             softRefreshMap();
         } else {
             st("js-2 fetching map");

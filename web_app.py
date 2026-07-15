@@ -3821,51 +3821,39 @@ async def portfolio_shape_clusters_page(request: Request):
     """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
 
     def _boot() -> Dict[str, Any]:
-        # Light SSR: clusters from cache only, NO spark_closes (~8KB vs ~24KB).
-        # Sparks arrive via API / on cluster click — avoids stuck "starting" while
-        # browser downloads a huge inline JSON before any script runs.
+        # Embed map JSON in HTML — client secondary fetch often hangs (~60KB body).
         try:
             from report_generator import get_engine
-            from services.portfolio_shape_clusters import (
-                build_shape_cluster_page_payload,
-                shape_cluster_method_ru,
-            )
+            from services.portfolio_shape_clusters import build_shape_cluster_page_payload
 
-            rep = build_shape_cluster_page_payload(
+            return build_shape_cluster_page_payload(
                 get_engine(),
                 lookback_trading_days=126,
                 max_clusters=0,
                 distance_threshold=0.12,
                 force_refresh=False,
-                cache_only=True,
             )
-            if not isinstance(rep, dict):
-                rep = {}
-            # Drop sparks from HTML embed (largest payload).
-            light = dict(rep)
-            light["spark_closes"] = {}
-            light["ssr_light"] = True
-            if not (light.get("method_ru") or "").strip():
-                light["method_ru"] = shape_cluster_method_ru()
-            return light
         except Exception as e:
-            logger.warning("shape-clusters light boot failed: %s", e)
-            try:
-                from services.portfolio_shape_clusters import shape_cluster_method_ru
-
-                return {"method_ru": shape_cluster_method_ru(), "clusters": [], "spark_closes": {}}
-            except Exception:
-                return {"clusters": [], "spark_closes": {}}
+            logger.warning("shape-clusters page boot payload failed: %s", e)
+            return {}
 
     boot = await asyncio.to_thread(_boot)
+    # Docs text is HTML-only — never put method_ru into BOOT_REPORT JSON (bloats
+    # inline script and froze this client on "boot"/"starting").
+    method_ru = ""
+    try:
+        from services.portfolio_shape_clusters import shape_cluster_method_ru
+
+        method_ru = shape_cluster_method_ru()
+        if isinstance(boot, dict):
+            boot = dict(boot)
+            boot.pop("method_ru", None)
+    except Exception:
+        pass
     return HTMLResponse(
         render_template(
             "portfolio_shape_clusters.html",
-            {
-                "request": request,
-                "boot_report": boot,
-                "method_ru": (boot or {}).get("method_ru") or "",
-            },
+            {"request": request, "boot_report": boot, "method_ru": method_ru},
         ),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
@@ -3877,15 +3865,33 @@ async def portfolio_shape_compare_page(request: Request):
     from services.shape_cluster_universe import shape_cluster_tickers
 
     tickers = shape_cluster_tickers()
-    # Do not embed spark series in HTML — browser stalled on large inline JSON.
-    # Client loads /api/portfolio/shape-clusters/sparks for selected tickers only.
+
+    def _boot_sparks() -> Dict[str, Any]:
+        # Prefer cached map sparks so HTML is self-contained (no 2nd fetch — client hangs).
+        try:
+            from report_generator import get_engine
+            from services.portfolio_shape_clusters import build_shape_cluster_page_payload
+
+            rep = build_shape_cluster_page_payload(
+                get_engine(),
+                lookback_trading_days=126,
+                max_clusters=0,
+                distance_threshold=0.12,
+                force_refresh=False,
+            )
+            sc = rep.get("spark_closes") if isinstance(rep, dict) else None
+            return sc if isinstance(sc, dict) else {}
+        except Exception:
+            return {}
+
+    spark_closes = await asyncio.to_thread(_boot_sparks)
     return HTMLResponse(
         render_template(
             "portfolio_shape_compare.html",
             {
                 "request": request,
                 "shape_tickers": tickers,
-                "spark_closes": {},
+                "spark_closes": spark_closes,
             },
         ),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},

@@ -22,11 +22,6 @@
         .ov-legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.65rem; margin-top: 0.45rem; }
         .ov-legend span { font-size: 0.72rem; color: #cbd5e1; display: inline-flex; align-items: center; gap: 0.3rem; }
         .ov-legend i { display: inline-block; width: 12px; height: 3px; border-radius: 1px; }
-        .pair { color: #94a3b8; font-size: 0.78rem; margin-top: 0.45rem; }
-        .method-inline {
-            font-size: 0.75rem; color: #94a3b8; margin: 0 0 0.65rem; line-height: 1.35;
-            padding: 0.45rem 0.6rem; background: #0b1020; border-left: 3px solid #38bdf8; border-radius: 0 6px 6px 0;
-        }
         .tabs { display: flex; gap: 0.75rem; margin: 0.35rem 0 0.85rem; font-size: 0.9rem; }
         .tabs a { text-decoration: none; color: #94a3b8; border-bottom: 2px solid transparent; padding-bottom: 0.15rem; }
         .tabs a.active { color: #7dd3fc; border-bottom-color: #38bdf8; font-weight: 650; }
@@ -40,8 +35,7 @@
         <a href="/portfolio/shape-clusters">Кластеры</a>
         <a class="active" href="/portfolio/shape-compare">На глаз</a>
     </div>
-    <p class="muted">2–3 тикера → нормированный оверлей + Pearson. Ряды подгружаются по выбранным тикерам (без тяжёлого SSR).</p>
-    <div class="method-inline">Метрика как у кластеров: P′=close/close_first, Pearson (не cosine). d=1−corr.</div>
+    <p class="muted">2–3 тикера из списка анализа → нормированный оверлей. Ряды уже в странице (без второго тяжёлого fetch).</p>
 
     <div class="controls">
         <label>Окно
@@ -54,8 +48,7 @@
         <button type="button" id="reloadBtn">Обновить выбранные</button>
     </div>
     <div id="metaLine"></div>
-    <div id="statusLine">html</div>
-    <script>try{document.getElementById("statusLine").textContent="html-ok";}catch(e0){}</script>
+    <div id="statusLine">boot</div>
 
     <div class="compare-row">
         <label>A
@@ -84,14 +77,15 @@
     <script>
     (function () {
         var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
-        var sparkCloses = {};
-        var lastPairs = [];
+        var sparkCloses = {{ (spark_closes or {}) | tojson }};
         var stEl = document.getElementById("statusLine");
         var metaEl = document.getElementById("metaLine");
         function st(m) { try { if (stEl) stEl.textContent = String(m); } catch (e0) {} }
         function colorFor(i) { return COLORS[i % COLORS.length]; }
-        st("js-0 ready - pick 2-3");
-        if (metaEl) metaEl.textContent = "sparks load on demand (no SSR embed)";
+        st("js-0 sparks=" + Object.keys(sparkCloses || {}).length);
+        if (metaEl) {
+            metaEl.textContent = "boot sparks=" + Object.keys(sparkCloses || {}).length + " (embedded)";
+        }
 
         function fetchJson(url, ms) {
             ms = ms || 20000;
@@ -167,42 +161,6 @@
             return out;
         }
 
-        function pearson(a, b) {
-            var xs = [], ys = [];
-            var n = Math.min((a || []).length, (b || []).length);
-            for (var i = 0; i < n; i++) {
-                var x = a[i], y = b[i];
-                if (x == null || y == null || !isFinite(x) || !isFinite(y)) continue;
-                xs.push(x); ys.push(y);
-            }
-            if (xs.length < 5) return null;
-            var mx = 0, my = 0;
-            for (var j = 0; j < xs.length; j++) { mx += xs[j]; my += ys[j]; }
-            mx /= xs.length; my /= ys.length;
-            var num = 0, dx = 0, dy = 0;
-            for (var k = 0; k < xs.length; k++) {
-                var vx = xs[k] - mx, vy = ys[k] - my;
-                num += vx * vy; dx += vx * vx; dy += vy * vy;
-            }
-            if (!(dx > 0) || !(dy > 0)) return null;
-            return num / Math.sqrt(dx * dy);
-        }
-
-        function pairLine(series) {
-            var parts = [];
-            for (var i = 0; i < series.length; i++) {
-                for (var j = i + 1; j < series.length; j++) {
-                    var c = pearson(series[i].values, series[j].values);
-                    if (c == null) continue;
-                    var d = 1 - c;
-                    parts.push(series[i].ticker + "-" + series[j].ticker +
-                        " (corr " + c.toFixed(3) + ", d " + d.toFixed(3) + ")");
-                }
-            }
-            lastPairs = parts;
-            return parts.join(" | ");
-        }
-
         function picked() {
             var picks = ["cmpA", "cmpB", "cmpC"].map(function (id) {
                 var el = document.getElementById(id);
@@ -221,15 +179,7 @@
             if (!root) return;
             var picks = picked();
             if (picks.length < 2) {
-                root.innerHTML = "<p class='muted'>Выберите минимум 2 тикера.</p>";
-                return;
-            }
-            var need = picks.filter(function (t) {
-                return !(sparkCloses[t] && sparkCloses[t].length);
-            });
-            if (need.length) {
-                root.innerHTML = "<p class='muted'>Загрузка рядов: " + need.join(", ") + "…</p>";
-                refreshSelected(true);
+                root.innerHTML = "<p class='muted'>Select at least 2 tickers.</p>";
                 return;
             }
             var series = [], miss = [];
@@ -241,21 +191,19 @@
                 series.push({ ticker: t, values: vals, color: colorFor(idx) });
             });
             if (series.length < 2) {
-                root.innerHTML = "<p class='muted'>Нет рядов: " + (miss.join(", ") || "-") + "</p>";
+                root.innerHTML = "<p class='muted'>No series for: " + (miss.join(", ") || "-") +
+                    ". Press refresh for selected.</p>";
                 return;
             }
-            var pairs = pairLine(series);
             root.innerHTML = "<div class='chart-section'><h2>Compare (norm) · " +
                 series.map(function (s) { return s.ticker; }).join(" · ") + "</h2>" +
                 sparkSvg(series) + legendHtml(series) +
-                (pairs ? "<div class='pair'>" + pairs + "</div>" : "") +
                 (miss.length ? "<p class='muted'>missing: " + miss.join(", ") + "</p>" : "") +
                 "</div>";
-            st("overlay " + series.map(function (s) { return s.ticker; }).join("/") +
-                (pairs ? " | Pearson ok" : ""));
+            st("overlay " + series.map(function (s) { return s.ticker; }).join("/"));
         }
 
-        function refreshSelected(autoPaint) {
+        function refreshSelected() {
             var picks = picked();
             var lookEl = document.getElementById("lookbackSel");
             var lookback = lookEl ? lookEl.value : "126";
@@ -266,25 +214,26 @@
             var url = "/api/portfolio/shape-clusters/sparks?lookback_days=" + encodeURIComponent(lookback) +
                 "&tickers=" + encodeURIComponent(picks.join(","));
             st("refresh " + picks.join(",") + "...");
-            fetchJson(url, 20000).then(function (pack) {
+            fetchJson(url, 15000).then(function (pack) {
                 if (!pack.ok) throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
                 var sc = (pack.body && pack.body.spark_closes) || {};
                 Object.keys(sc).forEach(function (t) { sparkCloses[t] = sc[t]; });
                 if (metaEl) {
-                    metaEl.textContent = "cached_sparks=" + Object.keys(sparkCloses).length +
-                        " last=" + Object.keys(sc).join(",");
+                    metaEl.textContent = "sparks=" + Object.keys(sparkCloses).length +
+                        " refreshed=" + Object.keys(sc).length;
                 }
                 st("refreshed " + Object.keys(sc).join(","));
-                if (autoPaint || picks.length >= 2) paintOverlay();
+                paintOverlay();
             }).catch(function (e) {
-                st("refresh fail: " + (e && e.message ? e.message : String(e)));
+                st("refresh fail: " + (e && e.message ? e.message : String(e)) + " (using embedded)");
+                paintOverlay();
             });
         }
 
         var reloadBtn = document.getElementById("reloadBtn");
         var cmpBtn = document.getElementById("cmpBtn");
         var cmpClearBtn = document.getElementById("cmpClearBtn");
-        if (reloadBtn) reloadBtn.addEventListener("click", function () { refreshSelected(true); });
+        if (reloadBtn) reloadBtn.addEventListener("click", refreshSelected);
         if (cmpBtn) cmpBtn.addEventListener("click", paintOverlay);
         if (cmpClearBtn) {
             cmpClearBtn.addEventListener("click", function () {
@@ -297,6 +246,7 @@
                 st("cleared");
             });
         }
+        st("ready sparks=" + Object.keys(sparkCloses || {}).length + " - pick 2-3");
     })();
     </script>
 </body>
