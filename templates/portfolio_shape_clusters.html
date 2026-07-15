@@ -285,38 +285,45 @@
 
             head.style.display = 'block';
             head.textContent = 'Графики · ' + (selected.label || '') + ' · ' + (selected.tickers || []).join(', ');
-            statusEl.textContent = 'Оверлей формы…';
             head.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-            var ovSec = document.createElement('div');
-            ovSec.className = 'chart-section overlay';
-            var ovH = document.createElement('h2');
-            ovH.textContent = 'Оверлей формы';
-            var ovCv = document.createElement('canvas');
-            ovSec.appendChild(ovH);
-            ovSec.appendChild(ovCv);
-            root.appendChild(ovSec);
+            var members = selected.tickers || [];
+            var isSolo = members.length <= 1;
 
-            try {
-                var qOv = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
-                    '&max_clusters=' + encodeURIComponent(maxCl) +
-                    '&method=hierarchical&mode=shape&include_overlay=1' +
-                    '&cluster_id=' + encodeURIComponent(clusterId);
-                var rOv = await fetchJsonTimeout(qOv, 25000);
-                if (rOv.ok) {
-                    var withOv = await rOv.json();
-                    var overlay = withOv.overlay || { labels: [], series: [] };
-                    if ((overlay.series || []).length) {
-                        chartInstances.push(buildOverlayChart(ovCv, overlay));
-                    } else {
-                        ovH.textContent = 'Оверлей формы (нет overlapping ряда)';
+            // Overlay only for multi-ticker groups (solo would duplicate the daily chart).
+            if (!isSolo) {
+                statusEl.textContent = 'Оверлей формы…';
+                var ovSec = document.createElement('div');
+                ovSec.className = 'chart-section overlay';
+                var ovH = document.createElement('h2');
+                ovH.textContent = 'Оверлей формы';
+                var ovCv = document.createElement('canvas');
+                ovSec.appendChild(ovH);
+                ovSec.appendChild(ovCv);
+                root.appendChild(ovSec);
+
+                try {
+                    var qOv = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
+                        '&max_clusters=' + encodeURIComponent(maxCl) +
+                        '&method=hierarchical&mode=shape&include_overlay=1' +
+                        '&cluster_id=' + encodeURIComponent(clusterId);
+                    var rOv = await fetchJsonTimeout(qOv, 25000);
+                    if (rOv.ok) {
+                        var withOv = await rOv.json();
+                        var overlay = withOv.overlay || { labels: [], series: [] };
+                        if ((overlay.series || []).length) {
+                            chartInstances.push(buildOverlayChart(ovCv, overlay));
+                        } else {
+                            ovH.textContent = 'Оверлей формы (нет overlapping ряда)';
+                        }
                     }
+                } catch (e) {
+                    ovH.textContent = 'Оверлей не загрузился — дневные ниже';
                 }
-            } catch (e) {
-                ovH.textContent = 'Оверлей не загрузился — дневные ниже';
             }
 
-            await loadPriceChartsBatched(selected.tickers || [], days);
+            statusEl.textContent = isSolo ? 'Дневной график…' : 'Дневные графики…';
+            await loadPriceChartsBatched(members, days);
         }
 
         async function loadBoard() {
