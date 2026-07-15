@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Похожесть графиков · кластеры</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e2e8f0; margin: 0; padding: 1rem; max-width: 1100px; margin-left: auto; margin-right: auto; }
         a { color: #7dd3fc; }
@@ -50,7 +49,7 @@
 <body>
 {% include "partials/site_nav_standalone.html" %}
     <h1>Похожесть графиков · кластеры</h1>
-    <p class="muted">Сначала рисуем <strong>группы</strong> (форма 6м-цены). Клик по карточке кластера → оверлей нормированных кривых и дневные графики членов группы.</p>
+    <p class="muted">Сначала карта <strong>групп</strong>. Клик по карточке → оверлей и дневные графики. Chart.js подгружается только при открытии группы (карта от CDN не зависит).</p>
 
     <div class="controls">
         <label>Lookback
@@ -76,11 +75,12 @@
             </select>
         </label>
         <button type="button" id="reloadBtn">Пересчитать карту</button>
+        <button type="button" id="retryBtn">Повторить</button>
     </div>
 
     <div id="metaLine"></div>
     <div id="clusterBoard"></div>
-    <div id="statusLine">Загрузка карты кластеров…</div>
+    <div id="statusLine">Карта…</div>
     <h2 id="detailHead"></h2>
     <div id="chartsRoot"></div>
 
@@ -88,6 +88,8 @@
         var chartInstances = [];
         var currentClusterId = null;
         var lastReport = null;
+        var mapHeartbeat = null;
+        var chartJsPromise = null;
         var COLORS = ['#38bdf8','#4ade80','#fbbf24','#f472b6','#a78bfa','#fb923c','#22d3ee','#e879f9','#86efac','#f87171','#c084fc','#2dd4bf'];
 
         function destroyCharts() {
@@ -97,9 +99,42 @@
 
         function colorFor(i) { return COLORS[i % COLORS.length]; }
 
+        function setStatus(msg) {
+            var el = document.getElementById('statusLine');
+            if (el) el.textContent = msg;
+        }
+
+        function stopHeartbeat() {
+            if (mapHeartbeat) { clearInterval(mapHeartbeat); mapHeartbeat = null; }
+        }
+
+        function startHeartbeat(base) {
+            stopHeartbeat();
+            var t0 = Date.now();
+            setStatus(base + ' 0с');
+            mapHeartbeat = setInterval(function() {
+                var s = Math.round((Date.now() - t0) / 1000);
+                setStatus(base + ' ' + s + 'с');
+            }, 500);
+        }
+
+        function ensureChartJs() {
+            if (window.Chart) return Promise.resolve();
+            if (chartJsPromise) return chartJsPromise;
+            chartJsPromise = new Promise(function(resolve, reject) {
+                var s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+                s.async = true;
+                s.onload = function() { resolve(); };
+                s.onerror = function() { reject(new Error('Chart.js CDN недоступен')); };
+                document.head.appendChild(s);
+            });
+            return chartJsPromise;
+        }
+
         async function fetchJsonTimeout(url, ms) {
             var ctrl = new AbortController();
-            var timer = setTimeout(function() { ctrl.abort(); }, ms || 20000);
+            var timer = setTimeout(function() { ctrl.abort(); }, ms || 12000);
             try {
                 var r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
                 clearTimeout(timer);
@@ -220,21 +255,20 @@
         }
 
         async function loadPriceChartsBatched(tickers, days) {
-            var statusEl = document.getElementById('statusLine');
             var root = document.getElementById('chartsRoot');
             var batchSize = 6;
             var loaded = 0;
             for (var i = 0; i < tickers.length; i += batchSize) {
                 var batch = tickers.slice(i, i + batchSize);
-                statusEl.textContent = 'Дневные ' + (loaded + 1) + '–' +
-                    Math.min(loaded + batch.length, tickers.length) + ' / ' + tickers.length;
+                setStatus('Дневные ' + (loaded + 1) + '–' +
+                    Math.min(loaded + batch.length, tickers.length) + ' / ' + tickers.length);
                 var cr = await fetchJsonTimeout(
                     '/api/portfolio/shape-clusters/charts?days=' + encodeURIComponent(days) +
                     '&tickers=' + encodeURIComponent(batch.join(',')),
-                    30000
+                    25000
                 );
                 if (!cr.ok) {
-                    statusEl.textContent += ' · ошибка ' + cr.status;
+                    setStatus('Ошибка графиков ' + cr.status);
                     return;
                 }
                 var pack = await cr.json();
@@ -258,13 +292,12 @@
                 });
                 loaded += batch.length;
             }
-            statusEl.textContent = 'Готово · ' + tickers.length + ' графиков';
+            setStatus('Готово · ' + tickers.length + ' графиков');
         }
 
         async function selectCluster(clusterId) {
             currentClusterId = clusterId;
             markActiveCard();
-            var statusEl = document.getElementById('statusLine');
             var root = document.getElementById('chartsRoot');
             var head = document.getElementById('detailHead');
             var lookback = document.getElementById('lookbackSel').value;
@@ -279,7 +312,7 @@
                 if (Number(c.cluster_id) === Number(clusterId)) selected = c;
             });
             if (!selected) {
-                statusEl.textContent = 'Кластер не найден';
+                setStatus('Кластер не найден');
                 return;
             }
 
@@ -287,12 +320,18 @@
             head.textContent = 'Графики · ' + (selected.label || '') + ' · ' + (selected.tickers || []).join(', ');
             head.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
+            try {
+                await ensureChartJs();
+            } catch (e) {
+                setStatus('Не удалось загрузить Chart.js (CDN). Карта есть, графики нет.');
+                return;
+            }
+
             var members = selected.tickers || [];
             var isSolo = members.length <= 1;
 
-            // Overlay only for multi-ticker groups (solo would duplicate the daily chart).
             if (!isSolo) {
-                statusEl.textContent = 'Оверлей формы…';
+                setStatus('Оверлей формы…');
                 var ovSec = document.createElement('div');
                 ovSec.className = 'chart-section overlay';
                 var ovH = document.createElement('h2');
@@ -307,7 +346,7 @@
                         '&max_clusters=' + encodeURIComponent(maxCl) +
                         '&method=hierarchical&mode=shape&include_overlay=1' +
                         '&cluster_id=' + encodeURIComponent(clusterId);
-                    var rOv = await fetchJsonTimeout(qOv, 25000);
+                    var rOv = await fetchJsonTimeout(qOv, 20000);
                     if (rOv.ok) {
                         var withOv = await rOv.json();
                         var overlay = withOv.overlay || { labels: [], series: [] };
@@ -322,12 +361,11 @@
                 }
             }
 
-            statusEl.textContent = isSolo ? 'Дневной график…' : 'Дневные графики…';
+            setStatus(isSolo ? 'Дневной график…' : 'Дневные графики…');
             await loadPriceChartsBatched(members, days);
         }
 
-        async function loadBoard() {
-            var statusEl = document.getElementById('statusLine');
+        async function loadBoard(forceRefresh) {
             var head = document.getElementById('detailHead');
             var root = document.getElementById('chartsRoot');
             var lookback = document.getElementById('lookbackSel').value;
@@ -336,41 +374,47 @@
             destroyCharts();
             root.innerHTML = '';
             head.style.display = 'none';
-            statusEl.textContent = 'Рисуем карту кластеров…';
+            document.getElementById('clusterBoard').innerHTML = '';
+            startHeartbeat('Рисуем карту кластеров…');
 
             try {
                 var q = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
                     '&max_clusters=' + encodeURIComponent(maxCl) +
                     '&method=hierarchical&mode=shape&include_overlay=0';
-                var r = await fetchJsonTimeout(q, 25000);
+                if (forceRefresh) q += '&refresh=1';
+                var r = await fetchJsonTimeout(q, 12000);
                 if (!r.ok) {
+                    stopHeartbeat();
                     var err = await r.json().catch(function() { return {}; });
-                    statusEl.textContent = err.detail || r.statusText;
+                    setStatus(err.detail || ('HTTP ' + r.status));
                     return;
                 }
                 var report = await r.json();
+                stopHeartbeat();
                 lastReport = report;
                 renderBoard(report.clusters || []);
                 document.getElementById('metaLine').textContent =
                     'ok=' + (report.n_tickers_ok || 0) + '/' + (report.n_tickers_requested || 0) +
                     ' · clusters=' + (report.n_clusters || 0) +
                     ' · method=' + (report.method || '') +
-                    ' · max≈' + (report.max_clusters || maxCl) +
-                    (report.cache_hit ? ' · cache' : '') +
-                    ' · кликните карточку группы';
-                statusEl.textContent = 'Карта готова — выберите кластер';
+                    ' · cache=' + (report.cache_source || (report.cache_hit ? 'yes' : 'live')) +
+                    ' · кликните карточку';
+                setStatus('Карта готова — выберите кластер');
             } catch (e) {
+                stopHeartbeat();
                 var msg = (e && e.name === 'AbortError')
-                    ? 'Таймаут карты кластеров. Обновите страницу.'
-                    : ('Ошибка: ' + (e.message || String(e)));
-                statusEl.textContent = msg;
+                    ? 'Таймаут карты (12с). Нажмите «Повторить».'
+                    : ('Ошибка карты: ' + (e.message || String(e)));
+                setStatus(msg);
             }
         }
 
-        document.getElementById('reloadBtn').addEventListener('click', loadBoard);
-        document.getElementById('lookbackSel').addEventListener('change', loadBoard);
-        document.getElementById('maxClustersSel').addEventListener('change', loadBoard);
-        loadBoard();
+        document.getElementById('reloadBtn').addEventListener('click', function() { loadBoard(true); });
+        document.getElementById('retryBtn').addEventListener('click', function() { loadBoard(false); });
+        document.getElementById('lookbackSel').addEventListener('change', function() { loadBoard(false); });
+        document.getElementById('maxClustersSel').addEventListener('change', function() { loadBoard(false); });
+        // Карта без Chart.js — сразу
+        loadBoard(false);
     </script>
 </body>
 </html>

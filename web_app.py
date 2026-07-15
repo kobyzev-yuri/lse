@@ -3696,8 +3696,9 @@ async def api_portfolio_shape_clusters(
     include_overlay: int = 0,
     max_clusters: int = 8,
     distance_threshold: float = 0.12,
+    refresh: int = 0,
 ):
-    """Карта кластеров формы. По умолчанию hierarchical maxclust; overlay только по клику."""
+    """Карта кластеров формы. Disk/memory cache для быстрой первой отрисовки карты."""
 
     def _run() -> Dict[str, Any]:
         from report_generator import get_engine
@@ -3713,8 +3714,8 @@ async def api_portfolio_shape_clusters(
             include_overlay=int(include_overlay or 0) == 1,
             max_clusters=min(max(2, int(max_clusters)), 20),
             distance_threshold=min(max(0.02, float(distance_threshold)), 1.0),
-        )
-    try:
+            force_refresh=int(refresh or 0) == 1,
+        )    try:
         payload = await asyncio.to_thread(_run)
         return JSONResponse(content=_api_json_body(payload))
     except Exception as e:

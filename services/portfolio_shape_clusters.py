@@ -7,8 +7,10 @@ Later modes (log-ret, sector, earnings) can plug in as `mode=`.
 """
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -319,7 +321,15 @@ def normalized_overlay_payload(norm: pd.DataFrame, tickers: Sequence[str]) -> Di
 
 
 _CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
-_CACHE_TTL_SEC = 90.0
+_CACHE_TTL_SEC = 300.0
+
+
+def default_shape_clusters_path(project_root: Path | None = None) -> Path:
+    root = project_root or Path(__file__).resolve().parents[1]
+    app = Path("/app/logs/ml/ml_data_quality/last_portfolio_shape_clusters.json")
+    if app.parent.exists() or Path("/app/logs").exists():
+        return app
+    return root / "local" / "logs" / "ml_data_quality" / "last_portfolio_shape_clusters.json"
 
 
 def _cache_get(key: str) -> Optional[Dict[str, Any]]:
@@ -340,6 +350,24 @@ def _cache_put(key: str, payload: Dict[str, Any]) -> None:
     _CACHE[key] = (time.time(), payload)
 
 
+def _disk_load(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        if not path.is_file():
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else None
+    except Exception:
+        return None
+
+
+def _disk_save(path: Path, payload: Dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def build_shape_cluster_page_payload(
     engine,
     *,
@@ -351,16 +379,37 @@ def build_shape_cluster_page_payload(
     include_overlay: bool = False,
     max_clusters: int = 8,
     distance_threshold: float = 0.12,
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
     from services.shape_cluster_universe import shape_cluster_tickers
 
     tickers = shape_cluster_tickers()
     cache_key = f"{mode}|{method}|{lookback_trading_days}|{corr_min:.4f}|{max_clusters}|{distance_threshold:.4f}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        report = dict(cached)
-        report["cache_hit"] = True
-    else:
+    disk_path = default_shape_clusters_path()
+    report: Optional[Dict[str, Any]] = None
+
+    if not force_refresh:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            report = dict(cached)
+            report["cache_hit"] = True
+            report["cache_source"] = "memory"
+        else:
+            # Prefer disk for default hierarchical map (survives worker restart).
+            if (
+                method == "hierarchical"
+                and int(lookback_trading_days) == 126
+                and int(max_clusters) == 8
+            ):
+                disk = _disk_load(disk_path)
+                if disk and disk.get("cache_key") == cache_key and isinstance(disk.get("clusters"), list):
+                    report = dict(disk)
+                    report.pop("cache_key", None)
+                    report["cache_hit"] = True
+                    report["cache_source"] = "disk"
+                    _cache_put(cache_key, {k: v for k, v in report.items() if k not in ("cache_hit", "cache_source")})
+
+    if report is None:
         report = build_shape_clusters(
             engine,
             tickers,
@@ -372,8 +421,12 @@ def build_shape_cluster_page_payload(
             distance_threshold=distance_threshold,
         )
         _cache_put(cache_key, report)
+        to_disk = dict(report)
+        to_disk["cache_key"] = cache_key
+        _disk_save(disk_path, to_disk)
         report = dict(report)
         report["cache_hit"] = False
+        report["cache_source"] = "live"
 
     clusters = report.get("clusters") or []
     selected = None
