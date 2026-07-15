@@ -1889,6 +1889,8 @@ def get_decision_5m(
     ticker: str,
     days: int = None,
     use_llm_news: bool = False,
+    *,
+    heavy_aux: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """
     Решение по 5m для короткой игры: 5m-свечи + новости из KB за тот же период.
@@ -1899,6 +1901,8 @@ def get_decision_5m(
 
     use_llm_news: при True и USE_LLM_NEWS — запрос к LLM о свежих новостях (дополняет KB).
     LLM не ищет в интернете; breaking news должны быть в KB (cron: Investing.com News и т.д.).
+    heavy_aux: при False пропускает тяжёлые доп. блоки (multiday ridge ~400д) —
+        для веб-карточек мониторинга, чтобы не ждать минутами на каждый тикер.
 
     Returns:
         dict: decision, reasoning, price, rsi_5m, volatility_5m_pct, momentum_2h_pct,
@@ -2606,6 +2610,11 @@ def get_decision_5m(
     try:
         mlr_on = (_gcv("GAME_5M_MULTIDAY_LR_REG_ENABLED", "false") or "false").strip().lower() in ("1", "true", "yes")
     except Exception:
+        mlr_on = False
+    if mlr_on and not heavy_aux:
+        # Веб-карточки: ridge на ~400д daily на каждый тикер даёт десятки секунд на карту.
+        out["multiday_lr_forecast_unavailable"] = True
+        out["multiday_lr_forecast_error"] = "skipped_for_web_cards"
         mlr_on = False
     if mlr_on:
         try:

@@ -2992,25 +2992,61 @@ async def get_game5m(ticker: str = None, limit: int = 20):
 
 
 _GAME5M_CARDS_CACHE: Dict[str, Any] = {"key": None, "expires": 0.0, "payload": None}
-_GAME5M_CARDS_CACHE_TTL_SEC = 20.0
+_GAME5M_CARDS_CACHE_TTL_SEC = 120.0
+_GAME5M_CARDS_LOCK = __import__("threading").Lock()
+
+_PORTFOLIO_CARDS_CACHE: Dict[str, Any] = {"key": None, "expires": 0.0, "payload": None}
+_PORTFOLIO_CARDS_CACHE_TTL_SEC = 120.0
+_PORTFOLIO_CARDS_LOCK = __import__("threading").Lock()
+
+
+def _build_one_game5m_card(tkr: str, days: int) -> Dict[str, Any]:
+    from services.recommend_5m import get_decision_5m, get_5m_card_payload
+
+    try:
+        # heavy_aux=False: skip multiday ridge (~400d) — main cards latency source when enabled
+        d5 = get_decision_5m(tkr, days=days, use_llm_news=False, heavy_aux=False)
+    except Exception:
+        d5 = None
+    card = get_5m_card_payload(d5, tkr)
+    try:
+        from services.game_5m import get_open_position, get_latest_buy_context_json
+        from services.game5m_ml_card_advice import enrich_game5m_card_ml_advice
+
+        open_pos = get_open_position(tkr)
+        entry_ctx = get_latest_buy_context_json(tkr, "GAME_5M") if open_pos else None
+        card = enrich_game5m_card_ml_advice(
+            card,
+            d5=d5 if isinstance(d5, dict) else None,
+            open_position=open_pos,
+            entry_ctx=entry_ctx if isinstance(entry_ctx, dict) else None,
+        )
+    except Exception as e_ml_card:
+        logger.debug("game5m card ml advice %s: %s", tkr, e_ml_card)
+    if card.get("reasoning") and len(card["reasoning"]) > 400:
+        card["reasoning"] = card["reasoning"][:400]
+    session = (d5 or {}).get("market_session") or {}
+    card["session_phase"] = session.get("session_phase")
+    return card
 
 
 def _compute_game5m_cards_sync(days: int) -> Dict[str, Any]:
     """Heavy sync path for 5m cards — must not run on the asyncio event loop."""
     import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     from services.ticker_groups import get_tickers_game_5m
-    from services.recommend_5m import get_decision_5m, get_5m_card_payload
 
     days = min(max(1, int(days or 5)), 7)
     cache_key = f"d{days}"
     now = _time.time()
-    if (
-        _GAME5M_CARDS_CACHE.get("key") == cache_key
-        and _GAME5M_CARDS_CACHE.get("payload") is not None
-        and float(_GAME5M_CARDS_CACHE.get("expires") or 0) > now
-    ):
-        return dict(_GAME5M_CARDS_CACHE["payload"])
+    with _GAME5M_CARDS_LOCK:
+        if (
+            _GAME5M_CARDS_CACHE.get("key") == cache_key
+            and _GAME5M_CARDS_CACHE.get("payload") is not None
+            and float(_GAME5M_CARDS_CACHE.get("expires") or 0) > now
+        ):
+            return dict(_GAME5M_CARDS_CACHE["payload"])
 
     tickers = list(get_tickers_game_5m() or [])
     if not tickers:
@@ -3020,45 +3056,32 @@ def _compute_game5m_cards_sync(days: int) -> Dict[str, Any]:
             "updated_at": None,
             "web_llm_enabled": web_llm_enabled(),
         }
+    else:
+        by_ticker: Dict[str, Dict[str, Any]] = {}
+        workers = min(6, max(1, len(tickers)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(_build_one_game5m_card, tkr, days): tkr for tkr in tickers}
+            for fut in as_completed(futs):
+                tkr = futs[fut]
+                try:
+                    by_ticker[tkr] = fut.result()
+                except Exception as e:
+                    by_ticker[tkr] = {
+                        "ticker": tkr,
+                        "decision": "ERROR",
+                        "error": str(e)[:200],
+                    }
+        cards = [by_ticker[t] for t in tickers if t in by_ticker]
+        payload = {
+            "tickers": tickers,
+            "cards": cards,
+            "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
+            "web_llm_enabled": web_llm_enabled(),
+        }
+    with _GAME5M_CARDS_LOCK:
         _GAME5M_CARDS_CACHE.update(
-            {"key": cache_key, "expires": now + _GAME5M_CARDS_CACHE_TTL_SEC, "payload": payload}
+            {"key": cache_key, "expires": _time.time() + _GAME5M_CARDS_CACHE_TTL_SEC, "payload": payload}
         )
-        return dict(payload)
-    cards = []
-    for tkr in tickers:
-        try:
-            d5 = get_decision_5m(tkr, days=days, use_llm_news=False)
-        except Exception:
-            d5 = None
-        card = get_5m_card_payload(d5, tkr)
-        try:
-            from services.game_5m import get_open_position, get_latest_buy_context_json
-            from services.game5m_ml_card_advice import enrich_game5m_card_ml_advice
-
-            open_pos = get_open_position(tkr)
-            entry_ctx = get_latest_buy_context_json(tkr, "GAME_5M") if open_pos else None
-            card = enrich_game5m_card_ml_advice(
-                card,
-                d5=d5 if isinstance(d5, dict) else None,
-                open_position=open_pos,
-                entry_ctx=entry_ctx if isinstance(entry_ctx, dict) else None,
-            )
-        except Exception as e_ml_card:
-            logger.debug("game5m card ml advice %s: %s", tkr, e_ml_card)
-        if card.get("reasoning") and len(card["reasoning"]) > 400:
-            card["reasoning"] = card["reasoning"][:400]
-        session = (d5 or {}).get("market_session") or {}
-        card["session_phase"] = session.get("session_phase")
-        cards.append(card)
-    payload = {
-        "tickers": tickers,
-        "cards": cards,
-        "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
-        "web_llm_enabled": web_llm_enabled(),
-    }
-    _GAME5M_CARDS_CACHE.update(
-        {"key": cache_key, "expires": now + _GAME5M_CARDS_CACHE_TTL_SEC, "payload": payload}
-    )
     return dict(payload)
 
 
@@ -3083,13 +3106,27 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
     Карточки портфельной игры: дневные quotes + стратегия без LLM.
     LLM по портфелю только через GET /api/portfolio/card/{ticker}/llm (кнопка на карточке).
     """
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     from services.portfolio_card import (
         get_portfolio_cluster_context,
         portfolio_card_payload,
         load_fallback_portfolio_take_pct,
     )
 
-    ctx, trade = get_portfolio_cluster_context(days=min(max(5, corr_days), 120))
+    corr_days = min(max(5, int(corr_days or 30)), 120)
+    cache_key = f"c{corr_days}"
+    now = _time.time()
+    with _PORTFOLIO_CARDS_LOCK:
+        if (
+            _PORTFOLIO_CARDS_CACHE.get("key") == cache_key
+            and _PORTFOLIO_CARDS_CACHE.get("payload") is not None
+            and float(_PORTFOLIO_CARDS_CACHE.get("expires") or 0) > now
+        ):
+            return dict(_PORTFOLIO_CARDS_CACHE["payload"])
+
+    ctx, trade = get_portfolio_cluster_context(days=corr_days)
     take_fb = load_fallback_portfolio_take_pct()
     try:
         from services.portfolio_catboost_signal import predict_portfolio_expected_returns
@@ -3101,64 +3138,93 @@ def _compute_portfolio_cards_sync(corr_days: int) -> Dict[str, Any]:
     try:
         from services.event_reaction_catboost_signal import predict_event_reaction_for_ticker
 
-        er_by_ticker = {t: predict_event_reaction_for_ticker(t) for t in trade}
+        er_by_ticker: Dict[str, Any] = {}
+        if trade:
+            with ThreadPoolExecutor(max_workers=min(6, len(trade))) as pool:
+                futs = {pool.submit(predict_event_reaction_for_ticker, t): t for t in trade}
+                for fut in as_completed(futs):
+                    t = futs[fut]
+                    try:
+                        er_by_ticker[t] = fut.result() or {}
+                    except Exception:
+                        er_by_ticker[t] = {}
     except Exception as e:
         logger.debug("event-reaction ML batch skipped: %s", e)
         er_by_ticker = {}
-    agent = AnalystAgent(use_llm=False)
-    cards: List[Dict[str, Any]] = []
-    for t in trade:
+
+    def _one(t: str) -> Dict[str, Any]:
+        agent = AnalystAgent(use_llm=False)
         try:
             r = agent.get_decision_with_llm(t, cluster_context=ctx)
             if r.get("decision") == "NO_DATA":
-                cards.append({
+                return {
                     "ticker": t,
                     "decision": "NO_DATA",
                     "horizon": "daily",
                     "reasoning": "Нет данных в quotes (или недостаточно истории).",
-                })
-            else:
-                card = portfolio_card_payload(t, r, fallback_take_pct=take_fb)
-                ml = ml_by_ticker.get(t, {})
-                er = er_by_ticker.get(t, {})
-                card.update(ml)
-                card.update(er)
-                try:
-                    from services.decision_stack import finalize_portfolio_decision_stack
+                }
+            card = portfolio_card_payload(t, r, fallback_take_pct=take_fb)
+            ml = ml_by_ticker.get(t, {})
+            er = er_by_ticker.get(t, {})
+            card.update(ml)
+            card.update(er)
+            try:
+                from services.decision_stack import finalize_portfolio_decision_stack
 
-                    row = {
-                        "decision": card.get("decision"),
-                        "selected_strategy": card.get("selected_strategy"),
-                        "decision_fused": r.get("decision_fused"),
-                        "llm_decision": r.get("llm_decision"),
-                    }
-                    finalize_portfolio_decision_stack(
-                        row,
-                        ticker=t,
-                        portfolio_ml=ml,
-                        event_reaction=er,
-                    )
-                    for k in (
-                        "decision_snapshot",
-                        "decision_effective",
-                        "decision_stack_projected_effective",
-                        "decision_stack_version",
-                        "decision_verdict",
-                    ):
-                        if row.get(k) is not None:
-                            card[k] = row[k]
-                except Exception as e:
-                    logger.debug("portfolio card decision_stack %s: %s", t, e)
-                cards.append(card)
+                row = {
+                    "decision": card.get("decision"),
+                    "selected_strategy": card.get("selected_strategy"),
+                    "decision_fused": r.get("decision_fused"),
+                    "llm_decision": r.get("llm_decision"),
+                }
+                finalize_portfolio_decision_stack(
+                    row,
+                    ticker=t,
+                    portfolio_ml=ml,
+                    event_reaction=er,
+                )
+                for k in (
+                    "decision_snapshot",
+                    "decision_effective",
+                    "decision_stack_projected_effective",
+                    "decision_stack_version",
+                    "decision_verdict",
+                ):
+                    if row.get(k) is not None:
+                        card[k] = row[k]
+            except Exception as e:
+                logger.debug("portfolio card decision_stack %s: %s", t, e)
+            return card
         except Exception as e:
-            cards.append({"ticker": t, "decision": "ERROR", "horizon": "daily", "error": str(e)})
-    return {
+            return {"ticker": t, "decision": "ERROR", "horizon": "daily", "error": str(e)}
+
+    by_ticker: Dict[str, Dict[str, Any]] = {}
+    if trade:
+        with ThreadPoolExecutor(max_workers=min(6, len(trade))) as pool:
+            futs = {pool.submit(_one, t): t for t in trade}
+            for fut in as_completed(futs):
+                t = futs[fut]
+                try:
+                    by_ticker[t] = fut.result()
+                except Exception as e:
+                    by_ticker[t] = {"ticker": t, "decision": "ERROR", "horizon": "daily", "error": str(e)}
+    cards = [by_ticker[t] for t in trade if t in by_ticker]
+    payload = {
         "tickers": trade,
         "correlation_tickers": (ctx or {}).get("tickers"),
         "cards": cards,
         "updated_at": _now_et().isoformat() if DISPLAY_TZ else datetime.now().isoformat(),
         "web_llm_enabled": web_llm_enabled(),
     }
+    with _PORTFOLIO_CARDS_LOCK:
+        _PORTFOLIO_CARDS_CACHE.update(
+            {
+                "key": cache_key,
+                "expires": _time.time() + _PORTFOLIO_CARDS_CACHE_TTL_SEC,
+                "payload": payload,
+            }
+        )
+    return dict(payload)
 
 
 def _compute_portfolio_card_llm_sync(ticker: str, corr_days: int, *, include_prompts: bool = False) -> Dict[str, Any]:
