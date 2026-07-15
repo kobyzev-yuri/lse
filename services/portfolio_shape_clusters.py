@@ -261,12 +261,6 @@ def build_shape_clusters(
                 top_pairs.append({"a": a, "b": b, "corr": round(v, 3)})
     top_pairs.sort(key=lambda x: -float(x["corr"]))
 
-    # compact corr for selected medoids only (UI light)
-    corr_compact = {
-        t: {u: round(float(corr.loc[t, u]), 3) for u in corr.columns if u != t}
-        for t in corr.columns
-    }
-
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "mode": mode_u,
@@ -281,10 +275,11 @@ def build_shape_clusters(
         "n_clusters": len(clusters),
         "clusters": clusters,
         "top_pairs": top_pairs[:15],
-        "corr_by_ticker": corr_compact,
         "note_ru": (
             "Кластеры по похожести формы: корреляция нормированной цены close/close₀ "
-            "за lookback. Число групп = сколько даст порог. Лог-ret / сектор / earnings — следующие режимы."
+            "за lookback. Порог corr_min — связные компоненты (транзитивно); "
+            "для более мелких групп поднимайте порог (0.88–0.93). "
+            "Лог-ret / сектор / earnings — следующие режимы."
         ),
     }
 
