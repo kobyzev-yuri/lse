@@ -95,29 +95,42 @@
     <script>
     (function () {
         var el = document.getElementById("statusLine");
-        if (el) el.textContent = "loader-1";
-        if (typeof document.createElement !== "function") {
-            el.textContent = "no DOM";
+        function st(msg) { if (el) el.textContent = msg; }
+        st("boot A");
+        if (typeof fetch !== "function") {
+            st("no fetch()");
             return;
         }
-        var s = document.createElement("script");
-        s.src = "/static/js/portfolio_shape_clusters.js?v=9c801dc3";
-        s.charset = "utf-8";
-        s.onload = function () {
-            var e = document.getElementById("statusLine");
-            if (!e) return;
-            // if main js never overwrote status past mainjs-*, report
-            var t = e.textContent || "";
-            if (t === "loader-1" || t.indexOf("loader-") === 0) {
-                e.textContent = "js onload but UI stuck: " + t;
-            }
-        };
-        s.onerror = function () {
-            var e = document.getElementById("statusLine");
-            if (e) e.textContent = "js file FAILED to load (network/404)";
-        };
-        if (el) el.textContent = "loader-2 fetching js...";
-        document.head.appendChild(s);
+        // Dynamic <script src> onload was stuck despite HTTP 200 — load via fetch + inject.
+        var url = "/api/portfolio/shape-clusters/app.js?v=652552b1";
+        st("boot B fetch " + url);
+        var done = false;
+        var timer = setTimeout(function () {
+            if (!done) st("boot TIMEOUT 10s on " + url);
+        }, 10000);
+        fetch(url, { cache: "no-store" }).then(function (r) {
+            st("boot C http " + r.status);
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+        }).then(function (code) {
+            done = true;
+            clearTimeout(timer);
+            st("boot D bytes=" + code.length + " exec");
+            var s = document.createElement("script");
+            s.type = "text/javascript";
+            s.textContent = code;
+            document.head.appendChild(s);
+            setTimeout(function () {
+                var t = (el && el.textContent) || "";
+                if (t.indexOf("boot D") === 0 || t.indexOf("boot ") === 0) {
+                    st("boot E exec finished but UI did not take over (" + t + ")");
+                }
+            }, 50);
+        }).catch(function (e) {
+            done = true;
+            clearTimeout(timer);
+            st("boot FAIL: " + (e && e.message ? e.message : String(e)));
+        });
     })();
     </script>
 </body>

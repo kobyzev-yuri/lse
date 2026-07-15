@@ -24,7 +24,7 @@ except ImportError:
     DISPLAY_TZ = None  # fallback: показываем как есть, без конвертации
 
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import pandas as pd
@@ -3686,6 +3686,20 @@ async def portfolio_shape_clusters_page(request: Request):
     return HTMLResponse(
         render_template("portfolio_shape_clusters.html", {"request": request}),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/api/portfolio/shape-clusters/app.js")
+async def api_portfolio_shape_clusters_app_js():
+    """Serve board UI JS with explicit charset (avoids stuck <script src> onload)."""
+    path = Path(__file__).resolve().parent / "static" / "js" / "portfolio_shape_clusters.js"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="shape-clusters app.js missing")
+    return FileResponse(
+        path,
+        media_type="application/javascript; charset=utf-8",
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        filename="portfolio_shape_clusters.js",
     )
 
 
