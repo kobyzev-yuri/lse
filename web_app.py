@@ -24,7 +24,7 @@ except ImportError:
     DISPLAY_TZ = None  # fallback: показываем как есть, без конвертации
 
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import pandas as pd
@@ -94,6 +94,7 @@ async def _strip_range_on_static(request: Request, call_next):
         scope_headers = request.scope.get("headers") or []
         request.scope["headers"] = [(k, v) for k, v in scope_headers if k != b"range"]
     return await call_next(request)
+
 logger = logging.getLogger(__name__)
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -3721,118 +3722,6 @@ async def portfolio_daily_chart_page(request: Request):
         )
     )
 
-
-@app.get("/portfolio/shape-clusters", response_class=HTMLResponse)
-async def portfolio_shape_clusters_page(request: Request):
-    """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
-    return HTMLResponse(
-        render_template("portfolio_shape_clusters.html", {"request": request}),
-        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-    )
-
-
-@app.get("/api/portfolio/shape-clusters/app.js")
-async def api_portfolio_shape_clusters_app_js():
-    """Serve board UI JS with explicit charset (avoids stuck <script src> onload)."""
-    path = Path(__file__).resolve().parent / "static" / "js" / "portfolio_shape_clusters.js"
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="shape-clusters app.js missing")
-    return FileResponse(
-        path,
-        media_type="application/javascript; charset=utf-8",
-        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-        filename="portfolio_shape_clusters.js",
-    )
-
-
-@app.get("/api/portfolio/shape-clusters", response_class=JSONResponse)
-async def api_portfolio_shape_clusters(
-    lookback_days: int = 126,
-    corr_min: float = 0.88,
-    method: str = "hierarchical",
-    mode: str = "shape",
-    cluster_id: Optional[int] = None,
-    include_overlay: int = 0,
-    max_clusters: int = 8,
-    distance_threshold: float = 0.12,
-    refresh: int = 0,
-):
-    """Карта кластеров формы. Disk/memory cache для быстрой первой отрисовки карты."""
-
-    def _run() -> Dict[str, Any]:
-        from report_generator import get_engine
-        from services.portfolio_shape_clusters import build_shape_cluster_page_payload
-
-        return build_shape_cluster_page_payload(
-            get_engine(),
-            lookback_trading_days=min(max(40, int(lookback_days)), 400),
-            corr_min=min(max(0.3, float(corr_min)), 0.99),
-            method=(method or "hierarchical").strip().lower(),
-            mode=(mode or "shape").strip().lower(),
-            cluster_id=int(cluster_id) if cluster_id is not None else None,
-            include_overlay=int(include_overlay or 0) == 1,
-            # 0 = cut by distance_threshold (slider); >=2 = fixed k groups
-            max_clusters=min(max(0, int(max_clusters)), 20),
-            distance_threshold=min(max(0.02, float(distance_threshold)), 1.0),
-            force_refresh=int(refresh or 0) == 1,
-        )
-
-    try:
-        payload = await asyncio.to_thread(_run)
-        return JSONResponse(content=_api_json_body(payload))
-    except Exception as e:
-        logger.exception("GET /api/portfolio/shape-clusters: %s", e)
-        raise HTTPException(status_code=500, detail=f"Ошибка shape-clusters: {e!s}")
-
-
-@app.get("/api/portfolio/shape-clusters/charts", response_class=JSONResponse)
-async def api_portfolio_shape_cluster_charts(days: int = 180, tickers: str = ""):
-    """Лёгкие дневные close-ряды для кластера (один SQL на весь список)."""
-
-    def _run() -> Dict[str, Any]:
-        from sqlalchemy import bindparam
-
-        raw = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()][:60]
-        days_clamped = min(max(10, int(days)), 730)
-        cutoff = datetime.now() - timedelta(days=days_clamped)
-        by_ticker: Dict[str, List[Dict[str, Any]]] = {t: [] for t in raw}
-        if raw:
-            sql = text(
-                """
-                SELECT ticker, date, close
-                FROM quotes
-                WHERE ticker IN :tickers AND date >= :cutoff
-                ORDER BY ticker ASC, date ASC
-                """
-            ).bindparams(bindparam("tickers", expanding=True))
-            with engine.connect() as conn:
-                rows = conn.execute(sql, {"tickers": raw, "cutoff": cutoff}).fetchall()
-            for r in rows:
-                t = str(r[0] or "").strip().upper()
-                if t not in by_ticker:
-                    continue
-                d = r[1]
-                by_ticker[t].append(
-                    {
-                        "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
-                        "close": _to_jsonable(r[2]),
-                    }
-                )
-        charts: List[Dict[str, Any]] = []
-        for t in raw:
-            bars = by_ticker.get(t) or []
-            entry: Dict[str, Any] = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
-            if not bars:
-                entry["error"] = "no_data"
-            charts.append(entry)
-        return {"days": days_clamped, "tickers": raw, "charts": charts, "lite": True}
-
-    try:
-        payload = await asyncio.to_thread(_run)
-        return JSONResponse(content=_api_json_body(payload))
-    except Exception as e:
-        logger.exception("GET /api/portfolio/shape-clusters/charts: %s", e)
-        raise HTTPException(status_code=500, detail=f"Ошибка shape-cluster charts: {e!s}")
 
 @app.get("/api/pnl", response_class=JSONResponse)
 async def get_pnl():
