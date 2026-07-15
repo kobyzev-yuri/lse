@@ -8,7 +8,9 @@ from services.portfolio_shape_clusters import (
     _clusters_from_corr_threshold,
     _clusters_hierarchical,
     correlation_matrix,
+    downsample_closes,
     normalize_paths,
+    spark_closes_from_series,
 )
 
 
@@ -36,6 +38,18 @@ class TestShapeClusters(unittest.TestCase):
         groups = _clusters_hierarchical(corr, distance_threshold=0.12, max_clusters=None)
         joined = {frozenset(g) for g in groups}
         self.assertIn(frozenset({"AAA", "BBB"}), joined)
+
+    def test_downsample_and_spark_closes(self):
+        vals = list(range(1, 201))
+        ds = downsample_closes(vals, max_points=80)
+        self.assertEqual(len(ds), 80)
+        self.assertEqual(ds[0], 1.0)
+        self.assertEqual(ds[-1], 200.0)
+        idx = pd.date_range("2025-01-01", periods=120, freq="B")
+        s = pd.Series(range(1, 121), index=idx, dtype=float)
+        sparks = spark_closes_from_series({"rblx": s}, max_points=40)
+        self.assertIn("RBLX", sparks)
+        self.assertEqual(len(sparks["RBLX"]), 40)
 
 
 if __name__ == "__main__":

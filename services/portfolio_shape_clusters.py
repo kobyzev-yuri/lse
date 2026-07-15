@@ -17,6 +17,47 @@ import numpy as np
 import pandas as pd
 
 
+def downsample_closes(values: Sequence[Any], max_points: int = 80) -> List[Optional[float]]:
+    """Sparse close path for SVG sparklines (keeps endpoints)."""
+    pts = min(max(20, int(max_points or 80)), 260)
+    cleaned: List[Optional[float]] = []
+    for v in values:
+        try:
+            f = float(v)
+            cleaned.append(f if math.isfinite(f) and f > 0 else None)
+        except (TypeError, ValueError):
+            cleaned.append(None)
+    n = len(cleaned)
+    if n <= pts:
+        return cleaned
+    if pts <= 2:
+        return [cleaned[0], cleaned[-1]]
+    out = [cleaned[0]]
+    step = (n - 1) / (pts - 1)
+    for i in range(1, pts - 1):
+        out.append(cleaned[int(round(i * step))])
+    out.append(cleaned[-1])
+    return out
+
+
+def spark_closes_from_series(
+    series: Dict[str, pd.Series],
+    *,
+    max_points: int = 80,
+) -> Dict[str, List[Optional[float]]]:
+    """Compact closes for UI — avoids a second charts fetch on flaky clients."""
+    out: Dict[str, List[Optional[float]]] = {}
+    for t, s in (series or {}).items():
+        if s is None or getattr(s, "empty", True):
+            continue
+        try:
+            vals = [float(x) for x in s.astype(float).tolist()]
+        except Exception:
+            continue
+        out[str(t).strip().upper()] = downsample_closes(vals, max_points=max_points)
+    return out
+
+
 def fetch_close_series(
     engine,
     tickers: Sequence[str],
@@ -286,6 +327,9 @@ def build_shape_clusters(
     top_pairs.sort(key=lambda x: -float(x["corr"]))
 
     cut = "maxclust" if int(max_clusters) >= 2 else "distance"
+    # Embed sparklines in map JSON so UI click needs no second /charts fetch
+    # (secondary fetches intermittently hang >20s for this client even at ~1KB).
+    spark_closes = spark_closes_from_series(series, max_points=80)
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "mode": mode_u,
@@ -302,6 +346,7 @@ def build_shape_clusters(
         "n_clusters": len(clusters),
         "clusters": clusters,
         "top_pairs": top_pairs[:15],
+        "spark_closes": spark_closes,
         "note_ru": (
             "Кластеры по похожести формы (норм. цена, average-linkage). "
             "Порог = distance cut (ниже порог похожести → строже группы). "
@@ -391,7 +436,11 @@ def build_shape_cluster_page_payload(
     from services.shape_cluster_universe import shape_cluster_tickers
 
     tickers = shape_cluster_tickers()
-    cache_key = f"{mode}|{method}|{lookback_trading_days}|{corr_min:.4f}|{max_clusters}|{distance_threshold:.4f}"
+    # v2: include spark_closes in map JSON (bust old disk/memory without embeds)
+    cache_key = (
+        f"v2spark|{mode}|{method}|{lookback_trading_days}|"
+        f"{corr_min:.4f}|{max_clusters}|{distance_threshold:.4f}"
+    )
     disk_path = default_shape_clusters_path()
     report: Optional[Dict[str, Any]] = None
 

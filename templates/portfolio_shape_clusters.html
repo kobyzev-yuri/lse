@@ -327,6 +327,14 @@
             });
         }
 
+        function sparkItem(ticker) {
+            var sc = (lastReport && lastReport.spark_closes) || {};
+            var t = String(ticker || "").toUpperCase();
+            var closes = sc[t] || sc[ticker];
+            if (!closes || !closes.length) return null;
+            return { ticker: t, closes: closes, source: "map_embed" };
+        }
+
         function selectCluster(cid) {
             currentClusterId = cid;
             var cseq = ++chartsSeq;
@@ -350,60 +358,96 @@
             overlayHost.id = "overlayHost";
             root.appendChild(overlayHost);
 
-            // One ticker at a time (~1–2KB) — most reliable on this client path.
-            var batchSize = 1;
             var overlaySeries = [];
             var doneN = 0;
             var failed = 0;
+            var needFetch = [];
+            var fromEmbed = 0;
 
-            function finish() {
-                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
+            function paintOverlay() {
                 overlayHost.innerHTML = "";
                 if (overlaySeries.length >= 2) {
                     overlayHost.innerHTML = "<div class='chart-section'><h2>Overlay (norm)</h2>" +
                         sparkSvg(overlaySeries.slice(0, 8), true) + "</div>";
                 }
+            }
+
+            function finish() {
+                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
+                paintOverlay();
                 if (members.length > show.length) {
                     var more = document.createElement("p");
                     more.className = "muted";
                     more.textContent = "Showing first " + show.length + " of " + members.length;
                     root.appendChild(more);
                 }
-                st("charts done: " + doneN + "/" + show.length + (failed ? (" fail=" + failed) : ""));
+                var bits = "charts done: " + doneN + "/" + show.length;
+                if (fromEmbed) bits += " embed=" + fromEmbed;
+                if (failed) bits += " fail=" + failed;
+                st(bits);
             }
 
-            function loadBatch(offset) {
-                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return Promise.resolve();
-                if (offset >= show.length) {
-                    finish();
-                    return Promise.resolve();
+            // Always paint from map JSON first — /charts body often hangs for this client
+            // (server 200 ~30ms / ~1KB) while fetch never resolves.
+            show.forEach(function (t) {
+                var it = sparkItem(t);
+                if (it) {
+                    appendChartItem(root, it, overlaySeries);
+                    doneN += 1;
+                    fromEmbed += 1;
+                } else {
+                    needFetch.push(t);
                 }
-                var batch = show.slice(offset, offset + batchSize);
-                st("charts: " + (offset + 1) + "/" + show.length + " " + batch[0] + "...");
+            });
+            paintOverlay();
+            if (!needFetch.length) {
+                finish();
+                return;
+            }
+            st("charts: embed " + fromEmbed + ", fetch " + needFetch.length + "...");
+
+            function fetchOne(ticker, attempt) {
+                attempt = attempt || 1;
                 var url = "/api/portfolio/shape-clusters/charts?days=" + encodeURIComponent(days) +
-                    "&tickers=" + encodeURIComponent(batch.join(",")) +
+                    "&tickers=" + encodeURIComponent(ticker) +
                     "&compact=1&max_points=80";
-                return fetchJson(url, 15000).then(function (pack) {
-                    if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
+                return fetchJson(url, 12000).then(function (pack) {
                     if (!pack.ok) throw new Error("HTTP " + pack.status);
                     var items = (pack.body && pack.body.charts) || [];
-                    items.forEach(function (it) {
-                        appendChartItem(root, it, overlaySeries);
-                        doneN += 1;
-                    });
-                    return loadBatch(offset + batchSize);
+                    if (!items.length) throw new Error("empty");
+                    return items[0];
                 }).catch(function (e) {
-                    if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
-                    failed += batch.length;
-                    var err = document.createElement("p");
-                    err.className = "muted";
-                    err.textContent = batch.join(",") + ": " + (e && e.message ? e.message : String(e));
-                    root.appendChild(err);
-                    return loadBatch(offset + batchSize);
+                    if (attempt < 2) return fetchOne(ticker, attempt + 1);
+                    throw e;
                 });
             }
 
-            loadBatch(0);
+            function loadMissing(offset) {
+                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return Promise.resolve();
+                if (offset >= needFetch.length) {
+                    finish();
+                    return Promise.resolve();
+                }
+                var t = needFetch[offset];
+                st("charts: fetch " + (offset + 1) + "/" + needFetch.length + " " + t + "...");
+                return fetchOne(t).then(function (it) {
+                    if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
+                    appendChartItem(root, it, overlaySeries);
+                    doneN += 1;
+                    paintOverlay();
+                    return loadMissing(offset + 1);
+                }).catch(function (e) {
+                    if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
+                    failed += 1;
+                    var err = document.createElement("p");
+                    err.className = "muted";
+                    err.textContent = t + ": " + (e && e.message ? e.message : String(e));
+                    root.appendChild(err);
+                    return loadMissing(offset + 1);
+                });
+            }
+
+            loadMissing(0);
         }
 
         function loadBoard(force) {
