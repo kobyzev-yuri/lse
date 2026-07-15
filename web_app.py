@@ -3880,16 +3880,27 @@ async def api_portfolio_shape_clusters(
 
 
 @app.get("/api/portfolio/shape-clusters/charts", response_class=JSONResponse)
-async def api_portfolio_shape_cluster_charts(days: int = 180, tickers: str = ""):
-    """Лёгкие дневные close-ряды для кластера (один SQL на весь список)."""
+async def api_portfolio_shape_cluster_charts(
+    days: int = 180,
+    tickers: str = "",
+    max_points: int = 90,
+    compact: int = 1,
+):
+    """Лёгкие дневные close-ряды для кластера (один SQL на весь список).
+
+    compact=1 (default): только closes + даты tip/head, downsample до max_points —
+    маленький JSON, чтобы браузер не зависал на теле ответа.
+    """
 
     def _run() -> Dict[str, Any]:
         from sqlalchemy import bindparam
 
         raw = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()][:60]
         days_clamped = min(max(10, int(days)), 730)
+        pts = min(max(20, int(max_points or 90)), 260)
+        use_compact = int(compact or 0) == 1
         cutoff = datetime.now() - timedelta(days=days_clamped)
-        by_ticker: Dict[str, List[Dict[str, Any]]] = {t: [] for t in raw}
+        by_ticker: Dict[str, List[Any]] = {t: [] for t in raw}
         if raw:
             sql = text(
                 """
@@ -3905,21 +3916,67 @@ async def api_portfolio_shape_cluster_charts(days: int = 180, tickers: str = "")
                 t = str(r[0] or "").strip().upper()
                 if t not in by_ticker:
                     continue
-                d = r[1]
-                by_ticker[t].append(
-                    {
-                        "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
-                        "close": _to_jsonable(r[2]),
-                    }
-                )
+                by_ticker[t].append((r[1], r[2]))
+
+        def _downsample(pairs: List[Any]) -> List[Any]:
+            n = len(pairs)
+            if n <= pts:
+                return pairs
+            if pts <= 2:
+                return [pairs[0], pairs[-1]]
+            out = [pairs[0]]
+            step = (n - 1) / (pts - 1)
+            for i in range(1, pts - 1):
+                out.append(pairs[int(round(i * step))])
+            out.append(pairs[-1])
+            return out
+
         charts: List[Dict[str, Any]] = []
         for t in raw:
-            bars = by_ticker.get(t) or []
-            entry: Dict[str, Any] = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
-            if not bars:
-                entry["error"] = "no_data"
-            charts.append(entry)
-        return {"days": days_clamped, "tickers": raw, "charts": charts, "lite": True}
+            pairs = _downsample(by_ticker.get(t) or [])
+            if use_compact:
+                closes: List[Any] = []
+                for _d, c in pairs:
+                    try:
+                        closes.append(float(c) if c is not None else None)
+                    except (TypeError, ValueError):
+                        closes.append(None)
+                entry: Dict[str, Any] = {
+                    "ticker": t,
+                    "closes": closes,
+                    "interval": "1d",
+                    "source": "quotes",
+                    "n_raw": len(by_ticker.get(t) or []),
+                    "n_points": len(closes),
+                }
+                if pairs:
+                    d0, _ = pairs[0]
+                    d1, _ = pairs[-1]
+                    entry["date_from"] = d0.isoformat() if hasattr(d0, "isoformat") else str(d0)
+                    entry["date_to"] = d1.isoformat() if hasattr(d1, "isoformat") else str(d1)
+                else:
+                    entry["error"] = "no_data"
+                charts.append(entry)
+            else:
+                bars = [
+                    {
+                        "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+                        "close": _to_jsonable(c),
+                    }
+                    for d, c in pairs
+                ]
+                entry = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
+                if not bars:
+                    entry["error"] = "no_data"
+                charts.append(entry)
+        return {
+            "days": days_clamped,
+            "tickers": raw,
+            "charts": charts,
+            "lite": True,
+            "compact": use_compact,
+            "max_points": pts,
+        }
 
     try:
         payload = await asyncio.to_thread(_run)

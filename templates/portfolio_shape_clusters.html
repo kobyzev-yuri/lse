@@ -127,25 +127,26 @@
         }
 
         function fetchJson(url, ms) {
+            // Timeout covers headers + body (r.json). Header-only resolve left hung ~100KB charts.
             ms = ms || 25000;
-            return new Promise(function (resolve, reject) {
-                var done = false;
-                var timer = setTimeout(function () {
-                    if (done) return;
-                    done = true;
-                    reject(new Error("timeout " + ms + "ms"));
-                }, ms);
-                fetch(url, { cache: "no-store" }).then(function (r) {
-                    if (done) return;
-                    done = true;
+            var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+            var timer = setTimeout(function () {
+                try { if (ctrl) ctrl.abort(); } catch (e0) {}
+            }, ms);
+            var opts = { cache: "no-store" };
+            if (ctrl) opts.signal = ctrl.signal;
+            return fetch(url, opts).then(function (r) {
+                return r.json().then(function (body) {
                     clearTimeout(timer);
-                    resolve(r);
-                }).catch(function (e) {
-                    if (done) return;
-                    done = true;
+                    return { ok: r.ok, status: r.status, body: body };
+                }, function () {
                     clearTimeout(timer);
-                    reject(e);
+                    return { ok: r.ok, status: r.status, body: {} };
                 });
+            }).catch(function (e) {
+                clearTimeout(timer);
+                var msg = (e && e.name === "AbortError") ? ("timeout " + ms + "ms") : (e && e.message ? e.message : String(e));
+                throw new Error(msg);
             });
         }
 
@@ -181,16 +182,55 @@
             return "<svg class='spark" + (overlay ? " overlay" : "") + "' viewBox='0 0 " + w + " " + h + "' preserveAspectRatio='none'>" + paths + "</svg>";
         }
 
-        function normCloses(bars) {
+        function seriesCloses(it) {
+            if (it && it.closes && it.closes.length) return it.closes;
+            return (it && it.bars || []).map(function (b) { return Number(b.close); });
+        }
+
+        function normCloses(closesOrBars) {
+            var closes;
+            if (closesOrBars && closesOrBars.length && typeof closesOrBars[0] === "object" && closesOrBars[0] !== null) {
+                closes = closesOrBars.map(function (b) { return Number(b.close); });
+            } else {
+                closes = closesOrBars || [];
+            }
             var out = [];
             var first = null;
-            (bars || []).forEach(function (b) {
-                var c = Number(b.close);
+            closes.forEach(function (c0) {
+                var c = Number(c0);
                 if (!isFinite(c) || c <= 0) { out.push(null); return; }
                 if (first == null) first = c;
                 out.push(c / first);
             });
             return out;
+        }
+
+        function appendChartItem(root, it, overlaySeries) {
+            var closes = seriesCloses(it);
+            var vals = normCloses(closes);
+            if (vals.length >= 2) overlaySeries.push({ ticker: it.ticker, values: vals });
+            var sec = document.createElement("div");
+            sec.className = "chart-section";
+            var h = document.createElement("h2");
+            h.textContent = it.ticker || "-";
+            sec.appendChild(h);
+            if (!closes.length) {
+                var miss = document.createElement("p");
+                miss.className = "muted";
+                miss.textContent = "No quotes";
+                sec.appendChild(miss);
+            } else {
+                sec.innerHTML += sparkSvg([{ values: closes }], false);
+                var first = Number(closes[0]);
+                var last = Number(closes[closes.length - 1]);
+                var chg = document.createElement("div");
+                chg.className = "chg";
+                if (isFinite(first) && first > 0 && isFinite(last)) {
+                    chg.textContent = "close " + last.toFixed(2) + " (" + (((last / first) - 1) * 100).toFixed(1) + "% window)";
+                }
+                sec.appendChild(chg);
+            }
+            root.appendChild(sec);
         }
 
         function renderBoard(clusters) {
@@ -269,48 +309,22 @@
             head.style.display = "block";
             head.textContent = "Charts: " + (selected.label || "") + " | " + members.join(", ");
             root.innerHTML = "";
-            st("charts: fetch " + show.length + "...");
+            var overlayHost = document.createElement("div");
+            overlayHost.id = "overlayHost";
+            root.appendChild(overlayHost);
 
-            var url = "/api/portfolio/shape-clusters/charts?days=" + encodeURIComponent(days) +
-                "&tickers=" + encodeURIComponent(show.join(","));
-            fetchJson(url, 45000).then(function (r) {
-                if (!r.ok) throw new Error("HTTP " + r.status);
-                return r.json();
-            }).then(function (pack) {
+            // Small batches: ~8–15KB each — large 12-ticker JSON (~100KB) often hangs mid-body.
+            var batchSize = 2;
+            var overlaySeries = [];
+            var doneN = 0;
+            var failed = 0;
+
+            function finish() {
                 if (Number(currentClusterId) !== cid) return;
-                var items = pack.charts || [];
-                var overlaySeries = [];
-                items.forEach(function (it) {
-                    var vals = normCloses(it.bars || []);
-                    if (vals.length >= 2) overlaySeries.push({ ticker: it.ticker, values: vals });
-                    var sec = document.createElement("div");
-                    sec.className = "chart-section";
-                    var h = document.createElement("h2");
-                    h.textContent = it.ticker || "-";
-                    sec.appendChild(h);
-                    if (!(it.bars || []).length) {
-                        var miss = document.createElement("p");
-                        miss.className = "muted";
-                        miss.textContent = "No quotes";
-                        sec.appendChild(miss);
-                    } else {
-                        sec.innerHTML += sparkSvg([{ values: (it.bars || []).map(function (b) { return Number(b.close); }) }], false);
-                        var first = Number(it.bars[0].close);
-                        var last = Number(it.bars[it.bars.length - 1].close);
-                        var chg = document.createElement("div");
-                        chg.className = "chg";
-                        if (isFinite(first) && first > 0 && isFinite(last)) {
-                            chg.textContent = "close " + last.toFixed(2) + " (" + (((last / first) - 1) * 100).toFixed(1) + "% window)";
-                        }
-                        sec.appendChild(chg);
-                    }
-                    root.appendChild(sec);
-                });
+                overlayHost.innerHTML = "";
                 if (overlaySeries.length >= 2) {
-                    var ov = document.createElement("div");
-                    ov.className = "chart-section";
-                    ov.innerHTML = "<h2>Overlay (norm)</h2>" + sparkSvg(overlaySeries.slice(0, 8), true);
-                    root.insertBefore(ov, root.firstChild);
+                    overlayHost.innerHTML = "<div class='chart-section'><h2>Overlay (norm)</h2>" +
+                        sparkSvg(overlaySeries.slice(0, 8), true) + "</div>";
                 }
                 if (members.length > show.length) {
                     var more = document.createElement("p");
@@ -318,11 +332,41 @@
                     more.textContent = "Showing first " + show.length + " of " + members.length;
                     root.appendChild(more);
                 }
-                st("charts done: " + items.length);
-            }).catch(function (e) {
-                if (Number(currentClusterId) !== cid) return;
-                st("charts error: " + (e && e.message ? e.message : String(e)));
-            });
+                st("charts done: " + doneN + "/" + show.length + (failed ? (" fail=" + failed) : ""));
+            }
+
+            function loadBatch(offset) {
+                if (Number(currentClusterId) !== cid) return Promise.resolve();
+                if (offset >= show.length) {
+                    finish();
+                    return Promise.resolve();
+                }
+                var batch = show.slice(offset, offset + batchSize);
+                st("charts: " + (offset + 1) + "-" + Math.min(offset + batch.length, show.length) + "/" + show.length + "...");
+                var url = "/api/portfolio/shape-clusters/charts?days=" + encodeURIComponent(days) +
+                    "&tickers=" + encodeURIComponent(batch.join(",")) +
+                    "&compact=1&max_points=80";
+                return fetchJson(url, 20000).then(function (pack) {
+                    if (Number(currentClusterId) !== cid) return;
+                    if (!pack.ok) throw new Error("HTTP " + pack.status);
+                    var items = (pack.body && pack.body.charts) || [];
+                    items.forEach(function (it) {
+                        appendChartItem(root, it, overlaySeries);
+                        doneN += 1;
+                    });
+                    return loadBatch(offset + batchSize);
+                }).catch(function (e) {
+                    if (Number(currentClusterId) !== cid) return;
+                    failed += batch.length;
+                    var err = document.createElement("p");
+                    err.className = "muted";
+                    err.textContent = "Batch " + batch.join(",") + ": " + (e && e.message ? e.message : String(e));
+                    root.appendChild(err);
+                    return loadBatch(offset + batchSize);
+                });
+            }
+
+            loadBatch(0);
         }
 
         function loadBoard(force) {
@@ -349,14 +393,12 @@
                     return Promise.resolve();
                 }
                 if (n > 0) startHb("Map retry " + (n + 1) + "/3...");
-                return fetchJson(q, force ? 60000 : 25000).then(function (r) {
+                return fetchJson(q, force ? 60000 : 25000).then(function (pack) {
                     if (seq !== boardSeq) return null;
-                    if (!r.ok) {
-                        return r.json().catch(function () { return {}; }).then(function (body) {
-                            throw new Error(body.detail || ("HTTP " + r.status));
-                        });
+                    if (!pack.ok) {
+                        throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
                     }
-                    return r.json();
+                    return pack.body;
                 }).then(function (report) {
                     if (!report || seq !== boardSeq) return;
                     stopHb();
