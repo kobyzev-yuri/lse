@@ -101,15 +101,21 @@
     </div>
 
     <div id="metaLine"></div>
-
-    <div id="clusterBoard"></div>
     <div id="statusLine">boot</div>
     <noscript><p class="muted">JavaScript required</p></noscript>
+
+    <div id="clusterBoard"></div>
     <h2 id="detailHead"></h2>
     <div id="chartsRoot"></div>
 
     <script>
     (function () {
+        var stEl = document.getElementById("statusLine");
+        function st(m) {
+            try { if (stEl) stEl.textContent = String(m); } catch (e0) {}
+        }
+        st("js-0");
+        try {
         var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
         var lastReport = null;
         var currentClusterId = null;
@@ -118,9 +124,7 @@
         var simDebounce = null;
         var hb = null;
         var liveCtrls = [];
-        var stEl = document.getElementById("statusLine");
 
-        function st(m) { if (stEl) stEl.textContent = m; }
         function colorFor(i) { return COLORS[i % COLORS.length]; }
         function simPct() {
             var el = document.getElementById("simSlider");
@@ -144,7 +148,7 @@
             }, 500);
         }
         function abortLive() {
-            // Only used when leaving charts; map loads must NOT share this —
+            // Only used when leaving charts; map loads must NOT share this \u2014
             // aborting in-flight map fetch often surfaces as "Failed to fetch"
             // on the next threshold request (same connection).
             liveCtrls.forEach(function (c) {
@@ -322,7 +326,7 @@
 
                 var meta = document.createElement("div");
                 meta.className = "meta";
-                meta.textContent = (c.size || 0) + " tickers — click";
+                meta.textContent = (c.size || 0) + " tickers \u2014 click";
 
                 var ticks = document.createElement("div");
                 ticks.className = "tickers";
@@ -385,12 +389,12 @@
             var head = document.getElementById("detailHead");
             var root = document.getElementById("chartsRoot");
             var members = (selected.tickers || []).slice();
-            // Medoid first — easier to read large clusters
+            // Medoid first \u2014 easier to read large clusters
             var med = selected.medoid;
             if (med) {
                 members = [med].concat(members.filter(function (t) { return t !== med; }));
             }
-            // Embed path is free/local — show all cluster members (was 12 + flaky /charts).
+            // Embed path is free/local \u2014 show all cluster members (was 12 + flaky /charts).
             var show = members.slice(0, 40);
             head.style.display = "block";
             head.textContent = "Charts: " + (selected.label || "") + " | " + members.join(", ");
@@ -414,8 +418,8 @@
                 }
             }
 
-            // Map embeds only — never block overlay/dailies on /charts (body hang).
-            // colorIndex = position in show → same color on daily chart and overlay.
+            // Map embeds only \u2014 never block overlay/dailies on /charts (body hang).
+            // colorIndex = position in show \u2192 same color on daily chart and overlay.
             show.forEach(function (t, idx) {
                 var it = sparkItem(t);
                 if (it) {
@@ -454,7 +458,7 @@
             var seq = ++boardSeq;
             chartsSeq += 1;
             currentClusterId = null;
-            // Do not abortLive() here — it kills the previous map fetch and the
+            // Do not abortLive() here \u2014 it kills the previous map fetch and the
             // browser often fails the next threshold request with "Failed to fetch".
             // Stale responses are ignored via boardSeq.
             document.getElementById("chartsRoot").innerHTML = "";
@@ -475,7 +479,7 @@
                 if (seq !== boardSeq || !report) return;
                 stopHb();
                 applyMapReport(report, dist);
-                st(note || "Map ready — click a cluster");
+                st(note || "Map ready \u2014 click a cluster");
             }
 
             function fetchMap(url, ms, retries) {
@@ -515,11 +519,11 @@
                 startHb("Map (cache)...");
                 return fetchMap(qCached, 20000, 1).then(function (report) {
                     if (seq !== boardSeq) return;
-                    if (report) paint(report, "Map from cache — DB refresh running...");
+                    if (report) paint(report, "Map from cache \u2014 DB refresh running...");
                     startHb("DB refresh...");
                     return fetchMap(qLive, 90000, 0).then(function (live) {
                         if (seq !== boardSeq) return;
-                        if (live) paint(live, "Map ready (DB) — click a cluster");
+                        if (live) paint(live, "Map ready (DB) \u2014 click a cluster");
                         else if (!report) st("Map timeout. Try again.");
                     }).catch(function (e) {
                         if (seq !== boardSeq) return;
@@ -531,7 +535,7 @@
                     startHb("DB refresh...");
                     return fetchMap(qLive, 90000, 0).then(function (live) {
                         if (seq !== boardSeq) return;
-                        if (live) paint(live, "Map ready (DB) — click a cluster");
+                        if (live) paint(live, "Map ready (DB) \u2014 click a cluster");
                     }).catch(function (e2) {
                         if (seq !== boardSeq) return;
                         stopHb();
@@ -544,15 +548,15 @@
             return fetchMap(qCached, 25000, 2).then(function (report) {
                 if (seq !== boardSeq) return;
                 if (mapUsable(report)) {
-                    paint(report, "Map ready — click a cluster");
+                    paint(report, "Map ready \u2014 click a cluster");
                     return;
                 }
-                // Empty live/cache (ok=0/0) — force rebuild once instead of fake "ready"
+                // Empty live/cache (ok=0/0) \u2014 force rebuild once instead of fake "ready"
                 startHb("Map empty, DB rebuild...");
                 return fetchMap(qLive, 90000, 0).then(function (live) {
                     if (seq !== boardSeq) return;
-                    if (mapUsable(live)) paint(live, "Map ready (DB) — click a cluster");
-                    else st("Map empty (ok=0). Press «Обновить из БД».");
+                    if (mapUsable(live)) paint(live, "Map ready (DB) \u2014 click a cluster");
+                    else st("Map empty (ok=0). Press \u00ab\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0438\u0437 \u0411\u0414\u00bb.");
                 });
             }).catch(function (e) {
                 if (seq !== boardSeq) return;
@@ -584,6 +588,10 @@
         }
         st("js-2 fetching map");
         loadBoard(false);
+        } catch (err) {
+            st("js-error: " + (err && err.message ? err.message : String(err)));
+            try { console.error(err); } catch (e1) {}
+        }
     })();
     </script>
 </body>
