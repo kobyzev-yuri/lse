@@ -62,6 +62,36 @@
         .ov-legend i {
             display: inline-block; width: 12px; height: 3px; border-radius: 1px;
         }
+        .method-box {
+            background: #12182a;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 0.55rem 0.75rem;
+            margin: 0.5rem 0 0.85rem;
+            font-size: 0.8rem;
+            color: #cbd5e1;
+            line-height: 1.4;
+        }
+        .method-box summary {
+            cursor: pointer;
+            color: #7dd3fc;
+            font-weight: 600;
+            list-style: none;
+        }
+        .method-box summary::-webkit-details-marker { display: none; }
+        .method-box summary::before { content: "▸ "; color: #64748b; }
+        .method-box[open] summary::before { content: "▾ "; }
+        .method-box .body { margin-top: 0.5rem; white-space: pre-wrap; color: #94a3b8; font-size: 0.78rem; }
+        .method-inline {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            margin: 0 0 0.65rem;
+            line-height: 1.35;
+            padding: 0.45rem 0.6rem;
+            background: #0b1020;
+            border-left: 3px solid #38bdf8;
+            border-radius: 0 6px 6px 0;
+        }
     </style>
     {% include "partials/lse_fetch_shim.html" %}
 </head>
@@ -73,6 +103,11 @@
         <a href="/portfolio/shape-compare" style="color:#94a3b8;border-bottom:2px solid transparent;padding-bottom:0.15rem;text-decoration:none;">На глаз</a>
     </div>
     <p class="muted">Карта групп по форме цены. Ползунок — порог похожести. Клик → оверлей и дневные (SVG, без Chart.js).</p>
+
+    <details class="method-box" id="methodBox">
+        <summary>Метод расчёта (Pearson по нормированной форме, не cosine)</summary>
+        <div class="body" id="methodBody">Загрузка…</div>
+    </details>
 
     <div class="controls">
         <label>Окно
@@ -106,6 +141,7 @@
 
     <div id="clusterBoard"></div>
     <h2 id="detailHead"></h2>
+    <div id="chartsMethodNote" class="method-inline" style="display:none;"></div>
     <div id="chartsRoot"></div>
 
     <script>
@@ -117,6 +153,10 @@
         st("js-0");
         
         var BOOT_REPORT = {{ (boot_report or {}) | tojson }};
+        var METHOD_FALLBACK = {{ (boot_report.method_ru if boot_report and boot_report.method_ru else '') | tojson }} ||
+            "Метод: дневные close → P′=close/close_first → Pearson corr(P′_A,P′_B). " +
+            "Кластеры: hierarchical average-linkage, d=1−corr. Ползунок S% → cut d=1−S/100. " +
+            "Пары на карточке — факт. corr топ-3, не порог. Не cosine.";
 try {
         var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
         var lastReport = null;
@@ -128,6 +168,26 @@ try {
         var liveCtrls = [];
 
         function colorFor(i) { return COLORS[i % COLORS.length]; }
+        function fillMethod(report) {
+            var text = (report && report.method_ru) || METHOD_FALLBACK;
+            var body = document.getElementById("methodBody");
+            if (body) body.textContent = text;
+        }
+        function showChartsMethodNote(selected) {
+            var el = document.getElementById("chartsMethodNote");
+            if (!el) return;
+            var thr = lastReport ? Math.round((1 - Number(lastReport.distance_threshold || 0.12)) * 100) : simPct();
+            var pairs = ((selected && selected.strong_pairs) || []).map(function (p) {
+                return p.a + "–" + p.b + " (" + p.corr + ")";
+            }).join(" · ");
+            el.style.display = "block";
+            el.textContent =
+                "Метрика кластера: Pearson по нормированной форме (P′=close/close_first), не cosine. " +
+                "Порог cut ≈ " + thr + "% (d=1−corr). " +
+                (pairs
+                    ? ("Топ-пары в группе: " + pairs + " — фактические corr, не порог.")
+                    : "Числа пар на карточке — фактические corr, не порог.");
+        }
         function simPct() {
             var el = document.getElementById("simSlider");
             return Number(el && el.value) || 88;
@@ -196,6 +256,7 @@ try {
 
         function applyMapReport(report, dist) {
             lastReport = report;
+            fillMethod(report);
             renderBoard(report.clusters || []);
             var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
             var meta = document.getElementById("metaLine");
@@ -204,6 +265,7 @@ try {
                     "ok=" + (report.n_tickers_ok || 0) + "/" + (report.n_tickers_requested || 0) +
                     " groups=" + (report.n_clusters || 0) +
                     " thr~" + simShow + "%" +
+                    " metric=Pearson(shape)" +
                     " cache=" + (report.cache_source || (report.cache_hit ? "yes" : "live"));
             }
         }
@@ -400,6 +462,7 @@ try {
             var show = members.slice(0, 40);
             head.style.display = "block";
             head.textContent = "Charts: " + (selected.label || "") + " | " + members.join(", ");
+            showChartsMethodNote(selected);
             root.innerHTML = "";
             var overlayHost = document.createElement("div");
             overlayHost.id = "overlayHost";
@@ -488,6 +551,8 @@ try {
             // Stale responses are ignored via boardSeq.
             document.getElementById("chartsRoot").innerHTML = "";
             document.getElementById("detailHead").style.display = "none";
+            var cmn = document.getElementById("chartsMethodNote");
+            if (cmn) { cmn.style.display = "none"; cmn.textContent = ""; }
 
             var qCached = mapQuery(lookback, dist, false);
             var qLive = mapQuery(lookback, dist, true);
@@ -592,6 +657,7 @@ try {
 
         st("js-1");
         syncSim();
+        fillMethod(BOOT_REPORT);
         var reloadBtn = document.getElementById("reloadBtn");
         var lookbackSel = document.getElementById("lookbackSel");
         var daysSel = document.getElementById("daysSel");

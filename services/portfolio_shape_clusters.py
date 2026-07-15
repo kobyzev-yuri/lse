@@ -16,6 +16,25 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+# Единый текст для UI (/portfolio/shape-clusters) и API.
+SHAPE_CLUSTER_METHOD_RU = """Метод расчёта похожести формы графика
+
+1. Источник: дневные close из таблицы quotes за выбранное окно (по умолчанию 126 торговых дней ≈ 6 мес.).
+2. Календарь: ряды выравниваются по общим торговым датам (inner join).
+3. Нормировка пути: P′_t = close_t / close_first — все тикеры стартуют с 1.0 (сравнивается форма, не абсолютная цена).
+4. Похожесть пары A–B: коэффициент корреляции Пирсона corr(P′_A, P′_B) на шкале −1…+1.
+   Это не cosine similarity; Pearson ≈ cosine только после центрирования (вычитания среднего).
+5. Кластеры (hierarchical, average linkage): расстояние d = 1 − corr.
+   Ползунок «порог похожести» S% задаёт cut: distance_threshold = 1 − S/100
+   (пример: 88% → d ≤ 0.12 ⇔ corr ≥ 0.88).
+6. Medoid группы — тикер с максимальной суммой corr к остальным участникам.
+7. Строка на карточке вида KLAC-LRCX (0.977) — фактический Pearson для топ-3 пар внутри кластера, не порог отсечения.
+"""
+
+
+def shape_cluster_method_ru() -> str:
+    return SHAPE_CLUSTER_METHOD_RU.strip()
+
 
 def downsample_closes(values: Sequence[Any], max_points: int = 80) -> List[Optional[float]]:
     """Sparse close path for SVG sparklines (keeps endpoints)."""
@@ -242,6 +261,65 @@ def _pair_examples(group: Sequence[str], corr: pd.DataFrame) -> List[Dict[str, A
     return [{"a": a, "b": b, "corr": round(v, 3)} for v, a, b in pairs[:3]]
 
 
+def pairs_from_corr(corr: pd.DataFrame, tickers: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+    """All unordered pairs with Pearson corr and distance d=1−corr (sorted by corr desc)."""
+    if corr is None or corr.empty:
+        return []
+    cols = [str(t).strip().upper() for t in (tickers or list(corr.columns)) if str(t).strip()]
+    cols = [c for c in cols if c in corr.columns]
+    out: List[Dict[str, Any]] = []
+    for i in range(len(cols)):
+        for j in range(i + 1, len(cols)):
+            a, b = cols[i], cols[j]
+            try:
+                v = float(corr.loc[a, b])
+            except Exception:
+                continue
+            if not math.isfinite(v):
+                continue
+            d = float(np.clip(1.0 - v, 0.0, 2.0))
+            out.append(
+                {
+                    "a": a,
+                    "b": b,
+                    "corr": round(v, 3),
+                    "distance": round(d, 3),
+                }
+            )
+    out.sort(key=lambda x: -float(x["corr"]))
+    return out
+
+
+def pairwise_shape_correlations(
+    engine,
+    tickers: Sequence[str],
+    *,
+    lookback_trading_days: int = 126,
+) -> Dict[str, Any]:
+    """
+    Same metric as shape clusters: Pearson on close/close[0] over aligned calendar.
+    For the manual compare page (2–3 tickers).
+    """
+    wanted = [str(t).strip().upper() for t in tickers if str(t).strip()]
+    series = fetch_close_series(engine, wanted, trading_days=int(lookback_trading_days))
+    missing = [t for t in wanted if t not in series]
+    norm = normalize_paths(series)
+    corr = correlation_matrix(norm)
+    pairs = pairs_from_corr(corr, [t for t in wanted if t in (corr.columns if not corr.empty else [])])
+    return {
+        "lookback_trading_days": int(lookback_trading_days),
+        "tickers": wanted,
+        "n_bars_aligned": int(norm.shape[0]) if not norm.empty else 0,
+        "missing_or_short": missing,
+        "pairs": pairs,
+        "metric": "pearson_shape",
+        "method_ru": (
+            "Pearson corr по нормированной форме P′=close/close_first; "
+            "distance d=1−corr. Не cosine. Тот же метод, что на странице кластеров."
+        ),
+    }
+
+
 def build_shape_clusters(
     engine,
     tickers: Sequence[str],
@@ -286,6 +364,7 @@ def build_shape_clusters(
             "missing_or_short": missing,
             "clusters": [],
             "spark_closes": {},
+            "method_ru": shape_cluster_method_ru(),
             "note_ru": "Недостаточно overlapping quotes для кластеризации.",
         }
 
@@ -353,9 +432,10 @@ def build_shape_clusters(
         "clusters": clusters,
         "top_pairs": top_pairs[:15],
         "spark_closes": spark_closes,
+        "method_ru": shape_cluster_method_ru(),
         "note_ru": (
-            "Кластеры по похожести формы (норм. цена, average-linkage). "
-            "Порог = distance cut (ниже порог похожести → строже группы). "
+            "Кластеры по похожести формы (норм. цена, Pearson, average-linkage). "
+            "Порог = distance cut d=1−corr (ниже порог похожести → строже группы). "
             "Клик по карточке → оверлей + дневные."
         ),
     }
@@ -542,4 +622,6 @@ def build_shape_cluster_page_payload(
     report["selected_cluster"] = selected
     report["overlay"] = overlay
     report["overlay_included"] = bool(include_overlay)
+    if not (report.get("method_ru") or "").strip():
+        report["method_ru"] = shape_cluster_method_ru()
     return report

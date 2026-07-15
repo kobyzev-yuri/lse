@@ -10,6 +10,7 @@ from services.portfolio_shape_clusters import (
     correlation_matrix,
     downsample_closes,
     normalize_paths,
+    shape_cluster_method_ru,
     spark_closes_from_series,
 )
 
@@ -50,6 +51,12 @@ class TestShapeClusters(unittest.TestCase):
         sparks = spark_closes_from_series({"rblx": s}, max_points=40)
         self.assertIn("RBLX", sparks)
         self.assertEqual(len(sparks["RBLX"]), 40)
+
+    def test_method_ru_mentions_pearson_not_cosine(self):
+        text = shape_cluster_method_ru()
+        self.assertIn("Пирсона", text)
+        self.assertIn("не cosine", text.lower())
+        self.assertIn("1 − corr", text)
 
 
 if __name__ == "__main__":

@@ -3838,6 +3838,13 @@ async def portfolio_shape_clusters_page(request: Request):
             return {}
 
     boot = await asyncio.to_thread(_boot)
+    try:
+        from services.portfolio_shape_clusters import shape_cluster_method_ru
+
+        if isinstance(boot, dict) and not (boot.get("method_ru") or "").strip():
+            boot["method_ru"] = shape_cluster_method_ru()
+    except Exception:
+        pass
     return HTMLResponse(
         render_template(
             "portfolio_shape_clusters.html",
