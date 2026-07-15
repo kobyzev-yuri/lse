@@ -3683,7 +3683,10 @@ async def portfolio_daily_chart_page(request: Request):
 @app.get("/portfolio/shape-clusters", response_class=HTMLResponse)
 async def portfolio_shape_clusters_page(request: Request):
     """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
-    return HTMLResponse(render_template("portfolio_shape_clusters.html", {"request": request}))
+    return HTMLResponse(
+        render_template("portfolio_shape_clusters.html", {"request": request}),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
 
 
 @app.get("/api/portfolio/shape-clusters", response_class=JSONResponse)
