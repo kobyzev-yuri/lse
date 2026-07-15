@@ -402,33 +402,45 @@ def build_shape_cluster_page_payload(
             report["cache_hit"] = True
             report["cache_source"] = "memory"
         else:
-            # Disk cache for matching params (survives worker restart).
             disk = _disk_load(disk_path)
-            if disk and disk.get("cache_key") == cache_key and isinstance(disk.get("clusters"), list):
+            if disk and isinstance(disk.get("clusters"), list):
+                if disk.get("cache_key") == cache_key:
+                    report = dict(disk)
+                    report.pop("cache_key", None)
+                    report["cache_hit"] = True
+                    report["cache_source"] = "disk"
+                    _cache_put(cache_key, {k: v for k, v in report.items() if k not in ("cache_hit", "cache_source")})
+                # иначе ниже пересчитаем; disk остаётся fallback только если live упадёт
+
+    if report is None:
+        try:
+            report = build_shape_clusters(
+                engine,
+                tickers,
+                lookback_trading_days=lookback_trading_days,
+                mode=mode,
+                method=method,
+                corr_min=corr_min,
+                max_clusters=max_clusters,
+                distance_threshold=distance_threshold,
+            )
+            _cache_put(cache_key, report)
+            to_disk = dict(report)
+            to_disk["cache_key"] = cache_key
+            _disk_save(disk_path, to_disk)
+            report = dict(report)
+            report["cache_hit"] = False
+            report["cache_source"] = "live"
+        except Exception:
+            # После рестарта/нагрузки — отдать последний disk, чтобы UI не «висел»
+            disk = _disk_load(disk_path)
+            if disk and isinstance(disk.get("clusters"), list):
                 report = dict(disk)
                 report.pop("cache_key", None)
                 report["cache_hit"] = True
-                report["cache_source"] = "disk"
-                _cache_put(cache_key, {k: v for k, v in report.items() if k not in ("cache_hit", "cache_source")})
-
-    if report is None:
-        report = build_shape_clusters(
-            engine,
-            tickers,
-            lookback_trading_days=lookback_trading_days,
-            mode=mode,
-            method=method,
-            corr_min=corr_min,
-            max_clusters=max_clusters,
-            distance_threshold=distance_threshold,
-        )
-        _cache_put(cache_key, report)
-        to_disk = dict(report)
-        to_disk["cache_key"] = cache_key
-        _disk_save(disk_path, to_disk)
-        report = dict(report)
-        report["cache_hit"] = False
-        report["cache_source"] = "live"
+                report["cache_source"] = "disk_fallback"
+            else:
+                raise
 
     clusters = report.get("clusters") or []
     selected = None
