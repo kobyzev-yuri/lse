@@ -1,0 +1,576 @@
+(function () {
+        var stEl = document.getElementById("statusLine");
+        function st(m) {
+            try { if (stEl) stEl.textContent = String(m); } catch (e0) {}
+        }
+        st("js-0");
+        // No large BOOT_REPORT embed — hangs download for this client. Use localStorage + API.
+        var LS_KEY = "lse_shape_map_v3";
+        var BOOT_REPORT = {};
+        function readLocalMap() {
+            try {
+                var raw = localStorage.getItem(LS_KEY);
+                if (!raw) return null;
+                return JSON.parse(raw);
+            } catch (e0) { return null; }
+        }
+        function writeLocalMap(report) {
+            try {
+                if (!report || !report.clusters) return;
+                // Keep sparks; drop bulky unused fields.
+                var slim = {
+                    n_tickers_ok: report.n_tickers_ok,
+                    n_tickers_requested: report.n_tickers_requested,
+                    n_clusters: report.n_clusters,
+                    clusters: report.clusters,
+                    spark_closes: report.spark_closes || {},
+                    distance_threshold: report.distance_threshold,
+                    lookback_trading_days: report.lookback_trading_days,
+                    cache_source: "localStorage",
+                    generated_at_utc: report.generated_at_utc
+                };
+                localStorage.setItem(LS_KEY, JSON.stringify(slim));
+            } catch (e1) {}
+        }
+try {
+        var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
+        var lastReport = null;
+        var currentClusterId = null;
+        var boardSeq = 0;
+        var chartsSeq = 0;
+        var simDebounce = null;
+        var hb = null;
+        var liveCtrls = [];
+
+        function colorFor(i) { return COLORS[i % COLORS.length]; }
+        function simPct() {
+            var el = document.getElementById("simSlider");
+            return Number(el && el.value) || 88;
+        }
+        function distFromSim(pct) {
+            var d = 1 - (pct / 100);
+            return Math.max(0.02, Math.min(0.5, Math.round(d * 1000) / 1000));
+        }
+        function syncSim() {
+            var el = document.getElementById("simVal");
+            if (el) el.textContent = simPct() + "%";
+        }
+        function stopHb() { if (hb) { clearInterval(hb); hb = null; } }
+        function startHb(base) {
+            stopHb();
+            var t0 = Date.now();
+            st(base + " 0s");
+            hb = setInterval(function () {
+                st(base + " " + Math.round((Date.now() - t0) / 1000) + "s");
+            }, 500);
+        }
+        function abortLive() {
+            // Only used when leaving charts; map loads must NOT share this \u2014
+            // aborting in-flight map fetch often surfaces as "Failed to fetch"
+            // on the next threshold request (same connection).
+            liveCtrls.forEach(function (c) {
+                try { c.abort(); } catch (e0) {}
+            });
+            liveCtrls = [];
+        }
+
+        function fetchJson(url, ms, trackAbort) {
+            // Timeout covers headers + body. Per-request AbortController only
+            // (do not put map fetches on shared abortLive list).
+            ms = ms || 25000;
+            var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+            if (ctrl && trackAbort) liveCtrls.push(ctrl);
+            var timedOut = false;
+            var timer = setTimeout(function () {
+                timedOut = true;
+                try { if (ctrl) ctrl.abort(); } catch (e0) {}
+            }, ms);
+            var opts = { cache: "no-store" };
+            if (ctrl) opts.signal = ctrl.signal;
+            function dropCtrl() {
+                clearTimeout(timer);
+                if (!ctrl || !trackAbort) return;
+                liveCtrls = liveCtrls.filter(function (c) { return c !== ctrl; });
+            }
+            return fetch(url, opts).then(function (r) {
+                return r.json().then(function (body) {
+                    dropCtrl();
+                    return { ok: r.ok, status: r.status, body: body };
+                }, function () {
+                    dropCtrl();
+                    return { ok: r.ok, status: r.status, body: {} };
+                });
+            }).catch(function (e) {
+                dropCtrl();
+                if (e && e.name === "AbortError") {
+                    throw new Error(timedOut ? ("timeout " + ms + "ms") : "aborted");
+                }
+                throw new Error(e && e.message ? e.message : String(e));
+            });
+        }
+
+        function applyMapReport(report, dist) {
+            lastReport = report;
+            writeLocalMap(report);
+            renderBoard(report.clusters || []);
+            var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
+            var meta = document.getElementById("metaLine");
+            if (meta) {
+                meta.textContent =
+                    "ok=" + (report.n_tickers_ok || 0) + "/" + (report.n_tickers_requested || 0) +
+                    " groups=" + (report.n_clusters || 0) +
+                    " thr~" + simShow + "%" +
+                    " cache=" + (report.cache_source || (report.cache_hit ? "yes" : "live"));
+            }
+        }
+
+        function mapQuery(lookback, dist, refresh) {
+            var q = "/api/portfolio/shape-clusters?lookback_days=" + encodeURIComponent(lookback) +
+                "&max_clusters=0&distance_threshold=" + encodeURIComponent(String(dist)) +
+                "&method=hierarchical&mode=shape&include_overlay=0";
+            if (refresh) q += "&refresh=1";
+            return q;
+        }
+
+        function sparkSvg(seriesList, overlay) {
+            var w = 640, h = overlay ? 180 : 120, pad = 8;
+            var n = 0;
+            seriesList.forEach(function (s) {
+                if ((s.values || []).length > n) n = s.values.length;
+            });
+            if (n < 2) return "<svg class='spark' viewBox='0 0 " + w + " " + h + "'></svg>";
+            var ymin = Infinity, ymax = -Infinity;
+            seriesList.forEach(function (s) {
+                (s.values || []).forEach(function (v) {
+                    if (v == null || !isFinite(v)) return;
+                    if (v < ymin) ymin = v;
+                    if (v > ymax) ymax = v;
+                });
+            });
+            if (!isFinite(ymin) || !isFinite(ymax) || ymin === ymax) {
+                ymin = 0; ymax = 1;
+            }
+            var paths = seriesList.map(function (s, idx) {
+                var stroke = s.color || colorFor(s.colorIndex != null ? s.colorIndex : idx);
+                var pts = [];
+                (s.values || []).forEach(function (v, i) {
+                    if (v == null || !isFinite(v)) return;
+                    var x = pad + (i / (n - 1)) * (w - 2 * pad);
+                    var y = h - pad - ((v - ymin) / (ymax - ymin)) * (h - 2 * pad);
+                    pts.push(x.toFixed(1) + "," + y.toFixed(1));
+                });
+                if (pts.length < 2) return "";
+                return "<polyline fill='none' stroke='" + stroke + "' stroke-width='1.6' points='" + pts.join(" ") + "'/>";
+            }).join("");
+            return "<svg class='spark" + (overlay ? " overlay" : "") + "' viewBox='0 0 " + w + " " + h + "' preserveAspectRatio='none'>" + paths + "</svg>";
+        }
+
+        function overlayLegendHtml(seriesList) {
+            return "<div class='ov-legend'>" + seriesList.map(function (s) {
+                var c = s.color || colorFor(s.colorIndex || 0);
+                var label = s.ticker || "?";
+                return "<span><i style='background:" + c + "'></i>" + label + "</span>";
+            }).join("") + "</div>";
+        }
+
+        function seriesCloses(it) {
+            if (it && it.closes && it.closes.length) return it.closes;
+            return (it && it.bars || []).map(function (b) { return Number(b.close); });
+        }
+
+        function normCloses(closesOrBars) {
+            var closes;
+            if (closesOrBars && closesOrBars.length && typeof closesOrBars[0] === "object" && closesOrBars[0] !== null) {
+                closes = closesOrBars.map(function (b) { return Number(b.close); });
+            } else {
+                closes = closesOrBars || [];
+            }
+            var out = [];
+            var first = null;
+            closes.forEach(function (c0) {
+                var c = Number(c0);
+                if (!isFinite(c) || c <= 0) { out.push(null); return; }
+                if (first == null) first = c;
+                out.push(c / first);
+            });
+            return out;
+        }
+
+        function appendChartItem(root, it, overlaySeries, colorIndex) {
+            var closes = seriesCloses(it);
+            var vals = normCloses(closes);
+            var ci = colorIndex == null ? 0 : Number(colorIndex);
+            var col = colorFor(ci);
+            if (vals.length >= 2) {
+                overlaySeries.push({ ticker: it.ticker, values: vals, colorIndex: ci, color: col });
+            }
+            var sec = document.createElement("div");
+            sec.className = "chart-section";
+            var h = document.createElement("h2");
+            h.innerHTML = "<span class='swatch' style='background:" + col + "'></span>" + (it.ticker || "-");
+            sec.appendChild(h);
+            if (!closes.length) {
+                var miss = document.createElement("p");
+                miss.className = "muted";
+                miss.textContent = "No quotes";
+                sec.appendChild(miss);
+            } else {
+                sec.innerHTML += sparkSvg([{ values: closes, colorIndex: ci, color: col }], false);
+                var first = Number(closes[0]);
+                var last = Number(closes[closes.length - 1]);
+                var chg = document.createElement("div");
+                chg.className = "chg";
+                if (isFinite(first) && first > 0 && isFinite(last)) {
+                    chg.textContent = "close " + last.toFixed(2) + " (" + (((last / first) - 1) * 100).toFixed(1) + "% window)";
+                }
+                sec.appendChild(chg);
+            }
+            root.appendChild(sec);
+        }
+
+        function renderBoard(clusters) {
+            var board = document.getElementById("clusterBoard");
+            if (!board) return;
+            board.innerHTML = "";
+            (clusters || []).forEach(function (c, idx) {
+                var card = document.createElement("div");
+                card.className = "cluster-card" + (Number(c.cluster_id) === Number(currentClusterId) ? " active" : "");
+                card.style.borderLeftColor = colorFor(idx);
+                card.setAttribute("data-cid", String(c.cluster_id));
+
+                var title = document.createElement("div");
+                title.className = "title";
+                title.textContent = c.label || ("C" + c.cluster_id);
+
+                var meta = document.createElement("div");
+                meta.className = "meta";
+                meta.textContent = (c.size || 0) + " tickers \u2014 click";
+
+                var ticks = document.createElement("div");
+                ticks.className = "tickers";
+                (c.tickers || []).forEach(function (t) {
+                    var s = document.createElement("span");
+                    if (t === c.medoid) s.className = "medoid";
+                    s.textContent = t;
+                    ticks.appendChild(s);
+                });
+
+                card.appendChild(title);
+                card.appendChild(meta);
+                card.appendChild(ticks);
+
+                var pairs = (c.strong_pairs || []).map(function (p) {
+                    return p.a + "-" + p.b + " (" + p.corr + ")";
+                }).join(" | ");
+                if (pairs) {
+                    var pEl = document.createElement("div");
+                    pEl.className = "pair";
+                    pEl.textContent = pairs;
+                    card.appendChild(pEl);
+                }
+
+                card.addEventListener("click", function () {
+                    selectCluster(Number(c.cluster_id));
+                });
+                board.appendChild(card);
+            });
+        }
+
+        function markActive() {
+            Array.prototype.forEach.call(document.querySelectorAll(".cluster-card"), function (card) {
+                if (Number(card.getAttribute("data-cid")) === Number(currentClusterId)) {
+                    card.classList.add("active");
+                } else {
+                    card.classList.remove("active");
+                }
+            });
+        }
+
+        function sparkItem(ticker) {
+            var sc = (lastReport && lastReport.spark_closes) || {};
+            var t = String(ticker || "").toUpperCase();
+            var closes = sc[t] || sc[ticker];
+            if (!closes || !closes.length) return null;
+            return { ticker: t, closes: closes, source: "map_embed" };
+        }
+
+        function selectCluster(cid) {
+            currentClusterId = cid;
+            var cseq = ++chartsSeq;
+            markActive();
+            var selected = null;
+            ((lastReport && lastReport.clusters) || []).forEach(function (c) {
+                if (Number(c.cluster_id) === cid) selected = c;
+            });
+            if (!selected) { st("cluster not found"); return; }
+
+            var head = document.getElementById("detailHead");
+            var root = document.getElementById("chartsRoot");
+            var members = (selected.tickers || []).slice();
+            // Medoid first \u2014 easier to read large clusters
+            var med = selected.medoid;
+            if (med) {
+                members = [med].concat(members.filter(function (t) { return t !== med; }));
+            }
+            // Embed path is free/local \u2014 show all cluster members (was 12 + flaky /charts).
+            var show = members.slice(0, 40);
+            head.style.display = "block";
+            head.textContent = "Charts: " + (selected.label || "") + " | " + members.join(", ");
+            var cmn = document.getElementById("chartsMethodNote");
+            if (cmn) {
+                var thr = lastReport ? Math.round((1 - Number(lastReport.distance_threshold || 0.12)) * 100) : simPct();
+                var pairs = ((selected.strong_pairs || []).map(function (p) {
+                    return p.a + "-" + p.b + " (" + p.corr + ")";
+                })).join(" | ");
+                cmn.style.display = "block";
+                cmn.textContent =
+                    "Pearson по нормированной форме (не cosine). Порог cut ~" + thr + "%. " +
+                    (pairs ? ("Топ-пары: " + pairs + " — факт. corr, не порог.") : "");
+            }
+            root.innerHTML = "";
+            var overlayHost = document.createElement("div");
+            overlayHost.id = "overlayHost";
+            root.appendChild(overlayHost);
+
+            var overlaySeries = [];
+            var doneN = 0;
+            var fromEmbed = 0;
+            var miss = [];
+
+            function paintOverlay() {
+                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
+                overlayHost.innerHTML = "";
+                if (overlaySeries.length >= 2) {
+                    var ov = overlaySeries.slice(0, 12);
+                    overlayHost.innerHTML = "<div class='chart-section'><h2>Overlay (norm)</h2>" +
+                        sparkSvg(ov, true) + overlayLegendHtml(ov) + "</div>";
+                }
+            }
+
+            show.forEach(function (t, idx) {
+                var it = sparkItem(t);
+                if (it) {
+                    appendChartItem(root, it, overlaySeries, idx);
+                    doneN += 1;
+                    fromEmbed += 1;
+                } else {
+                    miss.push(t);
+                    var col = colorFor(idx);
+                    var sec = document.createElement("div");
+                    sec.className = "chart-section";
+                    sec.innerHTML = "<h2><span class='swatch' style='background:" + col + "'></span>" + t +
+                        "</h2><p class='muted'>loading spark...</p>";
+                    root.appendChild(sec);
+                }
+            });
+            paintOverlay();
+            if (members.length > show.length) {
+                var more = document.createElement("p");
+                more.className = "muted";
+                more.textContent = "Showing first " + show.length + " of " + members.length;
+                root.appendChild(more);
+            }
+            var bits = "charts done: " + doneN + "/" + show.length;
+            if (fromEmbed) bits += " embed=" + fromEmbed;
+            if (miss.length) bits += " miss=" + miss.length;
+            if (overlaySeries.length >= 2) bits += " overlay=" + Math.min(12, overlaySeries.length);
+            else bits += " overlay=0";
+            st(bits);
+
+            if (!miss.length) return;
+            var lookEl = document.getElementById("lookbackSel");
+            var lookback = lookEl ? lookEl.value : "126";
+            var url = "/api/portfolio/shape-clusters/sparks?lookback_days=" + encodeURIComponent(lookback) +
+                "&tickers=" + encodeURIComponent(miss.slice(0, 40).join(","));
+            st("sparks fetch " + miss.length + "...");
+            fetchJson(url, 12000, true).then(function (pack) {
+                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
+                if (!pack.ok) throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
+                var sc = (pack.body && pack.body.spark_closes) || {};
+                if (!lastReport) lastReport = { spark_closes: {}, clusters: [] };
+                if (!lastReport.spark_closes) lastReport.spark_closes = {};
+                Object.keys(sc).forEach(function (t) { lastReport.spark_closes[t] = sc[t]; });
+                writeLocalMap(lastReport);
+                selectCluster(cid);
+            }).catch(function (e) {
+                if (cseq !== chartsSeq) return;
+                st("sparks fail: " + (e && e.message ? e.message : String(e)));
+            });
+        }
+
+
+        function mapUsableBoot(report) {
+            if (!report) return false;
+            var ok = Number(report.n_tickers_ok || 0);
+            var cl = report.clusters || [];
+            return ok > 0 && cl.length > 0;
+        }
+
+        function softRefreshMap() {
+            var lookEl = document.getElementById("lookbackSel");
+            var lookback = lookEl ? lookEl.value : "126";
+            var dist = distFromSim(simPct());
+            var seq = boardSeq;
+            var url = mapQuery(lookback, dist, false);
+            // Short timeout — this client often hangs on long fetches.
+            fetchJson(url, 12000, false).then(function (pack) {
+                if (seq !== boardSeq) return;
+                if (pack && pack.ok && mapUsableBoot(pack.body)) {
+                    applyMapReport(pack.body, dist);
+                    st("Map ready - click a cluster");
+                }
+            }).catch(function () { /* keep local/boot map */ });
+        }
+
+        function loadBoard(force) {
+            var lookEl = document.getElementById("lookbackSel");
+            var lookback = lookEl ? lookEl.value : "126";
+            var dist = distFromSim(simPct());
+            var seq = ++boardSeq;
+            chartsSeq += 1;
+            currentClusterId = null;
+            // Do not abortLive() here \u2014 it kills the previous map fetch and the
+            // browser often fails the next threshold request with "Failed to fetch".
+            // Stale responses are ignored via boardSeq.
+            document.getElementById("chartsRoot").innerHTML = "";
+            document.getElementById("detailHead").style.display = "none";
+            var cmn0 = document.getElementById("chartsMethodNote");
+            if (cmn0) { cmn0.style.display = "none"; cmn0.textContent = ""; }
+
+            var qCached = mapQuery(lookback, dist, false);
+            var qLive = mapQuery(lookback, dist, true);
+
+            function mapUsable(report) {
+                if (!report) return false;
+                var ok = Number(report.n_tickers_ok || 0);
+                var nCl = Number(report.n_clusters || 0);
+                var cl = report.clusters || [];
+                return ok > 0 && (nCl > 0 || cl.length > 0);
+            }
+
+            function paint(report, note) {
+                if (seq !== boardSeq || !report) return;
+                stopHb();
+                applyMapReport(report, dist);
+                st(note || "Map ready \u2014 click a cluster");
+            }
+
+            function fetchMap(url, ms, retries) {
+                function once(n, lastErr) {
+                    if (seq !== boardSeq) return Promise.resolve(null);
+                    if (n > retries) {
+                        throw lastErr || new Error("map fail");
+                    }
+                    if (n > 0) startHb("Map retry " + n + "/" + retries + "...");
+                    return fetchJson(url, ms, false).then(function (pack) {
+                        if (seq !== boardSeq) return null;
+                        if (!pack.ok) throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
+                        return pack.body;
+                    }).catch(function (e) {
+                        if (seq !== boardSeq) return null;
+                        var msg = e && e.message ? e.message : String(e);
+                        // Don't retry cancels / connection drops from superseded loads
+                        if (msg === "aborted") return null;
+                        return once(n + 1, e);
+                    });
+                }
+                return once(0, null);
+            }
+
+            function mapFailStatus(e) {
+                var msg = e && e.message ? e.message : String(e);
+                if (msg === "aborted") return;
+                if (String(msg).indexOf("timeout") >= 0) {
+                    st("Map timeout. Press DB refresh.");
+                    return;
+                }
+                st("Map error: " + msg);
+            }
+
+            if (force) {
+                startHb("Map (cache)...");
+                return fetchMap(qCached, 12000, 0).then(function (report) {
+                    if (seq !== boardSeq) return;
+                    if (report) paint(report, "Map from cache - DB refresh...");
+                    startHb("DB refresh...");
+                    return fetchMap(qLive, 25000, 0).then(function (live) {
+                        if (seq !== boardSeq) return;
+                        if (live) paint(live, "Map ready (DB) - click a cluster");
+                        else if (!report) st("Map timeout. Press retry.");
+                    }).catch(function (e) {
+                        if (seq !== boardSeq) return;
+                        if (report) st("DB refresh failed, kept cache");
+                        else mapFailStatus(e);
+                    });
+                }).catch(function (e) {
+                    if (seq !== boardSeq) return;
+                    startHb("DB refresh...");
+                    return fetchMap(qLive, 25000, 0).then(function (live) {
+                        if (seq !== boardSeq) return;
+                        if (live) paint(live, "Map ready (DB) - click a cluster");
+                    }).catch(function (e2) {
+                        if (seq !== boardSeq) return;
+                        stopHb();
+                        mapFailStatus(e2);
+                    });
+                });
+            }
+
+            startHb("Loading map...");
+            return fetchMap(qCached, 12000, 0).then(function (report) {
+                if (seq !== boardSeq) return;
+                if (mapUsable(report)) {
+                    paint(report, "Map ready - click a cluster");
+                    return;
+                }
+                startHb("Map empty, DB rebuild...");
+                return fetchMap(qLive, 25000, 0).then(function (live) {
+                    if (seq !== boardSeq) return;
+                    if (mapUsable(live)) paint(live, "Map ready (DB) - click a cluster");
+                    else st("Map empty. Press retry / DB refresh.");
+                });
+            }).catch(function (e) {
+                if (seq !== boardSeq) return;
+                stopHb();
+                mapFailStatus(e);
+            });
+        }
+
+        st("js-1");
+        syncSim();
+        var reloadBtn = document.getElementById("reloadBtn");
+        var retryMapBtn = document.getElementById("retryMapBtn");
+        var lookbackSel = document.getElementById("lookbackSel");
+        var daysSel = document.getElementById("daysSel");
+        var simSlider = document.getElementById("simSlider");
+        if (reloadBtn) reloadBtn.addEventListener("click", function () { loadBoard(true); });
+        if (retryMapBtn) retryMapBtn.addEventListener("click", function () { loadBoard(false); });
+        if (lookbackSel) lookbackSel.addEventListener("change", function () { loadBoard(false); });
+        if (daysSel) {
+            daysSel.addEventListener("change", function () {
+                if (currentClusterId != null) selectCluster(Number(currentClusterId));
+            });
+        }
+        if (simSlider) {
+            simSlider.addEventListener("input", syncSim);
+            simSlider.addEventListener("change", function () {
+                syncSim();
+                if (simDebounce) clearTimeout(simDebounce);
+                simDebounce = setTimeout(function () { loadBoard(false); }, 500);
+            });
+        }
+        st("js-2");
+        BOOT_REPORT = readLocalMap() || {};
+        if (mapUsableBoot(BOOT_REPORT)) {
+            applyMapReport(BOOT_REPORT, distFromSim(simPct()));
+            st("Map ready (localStorage) - click a cluster");
+            softRefreshMap();
+        } else {
+            st("js-2 fetching map");
+            loadBoard(false);
+        }
+        } catch (err) {
+            st("js-error: " + (err && err.message ? err.message : String(err)));
+            try { console.error(err); } catch (e1) {}
+        }
+    })();
