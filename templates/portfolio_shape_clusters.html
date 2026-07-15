@@ -106,7 +106,7 @@
 
     <details class="method-box" id="methodBox">
         <summary>Метод расчёта (Pearson по нормированной форме, не cosine)</summary>
-        <div class="body" id="methodBody">Загрузка…</div>
+        <div class="body" id="methodBody">{{ method_ru or 'Метод: close → P′=close/close_first → Pearson (не cosine). Hierarchical d=1−corr.' }}</div>
     </details>
 
     <div class="controls">
@@ -136,7 +136,8 @@
     </div>
 
     <div id="metaLine"></div>
-    <div id="statusLine">starting…</div>
+    <div id="statusLine">html</div>
+    <script>try{document.getElementById("statusLine").textContent="html-ok";}catch(e0){}</script>
     <noscript><p class="muted">JavaScript required</p></noscript>
 
     <div id="clusterBoard"></div>
@@ -151,11 +152,9 @@
             try { if (stEl) stEl.textContent = String(m); } catch (e0) {}
         }
         st("js-0");
-        // Map is NOT embedded (keeps HTML small). Fetched via /api/portfolio/shape-clusters.
-        var BOOT_REPORT = {};
-        var METHOD_FALLBACK = {{ (method_ru or '') | tojson }} ||
-            "Метод: close → P'=close/close_first → Pearson. Hierarchical d=1-corr. " +
-            "Пары на карточке — факт. corr, не порог. Не cosine.";
+        // Light SSR: clusters only (no spark_closes). Full map/sparks via API.
+        var BOOT_REPORT = {{ (boot_report or {}) | tojson }};
+        var METHOD_FALLBACK = "Pearson shape corr; d=1-corr. Pair numbers are measured corr, not the cut.";
 try {
         var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
         var lastReport = null;
@@ -168,9 +167,11 @@ try {
 
         function colorFor(i) { return COLORS[i % COLORS.length]; }
         function fillMethod(report) {
-            var text = (report && report.method_ru) || METHOD_FALLBACK;
             var body = document.getElementById("methodBody");
-            if (body) body.textContent = text;
+            if (!body) return;
+            if (report && report.method_ru && !body.textContent.trim()) {
+                body.textContent = report.method_ru;
+            }
         }
         function showChartsMethodNote(selected) {
             var el = document.getElementById("chartsMethodNote");
@@ -439,25 +440,22 @@ try {
             return { ticker: t, closes: closes, source: "map_embed" };
         }
 
-        function selectCluster(cid) {
-            currentClusterId = cid;
-            var cseq = ++chartsSeq;
-            markActive();
-            var selected = null;
-            ((lastReport && lastReport.clusters) || []).forEach(function (c) {
-                if (Number(c.cluster_id) === cid) selected = c;
+        function mergeSparks(sc) {
+            if (!lastReport) lastReport = { spark_closes: {}, clusters: [] };
+            if (!lastReport.spark_closes) lastReport.spark_closes = {};
+            Object.keys(sc || {}).forEach(function (t) {
+                lastReport.spark_closes[t] = sc[t];
             });
-            if (!selected) { st("cluster not found"); return; }
+        }
 
+        function paintClusterCharts(cid, selected, cseq) {
             var head = document.getElementById("detailHead");
             var root = document.getElementById("chartsRoot");
             var members = (selected.tickers || []).slice();
-            // Medoid first \u2014 easier to read large clusters
             var med = selected.medoid;
             if (med) {
                 members = [med].concat(members.filter(function (t) { return t !== med; }));
             }
-            // Embed path is free/local \u2014 show all cluster members (was 12 + flaky /charts).
             var show = members.slice(0, 40);
             head.style.display = "block";
             head.textContent = "Charts: " + (selected.label || "") + " | " + members.join(", ");
@@ -469,7 +467,6 @@ try {
 
             var overlaySeries = [];
             var doneN = 0;
-            var fromEmbed = 0;
             var miss = [];
 
             function paintOverlay() {
@@ -482,37 +479,57 @@ try {
                 }
             }
 
-            // Map embeds only \u2014 never block overlay/dailies on /charts (body hang).
-            // colorIndex = position in show \u2192 same color on daily chart and overlay.
             show.forEach(function (t, idx) {
                 var it = sparkItem(t);
                 if (it) {
                     appendChartItem(root, it, overlaySeries, idx);
                     doneN += 1;
-                    fromEmbed += 1;
                 } else {
                     miss.push(t);
                     var col = colorFor(idx);
                     var sec = document.createElement("div");
                     sec.className = "chart-section";
                     sec.innerHTML = "<h2><span class='swatch' style='background:" + col + "'></span>" + t +
-                        "</h2><p class='muted'>no spark in map</p>";
+                        "</h2><p class='muted'>no spark yet</p>";
                     root.appendChild(sec);
                 }
             });
             paintOverlay();
-            if (members.length > show.length) {
-                var more = document.createElement("p");
-                more.className = "muted";
-                more.textContent = "Showing first " + show.length + " of " + members.length;
-                root.appendChild(more);
-            }
-            var bits = "charts done: " + doneN + "/" + show.length;
-            if (fromEmbed) bits += " embed=" + fromEmbed;
+            var bits = "charts " + doneN + "/" + show.length;
             if (miss.length) bits += " miss=" + miss.length;
             if (overlaySeries.length >= 2) bits += " overlay=" + Math.min(12, overlaySeries.length);
-            else bits += " overlay=0";
             st(bits);
+            return { show: show, miss: miss };
+        }
+
+        function selectCluster(cid) {
+            currentClusterId = cid;
+            var cseq = ++chartsSeq;
+            markActive();
+            var selected = null;
+            ((lastReport && lastReport.clusters) || []).forEach(function (c) {
+                if (Number(c.cluster_id) === cid) selected = c;
+            });
+            if (!selected) { st("cluster not found"); return; }
+
+            var painted = paintClusterCharts(cid, selected, cseq);
+            if (!painted.miss.length) return;
+
+            // SSR light map has no sparks — fetch only missing tickers (small JSON).
+            var lookEl = document.getElementById("lookbackSel");
+            var lookback = lookEl ? lookEl.value : "126";
+            var url = "/api/portfolio/shape-clusters/sparks?lookback_days=" + encodeURIComponent(lookback) +
+                "&tickers=" + encodeURIComponent(painted.miss.slice(0, 40).join(","));
+            st("sparks fetch " + painted.miss.length + "...");
+            fetchJson(url, 20000, true).then(function (pack) {
+                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
+                if (!pack.ok) throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
+                mergeSparks((pack.body && pack.body.spark_closes) || {});
+                paintClusterCharts(cid, selected, cseq);
+            }).catch(function (e) {
+                if (cseq !== chartsSeq) return;
+                st("sparks fail: " + (e && e.message ? e.message : String(e)));
+            });
         }
 
 
@@ -677,9 +694,16 @@ try {
             });
         }
                 st("js-2");
-        // Always fetch map via API — HTML no longer embeds ~50KB BOOT_REPORT.
-        fillMethod({ method_ru: METHOD_FALLBACK });
-        loadBoard(false);
+        fillMethod(BOOT_REPORT);
+        if (mapUsableBoot(BOOT_REPORT)) {
+            applyMapReport(BOOT_REPORT, distFromSim(simPct()));
+            st("Map ready (light SSR) - loading sparks...");
+            // Upgrade sparks/cache in background; board already visible.
+            softRefreshMap();
+        } else {
+            st("js-2 fetching map");
+            loadBoard(false);
+        }
         } catch (err) {
             st("js-error: " + (err && err.message ? err.message : String(err)));
             try { console.error(err); } catch (e1) {}
