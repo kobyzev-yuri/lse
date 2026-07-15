@@ -414,7 +414,8 @@ def build_shape_clusters(
     cut = "maxclust" if int(max_clusters) >= 2 else "distance"
     # Embed sparklines in map JSON so UI click needs no second /charts fetch
     # (secondary fetches intermittently hang >20s for this client even at ~1KB).
-    spark_closes = spark_closes_from_series(series, max_points=48)
+    # 24 points keeps API/HTML payloads small for flaky browser downloads.
+    spark_closes = spark_closes_from_series(series, max_points=24)
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "mode": mode_u,
@@ -559,9 +560,9 @@ def build_shape_cluster_page_payload(
     from services.shape_cluster_universe import shape_cluster_tickers
 
     tickers = shape_cluster_tickers()
-    # v2: include spark_closes in map JSON (bust old disk/memory without embeds)
+    # v3: spark_closes max_points=24 (smaller API body for flaky clients)
     cache_key = (
-        f"v2spark|{mode}|{method}|{lookback_trading_days}|"
+        f"v3spark24|{mode}|{method}|{lookback_trading_days}|"
         f"{corr_min:.4f}|{max_clusters}|{distance_threshold:.4f}"
     )
     disk_path = default_shape_clusters_path()

@@ -121,8 +121,10 @@
     </div>
 
     <div id="metaLine"></div>
-    <div id="statusLine">boot</div>
+    <div id="statusLine">html</div>
+    <script>try{document.getElementById("statusLine").textContent="html-ok";}catch(e0){}</script>
     <noscript><p class="muted">JavaScript required</p></noscript>
+    <p class="muted" style="margin:0.25rem 0;"><button type="button" id="retryMapBtn">Повторить загрузку карты</button></p>
 
     <div id="clusterBoard"></div>
     <h2 id="detailHead"></h2>
@@ -136,8 +138,34 @@
             try { if (stEl) stEl.textContent = String(m); } catch (e0) {}
         }
         st("js-0");
-        
-        var BOOT_REPORT = {{ (boot_report or {}) | tojson }};
+        // No large BOOT_REPORT embed — hangs download for this client. Use localStorage + API.
+        var LS_KEY = "lse_shape_map_v3";
+        var BOOT_REPORT = {};
+        function readLocalMap() {
+            try {
+                var raw = localStorage.getItem(LS_KEY);
+                if (!raw) return null;
+                return JSON.parse(raw);
+            } catch (e0) { return null; }
+        }
+        function writeLocalMap(report) {
+            try {
+                if (!report || !report.clusters) return;
+                // Keep sparks; drop bulky unused fields.
+                var slim = {
+                    n_tickers_ok: report.n_tickers_ok,
+                    n_tickers_requested: report.n_tickers_requested,
+                    n_clusters: report.n_clusters,
+                    clusters: report.clusters,
+                    spark_closes: report.spark_closes || {},
+                    distance_threshold: report.distance_threshold,
+                    lookback_trading_days: report.lookback_trading_days,
+                    cache_source: "localStorage",
+                    generated_at_utc: report.generated_at_utc
+                };
+                localStorage.setItem(LS_KEY, JSON.stringify(slim));
+            } catch (e1) {}
+        }
 try {
         var COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#22d3ee", "#e879f9", "#86efac", "#f87171", "#c084fc", "#2dd4bf"];
         var lastReport = null;
@@ -217,6 +245,7 @@ try {
 
         function applyMapReport(report, dist) {
             lastReport = report;
+            writeLocalMap(report);
             renderBoard(report.clusters || []);
             var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
             var meta = document.getElementById("metaLine");
@@ -499,13 +528,14 @@ try {
             var dist = distFromSim(simPct());
             var seq = boardSeq;
             var url = mapQuery(lookback, dist, false);
-            fetchJson(url, 20000, false).then(function (pack) {
+            // Short timeout — this client often hangs on long fetches.
+            fetchJson(url, 12000, false).then(function (pack) {
                 if (seq !== boardSeq) return;
                 if (pack && pack.ok && mapUsableBoot(pack.body)) {
                     applyMapReport(pack.body, dist);
                     st("Map ready - click a cluster");
                 }
-            }).catch(function () { /* keep boot map */ });
+            }).catch(function () { /* keep local/boot map */ });
         }
 
         function loadBoard(force) {
@@ -574,27 +604,26 @@ try {
             }
 
             if (force) {
-                // Soft refresh: paint cache first, rebuild in background (avoids UI freeze on live SQL).
                 startHb("Map (cache)...");
-                return fetchMap(qCached, 20000, 1).then(function (report) {
+                return fetchMap(qCached, 12000, 0).then(function (report) {
                     if (seq !== boardSeq) return;
-                    if (report) paint(report, "Map from cache \u2014 DB refresh running...");
+                    if (report) paint(report, "Map from cache - DB refresh...");
                     startHb("DB refresh...");
-                    return fetchMap(qLive, 90000, 0).then(function (live) {
+                    return fetchMap(qLive, 25000, 0).then(function (live) {
                         if (seq !== boardSeq) return;
-                        if (live) paint(live, "Map ready (DB) \u2014 click a cluster");
-                        else if (!report) st("Map timeout. Try again.");
+                        if (live) paint(live, "Map ready (DB) - click a cluster");
+                        else if (!report) st("Map timeout. Press retry.");
                     }).catch(function (e) {
                         if (seq !== boardSeq) return;
-                        if (report) st("DB refresh failed, kept cache: " + (e && e.message ? e.message : String(e)));
+                        if (report) st("DB refresh failed, kept cache");
                         else mapFailStatus(e);
                     });
                 }).catch(function (e) {
                     if (seq !== boardSeq) return;
                     startHb("DB refresh...");
-                    return fetchMap(qLive, 90000, 0).then(function (live) {
+                    return fetchMap(qLive, 25000, 0).then(function (live) {
                         if (seq !== boardSeq) return;
-                        if (live) paint(live, "Map ready (DB) \u2014 click a cluster");
+                        if (live) paint(live, "Map ready (DB) - click a cluster");
                     }).catch(function (e2) {
                         if (seq !== boardSeq) return;
                         stopHb();
@@ -604,18 +633,17 @@ try {
             }
 
             startHb("Loading map...");
-            return fetchMap(qCached, 20000, 0).then(function (report) {
+            return fetchMap(qCached, 12000, 0).then(function (report) {
                 if (seq !== boardSeq) return;
                 if (mapUsable(report)) {
-                    paint(report, "Map ready \u2014 click a cluster");
+                    paint(report, "Map ready - click a cluster");
                     return;
                 }
-                // Empty live/cache (ok=0/0) \u2014 force rebuild once instead of fake "ready"
                 startHb("Map empty, DB rebuild...");
-                return fetchMap(qLive, 90000, 0).then(function (live) {
+                return fetchMap(qLive, 25000, 0).then(function (live) {
                     if (seq !== boardSeq) return;
-                    if (mapUsable(live)) paint(live, "Map ready (DB) \u2014 click a cluster");
-                    else st("Map empty (ok=0). Press \u00ab\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0438\u0437 \u0411\u0414\u00bb.");
+                    if (mapUsable(live)) paint(live, "Map ready (DB) - click a cluster");
+                    else st("Map empty. Press retry / DB refresh.");
                 });
             }).catch(function (e) {
                 if (seq !== boardSeq) return;
@@ -627,10 +655,12 @@ try {
         st("js-1");
         syncSim();
         var reloadBtn = document.getElementById("reloadBtn");
+        var retryMapBtn = document.getElementById("retryMapBtn");
         var lookbackSel = document.getElementById("lookbackSel");
         var daysSel = document.getElementById("daysSel");
         var simSlider = document.getElementById("simSlider");
         if (reloadBtn) reloadBtn.addEventListener("click", function () { loadBoard(true); });
+        if (retryMapBtn) retryMapBtn.addEventListener("click", function () { loadBoard(false); });
         if (lookbackSel) lookbackSel.addEventListener("change", function () { loadBoard(false); });
         if (daysSel) {
             daysSel.addEventListener("change", function () {
@@ -645,11 +675,11 @@ try {
                 simDebounce = setTimeout(function () { loadBoard(false); }, 500);
             });
         }
-                st("js-2");
+        st("js-2");
+        BOOT_REPORT = readLocalMap() || {};
         if (mapUsableBoot(BOOT_REPORT)) {
             applyMapReport(BOOT_REPORT, distFromSim(simPct()));
-            st("Map ready (boot) - click a cluster");
-            // optional silent refresh — never block UI; 1 attempt, no retry spam
+            st("Map ready (localStorage) - click a cluster");
             softRefreshMap();
         } else {
             st("js-2 fetching map");
