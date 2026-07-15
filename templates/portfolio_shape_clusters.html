@@ -62,29 +62,16 @@
         .ov-legend i {
             display: inline-block; width: 12px; height: 3px; border-radius: 1px;
         }
-        .compare-box {
-            margin: 0.85rem 0 1rem;
-            padding: 0.7rem 0.8rem;
-            background: #12182a;
-            border: 1px solid #334155;
-            border-radius: 10px;
-        }
-        .compare-box h2 {
-            font-size: 0.92rem; margin: 0 0 0.35rem; color: #e2e8f0; font-weight: 650;
-        }
-        .compare-box .hint { font-size: 0.75rem; color: #64748b; margin: 0 0 0.55rem; }
-        .compare-row {
-            display: flex; flex-wrap: wrap; gap: 0.5rem 0.65rem; align-items: center;
-        }
-        .compare-row select { min-width: 6.5rem; }
-        #compareRoot { margin-top: 0.55rem; }
-        #compareRoot:empty { display: none; }
     </style>
     {% include "partials/lse_fetch_shim.html" %}
 </head>
 <body>
 {% include "partials/site_nav_standalone.html" %}
     <h1>Похожесть графиков · кластеры</h1>
+    <div class="tabs" style="display:flex;gap:0.75rem;margin:0.35rem 0 0.85rem;font-size:0.9rem;">
+        <a class="active" href="/portfolio/shape-clusters" style="color:#7dd3fc;border-bottom:2px solid #38bdf8;padding-bottom:0.15rem;font-weight:650;text-decoration:none;">Кластеры</a>
+        <a href="/portfolio/shape-compare" style="color:#94a3b8;border-bottom:2px solid transparent;padding-bottom:0.15rem;text-decoration:none;">На глаз</a>
+    </div>
     <p class="muted">Карта групп по форме цены. Ползунок — порог похожести. Клик → оверлей и дневные (SVG, без Chart.js).</p>
 
     <div class="controls">
@@ -114,19 +101,6 @@
     </div>
 
     <div id="metaLine"></div>
-
-    <div class="compare-box">
-        <h2>Сравнить на глаз</h2>
-        <p class="hint">Отдельно от кластеров: 2–3 тикера из списка → нормированный оверлей (те же closes, что в карте).</p>
-        <div class="compare-row">
-            <label>A <select id="cmpA"><option value="">—</option></select></label>
-            <label>B <select id="cmpB"><option value="">—</option></select></label>
-            <label>C <select id="cmpC"><option value="">—</option></select></label>
-            <button type="button" id="cmpBtn">Оверлей</button>
-            <button type="button" id="cmpClearBtn">Сброс</button>
-        </div>
-        <div id="compareRoot"></div>
-    </div>
 
     <div id="clusterBoard"></div>
     <div id="statusLine">boot</div>
@@ -214,81 +188,8 @@
             });
         }
 
-        function universeTickers(report) {
-            var set = {};
-            var sc = (report && report.spark_closes) || {};
-            Object.keys(sc).forEach(function (t) { set[String(t).toUpperCase()] = true; });
-            ((report && report.clusters) || []).forEach(function (c) {
-                (c.tickers || []).forEach(function (t) { set[String(t).toUpperCase()] = true; });
-            });
-            return Object.keys(set).sort();
-        }
-
-        function fillCompareSelects(report) {
-            var tickers = universeTickers(report);
-            ["cmpA", "cmpB", "cmpC"].forEach(function (id) {
-                var sel = document.getElementById(id);
-                if (!sel) return;
-                var cur = sel.value;
-                sel.innerHTML = "<option value=\"\">—</option>";
-                tickers.forEach(function (t) {
-                    var opt = document.createElement("option");
-                    opt.value = t;
-                    opt.textContent = t;
-                    if (t === cur) opt.selected = true;
-                    sel.appendChild(opt);
-                });
-            });
-        }
-
-        function paintCompareOverlay() {
-            var root = document.getElementById("compareRoot");
-            if (!root) return;
-            var picks = ["cmpA", "cmpB", "cmpC"].map(function (id) {
-                var el = document.getElementById(id);
-                return el ? String(el.value || "").toUpperCase() : "";
-            }).filter(Boolean);
-            // unique, keep order
-            var seen = {};
-            picks = picks.filter(function (t) {
-                if (seen[t]) return false;
-                seen[t] = true;
-                return true;
-            });
-            if (picks.length < 2) {
-                root.innerHTML = "<p class='muted'>Выберите минимум 2 тикера.</p>";
-                return;
-            }
-            if (picks.length > 3) picks = picks.slice(0, 3);
-            var series = [];
-            var miss = [];
-            picks.forEach(function (t, idx) {
-                var it = sparkItem(t);
-                if (!it) { miss.push(t); return; }
-                var vals = normCloses(seriesCloses(it));
-                if (vals.length < 2) { miss.push(t); return; }
-                series.push({
-                    ticker: t,
-                    values: vals,
-                    colorIndex: idx,
-                    color: colorFor(idx)
-                });
-            });
-            if (series.length < 2) {
-                root.innerHTML = "<p class='muted'>Нет spark в карте: " + (miss.join(", ") || "—") +
-                    ". Сначала дождитесь загрузки карты.</p>";
-                return;
-            }
-            root.innerHTML = "<div class='chart-section'><h2>Сравнение (norm) · " +
-                series.map(function (s) { return s.ticker; }).join(" · ") + "</h2>" +
-                sparkSvg(series, true) + overlayLegendHtml(series) +
-                (miss.length ? "<p class='muted'>нет данных: " + miss.join(", ") + "</p>" : "") +
-                "</div>";
-        }
-
         function applyMapReport(report, dist) {
             lastReport = report;
-            fillCompareSelects(report);
             renderBoard(report.clusters || []);
             var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
             var meta = document.getElementById("metaLine");
@@ -298,11 +199,6 @@
                     " groups=" + (report.n_clusters || 0) +
                     " thr~" + simShow + "%" +
                     " cache=" + (report.cache_source || (report.cache_hit ? "yes" : "live"));
-            }
-            // keep eye-compare if selections still valid after map refresh
-            var root = document.getElementById("compareRoot");
-            if (root && root.innerHTML && root.querySelector(".chart-section")) {
-                paintCompareOverlay();
             }
         }
 
@@ -671,8 +567,6 @@
         var lookbackSel = document.getElementById("lookbackSel");
         var daysSel = document.getElementById("daysSel");
         var simSlider = document.getElementById("simSlider");
-        var cmpBtn = document.getElementById("cmpBtn");
-        var cmpClearBtn = document.getElementById("cmpClearBtn");
         if (reloadBtn) reloadBtn.addEventListener("click", function () { loadBoard(true); });
         if (lookbackSel) lookbackSel.addEventListener("change", function () { loadBoard(false); });
         if (daysSel) {
@@ -686,17 +580,6 @@
                 syncSim();
                 if (simDebounce) clearTimeout(simDebounce);
                 simDebounce = setTimeout(function () { loadBoard(false); }, 500);
-            });
-        }
-        if (cmpBtn) cmpBtn.addEventListener("click", paintCompareOverlay);
-        if (cmpClearBtn) {
-            cmpClearBtn.addEventListener("click", function () {
-                ["cmpA", "cmpB", "cmpC"].forEach(function (id) {
-                    var el = document.getElementById(id);
-                    if (el) el.value = "";
-                });
-                var root = document.getElementById("compareRoot");
-                if (root) root.innerHTML = "";
             });
         }
         st("js-2 fetching map");

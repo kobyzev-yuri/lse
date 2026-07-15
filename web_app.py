@@ -3825,6 +3825,20 @@ async def portfolio_shape_clusters_page(request: Request):
     )
 
 
+@app.get("/portfolio/shape-compare", response_class=HTMLResponse)
+async def portfolio_shape_compare_page(request: Request):
+    """UI: сравнить 2–3 тикера на глаз (норм. оверлей), отдельно от кластеров."""
+    from services.shape_cluster_universe import shape_cluster_tickers
+
+    return HTMLResponse(
+        render_template(
+            "portfolio_shape_compare.html",
+            {"request": request, "shape_tickers": shape_cluster_tickers()},
+        ),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
 @app.get("/api/portfolio/shape-clusters/app.js")
 async def api_portfolio_shape_clusters_app_js():
     """Serve board UI JS with explicit charset (avoids stuck <script src> onload)."""
