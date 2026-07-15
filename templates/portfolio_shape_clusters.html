@@ -136,9 +136,8 @@
     </div>
 
     <div id="metaLine"></div>
-    <div id="statusLine">parsing…</div>
+    <div id="statusLine">starting…</div>
     <noscript><p class="muted">JavaScript required</p></noscript>
-    <script>try{document.getElementById("statusLine").textContent="loading script…";}catch(e){}</script>
 
     <div id="clusterBoard"></div>
     <h2 id="detailHead"></h2>
@@ -152,10 +151,9 @@
             try { if (stEl) stEl.textContent = String(m); } catch (e0) {}
         }
         st("js-0");
-        
-        var BOOT_REPORT = {{ (boot_report or {}) | tojson }};
-        // Short fallback only — full method_ru lives in BOOT_REPORT / API (avoid duplicating ~1KB in HTML).
-        var METHOD_FALLBACK =
+        // Map is NOT embedded (keeps HTML small). Fetched via /api/portfolio/shape-clusters.
+        var BOOT_REPORT = {};
+        var METHOD_FALLBACK = {{ (method_ru or '') | tojson }} ||
             "Метод: close → P'=close/close_first → Pearson. Hierarchical d=1-corr. " +
             "Пары на карточке — факт. corr, не порог. Не cosine.";
 try {
@@ -679,15 +677,9 @@ try {
             });
         }
                 st("js-2");
-        if (mapUsableBoot(BOOT_REPORT)) {
-            applyMapReport(BOOT_REPORT, distFromSim(simPct()));
-            st("Map ready (boot/" + ((BOOT_REPORT && BOOT_REPORT.cache_source) || "?") + ") - click a cluster");
-            // optional silent refresh — never block UI; 1 attempt, no retry spam
-            softRefreshMap();
-        } else {
-            st("js-2 fetching map (SSR cache miss)");
-            loadBoard(false);
-        }
+        // Always fetch map via API — HTML no longer embeds ~50KB BOOT_REPORT.
+        fillMethod({ method_ru: METHOD_FALLBACK });
+        loadBoard(false);
         } catch (err) {
             st("js-error: " + (err && err.message ? err.message : String(err)));
             try { console.error(err); } catch (e1) {}

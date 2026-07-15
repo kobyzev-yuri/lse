@@ -3819,38 +3819,23 @@ async def portfolio_daily_chart_page(request: Request):
 @app.get("/portfolio/shape-clusters", response_class=HTMLResponse)
 async def portfolio_shape_clusters_page(request: Request):
     """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
-
-    def _boot() -> Dict[str, Any]:
-        # SSR embeds map only from memory/disk — never block HTML on live SQL rebuild.
-        # Client loadBoard() rebuilds via API when cache_miss.
-        try:
-            from report_generator import get_engine
-            from services.portfolio_shape_clusters import build_shape_cluster_page_payload
-
-            return build_shape_cluster_page_payload(
-                get_engine(),
-                lookback_trading_days=126,
-                max_clusters=0,
-                distance_threshold=0.12,
-                force_refresh=False,
-                cache_only=True,
-            )
-        except Exception as e:
-            logger.warning("shape-clusters page boot payload failed: %s", e)
-            return {}
-
-    boot = await asyncio.to_thread(_boot)
+    # Do NOT embed full map JSON in HTML (~50KB): browser stays on
+    # "loading script…" until the huge inline script parses. Map loads via API.
+    method_ru = ""
     try:
         from services.portfolio_shape_clusters import shape_cluster_method_ru
 
-        if isinstance(boot, dict) and not (boot.get("method_ru") or "").strip():
-            boot["method_ru"] = shape_cluster_method_ru()
+        method_ru = shape_cluster_method_ru()
     except Exception:
         pass
     return HTMLResponse(
         render_template(
             "portfolio_shape_clusters.html",
-            {"request": request, "boot_report": boot},
+            {
+                "request": request,
+                "boot_report": {},
+                "method_ru": method_ru,
+            },
         ),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
