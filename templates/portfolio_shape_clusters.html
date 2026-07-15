@@ -98,8 +98,10 @@
         var lastReport = null;
         var currentClusterId = null;
         var boardSeq = 0;
+        var chartsSeq = 0;
         var simDebounce = null;
         var hb = null;
+        var liveCtrls = [];
         var stEl = document.getElementById("statusLine");
 
         function st(m) { if (stEl) stEl.textContent = m; }
@@ -125,29 +127,63 @@
                 st(base + " " + Math.round((Date.now() - t0) / 1000) + "s");
             }, 500);
         }
+        function abortLive() {
+            liveCtrls.forEach(function (c) {
+                try { c.abort(); } catch (e0) {}
+            });
+            liveCtrls = [];
+        }
 
         function fetchJson(url, ms) {
-            // Timeout covers headers + body (r.json). Header-only resolve left hung ~100KB charts.
+            // Timeout covers headers + body. Track controllers so map/refresh can cancel charts.
             ms = ms || 25000;
             var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+            if (ctrl) liveCtrls.push(ctrl);
             var timer = setTimeout(function () {
                 try { if (ctrl) ctrl.abort(); } catch (e0) {}
             }, ms);
             var opts = { cache: "no-store" };
             if (ctrl) opts.signal = ctrl.signal;
+            function dropCtrl() {
+                clearTimeout(timer);
+                if (!ctrl) return;
+                liveCtrls = liveCtrls.filter(function (c) { return c !== ctrl; });
+            }
             return fetch(url, opts).then(function (r) {
                 return r.json().then(function (body) {
-                    clearTimeout(timer);
+                    dropCtrl();
                     return { ok: r.ok, status: r.status, body: body };
                 }, function () {
-                    clearTimeout(timer);
+                    dropCtrl();
                     return { ok: r.ok, status: r.status, body: {} };
                 });
             }).catch(function (e) {
-                clearTimeout(timer);
+                dropCtrl();
                 var msg = (e && e.name === "AbortError") ? ("timeout " + ms + "ms") : (e && e.message ? e.message : String(e));
                 throw new Error(msg);
             });
+        }
+
+        function applyMapReport(report, dist) {
+            lastReport = report;
+            renderBoard(report.clusters || []);
+            var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
+            var meta = document.getElementById("metaLine");
+            if (meta) {
+                meta.textContent =
+                    "ok=" + (report.n_tickers_ok || 0) + "/" + (report.n_tickers_requested || 0) +
+                    " groups=" + (report.n_clusters || 0) +
+                    " thr~" + simShow + "%" +
+                    " cache=" + (report.cache_source || (report.cache_hit ? "yes" : "live"));
+            }
+        }
+
+        function mapQuery(lookback, dist, refresh) {
+            var q = "/api/portfolio/shape-clusters?lookback_days=" + encodeURIComponent(lookback) +
+                "&max_clusters=0&distance_threshold=" + encodeURIComponent(String(dist)) +
+                "&method=hierarchical&mode=shape&include_overlay=0";
+            if (refresh) q += "&refresh=1";
+            return q;
         }
 
         function sparkSvg(seriesList, overlay) {
@@ -293,6 +329,7 @@
 
         function selectCluster(cid) {
             currentClusterId = cid;
+            var cseq = ++chartsSeq;
             markActive();
             var selected = null;
             ((lastReport && lastReport.clusters) || []).forEach(function (c) {
@@ -313,14 +350,14 @@
             overlayHost.id = "overlayHost";
             root.appendChild(overlayHost);
 
-            // Small batches: ~8–15KB each — large 12-ticker JSON (~100KB) often hangs mid-body.
-            var batchSize = 2;
+            // One ticker at a time (~1–2KB) — most reliable on this client path.
+            var batchSize = 1;
             var overlaySeries = [];
             var doneN = 0;
             var failed = 0;
 
             function finish() {
-                if (Number(currentClusterId) !== cid) return;
+                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
                 overlayHost.innerHTML = "";
                 if (overlaySeries.length >= 2) {
                     overlayHost.innerHTML = "<div class='chart-section'><h2>Overlay (norm)</h2>" +
@@ -336,18 +373,18 @@
             }
 
             function loadBatch(offset) {
-                if (Number(currentClusterId) !== cid) return Promise.resolve();
+                if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return Promise.resolve();
                 if (offset >= show.length) {
                     finish();
                     return Promise.resolve();
                 }
                 var batch = show.slice(offset, offset + batchSize);
-                st("charts: " + (offset + 1) + "-" + Math.min(offset + batch.length, show.length) + "/" + show.length + "...");
+                st("charts: " + (offset + 1) + "/" + show.length + " " + batch[0] + "...");
                 var url = "/api/portfolio/shape-clusters/charts?days=" + encodeURIComponent(days) +
                     "&tickers=" + encodeURIComponent(batch.join(",")) +
                     "&compact=1&max_points=80";
-                return fetchJson(url, 20000).then(function (pack) {
-                    if (Number(currentClusterId) !== cid) return;
+                return fetchJson(url, 15000).then(function (pack) {
+                    if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
                     if (!pack.ok) throw new Error("HTTP " + pack.status);
                     var items = (pack.body && pack.body.charts) || [];
                     items.forEach(function (it) {
@@ -356,11 +393,11 @@
                     });
                     return loadBatch(offset + batchSize);
                 }).catch(function (e) {
-                    if (Number(currentClusterId) !== cid) return;
+                    if (cseq !== chartsSeq || Number(currentClusterId) !== cid) return;
                     failed += batch.length;
                     var err = document.createElement("p");
                     err.className = "muted";
-                    err.textContent = "Batch " + batch.join(",") + ": " + (e && e.message ? e.message : String(e));
+                    err.textContent = batch.join(",") + ": " + (e && e.message ? e.message : String(e));
                     root.appendChild(err);
                     return loadBatch(offset + batchSize);
                 });
@@ -374,60 +411,96 @@
             var lookback = lookEl ? lookEl.value : "126";
             var dist = distFromSim(simPct());
             var seq = ++boardSeq;
+            chartsSeq += 1;
             currentClusterId = null;
+            abortLive();
             document.getElementById("chartsRoot").innerHTML = "";
             document.getElementById("detailHead").style.display = "none";
-            startHb(force ? "DB refresh..." : "Loading map...");
 
-            var q = "/api/portfolio/shape-clusters?lookback_days=" + encodeURIComponent(lookback) +
-                "&max_clusters=0&distance_threshold=" + encodeURIComponent(String(dist)) +
-                "&method=hierarchical&mode=shape&include_overlay=0";
-            if (force) q += "&refresh=1";
+            var qCached = mapQuery(lookback, dist, false);
+            var qLive = mapQuery(lookback, dist, true);
 
-            function attempt(n, lastErr) {
-                if (seq !== boardSeq) return Promise.resolve();
-                if (n >= 3) {
-                    stopHb();
-                    var em = lastErr && lastErr.message ? String(lastErr.message) : String(lastErr || "");
-                    st(em.indexOf("timeout") >= 0 ? "Map timeout. Press DB refresh." : ("Map error: " + em));
-                    return Promise.resolve();
+            function paint(report, note) {
+                if (seq !== boardSeq || !report) return;
+                stopHb();
+                applyMapReport(report, dist);
+                st(note || "Map ready — click a cluster");
+            }
+
+            function fetchMap(url, ms, retries) {
+                function once(n, lastErr) {
+                    if (seq !== boardSeq) return Promise.resolve(null);
+                    if (n > retries) {
+                        throw lastErr || new Error("map fail");
+                    }
+                    if (n > 0) startHb("Map retry " + n + "/" + retries + "...");
+                    return fetchJson(url, ms).then(function (pack) {
+                        if (seq !== boardSeq) return null;
+                        if (!pack.ok) throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
+                        return pack.body;
+                    }).catch(function (e) {
+                        return once(n + 1, e);
+                    });
                 }
-                if (n > 0) startHb("Map retry " + (n + 1) + "/3...");
-                return fetchJson(q, force ? 60000 : 25000).then(function (pack) {
-                    if (seq !== boardSeq) return null;
-                    if (!pack.ok) {
-                        throw new Error((pack.body && pack.body.detail) || ("HTTP " + pack.status));
-                    }
-                    return pack.body;
-                }).then(function (report) {
-                    if (!report || seq !== boardSeq) return;
-                    stopHb();
-                    lastReport = report;
-                    renderBoard(report.clusters || []);
-                    var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
-                    var meta = document.getElementById("metaLine");
-                    if (meta) {
-                        meta.textContent =
-                            "ok=" + (report.n_tickers_ok || 0) + "/" + (report.n_tickers_requested || 0) +
-                            " groups=" + (report.n_clusters || 0) +
-                            " thr~" + simShow + "%" +
-                            " cache=" + (report.cache_source || (report.cache_hit ? "yes" : "live"));
-                    }
-                    st("Map ready — click a cluster");
+                return once(0, null);
+            }
+
+            if (force) {
+                // Soft refresh: paint cache first, rebuild in background (avoids UI freeze on live SQL).
+                startHb("Map (cache)...");
+                return fetchMap(qCached, 20000, 1).then(function (report) {
+                    if (seq !== boardSeq) return;
+                    if (report) paint(report, "Map from cache — DB refresh running...");
+                    startHb("DB refresh...");
+                    return fetchMap(qLive, 90000, 0).then(function (live) {
+                        if (seq !== boardSeq) return;
+                        if (live) paint(live, "Map ready (DB) — click a cluster");
+                        else if (!report) st("Map timeout. Try again.");
+                    }).catch(function (e) {
+                        if (seq !== boardSeq) return;
+                        if (report) st("DB refresh failed, kept cache: " + (e && e.message ? e.message : String(e)));
+                        else st("Map error: " + (e && e.message ? e.message : String(e)));
+                    });
                 }).catch(function (e) {
-                    return attempt(n + 1, e);
+                    if (seq !== boardSeq) return;
+                    startHb("DB refresh...");
+                    return fetchMap(qLive, 90000, 0).then(function (live) {
+                        if (seq !== boardSeq) return;
+                        if (live) paint(live, "Map ready (DB) — click a cluster");
+                    }).catch(function (e2) {
+                        if (seq !== boardSeq) return;
+                        stopHb();
+                        st("Map error: " + (e2 && e2.message ? e2.message : String(e2)));
+                    });
                 });
             }
-            return attempt(0, null);
+
+            startHb("Loading map...");
+            return fetchMap(qCached, 25000, 2).then(function (report) {
+                if (seq !== boardSeq) return;
+                if (report) paint(report, "Map ready — click a cluster");
+            }).catch(function (e) {
+                if (seq !== boardSeq) return;
+                stopHb();
+                st((String(e && e.message || "").indexOf("timeout") >= 0)
+                    ? "Map timeout. Press DB refresh."
+                    : ("Map error: " + (e && e.message ? e.message : String(e))));
+            });
         }
 
         st("js-1");
         syncSim();
         var reloadBtn = document.getElementById("reloadBtn");
         var lookbackSel = document.getElementById("lookbackSel");
+        var daysSel = document.getElementById("daysSel");
         var simSlider = document.getElementById("simSlider");
         if (reloadBtn) reloadBtn.addEventListener("click", function () { loadBoard(true); });
         if (lookbackSel) lookbackSel.addEventListener("change", function () { loadBoard(false); });
+        if (daysSel) {
+            daysSel.addEventListener("change", function () {
+                if (currentClusterId != null) selectCluster(Number(currentClusterId));
+            });
+        }
         if (simSlider) {
             simSlider.addEventListener("input", syncSim);
             simSlider.addEventListener("change", function () {
