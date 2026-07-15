@@ -329,13 +329,18 @@ def build_shape_cluster_page_payload(
                 selected = c
                 break
     if selected is None and clusters:
-        # Prefer multi-name cluster containing LRCX/KLAC if present, else largest
+        # Prefer a small multi-name group for fast UI; else first cluster
         preferred = None
         for c in clusters:
-            ts = set(c.get("tickers") or [])
-            if "LRCX" in ts or "KLAC" in ts:
+            n = int(c.get("size") or 0)
+            if 2 <= n <= 8:
                 preferred = c
                 break
+        if preferred is None:
+            for c in clusters:
+                if int(c.get("size") or 0) >= 2:
+                    preferred = c
+                    break
         selected = preferred or clusters[0]
 
     overlay = {"labels": [], "series": []}

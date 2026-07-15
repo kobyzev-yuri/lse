@@ -168,13 +168,58 @@
                 (pairs ? '<div class="pair">Сильные пары: ' + pairs + '</div>' : '');
         }
 
+        function appendPriceCharts(items) {
+            var root = document.getElementById('chartsRoot');
+            (items || []).forEach(function(item) {
+                var sec = document.createElement('div');
+                sec.className = 'chart-section';
+                var h = document.createElement('h2');
+                h.textContent = item.ticker || '—';
+                var cv = document.createElement('canvas');
+                sec.appendChild(h);
+                sec.appendChild(cv);
+                root.appendChild(sec);
+                var bars = item.bars || [];
+                if (!bars.length) {
+                    var miss = document.createElement('p');
+                    miss.className = 'muted';
+                    miss.textContent = 'Нет quotes';
+                    sec.appendChild(miss);
+                    return;
+                }
+                chartInstances.push(buildPriceChart(cv, '', bars));
+            });
+        }
+
+        async function loadPriceChartsBatched(tickers, days) {
+            var statusEl = document.getElementById('statusLine');
+            var batchSize = 6;
+            var loaded = 0;
+            for (var i = 0; i < tickers.length; i += batchSize) {
+                var batch = tickers.slice(i, i + batchSize);
+                statusEl.textContent = 'Дневные графики ' + (loaded + 1) + '–' +
+                    Math.min(loaded + batch.length, tickers.length) + ' / ' + tickers.length +
+                    ' · кластер: ' + tickers.join(', ');
+                var cr = await fetch('/api/portfolio/shape-clusters/charts?days=' + encodeURIComponent(days) +
+                    '&tickers=' + encodeURIComponent(batch.join(',')));
+                if (!cr.ok) {
+                    statusEl.textContent += ' · ошибка батча ' + cr.status;
+                    return;
+                }
+                var pack = await cr.json();
+                appendPriceCharts(pack.charts || []);
+                loaded += batch.length;
+            }
+            statusEl.textContent = 'Готово · ' + tickers.length + ' тикеров · ' + tickers.join(', ');
+        }
+
         async function loadClusterView(fullReload) {
             var statusEl = document.getElementById('statusLine');
             var root = document.getElementById('chartsRoot');
             var lookback = document.getElementById('lookbackSel').value;
             var corrMin = document.getElementById('corrMinSel').value;
             var days = document.getElementById('daysSel').value;
-            statusEl.textContent = 'Загрузка…';
+            statusEl.textContent = 'Кластеры…';
             destroyCharts();
             root.innerHTML = '';
 
@@ -196,7 +241,6 @@
                     currentClusterId = sel ? sel.cluster_id : null;
                 }
                 renderNav(report.clusters || []);
-                // re-mark active after nav rebuild
                 Array.prototype.forEach.call(document.querySelectorAll('#clusterNav button'), function(btn, idx) {
                     var c = (report.clusters || [])[idx];
                     if (c && Number(c.cluster_id) === Number(currentClusterId)) btn.classList.add('active');
@@ -216,14 +260,13 @@
                     ' · clusters=' + (report.n_clusters || 0) +
                     ' · method=' + (report.method || '') +
                     ' · corr≥' + (report.corr_min != null ? report.corr_min : '') +
-                    ' · ' + (report.generated_at_utc || '');
+                    ' · клик по кнопке группы = навигация · ' + (report.generated_at_utc || '');
 
                 if (!selected) {
                     statusEl.textContent = 'Нет кластеров';
                     return;
                 }
 
-                // overlay
                 var ovSec = document.createElement('div');
                 ovSec.className = 'chart-section overlay';
                 var ovH = document.createElement('h2');
@@ -242,35 +285,8 @@
                     ovSec.appendChild(p);
                 }
 
-                // per-ticker price charts
-                var tickers = selected.tickers || [];
-                statusEl.textContent = 'Графики кластера: ' + tickers.join(', ');
-                var cr = await fetch('/api/portfolio/shape-clusters/charts?days=' + encodeURIComponent(days) +
-                    '&tickers=' + encodeURIComponent(tickers.join(',')));
-                if (!cr.ok) {
-                    statusEl.textContent += ' · ошибка графиков ' + cr.status;
-                    return;
-                }
-                var pack = await cr.json();
-                (pack.charts || []).forEach(function(item) {
-                    var sec = document.createElement('div');
-                    sec.className = 'chart-section';
-                    var h = document.createElement('h2');
-                    h.textContent = item.ticker || '—';
-                    var cv = document.createElement('canvas');
-                    sec.appendChild(h);
-                    sec.appendChild(cv);
-                    root.appendChild(sec);
-                    var bars = item.bars || [];
-                    if (!bars.length) {
-                        var miss = document.createElement('p');
-                        miss.className = 'muted';
-                        miss.textContent = 'Нет quotes';
-                        sec.appendChild(miss);
-                        return;
-                    }
-                    chartInstances.push(buildPriceChart(cv, '', bars));
-                });
+                statusEl.textContent = 'Навигация готова · грузим дневные…';
+                await loadPriceChartsBatched(selected.tickers || [], days);
             } catch (e) {
                 statusEl.textContent = 'Ошибка: ' + (e.message || String(e));
             }

@@ -3719,20 +3719,41 @@ async def api_portfolio_shape_clusters(
 
 @app.get("/api/portfolio/shape-clusters/charts", response_class=JSONResponse)
 async def api_portfolio_shape_cluster_charts(days: int = 180, tickers: str = ""):
-    """Дневные графики для списка тикеров кластера (quotes)."""
+    """Лёгкие дневные close-ряды для кластера (без trades/position/trend — быстрее навигация)."""
 
     def _run() -> Dict[str, Any]:
         raw = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()]
         days_clamped = min(max(10, int(days)), 730)
+        cutoff = datetime.now() - timedelta(days=days_clamped)
         charts: List[Dict[str, Any]] = []
-        for t in raw[:60]:
-            one = _build_portfolio_daily_chart_data(t, days_clamped)
-            bars = one.get("bars") or []
-            entry: Dict[str, Any] = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
-            if not bars:
-                entry["error"] = "no_data"
-            charts.append(entry)
-        return {"days": days_clamped, "tickers": raw, "charts": charts}
+        with engine.connect() as conn:
+            for t in raw[:60]:
+                df = pd.read_sql(
+                    text(
+                        """
+                        SELECT date, close
+                        FROM quotes
+                        WHERE ticker = :ticker AND date >= :cutoff
+                        ORDER BY date ASC
+                        """
+                    ),
+                    conn,
+                    params={"ticker": t, "cutoff": cutoff},
+                )
+                bars = []
+                for _, row in df.iterrows():
+                    d = row["date"]
+                    bars.append(
+                        {
+                            "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+                            "close": _to_jsonable(row.get("close")),
+                        }
+                    )
+                entry: Dict[str, Any] = {"ticker": t, "bars": bars, "interval": "1d", "source": "quotes"}
+                if not bars:
+                    entry["error"] = "no_data"
+                charts.append(entry)
+        return {"days": days_clamped, "tickers": raw, "charts": charts, "lite": True}
 
     try:
         payload = await asyncio.to_thread(_run)
@@ -3740,7 +3761,6 @@ async def api_portfolio_shape_cluster_charts(days: int = 180, tickers: str = "")
     except Exception as e:
         logger.exception("GET /api/portfolio/shape-clusters/charts: %s", e)
         raise HTTPException(status_code=500, detail=f"Ошибка shape-cluster charts: {e!s}")
-
 
 @app.get("/api/pnl", response_class=JSONResponse)
 async def get_pnl():
