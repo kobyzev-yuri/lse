@@ -3689,13 +3689,15 @@ async def portfolio_shape_clusters_page(request: Request):
 @app.get("/api/portfolio/shape-clusters", response_class=JSONResponse)
 async def api_portfolio_shape_clusters(
     lookback_days: int = 126,
-    corr_min: float = 0.75,
-    method: str = "components",
+    corr_min: float = 0.88,
+    method: str = "hierarchical",
     mode: str = "shape",
     cluster_id: Optional[int] = None,
     include_overlay: int = 0,
+    max_clusters: int = 8,
+    distance_threshold: float = 0.12,
 ):
-    """Кластеры по форме пути. По умолчанию без overlay (быстрый первый ответ для nav)."""
+    """Карта кластеров формы. По умолчанию hierarchical maxclust; overlay только по клику."""
 
     def _run() -> Dict[str, Any]:
         from report_generator import get_engine
@@ -3705,12 +3707,13 @@ async def api_portfolio_shape_clusters(
             get_engine(),
             lookback_trading_days=min(max(40, int(lookback_days)), 400),
             corr_min=min(max(0.3, float(corr_min)), 0.99),
-            method=(method or "components").strip().lower(),
+            method=(method or "hierarchical").strip().lower(),
             mode=(mode or "shape").strip().lower(),
             cluster_id=int(cluster_id) if cluster_id is not None else None,
             include_overlay=int(include_overlay or 0) == 1,
+            max_clusters=min(max(2, int(max_clusters)), 20),
+            distance_threshold=min(max(0.02, float(distance_threshold)), 1.0),
         )
-
     try:
         payload = await asyncio.to_thread(_run)
         return JSONResponse(content=_api_json_body(payload))

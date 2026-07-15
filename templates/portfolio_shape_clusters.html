@@ -10,96 +10,125 @@
         a { color: #7dd3fc; }
         h1 { font-size: 1.15rem; margin: 0.5rem 0 0.35rem; }
         .muted { color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.75rem; line-height: 1.35; }
-        select, button, input { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; padding: 0.35rem 0.6rem; border-radius: 6px; margin-right: 0.4rem; }
+        select, button { background: #0f3460; color: #e2e8f0; border: 1px solid #334155; padding: 0.35rem 0.6rem; border-radius: 6px; margin-right: 0.4rem; }
         .controls { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.75rem; }
-        .cluster-nav { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 1rem; }
-        .cluster-nav button {
-            background: #12182a; border: 1px solid #334155; color: #cbd5e1;
-            padding: 0.4rem 0.65rem; border-radius: 8px; cursor: pointer; font-size: 0.8rem;
-        }
-        .cluster-nav button.active { background: #0f3460; border-color: #38bdf8; color: #e0f2fe; }
-        .cluster-nav button.solo { opacity: 0.75; }
         #metaLine { font-size: 0.78rem; color: #64748b; margin-bottom: 0.75rem; }
-        #clusterInfo { font-size: 0.85rem; color: #cbd5e1; margin-bottom: 0.75rem; }
+        #statusLine { font-size: 0.8rem; color: #94a3b8; min-height: 1.2em; margin: 0.5rem 0; }
+        #clusterBoard {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 0.65rem;
+            margin: 0.75rem 0 1.25rem;
+        }
+        .cluster-card {
+            background: #12182a;
+            border: 1px solid #334155;
+            border-left-width: 5px;
+            border-radius: 10px;
+            padding: 0.7rem 0.75rem;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s, transform 0.1s;
+        }
+        .cluster-card:hover { background: #16213e; transform: translateY(-1px); }
+        .cluster-card.active { border-color: #38bdf8; background: #0f3460; box-shadow: 0 0 0 1px #38bdf8; }
+        .cluster-card .title { font-weight: 650; font-size: 0.92rem; margin-bottom: 0.2rem; }
+        .cluster-card .meta { font-size: 0.72rem; color: #94a3b8; margin-bottom: 0.45rem; }
+        .cluster-card .tickers { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+        .cluster-card .tickers span {
+            font-size: 0.7rem; background: #1a1a2e; border: 1px solid #334155;
+            border-radius: 999px; padding: 0.1rem 0.4rem; color: #cbd5e1;
+        }
+        .cluster-card .tickers span.medoid { border-color: #38bdf8; color: #7dd3fc; }
+        #detailHead { font-size: 1rem; margin: 1rem 0 0.35rem; color: #e2e8f0; display: none; }
         .chart-section { position: relative; height: 280px; margin-top: 1rem; }
         .chart-section.overlay { height: 340px; }
         .chart-section h2 { font-size: 0.95rem; margin: 0 0 0.35rem 0; color: #cbd5e1; }
-        #statusLine { font-size: 0.8rem; color: #94a3b8; min-height: 1.2em; }
-        .pair { color: #94a3b8; font-size: 0.78rem; }
+        .pair { color: #94a3b8; font-size: 0.78rem; margin-top: 0.25rem; }
     </style>
     {% include "partials/lse_fetch_shim.html" %}
 </head>
 <body>
 {% include "partials/site_nav_standalone.html" %}
-    <h1>Похожесть графиков · кластеры (6м форма)</h1>
-    <p class="muted">Список Насти (~40 тикеров). Кластеры по корреляции <strong>нормированной цены</strong> (close/close₀) за lookback — похожесть <em>формы</em> пути. Число групп зависит от порога. Навигация по кластеру: оверлей нормализованных кривых + дневные графики как у портфеля.</p>
+    <h1>Похожесть графиков · кластеры</h1>
+    <p class="muted">Сначала рисуем <strong>группы</strong> (форма 6м-цены). Клик по карточке кластера → оверлей нормированных кривых и дневные графики членов группы.</p>
 
     <div class="controls">
-        <label>Lookback (д.дней)
+        <label>Lookback
             <select id="lookbackSel">
-                <option value="63">63 (~3м)</option>
-                <option value="126" selected>126 (~6м)</option>
-                <option value="189">189 (~9м)</option>
+                <option value="63">63д</option>
+                <option value="126" selected>126д (~6м)</option>
+                <option value="189">189д</option>
             </select>
         </label>
-        <label>corr ≥
-            <select id="corrMinSel">
-                <option value="0.75">0.75</option>
-                <option value="0.80">0.80</option>
-                <option value="0.85">0.85</option>
-                <option value="0.88" selected>0.88</option>
-                <option value="0.90">0.90</option>
-                <option value="0.93">0.93</option>
+        <label>Групп ~
+            <select id="maxClustersSel">
+                <option value="6">6</option>
+                <option value="8" selected>8</option>
+                <option value="10">10</option>
+                <option value="12">12</option>
             </select>
         </label>
-        <label>Дней на графике
+        <label>Дней графика
             <select id="daysSel">
                 <option value="90">90</option>
                 <option value="180" selected>180</option>
                 <option value="270">270</option>
             </select>
         </label>
-        <button type="button" id="reloadBtn">Пересчитать</button>
+        <button type="button" id="reloadBtn">Пересчитать карту</button>
     </div>
 
     <div id="metaLine"></div>
-    <div class="cluster-nav" id="clusterNav"></div>
-    <div id="clusterInfo"></div>
-    <div id="statusLine"></div>
+    <div id="clusterBoard"></div>
+    <div id="statusLine">Загрузка карты кластеров…</div>
+    <h2 id="detailHead"></h2>
     <div id="chartsRoot"></div>
 
     <script>
         var chartInstances = [];
         var currentClusterId = null;
         var lastReport = null;
+        var COLORS = ['#38bdf8','#4ade80','#fbbf24','#f472b6','#a78bfa','#fb923c','#22d3ee','#e879f9','#86efac','#f87171','#c084fc','#2dd4bf'];
 
         function destroyCharts() {
             chartInstances.forEach(function(ch) { try { ch.destroy(); } catch (e) {} });
             chartInstances = [];
         }
 
-        function colorFor(i) {
-            var palette = ['#38bdf8','#4ade80','#fbbf24','#f472b6','#a78bfa','#fb923c','#22d3ee','#e879f9','#86efac','#f87171'];
-            return palette[i % palette.length];
+        function colorFor(i) { return COLORS[i % COLORS.length]; }
+
+        async function fetchJsonTimeout(url, ms) {
+            var ctrl = new AbortController();
+            var timer = setTimeout(function() { ctrl.abort(); }, ms || 20000);
+            try {
+                var r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+                clearTimeout(timer);
+                return r;
+            } catch (e) {
+                clearTimeout(timer);
+                throw e;
+            }
         }
 
         function buildOverlayChart(canvas, overlay) {
             var labels = overlay.labels || [];
             var series = overlay.series || [];
-            var datasets = series.map(function(s, i) {
-                return {
-                    label: s.ticker,
-                    data: s.values || [],
-                    borderColor: colorFor(i),
-                    tension: 0.1,
-                    spanGaps: true,
-                    pointRadius: 0,
-                    borderWidth: 1.6
-                };
-            });
             return new Chart(canvas, {
                 type: 'line',
-                data: { labels: labels, datasets: datasets },
+                data: {
+                    labels: labels,
+                    datasets: series.map(function(s, i) {
+                        return {
+                            label: s.ticker,
+                            data: s.values || [],
+                            borderColor: colorFor(i),
+                            tension: 0.1,
+                            spanGaps: true,
+                            pointRadius: 0,
+                            borderWidth: 1.6
+                        };
+                    })
+                },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
@@ -115,7 +144,7 @@
             });
         }
 
-        function buildPriceChart(canvas, title, bars) {
+        function buildPriceChart(canvas, bars) {
             var labels = bars.map(function(b) { return String(b.date).slice(0, 10); });
             var closes = bars.map(function(b) { return b.close != null ? Number(b.close) : null; });
             return new Chart(canvas, {
@@ -127,10 +156,7 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: {
-                        title: { display: !!title, text: title || '', color: '#94a3b8', font: { size: 11 } },
-                        legend: { display: false }
-                    },
+                    plugins: { legend: { display: false } },
                     scales: {
                         x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 } },
                         y: { ticks: { color: '#94a3b8' } }
@@ -139,110 +165,177 @@
             });
         }
 
-        function renderNav(clusters) {
-            var nav = document.getElementById('clusterNav');
-            nav.innerHTML = '';
-            (clusters || []).forEach(function(c) {
-                var btn = document.createElement('button');
-                btn.type = 'button';
-                btn.textContent = c.label || ('C' + c.cluster_id);
-                btn.title = (c.tickers || []).join(', ');
-                if ((c.size || 0) <= 1) btn.classList.add('solo');
-                if (currentClusterId != null && Number(c.cluster_id) === Number(currentClusterId)) btn.classList.add('active');
-                btn.addEventListener('click', function() {
-                    currentClusterId = c.cluster_id;
-                    loadClusterView(false);
+        function renderBoard(clusters) {
+            var board = document.getElementById('clusterBoard');
+            board.innerHTML = '';
+            (clusters || []).forEach(function(c, idx) {
+                var card = document.createElement('div');
+                card.className = 'cluster-card' + (Number(c.cluster_id) === Number(currentClusterId) ? ' active' : '');
+                card.style.borderLeftColor = colorFor(idx);
+                card.dataset.clusterId = String(c.cluster_id);
+
+                var title = document.createElement('div');
+                title.className = 'title';
+                title.textContent = c.label || ('C' + c.cluster_id);
+
+                var meta = document.createElement('div');
+                meta.className = 'meta';
+                meta.textContent = (c.size || 0) + ' тикер(ов) · клик → графики';
+
+                var ticks = document.createElement('div');
+                ticks.className = 'tickers';
+                (c.tickers || []).forEach(function(t) {
+                    var s = document.createElement('span');
+                    if (t === c.medoid) s.className = 'medoid';
+                    s.textContent = t;
+                    ticks.appendChild(s);
                 });
-                nav.appendChild(btn);
+
+                card.appendChild(title);
+                card.appendChild(meta);
+                card.appendChild(ticks);
+
+                var pairs = (c.strong_pairs || []).map(function(p) {
+                    return p.a + '–' + p.b + ' (' + p.corr + ')';
+                }).join(' · ');
+                if (pairs) {
+                    var pEl = document.createElement('div');
+                    pEl.className = 'pair';
+                    pEl.textContent = pairs;
+                    card.appendChild(pEl);
+                }
+
+                card.addEventListener('click', function() {
+                    selectCluster(Number(c.cluster_id));
+                });
+                board.appendChild(card);
             });
         }
 
-        function renderClusterInfo(c, report) {
-            var el = document.getElementById('clusterInfo');
-            if (!c) { el.textContent = ''; return; }
-            var pairs = (c.strong_pairs || []).map(function(p) {
-                return p.a + '–' + p.b + ' (' + p.corr + ')';
-            }).join(' · ');
-            el.innerHTML = '<strong>' + (c.label || '') + '</strong>: ' +
-                (c.tickers || []).join(', ') +
-                (pairs ? '<div class="pair">Сильные пары: ' + pairs + '</div>' : '');
-        }
-
-        function appendPriceCharts(items) {
-            var root = document.getElementById('chartsRoot');
-            (items || []).forEach(function(item) {
-                var sec = document.createElement('div');
-                sec.className = 'chart-section';
-                var h = document.createElement('h2');
-                h.textContent = item.ticker || '—';
-                var cv = document.createElement('canvas');
-                sec.appendChild(h);
-                sec.appendChild(cv);
-                root.appendChild(sec);
-                var bars = item.bars || [];
-                if (!bars.length) {
-                    var miss = document.createElement('p');
-                    miss.className = 'muted';
-                    miss.textContent = 'Нет quotes';
-                    sec.appendChild(miss);
-                    return;
-                }
-                chartInstances.push(buildPriceChart(cv, '', bars));
+        function markActiveCard() {
+            Array.prototype.forEach.call(document.querySelectorAll('.cluster-card'), function(card) {
+                if (Number(card.dataset.clusterId) === Number(currentClusterId)) card.classList.add('active');
+                else card.classList.remove('active');
             });
         }
 
         async function loadPriceChartsBatched(tickers, days) {
             var statusEl = document.getElementById('statusLine');
+            var root = document.getElementById('chartsRoot');
             var batchSize = 6;
             var loaded = 0;
             for (var i = 0; i < tickers.length; i += batchSize) {
                 var batch = tickers.slice(i, i + batchSize);
-                statusEl.textContent = 'Дневные графики ' + (loaded + 1) + '–' +
-                    Math.min(loaded + batch.length, tickers.length) + ' / ' + tickers.length +
-                    ' · кластер: ' + tickers.join(', ');
-                var cr = await fetch('/api/portfolio/shape-clusters/charts?days=' + encodeURIComponent(days) +
-                    '&tickers=' + encodeURIComponent(batch.join(',')));
+                statusEl.textContent = 'Дневные ' + (loaded + 1) + '–' +
+                    Math.min(loaded + batch.length, tickers.length) + ' / ' + tickers.length;
+                var cr = await fetchJsonTimeout(
+                    '/api/portfolio/shape-clusters/charts?days=' + encodeURIComponent(days) +
+                    '&tickers=' + encodeURIComponent(batch.join(',')),
+                    30000
+                );
                 if (!cr.ok) {
-                    statusEl.textContent += ' · ошибка батча ' + cr.status;
+                    statusEl.textContent += ' · ошибка ' + cr.status;
                     return;
                 }
                 var pack = await cr.json();
-                appendPriceCharts(pack.charts || []);
+                (pack.charts || []).forEach(function(item) {
+                    var sec = document.createElement('div');
+                    sec.className = 'chart-section';
+                    var h = document.createElement('h2');
+                    h.textContent = item.ticker || '—';
+                    var cv = document.createElement('canvas');
+                    sec.appendChild(h);
+                    sec.appendChild(cv);
+                    root.appendChild(sec);
+                    if (!(item.bars || []).length) {
+                        var miss = document.createElement('p');
+                        miss.className = 'muted';
+                        miss.textContent = 'Нет quotes';
+                        sec.appendChild(miss);
+                        return;
+                    }
+                    chartInstances.push(buildPriceChart(cv, item.bars));
+                });
                 loaded += batch.length;
             }
-            statusEl.textContent = 'Готово · ' + tickers.length + ' тикеров · ' + tickers.join(', ');
+            statusEl.textContent = 'Готово · ' + tickers.length + ' графиков';
         }
 
-        async function fetchJsonTimeout(url, ms) {
-            var ctrl = new AbortController();
-            var timer = setTimeout(function() { ctrl.abort(); }, ms || 15000);
-            try {
-                var r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
-                clearTimeout(timer);
-                return r;
-            } catch (e) {
-                clearTimeout(timer);
-                throw e;
-            }
-        }
-
-        async function loadClusterView(fullReload) {
+        async function selectCluster(clusterId) {
+            currentClusterId = clusterId;
+            markActiveCard();
             var statusEl = document.getElementById('statusLine');
             var root = document.getElementById('chartsRoot');
+            var head = document.getElementById('detailHead');
             var lookback = document.getElementById('lookbackSel').value;
-            var corrMin = document.getElementById('corrMinSel').value;
+            var maxCl = document.getElementById('maxClustersSel').value;
             var days = document.getElementById('daysSel').value;
-            statusEl.textContent = 'Кластеры…';
+
             destroyCharts();
             root.innerHTML = '';
 
+            var selected = null;
+            ((lastReport && lastReport.clusters) || []).forEach(function(c) {
+                if (Number(c.cluster_id) === Number(clusterId)) selected = c;
+            });
+            if (!selected) {
+                statusEl.textContent = 'Кластер не найден';
+                return;
+            }
+
+            head.style.display = 'block';
+            head.textContent = 'Графики · ' + (selected.label || '') + ' · ' + (selected.tickers || []).join(', ');
+            statusEl.textContent = 'Оверлей формы…';
+            head.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+            var ovSec = document.createElement('div');
+            ovSec.className = 'chart-section overlay';
+            var ovH = document.createElement('h2');
+            ovH.textContent = 'Оверлей формы';
+            var ovCv = document.createElement('canvas');
+            ovSec.appendChild(ovH);
+            ovSec.appendChild(ovCv);
+            root.appendChild(ovSec);
+
             try {
-                // 1) Быстрый ответ без overlay — сразу кнопки навигации
+                var qOv = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
+                    '&max_clusters=' + encodeURIComponent(maxCl) +
+                    '&method=hierarchical&mode=shape&include_overlay=1' +
+                    '&cluster_id=' + encodeURIComponent(clusterId);
+                var rOv = await fetchJsonTimeout(qOv, 25000);
+                if (rOv.ok) {
+                    var withOv = await rOv.json();
+                    var overlay = withOv.overlay || { labels: [], series: [] };
+                    if ((overlay.series || []).length) {
+                        chartInstances.push(buildOverlayChart(ovCv, overlay));
+                    } else {
+                        ovH.textContent = 'Оверлей формы (нет overlapping ряда)';
+                    }
+                }
+            } catch (e) {
+                ovH.textContent = 'Оверлей не загрузился — дневные ниже';
+            }
+
+            await loadPriceChartsBatched(selected.tickers || [], days);
+        }
+
+        async function loadBoard() {
+            var statusEl = document.getElementById('statusLine');
+            var head = document.getElementById('detailHead');
+            var root = document.getElementById('chartsRoot');
+            var lookback = document.getElementById('lookbackSel').value;
+            var maxCl = document.getElementById('maxClustersSel').value;
+            currentClusterId = null;
+            destroyCharts();
+            root.innerHTML = '';
+            head.style.display = 'none';
+            statusEl.textContent = 'Рисуем карту кластеров…';
+
+            try {
                 var q = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
-                    '&corr_min=' + encodeURIComponent(corrMin) +
-                    '&method=components&mode=shape&include_overlay=0';
-                if (currentClusterId != null) q += '&cluster_id=' + encodeURIComponent(currentClusterId);
-                var r = await fetchJsonTimeout(q, 20000);
+                    '&max_clusters=' + encodeURIComponent(maxCl) +
+                    '&method=hierarchical&mode=shape&include_overlay=0';
+                var r = await fetchJsonTimeout(q, 25000);
                 if (!r.ok) {
                     var err = await r.json().catch(function() { return {}; });
                     statusEl.textContent = err.detail || r.statusText;
@@ -250,99 +343,27 @@
                 }
                 var report = await r.json();
                 lastReport = report;
-                if (fullReload || currentClusterId == null) {
-                    var sel = report.selected_cluster;
-                    currentClusterId = sel ? sel.cluster_id : null;
-                }
-                renderNav(report.clusters || []);
-                Array.prototype.forEach.call(document.querySelectorAll('#clusterNav button'), function(btn, idx) {
-                    var c = (report.clusters || [])[idx];
-                    if (c && Number(c.cluster_id) === Number(currentClusterId)) btn.classList.add('active');
-                    else btn.classList.remove('active');
-                });
-
-                var selected = null;
-                (report.clusters || []).forEach(function(c) {
-                    if (Number(c.cluster_id) === Number(currentClusterId)) selected = c;
-                });
-                if (!selected) selected = report.selected_cluster;
-                renderClusterInfo(selected, report);
-
+                renderBoard(report.clusters || []);
                 document.getElementById('metaLine').textContent =
                     'ok=' + (report.n_tickers_ok || 0) + '/' + (report.n_tickers_requested || 0) +
-                    ' · bars=' + (report.n_bars_aligned || 0) +
                     ' · clusters=' + (report.n_clusters || 0) +
-                    ' · corr≥' + (report.corr_min != null ? report.corr_min : '') +
+                    ' · method=' + (report.method || '') +
+                    ' · max≈' + (report.max_clusters || maxCl) +
                     (report.cache_hit ? ' · cache' : '') +
-                    ' · клик по группе = навигация';
-
-                if (!selected) {
-                    statusEl.textContent = 'Нет кластеров';
-                    return;
-                }
-                statusEl.textContent = 'Навигация готова · оверлей…';
-
-                // 2) Overlay отдельным запросом (только выбранный кластер)
-                var ovSec = document.createElement('div');
-                ovSec.className = 'chart-section overlay';
-                var ovH = document.createElement('h2');
-                ovH.textContent = 'Оверлей формы · ' + (selected.label || '');
-                var ovCv = document.createElement('canvas');
-                ovSec.appendChild(ovH);
-                ovSec.appendChild(ovCv);
-                root.appendChild(ovSec);
-
-                var qOv = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
-                    '&corr_min=' + encodeURIComponent(corrMin) +
-                    '&method=components&mode=shape&include_overlay=1' +
-                    '&cluster_id=' + encodeURIComponent(selected.cluster_id);
-                try {
-                    var rOv = await fetchJsonTimeout(qOv, 20000);
-                    if (rOv.ok) {
-                        var withOv = await rOv.json();
-                        var overlay = withOv.overlay || { labels: [], series: [] };
-                        if ((overlay.series || []).length) {
-                            chartInstances.push(buildOverlayChart(ovCv, overlay));
-                        } else {
-                            var p0 = document.createElement('p');
-                            p0.className = 'muted';
-                            p0.textContent = 'Нет overlapping ряда для оверлея';
-                            ovSec.appendChild(p0);
-                        }
-                    }
-                } catch (eOv) {
-                    var p1 = document.createElement('p');
-                    p1.className = 'muted';
-                    p1.textContent = 'Оверлей не загрузился (можно смотреть дневные ниже)';
-                    ovSec.appendChild(p1);
-                }
-
-                statusEl.textContent = 'Навигация готова · грузим дневные…';
-                await loadPriceChartsBatched(selected.tickers || [], days);
+                    ' · кликните карточку группы';
+                statusEl.textContent = 'Карта готова — выберите кластер';
             } catch (e) {
                 var msg = (e && e.name === 'AbortError')
-                    ? 'Таймаут загрузки кластеров (сеть/сервер). Обновите страницу или подождите 10с.'
+                    ? 'Таймаут карты кластеров. Обновите страницу.'
                     : ('Ошибка: ' + (e.message || String(e)));
                 statusEl.textContent = msg;
             }
         }
 
-        document.getElementById('reloadBtn').addEventListener('click', function() {
-            currentClusterId = null;
-            loadClusterView(true);
-        });
-        document.getElementById('lookbackSel').addEventListener('change', function() {
-            currentClusterId = null;
-            loadClusterView(true);
-        });
-        document.getElementById('corrMinSel').addEventListener('change', function() {
-            currentClusterId = null;
-            loadClusterView(true);
-        });
-        document.getElementById('daysSel').addEventListener('change', function() {
-            loadClusterView(false);
-        });
-        loadClusterView(true);
+        document.getElementById('reloadBtn').addEventListener('click', loadBoard);
+        document.getElementById('lookbackSel').addEventListener('change', loadBoard);
+        document.getElementById('maxClustersSel').addEventListener('change', loadBoard);
+        loadBoard();
     </script>
 </body>
 </html>

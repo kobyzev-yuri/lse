@@ -127,21 +127,30 @@ def _clusters_from_corr_threshold(corr: pd.DataFrame, corr_min: float) -> List[L
     return groups
 
 
-def _clusters_hierarchical(corr: pd.DataFrame, distance_threshold: float) -> List[List[str]]:
-    """Average-linkage on distance=1-corr; needs scipy."""
+def _clusters_hierarchical(
+    corr: pd.DataFrame,
+    *,
+    distance_threshold: Optional[float] = None,
+    max_clusters: Optional[int] = None,
+) -> List[List[str]]:
+    """Average-linkage on distance=1-corr; cut by max_clusters or distance threshold."""
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import squareform
 
     tickers = [str(c) for c in corr.columns]
-    mat = corr.reindex(index=tickers, columns=tickers).to_numpy(dtype=float)
+    mat = np.array(corr.reindex(index=tickers, columns=tickers).to_numpy(dtype=float), copy=True)
     np.fill_diagonal(mat, 1.0)
     dist = np.clip(1.0 - mat, 0.0, 2.0)
+    dist = np.array((dist + dist.T) / 2.0, copy=True)
     np.fill_diagonal(dist, 0.0)
-    # numerical symmetry
-    dist = (dist + dist.T) / 2.0
     condensed = squareform(dist, checks=False)
     z = linkage(condensed, method="average")
-    labels = fcluster(z, t=float(distance_threshold), criterion="distance")
+    if max_clusters is not None and int(max_clusters) >= 2:
+        k = min(int(max_clusters), max(2, len(tickers)))
+        labels = fcluster(z, t=k, criterion="maxclust")
+    else:
+        thr = float(distance_threshold if distance_threshold is not None else 0.12)
+        labels = fcluster(z, t=thr, criterion="distance")
     buckets: Dict[int, List[str]] = {}
     for t, lab in zip(tickers, labels):
         buckets.setdefault(int(lab), []).append(t)
@@ -192,17 +201,18 @@ def build_shape_clusters(
     *,
     lookback_trading_days: int = 126,
     mode: str = "shape",
-    method: str = "components",
-    corr_min: float = 0.75,
-    distance_threshold: float = 0.35,
+    method: str = "hierarchical",
+    corr_min: float = 0.88,
+    distance_threshold: float = 0.12,
+    max_clusters: int = 8,
 ) -> Dict[str, Any]:
     """
     mode=shape: corr of normalized prices (path similarity).
-    method=components: union-find on corr>=corr_min (N groups free).
-    method=hierarchical: scipy average linkage cut on 1-corr.
+    method=hierarchical (default): average linkage, cut by max_clusters.
+    method=components: union-find on corr>=corr_min (transitivity → megaclusters).
     """
     mode_u = (mode or "shape").strip().lower()
-    method_u = (method or "components").strip().lower()
+    method_u = (method or "hierarchical").strip().lower()
     series = fetch_close_series(engine, tickers, trading_days=int(lookback_trading_days))
     missing = [str(t).upper() for t in tickers if str(t).strip().upper() not in series]
 
@@ -220,20 +230,26 @@ def build_shape_clusters(
             "lookback_trading_days": int(lookback_trading_days),
             "corr_min": float(corr_min),
             "distance_threshold": float(distance_threshold),
+            "max_clusters": int(max_clusters),
             "n_tickers_ok": 0,
             "missing_or_short": missing,
             "clusters": [],
             "note_ru": "Недостаточно overlapping quotes для кластеризации.",
         }
 
-    if method_u == "hierarchical":
+    if method_u == "components":
+        groups = _clusters_from_corr_threshold(corr, float(corr_min))
+    else:
         try:
-            groups = _clusters_hierarchical(corr, float(distance_threshold))
+            groups = _clusters_hierarchical(
+                corr,
+                distance_threshold=float(distance_threshold),
+                max_clusters=int(max_clusters) if max_clusters else None,
+            )
+            method_u = "hierarchical"
         except Exception:
             groups = _clusters_from_corr_threshold(corr, float(corr_min))
             method_u = "components_fallback"
-    else:
-        groups = _clusters_from_corr_threshold(corr, float(corr_min))
 
     clusters: List[Dict[str, Any]] = []
     for i, g in enumerate(groups, start=1):
@@ -270,6 +286,7 @@ def build_shape_clusters(
         "lookback_trading_days": int(lookback_trading_days),
         "corr_min": float(corr_min),
         "distance_threshold": float(distance_threshold),
+        "max_clusters": int(max_clusters),
         "n_tickers_requested": len([t for t in tickers if str(t).strip()]),
         "n_tickers_ok": int(norm.shape[1]),
         "n_bars_aligned": int(norm.shape[0]),
@@ -278,10 +295,8 @@ def build_shape_clusters(
         "clusters": clusters,
         "top_pairs": top_pairs[:15],
         "note_ru": (
-            "Кластеры по похожести формы: корреляция нормированной цены close/close₀ "
-            "за lookback. Порог corr_min — связные компоненты (транзитивно); "
-            "для более мелких групп поднимайте порог (0.88–0.93). "
-            "Лог-ret / сектор / earnings — следующие режимы."
+            "Кластеры по похожести формы 6м (норм. цена). По умолчанию hierarchical "
+            "average-linkage с max_clusters. Клик по карточке группы → оверлей + дневные графики."
         ),
     }
 
@@ -329,16 +344,18 @@ def build_shape_cluster_page_payload(
     engine,
     *,
     lookback_trading_days: int = 126,
-    corr_min: float = 0.75,
-    method: str = "components",
+    corr_min: float = 0.88,
+    method: str = "hierarchical",
     mode: str = "shape",
     cluster_id: Optional[int] = None,
     include_overlay: bool = False,
+    max_clusters: int = 8,
+    distance_threshold: float = 0.12,
 ) -> Dict[str, Any]:
     from services.shape_cluster_universe import shape_cluster_tickers
 
     tickers = shape_cluster_tickers()
-    cache_key = f"{mode}|{method}|{lookback_trading_days}|{corr_min:.4f}"
+    cache_key = f"{mode}|{method}|{lookback_trading_days}|{corr_min:.4f}|{max_clusters}|{distance_threshold:.4f}"
     cached = _cache_get(cache_key)
     if cached is not None:
         report = dict(cached)
@@ -351,8 +368,9 @@ def build_shape_cluster_page_payload(
             mode=mode,
             method=method,
             corr_min=corr_min,
+            max_clusters=max_clusters,
+            distance_threshold=distance_threshold,
         )
-        # do not cache overlay / selected
         _cache_put(cache_key, report)
         report = dict(report)
         report["cache_hit"] = False
@@ -364,18 +382,6 @@ def build_shape_cluster_page_payload(
             if int(c.get("cluster_id") or 0) == int(cluster_id):
                 selected = c
                 break
-    if selected is None and clusters:
-        # Prefer small group for snappy first paint (avoid megacluster C1)
-        preferred = None
-        for c in clusters:
-            n = int(c.get("size") or 0)
-            if 2 <= n <= 8:
-                preferred = c
-                break
-        if preferred is None:
-            # smallest cluster (often solo) — nav visible immediately
-            preferred = min(clusters, key=lambda c: (int(c.get("size") or 999), str(c.get("label") or "")))
-        selected = preferred
 
     overlay = {"labels": [], "series": []}
     if include_overlay and selected:
@@ -385,7 +391,20 @@ def build_shape_cluster_page_payload(
             trading_days=lookback_trading_days,
         )
         norm = normalize_paths(series)
-        overlay = normalized_overlay_payload(norm, selected.get("tickers") or [])
+        # Cap overlay series for huge groups (UI remains readable)
+        members = list(selected.get("tickers") or [])
+        if len(members) > 12:
+            med = selected.get("medoid")
+            strong = []
+            for p in selected.get("strong_pairs") or []:
+                strong.extend([p.get("a"), p.get("b")])
+            prefer = []
+            for x in [med] + strong + members:
+                u = str(x or "").upper()
+                if u and u not in prefer:
+                    prefer.append(u)
+            members = prefer[:12]
+        overlay = normalized_overlay_payload(norm, members)
 
     report["selected_cluster"] = selected
     report["overlay"] = overlay
