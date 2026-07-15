@@ -87,16 +87,21 @@
 
     <div id="metaLine"></div>
     <div id="clusterBoard"></div>
-    <div id="statusLine">Карта…</div>
+    <div id="statusLine">Загрузка скрипта…</div>
+    <noscript><p class="muted">Нужен JavaScript для карты кластеров.</p></noscript>
     <h2 id="detailHead"></h2>
     <div id="chartsRoot"></div>
 
     <script>
+    (function () {
+      try {
         var chartInstances = [];
         var currentClusterId = null;
         var lastReport = null;
         var mapHeartbeat = null;
         var chartJsPromise = null;
+        var boardLoadSeq = 0;
+        var simDebounce = null;
         var COLORS = ['#38bdf8','#4ade80','#fbbf24','#f472b6','#a78bfa','#fb923c','#22d3ee','#e879f9','#86efac','#f87171','#c084fc','#2dd4bf'];
 
         function destroyCharts() {
@@ -553,15 +558,11 @@
             }
         }
 
-        var boardLoadSeq = 0;
-        var simDebounce = null;
-
         function simPct() {
             return Number(document.getElementById('simSlider').value) || 88;
         }
 
         function distanceFromSim(pct) {
-            // hierarchical cut: distance = 1 − corr similarity
             var d = 1 - (pct / 100);
             return Math.max(0.02, Math.min(0.5, Math.round(d * 1000) / 1000));
         }
@@ -578,7 +579,7 @@
             var seq = ++boardLoadSeq;
             currentClusterId = null;
             clearChartsRoot();
-            head.style.display = 'none';
+            if (head) head.style.display = 'none';
             startHeartbeat(forceRefresh ? 'Пересчёт из БД…' : 'Обновляем карту…');
 
             var q = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
@@ -588,7 +589,6 @@
             if (forceRefresh) q += '&refresh=1';
 
             var lastErr = null;
-            // авто-retry: не нужно руками жать «Обновить из БД»
             for (var attempt = 0; attempt < 3; attempt++) {
                 if (seq !== boardLoadSeq) return;
                 try {
@@ -598,8 +598,8 @@
                     var r = await fetchJsonTimeout(q, forceRefresh ? 60000 : 25000);
                     if (seq !== boardLoadSeq) return;
                     if (!r.ok) {
-                        var err = await r.json().catch(function() { return {}; });
-                        lastErr = new Error(err.detail || ('HTTP ' + r.status));
+                        var errBody = await r.json().catch(function() { return {}; });
+                        lastErr = new Error(errBody.detail || ('HTTP ' + r.status));
                         continue;
                     }
                     var report = await r.json();
@@ -608,13 +608,16 @@
                     lastReport = report;
                     renderBoard(report.clusters || []);
                     var simShow = Math.round((1 - Number(report.distance_threshold || dist)) * 100);
-                    document.getElementById('metaLine').textContent =
-                        'ok=' + (report.n_tickers_ok || 0) + '/' + (report.n_tickers_requested || 0) +
-                        ' · групп=' + (report.n_clusters || 0) +
-                        ' · порог≈' + simShow + '%' +
-                        ' · cut=' + (report.cut || 'distance') +
-                        ' · cache=' + (report.cache_source || (report.cache_hit ? 'yes' : 'live')) +
-                        ' · кликните карточку';
+                    var meta = document.getElementById('metaLine');
+                    if (meta) {
+                        meta.textContent =
+                            'ok=' + (report.n_tickers_ok || 0) + '/' + (report.n_tickers_requested || 0) +
+                            ' · групп=' + (report.n_clusters || 0) +
+                            ' · порог≈' + simShow + '%' +
+                            ' · cut=' + (report.cut || 'distance') +
+                            ' · cache=' + (report.cache_source || (report.cache_hit ? 'yes' : 'live')) +
+                            ' · кликните карточку';
+                    }
                     setStatus('Карта готова — выберите кластер');
                     return;
                 } catch (e) {
@@ -635,12 +638,28 @@
             simDebounce = setTimeout(function() { loadBoard(false); }, 350);
         }
 
-        document.getElementById('reloadBtn').addEventListener('click', function() { loadBoard(true); });
-        document.getElementById('lookbackSel').addEventListener('change', function() { loadBoard(false); });
-        document.getElementById('simSlider').addEventListener('input', syncSimLabel);
-        document.getElementById('simSlider').addEventListener('change', scheduleBoardReload);
+        function wireControls() {
+            var reloadBtn = document.getElementById('reloadBtn');
+            var lookbackSel = document.getElementById('lookbackSel');
+            var simSlider = document.getElementById('simSlider');
+            if (reloadBtn) reloadBtn.addEventListener('click', function() { loadBoard(true); });
+            if (lookbackSel) lookbackSel.addEventListener('change', function() { loadBoard(false); });
+            if (simSlider) {
+                simSlider.addEventListener('input', syncSimLabel);
+                simSlider.addEventListener('change', scheduleBoardReload);
+            }
+        }
+
+        setStatus('Старт JS…');
+        wireControls();
         syncSimLabel();
         loadBoard(false);
+      } catch (bootErr) {
+        var el = document.getElementById('statusLine');
+        if (el) el.textContent = 'Ошибка JS: ' + (bootErr && bootErr.message ? bootErr.message : String(bootErr));
+        console.error(bootErr);
+      }
+    })();
     </script>
 </body>
 </html>
