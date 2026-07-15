@@ -21,48 +21,50 @@ def fetch_close_series(
     *,
     trading_days: int = 126,
 ) -> Dict[str, pd.Series]:
-    """Oldest→newest close series keyed by ticker (DatetimeIndex)."""
-    from sqlalchemy import text
+    """Oldest→newest close series keyed by ticker (DatetimeIndex). One SQL for all tickers."""
+    from sqlalchemy import bindparam, text
+
+    wanted = [str(t).strip().upper() for t in tickers if str(t).strip()]
+    if not wanted:
+        return {}
+    lim = int(trading_days) + 5
+    min_bars = max(40, int(trading_days) // 3)
+    sql = text(
+        """
+        SELECT ticker, date, close
+        FROM (
+            SELECT ticker, date, close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM quotes
+            WHERE ticker IN :tickers
+        ) x
+        WHERE rn <= :n
+        ORDER BY ticker ASC, date ASC
+        """
+    ).bindparams(bindparam("tickers", expanding=True))
+
+    buckets: Dict[str, List[Tuple[Any, float]]] = {}
+    with engine.connect() as conn:
+        rows = conn.execute(sql, {"tickers": wanted, "n": lim}).fetchall()
+    for r in rows:
+        t = str(r[0] or "").strip().upper()
+        try:
+            c = float(r[2])
+        except (TypeError, ValueError):
+            continue
+        if not (t and c > 0 and math.isfinite(c)):
+            continue
+        buckets.setdefault(t, []).append((r[1], c))
 
     out: Dict[str, pd.Series] = {}
-    lim = int(trading_days) + 5
-    with engine.connect() as conn:
-        for raw in tickers:
-            t = str(raw).strip().upper()
-            if not t:
-                continue
-            rows = conn.execute(
-                text(
-                    """
-                    SELECT date, close FROM quotes
-                    WHERE ticker = :t
-                    ORDER BY date DESC
-                    LIMIT :n
-                    """
-                ),
-                {"t": t, "n": lim},
-            ).fetchall()
-            if not rows:
-                continue
-            dates = []
-            closes = []
-            for r in reversed(rows):
-                try:
-                    c = float(r[1])
-                except (TypeError, ValueError):
-                    continue
-                if not (c > 0 and math.isfinite(c)):
-                    continue
-                d = r[0]
-                dates.append(pd.Timestamp(d))
-                closes.append(c)
-            if len(closes) < max(40, trading_days // 3):
-                continue
-            # keep last trading_days+1 points if longer
-            if len(closes) > trading_days + 1:
-                dates = dates[-(trading_days + 1) :]
-                closes = closes[-(trading_days + 1) :]
-            out[t] = pd.Series(closes, index=pd.DatetimeIndex(dates), name=t)
+    for t, pairs in buckets.items():
+        if len(pairs) < min_bars:
+            continue
+        if len(pairs) > trading_days + 1:
+            pairs = pairs[-(trading_days + 1) :]
+        dates = [pd.Timestamp(d) for d, _ in pairs]
+        closes = [c for _, c in pairs]
+        out[t] = pd.Series(closes, index=pd.DatetimeIndex(dates), name=t)
     return out
 
 
@@ -301,6 +303,28 @@ def normalized_overlay_payload(norm: pd.DataFrame, tickers: Sequence[str]) -> Di
     return {"labels": labels, "series": series}
 
 
+_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_CACHE_TTL_SEC = 90.0
+
+
+def _cache_get(key: str) -> Optional[Dict[str, Any]]:
+    import time
+
+    hit = _CACHE.get(key)
+    if not hit:
+        return None
+    ts, payload = hit
+    if time.time() - ts > _CACHE_TTL_SEC:
+        return None
+    return payload
+
+
+def _cache_put(key: str, payload: Dict[str, Any]) -> None:
+    import time
+
+    _CACHE[key] = (time.time(), payload)
+
+
 def build_shape_cluster_page_payload(
     engine,
     *,
@@ -309,18 +333,30 @@ def build_shape_cluster_page_payload(
     method: str = "components",
     mode: str = "shape",
     cluster_id: Optional[int] = None,
+    include_overlay: bool = False,
 ) -> Dict[str, Any]:
     from services.shape_cluster_universe import shape_cluster_tickers
 
     tickers = shape_cluster_tickers()
-    report = build_shape_clusters(
-        engine,
-        tickers,
-        lookback_trading_days=lookback_trading_days,
-        mode=mode,
-        method=method,
-        corr_min=corr_min,
-    )
+    cache_key = f"{mode}|{method}|{lookback_trading_days}|{corr_min:.4f}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        report = dict(cached)
+        report["cache_hit"] = True
+    else:
+        report = build_shape_clusters(
+            engine,
+            tickers,
+            lookback_trading_days=lookback_trading_days,
+            mode=mode,
+            method=method,
+            corr_min=corr_min,
+        )
+        # do not cache overlay / selected
+        _cache_put(cache_key, report)
+        report = dict(report)
+        report["cache_hit"] = False
+
     clusters = report.get("clusters") or []
     selected = None
     if cluster_id is not None:
@@ -329,7 +365,7 @@ def build_shape_cluster_page_payload(
                 selected = c
                 break
     if selected is None and clusters:
-        # Prefer a small multi-name group for fast UI; else first cluster
+        # Prefer small group for snappy first paint (avoid megacluster C1)
         preferred = None
         for c in clusters:
             n = int(c.get("size") or 0)
@@ -337,18 +373,21 @@ def build_shape_cluster_page_payload(
                 preferred = c
                 break
         if preferred is None:
-            for c in clusters:
-                if int(c.get("size") or 0) >= 2:
-                    preferred = c
-                    break
-        selected = preferred or clusters[0]
+            # smallest cluster (often solo) — nav visible immediately
+            preferred = min(clusters, key=lambda c: (int(c.get("size") or 999), str(c.get("label") or "")))
+        selected = preferred
 
     overlay = {"labels": [], "series": []}
-    if selected:
-        series = fetch_close_series(engine, tickers, trading_days=lookback_trading_days)
+    if include_overlay and selected:
+        series = fetch_close_series(
+            engine,
+            selected.get("tickers") or [],
+            trading_days=lookback_trading_days,
+        )
         norm = normalize_paths(series)
         overlay = normalized_overlay_payload(norm, selected.get("tickers") or [])
 
     report["selected_cluster"] = selected
     report["overlay"] = overlay
+    report["overlay_included"] = bool(include_overlay)
     return report

@@ -213,6 +213,19 @@
             statusEl.textContent = 'Готово · ' + tickers.length + ' тикеров · ' + tickers.join(', ');
         }
 
+        async function fetchJsonTimeout(url, ms) {
+            var ctrl = new AbortController();
+            var timer = setTimeout(function() { ctrl.abort(); }, ms || 15000);
+            try {
+                var r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+                clearTimeout(timer);
+                return r;
+            } catch (e) {
+                clearTimeout(timer);
+                throw e;
+            }
+        }
+
         async function loadClusterView(fullReload) {
             var statusEl = document.getElementById('statusLine');
             var root = document.getElementById('chartsRoot');
@@ -224,11 +237,12 @@
             root.innerHTML = '';
 
             try {
+                // 1) Быстрый ответ без overlay — сразу кнопки навигации
                 var q = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
                     '&corr_min=' + encodeURIComponent(corrMin) +
-                    '&method=components&mode=shape';
+                    '&method=components&mode=shape&include_overlay=0';
                 if (currentClusterId != null) q += '&cluster_id=' + encodeURIComponent(currentClusterId);
-                var r = await fetch(q);
+                var r = await fetchJsonTimeout(q, 20000);
                 if (!r.ok) {
                     var err = await r.json().catch(function() { return {}; });
                     statusEl.textContent = err.detail || r.statusText;
@@ -258,15 +272,17 @@
                     'ok=' + (report.n_tickers_ok || 0) + '/' + (report.n_tickers_requested || 0) +
                     ' · bars=' + (report.n_bars_aligned || 0) +
                     ' · clusters=' + (report.n_clusters || 0) +
-                    ' · method=' + (report.method || '') +
                     ' · corr≥' + (report.corr_min != null ? report.corr_min : '') +
-                    ' · клик по кнопке группы = навигация · ' + (report.generated_at_utc || '');
+                    (report.cache_hit ? ' · cache' : '') +
+                    ' · клик по группе = навигация';
 
                 if (!selected) {
                     statusEl.textContent = 'Нет кластеров';
                     return;
                 }
+                statusEl.textContent = 'Навигация готова · оверлей…';
 
+                // 2) Overlay отдельным запросом (только выбранный кластер)
                 var ovSec = document.createElement('div');
                 ovSec.className = 'chart-section overlay';
                 var ovH = document.createElement('h2');
@@ -275,20 +291,39 @@
                 ovSec.appendChild(ovH);
                 ovSec.appendChild(ovCv);
                 root.appendChild(ovSec);
-                var overlay = report.overlay || { labels: [], series: [] };
-                if ((overlay.series || []).length) {
-                    chartInstances.push(buildOverlayChart(ovCv, overlay));
-                } else {
-                    var p = document.createElement('p');
-                    p.className = 'muted';
-                    p.textContent = 'Нет overlapping ряда для оверлея';
-                    ovSec.appendChild(p);
+
+                var qOv = '/api/portfolio/shape-clusters?lookback_days=' + encodeURIComponent(lookback) +
+                    '&corr_min=' + encodeURIComponent(corrMin) +
+                    '&method=components&mode=shape&include_overlay=1' +
+                    '&cluster_id=' + encodeURIComponent(selected.cluster_id);
+                try {
+                    var rOv = await fetchJsonTimeout(qOv, 20000);
+                    if (rOv.ok) {
+                        var withOv = await rOv.json();
+                        var overlay = withOv.overlay || { labels: [], series: [] };
+                        if ((overlay.series || []).length) {
+                            chartInstances.push(buildOverlayChart(ovCv, overlay));
+                        } else {
+                            var p0 = document.createElement('p');
+                            p0.className = 'muted';
+                            p0.textContent = 'Нет overlapping ряда для оверлея';
+                            ovSec.appendChild(p0);
+                        }
+                    }
+                } catch (eOv) {
+                    var p1 = document.createElement('p');
+                    p1.className = 'muted';
+                    p1.textContent = 'Оверлей не загрузился (можно смотреть дневные ниже)';
+                    ovSec.appendChild(p1);
                 }
 
                 statusEl.textContent = 'Навигация готова · грузим дневные…';
                 await loadPriceChartsBatched(selected.tickers || [], days);
             } catch (e) {
-                statusEl.textContent = 'Ошибка: ' + (e.message || String(e));
+                var msg = (e && e.name === 'AbortError')
+                    ? 'Таймаут загрузки кластеров (сеть/сервер). Обновите страницу или подождите 10с.'
+                    : ('Ошибка: ' + (e.message || String(e)));
+                statusEl.textContent = msg;
             }
         }
 

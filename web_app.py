@@ -3693,8 +3693,9 @@ async def api_portfolio_shape_clusters(
     method: str = "components",
     mode: str = "shape",
     cluster_id: Optional[int] = None,
+    include_overlay: int = 0,
 ):
-    """Кластеры по форме пути (норм. цена). cluster_id — выбранная группа для overlay."""
+    """Кластеры по форме пути. По умолчанию без overlay (быстрый первый ответ для nav)."""
 
     def _run() -> Dict[str, Any]:
         from report_generator import get_engine
@@ -3707,6 +3708,7 @@ async def api_portfolio_shape_clusters(
             method=(method or "components").strip().lower(),
             mode=(mode or "shape").strip().lower(),
             cluster_id=int(cluster_id) if cluster_id is not None else None,
+            include_overlay=int(include_overlay or 0) == 1,
         )
 
     try:
