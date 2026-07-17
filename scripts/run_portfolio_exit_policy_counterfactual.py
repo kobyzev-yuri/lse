@@ -63,9 +63,8 @@ def main() -> int:
     from datetime import timedelta
 
     import pandas as pd
-    from db_connection import get_engine
     from sqlalchemy import text
-    from report_generator import compute_closed_trade_pnls, load_trade_history
+    from report_generator import compute_closed_trade_pnls, get_engine, load_trade_history
     from services.portfolio_exit_policy import trailing_take_should_close
 
     engine = get_engine()
