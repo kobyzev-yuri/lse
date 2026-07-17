@@ -172,6 +172,46 @@ def collect_portfolio_contributions(
                 },
             )
         )
+    # Options sentiment (portfolio phase 6) — default telemetry / log_only
+    opt_hint = pm.get("portfolio_options_gate_hint")
+    opt_label = pm.get("portfolio_options_sentiment_label")
+    if opt_hint is not None or opt_label is not None:
+        gm_opt = gate_mode("DECISION_STACK_PORTFOLIO_OPTIONS_GATE_MODE", "log_only")
+        would_opt = str(opt_hint) == "would_downgrade" or str(
+            pm.get("portfolio_options_structure_gate_hint") or ""
+        ) == "would_downgrade"
+        action_opt = "telemetry"
+        if would_opt and gm_opt == "apply":
+            action_opt = "veto"
+        try:
+            sc_opt = float(pm.get("portfolio_options_sentiment_score"))
+            strength_opt = max(-1.0, min(1.0, sc_opt))
+        except (TypeError, ValueError):
+            strength_opt = -0.3 if would_opt else 0.0
+        out.append(
+            make_contribution(
+                contour_id="options_sentiment",
+                role="policy_gate",
+                readiness=stack_readiness("options_sentiment"),
+                strength=strength_opt,
+                weight=effective_stack_weight("options_sentiment", stack_readiness("options_sentiment")),
+                action=action_opt,
+                detail=(
+                    f"portfolio options hint={opt_hint}, label={opt_label}, "
+                    f"structure={pm.get('portfolio_options_structure_gate_hint')}"
+                ),
+                metrics={
+                    "gate_hint": opt_hint,
+                    "structure_gate_hint": pm.get("portfolio_options_structure_gate_hint"),
+                    "sentiment_label": opt_label,
+                    "sentiment_score": pm.get("portfolio_options_sentiment_score"),
+                    "gate_mode": gm_opt,
+                    "would_veto": would_opt,
+                    "trust_score": trust_score_for_contour("options_sentiment"),
+                },
+            )
+        )
+
     er = event_reaction or {}
     er_status = er.get("event_reaction_ml_status")
     er_score = er.get("event_reaction_ml_entry_score")

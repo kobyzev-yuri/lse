@@ -14,9 +14,34 @@ from services.portfolio_trend_regime import regime_from_context
 
 logger = logging.getLogger(__name__)
 
+_LIVE_REGIME_SKIP = frozenset({"", "insufficient", "error", "disabled", "n/a", "none"})
+
 
 def _truthy(raw: str, default: str = "false") -> bool:
     return (get_config_value(raw, default) or default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def resolve_exit_regime(
+    *,
+    entry_regime: str | None,
+    live_regime: str | None = None,
+    use_live: bool | None = None,
+) -> str:
+    """
+    Режим для trailing/take на выходе.
+
+    По умолчанию предпочитаем live 20d regime (позиция могла войти в neutral
+    и разогнаться в melt_up — узкий trailing с entry snapshot режет ралли).
+    """
+    entry = (entry_regime or "neutral").strip().lower() or "neutral"
+    if use_live is None:
+        use_live = _truthy("PORTFOLIO_TREND_EXIT_USE_LIVE_REGIME", "true")
+    if not use_live:
+        return entry
+    live = (live_regime or "").strip().lower()
+    if not live or live in _LIVE_REGIME_SKIP:
+        return entry
+    return live
 
 
 def _float_cfg(key: str, default: float) -> float:
@@ -237,26 +262,47 @@ def evaluate_portfolio_exit(
     current_price: float,
     buy_take_pct: Optional[float],
     context_json: Any = None,
+    live_regime: str | None = None,
 ) -> Tuple[bool, str, str]:
     """
     Returns: (should_close, human_reason, signal_type)
     signal_type: TAKE_PROFIT | TRAILING_TAKE
+
+    trailing/take caps используют resolve_exit_regime (live 20d by default).
     """
     ctx = _parse_context(context_json)
-    regime = regime_from_context(ctx)
+    entry_regime = regime_from_context(ctx)
+    resolved_live = live_regime
+    if resolved_live is None and _truthy("PORTFOLIO_TREND_EXIT_USE_LIVE_REGIME", "true"):
+        try:
+            from services.portfolio_trend_regime import portfolio_trend_regime_snapshot
+
+            snap = portfolio_trend_regime_snapshot(ticker, engine=engine)
+            resolved_live = snap.get("portfolio_trend_regime")
+        except Exception as e:
+            logger.debug("live regime snapshot %s: %s", ticker, e)
+            resolved_live = None
+    regime = resolve_exit_regime(entry_regime=entry_regime, live_regime=resolved_live)
     pnl_pct = (current_price - entry_price) / entry_price * 100.0
     peak = peak_pnl_pct_since_entry(engine, ticker, entry_price, entry_ts)
     trail_close, trail_reason = trailing_take_should_close(pnl_pct, peak, regime=regime)
     if trail_close:
-        return True, trail_reason, "TRAILING_TAKE"
+        reason = trail_reason
+        if regime != entry_regime:
+            reason = f"{trail_reason} [exit_regime={regime} entry={entry_regime}]"
+        return True, reason, "TRAILING_TAKE"
 
     take_pct, take_note = resolve_effective_take_pct(
         ticker, buy_take_pct, context_json=context_json
     )
+    # Regime-aware cap on take even when entry snapshot exists.
+    _, _, floor_p, cap_p = ml_take_params_for_regime(regime)
+    if take_pct > 0:
+        take_pct = clamp_take_pct(take_pct, floor_pct=floor_p, cap_pct=cap_p)
     if take_pct > 0 and pnl_pct >= take_pct - 0.05:
         return (
             True,
-            f"Take-profit ({take_note}): pnl={pnl_pct:.2f}% >= {take_pct:.2f}%",
+            f"Take-profit ({take_note}; exit_regime={regime}): pnl={pnl_pct:.2f}% >= {take_pct:.2f}%",
             "TAKE_PROFIT",
         )
     return False, "", ""

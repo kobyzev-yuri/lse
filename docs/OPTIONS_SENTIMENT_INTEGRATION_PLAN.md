@@ -40,7 +40,7 @@
 | **4** | Shadow-анализ | `log_only` | 2–4 недели: analyzer / ручной срез «сколько BUY отсекли бы» | 🔄 |
 | **4b** | `options_structure` + PCR divergence | `log_only` | Max pain / ceiling / plate shift в shadow; отдельный contribution | ✅ |
 | **5** | GAME_5M apply | `apply` | `DECISION_STACK_OPTIONS_SENTIMENT_GATE_MODE=apply`, пороги согласованы | ⏳ |
-| **6** | Portfolio shadow | `log_only` | `portfolio_entry_guards` + contribution в `decision_stack/portfolio.py` | ⏳ |
+| **6** | Portfolio shadow | `log_only` | `portfolio_entry_guards` + contribution в `decision_stack/portfolio.py` | ✅ (2026-07-17, apply off) |
 | **7** | Portfolio apply | `apply` | Отдельные пороги, не конфликтовать с CatBoost / event_reaction | ⏳ |
 | **8** | LLM earnings | — | Блок в `build_event_brief` + `earnings_llm_context` | ⏳ |
 | **9** | История OI в brief | cron | `plate_shift` из БД при ≥2 снимках; пометка `data_as_of: snapshot` | ⏳ данных |

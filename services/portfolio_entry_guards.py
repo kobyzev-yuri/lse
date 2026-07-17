@@ -52,13 +52,63 @@ def portfolio_ml_snapshot(ticker: str) -> Dict[str, Any]:
                     hint=hint,
                 )
             )
+            try:
+                from services.portfolio_peer_rank import portfolio_peer_relative_rank
+
+                out.update(
+                    portfolio_peer_relative_rank(
+                        ticker,
+                        ret_20d_pct=snap.get("portfolio_trend_ret_20d_pct"),
+                    )
+                )
+            except Exception as e:
+                logger.debug("portfolio peer rank %s: %s", ticker, e)
         except Exception:
             out.setdefault("portfolio_ml_20d_regime_hint", "no_regime")
+        try:
+            from services.options_card_context import build_options_card_context
+
+            opts = build_options_card_context(ticker)
+            if isinstance(opts, dict):
+                out["portfolio_options_status"] = opts.get("status")
+                out["portfolio_options_gate_hint"] = opts.get("gate_hint")
+                out["portfolio_options_structure_gate_hint"] = opts.get("structure_gate_hint")
+                out["portfolio_options_sentiment_label"] = opts.get("sentiment_label")
+                out["portfolio_options_sentiment_score"] = opts.get("sentiment_score")
+        except Exception as e:
+            logger.debug("portfolio options snapshot %s: %s", ticker, e)
     except Exception as e:
         logger.debug("portfolio_ml_snapshot %s: %s", ticker, e)
         out.setdefault("portfolio_ml_status", "error")
         out.setdefault("portfolio_ml_note", str(e))
     return out
+
+
+def portfolio_options_sentiment_blocks_buy(ticker: str) -> Tuple[bool, str]:
+    """
+    Options → portfolio. Default log_only (не блокирует), apply только при
+    DECISION_STACK_PORTFOLIO_OPTIONS_GATE_MODE=apply.
+    """
+    try:
+        from services.decision_stack._types import gate_mode
+        from services.options_card_context import build_options_card_context
+
+        opts = build_options_card_context(ticker)
+        hint = str(opts.get("gate_hint") or "")
+        struct = str(opts.get("structure_gate_hint") or "")
+        would = hint == "would_downgrade" or struct == "would_downgrade"
+        if not would:
+            return False, ""
+        reason = (
+            f"options gate_hint={hint} structure={struct} "
+            f"label={opts.get('sentiment_label')} score={opts.get('sentiment_score')}"
+        )
+        if gate_mode("DECISION_STACK_PORTFOLIO_OPTIONS_GATE_MODE", "log_only") != "apply":
+            return False, f"log_only: {reason}"
+        return True, reason
+    except Exception as e:
+        logger.debug("portfolio_options_sentiment_blocks_buy %s: %s", ticker, e)
+        return False, ""
 
 
 def portfolio_catboost_blocks_buy(ticker: str) -> Tuple[bool, str]:
@@ -114,7 +164,7 @@ def portfolio_indicator_blocks_buy(ticker: str) -> Tuple[bool, str]:
 
 
 def portfolio_trend_blocks_buy(ticker: str) -> Tuple[bool, str]:
-    """Late-chase + 20d prospect apply-гейт."""
+    """Late-chase + 20d prospect apply-гейт (+ options apply if enabled)."""
     try:
         from services.portfolio_trend_regime import (
             portfolio_trend_20d_blocks_buy,
@@ -124,7 +174,10 @@ def portfolio_trend_blocks_buy(ticker: str) -> Tuple[bool, str]:
         blocked, reason = portfolio_trend_late_chase_blocks_buy(ticker)
         if blocked:
             return True, reason
-        return portfolio_trend_20d_blocks_buy(ticker)
+        blocked, reason = portfolio_trend_20d_blocks_buy(ticker)
+        if blocked:
+            return True, reason
+        return portfolio_options_sentiment_blocks_buy(ticker)
     except Exception as e:
         logger.debug("portfolio_trend_blocks_buy %s: %s", ticker, e)
         return False, ""
@@ -143,7 +196,12 @@ def merge_portfolio_buy_context(
     base = dict(context_json) if isinstance(context_json, dict) else {}
     ml = dict(portfolio_ml) if isinstance(portfolio_ml, dict) else portfolio_ml_snapshot(ticker)
     for k, v in ml.items():
-        if k.startswith("portfolio_ml_") or k.startswith("portfolio_prospect_"):
+        if (
+            k.startswith("portfolio_ml_")
+            or k.startswith("portfolio_prospect_")
+            or k.startswith("portfolio_peer_")
+            or k.startswith("portfolio_options_")
+        ):
             base[k] = v
     try:
         from services.portfolio_multiday_signal import portfolio_multiday_snapshot

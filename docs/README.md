@@ -34,6 +34,8 @@
 |--------|----------|
 | Алгоритм, стратегии, вход/выход, справочник `PORTFOLIO_*` | [PORTFOLIO_GAME.md](PORTFOLIO_GAME.md) |
 | CatBoost (карточки, фильтр входа, ML-тейк, trailing) | [ML_PORTFOLIO_CATBOOST.md](ML_PORTFOLIO_CATBOOST.md) |
+| **Policy next (live exit regime, late-chase CF, peer rank, options)** | [PORTFOLIO_POLICY_NEXT_PLAN.md](PORTFOLIO_POLICY_NEXT_PLAN.md) |
+| Trend overlay 20d | [PORTFOLIO_TREND_OVERLAY_PLAN.md](PORTFOLIO_TREND_OVERLAY_PLAN.md) |
 | Крон vs GAME_5M, тейк/стоп в логах | [CRONS_AND_TAKE_STOP.md](CRONS_AND_TAKE_STOP.md) |
 | Ключи config.env | [CONFIG_OPTIONS_ANALYSIS.md](CONFIG_OPTIONS_ANALYSIS.md) §6 |
 | Бизнес-процессы | [BUSINESS_PROCESSES.md](../BUSINESS_PROCESSES.md) |
