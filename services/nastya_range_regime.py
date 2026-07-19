@@ -22,22 +22,28 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TICKERS = ("META", "AMKR", "ARM")
 METHOD_RU = """
-Что показывает отчёт
+Цель (запрос Насти)
+• Широкие границы движения: где ориентировочно «пол» и «потолок» (не точка входа).
+• Боковик: насколько широкая зона / как долго roughly держится (Age≈, width60d).
+• Bias: куда вероятнее выход из текущей зоны (up/down/neutral) — эвристика, не прогноз цены.
+• RVOL: проверка гипотезы, что на РАЗВОРОТАХ тренда и на ВЫХОДАХ из боковика объём
+  аномально растёт или падает. Текущий столник показывает RVOL «сегодня» как индикатор;
+  сама гипотеза проверяется на истории дат разворота, а не одним спокойным снимком.
 
-• Коридор (floor→ceiling): якоря Excel + локальный 20d channel по котировкам.
-• Regime / Bias / RVOL / NDX+VIX — авто (не точная цена входа).
+Что на экране
+• Коридор floor→ceil = якоря Excel + локальный 20d channel.
+• Regime: uptrend / downtrend / range / transition.
+• NDX + VIX: глобальный фон (не сигнал купить/продать тикер).
 
-Якоря Excel (методология Насти)
-• Min low (июн.2022–дек.2023) ×10 — не опечатка: зона «×10 к минимуму 2022»,
-  после которой часто замедление / rerating.
-• UPSIDE = (Min low ×10) / (Max high за 52 недели).
-  Около 1.0 ≈ цена у зоны ×10 к min-2022 относительно 52w high.
-• Потенциал от close = (Min low ×10) / Close — запас до той же ×10-зоны от текущей цены.
-• %%margin 17%/25% = цель (+17%/+25% от close) / (Drop 30% от max high).
-• Drop 20/25/30% от max high, цели +17/+25%, июльский гребень — ориентиры пола/потолка.
+Якоря Excel
+• Min low (июн.2022–дек.2023) ×10 — зона ×10 к минимуму 2022 (rerating / замедление).
+• UPSIDE = (Min low ×10) / Max high 52w. ≈1.0 → у зоны ×10 относительно 52w high.
+• Потенциал = (Min low ×10) / Close — запас до ×10-зоны от текущей цены.
+• %%margin 17%/25% = цель (+17%/+25%) / (Drop 30% от max high).
+• Drop 20/25/30%, цели +17/+25%, июльский гребень — ориентиры пола/потолка.
 
-Тест-набор по умолчанию: META (гиперскейлер на выбор), AMKR, ARM.
-Excel обновлять вручную при новой дате close / новых экстремумах; котировки — авто.
+По умолчанию: META (гиперскейлер), AMKR, ARM.
+Excel — вручную при новой дате close; котировки/RVOL/NDX/VIX — авто.
 """.strip()
 
 
@@ -353,6 +359,32 @@ def build_nastya_range_regime_report(
                 upside_note = "близко к зоне ×10"
             else:
                 upside_note = "есть запас до ×10 к min-2022 (vs 52w high)"
+        potential = xa.get("potential_from_close")
+        if potential is not None:
+            try:
+                xa = dict(xa)
+                xa["potential_from_close"] = round(float(potential), 2)
+            except (TypeError, ValueError):
+                pass
+        comments: List[str] = []
+        if upside_note:
+            comments.append(f"UPSIDE: {upside_note}.")
+        if local.get("regime") == "transition":
+            comments.append("Режим transition — не чистый боковик и не явный тренд.")
+        elif local.get("regime") == "range":
+            comments.append(
+                f"Боковик: ширина 60d ≈{local.get('range_width_60d_pct')}%, Age≈{local.get('approx_range_age_days')}d."
+            )
+        if rvol_flag == "high":
+            comments.append("RVOL high — объём аномально высокий (смотри в контексте выхода/разворота).")
+        elif rvol_flag == "low":
+            comments.append("RVOL low — объём слабый; само по себе не отменяет bias.")
+        else:
+            comments.append("RVOL обычный — снимок не про дату исторического разворота.")
+        if band.get("bias_exit") == "up" and band.get("pos_in_band") is not None and band["pos_in_band"] <= 0.35:
+            comments.append("Цена у нижней части коридора → bias up (эвристика пола).")
+        elif band.get("bias_exit") == "down" and band.get("pos_in_band") is not None and band["pos_in_band"] >= 0.75:
+            comments.append("Цена у верхней части коридора → bias down (эвристика потолка).")
         rows.append(
             {
                 "ticker": t,
@@ -365,6 +397,7 @@ def build_nastya_range_regime_report(
                 **band,
                 **xa,
                 "upside_note_ru": upside_note,
+                "comment_ru": " ".join(comments),
             }
         )
 
@@ -384,6 +417,24 @@ def build_nastya_range_regime_report(
             "not_required_mvp": ["candlestick labels", "Investing AI news", "earnings text"],
         },
     }
+    mkt = report["market"] if isinstance(report.get("market"), dict) else {}
+    mnotes: List[str] = []
+    if mkt.get("vix_regime") == "calm":
+        mnotes.append("VIX спокойный — глобального «шторма» нет.")
+    elif mkt.get("vix_regime") == "storm":
+        mnotes.append("VIX storm — осторожнее с bias up.")
+    try:
+        ndx6 = float(mkt.get("ndx_ret_approx_6w_pct"))
+        if ndx6 <= -5:
+            mnotes.append(f"NDX ~6w {ndx6}% — фон рынка слабый.")
+        elif ndx6 >= 5:
+            mnotes.append(f"NDX ~6w +{ndx6}% — фон рынка сильный.")
+    except (TypeError, ValueError):
+        pass
+    mnotes.append(
+        "RVOL в таблице — текущий снимок; гипотеза Насти про объём проверяется на датах разворота/выхода из боковика, не этим экраном в одиночку."
+    )
+    report["market_comment_ru"] = " ".join(mnotes)
     return report
 
 

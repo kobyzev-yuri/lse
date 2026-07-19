@@ -67,7 +67,8 @@
         <button class="btn" id="btnLoad" type="button">Обновить</button>
         <button class="btn" id="btnForce" type="button" title="Пересчитать без кэша">Пересчитать</button>
     </div>
-    <p class="muted">Excel — якоря (вручную). Котировки / RVOL / NDX / VIX — автоматически. Не угадываем точную цену входа.</p>
+    <p class="muted">Excel — якоря (вручную). Котировки / RVOL / NDX / VIX — авто. Коридор и bias — ориентир, не цена входа.</p>
+    <p class="muted" id="marketComment" style="margin-top:0.35rem;"></p>
 
     <div class="macro" id="macro"></div>
     <div id="err" class="err" hidden></div>
@@ -120,6 +121,8 @@
                 '<div class="stat"><div class="k">VIX</div><div class="v">' + esc(m.vix_close) + ' <span class="pill">' + esc(m.vix_regime) + '</span></div></div>' +
                 '<div class="stat"><div class="k">NDX max up-weeks / 1y</div><div class="v">' + esc(m.ndx_max_consec_up_weeks_1y) + '</div></div>';
             if (d.method_ru) document.getElementById('method').textContent = d.method_ru;
+            var mc = document.getElementById('marketComment');
+            if (mc) mc.textContent = d.market_comment_ru || '';
             var rows = d.tickers || [];
             tbody.innerHTML = rows.map(function (r) {
                 if (r.status && r.status !== 'ok') {
@@ -150,7 +153,9 @@
                     ' · channel 20d ' + esc(r.channel_lo_20d) + '–' + esc(r.channel_hi_20d) + '</div>' +
                     '<div class="muted" style="margin-top:0.35rem;">drop20=' + esc(r.drop20_from_52w) +
                     ' · target17=' + esc(r.target_17pct) +
-                    ' · crest=' + esc(r.july_crest) + '</div></div>';
+                    ' · crest=' + esc(r.july_crest) + '</div>' +
+                    (r.comment_ru ? '<div style="margin-top:0.45rem;font-size:0.8rem;line-height:1.35;color:#cbd5e1;">' + esc(r.comment_ru) + '</div>' : '') +
+                    '</div>';
             }).join('');
         }
         async function load(force) {
