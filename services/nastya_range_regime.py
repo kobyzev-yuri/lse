@@ -21,6 +21,8 @@ from config_loader import get_config_value
 logger = logging.getLogger(__name__)
 
 DEFAULT_TICKERS = ("META", "AMKR", "ARM")
+# Bump when comment/UI payload shape changes so stale JSON cache is ignored.
+REPORT_SCHEMA_VERSION = 2
 METHOD_RU = """
 Цель (запрос Насти)
 • Широкие границы движения: где ориентировочно «пол» и «потолок» (не точка входа).
@@ -395,7 +397,7 @@ def build_nastya_range_regime_report(
         )
 
     report = {
-        "schema_version": 1,
+        "schema_version": REPORT_SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "source_excel": str(excel_p),
         "excel_exists": excel_p.is_file(),
@@ -457,7 +459,11 @@ def get_or_build_report(
 ) -> Dict[str, Any]:
     if not refresh:
         cached = load_report_cache()
-        if cached and cached.get("tickers"):
+        if (
+            cached
+            and cached.get("tickers")
+            and int(cached.get("schema_version") or 0) == REPORT_SCHEMA_VERSION
+        ):
             # reuse if same ticker set requested
             req = [str(t).strip().upper() for t in (tickers or DEFAULT_TICKERS) if str(t).strip()]
             got = [str(r.get("ticker") or "").upper() for r in (cached.get("tickers") or [])]
