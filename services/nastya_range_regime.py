@@ -20,19 +20,24 @@ from config_loader import get_config_value
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TICKERS = ("META", "MSFT", "AMKR", "ARM")
+DEFAULT_TICKERS = ("META", "AMKR", "ARM")
 METHOD_RU = """
 Что показывает отчёт
 
-• Коридор (floor→ceiling): смесь якорей из Excel (дропы от high, цели +17/+25%, гребень)
-  и локального 20d channel по котировкам.
-• Regime: uptrend / downtrend / range / transition по ширине 60d и SMA.
-• Bias: вероятный выход из зоны вверх/вниз (не цена входа).
-• RVOL: объём / среднее 20d — гипотеза аномалий на разворотах.
-• NDX + VIX: глобальный режим рынка.
+• Коридор (floor→ceiling): якоря Excel + локальный 20d channel по котировкам.
+• Regime / Bias / RVOL / NDX+VIX — авто (не точная цена входа).
 
-Excel обновляем вручную при новой дате close / новых экстремумах.
-Котировки и объёмы подтягиваются автоматически.
+Якоря Excel (методология Насти)
+• Min low (июн.2022–дек.2023) ×10 — не опечатка: зона «×10 к минимуму 2022»,
+  после которой часто замедление / rerating.
+• UPSIDE = (Min low ×10) / (Max high за 52 недели).
+  Около 1.0 ≈ цена у зоны ×10 к min-2022 относительно 52w high.
+• Потенциал от close = (Min low ×10) / Close — запас до той же ×10-зоны от текущей цены.
+• %%margin 17%/25% = цель (+17%/+25% от close) / (Drop 30% от max high).
+• Drop 20/25/30% от max high, цели +17/+25%, июльский гребень — ориентиры пола/потолка.
+
+Тест-набор по умолчанию: META (гиперскейлер на выбор), AMKR, ARM.
+Excel обновлять вручную при новой дате close / новых экстремумах; котировки — авто.
 """.strip()
 
 
@@ -339,6 +344,15 @@ def build_nastya_range_regime_report(
                 rvol_now = float(rv.iloc[-1])
                 rvol_flag = "high" if rvol_now >= 1.5 else ("low" if rvol_now <= 0.7 else "normal")
         band = _blend_band(last, local, xa)
+        upside = xa.get("upside")
+        upside_note = None
+        if upside is not None:
+            if upside <= 1.05:
+                upside_note = "у зоны ×10 к min-2022 (rerating / замедление)"
+            elif upside <= 1.25:
+                upside_note = "близко к зоне ×10"
+            else:
+                upside_note = "есть запас до ×10 к min-2022 (vs 52w high)"
         rows.append(
             {
                 "ticker": t,
@@ -350,6 +364,7 @@ def build_nastya_range_regime_report(
                 "rvol_flag": rvol_flag,
                 **band,
                 **xa,
+                "upside_note_ru": upside_note,
             }
         )
 

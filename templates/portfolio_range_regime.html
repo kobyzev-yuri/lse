@@ -68,7 +68,7 @@
     </div>
 
     <div class="toolbar">
-        <input id="tickers" type="text" value="META,MSFT,AMKR,ARM" title="Тикеры через запятую" />
+        <input id="tickers" type="text" value="META,AMKR,ARM" title="Тикеры через запятую" />
         <button class="btn" id="btnLoad" type="button">Обновить</button>
         <button class="btn" id="btnForce" type="button" title="Пересчитать без кэша">Пересчитать</button>
     </div>
@@ -81,7 +81,7 @@
             <thead>
                 <tr>
                     <th>Ticker</th><th>Close</th><th>Regime</th><th>Floor→Ceil</th>
-                    <th>Pos</th><th>Bias</th><th>RVOL</th><th>Excel</th><th>Age≈</th>
+                    <th>Pos</th><th>Bias</th><th>UPSIDE</th><th>RVOL</th><th>Excel</th><th>Age≈</th>
                 </tr>
             </thead>
             <tbody id="tbody"></tbody>
@@ -128,10 +128,11 @@
             var rows = d.tickers || [];
             tbody.innerHTML = rows.map(function (r) {
                 if (r.status && r.status !== 'ok') {
-                    return '<tr><td>' + esc(r.ticker) + '</td><td colspan="8" class="muted">' + esc(r.status) +
+                    return '<tr><td>' + esc(r.ticker) + '</td><td colspan="9" class="muted">' + esc(r.status) +
                         (r.in_excel ? '' : ' · нет в Excel') + '</td></tr>';
                 }
                 var band = (r.band_floor != null ? r.band_floor : '—') + '→' + (r.band_ceiling != null ? r.band_ceiling : '—');
+                var upPill = (r.upside != null && r.upside <= 1.05) ? ' <span class="pill warn">×10 zone</span>' : '';
                 return '<tr>' +
                     '<td><strong>' + esc(r.ticker) + '</strong></td>' +
                     '<td>' + esc(r.close) + '</td>' +
@@ -139,6 +140,7 @@
                     '<td>' + esc(band) + '</td>' +
                     '<td>' + esc(r.pos_in_band) + '</td>' +
                     '<td class="' + biasClass(r.bias_exit) + '">' + esc(r.bias_exit) + '</td>' +
+                    '<td>' + esc(r.upside) + upPill + '</td>' +
                     '<td>' + esc(r.rvol_20) + ' <span class="pill">' + esc(r.rvol_flag) + '</span></td>' +
                     '<td>' + (r.in_excel ? 'yes' : '<span class="pill warn">NO</span>') + '</td>' +
                     '<td>' + esc(r.approx_range_age_days) + 'd</td>' +
@@ -147,13 +149,13 @@
             cards.innerHTML = rows.filter(function (r) { return r.status === 'ok'; }).map(function (r) {
                 return '<div class="card"><h3>' + esc(r.ticker) +
                     ' <span class="' + biasClass(r.bias_exit) + '">' + esc(r.bias_exit) + '</span></h3>' +
-                    '<div class="muted">channel 20d ' + esc(r.channel_lo_20d) + '–' + esc(r.channel_hi_20d) +
-                    ' · width60 ' + esc(r.range_width_60d_pct) + '%' +
-                    (r.in_excel ? '' : ' · нет Excel-якорей') + '</div>' +
+                    '<div class="muted">UPSIDE ' + esc(r.upside) +
+                    (r.upside_note_ru ? ' — ' + esc(r.upside_note_ru) : '') + '</div>' +
+                    '<div class="muted">потенциал ' + esc(r.potential_from_close) +
+                    ' · channel 20d ' + esc(r.channel_lo_20d) + '–' + esc(r.channel_hi_20d) + '</div>' +
                     '<div class="muted" style="margin-top:0.35rem;">drop20=' + esc(r.drop20_from_52w) +
                     ' · target17=' + esc(r.target_17pct) +
-                    ' · crest=' + esc(r.july_crest) +
-                    ' · upside=' + esc(r.upside) + '</div></div>';
+                    ' · crest=' + esc(r.july_crest) + '</div></div>';
             }).join('');
         }
         async function load(force) {

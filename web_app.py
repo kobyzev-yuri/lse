@@ -3837,7 +3837,7 @@ async def portfolio_range_regime_page(request: Request):
 
 @app.get("/api/portfolio/range-regime", response_class=JSONResponse)
 async def api_portfolio_range_regime(
-    tickers: str = "META,MSFT,AMKR,ARM",
+    tickers: str = "META,AMKR,ARM",
     refresh: int = 0,
 ):
     """Отчёт коридоров: Excel-якоря + OHLCV/RVOL/NDX/VIX."""
