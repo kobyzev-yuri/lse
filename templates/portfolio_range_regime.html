@@ -145,16 +145,18 @@
                     '</tr>';
             }).join('');
             cards.innerHTML = rows.filter(function (r) { return r.status === 'ok'; }).map(function (r) {
+                var note = r.comment_ru ? String(r.comment_ru).trim() : '';
                 return '<div class="card"><h3>' + esc(r.ticker) +
-                    ' <span class="' + biasClass(r.bias_exit) + '">' + esc(r.bias_exit) + '</span></h3>' +
+                    ' <span class="' + biasClass(r.bias_exit) + '">' + esc(r.bias_exit) + '</span>' +
+                    ' <span class="pill">' + esc(r.regime) + '</span></h3>' +
                     '<div class="muted">UPSIDE ' + esc(r.upside) +
-                    (r.upside_note_ru ? ' — ' + esc(r.upside_note_ru) : '') + '</div>' +
-                    '<div class="muted">потенциал ' + esc(r.potential_from_close) +
-                    ' · channel 20d ' + esc(r.channel_lo_20d) + '–' + esc(r.channel_hi_20d) + '</div>' +
-                    '<div class="muted" style="margin-top:0.35rem;">drop20=' + esc(r.drop20_from_52w) +
+                    (r.upside_note_ru ? ' <span class="pill">' + esc(r.upside_note_ru) + '</span>' : '') +
+                    ' · потенц. ' + esc(r.potential_from_close) + '</div>' +
+                    '<div class="muted">channel ' + esc(r.channel_lo_20d) + '–' + esc(r.channel_hi_20d) +
+                    ' · drop20=' + esc(r.drop20_from_52w) +
                     ' · target17=' + esc(r.target_17pct) +
                     ' · crest=' + esc(r.july_crest) + '</div>' +
-                    (r.comment_ru ? '<div style="margin-top:0.45rem;font-size:0.8rem;line-height:1.35;color:#cbd5e1;">' + esc(r.comment_ru) + '</div>' : '') +
+                    (note ? '<div style="margin-top:0.45rem;font-size:0.8rem;line-height:1.35;color:#cbd5e1;">' + esc(note) + '</div>' : '') +
                     '</div>';
             }).join('');
         }

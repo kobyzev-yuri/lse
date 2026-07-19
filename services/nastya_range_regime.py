@@ -37,8 +37,8 @@ METHOD_RU = """
 
 Якоря Excel
 • Min low (июн.2022–дек.2023) ×10 — зона ×10 к минимуму 2022 (rerating / замедление).
-• UPSIDE = (Min low ×10) / Max high 52w. ≈1.0 → у зоны ×10 относительно 52w high.
-• Потенциал = (Min low ×10) / Close — запас до ×10-зоны от текущей цены.
+• UPSIDE = (Min low ×10) / Max high 52w — ×10-зона относительно годового максимума (≈1.0 → у зоны).
+• Потенциал от close = (Min low ×10) / Close — та же ×10-зона относительно текущей цены (не дубль UPSIDE).
 • %%margin 17%/25% = цель (+17%/+25%) / (Drop 30% от max high).
 • Drop 20/25/30%, цели +17/+25%, июльский гребень — ориентиры пола/потолка.
 
@@ -351,14 +351,15 @@ def build_nastya_range_regime_report(
                 rvol_flag = "high" if rvol_now >= 1.5 else ("low" if rvol_now <= 0.7 else "normal")
         band = _blend_band(last, local, xa)
         upside = xa.get("upside")
+        # Short labels for UI; not repeated in comment_ru (table/card already show UPSIDE).
         upside_note = None
         if upside is not None:
             if upside <= 1.05:
-                upside_note = "у зоны ×10 к min-2022 (rerating / замедление)"
+                upside_note = "у зоны ×10"
             elif upside <= 1.25:
-                upside_note = "близко к зоне ×10"
+                upside_note = "близко к ×10"
             else:
-                upside_note = "есть запас до ×10 к min-2022 (vs 52w high)"
+                upside_note = "запас до ×10"
         potential = xa.get("potential_from_close")
         if potential is not None:
             try:
@@ -366,25 +367,17 @@ def build_nastya_range_regime_report(
                 xa["potential_from_close"] = round(float(potential), 2)
             except (TypeError, ValueError):
                 pass
+        # Per-ticker notes: only non-default / actionable; skip boilerplate
+        # (UPSIDE note, transition, RVOL normal, floor/ceiling bias — already in columns).
         comments: List[str] = []
-        if upside_note:
-            comments.append(f"UPSIDE: {upside_note}.")
-        if local.get("regime") == "transition":
-            comments.append("Режим transition — не чистый боковик и не явный тренд.")
-        elif local.get("regime") == "range":
+        if local.get("regime") == "range":
             comments.append(
                 f"Боковик: ширина 60d ≈{local.get('range_width_60d_pct')}%, Age≈{local.get('approx_range_age_days')}d."
             )
         if rvol_flag == "high":
-            comments.append("RVOL high — объём аномально высокий (смотри в контексте выхода/разворота).")
+            comments.append("RVOL high — объём аномально высокий (выход/разворот?).")
         elif rvol_flag == "low":
-            comments.append("RVOL low — объём слабый; само по себе не отменяет bias.")
-        else:
-            comments.append("RVOL обычный — снимок не про дату исторического разворота.")
-        if band.get("bias_exit") == "up" and band.get("pos_in_band") is not None and band["pos_in_band"] <= 0.35:
-            comments.append("Цена у нижней части коридора → bias up (эвристика пола).")
-        elif band.get("bias_exit") == "down" and band.get("pos_in_band") is not None and band["pos_in_band"] >= 0.75:
-            comments.append("Цена у верхней части коридора → bias down (эвристика потолка).")
+            comments.append("RVOL low — объём слабый.")
         rows.append(
             {
                 "ticker": t,
