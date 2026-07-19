@@ -3816,6 +3816,48 @@ async def portfolio_daily_chart_page(request: Request):
 
 
 
+@app.get("/portfolio/range-regime", response_class=HTMLResponse)
+async def portfolio_range_regime_page(request: Request):
+    """UI: коридоры / боковик / bias (анализ Насти)."""
+    method_ru = ""
+    try:
+        from services.nastya_range_regime import method_ru as _method
+
+        method_ru = _method()
+    except Exception:
+        pass
+    return HTMLResponse(
+        render_template(
+            "portfolio_range_regime.html",
+            {"request": request, "method_ru": method_ru},
+        ),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/api/portfolio/range-regime", response_class=JSONResponse)
+async def api_portfolio_range_regime(
+    tickers: str = "META,MSFT,AMKR,ARM",
+    refresh: int = 0,
+):
+    """Отчёт коридоров: Excel-якоря + OHLCV/RVOL/NDX/VIX."""
+
+    def _run() -> Dict[str, Any]:
+        from services.nastya_range_regime import DEFAULT_TICKERS, get_or_build_report
+
+        raw = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()]
+        if not raw:
+            raw = list(DEFAULT_TICKERS)
+        raw = raw[:40]
+        return get_or_build_report(tickers=raw, refresh=bool(int(refresh or 0)))
+
+    try:
+        return JSONResponse(_run())
+    except Exception as e:
+        logger.exception("GET /api/portfolio/range-regime: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка range-regime: {e!s}")
+
+
 @app.get("/portfolio/shape-clusters", response_class=HTMLResponse)
 async def portfolio_shape_clusters_page(request: Request):
     """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
