@@ -3829,7 +3829,11 @@ async def portfolio_range_regime_page(request: Request):
     return HTMLResponse(
         render_template(
             "portfolio_range_regime.html",
-            {"request": request, "method_ru": method_ru},
+            {
+                "request": request,
+                "method_ru": method_ru,
+                "web_llm_enabled": web_llm_enabled(),
+            },
         ),
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
     )
@@ -3840,7 +3844,7 @@ async def api_portfolio_range_regime(
     tickers: str = "META,AMKR,ARM",
     refresh: int = 0,
 ):
-    """Отчёт коридоров: Excel-якоря + OHLCV/RVOL/NDX/VIX."""
+    """Отчёт коридоров: Excel-якоря + OHLCV/RVOL/NDX/VIX + portfolio trend 20d."""
 
     def _run() -> Dict[str, Any]:
         from services.nastya_range_regime import DEFAULT_TICKERS, get_or_build_report
@@ -3856,6 +3860,42 @@ async def api_portfolio_range_regime(
     except Exception as e:
         logger.exception("GET /api/portfolio/range-regime: %s", e)
         raise HTTPException(status_code=500, detail=f"Ошибка range-regime: {e!s}")
+
+
+@app.get("/api/portfolio/range-regime/{ticker}/llm", response_class=JSONResponse)
+async def api_portfolio_range_regime_llm(ticker: str, tickers: str = ""):
+    """LLM-пояснение строки коридоров в контексте вопросов Насти."""
+    if not web_llm_enabled():
+        raise HTTPException(status_code=403, detail="WEB: LLM disabled")
+    t = (ticker or "").strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="Пустой тикер")
+
+    def _run() -> Dict[str, Any]:
+        from services.nastya_range_regime import DEFAULT_TICKERS, explain_nastya_range_row_llm, get_or_build_report
+
+        wanted = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()]
+        if t not in wanted:
+            wanted = [t] + wanted
+        if not wanted:
+            wanted = list(DEFAULT_TICKERS)
+        report = get_or_build_report(tickers=wanted[:40], refresh=False)
+        row = None
+        for r in report.get("tickers") or []:
+            if str(r.get("ticker") or "").upper() == t:
+                row = r
+                break
+        market = report.get("market") if isinstance(report.get("market"), dict) else {}
+        return explain_nastya_range_row_llm(t, row=row, market=market)
+
+    try:
+        result = await asyncio.to_thread(_run)
+    except Exception as e:
+        logger.exception("GET /api/portfolio/range-regime/%s/llm: %s", t, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка LLM коридоров: {e!s}")
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "LLM failed")
+    return JSONResponse(content=_api_json_body(result))
 
 
 @app.get("/portfolio/shape-clusters", response_class=HTMLResponse)

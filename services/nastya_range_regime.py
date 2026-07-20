@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TICKERS = ("META", "AMKR", "ARM")
 # Bump when comment/UI payload shape changes so stale JSON cache is ignored.
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 METHOD_RU = """
 Цель (запрос Насти)
 • Широкие границы движения: где ориентировочно «пол» и «потолок» (не точка входа).
@@ -34,8 +34,12 @@ METHOD_RU = """
 
 Что на экране
 • Коридор floor→ceil = якоря Excel + локальный 20d channel.
-• Regime: uptrend / downtrend / range / transition.
+• Regime: uptrend / downtrend / range / transition (локальный канал Насти).
+• ML trend: режим тренда 20d нашей portfolio-сетки (melt_up / trend_up / neutral / breakdown)
+  — отдельный слой, не замена bias_exit.
 • NDX + VIX: глобальный фон (не сигнал купить/продать тикер).
+• Кнопка LLM по тикеру: коротко отвечает на вопросы Насти по строке; может глянуть
+  карточку портфеля, без перегруза техникой.
 
 Якоря Excel
 • Min low (июн.2022–дек.2023) ×10 — зона ×10 к минимуму 2022 (rerating / замедление).
@@ -47,6 +51,190 @@ METHOD_RU = """
 По умолчанию: META (гиперскейлер), AMKR, ARM.
 Excel — вручную при новой дате close; котировки/RVOL/NDX/VIX — авто.
 """.strip()
+
+LLM_SYSTEM_RU = """
+Ты помогаешь аналитику Насте разобрать один тикер по отчёту «коридоры / боковик».
+Отвечай по-русски, коротко, живым языком. Без торговых приказов BUY/SELL.
+
+Структура ответа строго по пунктам:
+1) Пол и потолок — где ориентировочные границы и где цена внутри коридора.
+2) Боковик — есть ли (range vs transition/тренд), насколько зона широкая, сколько уже держится (Age).
+   Не выдумывай дату конца боковика.
+3) Куда вероятнее выход — bias up/down/neutral и почему (позиция в коридоре / режим).
+4) Объём (RVOL) — только как сегодняшний снимок; не пиши, что гипотеза разворота
+   «подтверждена» или «опровергнута» одним днём.
+5) Тренд сетки ML portfolio (20d) — как соотносится с коридором и bias; без порогов конфигов,
+   без jargon вроде thr/late_chase_min.
+
+Можно упомянуть 1–2 бытовых факта с карточки портфеля (решение стратегии, день ±%),
+если они помогают. Не перечисляй RSI/SMA/волатильность списком.
+""".strip()
+
+
+def _attach_portfolio_trend(ticker: str, *, engine=None) -> Dict[str, Any]:
+    """Слой portfolio trend 20d — отдельно от локального regime коридоров."""
+    try:
+        from services.portfolio_trend_regime import portfolio_trend_regime_snapshot
+
+        snap = portfolio_trend_regime_snapshot(ticker, engine=engine)
+        if not isinstance(snap, dict):
+            return {
+                "portfolio_trend_regime": "n/a",
+                "portfolio_trend_ret_20d_pct": None,
+                "portfolio_trend_near_20d_high": None,
+                "portfolio_trend_status": "n/a",
+            }
+        return {
+            "portfolio_trend_regime": snap.get("portfolio_trend_regime"),
+            "portfolio_trend_ret_20d_pct": snap.get("portfolio_trend_ret_20d_pct"),
+            "portfolio_trend_near_20d_high": snap.get("portfolio_trend_near_20d_high"),
+            "portfolio_trend_drawdown_from_20d_high_pct": snap.get(
+                "portfolio_trend_drawdown_from_20d_high_pct"
+            ),
+            "portfolio_trend_note_ru": snap.get("portfolio_trend_note_ru"),
+            "portfolio_trend_status": snap.get("portfolio_trend_status") or "ok",
+        }
+    except Exception as e:
+        logger.debug("portfolio_trend attach %s: %s", ticker, e)
+        return {
+            "portfolio_trend_regime": "error",
+            "portfolio_trend_ret_20d_pct": None,
+            "portfolio_trend_near_20d_high": None,
+            "portfolio_trend_status": "error",
+            "portfolio_trend_note_ru": str(e),
+        }
+
+
+def slim_portfolio_card_context(ticker: str) -> Dict[str, Any]:
+    """
+    Лёгкий срез карточки портфеля для LLM Насти (без вызова LLM портфеля).
+    """
+    t = (ticker or "").strip().upper()
+    out: Dict[str, Any] = {"ticker": t, "in_portfolio_game": False}
+    try:
+        from analyst_agent import AnalystAgent
+        from services.portfolio_card import (
+            get_portfolio_trade_tickers,
+            load_fallback_portfolio_take_pct,
+            portfolio_card_payload,
+        )
+
+        trade = set(get_portfolio_trade_tickers())
+        if t not in trade:
+            out["note_ru"] = "Тикер не в списке портфельной игры — только коридоры."
+            return out
+        out["in_portfolio_game"] = True
+        agent = AnalystAgent(use_llm=False)
+        r = agent.get_decision_with_llm(t, cluster_context=None)
+        if r.get("decision") == "NO_DATA":
+            out["status"] = "no_data"
+            return out
+        card = portfolio_card_payload(t, r, fallback_take_pct=load_fallback_portfolio_take_pct())
+        keep = (
+            "decision",
+            "selected_strategy",
+            "close",
+            "prev_day_return_pct",
+            "current_day_return_pct",
+            "vix_regime",
+            "strategy_insight",
+            "cluster_note",
+            "portfolio_trend_regime",
+            "portfolio_trend_ret_20d_pct",
+        )
+        for k in keep:
+            if card.get(k) is not None:
+                out[k] = card.get(k)
+        out["status"] = "ok"
+    except Exception as e:
+        logger.debug("slim_portfolio_card_context %s: %s", t, e)
+        out["status"] = "error"
+        out["error"] = str(e)
+    return out
+
+
+def build_nastya_llm_prompts(
+    row: Dict[str, Any],
+    *,
+    market: Optional[Dict[str, Any]] = None,
+    portfolio_slim: Optional[Dict[str, Any]] = None,
+) -> tuple[str, str]:
+    """System + user prompts for per-ticker Nastya explanation."""
+    payload = {
+        "цели_насти": [
+            "пол и потолок",
+            "боковик: ширина / сколько уже длится",
+            "bias выхода из зоны",
+            "RVOL как снимок (не вердикт по гипотезе разворота)",
+            "соотнести с ML trend portfolio 20d",
+        ],
+        "строка_отчёта": row,
+        "рынок": market or {},
+        "карточка_портфеля_кратко": portfolio_slim or {},
+    }
+    user = (
+        "Разбери тикер по пунктам из system prompt.\n"
+        f"Данные (JSON):\n{json.dumps(payload, ensure_ascii=False, default=str)}"
+    )
+    return LLM_SYSTEM_RU, user
+
+
+def explain_nastya_range_row_llm(
+    ticker: str,
+    *,
+    engine=None,
+    row: Optional[Dict[str, Any]] = None,
+    market: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    LLM-пояснение одной строки отчёта коридоров в контексте вопросов Насти.
+    """
+    t = (ticker or "").strip().upper()
+    if not t:
+        return {"ok": False, "error": "Пустой тикер"}
+
+    if row is None or market is None:
+        report = get_or_build_report(tickers=[t], refresh=False, engine=engine)
+        market = market or (report.get("market") if isinstance(report.get("market"), dict) else {})
+        if row is None:
+            for r in report.get("tickers") or []:
+                if str(r.get("ticker") or "").upper() == t:
+                    row = r
+                    break
+    if not isinstance(row, dict) or row.get("status") not in (None, "ok"):
+        return {"ok": False, "ticker": t, "error": f"Нет данных коридоров для {t}"}
+
+    portfolio_slim = slim_portfolio_card_context(t)
+    system_prompt, user_prompt = build_nastya_llm_prompts(
+        row, market=market, portfolio_slim=portfolio_slim
+    )
+
+    try:
+        from services.llm_service import LLMService
+
+        llm = LLMService()
+        if getattr(llm, "client", None) is None:
+            return {"ok": False, "ticker": t, "error": "LLM недоступен (нет ключа)"}
+        out = llm.generate_response(
+            messages=[{"role": "user", "content": user_prompt}],
+            system_prompt=system_prompt,
+            max_tokens=900,
+        )
+        text = (out or {}).get("response") or (out or {}).get("content") or (out or {}).get("text") or ""
+        if not str(text).strip():
+            err = (out or {}).get("error") or "Пустой ответ LLM"
+            return {"ok": False, "ticker": t, "error": str(err)}
+        return {
+            "ok": True,
+            "ticker": t,
+            "explanation_ru": str(text).strip(),
+            "model": (out or {}).get("model") or getattr(llm, "model", None),
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "portfolio_context_used": bool(portfolio_slim.get("in_portfolio_game")),
+        }
+    except Exception as e:
+        logger.exception("explain_nastya_range_row_llm %s: %s", t, e)
+        return {"ok": False, "ticker": t, "error": str(e)}
 
 
 def _project_root() -> Path:
@@ -380,6 +568,12 @@ def build_nastya_range_regime_report(
             comments.append("RVOL high — объём аномально высокий (выход/разворот?).")
         elif rvol_flag == "low":
             comments.append("RVOL low — объём слабый.")
+        trend = _attach_portfolio_trend(t, engine=engine)
+        tr = trend.get("portfolio_trend_regime")
+        if tr and tr not in ("n/a", "error", "disabled", "insufficient"):
+            ret20 = trend.get("portfolio_trend_ret_20d_pct")
+            ret_s = f", 20d {ret20:+.1f}%" if isinstance(ret20, (int, float)) else ""
+            comments.append(f"ML trend: {tr}{ret_s}.")
         rows.append(
             {
                 "ticker": t,
@@ -391,6 +585,7 @@ def build_nastya_range_regime_report(
                 "rvol_flag": rvol_flag,
                 **band,
                 **xa,
+                **trend,
                 "upside_note_ru": upside_note,
                 "comment_ru": " ".join(comments),
             }

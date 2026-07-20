@@ -1,11 +1,16 @@
 """Tests for nastya range-regime helpers (no network)."""
 
 import unittest
-from unittest.mock import patch
 
 import pandas as pd
 
-from services.nastya_range_regime import _blend_band, _detect_local, _excel_anchors
+from services.nastya_range_regime import (
+    REPORT_SCHEMA_VERSION,
+    _blend_band,
+    _detect_local,
+    _excel_anchors,
+    build_nastya_llm_prompts,
+)
 
 
 class TestNastyaRangeRegime(unittest.TestCase):
@@ -27,6 +32,36 @@ class TestNastyaRangeRegime(unittest.TestCase):
     def test_excel_missing(self):
         ex = pd.DataFrame()
         self.assertFalse(_excel_anchors(ex, "ARM").get("in_excel"))
+
+    def test_schema_version_bumped_for_trend(self):
+        self.assertGreaterEqual(REPORT_SCHEMA_VERSION, 3)
+
+    def test_llm_prompts_cover_nastya_goals(self):
+        row = {
+            "ticker": "META",
+            "status": "ok",
+            "regime": "transition",
+            "bias_exit": "up",
+            "band_floor": 637,
+            "band_ceiling": 686,
+            "pos_in_band": 0.18,
+            "rvol_20": 1.06,
+            "rvol_flag": "normal",
+            "approx_range_age_days": 75,
+            "portfolio_trend_regime": "neutral",
+            "portfolio_trend_ret_20d_pct": -2.1,
+        }
+        system, user = build_nastya_llm_prompts(
+            row,
+            market={"vix_regime": "calm"},
+            portfolio_slim={"in_portfolio_game": True, "decision": "HOLD"},
+        )
+        self.assertIn("Пол и потолок", system)
+        self.assertIn("Боковик", system)
+        self.assertIn("RVOL", system)
+        self.assertIn("ML portfolio", system)
+        self.assertIn("META", user)
+        self.assertIn("neutral", user)
 
 
 if __name__ == "__main__":

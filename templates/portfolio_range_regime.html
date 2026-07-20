@@ -17,9 +17,6 @@
             display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; justify-content: space-between;
         }
         .header h1 { font-size: 1.05rem; font-weight: 650; }
-        .header a { color: #7dd3fc; text-decoration: none; font-size: 0.85rem; margin-right: 0.65rem; }
-        .tabs a { color: #94a3b8; border-bottom: 2px solid transparent; padding-bottom: 0.15rem; text-decoration: none; margin-right: 0.85rem; font-size: 0.9rem; }
-        .tabs a.active { color: #7dd3fc; border-bottom-color: #38bdf8; font-weight: 650; }
         .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.9rem 0; }
         .toolbar input[type=text] {
             flex: 1 1 220px; min-width: 160px; background: #0f172a; border: 1px solid #334155;
@@ -30,27 +27,39 @@
             border-radius: 6px; font-size: 0.85rem; cursor: pointer;
         }
         .btn:hover { background: #1a4a7a; }
+        .btn:disabled { opacity: 0.55; cursor: wait; }
+        .btn-llm { background: #312e81; border-color: #4338ca; }
+        .btn-llm:hover { background: #3730a3; }
         .muted { color: #94a3b8; font-size: 0.8rem; }
         .macro { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; margin: 0.75rem 0 1rem; }
         .stat { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 0.55rem 0.7rem; }
         .stat .k { font-size: 0.72rem; color: #94a3b8; }
         .stat .v { font-size: 1rem; font-weight: 650; margin-top: 0.15rem; }
         table { width: 100%; border-collapse: collapse; font-size: 0.85rem; background: #16213e; border-radius: 8px; overflow: hidden; }
-        th, td { padding: 0.45rem 0.55rem; border-bottom: 1px solid #0f3460; text-align: left; }
+        th, td { padding: 0.45rem 0.55rem; border-bottom: 1px solid #0f3460; text-align: left; white-space: nowrap; }
         th { color: #94a3b8; font-weight: 600; font-size: 0.75rem; }
         tr:hover td { background: #1a2744; }
         .bias-up { color: #4ade80; font-weight: 700; }
         .bias-down { color: #f87171; font-weight: 700; }
         .bias-neutral { color: #cbd5e1; }
+        .trend-melt_up, .trend-trend_up { color: #4ade80; }
+        .trend-breakdown { color: #f87171; }
+        .trend-neutral, .trend-insufficient { color: #cbd5e1; }
         .pill { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.72rem; background: #0f3460; color: #cbd5e1; }
         .pill.warn { background: #422006; color: #fdba74; }
         details { margin: 1rem 0; background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 0.6rem 0.8rem; }
         details summary { cursor: pointer; color: #7dd3fc; font-size: 0.9rem; }
         pre.note { white-space: pre-wrap; color: #cbd5e1; font-size: 0.8rem; margin-top: 0.5rem; line-height: 1.4; font-family: inherit; }
         .err { color: #f87171; margin: 0.75rem 0; }
-        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.6rem; margin-top: 1rem; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.6rem; margin-top: 1rem; }
         .card { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 0.7rem; }
-        .card h3 { font-size: 0.95rem; margin-bottom: 0.35rem; }
+        .card h3 { font-size: 0.95rem; margin-bottom: 0.35rem; display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+        .card-actions { margin-top: 0.55rem; display: flex; gap: 0.4rem; align-items: center; }
+        .llm-box {
+            margin-top: 0.55rem; padding: 0.55rem 0.6rem; background: #0f172a; border: 1px solid #1e3a5f;
+            border-radius: 6px; font-size: 0.8rem; line-height: 1.45; color: #e2e8f0; white-space: pre-wrap;
+        }
+        .llm-box.err { color: #fca5a5; border-color: #7f1d1d; }
     </style>
 </head>
 <body>
@@ -67,7 +76,7 @@
         <button class="btn" id="btnLoad" type="button">Обновить</button>
         <button class="btn" id="btnForce" type="button" title="Пересчитать без кэша">Пересчитать</button>
     </div>
-    <p class="muted">Excel — якоря (вручную). Котировки / RVOL / NDX / VIX — авто. Коридор и bias — ориентир, не цена входа.</p>
+    <p class="muted">Excel — якоря (вручную). Котировки / RVOL / NDX / VIX / ML trend 20d — авто. Bias — ориентир, не цена входа. LLM — по кнопке на карточке.</p>
     <p class="muted" id="marketComment" style="margin-top:0.35rem;"></p>
 
     <div class="macro" id="macro"></div>
@@ -77,7 +86,7 @@
             <thead>
                 <tr>
                     <th>Ticker</th><th>Close</th><th>Regime</th><th>Floor→Ceil</th>
-                    <th>Pos</th><th>Bias</th><th>UPSIDE</th><th>Потенциал</th><th>RVOL</th><th>Excel</th><th>Age≈</th>
+                    <th>Pos</th><th>Bias</th><th>ML trend</th><th>UPSIDE</th><th>Потенциал</th><th>RVOL</th><th>Excel</th><th>Age≈</th>
                 </tr>
             </thead>
             <tbody id="tbody"></tbody>
@@ -92,6 +101,7 @@
 
     <script>
     (function () {
+        var LSE_WEB_LLM_ENABLED = {% if web_llm_enabled %}true{% else %}false{% endif %};
         var tbody = document.getElementById('tbody');
         var cards = document.getElementById('cards');
         var macro = document.getElementById('macro');
@@ -104,9 +114,21 @@
             if (b === 'down') return 'bias-down';
             return 'bias-neutral';
         }
+        function trendClass(t) {
+            var k = String(t || '').toLowerCase();
+            return 'trend-' + k;
+        }
         function esc(s) {
             return String(s == null ? '' : s)
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        function mlTrendCell(r) {
+            var reg = r.portfolio_trend_regime;
+            if (reg == null || reg === '') return '—';
+            var ret = r.portfolio_trend_ret_20d_pct;
+            var retS = (typeof ret === 'number') ? (' ' + (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%') : '';
+            var near = r.portfolio_trend_near_20d_high ? ' <span class="pill warn">near high</span>' : '';
+            return '<span class="' + trendClass(reg) + '">' + esc(reg) + '</span>' + esc(retS) + near;
         }
         function render(d) {
             err.hidden = true;
@@ -126,7 +148,7 @@
             var rows = d.tickers || [];
             tbody.innerHTML = rows.map(function (r) {
                 if (r.status && r.status !== 'ok') {
-                    return '<tr><td>' + esc(r.ticker) + '</td><td colspan="10" class="muted">' + esc(r.status) +
+                    return '<tr><td>' + esc(r.ticker) + '</td><td colspan="11" class="muted">' + esc(r.status) +
                         (r.in_excel ? '' : ' · нет в Excel') + '</td></tr>';
                 }
                 var band = (r.band_floor != null ? r.band_floor : '—') + '→' + (r.band_ceiling != null ? r.band_ceiling : '—');
@@ -138,6 +160,7 @@
                     '<td>' + esc(band) + '</td>' +
                     '<td>' + esc(r.pos_in_band) + '</td>' +
                     '<td class="' + biasClass(r.bias_exit) + '">' + esc(r.bias_exit) + '</td>' +
+                    '<td>' + mlTrendCell(r) + '</td>' +
                     '<td>' + esc(r.upside) + upPill + '</td>' +
                     '<td><strong>' + esc(r.potential_from_close != null ? r.potential_from_close : '—') + '</strong></td>' +
                     '<td>' + esc(r.rvol_20) + ' <span class="pill">' + esc(r.rvol_flag) + '</span></td>' +
@@ -147,9 +170,13 @@
             }).join('');
             cards.innerHTML = rows.filter(function (r) { return r.status === 'ok'; }).map(function (r) {
                 var note = r.comment_ru ? String(r.comment_ru).trim() : '';
-                return '<div class="card"><h3>' + esc(r.ticker) +
+                var llmBtn = LSE_WEB_LLM_ENABLED
+                    ? ('<button type="button" class="btn btn-llm" data-llm="' + esc(r.ticker) + '">LLM · пояснить</button>')
+                    : '<span class="muted">LLM выключен</span>';
+                return '<div class="card" data-ticker="' + esc(r.ticker) + '"><h3>' + esc(r.ticker) +
                     ' <span class="' + biasClass(r.bias_exit) + '">' + esc(r.bias_exit) + '</span>' +
-                    ' <span class="pill">' + esc(r.regime) + '</span></h3>' +
+                    ' <span class="pill">' + esc(r.regime) + '</span>' +
+                    ' <span class="pill ' + trendClass(r.portfolio_trend_regime) + '">ML ' + esc(r.portfolio_trend_regime || '—') + '</span></h3>' +
                     '<div>UPSIDE <strong>' + esc(r.upside) + '</strong>' +
                     (r.upside_note_ru ? ' <span class="pill">' + esc(r.upside_note_ru) + '</span>' : '') + '</div>' +
                     '<div>Потенциал <strong>' + esc(r.potential_from_close != null ? r.potential_from_close : '—') + '</strong>' +
@@ -159,8 +186,37 @@
                     ' · target17=' + esc(r.target_17pct) +
                     ' · crest=' + esc(r.july_crest) + '</div>' +
                     (note ? '<div style="margin-top:0.45rem;font-size:0.8rem;line-height:1.35;color:#cbd5e1;">' + esc(note) + '</div>' : '') +
+                    '<div class="card-actions">' + llmBtn + '</div>' +
+                    '<div class="llm-box" id="llm-' + esc(r.ticker) + '" hidden></div>' +
                     '</div>';
             }).join('');
+            cards.querySelectorAll('[data-llm]').forEach(function (btn) {
+                btn.onclick = function () { explainTicker(btn.getAttribute('data-llm'), btn); };
+            });
+        }
+        async function explainTicker(ticker, btn) {
+            var box = document.getElementById('llm-' + ticker);
+            if (!box) return;
+            box.hidden = false;
+            box.classList.remove('err');
+            box.textContent = 'Думаю…';
+            if (btn) btn.disabled = true;
+            var tickers = (tickersEl.value || '').trim();
+            var url = '/api/portfolio/range-regime/' + encodeURIComponent(ticker) + '/llm?tickers=' + encodeURIComponent(tickers);
+            try {
+                var r = await fetch(url, { cache: 'no-store' });
+                var d = await r.json();
+                if (!r.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
+                box.textContent = d.explanation_ru || 'Пустой ответ';
+                if (d.model) {
+                    box.textContent += '\n\n— ' + d.model + (d.portfolio_context_used ? ' · +карточка портфеля' : '');
+                }
+            } catch (e) {
+                box.classList.add('err');
+                box.textContent = String(e.message || e);
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         }
         async function load(force) {
             err.hidden = true;
