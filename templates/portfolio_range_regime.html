@@ -251,6 +251,9 @@
                 var meta = [];
                 if (d.model) meta.push(d.model);
                 if (d.chart_used) meta.push('график ~6м');
+                if (d.chart_markers_counts) {
+                    meta.push('E' + (d.chart_markers_counts.earnings || 0) + '/N' + (d.chart_markers_counts.news || 0));
+                }
                 if (d.portfolio_context_used) meta.push('+карточка портфеля');
                 if (meta.length) {
                     var metaLine = '\n\n— ' + meta.join(' · ');

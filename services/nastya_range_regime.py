@@ -9,9 +9,9 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 from sqlalchemy import bindparam, text
@@ -39,7 +39,8 @@ METHOD_RU = """
   — отдельный слой, не замена bias_exit.
 • NDX + VIX: глобальный фон (не сигнал купить/продать тикер).
 • Кнопка LLM по тикеру: сначала краткий «Итог» (что ждать по движению в ближайшее время),
-  затем разбор по пунктам Насти; может глянуть карточку портфеля и дневной график ~6м.
+  затем разбор по пунктам Насти; может глянуть карточку портфеля и дневной график ~6м
+  с маркерами earnings (X) и сильных новостей (▲/▼, топ‑5/мес).
 
 Якоря Excel
 • Min low (июн.2022–дек.2023) ×10 — зона ×10 к минимуму 2022 (rerating / замедление).
@@ -71,14 +72,244 @@ LLM_SYSTEM_RU = """
    «подтверждена» или «опровергнута» одним днём.
 5) Тренд сетки ML portfolio (20d) — как соотносится с коридором и bias; без порогов конфигов,
    без jargon вроде thr/late_chase_min.
+6) История новостей/earnings на графике — 1–2 аналогии: что было после похожих маркеров
+   раньше и что это может значить сейчас (с оговоркой, что аналогия не гарантия).
 
 Можно упомянуть 1–2 бытовых факта с карточки портфеля (решение стратегии, день ±%),
 если они помогают. Не перечисляй RSI/SMA/волатильность списком.
 
 Если приложена картинка дневного графика (~6 месяцев) — обязательно взгляни на форму
 цены (полка, пила, V, импульс вниз/вверх) и свяжи это с боковиком/Age/bias/ML trend и с блоком «Итог».
+На графике могут быть маркеры: зелёный/красный X = earnings (beat/miss по EPS),
+зелёный ▲ / красный ▼ = сильные новости (не нейтральные; до 5/мес).
+
+Важно про историю новостей/earnings:
+• посмотри, как цена вела себя ПОСЛЕ прошлых маркеров на этом же графике (и в JSON
+  маркеров — поля ret_5d/ret_10d, если есть);
+• сделай короткую разумную аналогию: похожий тип события раньше → похожий/иной отклик сейчас;
+• не утверждай причинность наверняка; 1–2 аналогии достаточно, без пересказа каждой новости.
 Не пересказывай каждую свечу.
 """.strip()
+
+
+NEWS_SENTIMENT_STRONG_LO = 0.35
+NEWS_SENTIMENT_STRONG_HI = 0.65
+NEWS_TOP_PER_MONTH = 5
+
+
+def _as_date(v: Any) -> Optional[date]:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    try:
+        return pd.Timestamp(v).date()
+    except Exception:
+        return None
+
+
+def classify_earnings_tone(eps_actual: Any, eps_estimate: Any) -> Optional[str]:
+    """good/bad/neutral by EPS beat/miss; None if cannot classify."""
+    a = _f_num(eps_actual)
+    e = _f_num(eps_estimate)
+    if a is None or e is None:
+        return None
+    if a > e:
+        return "good"
+    if a < e:
+        return "bad"
+    return "neutral"
+
+
+def select_top_news_per_month(
+    items: Sequence[Dict[str, Any]],
+    *,
+    top_n: int = NEWS_TOP_PER_MONTH,
+) -> List[Dict[str, Any]]:
+    """Keep strongest non-neutral news, at most top_n per calendar month."""
+    by_month: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
+    for it in items:
+        d = _as_date(it.get("date"))
+        sc = _f_num(it.get("sentiment_score"))
+        if d is None or sc is None:
+            continue
+        if NEWS_SENTIMENT_STRONG_LO < sc < NEWS_SENTIMENT_STRONG_HI:
+            continue
+        key = (d.year, d.month)
+        by_month.setdefault(key, []).append(dict(it))
+    out: List[Dict[str, Any]] = []
+    for key in sorted(by_month.keys()):
+        bucket = by_month[key]
+        bucket.sort(key=lambda x: abs(float(x.get("sentiment_score") or 0.5) - 0.5), reverse=True)
+        out.extend(bucket[: max(0, int(top_n))])
+    out.sort(key=lambda x: _as_date(x.get("date")) or date.min)
+    return out
+
+
+def load_chart_event_markers(
+    ticker: str,
+    *,
+    start: date,
+    end: date,
+    engine=None,
+    news_top_per_month: int = NEWS_TOP_PER_MONTH,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Earnings (EPS beat/miss) + strongest non-neutral KB news for chart overlays."""
+    t = (ticker or "").strip().upper()
+    empty: Dict[str, List[Dict[str, Any]]] = {"earnings": [], "news": []}
+    if not t or start > end:
+        return empty
+    eng = engine
+    if eng is None:
+        try:
+            from report_generator import get_engine
+
+            eng = get_engine()
+        except Exception:
+            eng = None
+    if eng is None:
+        return empty
+
+    earnings: List[Dict[str, Any]] = []
+    news_raw: List[Dict[str, Any]] = []
+    try:
+        with eng.connect() as conn:
+            erows = conn.execute(
+                text(
+                    """
+                    SELECT kb.ts::date AS d,
+                           ed.eps_actual, ed.eps_estimate,
+                           ed.revenue_actual, ed.revenue_estimate
+                    FROM earnings_event_detail ed
+                    JOIN knowledge_base kb ON kb.id = ed.knowledge_base_id
+                    WHERE upper(coalesce(kb.symbol, kb.ticker)) = :t
+                      AND kb.ts::date >= :d0 AND kb.ts::date <= :d1
+                    ORDER BY kb.ts ASC
+                    """
+                ),
+                {"t": t, "d0": start, "d1": end},
+            ).mappings().all()
+            for r in erows:
+                tone = classify_earnings_tone(r.get("eps_actual"), r.get("eps_estimate"))
+                if tone is None:
+                    continue
+                earnings.append(
+                    {
+                        "date": _as_date(r.get("d")),
+                        "kind": "earnings",
+                        "tone": tone,
+                        "eps_actual": _f_num(r.get("eps_actual")),
+                        "eps_estimate": _f_num(r.get("eps_estimate")),
+                        "label_ru": (
+                            "earnings beat"
+                            if tone == "good"
+                            else ("earnings miss" if tone == "bad" else "earnings inline")
+                        ),
+                    }
+                )
+            nrows = conn.execute(
+                text(
+                    """
+                    SELECT ts::date AS d, sentiment_score,
+                           left(coalesce(insight, content), 100) AS title
+                    FROM knowledge_base
+                    WHERE upper(coalesce(ticker, symbol)) = :t
+                      AND sentiment_score IS NOT NULL
+                      AND ts::date >= :d0 AND ts::date <= :d1
+                      AND (sentiment_score <= :lo OR sentiment_score >= :hi)
+                    ORDER BY ts ASC
+                    """
+                ),
+                {
+                    "t": t,
+                    "d0": start,
+                    "d1": end,
+                    "lo": NEWS_SENTIMENT_STRONG_LO,
+                    "hi": NEWS_SENTIMENT_STRONG_HI,
+                },
+            ).mappings().all()
+            for r in nrows:
+                sc = _f_num(r.get("sentiment_score"))
+                if sc is None:
+                    continue
+                tone = "good" if sc >= NEWS_SENTIMENT_STRONG_HI else "bad"
+                news_raw.append(
+                    {
+                        "date": _as_date(r.get("d")),
+                        "kind": "news",
+                        "tone": tone,
+                        "sentiment_score": sc,
+                        "title": (str(r.get("title") or "").strip() or None),
+                        "label_ru": "news+" if tone == "good" else "news−",
+                    }
+                )
+    except Exception as e:
+        logger.debug("load_chart_event_markers %s: %s", t, e)
+        return empty
+
+    news = select_top_news_per_month(news_raw, top_n=news_top_per_month)
+    return {"earnings": earnings, "news": news}
+
+
+def _price_on_or_before(close: pd.Series, d: date) -> Optional[float]:
+    if close is None or close.empty:
+        return None
+    idx = pd.to_datetime(close.index)
+    target = pd.Timestamp(d)
+    mask = idx <= target
+    try:
+        import numpy as np
+
+        positions = np.flatnonzero(np.asarray(mask))
+    except Exception:
+        positions = [i for i, ok in enumerate(mask) if bool(ok)]
+    if len(positions):
+        return float(close.iloc[int(positions[-1])])
+    return float(close.iloc[0])
+
+
+def _forward_return_pct(close: pd.Series, d: date, *, horizon_bars: int) -> Optional[float]:
+    """Close-to-close % move over ~horizon trading bars after event date."""
+    if close is None or close.empty or horizon_bars <= 0:
+        return None
+    idx = pd.to_datetime(close.index)
+    target = pd.Timestamp(d)
+    try:
+        import numpy as np
+
+        positions = np.flatnonzero(np.asarray(idx >= target))
+    except Exception:
+        positions = [i for i, ts in enumerate(idx) if ts >= target]
+    if not len(positions):
+        return None
+    i0 = int(positions[0])
+    i1 = i0 + int(horizon_bars)
+    if i1 >= len(close):
+        return None
+    p0 = float(close.iloc[i0])
+    p1 = float(close.iloc[i1])
+    if p0 <= 0:
+        return None
+    return round((p1 / p0 - 1.0) * 100.0, 2)
+
+
+def enrich_markers_with_forward_returns(
+    close: pd.Series,
+    markers: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Attach post-event 5d/10d % moves so LLM can analogize historically."""
+    out: Dict[str, List[Dict[str, Any]]] = {"earnings": [], "news": []}
+    for key in ("earnings", "news"):
+        for raw in markers.get(key) or []:
+            m = dict(raw)
+            dd = _as_date(m.get("date"))
+            if dd is not None:
+                m["ret_5d_pct"] = _forward_return_pct(close, dd, horizon_bars=5)
+                m["ret_10d_pct"] = _forward_return_pct(close, dd, horizon_bars=10)
+            out[key].append(m)
+    return out
 
 
 def split_nastya_llm_explanation(text: str) -> Dict[str, str]:
@@ -165,20 +396,28 @@ def _load_ohlcv_for_ticker(ticker: str, *, engine=None, bars: int = 160) -> Opti
     return d.tail(bars)
 
 
-def render_nastya_range_chart_png(
+def render_nastya_range_chart_bundle(
     ticker: str,
     *,
     row: Optional[Dict[str, Any]] = None,
     engine=None,
     days: int = 130,
-) -> Optional[bytes]:
+) -> Dict[str, Any]:
     """
-    Дневной close-график ~6м с полом/потолком коридора (если есть) — для vision LLM и UI.
+    Дневной close-график ~6м + маркеры earnings/news.
+    Returns {"png": bytes|None, "markers": {"earnings": [...], "news": [...]}}.
     """
     t = (ticker or "").strip().upper()
+    empty_markers: Dict[str, List[Dict[str, Any]]] = {"earnings": [], "news": []}
     d = _load_ohlcv_for_ticker(t, engine=engine, bars=max(60, int(days)))
     if d is None or d.empty:
-        return None
+        return {"png": None, "markers": empty_markers}
+    close = d["Close"].astype(float)
+    idx = pd.to_datetime(close.index)
+    start_d = _as_date(idx[0]) or date.today()
+    end_d = _as_date(idx[-1]) or date.today()
+    markers = load_chart_event_markers(t, start=start_d, end=end_d, engine=engine)
+    markers = enrich_markers_with_forward_returns(close, markers)
     try:
         import io
 
@@ -189,17 +428,14 @@ def render_nastya_range_chart_png(
         import matplotlib.pyplot as plt
     except Exception as e:
         logger.warning("matplotlib unavailable for nastya chart: %s", e)
-        return None
+        return {"png": None, "markers": markers}
 
-    close = d["Close"].astype(float)
-    idx = pd.to_datetime(close.index)
-    fig, ax = plt.subplots(figsize=(8.2, 4.2), dpi=110)
+    fig, ax = plt.subplots(figsize=(8.4, 4.4), dpi=110)
     ax.plot(idx, close.values, color="#2563eb", linewidth=1.6, label="Close")
     if len(close) >= 20:
         sma20 = close.rolling(20).mean()
         ax.plot(idx, sma20.values, color="#94a3b8", linewidth=1.0, alpha=0.9, label="SMA20")
-    floor = None
-    ceil = None
+    floor = ceil = None
     if isinstance(row, dict):
         floor = _f_num(row.get("band_floor"))
         ceil = _f_num(row.get("band_ceiling"))
@@ -207,6 +443,30 @@ def render_nastya_range_chart_png(
         ax.axhline(floor, color="#16a34a", linestyle="--", linewidth=1.0, alpha=0.85, label=f"floor {floor}")
     if ceil is not None:
         ax.axhline(ceil, color="#dc2626", linestyle="--", linewidth=1.0, alpha=0.85, label=f"ceil {ceil}")
+
+    def _scatter(points: List[Dict[str, Any]], *, marker: str, color: str, label: str, z: int = 5) -> None:
+        xs, ys = [], []
+        for p in points:
+            dd = _as_date(p.get("date"))
+            if dd is None:
+                continue
+            y = _price_on_or_before(close, dd)
+            if y is None:
+                continue
+            xs.append(pd.Timestamp(dd))
+            ys.append(y)
+        if xs:
+            ax.scatter(xs, ys, marker=marker, c=color, s=70, linewidths=1.6, zorder=z, label=label)
+
+    earn_good = [p for p in markers.get("earnings") or [] if p.get("tone") == "good"]
+    earn_bad = [p for p in markers.get("earnings") or [] if p.get("tone") == "bad"]
+    news_good = [p for p in markers.get("news") or [] if p.get("tone") == "good"]
+    news_bad = [p for p in markers.get("news") or [] if p.get("tone") == "bad"]
+    _scatter(earn_good, marker="x", color="#16a34a", label="earnings beat", z=6)
+    _scatter(earn_bad, marker="x", color="#dc2626", label="earnings miss", z=6)
+    _scatter(news_good, marker="^", color="#16a34a", label="news+", z=5)
+    _scatter(news_bad, marker="v", color="#dc2626", label="news−", z=5)
+
     regime = (row or {}).get("portfolio_trend_regime") if isinstance(row, dict) else None
     bias = (row or {}).get("bias_exit") if isinstance(row, dict) else None
     title = f"{t} · daily ~{len(close)}d"
@@ -214,9 +474,13 @@ def render_nastya_range_chart_png(
         title += f" · bias {bias}"
     if regime:
         title += f" · ML {regime}"
+    n_e = len(markers.get("earnings") or [])
+    n_n = len(markers.get("news") or [])
+    if n_e or n_n:
+        title += f" · E{n_e}/N{n_n}"
     ax.set_title(title, fontsize=11)
     ax.grid(True, alpha=0.25)
-    ax.legend(loc="best", fontsize=8)
+    ax.legend(loc="best", fontsize=7, ncol=2)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
     ax.xaxis.set_major_locator(mdates.MonthLocator())
     fig.autofmt_xdate(rotation=0, ha="center")
@@ -224,7 +488,18 @@ def render_nastya_range_chart_png(
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    return buf.getvalue()
+    return {"png": buf.getvalue(), "markers": markers}
+
+
+def render_nastya_range_chart_png(
+    ticker: str,
+    *,
+    row: Optional[Dict[str, Any]] = None,
+    engine=None,
+    days: int = 130,
+) -> Optional[bytes]:
+    """Дневной close-график ~6м с полом/потолком и маркерами earnings/news."""
+    return render_nastya_range_chart_bundle(ticker, row=row, engine=engine, days=days).get("png")
 
 
 def build_nastya_llm_user_content(
@@ -332,6 +607,7 @@ def build_nastya_llm_prompts(
     *,
     market: Optional[Dict[str, Any]] = None,
     portfolio_slim: Optional[Dict[str, Any]] = None,
+    chart_markers: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, str]:
     """System + user prompts for per-ticker Nastya explanation."""
     payload = {
@@ -342,11 +618,22 @@ def build_nastya_llm_prompts(
             "bias выхода из зоны",
             "RVOL как снимок (не вердикт по гипотезе разворота)",
             "соотнести с ML trend portfolio 20d",
-            "форма тренда по графику (~6м), если картинка приложена",
+            "форма тренда по графику (~6м) и маркеры earnings/news, если есть",
+            "историческая аналогия: как цена реагировала на похожие новости/earnings раньше (ret_5d/ret_10d)",
         ],
         "строка_отчёта": row,
         "рынок": market or {},
         "карточка_портфеля_кратко": portfolio_slim or {},
+        "маркеры_графика": chart_markers or {"earnings": [], "news": []},
+        "легенда_маркеров": {
+            "earnings_X_green": "EPS beat vs estimate",
+            "earnings_X_red": "EPS miss vs estimate",
+            "news_triangle_up_green": "сильная позитивная новость",
+            "news_triangle_down_red": "сильная негативная новость",
+            "news_cap": "до 5 сильнейших не-нейтральных новостей в месяц",
+            "ret_5d_pct": "изменение close за ~5 торговых дней после маркера",
+            "ret_10d_pct": "изменение close за ~10 торговых дней после маркера",
+        },
     }
     user = (
         "Разбери тикер по пунктам из system prompt.\n"
@@ -364,7 +651,7 @@ def explain_nastya_range_row_llm(
 ) -> Dict[str, Any]:
     """
     LLM-пояснение одной строки отчёта коридоров в контексте вопросов Насти.
-    При возможности передаёт дневной график (~6м) в vision-запрос.
+    При возможности передаёт дневной график (~6м) с маркерами earnings/news.
     """
     import base64
 
@@ -384,10 +671,15 @@ def explain_nastya_range_row_llm(
         return {"ok": False, "ticker": t, "error": f"Нет данных коридоров для {t}"}
 
     portfolio_slim = slim_portfolio_card_context(t)
+    chart_bundle = render_nastya_range_chart_bundle(t, row=row, engine=engine, days=130)
+    chart_png = chart_bundle.get("png")
+    chart_markers = chart_bundle.get("markers") or {"earnings": [], "news": []}
     system_prompt, user_prompt = build_nastya_llm_prompts(
-        row, market=market, portfolio_slim=portfolio_slim
+        row,
+        market=market,
+        portfolio_slim=portfolio_slim,
+        chart_markers=chart_markers,
     )
-    chart_png = render_nastya_range_chart_png(t, row=row, engine=engine, days=130)
     user_content = build_nastya_llm_user_content(user_prompt, chart_png=chart_png)
 
     try:
@@ -416,6 +708,11 @@ def explain_nastya_range_row_llm(
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "portfolio_context_used": bool(portfolio_slim.get("in_portfolio_game")),
             "chart_used": bool(chart_png),
+            "chart_markers": chart_markers,
+            "chart_markers_counts": {
+                "earnings": len(chart_markers.get("earnings") or []),
+                "news": len(chart_markers.get("news") or []),
+            },
         }
         if chart_png:
             result["chart_png_base64"] = base64.b64encode(chart_png).decode("ascii")

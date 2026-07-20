@@ -12,7 +12,10 @@ from services.nastya_range_regime import (
     _excel_anchors,
     build_nastya_llm_prompts,
     build_nastya_llm_user_content,
+    classify_earnings_tone,
+    enrich_markers_with_forward_returns,
     render_nastya_range_chart_png,
+    select_top_news_per_month,
     split_nastya_llm_explanation,
 )
 
@@ -66,8 +69,22 @@ class TestNastyaRangeRegime(unittest.TestCase):
         self.assertIn("ML portfolio", system)
         self.assertIn("графика", system)
         self.assertIn("Итог", system)
+        self.assertIn("аналог", system.lower())
         self.assertIn("META", user)
         self.assertIn("neutral", user)
+
+    def test_enrich_forward_returns(self):
+        idx = pd.date_range("2026-01-01", periods=30, freq="B")
+        close = pd.Series([100.0 + i for i in range(30)], index=idx)
+        markers = {
+            "earnings": [{"date": idx[5].date(), "tone": "good"}],
+            "news": [{"date": idx[10].date(), "tone": "bad"}],
+        }
+        out = enrich_markers_with_forward_returns(close, markers)
+        self.assertIsNotNone(out["earnings"][0].get("ret_5d_pct"))
+        self.assertIsNotNone(out["news"][0].get("ret_10d_pct"))
+        # rising series → positive forward returns
+        self.assertGreater(out["earnings"][0]["ret_5d_pct"], 0)
 
     def test_split_итог_and_details(self):
         text = (
@@ -79,6 +96,22 @@ class TestNastyaRangeRegime(unittest.TestCase):
         self.assertIn("отскок от пола", parts["summary_ru"])
         self.assertIn("1) Пол", parts["details_ru"])
         self.assertTrue(parts["explanation_ru"].startswith("Итог:"))
+
+    def test_earnings_tone_beat_miss(self):
+        self.assertEqual(classify_earnings_tone(7.3, 6.8), "good")
+        self.assertEqual(classify_earnings_tone(5.0, 6.0), "bad")
+        self.assertEqual(classify_earnings_tone(6.0, 6.0), "neutral")
+        self.assertIsNone(classify_earnings_tone(None, 6.0))
+
+    def test_top_news_per_month_cap(self):
+        items = []
+        for i in range(8):
+            items.append({"date": "2026-04-%02d" % (i + 1), "sentiment_score": 0.9 - i * 0.01})
+            items.append({"date": "2026-04-%02d" % (i + 1), "sentiment_score": 0.1 + i * 0.01})
+        items.append({"date": "2026-04-10", "sentiment_score": 0.5})  # neutral skip
+        out = select_top_news_per_month(items, top_n=5)
+        self.assertEqual(len(out), 5)
+        self.assertTrue(all(abs(float(x["sentiment_score"]) - 0.5) >= 0.15 for x in out))
 
     def test_user_content_with_chart_is_multimodal(self):
         content = build_nastya_llm_user_content("hello", chart_png=b"\x89PNG\r\n")
@@ -100,7 +133,19 @@ class TestNastyaRangeRegime(unittest.TestCase):
             },
             index=idx,
         )
-        with patch("services.nastya_range_regime._load_ohlcv_for_ticker", return_value=df):
+        markers = {
+            "earnings": [
+                {"date": idx[40].date(), "tone": "good", "kind": "earnings"},
+                {"date": idx[70].date(), "tone": "bad", "kind": "earnings"},
+            ],
+            "news": [
+                {"date": idx[50].date(), "tone": "good", "kind": "news"},
+                {"date": idx[60].date(), "tone": "bad", "kind": "news"},
+            ],
+        }
+        with patch("services.nastya_range_regime._load_ohlcv_for_ticker", return_value=df), patch(
+            "services.nastya_range_regime.load_chart_event_markers", return_value=markers
+        ):
             png = render_nastya_range_chart_png(
                 "META",
                 row={
