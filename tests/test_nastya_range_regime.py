@@ -1,6 +1,7 @@
 """Tests for nastya range-regime helpers (no network)."""
 
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -10,6 +11,8 @@ from services.nastya_range_regime import (
     _detect_local,
     _excel_anchors,
     build_nastya_llm_prompts,
+    build_nastya_llm_user_content,
+    render_nastya_range_chart_png,
 )
 
 
@@ -60,8 +63,42 @@ class TestNastyaRangeRegime(unittest.TestCase):
         self.assertIn("Боковик", system)
         self.assertIn("RVOL", system)
         self.assertIn("ML portfolio", system)
+        self.assertIn("графика", system)
         self.assertIn("META", user)
         self.assertIn("neutral", user)
+
+    def test_user_content_with_chart_is_multimodal(self):
+        content = build_nastya_llm_user_content("hello", chart_png=b"\x89PNG\r\n")
+        self.assertIsInstance(content, list)
+        self.assertEqual(content[0]["type"], "text")
+        self.assertEqual(content[1]["type"], "image_url")
+        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    def test_render_chart_png_from_synthetic(self):
+        idx = pd.date_range("2026-01-01", periods=90, freq="B")
+        close = pd.Series(range(90), index=idx, dtype=float) + 100
+        df = pd.DataFrame(
+            {
+                "Open": close,
+                "High": close + 1,
+                "Low": close - 1,
+                "Close": close,
+                "Volume": 1e6,
+            },
+            index=idx,
+        )
+        with patch("services.nastya_range_regime._load_ohlcv_for_ticker", return_value=df):
+            png = render_nastya_range_chart_png(
+                "META",
+                row={
+                    "band_floor": 110.0,
+                    "band_ceiling": 170.0,
+                    "bias_exit": "up",
+                    "portfolio_trend_regime": "melt_up",
+                },
+            )
+        self.assertIsNotNone(png)
+        self.assertTrue(png.startswith(b"\x89PNG"))
 
 
 if __name__ == "__main__":

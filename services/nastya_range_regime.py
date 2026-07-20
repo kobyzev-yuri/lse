@@ -39,7 +39,7 @@ METHOD_RU = """
   — отдельный слой, не замена bias_exit.
 • NDX + VIX: глобальный фон (не сигнал купить/продать тикер).
 • Кнопка LLM по тикеру: коротко отвечает на вопросы Насти по строке; может глянуть
-  карточку портфеля, без перегруза техникой.
+  карточку портфеля и дневной график ~6м (картинка), без перегруза техникой.
 
 Якоря Excel
 • Min low (июн.2022–дек.2023) ×10 — зона ×10 к минимуму 2022 (rerating / замедление).
@@ -68,7 +68,117 @@ LLM_SYSTEM_RU = """
 
 Можно упомянуть 1–2 бытовых факта с карточки портфеля (решение стратегии, день ±%),
 если они помогают. Не перечисляй RSI/SMA/волатильность списком.
+
+Если приложена картинка дневного графика (~6 месяцев) — обязательно взгляни на форму
+цены (полка, пила, V, импульс вниз/вверх) и свяжи это с боковиком/Age/bias/ML trend.
+Не пересказывай каждую свечу.
 """.strip()
+
+
+def _load_ohlcv_for_ticker(ticker: str, *, engine=None, bars: int = 160) -> Optional[pd.DataFrame]:
+    t = (ticker or "").strip().upper()
+    if not t:
+        return None
+    eng = engine
+    if eng is None:
+        try:
+            from report_generator import get_engine
+
+            eng = get_engine()
+        except Exception:
+            eng = None
+    frames: Dict[str, pd.DataFrame] = {}
+    if eng is not None:
+        frames = fetch_ohlcv_from_db(eng, [t], bars=bars)
+    if t not in frames or frames[t].empty or len(frames[t]) < 30:
+        yf = fetch_ohlcv_yfinance([t], period="1y")
+        frames.update(yf)
+    d = frames.get(t)
+    if d is None or d.empty or "Close" not in d.columns:
+        return None
+    return d.tail(bars)
+
+
+def render_nastya_range_chart_png(
+    ticker: str,
+    *,
+    row: Optional[Dict[str, Any]] = None,
+    engine=None,
+    days: int = 130,
+) -> Optional[bytes]:
+    """
+    Дневной close-график ~6м с полом/потолком коридора (если есть) — для vision LLM и UI.
+    """
+    t = (ticker or "").strip().upper()
+    d = _load_ohlcv_for_ticker(t, engine=engine, bars=max(60, int(days)))
+    if d is None or d.empty:
+        return None
+    try:
+        import io
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.dates as mdates
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        logger.warning("matplotlib unavailable for nastya chart: %s", e)
+        return None
+
+    close = d["Close"].astype(float)
+    idx = pd.to_datetime(close.index)
+    fig, ax = plt.subplots(figsize=(8.2, 4.2), dpi=110)
+    ax.plot(idx, close.values, color="#2563eb", linewidth=1.6, label="Close")
+    if len(close) >= 20:
+        sma20 = close.rolling(20).mean()
+        ax.plot(idx, sma20.values, color="#94a3b8", linewidth=1.0, alpha=0.9, label="SMA20")
+    floor = None
+    ceil = None
+    if isinstance(row, dict):
+        floor = _f_num(row.get("band_floor"))
+        ceil = _f_num(row.get("band_ceiling"))
+    if floor is not None:
+        ax.axhline(floor, color="#16a34a", linestyle="--", linewidth=1.0, alpha=0.85, label=f"floor {floor}")
+    if ceil is not None:
+        ax.axhline(ceil, color="#dc2626", linestyle="--", linewidth=1.0, alpha=0.85, label=f"ceil {ceil}")
+    regime = (row or {}).get("portfolio_trend_regime") if isinstance(row, dict) else None
+    bias = (row or {}).get("bias_exit") if isinstance(row, dict) else None
+    title = f"{t} · daily ~{len(close)}d"
+    if bias:
+        title += f" · bias {bias}"
+    if regime:
+        title += f" · ML {regime}"
+    ax.set_title(title, fontsize=11)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best", fontsize=8)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+    ax.xaxis.set_major_locator(mdates.MonthLocator())
+    fig.autofmt_xdate(rotation=0, ha="center")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def build_nastya_llm_user_content(
+    user_prompt: str,
+    *,
+    chart_png: Optional[bytes] = None,
+) -> Any:
+    """OpenAI-compatible user content: text (+ optional chart image)."""
+    import base64
+
+    if not chart_png:
+        return user_prompt
+    b64 = base64.b64encode(chart_png).decode("ascii")
+    return [
+        {"type": "text", "text": user_prompt + "\n\nПриложена картинка дневного графика (~6м). Учти форму тренда."},
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"},
+        },
+    ]
 
 
 def _attach_portfolio_trend(ticker: str, *, engine=None) -> Dict[str, Any]:
@@ -106,9 +216,7 @@ def _attach_portfolio_trend(ticker: str, *, engine=None) -> Dict[str, Any]:
 
 
 def slim_portfolio_card_context(ticker: str) -> Dict[str, Any]:
-    """
-    Лёгкий срез карточки портфеля для LLM Насти (без вызова LLM портфеля).
-    """
+    """Лёгкий срез карточки портфеля для LLM Насти (без вызова LLM портфеля)."""
     t = (ticker or "").strip().upper()
     out: Dict[str, Any] = {"ticker": t, "in_portfolio_game": False}
     try:
@@ -167,6 +275,7 @@ def build_nastya_llm_prompts(
             "bias выхода из зоны",
             "RVOL как снимок (не вердикт по гипотезе разворота)",
             "соотнести с ML trend portfolio 20d",
+            "форма тренда по графику (~6м), если картинка приложена",
         ],
         "строка_отчёта": row,
         "рынок": market or {},
@@ -188,7 +297,10 @@ def explain_nastya_range_row_llm(
 ) -> Dict[str, Any]:
     """
     LLM-пояснение одной строки отчёта коридоров в контексте вопросов Насти.
+    При возможности передаёт дневной график (~6м) в vision-запрос.
     """
+    import base64
+
     t = (ticker or "").strip().upper()
     if not t:
         return {"ok": False, "error": "Пустой тикер"}
@@ -208,6 +320,8 @@ def explain_nastya_range_row_llm(
     system_prompt, user_prompt = build_nastya_llm_prompts(
         row, market=market, portfolio_slim=portfolio_slim
     )
+    chart_png = render_nastya_range_chart_png(t, row=row, engine=engine, days=130)
+    user_content = build_nastya_llm_user_content(user_prompt, chart_png=chart_png)
 
     try:
         from services.llm_service import LLMService
@@ -216,22 +330,27 @@ def explain_nastya_range_row_llm(
         if getattr(llm, "client", None) is None:
             return {"ok": False, "ticker": t, "error": "LLM недоступен (нет ключа)"}
         out = llm.generate_response(
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=[{"role": "user", "content": user_content}],
             system_prompt=system_prompt,
-            max_tokens=900,
+            max_tokens=1100,
         )
         text = (out or {}).get("response") or (out or {}).get("content") or (out or {}).get("text") or ""
         if not str(text).strip():
             err = (out or {}).get("error") or "Пустой ответ LLM"
             return {"ok": False, "ticker": t, "error": str(err)}
-        return {
+        result: Dict[str, Any] = {
             "ok": True,
             "ticker": t,
             "explanation_ru": str(text).strip(),
             "model": (out or {}).get("model") or getattr(llm, "model", None),
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "portfolio_context_used": bool(portfolio_slim.get("in_portfolio_game")),
+            "chart_used": bool(chart_png),
         }
+        if chart_png:
+            result["chart_png_base64"] = base64.b64encode(chart_png).decode("ascii")
+            result["chart_mime"] = "image/png"
+        return result
     except Exception as e:
         logger.exception("explain_nastya_range_row_llm %s: %s", t, e)
         return {"ok": False, "ticker": t, "error": str(e)}

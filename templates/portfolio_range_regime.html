@@ -60,6 +60,7 @@
             border-radius: 6px; font-size: 0.8rem; line-height: 1.45; color: #e2e8f0; white-space: pre-wrap;
         }
         .llm-box.err { color: #fca5a5; border-color: #7f1d1d; }
+        .llm-chart { margin-top: 0.45rem; width: 100%; max-width: 520px; border-radius: 6px; border: 1px solid #1e3a5f; background: #fff; }
     </style>
 </head>
 <body>
@@ -187,6 +188,7 @@
                     ' · crest=' + esc(r.july_crest) + '</div>' +
                     (note ? '<div style="margin-top:0.45rem;font-size:0.8rem;line-height:1.35;color:#cbd5e1;">' + esc(note) + '</div>' : '') +
                     '<div class="card-actions">' + llmBtn + '</div>' +
+                    '<img class="llm-chart" id="llm-chart-' + esc(r.ticker) + '" alt="" hidden />' +
                     '<div class="llm-box" id="llm-' + esc(r.ticker) + '" hidden></div>' +
                     '</div>';
             }).join('');
@@ -196,10 +198,12 @@
         }
         async function explainTicker(ticker, btn) {
             var box = document.getElementById('llm-' + ticker);
+            var img = document.getElementById('llm-chart-' + ticker);
             if (!box) return;
             box.hidden = false;
             box.classList.remove('err');
-            box.textContent = 'Думаю…';
+            box.textContent = 'Думаю (с графиком)…';
+            if (img) { img.hidden = true; img.removeAttribute('src'); }
             if (btn) btn.disabled = true;
             var tickers = (tickersEl.value || '').trim();
             var url = '/api/portfolio/range-regime/' + encodeURIComponent(ticker) + '/llm?tickers=' + encodeURIComponent(tickers);
@@ -207,10 +211,16 @@
                 var r = await fetch(url, { cache: 'no-store' });
                 var d = await r.json();
                 if (!r.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
-                box.textContent = d.explanation_ru || 'Пустой ответ';
-                if (d.model) {
-                    box.textContent += '\n\n— ' + d.model + (d.portfolio_context_used ? ' · +карточка портфеля' : '');
+                if (img && d.chart_png_base64) {
+                    img.src = 'data:' + (d.chart_mime || 'image/png') + ';base64,' + d.chart_png_base64;
+                    img.hidden = false;
                 }
+                box.textContent = d.explanation_ru || 'Пустой ответ';
+                var meta = [];
+                if (d.model) meta.push(d.model);
+                if (d.chart_used) meta.push('график ~6м');
+                if (d.portfolio_context_used) meta.push('+карточка портфеля');
+                if (meta.length) box.textContent += '\n\n— ' + meta.join(' · ');
             } catch (e) {
                 box.classList.add('err');
                 box.textContent = String(e.message || e);
