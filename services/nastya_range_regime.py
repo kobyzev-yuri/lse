@@ -38,8 +38,8 @@ METHOD_RU = """
 • ML trend: режим тренда 20d нашей portfolio-сетки (melt_up / trend_up / neutral / breakdown)
   — отдельный слой, не замена bias_exit.
 • NDX + VIX: глобальный фон (не сигнал купить/продать тикер).
-• Кнопка LLM по тикеру: коротко отвечает на вопросы Насти по строке; может глянуть
-  карточку портфеля и дневной график ~6м (картинка), без перегруза техникой.
+• Кнопка LLM по тикеру: сначала краткий «Итог» (что ждать по движению в ближайшее время),
+  затем разбор по пунктам Насти; может глянуть карточку портфеля и дневной график ~6м.
 
 Якоря Excel
 • Min low (июн.2022–дек.2023) ×10 — зона ×10 к минимуму 2022 (rerating / замедление).
@@ -54,9 +54,15 @@ Excel — вручную при новой дате close; котировки/RV
 
 LLM_SYSTEM_RU = """
 Ты помогаешь аналитику Насте разобрать один тикер по отчёту «коридоры / боковик».
-Отвечай по-русски, коротко, живым языком. Без торговых приказов BUY/SELL.
+Отвечай по-русски, коротко, живым языком. Без торговых приказов BUY/SELL и без точной цены входа.
 
-Структура ответа строго по пунктам:
+Структура ответа строго так:
+
+Итог: 1–2 предложения — что в ближайшие дни/недели скорее ждать по движению
+(продолжение боковика / отскок от пола / пробой вниз / вялый дрейф вверх и т.п.).
+Это рабочая гипотеза по коридору+графику+ML trend, не гарантия.
+
+Затем подробный разбор по пунктам:
 1) Пол и потолок — где ориентировочные границы и где цена внутри коридора.
 2) Боковик — есть ли (range vs transition/тренд), насколько зона широкая, сколько уже держится (Age).
    Не выдумывай дату конца боковика.
@@ -70,9 +76,69 @@ LLM_SYSTEM_RU = """
 если они помогают. Не перечисляй RSI/SMA/волатильность списком.
 
 Если приложена картинка дневного графика (~6 месяцев) — обязательно взгляни на форму
-цены (полка, пила, V, импульс вниз/вверх) и свяжи это с боковиком/Age/bias/ML trend.
+цены (полка, пила, V, импульс вниз/вверх) и свяжи это с боковиком/Age/bias/ML trend и с блоком «Итог».
 Не пересказывай каждую свечу.
 """.strip()
+
+
+def split_nastya_llm_explanation(text: str) -> Dict[str, str]:
+    """
+    Выделяет краткий «Итог» и остальной подробный разбор.
+    Ожидает блок, начинающийся с «Итог: …».
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {"summary_ru": "", "details_ru": "", "explanation_ru": ""}
+
+    lines = raw.splitlines()
+    summary_parts: List[str] = []
+    details_parts: List[str] = []
+    mode = "pre"
+
+    def _strip_итог_prefix(s: str) -> str:
+        low = s.lower()
+        for prefix in ("итог:", "итог —", "итог -", "итог–"):
+            if low.startswith(prefix):
+                return s[len(prefix) :].strip()
+        return s
+
+    for line in lines:
+        s = line.strip()
+        low = s.lower()
+        if mode == "pre":
+            if low == "итог" or low.startswith("итог:") or low.startswith("итог —") or low.startswith("итог -") or low.startswith("итог–"):
+                rest = _strip_итог_prefix(s) if low != "итог" else ""
+                if rest:
+                    summary_parts.append(rest)
+                mode = "summary"
+            continue
+        if mode == "summary":
+            if not s:
+                mode = "details"
+                continue
+            if low.startswith("1)") or low.startswith("1.") or (len(s) >= 2 and s[0] == "1" and s[1] in ").] "):
+                details_parts.append(line)
+                mode = "details"
+                continue
+            if low.startswith("затем") or low.startswith("подробн"):
+                mode = "details"
+                continue
+            summary_parts.append(s)
+            continue
+        details_parts.append(line)
+
+    summary = " ".join(x.strip() for x in summary_parts if x.strip()).strip()
+    details = "\n".join(details_parts).strip()
+    if not summary:
+        paras = [p.strip() for p in raw.split("\n\n") if p.strip()]
+        if paras:
+            summary = paras[0]
+            details = "\n\n".join(paras[1:]).strip() if len(paras) > 1 else ""
+    return {
+        "summary_ru": summary,
+        "details_ru": details,
+        "explanation_ru": raw,
+    }
 
 
 def _load_ohlcv_for_ticker(ticker: str, *, engine=None, bars: int = 160) -> Optional[pd.DataFrame]:
@@ -270,6 +336,7 @@ def build_nastya_llm_prompts(
     """System + user prompts for per-ticker Nastya explanation."""
     payload = {
         "цели_насти": [
+            "краткий Итог: что ждать по движению в ближайшее время",
             "пол и потолок",
             "боковик: ширина / сколько уже длится",
             "bias выхода из зоны",
@@ -332,16 +399,19 @@ def explain_nastya_range_row_llm(
         out = llm.generate_response(
             messages=[{"role": "user", "content": user_content}],
             system_prompt=system_prompt,
-            max_tokens=1100,
+            max_tokens=1300,
         )
         text = (out or {}).get("response") or (out or {}).get("content") or (out or {}).get("text") or ""
         if not str(text).strip():
             err = (out or {}).get("error") or "Пустой ответ LLM"
             return {"ok": False, "ticker": t, "error": str(err)}
+        parts = split_nastya_llm_explanation(str(text))
         result: Dict[str, Any] = {
             "ok": True,
             "ticker": t,
-            "explanation_ru": str(text).strip(),
+            "explanation_ru": parts.get("explanation_ru") or str(text).strip(),
+            "summary_ru": parts.get("summary_ru") or "",
+            "details_ru": parts.get("details_ru") or "",
             "model": (out or {}).get("model") or getattr(llm, "model", None),
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "portfolio_context_used": bool(portfolio_slim.get("in_portfolio_game")),

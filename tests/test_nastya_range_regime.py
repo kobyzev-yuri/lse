@@ -13,6 +13,7 @@ from services.nastya_range_regime import (
     build_nastya_llm_prompts,
     build_nastya_llm_user_content,
     render_nastya_range_chart_png,
+    split_nastya_llm_explanation,
 )
 
 
@@ -64,8 +65,20 @@ class TestNastyaRangeRegime(unittest.TestCase):
         self.assertIn("RVOL", system)
         self.assertIn("ML portfolio", system)
         self.assertIn("графика", system)
+        self.assertIn("Итог", system)
         self.assertIn("META", user)
         self.assertIn("neutral", user)
+
+    def test_split_итог_and_details(self):
+        text = (
+            "Итог: Скорее отскок от пола и продолжение узкой полки, не свободный рост.\n\n"
+            "1) Пол и потолок — у нижней границы.\n"
+            "2) Боковик — transition, Age≈75d."
+        )
+        parts = split_nastya_llm_explanation(text)
+        self.assertIn("отскок от пола", parts["summary_ru"])
+        self.assertIn("1) Пол", parts["details_ru"])
+        self.assertTrue(parts["explanation_ru"].startswith("Итог:"))
 
     def test_user_content_with_chart_is_multimodal(self):
         content = build_nastya_llm_user_content("hello", chart_png=b"\x89PNG\r\n")

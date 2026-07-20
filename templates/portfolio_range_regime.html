@@ -60,6 +60,15 @@
             border-radius: 6px; font-size: 0.8rem; line-height: 1.45; color: #e2e8f0; white-space: pre-wrap;
         }
         .llm-box.err { color: #fca5a5; border-color: #7f1d1d; }
+        .llm-summary {
+            margin-top: 0.45rem; padding: 0.55rem 0.65rem; background: #12263f; border: 1px solid #2563eb;
+            border-radius: 6px; font-size: 0.85rem; line-height: 1.4; color: #e2e8f0;
+        }
+        .llm-summary .lbl { font-size: 0.72rem; color: #93c5fd; font-weight: 650; margin-bottom: 0.25rem; }
+        .llm-details {
+            margin-top: 0.45rem; padding: 0.55rem 0.6rem; background: #0f172a; border: 1px solid #1e3a5f;
+            border-radius: 6px; font-size: 0.78rem; line-height: 1.45; color: #cbd5e1; white-space: pre-wrap;
+        }
         .llm-chart { margin-top: 0.45rem; width: 100%; max-width: 520px; border-radius: 6px; border: 1px solid #1e3a5f; background: #fff; }
     </style>
 </head>
@@ -189,6 +198,8 @@
                     (note ? '<div style="margin-top:0.45rem;font-size:0.8rem;line-height:1.35;color:#cbd5e1;">' + esc(note) + '</div>' : '') +
                     '<div class="card-actions">' + llmBtn + '</div>' +
                     '<img class="llm-chart" id="llm-chart-' + esc(r.ticker) + '" alt="" hidden />' +
+                    '<div class="llm-summary" id="llm-sum-' + esc(r.ticker) + '" hidden></div>' +
+                    '<div class="llm-details" id="llm-det-' + esc(r.ticker) + '" hidden></div>' +
                     '<div class="llm-box" id="llm-' + esc(r.ticker) + '" hidden></div>' +
                     '</div>';
             }).join('');
@@ -198,11 +209,15 @@
         }
         async function explainTicker(ticker, btn) {
             var box = document.getElementById('llm-' + ticker);
+            var sum = document.getElementById('llm-sum-' + ticker);
+            var det = document.getElementById('llm-det-' + ticker);
             var img = document.getElementById('llm-chart-' + ticker);
             if (!box) return;
             box.hidden = false;
             box.classList.remove('err');
             box.textContent = 'Думаю (с графиком)…';
+            if (sum) { sum.hidden = true; sum.innerHTML = ''; }
+            if (det) { det.hidden = true; det.textContent = ''; }
             if (img) { img.hidden = true; img.removeAttribute('src'); }
             if (btn) btn.disabled = true;
             var tickers = (tickersEl.value || '').trim();
@@ -215,15 +230,39 @@
                     img.src = 'data:' + (d.chart_mime || 'image/png') + ';base64,' + d.chart_png_base64;
                     img.hidden = false;
                 }
-                box.textContent = d.explanation_ru || 'Пустой ответ';
+                var summary = (d.summary_ru || '').trim();
+                var details = (d.details_ru || '').trim();
+                var full = (d.explanation_ru || '').trim();
+                if (summary && sum) {
+                    sum.innerHTML = '<div class="lbl">Итог · ближайшее движение</div>' + esc(summary);
+                    sum.hidden = false;
+                    box.hidden = true;
+                    box.textContent = '';
+                    if (det && details) {
+                        det.textContent = details;
+                        det.hidden = false;
+                    } else if (det && full && full !== summary) {
+                        det.textContent = full;
+                        det.hidden = false;
+                    }
+                } else {
+                    box.textContent = full || 'Пустой ответ';
+                }
                 var meta = [];
                 if (d.model) meta.push(d.model);
                 if (d.chart_used) meta.push('график ~6м');
                 if (d.portfolio_context_used) meta.push('+карточка портфеля');
-                if (meta.length) box.textContent += '\n\n— ' + meta.join(' · ');
+                if (meta.length) {
+                    var metaLine = '\n\n— ' + meta.join(' · ');
+                    if (det && !det.hidden) det.textContent += metaLine;
+                    else if (!box.hidden) box.textContent += metaLine;
+                }
             } catch (e) {
+                box.hidden = false;
                 box.classList.add('err');
                 box.textContent = String(e.message || e);
+                if (sum) sum.hidden = true;
+                if (det) det.hidden = true;
             } finally {
                 if (btn) btn.disabled = false;
             }
