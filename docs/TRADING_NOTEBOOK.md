@@ -76,25 +76,70 @@
 
 ---
 
-## Уже в проде (детали)
+## Источники новостей (LSE → `knowledge_base` → дайджест)
+
+Все ленты пишут в одну таблицу `knowledge_base`. Утренний дайджест читает **NEWS** по тикерам тетрадки (+ опционально `MACRO`), **все `source`**, затем дедуп (link / ticker+title) и LLM.
+
+| Источник | Cron / mode | Что даёт | В дайджесте |
+|----------|-------------|----------|-------------|
+| **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные новости SA по universe тетрадки | да (`source=Seeking Alpha Finance`) |
+| **Yahoo + Marketaux** | `5 */2` · `--mode tickers` | Тикерные новости (Motley Fool, Zacks, Reuters, Yahoo, …) | да (разные `source`) |
+| **Investing.com News** (+ calendar) | `0 */2` · `--mode investing` | Лента + экономкалендарь | новости — да; календарь — другой `event_type` |
+| **RSS ЦБ / Alpha Vantage** | `*/15` · `--mode core-fast` | Макро/календарные потоки | если попали как NEWS/MACRO по тикерам |
+| **NewsAPI** | cron **выключен** (`# newsapi`) | макро/equity при включении | сейчас почти не кормит |
+| **Email SA 35–40/день** | нет | — | **ждём п.7** |
+| Отдельная SA «геополитика» лента | нет | RapidAPI `/v1/news/list` → 422 | нет; макро из тикеров + `MACRO` |
+
+**Дайджест:** будни `30 12` UTC ≈ **08:30 ET** · `run_notebook_news_digest.py --from-kb-only` · Telegram `/digest` из кэша.
+
+Конфиг: `NOTEBOOK_NEWS_KB_ALL_SOURCES=1` (все источники), `NOTEBOOK_NEWS_INCLUDE_MACRO=1`, откат SA-only → `NOTEBOOK_NEWS_KB_ALL_SOURCES=0`.
+
+---
+
+## Тикеры по группам
+
+Источник правды UI: [`nastya/notebook/notebook_data.json`](../nastya/notebook/notebook_data.json).  
+**Сейчас — образцы** (п.1 Насти ещё открыт). Дайджест/SA-ingest берут **union всех групп** из этого JSON.
+
+### Сейчас в тетрадке (образцы)
+
+| Группа | Тикеры | Уровни / заметки |
+|--------|--------|------------------|
+| **G1 · Пассивное (удержание)** | **MSFT**, **META** | MSFT Buy Dip **$350** / Sell **$450**; META уровни TBD |
+| **G2 · Активное** | **SNDK**, **LITE**, **NBIS** | SNDK Sell ≈ вход **+$250**; LITE Buy Dip ~**$650**, Sell ≈ вход **+$150**; NBIS уровни TBD + эталон фундамента |
+| **G3 · Кандидаты** | *(пусто)* | ждать список Насти |
+| **Новые · первичный анализ** | *(пусто)* | Most Active / SA / Investing — после п.3 |
+
+Universe дайджеста сейчас: `MSFT, META, SNDK, LITE, NBIS` (+ строка `MACRO` из KB).
+
+### Связанные списки LSE (не группы тетрадки)
+
+Используются ботом / fallback, если JSON без equities; **не** подставляются автоматически при непустом notebook JSON.
+
+| Список | Equities (без фьючерсов/FX) |
+|--------|-----------------------------|
+| Portfolio game | ALAB, AMD, AMZN, META, MSFT, MU, ORCL, TER |
+| GAME_5M | ASML, CIEN, LITE, MU, NBIS, SNDK |
+
+### Черновик Насти (графики, не канон)
+
+Из `nastya/tz.txt` — общий пул для разбора на группы (в исходнике часть помечена `*`):
+
+`AAOI, AEIS, ALAB*, AMD*, AMKR, AMZN*, ANET, ARM*, ASML*, AVGO*, CDNS*, CIEN, COHR, CRDO, CRWV*, DDOG*, DELL, ENTG, GOOGL*, INTC*, INTU*, KLAC*, LITE, LRCX*, META*, MRVL*, MSFT*, MU*, MXL, NBIS*, NOW, NVDA*, ONTO, ORCL, PLTR*, QCOM*, RBLX, SMCI, SNDK*, SNPS*, TSM, WDC`
+
+После ответа по п.1 этот пул разложится в G1/G2/G3/Новые в JSON.
+
+---
+
+## Уже в проде (кратко)
 
 | Что | Где |
 |-----|-----|
-| UI групп / тикеров / вкладок | `/notebook` |
-| Образцы MSFT 350/450, META TBD, SNDK/LITE, NBIS фундамент | [`nastya/notebook/notebook_data.json`](../nastya/notebook/notebook_data.json) |
-| Close в вердикте | quotes → API |
-| SA новости → `knowledge_base` | cron `--mode sa` каждые 2 ч |
-| Прочие новости LSE → KB | cron `core-fast` / `tickers` / `investing` (Yahoo, Marketaux, …) |
-| Утренний LLM-дайджест | будни **12:30 UTC ≈ 08:30 ET**, из KB, все источники + дедуп |
-| Telegram `/digest` | кэш дайджеста |
-
-Universe: тикеры из `notebook_data.json` по группам; если equities пусто — fallback portfolio ∪ GAME_5M. После ответа Насти по п.1 — только её состав.
-
-Конфиг дайджеста (по умолчанию уже «широкий»):
-
-- `NOTEBOOK_NEWS_KB_ALL_SOURCES=1` — все NEWS в KB (не только SA)
-- `NOTEBOOK_NEWS_INCLUDE_MACRO=1` — строки `ticker=MACRO`
-- `NOTEBOOK_NEWS_KB_ALL_SOURCES=0` — откат на SA-only
+| UI | `/notebook` |
+| Данные групп/уровней | `nastya/notebook/notebook_data.json` |
+| Close → вердикт | quotes API |
+| Ingest + дайджест | cron выше; дедуп в `notebook_news_digest.dedupe_news_items` |
+| Telegram | `/digest` ← кэш |
 
 ---
 
