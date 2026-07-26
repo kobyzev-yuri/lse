@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Тетрадка · Рабочее пространство</title>
+<style>
+  :root{
+    --bg:#0e1116;--panel:#161b22;--panel-2:#1c232d;--line:#2a323d;
+    --ink:#e6edf3;--muted:#8b98a8;--dim:#5d6875;
+    --buy:#2ea043;--buy-soft:#1a3a24;--sell:#d9534f;--sell-soft:#3a1e1d;
+    --warn:#d6a516;--warn-soft:#3a3110;--accent:#4a9eda;
+    --mono:'SF Mono',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+    --sans:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1080px;margin:0 auto;padding:22px 20px 80px;}
+  header.top{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:4px;}
+  header.top h1{font-size:19px;font-weight:700;letter-spacing:-.3px;margin:0;}
+  header.top .sub{color:var(--dim);font-size:13px;font-family:var(--mono);}
+  .principle{color:var(--muted);font-size:13px;margin:6px 0 18px;border-left:2px solid var(--line);padding-left:12px;}
+
+  /* group nav */
+  .group-nav{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;}
+  .gbtn{cursor:pointer;border:1px solid var(--line);background:var(--panel);border-radius:9px;padding:8px 12px;font-size:12.5px;color:var(--muted);transition:.15s;display:flex;align-items:center;gap:7px;}
+  .gbtn:hover{border-color:var(--dim);color:var(--ink);}
+  .gbtn.on{background:var(--panel-2);color:var(--ink);}
+  .gbtn .gd{width:8px;height:8px;border-radius:2px;}
+  .gd1{background:#6f7cff;} .gd2{background:#ff8a3d;} .gd3{background:#4a9eda;} .gdn{background:#8b98a8;}
+  .gbtn .cnt{font-family:var(--mono);font-size:11px;color:var(--dim);}
+
+  /* group meta */
+  .gmeta{background:var(--panel-2);border-radius:10px;padding:11px 15px;margin-bottom:16px;font-size:12.5px;color:var(--muted);line-height:1.5;}
+  .gmeta b{color:var(--ink);}
+
+  /* ticker switch */
+  .ticker-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+  .tk{cursor:pointer;border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:10px 14px;display:flex;flex-direction:column;gap:2px;min-width:150px;transition:.15s;}
+  .tk:hover{border-color:var(--dim);}
+  .tk.on{border-color:var(--accent);background:var(--panel-2);}
+  .tk .row1{display:flex;align-items:center;gap:8px;}
+  .tk .sym{font-weight:700;font-size:16px;letter-spacing:.3px;}
+  .tk .grp{font-size:10px;font-family:var(--mono);padding:2px 6px;border-radius:5px;font-weight:600;}
+  .grp.g1{background:rgba(111,124,255,.16);color:#a2abff;}
+  .grp.g2{background:rgba(255,138,61,.16);color:#ffb27d;}
+  .grp.g3{background:rgba(74,158,218,.16);color:#8cc7f0;}
+  .grp.gn{background:rgba(139,152,168,.16);color:#aeb9c6;}
+  .tk .px{font-family:var(--mono);font-size:13px;color:var(--muted);}
+  .tk .chg{font-size:12px;font-family:var(--mono);}
+  .up{color:var(--buy);} .down{color:var(--sell);}
+  .empty-grp{color:var(--dim);font-size:13px;padding:18px 4px;font-style:italic;}
+
+  /* tabs */
+  nav.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:20px;overflow-x:auto;}
+  nav.tabs button{background:none;border:none;color:var(--muted);font-family:var(--sans);font-size:13.5px;font-weight:500;padding:10px 14px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:.15s;}
+  nav.tabs button:hover{color:var(--ink);}
+  nav.tabs button.on{color:var(--ink);border-bottom-color:var(--accent);}
+
+  .tab-body{display:none;}
+  .tab-body.on{display:block;animation:fade .2s ease;}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:14px;}
+  .card h3{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;}
+  .card h3 .hint{text-transform:none;letter-spacing:0;color:var(--dim);font-weight:400;font-size:12px;margin-left:8px;}
+
+  .trig{display:flex;align-items:flex-start;gap:12px;padding:11px 0;border-top:1px solid var(--line);}
+  .trig:first-of-type{border-top:none;}
+  .badge{font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 8px;border-radius:6px;letter-spacing:.5px;white-space:nowrap;margin-top:1px;}
+  .b-buy{background:var(--buy-soft);color:#5fd67c;}
+  .b-sell{background:var(--sell-soft);color:#ef8582;}
+  .b-add{background:rgba(74,158,218,.14);color:#7cc0ef;}
+  .b-watch{background:var(--warn-soft);color:#e8c65a;}
+  .trig .body{flex:1;}
+  .trig .lvl{font-family:var(--mono);font-weight:700;font-size:15px;}
+  .trig .desc{color:var(--muted);font-size:13px;margin-top:2px;}
+  .trig .cond{color:var(--dim);font-size:12px;margin-top:3px;font-style:italic;}
+  .manual{display:inline-block;font-size:10px;font-family:var(--mono);padding:1px 6px;border-radius:4px;background:rgba(214,165,22,.14);color:#e8c65a;margin-left:6px;vertical-align:middle;}
+
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13.5px;}
+  .kv .k{color:var(--muted);}
+  .kv .v{font-family:var(--mono);text-align:right;}
+
+  ul.clean{margin:0;padding-left:18px;}
+  ul.clean li{margin:6px 0;color:var(--muted);font-size:13.5px;}
+  ul.clean li b{color:var(--ink);font-weight:600;}
+
+  .env{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line);font-size:13.5px;}
+  .env:first-of-type{border-top:none;}
+  .dot{width:9px;height:9px;border-radius:50%;flex:none;}
+  .dot.ok{background:var(--buy);} .dot.mid{background:var(--warn);} .dot.bad{background:var(--sell);}
+  .env .lbl{flex:1;}
+  .env .st{font-family:var(--mono);font-size:12px;color:var(--muted);}
+
+  .house{border-top:1px solid var(--line);padding:13px 0;}
+  .house:first-of-type{border-top:none;}
+  .house .hh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
+  .house .firm{font-weight:700;font-size:14px;}
+  .house .rate{font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:5px;background:var(--panel-2);color:var(--muted);}
+  .house .pt{font-family:var(--mono);font-weight:700;color:var(--accent);margin-left:auto;font-size:14px;}
+  .house .quote{color:var(--muted);font-size:13px;margin-top:6px;border-left:2px solid var(--line);padding-left:10px;font-style:italic;}
+  .house .tac{color:var(--ink);font-size:13px;margin-top:6px;}
+  .house .tac b{color:#ff8a3d;}
+
+  .concens{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px;padding:12px 16px;background:var(--panel-2);border-radius:10px;}
+  .concens .cell{display:flex;flex-direction:column;gap:2px;}
+  .concens .cl{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;}
+  .concens .cv{font-family:var(--mono);font-size:16px;font-weight:700;}
+
+  .note{font-size:12px;color:var(--dim);margin-top:10px;line-height:1.45;}
+  .macro{background:var(--panel-2);border-radius:10px;padding:13px 15px;font-size:13px;color:var(--muted);margin-top:12px;}
+  .macro b{color:var(--ink);}
+  .upd{font-size:11px;font-family:var(--mono);color:var(--dim);float:right;font-weight:400;text-transform:none;letter-spacing:0;}
+
+  footer{color:var(--dim);font-size:11.5px;margin-top:26px;line-height:1.5;border-top:1px solid var(--line);padding-top:14px;}
+
+  /* digest */
+  .digest-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+  .digest-head .dt{font-family:var(--mono);font-size:13px;color:var(--muted);}
+  .filterstat{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;font-family:var(--mono);margin-bottom:14px;}
+  .fstat{padding:4px 10px;border-radius:7px;background:var(--panel-2);color:var(--muted);}
+  .fstat b{color:var(--ink);}
+  .fstat.trash{color:var(--dim);}
+  .fstat.keep{color:#5fd67c;}
+
+  .dsec{margin-bottom:18px;}
+  .dsec .stitle{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:9px;display:flex;align-items:center;gap:8px;}
+  .dsec.sig .stitle{color:#5fd67c;}
+  .dsec.risk .stitle{color:#ef8582;}
+  .dsec.macro-d .stitle{color:#7cc0ef;}
+  .dsec.newt .stitle{color:#e8c65a;}
+
+  .ditem{border-left:2px solid var(--line);padding:8px 0 8px 12px;margin-bottom:8px;}
+  .ditem .dsym{font-family:var(--mono);font-weight:700;font-size:14px;}
+  .ditem .dsrc{font-size:11px;color:var(--dim);font-family:var(--mono);margin-left:6px;}
+  .ditem .dtext{font-size:13px;color:var(--muted);margin-top:3px;}
+  .ditem .dprem{font-family:var(--mono);font-size:12px;margin-top:4px;}
+  .ditem .dtac{font-size:12.5px;margin-top:4px;color:var(--ink);}
+  .ditem .dtac b{color:#ff8a3d;}
+  .ditem .dlink{font-size:11px;font-family:var(--mono);color:var(--accent);text-decoration:none;margin-top:4px;display:inline-block;}
+  .ditem .dlink:hover{text-decoration:underline;}
+  .ditem.sig{border-left-color:var(--buy);}
+  .ditem.risk{border-left-color:var(--sell);}
+  .ditem.macro-d{border-left-color:var(--accent);}
+  .ditem.newt{border-left-color:var(--warn);}
+
+  .trash-line{font-size:12px;color:var(--dim);font-style:italic;padding:8px 0 0;border-top:1px solid var(--line);margin-top:6px;}
+
+  .variant-switch{display:flex;gap:6px;margin-bottom:16px;}
+  .vbtn{cursor:pointer;border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 12px;font-size:12.5px;color:var(--muted);transition:.15s;}
+  .vbtn:hover{color:var(--ink);}
+  .vbtn.on{background:var(--panel-2);color:var(--ink);border-color:var(--accent);}
+  .bucket{display:flex;align-items:flex-start;gap:12px;padding:11px 0;border-top:1px solid var(--line);}
+  .bucket:first-of-type{border-top:none;}
+  .bucket .bico{font-size:18px;line-height:1;margin-top:2px;}
+  .bucket .bbody{flex:1;}
+  .bucket .btitle{font-weight:600;font-size:14px;}
+  .bucket .bdesc{font-size:13px;color:var(--muted);margin-top:2px;}
+  .tg-hint{background:var(--panel-2);border-radius:10px;padding:12px 15px;font-size:12.5px;color:var(--muted);margin-top:12px;}
+  .tg-hint b{color:var(--ink);}
+  .tg-hint code{font-family:var(--mono);background:var(--bg);padding:1px 6px;border-radius:4px;color:#7cc0ef;font-size:12px;}
+
+  /* verdict */
+  .verdict-hero{border-radius:14px;padding:20px 22px;margin-bottom:16px;border:1px solid var(--line);position:relative;overflow:hidden;}
+  .verdict-hero.buy{background:linear-gradient(135deg,rgba(46,160,67,.14),rgba(46,160,67,.04));border-color:rgba(46,160,67,.4);}
+  .verdict-hero.wait{background:linear-gradient(135deg,rgba(214,165,22,.13),rgba(214,165,22,.03));border-color:rgba(214,165,22,.4);}
+  .verdict-hero.hold{background:linear-gradient(135deg,rgba(74,158,218,.12),rgba(74,158,218,.03));border-color:rgba(74,158,218,.4);}
+  .verdict-hero.sell{background:linear-gradient(135deg,rgba(217,83,79,.13),rgba(217,83,79,.03));border-color:rgba(217,83,79,.4);}
+  .verdict-hero.stop{background:linear-gradient(135deg,rgba(217,83,79,.16),rgba(217,83,79,.05));border-color:rgba(217,83,79,.5);}
+  .verdict-hero .vlabel{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:6px;}
+  .verdict-hero .vaction{font-size:28px;font-weight:800;letter-spacing:-.5px;line-height:1.1;}
+  .verdict-hero.buy .vaction{color:#5fd67c;}
+  .verdict-hero.wait .vaction{color:#e8c65a;}
+  .verdict-hero.hold .vaction{color:#7cc0ef;}
+  .verdict-hero.sell .vaction,.verdict-hero.stop .vaction{color:#ef8582;}
+  .verdict-hero .vwhy{font-size:13.5px;color:var(--ink);margin-top:8px;line-height:1.45;}
+  .verdict-hero .vprice{font-family:var(--mono);font-size:13px;color:var(--muted);margin-top:8px;}
+
+  .ind-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line);}
+  .ind-row:first-of-type{border-top:none;}
+  .ind-row .idot{width:11px;height:11px;border-radius:50%;flex:none;}
+  .idot.ok{background:var(--buy);} .idot.mid{background:var(--warn);} .idot.bad{background:var(--sell);} .idot.neutral{background:var(--dim);}
+  .ind-row .iname{width:170px;font-size:13px;font-weight:600;flex:none;}
+  .ind-row .ival{font-size:13px;color:var(--muted);flex:1;}
+  .ind-row .igate{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:5px;background:var(--sell-soft);color:#ef8582;flex:none;}
+  @media(max-width:640px){.ind-row .iname{width:auto;}.ind-row{flex-wrap:wrap;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Рабочая тетрадка</h1>
+    <span class="sub" id="asof">as of 24 июл 2026</span>
+  </header>
+  <p class="principle">Каждый тикер — изолированно. Решение о входе/выходе принято заранее и записано. Когда триггер срабатывает — просто исполняем план, без эмоций. Технику вписываем вручную, макро накладываем поверх.</p>
+
+  <div class="group-nav" id="groupNav"></div>
+  <div class="gmeta" id="groupMeta"></div>
+  <div class="ticker-bar" id="tickerBar"></div>
+
+  <nav class="tabs" id="tabs"></nav>
+  <div id="content"></div>
+
+  <footer>
+    Прототип рабочего пространства. Технические уровни (Close / Low / High) считаются и вписываются вручную; макро и оценки инвестдомов накладываются поверх. Оценки инвестдомов периодически обновляются вручную. Цены и таргеты — иллюстративные, на основе публичных данных на 24.07.2026, требуют ручной сверки перед сделкой. Не является инвестиционной рекомендацией.
+  </footer>
+</div>
+
+<script>
+const GROUPS = {
+  1:{key:1,name:"Группа 1 · Пассивное управление (удержание)",dot:"gd1",
+     meta:"Зашли и <b>долго удерживаем</b> позицию (3–6 месяцев в зависимости от индикаторов). Примеры: гиперскейлеры — MSFT, AMZN, GOOGL, META и др. Buy Dip прогнозируется проще: один чёткий уровень."},
+  2:{key:2,name:"Группа 2 · Активное управление",dot:"gd2",
+     meta:"Требует регулярной корректировки (горизонт: от одного дня до недели — любой период, дающий целевую прибыль). Сюда входят <b>наиболее волатильные стоки</b> с высокой чувствительностью к отчётам, новостным катализаторам и прочим триггерам. Buy Dip — несколько уровней."},
+  3:{key:3,name:"Группа 3 · Кандидаты / резерв",dot:"gd3",
+     meta:"Акции, не попавшие в Группу 1 и Группу 2, но присутствующие в Watchlist. <b>Заранее прописываем входные параметры</b> — при их достижении берём тикер в детальную проработку по правилам Группы 2 (переход GRP 3 → GRP 2). Цель — не упустить момент, когда сток покажет нужные условия."},
+  n:{key:"n",name:"Новые стоки · Первичный анализ",dot:"gdn",
+     meta:"Акции, поступающие на первичный анализ. <b>Поиск:</b> раздел Most Active Stocks на Investing.com, рекомендации из статей Seeking Alpha, новостная лента Investing. Сбор потока → под автоматизацию. После первичной оценки — распределяем по Группам 1/2/3 или отсеиваем."},
+};
+
+const DATA = {
+  SNDK:{
+    sym:"SNDK",name:"SanDisk",group:2,px:1391.0,chg:"+36.13 (+2.67%)",up:true,
+    horizon:"от 1 дня до недели — любой период, дающий целевую прибыль",
+    profile:{
+      "Сектор / слой":"NAND / память (слой с MU, WDC)",
+      "Роль в тетрадке":"Волатильный, высокая чувствительность к отчётам и новостям по NAND",
+      "Отчёт (след.)":"12 авг 2026 · Investor Day 13 авг",
+      "Целевая прибыль":"+$250 к цене входа (индивидуально)",
+    },
+    triggers:[
+      {t:"add",lvl:"Buy Dip · тех. уровень",manual:true,desc:"Докупаем на откате к технической поддержке — уровень вписываем вручную (Close/Low)",cond:"если нет общего слома сентимента по AI/NAND-сектору"},
+      {t:"buy",lvl:"Buy · уверенный",manual:true,desc:"Заранее принятое решение — исполняем даже если некомфортно",cond:"объём подтверждает, новостной фон без структурного негатива"},
+      {t:"sell",lvl:"Sell · +$250 к входу",manual:true,desc:"Фиксация целевой прибыли. Точный уровень выхода вписываем от цены входа",cond:"пересчитываем target после входа и по свежим данным"},
+      {t:"watch",lvl:"Стоп-наблюдение",desc:"Слом сентимента по NAND / прогноз падения цен на память",cond:"пауза во входах, тикер не покупаем на эмоциях"},
+    ],
+    entry:[
+      "<b>Технический анализ — первым.</b> Ориентиры для входа рассчитываем по ценовым уровням (Close / Low / High) и <b>вписываем самостоятельно</b>.",
+      "На технические сигналы <b>поверх накладываем макроанализ</b> (см. блок ниже).",
+      "Вход только при подтверждении объёмом и без структурного негатива по NAND.",
+    ],
+    exit:[
+      "<b>Sell — аналогично:</b> технический уровень выхода вписываем вручную от цены входа.",
+      "Целевая прибыль SNDK: <b>+$250</b> к цене входа. Периодически пересчитываем с учётом свежих данных.",
+    ],
+    env:[
+      {lbl:"VIX",st:"норма · <20",state:"ok"},
+      {lbl:"Риторика ФРС",st:"нейтральная",state:"ok"},
+      {lbl:"Понижения таргетов (вне earnings)",st:"следить — есть Sell от 24/7",state:"mid"},
+      {lbl:"Сентимент NAND / цены на память",st:"тайтовое предложение = тейлвинд",state:"ok"},
+    ],
+    consensus:{rating:"Buy",pt:"$2 144",low:"$1 000",high:"$3 250",n:"23 аналитика",upd:"обн. 21 июл 2026"},
+    houses:[
+      {firm:"Goldman Sachs",rate:"Buy",pt:"$2 200",quote:"Таргет почти удвоен ($1 200 → $2 200): нормализованная оценка EPS поднята с $55 до $110, мультипликатор 20× P/E.",tac:"<b>Тактика:</b> самый бычий из крупных домов — держит верхнюю границу. Ориентир потолка, а не сигнал догонять по рынку. Катализатор — Investor Day 13 авг."},
+      {firm:"Mizuho",rate:"Outperform",pt:"$215*",quote:"Тайтовое предложение продолжает давать ценовой тейлвинд в legacy DRAM и NAND; лучше выручка и маржа в 2026.",tac:"<b>Тактика:</b> тезис «тайтовое предложение» — опора для Buy Dip. Пока предложение узкое, откаты выкупаемы. (*до сплита)"},
+      {firm:"24/7 Wall St.",rate:"Sell · 90%",pt:"$1 453",quote:"Фундамент исключительный, но цена его уже отыграла; форвардный P/E ~57. Медвежий кейс — $1 027, если развернутся цены на NAND.",tac:"<b>Тактика:</b> это и есть уровень «стоп-наблюдения». Разворот цен на NAND = слом сентимента → входы на паузу. Downside-ориентир."},
+    ],
+    houseNote:"Разброс огромный ($1 000 → $3 250) — признак дивизивного, спекулятивного имени, типичного для Группы 2. Консенсус тянут вверх Goldman/Mizuho, снизу держит valuation-медведь 24/7. Техника решает точку входа, оценки домов задают коридор и точку слома сентимента.",
+    macro:"по отчёту Société Générale слом концепции AI не ожидается как минимум до середины 2027 — нет предпосылок для фундаментального научного прорыва (модели в 10× эффективнее), и гипотеза о целесообразности массового строительства дата-центров ещё не успеет подтвердиться/опровергнуться. Для NAND-имён это удерживающий фактор спроса.",
+    levels:{buyDip:null, sell:null, note:"тех. уровни не вписаны — вход по факту касания поддержки, Sell = вход +$250"},
+    signals:{macroAlive:true, sentimentBroken:false},
+  },
+  MSFT:{
+    sym:"MSFT",name:"Microsoft",group:1,px:381.58,chg:"-8.76 (-2.24%)",up:false,
+    horizon:"3–6 месяцев в зависимости от индикаторов",
+    profile:{
+      "Сектор / слой":"Гиперскейлер / software + Azure",
+      "Роль в тетрадке":"Ядро удержания. Заходим и держим долго",
+      "Отчёт (след.)":"29 июл 2026",
+      "Целевая прибыль":"Уровень продажи задан заранее (≈ $470)",
+    },
+    triggers:[
+      {t:"buy",lvl:"$350 · Buy Dip",manual:true,desc:"Покупка в районе $350 — заранее заданная граница уверенного входа. Точный уровень уточняем техникой",cond:"Группа 1 прогнозируется проще — один чёткий уровень"},
+      {t:"add",lvl:"$381 · текущая зона",desc:"Сейчас цена ниже среднего таргета; ждём откат к $350",cond:"не догоняем — ждём свой уровень"},
+      {t:"sell",lvl:"$470 · Sell",manual:true,desc:"Уровень фиксации прибыли задан заранее. Уточняем техникой",cond:"пересчитываем при смене макро-картины"},
+      {t:"watch",lvl:"Наблюдение",desc:"Риск капекса на AI — $80–146 млрд на FY2026 растёт быстрее выручки",cond:"медвежий тезис, но не триггер продажи сам по себе"},
+    ],
+    entry:[
+      "<b>Один чёткий уровень.</b> Группа 1 проще: Buy Dip ≈ <b>$350</b> — базовый ориентир, точку уточняем техникой (Close/Low) и <b>вписываем сами</b>.",
+      "На технику <b>поверх накладываем макроанализ</b>.",
+      "Держим долго (3–6 мес). Не активничаем на внутридневных движениях.",
+    ],
+    exit:[
+      "<b>Sell ≈ $470</b> — заранее заданный уровень. Уточняем техникой, вписываем вручную.",
+      "Уровень продажи пересчитываем только при смене макро-картины, не на новостном шуме.",
+    ],
+    env:[
+      {lbl:"VIX",st:"норма · <20",state:"ok"},
+      {lbl:"Риторика ФРС",st:"нейтральная",state:"ok"},
+      {lbl:"Понижения таргетов (вне earnings)",st:"Stifel $400 — низший, следить",state:"mid"},
+      {lbl:"Сентимент AI / капекс",st:"давит на настроение перед отчётом",state:"mid"},
+    ],
+    consensus:{rating:"Strong Buy",pt:"$556.75",low:"$400",high:"$870",n:"58 аналитиков",upd:"обн. 23 июл 2026"},
+    houses:[
+      {firm:"Wedbush (Dan Ives)",rate:"Outperform",pt:"$625",quote:"Wall Street недооценивает перспективы роста Azure; монетизация AI серьёзно поднимет прибыль в 2026–2027.",tac:"<b>Тактика:</b> подтверждает тезис удержания. Пока Azure-история жива, откат к $350 — это Buy Dip, а не выход."},
+      {firm:"Morgan Stanley",rate:"Top Pick",pt:"$650",quote:"Поднял таргет (до ~$650), называет Microsoft top pick.",tac:"<b>Тактика:</b> верхний ориентир. Разрыв цены ($381) и таргета широкий — аргумент за долгое удержание Группы 1."},
+      {firm:"Stifel",rate:"низший таргет",pt:"$400",quote:"Самый низкий таргет в выборке (25 июн 2026).",tac:"<b>Тактика:</b> даже медведь стоит выше текущей цены. Скромный downside-ориентир → тезис удержания подтверждается."},
+    ],
+    houseNote:"Консенсус Strong Buy, разброс $400–$870. Даже нижняя граница выше текущей цены — редкая ситуация, работающая на тезис удержания Группы 1. Класс-экшн по Azure/Copilot давит на сентимент перед отчётом 29 июл — держим уровни, не реагируем на шум.",
+    macro:"тезис AI по Société Générale устойчив как минимум до середины 2027. Для гиперскейлера главный медвежий фактор — капекс на AI-инфраструктуру ($80–146 млрд FY2026) растёт быстрее выручки. Пока гипотеза о целесообразности дата-центров не опровергнута — удерживаем.",
+    levels:{buyDip:350, sell:470, note:"Buy Dip ≈ $350, Sell ≈ $470 — заданы заранее"},
+    signals:{macroAlive:true, sentimentBroken:false},
+  },
+};
+
+// Watchlist tab is special (not per-ticker)
+const WATCHLIST = {
+  rules:[
+    "<b>Критерии добавления</b> в список и <b>исключения</b> из него — формализуем единые принципы (в проработке).",
+    "Спекулятивные входы в тикеры <b>ВНЕ списка</b> — только по отдельному редкому алгоритму (см. Flash Crash).",
+  ],
+  flash:{
+    precedent:"Внезапный провал акции не из Watchlist (пример: TSLA падает на −14%).",
+    question:"Стоит ли заходить в такие истории ради быстрого отскока?",
+    risk:"На рынке нет гарантированных отскоков даже на 5%. Сильное падение без глубокого понимания причин может быть началом продолжительного даунтренда («падение падающего ножа»).",
+    rule:"Входить можно только при строгих критериях (объём торгов, поддержка, характер новостей) и строго выделенном лимите под риск — чтобы это не разрушало дисциплину основной тетрадки.",
+    why:"После падения на 14% с одинаковой вероятностью возможен как отскок на 5–7%, так и продолжение падения ещё на 10–15% (делевереджинг маржинальщиков, плохой отчёт, структурные проблемы). Покупка «на эмоциях» противоречит принципу тетрадки — уйти от суеты.",
+  },
+};
+
+// Digest — portfolio-wide, based on Seeking Alpha / Investing feed
+const DIGEST={
+  date:"22 июл 2026 · утро",
+  filtered:24, kept:5, trashed:19,
+  signals:[
+    {sym:"SNDK",src:"Goldman Sachs / TheStreet",text:"Таргет почти удвоен до ~$2 200 (нормализ. EPS $55 → $110). SanDisk — топ-акция S&P 500 в 2026.",prem:"Premarket: $1 391 (+2.67%)",tac:"<b>Тактика:</b> Buy on Dips — техника решает вход, Goldman = потолок. Катализатор — Investor Day 13 авг.",link:"thestreet.com · SNDK price target"},
+  ],
+  risks:[
+    {sym:"MSFT",src:"24/7 Wall St.",text:"Класс-экшн по заявлениям об Azure/Copilot давит на сентимент перед отчётом 29 июл. Риск капекса на AI растёт быстрее выручки.",tac:"<b>Тактика:</b> Hold — не докупать до отчёта, держим уровень $350 как Buy Dip.",link:"247wallst.com · MSFT"},
+  ],
+  macro:[
+    {sym:"МАКРО · ФРС",src:"Seeking Alpha (22 июл)",text:"AI-модель сентимента Deutsche Bank: риторика ФРС — самая ястребиная с 2022. Warsh, Kashkari, Logan на ястребином фланге; фьючерсы закладывали ~60% на ужесточение.",tac:"<b>Влияние:</b> прямо бьёт по Environment Check обоих тикеров — «ястребиная ФРС» переводит фильтр в жёлтый. Входы осторожнее, ждём подтверждения техникой.",link:"seekingalpha.com/news/4616777"},
+  ],
+  newtickers:[
+    {sym:"MU",src:"Most Active · Investing.com",text:"Micron — кандидат в Группу 2/3. NAND/HBM-слой, высокая чувствительность к отчётам, есть в конспекте как вопрос классификации.",tac:"<b>Обоснование:</b> тот же слой памяти, что SNDK; заводим с входными параметрами, при их достижении → детальная проработка по правилам Группы 2.",link:"investing.com · MU"},
+  ],
+  trashNote:"19 статей отсеяно: повторы FOMC-обзоров без новых драйверов, кликбейт-прогнозы «up 600%», дублирующие ленты по нефти без привязки к нашим тикерам.",
+};
+
+const DIGEST_BUCKETS=[
+  {ico:"🗑",title:"Шум (спам / кликбейт)",desc:"Статьи без конкретики, повторяющиеся новости, обзоры «ни о чём». ИИ удаляет — отсеивается 50–70% потока."},
+  {ico:"🌍",title:"Макро / Сектора",desc:"Общая важная информация: ставки ФРС, инфляция, законы, тренды в AI. Идёт в макро-дайджест."},
+  {ico:"🎯",title:"Конкретные тикеры",desc:"Новости по акциям из портфеля/Watchlist. Раскладываются по сигналам, рискам и кандидатам."},
+];
+
+const TABS=[
+  {id:"verdict",label:"⚡ Вердикт"},
+  {id:"profile",label:"Профиль"},
+  {id:"triggers",label:"Триггеры Buy / Sell"},
+  {id:"entry",label:"Тактика входа / выхода"},
+  {id:"env",label:"Окружение"},
+  {id:"houses",label:"Инвестдома"},
+  {id:"digest",label:"Дайджесты"},
+  {id:"watchlist",label:"Watchlist · Flash Crash"},
+];
+
+let digestVariant="digest"; // "digest" | "logic"
+
+let currentGroup=2;
+let current="SNDK";
+let activeTab="verdict";
+
+function tickersInGroup(g){return Object.values(DATA).filter(d=>d.group===g);}
+
+function renderGroupNav(){
+  const counts={1:0,2:0,3:0,n:0};
+  Object.values(DATA).forEach(d=>counts[d.group]++);
+  document.getElementById("groupNav").innerHTML=Object.values(GROUPS).map(g=>`
+    <div class="gbtn ${g.key===currentGroup?'on':''}" onclick="selectGroup('${g.key}')">
+      <span class="gd ${g.dot}"></span>${g.name.split(' · ')[0]}
+      <span class="cnt">${counts[g.key]||0}</span>
+    </div>`).join('');
+  document.getElementById("groupMeta").innerHTML=GROUPS[currentGroup].meta;
+}
+
+function renderTickers(){
+  const list=tickersInGroup(currentGroup);
+  const bar=document.getElementById("tickerBar");
+  if(list.length===0){
+    bar.innerHTML=`<div class="empty-grp">В этой группе пока нет проработанных тикеров. Входные параметры прописываются заранее — при их достижении тикер переходит в детальную проработку.</div>`;
+    return;
+  }
+  bar.innerHTML=list.map(d=>{
+    const gc={1:'g1',2:'g2',3:'g3'}[d.group]||'gn';
+    return `<div class="tk ${d.sym===current?'on':''}" onclick="selectTicker('${d.sym}')">
+      <div class="row1"><span class="sym">${d.sym}</span><span class="grp ${gc}">GRP ${d.group}</span></div>
+      <span class="px">$${d.px.toLocaleString('en-US')}</span>
+      <span class="chg ${d.up?'up':'down'}">${d.chg}</span>
+    </div>`;}).join('');
+}
+
+function renderTabs(){
+  document.getElementById("tabs").innerHTML=TABS.map(t=>`<button class="${t.id===activeTab?'on':''}" onclick="selectTab('${t.id}')">${t.label}</button>`).join('');
+}
+
+function selectGroup(g){
+  currentGroup=(g==='n')?'n':parseInt(g);
+  const list=tickersInGroup(currentGroup);
+  current=list.length?list[0].sym:null;
+  renderGroupNav();renderTickers();renderContent();
+}
+function selectTicker(s){current=s;renderTickers();renderContent();}
+function selectTab(t){activeTab=t;renderTabs();renderContent();}
+
+function tabWrap(id,inner){return `<div class="tab-body ${id===activeTab?'on':''}" id="tab-${id}">${inner}</div>`;}
+
+function renderContent(){
+  const c=document.getElementById("content");
+
+  if(!current){
+    if(activeTab==='watchlist'){c.innerHTML=renderWatchlist();}
+    else if(activeTab==='digest'){c.innerHTML=renderDigest();}
+    else c.innerHTML=tabWrap(activeTab,`<div class="card"><h3>Нет активного тикера</h3><p class="note">Выберите группу с проработанными тикерами (GRP 1 или GRP 2), либо откройте вкладку «Дайджесты» / «Watchlist» — они общие по портфелю.</p></div>`);
+    return;
+  }
+  const d=DATA[current];
+  let html="";
+
+  html+=tabWrap("verdict",renderVerdict(d));
+
+  const kv=Object.entries(d.profile).map(([k,v])=>`<div class="k">${k}</div><div class="v">${v}</div>`).join('');
+  html+=tabWrap("profile",`<div class="card"><h3>${d.name} · ${GROUPS[d.group].name.split(' · ')[0]}</h3>
+    <div class="kv"><div class="k">Горизонт</div><div class="v">${d.horizon}</div>${kv}</div></div>`);
+
+  const trigs=d.triggers.map(t=>{
+    const map={buy:['b-buy','BUY'],sell:['b-sell','SELL'],add:['b-add','ADD'],watch:['b-watch','WATCH']};
+    const [cls,txt]=map[t.t];
+    return `<div class="trig"><span class="badge ${cls}">${txt}</span><div class="body">
+      <div class="lvl">${t.lvl}${t.manual?'<span class="manual">впис. вручную</span>':''}</div>
+      <div class="desc">${t.desc}</div><div class="cond">${t.cond}</div></div></div>`;}).join('');
+  html+=tabWrap("triggers",`<div class="card"><h3>Триггеры <span class="hint">решение принято заранее — при срабатывании просто исполняем</span></h3>${trigs}</div>`);
+
+  html+=tabWrap("entry",`<div class="card">
+    <h3>Стратегия входа <span class="hint">техника первой, макро — поверх</span></h3>
+    <ul class="clean">${d.entry.map(e=>`<li>${e}</li>`).join('')}</ul></div>
+    <div class="card"><h3>Стратегия выхода</h3>
+    <ul class="clean">${d.exit.map(e=>`<li>${e}</li>`).join('')}</ul>
+    <div class="macro"><b>Макро-контекст (поверх техники):</b> ${d.macro}</div></div>`);
+
+  const envs=d.env.map(e=>`<div class="env"><span class="dot ${e.state}"></span><span class="lbl">${e.lbl}</span><span class="st">${e.st}</span></div>`).join('');
+  html+=tabWrap("env",`<div class="card"><h3>Environment Check <span class="hint">фильтр скрытых угроз поверх логики входа</span></h3>${envs}
+    <div class="note">Красный/жёлтый по любому пункту = входы на паузу. VIX, ястребиная ФРС и внезапные понижения таргетов вне earnings — стоп-факторы независимо от техники.</div></div>`);
+
+  const houses=d.houses.map(h=>`<div class="house"><div class="hh">
+    <span class="firm">${h.firm}</span><span class="rate">${h.rate}</span><span class="pt">${h.pt}</span></div>
+    <div class="quote">${h.quote}</div><div class="tac">${h.tac}</div></div>`).join('');
+  html+=tabWrap("houses",`<div class="card"><h3>Оценки инвестдомов <span class="upd">${d.consensus.upd}</span><span class="hint">как переложить на тактику входа · обновляется вручную</span></h3>
+    <div class="concens">
+      <div class="cell"><span class="cl">Консенсус</span><span class="cv">${d.consensus.rating}</span></div>
+      <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${d.consensus.pt}</span></div>
+      <div class="cell"><span class="cl">Low</span><span class="cv down">${d.consensus.low}</span></div>
+      <div class="cell"><span class="cl">High</span><span class="cv up">${d.consensus.high}</span></div>
+      <div class="cell"><span class="cl">Выборка</span><span class="cv" style="font-size:13px">${d.consensus.n}</span></div>
+    </div>${houses}<div class="note">${d.houseNote}</div></div>`);
+
+  html+=renderDigest();
+  html+=renderWatchlist();
+
+  c.innerHTML=html;
+}
+
+function setDigestVariant(v){digestVariant=v;renderContent();}
+
+// ---- Вердикт: детерминированная агрегация всех индикаторов ----
+function computeVerdict(d){
+  // 1. Environment Check — это ГЕЙТ, не голос
+  const worstEnv = d.env.reduce((w,e)=>{
+    const rank={ok:0,mid:1,bad:2};
+    return rank[e.state]>rank[w]?e.state:w;
+  },"ok");
+  const redEnv = d.env.filter(e=>e.state==='bad');
+  const yellowEnv = d.env.filter(e=>e.state==='mid');
+
+  // 2. Макро-гейт
+  const macroBroken = d.signals.sentimentBroken || !d.signals.macroAlive;
+
+  // Индикаторы для отображения (голоса)
+  const indicators=[];
+
+  // Env как первый индикатор-гейт
+  indicators.push({
+    name:"Environment Check",
+    state:worstEnv,
+    gate: worstEnv==='bad',
+    val: worstEnv==='ok' ? "чисто — угроз нет"
+       : worstEnv==='mid' ? `жёлтый: ${yellowEnv.map(e=>e.lbl).join(', ')}`
+       : `КРАСНЫЙ: ${redEnv.map(e=>e.lbl).join(', ')}`
+  });
+
+  // Макро
+  indicators.push({
+    name:"Макро (SocGen)",
+    state: macroBroken?'bad':'ok',
+    gate: macroBroken,
+    val: macroBroken ? "тезис AI под вопросом — фон против входа" : "тезис AI жив до сер. 2027 — фон поддерживающий"
+  });
+
+  // Цена vs заданные уровни
+  const L=d.levels;
+  let priceState='neutral', priceVal='', triggerHit=null;
+  if(L.buyDip!=null){
+    const distBuy=((d.px-L.buyDip)/L.buyDip*100);
+    if(d.px<=L.buyDip){priceState='ok';priceVal=`цена $${d.px} ≤ Buy Dip $${L.buyDip} → триггер входа`;triggerHit='buy';}
+    else if(L.sell!=null && d.px>=L.sell){priceState='ok';priceVal=`цена $${d.px} ≥ Sell $${L.sell} → фиксация`;triggerHit='sell';}
+    else{priceState='mid';priceVal=`цена $${d.px} · до Buy Dip $${L.buyDip} ещё ${distBuy.toFixed(0)}%`;triggerHit='wait';}
+  } else {
+    priceState='neutral';priceVal=`уровни не вписаны — ${L.note}`;triggerHit='manual';
+  }
+  indicators.push({name:"Цена vs уровень",state:priceState,gate:false,val:priceVal});
+
+  // Инвестдома — коридор
+  const c=d.consensus;
+  indicators.push({
+    name:"Инвестдома",
+    state:'ok',
+    gate:false,
+    val:`консенсус ${c.rating} · ср. таргет ${c.pt} (коридор ${c.low}–${c.high})`
+  });
+
+  // ---- Итоговое решение ----
+  let action, cls, why;
+  if(worstEnv==='bad' || macroBroken){
+    action="СТОП · ВНЕ ИГРЫ"; cls="stop";
+    why="Сработал блокирующий фактор (красный Environment Check или слом макро-тезиса). По правилу тетрадки входы на паузу независимо от техники — это защита от покупки на эмоциях.";
+  } else if(triggerHit==='sell'){
+    action="ФИКСИРОВАТЬ"; cls="sell";
+    why="Цена достигла заранее заданного уровня Sell. Решение принято раньше — просто исполняем, не пересматриваем на эмоциях.";
+  } else if(triggerHit==='buy' && worstEnv==='ok'){
+    action="ПОКУПАТЬ · триггер"; cls="buy";
+    why="Цена коснулась заданного Buy Dip, окружение чистое, макро жив. Это тот самый «уверенный» вход — исполняем план.";
+  } else if(triggerHit==='buy' && worstEnv==='mid'){
+    action="ЖДАТЬ · жёлтое окружение"; cls="wait";
+    why="Уровень входа достигнут, НО Environment Check жёлтый. Вход запрещён до снятия предупреждения — даже идеальная техника не перебивает фильтр окружения.";
+  } else if(triggerHit==='wait' || triggerHit==='manual'){
+    if(d.group===1){
+      action="ДЕРЖАТЬ"; cls="hold";
+      why="Группа 1 (удержание). Цена ещё не у Buy Dip — не догоняем, ждём свой уровень. Уже в позиции — держим до Sell.";
+    } else {
+      action="ЖДАТЬ УРОВЕНЬ"; cls="wait";
+      why="Триггер входа не сработал. Ждём касания технического уровня — не входим раньше плана.";
+    }
+  } else {
+    action="ДЕРЖАТЬ"; cls="hold"; why="Нейтральное состояние — следим за триггерами.";
+  }
+
+  // если окружение жёлтое, но действие было бы buy/hold — понижаем до предупреждения
+  if(worstEnv==='mid' && cls==='hold'){
+    why+=" ⚠ Внимание: Environment Check жёлтый — при появлении сигнала входа сначала дождись снятия предупреждения.";
+  }
+
+  return {action,cls,why,indicators};
+}
+
+function renderVerdict(d){
+  const v=computeVerdict(d);
+  const inds=v.indicators.map(i=>`
+    <div class="ind-row">
+      <span class="idot ${i.state}"></span>
+      <span class="iname">${i.name}</span>
+      <span class="ival">${i.val}</span>
+      ${i.gate?'<span class="igate">БЛОК</span>':''}
+    </div>`).join('');
+
+  return `
+    <div class="verdict-hero ${v.cls}">
+      <div class="vlabel">Итоговый вердикт · ${d.sym}</div>
+      <div class="vaction">${v.action}</div>
+      <div class="vwhy">${v.why}</div>
+      <div class="vprice">Тек. цена $${d.px.toLocaleString('en-US')} ${d.chg} · горизонт: ${d.horizon}</div>
+    </div>
+    <div class="card">
+      <h3>Как собрался вердикт <span class="hint">все индикаторы в одном месте — детерминированно, без эмоций</span></h3>
+      ${inds}
+      <div class="note">Логика: <b>Environment Check и Макро — это гейты</b> (красный = принудительный СТОП, жёлтый = максимум «ждать»). Цена сверяется с заранее вписанными уровнями. Инвестдома задают коридор. Порядок приоритета жёсткий и не меняется от настроения — в этом и смысл: когда триггер сработал, ты смотришь одну строку, а не семь вкладок.</div>
+    </div>`;
+}
+
+function digestItem(it,cls){
+  return `<div class="ditem ${cls}">
+    <span class="dsym">${it.sym}</span><span class="dsrc">${it.src}</span>
+    <div class="dtext">${it.text}</div>
+    ${it.prem?`<div class="dprem up">${it.prem}</div>`:''}
+    <div class="dtac">${it.tac}</div>
+    ${it.link?`<a class="dlink" href="#" onclick="return false">↗ ${it.link}</a>`:''}
+  </div>`;
+}
+
+function renderDigest(){
+  const d=DIGEST;
+  const variantSwitch=`<div class="variant-switch">
+    <div class="vbtn ${digestVariant==='digest'?'on':''}" onclick="setDigestVariant('digest')">Дайджест (по запросу)</div>
+    <div class="vbtn ${digestVariant==='logic'?'on':''}" onclick="setDigestVariant('logic')">Логика фильтра</div>
+  </div>`;
+
+  if(digestVariant==='logic'){
+    const buckets=DIGEST_BUCKETS.map(b=>`<div class="bucket"><span class="bico">${b.ico}</span>
+      <div class="bbody"><div class="btitle">${b.title}</div><div class="bdesc">${b.desc}</div></div></div>`).join('');
+    return tabWrap("digest",variantSwitch+`
+      <div class="card"><h3>Вариант 1 · Автоматический фильтр и агрегация <span class="hint">письма за день → скрипту/боту</span></h3>
+        <p class="note" style="margin-top:0;margin-bottom:12px">Все письма Seeking Alpha / Investing в течение дня приходят боту. ИИ раскладывает поток по 3 корзинам, отсеивая шум до того, как он дойдёт до тебя.</p>
+        ${buckets}
+        <div class="tg-hint"><b>Телеграм по запросу:</b> команда <code>/digest</code> собирает отчёт за день из ленты ресурса; <code>/macro</code> — только рынок и ФРС; <code>/new</code> — только новые тикеры к рассмотрению. На первое время под каждым пунктом остаётся ссылка на исходную статью для проверки.</div>
+      </div>`);
+  }
+
+  const sig=d.signals.map(x=>digestItem(x,'sig')).join('');
+  const risk=d.risks.map(x=>digestItem(x,'risk')).join('');
+  const macro=d.macro.map(x=>digestItem(x,'macro-d')).join('');
+  const newt=d.newtickers.map(x=>digestItem(x,'newt')).join('');
+
+  return tabWrap("digest",variantSwitch+`
+    <div class="card">
+      <div class="digest-head"><h3 style="margin:0">📊 Утренний дайджест портфеля</h3><span class="dt">${d.date}</span></div>
+      <div class="filterstat">
+        <span class="fstat"><b>${d.filtered}</b> статей обработано</span>
+        <span class="fstat keep">➔ <b>${d.kept}</b> в дайджест</span>
+        <span class="fstat trash">🗑 <b>${d.trashed}</b> в корзину</span>
+      </div>
+      <div class="dsec sig"><div class="stitle">🟢 Сигналы и тикеры</div>${sig}</div>
+      <div class="dsec risk"><div class="stitle">🔴 Риски и тикеры</div>${risk}</div>
+      <div class="dsec macro-d"><div class="stitle">🌍 Макро и сектор</div>${macro}</div>
+      <div class="dsec newt"><div class="stitle">🟡 Новые тикеры к рассмотрению</div>${newt}</div>
+      <div class="trash-line">🗑 ${d.trashNote}</div>
+    </div>`);
+}
+
+function renderWatchlist(){
+  const w=WATCHLIST;
+  return tabWrap("watchlist",`
+    <div class="card"><h3>Правила работы с Watchlist</h3>
+      <ul class="clean">${w.rules.map(r=>`<li>${r}</li>`).join('')}</ul></div>
+    <div class="card"><h3>Обработка внезапных провалов · Flash Crash <span class="hint">спекулятивные входы ВНЕ списка</span></h3>
+      <div class="kv" style="grid-template-columns:auto 1fr;gap:10px 16px;">
+        <div class="k">Прецедент</div><div class="v" style="text-align:left;font-family:var(--sans)">${w.flash.precedent}</div>
+        <div class="k">Вопрос</div><div class="v" style="text-align:left;font-family:var(--sans);color:var(--muted)">${w.flash.question}</div>
+      </div>
+      <div class="macro" style="margin-top:14px"><b>Риски и иллюзия гарантий.</b> ${w.flash.risk}</div>
+      <div class="trig" style="border-top:1px solid var(--line);margin-top:10px;padding-top:14px">
+        <span class="badge b-watch">ПРАВИЛО</span>
+        <div class="body"><div class="desc" style="color:var(--ink)">${w.flash.rule}</div></div>
+      </div>
+      <div class="note">${w.flash.why}</div>
+    </div>`);
+}
+
+renderGroupNav();renderTickers();renderTabs();renderContent();
+</script>
+</body>
+</html>

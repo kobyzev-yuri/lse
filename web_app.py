@@ -3898,6 +3898,79 @@ async def api_portfolio_range_regime_llm(ticker: str, tickers: str = ""):
     return JSONResponse(content=_api_json_body(result))
 
 
+@app.get("/notebook", response_class=HTMLResponse)
+async def trading_notebook_page(request: Request):
+    """Отдельный UI: рабочая тетрадка (группы, ручные уровни, вердикт)."""
+
+    def _boot() -> Dict[str, Any]:
+        from services.trading_notebook import build_notebook_payload
+
+        return build_notebook_payload(with_prices=True)
+
+    try:
+        payload = await asyncio.to_thread(_boot)
+    except Exception as e:
+        logger.exception("GET /notebook boot: %s", e)
+        payload = {
+            "schema_version": 1,
+            "asof_label": "ошибка загрузки",
+            "principle_ru": f"Не удалось загрузить данные тетрадки: {e!s}",
+            "groups": {},
+            "tickers": {},
+            "digest": {},
+            "digest_buckets": [],
+            "watchlist": {},
+            "prices": {},
+        }
+    return HTMLResponse(
+        render_template(
+            "trading_notebook.html",
+            {
+                "request": request,
+                "boot_json": json.dumps(_to_jsonable(payload), ensure_ascii=False),
+            },
+        ),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/api/notebook", response_class=JSONResponse)
+async def api_trading_notebook(prices: int = 1):
+    """Группы + тикеры + дайджест; prices=1 — подмешать live Close."""
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import build_notebook_payload
+
+        return build_notebook_payload(with_prices=bool(int(prices or 0)))
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        logger.exception("GET /api/notebook: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка notebook: {e!s}")
+
+
+@app.get("/api/notebook/prices", response_class=JSONResponse)
+async def api_trading_notebook_prices(tickers: str = ""):
+    """Справочные Close для тикеров тетрадки (quotes → yfinance)."""
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import build_notebook_payload, fetch_closes
+
+        raw = [x.strip().upper() for x in (tickers or "").split(",") if x.strip()]
+        if not raw:
+            payload = build_notebook_payload(with_prices=False)
+            raw = list((payload.get("tickers") or {}).keys())
+        prices = fetch_closes(raw[:40])
+        return {"tickers": raw[:40], "prices": prices}
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        logger.exception("GET /api/notebook/prices: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка notebook prices: {e!s}")
+
+
 @app.get("/portfolio/shape-clusters", response_class=HTMLResponse)
 async def portfolio_shape_clusters_page(request: Request):
     """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
