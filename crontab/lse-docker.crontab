@@ -38,6 +38,10 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 */15 * * * * flock -n /tmp/lse_news_core_fast.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode core-fast >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 # Ticker news: Yahoo yfinance.get_news по GAME_5M / portfolio (без ключа).
 5 */2 * * * flock -n /tmp/lse_news_tickers.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode tickers >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
+# Seeking Alpha Finance → knowledge_base (portfolio ∪ GAME_5M). Нужен SEEKING_ALPHA_RAPIDAPI_KEY в config.env. Без LLM.
+35 */2 * * * flock -n /tmp/lse_news_sa.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode sa >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
+# Notebook digest (LLM ProxyAPI): только когда нужен дайджест для /notebook — не путать с ingest.
+# 10 7 * * 1-5 flock -n /tmp/lse_notebook_digest.lock docker exec lse-bot python scripts/run_notebook_news_digest.py --from-kb-only >> /home/ai8049520/lse/logs/notebook_news_digest.log 2>&1
 # Investing: economic calendar JSON (работает) + HTML news (может 403 без прокси).
 0 */2 * * * flock -n /tmp/lse_news_investing.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode investing >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 # NewsAPI — выключено (NEWSAPI 426 Upgrade Required). Включить при платном плане:
