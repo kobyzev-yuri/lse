@@ -19,7 +19,27 @@
 - Уровни вписываются **вручную** (команда) в JSON.
 - **Close** из `quotes` (fallback yfinance) — только справочная цена на карточке и во вкладке «Вердикт».
 - Вердикт **не** является авто-сигналом BUY: сравнивает Close с ручным Buy Dip / Sell + Environment / макро-гейты.
-- Дайджест / инвестдома — структура под будущий Seeking Alpha ingest; пока ручное наполнение JSON.
+- Дайджест: пайплайн SA Finance (RapidAPI) + LLM (ProxyAPI / Claude|GPT из config) → `local/notebook/digest_latest.json`; UI подхватывает поверх JSON-образца.
+- Инвестдома — пока вручную; email Seeking Alpha — отдельно.
+
+## Новости → дайджест
+
+Временно до уточнения групп у Насти:
+
+| Код | Состав |
+|-----|--------|
+| Group 1 | portfolio (`TRADING_CYCLE_TICKERS` или MEDIUM+LONG) |
+| Group 2 | GAME_5M (`GAME_5M_TICKERS` / `TICKERS_FAST`) |
+| Group 3 | **union** 1∪2 (пересечения ок, теги `portfolio` / `game_5m`) |
+
+```bash
+# ключ RapidAPI в config.env: SEEKING_ALPHA_RAPIDAPI_KEY или RAPIDAPI_KEY
+python scripts/run_notebook_news_digest.py --universe-only
+python scripts/run_notebook_news_digest.py --tickers MSFT,SNDK --no-llm   # fetch only
+python scripts/run_notebook_news_digest.py --max-tickers 8                # + LLM digest
+```
+
+LLM: тот же `OPENAI_*` / `ANTHROPIC_MODEL` (ProxyAPI). Выход дайджеста: signals / risks / macro / newtickers (+ trashNote), как во вкладке «Дайджесты».
 
 ## Данные
 
@@ -36,6 +56,9 @@
 
 ## Код
 
-- `services/trading_notebook.py` — load JSON, merge prices
+- `services/trading_notebook.py` — load JSON, merge prices, overlay digest_latest
+- `services/seeking_alpha_finance.py` — RapidAPI SA Finance client
+- `services/notebook_news_digest.py` — universe + LLM digest
+- `scripts/run_notebook_news_digest.py` — CLI пайплайна
 - `templates/trading_notebook.html` — порт UI из Claude-шаблона
 - `docs/trading-notebook (3).html` — исходный дизайн-макет
