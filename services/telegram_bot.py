@@ -981,6 +981,7 @@ class LSETelegramBot:
         self.application.add_handler(CommandHandler("help", self._handle_help))
         self.application.add_handler(CommandHandler("signal", self._handle_signal))
         self.application.add_handler(CommandHandler("news", self._handle_news))
+        self.application.add_handler(CommandHandler("digest", self._handle_notebook_digest))
         self.application.add_handler(CommandHandler("newssources", self._handle_newssources))
         self.application.add_handler(CommandHandler("price", self._handle_price))
         self.application.add_handler(CommandHandler("chart", self._handle_chart))
@@ -1137,7 +1138,7 @@ class LSETelegramBot:
 • Золото (GC=F), нефть (CL=F), валюты (GBPUSD=X), акции (MSFT, SNDK)
 
 **Команды:**
-/news <ticker> [N] — KB (HTML + файл): draft_bias, news.bias, gate; /newssources — каналы за 14 дн.
+/news <ticker> [N] — KB (HTML + файл): draft_bias, news.bias, gate; /digest — утренний дайджест тетрадки; /newssources — каналы за 14 дн.
 /price <ticker> — цена
 /chart <ticker> [days] — график дневной; /chart game_5m [days] — все тикеры игры 5m (горизонтально по сессиям, тикеры друг под другом)
 /chart5m <ticker> [days] — график 5 мин (по требованию)
@@ -1212,6 +1213,7 @@ class LSETelegramBot:
   В чате: HTML как nyse — draft_bias (грубое среднее), news.bias (взвеш. как AnalystAgent), режим Gate FULL/LITE/SKIP (пороги как nyse GAME_5M).
   Файл: полный отчёт с формулами и таблицей. Пример: `/news MSFT` или `/news MSFT 15`
   Показывает: последние новости с источником и sentiment
+`/digest` — утренний дайджест «Рабочей тетрадки» (кэш LLM, без повторного вызова модели). Полный вид: /notebook
 `/newssources` — все каналы новостей и кол-во записей за последние 14 дней
 
 **Цена:**
@@ -1419,6 +1421,24 @@ class LSETelegramBot:
                 f"❌ Ошибка анализа {ticker}: {str(e)}"
             )
     
+    async def _handle_notebook_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда /digest — кэш утреннего дайджеста тетрадки (без LLM)."""
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id is None or not self._check_access(user_id):
+            await self._reply_to_update(update, context, "❌ Доступ запрещен")
+            return
+        try:
+            from services.notebook_news_digest import format_digest_telegram
+
+            text = format_digest_telegram()
+        except Exception as e:
+            logger.exception("/digest failed: %s", e)
+            text = f"Не удалось прочитать дайджест: {e}"
+        # Telegram hard limit ~4096
+        if len(text) > 4000:
+            text = text[:3990] + "\n…"
+        await self._reply_to_update(update, context, text)
+
     async def _handle_news(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /news <ticker>"""
         user_id = update.effective_user.id if update.effective_user else None

@@ -233,8 +233,16 @@
     "risks": [],
     "macro": [],
     "newtickers": [],
-    "trashNote": "Пайплайн Seeking Alpha (35–40 писем/день) — фаза после решения по оплате. Пока дайджест заполняется вручную в JSON."
+    "trashNote": "Утренний дайджест LLM из knowledge_base (SA). Полный email-поток SA — если подтвердит Настя. Вопросы: docs/TRADING_NOTEBOOK.md"
   },
+  "card_templates": {
+    "fundament_fields_ru": ["tagline", "metrics(кэш/FCF/долг/запас)", "margin_ru", "financing_ru", "pluses", "risks"],
+    "fundament_note_ru": "Эталон заполнения — карточка NBIS. Остальные тикеры — по ответу Насти (п.11).",
+    "houses_fields_ru": ["firm", "rate", "pt", "quote", "tac"],
+    "env_fields_ru": ["lbl", "state=ok|mid|bad", "st"],
+    "levels_edit_ru": "Пока JSON + deploy. UI-редактор — docs/NOTEBOOK_PHASE_D_EDITOR.md"
+  },
+  "awaiting_nastya_lists": true,
   "digest_buckets": [
     {"ico": "🗑", "title": "Шум (спам / кликбейт)", "desc": "Без конкретики, повторы — отсев 50–70% потока."},
     {"ico": "🌍", "title": "Макро / Сектора", "desc": "ФРС, инфляция, AI-тренды → макро-дайджест."},

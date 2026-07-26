@@ -1,7 +1,8 @@
-"""Notebook news digest: portfolio ∪ GAME_5M → SA Finance → knowledge_base → LLM.
+"""Notebook news digest: notebook groups → SA Finance → knowledge_base → LLM.
 
-Temporary «group 3» = union of portfolio + GAME_5M. News stored in knowledge_base
-(same pattern as Yahoo/Marketaux). Digest JSON is only a UI cache for /notebook.
+Universe primary source: tickers in nastya/notebook/notebook_data.json (by group).
+Fallback: portfolio ∪ GAME_5M if notebook has no equities (until Nastya fills lists).
+Digest JSON is UI/Telegram cache only.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ DEFAULT_DIGEST_PATH = DEFAULT_OUT_DIR / "digest_latest.json"
 DEFAULT_RAW_PATH = DEFAULT_OUT_DIR / "news_raw_latest.json"
 
 DIGEST_SYSTEM = """Ты — редактор утреннего дайджеста для торговой «Рабочей тетрадки».
-Вход: список новостей из knowledge_base LSE (в основном Seeking Alpha Finance) по тикерам портфеля и игры 5m.
+Вход: список новостей из knowledge_base LSE (Seeking Alpha Finance и др.) по тикерам тетрадки.
 Задача: отсеять шум (кликбейт, повторы без конкретики) и разложить остаток по корзинам ТЗ.
 
 Верни ТОЛЬКО JSON-объект без markdown:
@@ -46,11 +47,11 @@ DIGEST_SYSTEM = """Ты — редактор утреннего дайджест
 }
 
 Правила:
-- signals: позитивные/нейтрально-полезные катализаторы по нашим тикерам.
-- risks: угрозы, даунсайд, негатив по нашим тикерам.
-- macro: ФРС, сектор AI, широкие тренды без одного тикера как якоря.
-- newtickers: имена НЕ из watchlist входа — только если явно «кандидат к рассмотрению».
-- text: 1–2 предложения по-русски; tac — короткая тактика для тетрадки.
+- signals: позитивные/нейтрально-полезные катализаторы по нашим тикерам; tac в терминах тетрадки (Buy Dip / Hold / пауза / ждать уровень).
+- risks: угрозы, даунсайд; tac часто Hold / не докупать / стоп-наблюдение.
+- macro: ФРС, сектор AI, широкие тренды; tac = влияние на Environment Check.
+- newtickers: имена НЕ из текущего списка тетрадки — кандидат «к рассмотрению» (не авто-добавление в группу).
+- text: 1–2 предложения по-русски.
 - Не выдумывай новости: только из входа. Если данных мало — пустые массивы ок.
 - Отсев 50–70% шума — норма.
 """
@@ -68,33 +69,143 @@ def _unique_upper(seq: Sequence[str]) -> List[str]:
     return out
 
 
+def _tickers_from_notebook_data() -> Dict[str, List[str]]:
+    """Group key → tickers from nastya/notebook/notebook_data.json."""
+    try:
+        from services.trading_notebook import load_notebook_data
+
+        data = load_notebook_data()
+    except Exception as e:
+        logger.debug("notebook_data load for universe: %s", e)
+        return {"1": [], "2": [], "3": [], "n": []}
+    by_g: Dict[str, List[str]] = {"1": [], "2": [], "3": [], "n": []}
+    tickers = data.get("tickers") if isinstance(data.get("tickers"), dict) else {}
+    for sym, row in tickers.items():
+        if not isinstance(row, dict):
+            continue
+        u = str(sym or row.get("sym") or "").strip().upper()
+        if not u or not is_equity_symbol(u):
+            continue
+        g = str(row.get("group") or "").strip().lower()
+        if g not in by_g:
+            g = "3"
+        if u not in by_g[g]:
+            by_g[g].append(u)
+    return by_g
+
+
 def build_news_universe(*, equity_only: bool = True) -> Dict[str, Any]:
-    """Group1=portfolio, Group2=game_5m, Group3=union (temp until Nastya)."""
-    portfolio = _unique_upper(get_tickers_for_portfolio_game())
-    game5m = _unique_upper(get_tickers_game_5m())
-    if equity_only:
-        portfolio = [t for t in portfolio if is_equity_symbol(t)]
-        game5m = [t for t in game5m if is_equity_symbol(t)]
-    pset, gset = set(portfolio), set(game5m)
-    union = _unique_upper(portfolio + game5m)
+    """Notebook JSON groups first; optional config fallback for empty notebook."""
+    mode = (get_config_value("NOTEBOOK_NEWS_UNIVERSE", "notebook") or "notebook").strip().lower()
+    nb = _tickers_from_notebook_data()
+    g1, g2, g3, gn = nb.get("1") or [], nb.get("2") or [], nb.get("3") or [], nb.get("n") or []
+    notebook_union = _unique_upper(g1 + g2 + g3 + gn)
+
+    use_config_fallback = mode in ("config", "portfolio_5m", "legacy") or (
+        mode == "notebook" and not notebook_union
+    )
+    if use_config_fallback and not notebook_union:
+        portfolio = _unique_upper(get_tickers_for_portfolio_game())
+        game5m = _unique_upper(get_tickers_game_5m())
+        if equity_only:
+            portfolio = [t for t in portfolio if is_equity_symbol(t)]
+            game5m = [t for t in game5m if is_equity_symbol(t)]
+        g1, g2 = portfolio, game5m
+        g3, gn = [], []
+        union = _unique_upper(g1 + g2)
+        note = (
+            "Fallback: notebook_data без тикеров → portfolio ∪ GAME_5M. "
+            "Заполните группы в nastya/notebook/notebook_data.json (ответы Насти)."
+        )
+        source = "config_fallback"
+    elif mode in ("config", "portfolio_5m", "legacy"):
+        portfolio = _unique_upper(get_tickers_for_portfolio_game())
+        game5m = _unique_upper(get_tickers_game_5m())
+        if equity_only:
+            portfolio = [t for t in portfolio if is_equity_symbol(t)]
+            game5m = [t for t in game5m if is_equity_symbol(t)]
+        g1, g2 = portfolio, game5m
+        g3, gn = [], []
+        union = _unique_upper(g1 + g2)
+        note = "NOTEBOOK_NEWS_UNIVERSE=config: portfolio ∪ GAME_5M."
+        source = "config"
+    else:
+        union = notebook_union
+        note = (
+            "Universe из notebook_data.json (группы 1/2/3/n). "
+            "Списки уточняются у Насти — см. nastya/NOTEBOOK_QUESTIONS_FOR_NASTYA.md."
+        )
+        source = "notebook"
+
+    pset, gset, cset, nset = set(g1), set(g2), set(g3), set(gn)
     membership: Dict[str, List[str]] = {}
     for t in union:
         tags: List[str] = []
         if t in pset:
-            tags.append("portfolio")  # group 1
+            tags.append("g1")
         if t in gset:
-            tags.append("game_5m")  # group 2
+            tags.append("g2")
+        if t in cset:
+            tags.append("g3")
+        if t in nset:
+            tags.append("new")
+        if not tags:
+            tags = ["notebook"]
         membership[t] = tags
+
     return {
-        "group1_portfolio": portfolio,
-        "group2_game_5m": game5m,
+        "group1_portfolio": list(g1),
+        "group2_game_5m": list(g2),
+        "group3_candidates": list(g3),
+        "group_new": list(gn),
         "group3_union": union,
         "membership": membership,
-        "note_ru": (
-            "Временно: группа 3 = объединение portfolio ∪ GAME_5M (пересечения допустимы). "
-            "Финальные группы тетрадки — уточнить у Насти."
-        ),
+        "source": source,
+        "note_ru": note,
     }
+
+
+def format_digest_telegram(digest: Optional[Dict[str, Any]] = None, *, max_items: int = 4) -> str:
+    """Compact Telegram text from digest_latest (no LLM)."""
+    d = digest
+    if d is None:
+        d = load_latest_digest()
+    if not isinstance(d, dict):
+        return "Дайджест тетрадки ещё не собран. Дождитесь утреннего cron (~08:30 ET) или UI /notebook."
+    lines = [
+        f"Тетрадка · дайджест ({d.get('date') or '—'})",
+        f"filtered={d.get('filtered')} kept={d.get('kept')} trashed={d.get('trashed')}",
+        "",
+    ]
+
+    def _sec(title: str, key: str) -> None:
+        rows = d.get(key) if isinstance(d.get(key), list) else []
+        lines.append(f"{title} ({len(rows)})")
+        if not rows:
+            lines.append("  —")
+            return
+        for row in rows[:max_items]:
+            if not isinstance(row, dict):
+                continue
+            sym = row.get("sym") or "?"
+            text = str(row.get("text") or "").strip()
+            tac = re.sub(r"<[^>]+>", "", str(row.get("tac") or "")).strip()
+            lines.append(f"  • {sym}: {text[:180]}")
+            if tac:
+                lines.append(f"    → {tac[:160]}")
+        if len(rows) > max_items:
+            lines.append(f"  … ещё {len(rows) - max_items}")
+        lines.append("")
+
+    _sec("Сигналы", "signals")
+    _sec("Риски", "risks")
+    _sec("Макро", "macro")
+    _sec("Новые", "newtickers")
+    trash = str(d.get("trashNote") or "").strip()
+    if trash:
+        lines.append(f"Отсев: {trash[:300]}")
+    lines.append("Полный вид: /notebook → Дайджесты")
+    return "\n".join(lines).strip()
 
 
 def _parse_llm_json(text: str) -> Dict[str, Any]:

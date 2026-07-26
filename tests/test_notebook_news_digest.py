@@ -11,14 +11,36 @@ def test_build_news_universe_has_three_groups():
     assert "group1_portfolio" in uni
     assert "group2_game_5m" in uni
     assert "group3_union" in uni
+    assert uni.get("source") in ("notebook", "config", "config_fallback")
     u = set(uni["group3_union"])
-    assert u >= set(uni["group1_portfolio"])
-    assert u >= set(uni["group2_game_5m"])
-    # overlaps tagged
+    # Notebook samples include MSFT
+    if uni.get("source") == "notebook":
+        assert "MSFT" in u
     for t in uni["group3_union"]:
         tags = uni["membership"][t]
         assert tags
-        assert set(tags) <= {"portfolio", "game_5m"}
+        assert set(tags) <= {"g1", "g2", "g3", "new", "notebook"}
+
+
+def test_format_digest_telegram_empty():
+    from services.notebook_news_digest import format_digest_telegram
+
+    text = format_digest_telegram(
+        {
+            "date": "test",
+            "filtered": 2,
+            "kept": 1,
+            "trashed": 1,
+            "signals": [{"sym": "MSFT", "text": "Hello", "tac": "<b>Тактика:</b> Hold"}],
+            "risks": [],
+            "macro": [],
+            "newtickers": [],
+            "trashNote": "x",
+        }
+    )
+    assert "MSFT" in text
+    assert "Hold" in text
+    assert "Дайджесты" in text or "/notebook" in text
 
 
 def test_flatten_news_items():

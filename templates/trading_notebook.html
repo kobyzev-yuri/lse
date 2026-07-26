@@ -225,7 +225,8 @@
   <div id="content"><div class="card"><p class="note">Загрузка данных…</p></div></div>
 
   <footer>
-    Уровни Buy Dip / Sell — ручные (команда). Close — справочная цена из quotes (fallback yfinance), не авто-сигнал BUY.
+    Уровни Buy Dip / Sell — ручные (команда): правки в <code>nastya/notebook/notebook_data.json</code> → deploy; UI-редактор — позже (фаза D).
+    Close — справочная цена из quotes, не авто-сигнал BUY. План и вопросы Насте: docs/TRADING_NOTEBOOK.md.
     Отдельный UI от «Портфель · карточки» / коридоров / GAME_5M. Не является инвестиционной рекомендацией.
   </footer>
 </div>
@@ -547,8 +548,12 @@ function renderVerdict(d){
 }
 
 function digestItem(it, cls){
-  return `<div class="ditem ${cls}">
-    <span class="dsym">${esc(it.sym)}</span><span class="dsrc">${esc(it.src||"")}</span>
+  const sym = String(it.sym||"").toUpperCase();
+  const inData = !!DATA[sym];
+  const click = inData ? ` style="cursor:pointer" onclick="selectTicker('${esc(sym)}');selectTab('verdict')"` : "";
+  const openHint = inData ? `<span class="dlink" style="margin-left:8px">открыть в тетрадке</span>` : "";
+  return `<div class="ditem ${cls}"${click}>
+    <span class="dsym">${esc(it.sym)}</span><span class="dsrc">${esc(it.src||"")}</span>${openHint}
     <div class="dtext">${esc(it.text||"")}</div>
     ${it.prem?`<div class="dprem up">${esc(it.prem)}</div>`:""}
     <div class="dtac">${it.tac||""}</div>

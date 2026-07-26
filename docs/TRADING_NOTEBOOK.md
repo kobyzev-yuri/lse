@@ -1,67 +1,103 @@
-# Рабочая тетрадка
+# Рабочая тетрадка — план и вопросы Насте
 
-Отдельный UI для ручной дисциплины Насти: группы тикеров, заранее записанные уровни Buy Dip / Sell, вердикт по сравнению с live Close.
+Отдельный UI для ручной дисциплины: группы тикеров, заранее записанные уровни Buy Dip / Sell, вердикт по live Close. **Не смешивать** с GAME_5M / «Портфель · карточки» / коридорами.
 
-**Не смешивать** с GAME_5M, «Портфель · карточки» и «Анализ · коридоры» — другой визуальный язык и другая логика (ручной план, не интрадей-бот).
+**UI:** `/notebook` (в шапке сайта — «Тетрадка»).
 
-## URL
+Дубликат вопросов для копипаста в чат: [`nastya/NOTEBOOK_QUESTIONS_FOR_NASTYA.md`](../nastya/NOTEBOOK_QUESTIONS_FOR_NASTYA.md).
 
-| Путь | Назначение |
-|------|------------|
-| `/notebook` | Страница тетрадки |
-| `/api/notebook` | JSON: группы, тикеры, дайджест (`?prices=0` без Close) |
-| `/api/notebook/prices?tickers=MSFT,NBIS` | Только closes |
+---
 
-В общей шапке сайта — ссылка **Тетрадка**. На самой странице портфельных субтабов нет.
+## Вопросы Насте (нужны ответы, чтобы наполнить тетрадку)
 
-## Принцип
+### Группы и тикеры
 
-- Уровни вписываются **вручную** (команда) в JSON.
-- **Close** из `quotes` (fallback yfinance) — только справочная цена на карточке и во вкладке «Вердикт».
-- Вердикт **не** является авто-сигналом BUY: сравнивает Close с ручным Buy Dip / Sell + Environment / макро-гейты.
-- Дайджест: пайплайн SA Finance (RapidAPI) + LLM (ProxyAPI / Claude|GPT из config) → `local/notebook/digest_latest.json`; UI подхватывает поверх JSON-образца.
-- Инвестдома — пока вручную; email Seeking Alpha — отдельно.
+1. Финальный список тикеров по **Группам 1 / 2 / 3 / Новые** (или Excel) — что обязательно в тетрадке, что только Watchlist?
+2. Пересечения допустимы? (сейчас один тикер может быть и в portfolio, и в 5m.)
+3. «Новые стоки» — только Most Active / SA candidates, или ещё ручной список?
 
-## Новости → дайджест
+### Уровни и вердикт
 
-Схема как у остальных новостей LSE: **сначала `knowledge_base`**, дайджест — поверх выборки из Postgres. JSON `local/notebook/digest_latest.json` — только кэш для вкладки UI.
+4. Для ядра (хотя бы G1/G2): подтвердить **Buy Dip / Sell** (или «TBD, впишут Алексей/Настя»). MSFT **350 / 450** — ок?
+5. SNDK **+$250** / LITE **+$150** к входу — целевая прибыль или абсолютные уровни? Нужна ли колонка «вход факт»?
+6. Вердикт: достаточно Close vs уровни + env/макро-гейты, или ещё объём / RVOL / коридоры?
 
-Временно до уточнения групп у Насти:
+### Дайджест
 
-| Код | Состав |
-|-----|--------|
-| Group 1 | portfolio (`TRADING_CYCLE_TICKERS` или MEDIUM+LONG) |
-| Group 2 | GAME_5M (`GAME_5M_TICKERS` / `TICKERS_FAST`) |
-| Group 3 | **union** 1∪2 (пересечения ок, теги `portfolio` / `game_5m`) |
+7. Источник: **SA API (как сейчас)** достаточен, или обязателен именно **email 35–40 писем/день**?
+8. Хватает утреннего снимка **08:30 ET**, или нужен ещё вечерний / Telegram?
+9. Кому слать дайджест: только вкладка UI, или ещё Telegram (кому)? Команда `/digest` уже читает кэш без повторного LLM.
+10. «Новые тикеры» в дайджесте — сразу в Группу 3 с пустыми уровнями или только текст «к рассмотрению»?
 
-```bash
-# ключ RapidAPI в config.env: SEEKING_ALPHA_RAPIDAPI_KEY или RAPIDAPI_KEY
-python scripts/run_notebook_news_digest.py --universe-only
-python scripts/run_notebook_news_digest.py --tickers MSFT,SNDK --no-llm   # SA→KB→digest
-python scripts/run_notebook_news_digest.py --from-kb-only --no-llm        # только из KB
-python scripts/fetch_news_cron.py --mode sa                              # только ingest в KB
-```
+### Фундамент / инвестдома / окружение
 
-LLM: тот же `OPENAI_*` / `ANTHROPIC_MODEL` (ProxyAPI). Sentiment по SA-строкам — обычный `add_sentiment_to_news_cron` (как у RSS/NewsAPI).
+11. Фундамент (эталон NBIS): заполнять для всех G2 или только по запросу?
+12. Инвестдома: ручной ввод ОК или авто (какие дома/поля обязательны)?
+13. Environment (VIX, ФРС, понижения таргетов): кто обновляет и как часто?
 
-## Данные
+### Процесс
 
-Файл: [`nastya/notebook/notebook_data.json`](../nastya/notebook/notebook_data.json)
+14. Кто правит уровни день за днём — Настя / Алексей / оба? Нужен ли простой редактор в UI (фаза 2)? Спека: [`docs/NOTEBOOK_PHASE_D_EDITOR.md`](NOTEBOOK_PHASE_D_EDITOR.md).
+15. Flash Crash вне Watchlist: фиксируем правило как в шаблоне (уже на вкладке Watchlist) или откладываем?
 
-Образцы MVP:
+---
 
-- **MSFT** (G1): Buy Dip **$350**, Sell **$450**
-- **META** (G1): уровни TBD
-- **SNDK / LITE** (G2): ориентиры +$250 / +$150, помечены «уточнить»
-- **NBIS**: эталон секции **Фундамент** (кэш / FCF / долг / плюсы / риски)
+## Уже в проде
 
-Правки уровней: править JSON → commit → deploy. Редактор в UI — вне MVP.
+| Что | Где |
+|-----|-----|
+| UI групп / тикеров / вкладок | `/notebook` |
+| Образцы MSFT 350/450, META TBD, SNDK/LITE, NBIS фундамент | [`nastya/notebook/notebook_data.json`](../nastya/notebook/notebook_data.json) |
+| Close в вердикте | quotes → API |
+| SA новости → `knowledge_base` | cron `--mode sa` каждые 2 ч |
+| Утренний LLM-дайджест | будни **12:30 UTC ≈ 08:30 ET**, из KB |
+| Telegram `/digest` | кэш дайджеста, без повторного LLM |
 
-## Код
+Universe новостей/дайджеста берётся из тикеров в `notebook_data.json` (по группам). Пока списки-образцы; после ответа Насти — подставим её состав.
 
-- `services/trading_notebook.py` — load JSON, merge prices, overlay digest_latest
-- `services/seeking_alpha_finance.py` — RapidAPI SA Finance client
-- `services/notebook_news_digest.py` — universe + LLM digest
-- `scripts/run_notebook_news_digest.py` — CLI пайплайна
-- `templates/trading_notebook.html` — порт UI из Claude-шаблона
-- `docs/trading-notebook (3).html` — исходный дизайн-макет
+---
+
+## План реализации
+
+### Фаза A — после списков Насти
+
+- Заменить образцы в `notebook_data.json` на её G1/G2/G3/Новые + уровни.
+- Ingest/дайджест уже завязаны на этот JSON.
+- Обновить канон в этом документе.
+
+### Фаза B — дайджест
+
+- Сейчас: SA → KB → утренний LLM → UI + `/digest`.
+- Email 35–40 писем/день — только если подтвердит п.7.
+- Промпт тактики: Buy Dip / Hold / пауза (уже в системном промпте).
+
+### Фаза C — карточки
+
+- **Фундамент** (шаблон NBIS): кэш / FCF / долг / запас / плюсы / риски — заполнять вручную в JSON по ответу п.11.
+- **Инвестдома**: поля firm / rate / pt / quote / tac — вручную, пока нет ответа п.12.
+- **Environment**: lbl / state (ok\|mid\|bad) / st — вручную по п.13.
+
+### Фаза D — удобство (по запросу)
+
+- UI-редактор уровней — см. [`NOTEBOOK_PHASE_D_EDITOR.md`](NOTEBOOK_PHASE_D_EDITOR.md).
+- Flash Crash — вкладка Watchlist уже есть.
+- Связка дайджест → тикер в UI — по мере необходимости.
+
+### Вне плана
+
+- Смешение с GAME_5M / range-regime.
+- Авто-BUY по дайджесту или Close.
+
+---
+
+## Критерий «принята Настей»
+
+- Её группы и уровни на `/notebook`.
+- Утренний дайджест читабелен и совпадает с ожидаемой тактикой.
+- Понятно, кто обновляет уровни / env / дома без разработчика каждый день.
+
+## Код (справка)
+
+- `services/trading_notebook.py`, `services/seeking_alpha_finance.py`, `services/notebook_news_digest.py`
+- `scripts/run_notebook_news_digest.py`, `scripts/fetch_news_cron.py --mode sa`
+- `templates/trading_notebook.html`
