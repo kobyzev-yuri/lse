@@ -1,11 +1,7 @@
-"""Notebook news digest: portfolio ∪ GAME_5M → SA Finance → LLM (ProxyAPI).
+"""Notebook news digest: portfolio ∪ GAME_5M → SA Finance → knowledge_base → LLM.
 
-Temporary «group 3» = union of:
-  1) portfolio (TRADING_CYCLE / MEDIUM+LONG)
-  2) GAME_5M
-Overlaps allowed; membership tags kept. Nastya may redefine groups later.
-
-Digest shape matches nastya/notebook digest (signals / risks / macro / newtickers).
+Temporary «group 3» = union of portfolio + GAME_5M. News stored in knowledge_base
+(same pattern as Yahoo/Marketaux). Digest JSON is only a UI cache for /notebook.
 """
 
 from __future__ import annotations
@@ -19,7 +15,11 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 
 from config_loader import get_config_value
 from services.earnings_intelligence_universe import is_equity_symbol
-from services.seeking_alpha_finance import fetch_news_for_tickers
+from services.seeking_alpha_finance import (
+    KB_SOURCE,
+    fetch_and_save_sa_news,
+    load_kb_news_items,
+)
 from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_game_5m
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ DEFAULT_DIGEST_PATH = DEFAULT_OUT_DIR / "digest_latest.json"
 DEFAULT_RAW_PATH = DEFAULT_OUT_DIR / "news_raw_latest.json"
 
 DIGEST_SYSTEM = """Ты — редактор утреннего дайджеста для торговой «Рабочей тетрадки».
-Вход: список новостей Seeking Alpha по тикерам портфеля и игры 5m.
+Вход: список новостей из knowledge_base LSE (в основном Seeking Alpha Finance) по тикерам портфеля и игры 5m.
 Задача: отсеять шум (кликбейт, повторы без конкретики) и разложить остаток по корзинам ТЗ.
 
 Верни ТОЛЬКО JSON-объект без markdown:
@@ -184,13 +184,16 @@ def run_notebook_news_digest(
     sleep_sec: Optional[float] = None,
     use_llm: bool = True,
     write: bool = True,
+    fetch_sa: bool = True,
+    save_kb: bool = True,
+    from_kb: bool = True,
+    lookback_hours: Optional[int] = None,
     out_digest: Optional[Path] = None,
     out_raw: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Fetch SA news for universe and optionally LLM-build notebook digest."""
+    """SA fetch → knowledge_base → LLM digest (JSON cache for /notebook UI)."""
     uni = build_news_universe(equity_only=True)
     wanted = _unique_upper(tickers) if tickers else list(uni["group3_union"])
-    # keep membership for requested set
     membership = {t: uni["membership"].get(t, []) for t in wanted}
     for t in wanted:
         if t not in membership or not membership[t]:
@@ -202,14 +205,72 @@ def run_notebook_news_digest(
         raw_mx = (get_config_value("NOTEBOOK_NEWS_MAX_TICKERS", "") or "").strip()
         mx = int(raw_mx) if raw_mx.isdigit() else None
     sl = float(sleep_sec if sleep_sec is not None else (get_config_value("NOTEBOOK_NEWS_SLEEP_SEC", "0.35") or 0.35))
-
-    raw_bundle = fetch_news_for_tickers(
-        wanted,
-        per_ticker=per,
-        sleep_sec=sl,
-        max_tickers=mx,
+    lb = int(
+        lookback_hours
+        if lookback_hours is not None
+        else (get_config_value("NOTEBOOK_NEWS_KB_LOOKBACK_HOURS", "72") or 72)
     )
-    items = raw_bundle.get("items") or []
+    # Default: only SA Finance rows. NOTEBOOK_NEWS_KB_ALL_SOURCES=1 → any NEWS for tickers.
+    if (get_config_value("NOTEBOOK_NEWS_KB_ALL_SOURCES", "") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        kb_src: Optional[str] = None
+    else:
+        kb_src = (get_config_value("NOTEBOOK_NEWS_KB_SOURCE", KB_SOURCE) or KB_SOURCE).strip() or KB_SOURCE
+
+    requested = wanted[: mx or len(wanted)]
+    fetch_meta: Dict[str, Any] = {"skipped": not fetch_sa}
+    kb_inserted = 0
+    api_items: List[Dict[str, Any]] = []
+
+    if fetch_sa:
+        if save_kb:
+            bundle = fetch_and_save_sa_news(
+                requested,
+                per_ticker=per,
+                sleep_sec=sl,
+                max_tickers=None,
+            )
+            kb_inserted = int(bundle.get("kb_inserted") or 0)
+            api_items = list(bundle.get("items") or [])
+            fetch_meta = {
+                "fetched_at": bundle.get("fetched_at"),
+                "api_item_count": len(api_items),
+                "errors": bundle.get("errors") or {},
+                "kb_inserted": kb_inserted,
+                "kb_error": bundle.get("kb_error"),
+            }
+        else:
+            from services.seeking_alpha_finance import fetch_news_for_tickers
+
+            bundle = fetch_news_for_tickers(requested, per_ticker=per, sleep_sec=sl)
+            api_items = list(bundle.get("items") or [])
+            fetch_meta = {
+                "fetched_at": bundle.get("fetched_at"),
+                "api_item_count": len(api_items),
+                "errors": bundle.get("errors") or {},
+                "kb_inserted": 0,
+                "note": "save_kb=false",
+            }
+
+    items: List[Dict[str, Any]] = []
+    if from_kb:
+        try:
+            items = load_kb_news_items(
+                requested,
+                lookback_hours=lb,
+                source=kb_src,
+                limit=max(20, per * max(1, len(requested))),
+            )
+        except Exception as e:
+            logger.exception("KB load for digest failed: %s", e)
+            fetch_meta["kb_load_error"] = str(e)
+            items = api_items  # fallback to API payload
+    else:
+        items = api_items
+
     filtered = len(items)
 
     if use_llm and items:
@@ -220,9 +281,8 @@ def run_notebook_news_digest(
             digest_body = _empty_digest(filtered=filtered, note=f"LLM ошибка: {e}")
             digest_body["llm_error"] = str(e)
     elif use_llm and not items:
-        digest_body = _empty_digest(filtered=0, note="Пустой fetch — LLM не вызывался.")
+        digest_body = _empty_digest(filtered=0, note="Пустой KB/fetch — LLM не вызывался.")
     else:
-        # No LLM: naive keep all as signals (debug)
         digest_body = _empty_digest(filtered=filtered, note="LLM отключён — сырой список в signals.")
         digest_body["kept"] = filtered
         digest_body["trashed"] = 0
@@ -238,7 +298,6 @@ def run_notebook_news_digest(
             for it in items
         ]
 
-    # Normalize counts if model omitted
     if "filtered" not in digest_body:
         digest_body["filtered"] = filtered
     digest = {
@@ -262,12 +321,19 @@ def run_notebook_news_digest(
         "schema_version": 1,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "universe": uni,
-        "requested_tickers": wanted[: mx or len(wanted)],
+        "requested_tickers": requested,
+        "pipeline": {
+            "fetch_sa": fetch_sa,
+            "save_kb": save_kb,
+            "from_kb": from_kb,
+            "kb_source": kb_src,
+            "lookback_hours": lb,
+            "kb_inserted": kb_inserted,
+        },
         "raw": {
-            "fetched_at": raw_bundle.get("fetched_at"),
+            **fetch_meta,
             "item_count": filtered,
-            "errors": raw_bundle.get("errors") or {},
-            "by_ticker_counts": {k: len(v or []) for k, v in (raw_bundle.get("by_ticker") or {}).items()},
+            "items_from": "knowledge_base" if from_kb and not fetch_meta.get("kb_load_error") else "api",
         },
         "digest": digest,
         "items_sample": items[:20],
@@ -278,15 +344,24 @@ def run_notebook_news_digest(
         rpath = out_raw or DEFAULT_RAW_PATH
         dpath.parent.mkdir(parents=True, exist_ok=True)
         rpath.parent.mkdir(parents=True, exist_ok=True)
-        dpath.write_text(json.dumps({"digest": digest, "universe": uni, "generated_at_utc": result["generated_at_utc"]}, ensure_ascii=False, indent=2), encoding="utf-8")
-        # raw can be large — store compact items + errors
+        dpath.write_text(
+            json.dumps(
+                {
+                    "digest": digest,
+                    "universe": uni,
+                    "generated_at_utc": result["generated_at_utc"],
+                    "pipeline": result["pipeline"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         rpath.write_text(
             json.dumps(
                 {
-                    "fetched_at": raw_bundle.get("fetched_at"),
+                    "raw": result["raw"],
                     "items": items,
-                    "errors": raw_bundle.get("errors"),
-                    "by_ticker_counts": result["raw"]["by_ticker_counts"],
                 },
                 ensure_ascii=False,
                 indent=2,

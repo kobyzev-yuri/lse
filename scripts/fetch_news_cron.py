@@ -49,7 +49,7 @@ def fetch_all_news_sources(mode: str = "all"):
     logger.info("=" * 60)
     
     mode = (mode or "all").strip().lower()
-    if mode not in ("all", "core", "core-fast", "newsapi", "investing", "tickers"):
+    if mode not in ("all", "core", "core-fast", "newsapi", "investing", "tickers", "sa"):
         mode = "all"
 
     sources_status = {}
@@ -58,11 +58,13 @@ def fetch_all_news_sources(mode: str = "all"):
     n_investing = 0
     ticker_news_saved = 0
     yfinance_earnings_saved = 0
+    sa_news_saved = 0
 
     run_investing = mode in ("all", "investing")
     run_core_fast = mode in ("all", "core", "core-fast")
     run_newsapi = mode in ("all", "core", "newsapi")
     run_tickers = mode in ("all", "core", "tickers")
+    run_sa = mode in ("all", "sa")
 
     if run_core_fast:
         # 1. RSS фиды центральных банков (всегда работает, бесплатно)
@@ -145,6 +147,42 @@ def fetch_all_news_sources(mode: str = "all"):
             logger.error("❌ Ошибка ticker news: %s", e)
             sources_status["TickerNews"] = f"❌ Ошибка: {e}"
 
+    if run_sa:
+        try:
+            logger.info("\n📰 Источник SA: Seeking Alpha Finance → knowledge_base")
+            from services.notebook_news_digest import build_news_universe
+            from services.seeking_alpha_finance import fetch_and_save_sa_news, rapidapi_key
+
+            if not rapidapi_key():
+                sources_status["SeekingAlphaFinance"] = "⚠️ нет SEEKING_ALPHA_RAPIDAPI_KEY / RAPIDAPI_KEY"
+            else:
+                uni = build_news_universe(equity_only=True)
+                tickers = list(uni.get("group3_union") or [])
+                try:
+                    per = int((get_config_value("NOTEBOOK_NEWS_PER_TICKER", "5") or "5").strip())
+                except (ValueError, TypeError):
+                    per = 5
+                try:
+                    sleep = float((get_config_value("NOTEBOOK_NEWS_SLEEP_SEC", "0.35") or "0.35").strip())
+                except (ValueError, TypeError):
+                    sleep = 0.35
+                raw_mx = (get_config_value("NOTEBOOK_NEWS_MAX_TICKERS", "") or "").strip()
+                max_t = int(raw_mx) if raw_mx.isdigit() else None
+                bundle = fetch_and_save_sa_news(
+                    tickers,
+                    per_ticker=per,
+                    sleep_sec=sleep,
+                    max_tickers=max_t,
+                )
+                sa_news_saved = int(bundle.get("kb_inserted") or 0)
+                err_n = len(bundle.get("errors") or {})
+                sources_status["SeekingAlphaFinance"] = (
+                    f"✅ KB +{sa_news_saved}, api_items={len(bundle.get('items') or [])}, errors={err_n}"
+                )
+        except Exception as e:
+            logger.error("❌ Ошибка Seeking Alpha Finance: %s", e)
+            sources_status["SeekingAlphaFinance"] = f"❌ Ошибка: {e}"
+
     if run_investing:
         # 4. Investing.com Economic Calendar (JSON API по умолчанию; legacy HTML — INVESTING_CALENDAR_USE_HTML)
         try:
@@ -180,7 +218,9 @@ def fetch_all_news_sources(mode: str = "all"):
             sources_status['Investing.com News'] = f'❌ Ошибка: {e}'
 
     # Итоговый отчет
-    total_new = rss_saved + newsapi_saved + n_investing + ticker_news_saved + yfinance_earnings_saved
+    total_new = (
+        rss_saved + newsapi_saved + n_investing + ticker_news_saved + yfinance_earnings_saved + sa_news_saved
+    )
     logger.info("\n" + "=" * 60)
     logger.info("📊 Итоговый статус источников:")
     for source, status in sources_status.items():
@@ -194,9 +234,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fetch news from sources")
     parser.add_argument(
         "--mode",
-        choices=("all", "core", "core-fast", "newsapi", "investing", "tickers"),
+        choices=("all", "core", "core-fast", "newsapi", "investing", "tickers", "sa"),
         default="all",
-        help="all=все источники, core=RSS+AlphaVantage+NewsAPI+TickerNews, core-fast=RSS+AlphaVantage, newsapi=только NewsAPI, investing=только Investing, tickers=Yahoo+Marketaux merge",
+        help="all=все (+SA если ключ), core=RSS+AV+NewsAPI+TickerNews, core-fast=RSS+AV, newsapi, investing, tickers=Yahoo+Marketaux, sa=Seeking Alpha Finance→KB",
     )
     args = parser.parse_args()
     try:

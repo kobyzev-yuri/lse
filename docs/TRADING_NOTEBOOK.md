@@ -24,6 +24,8 @@
 
 ## Новости → дайджест
 
+Схема как у остальных новостей LSE: **сначала `knowledge_base`**, дайджест — поверх выборки из Postgres. JSON `local/notebook/digest_latest.json` — только кэш для вкладки UI.
+
 Временно до уточнения групп у Насти:
 
 | Код | Состав |
@@ -35,11 +37,12 @@
 ```bash
 # ключ RapidAPI в config.env: SEEKING_ALPHA_RAPIDAPI_KEY или RAPIDAPI_KEY
 python scripts/run_notebook_news_digest.py --universe-only
-python scripts/run_notebook_news_digest.py --tickers MSFT,SNDK --no-llm   # fetch only
-python scripts/run_notebook_news_digest.py --max-tickers 8                # + LLM digest
+python scripts/run_notebook_news_digest.py --tickers MSFT,SNDK --no-llm   # SA→KB→digest
+python scripts/run_notebook_news_digest.py --from-kb-only --no-llm        # только из KB
+python scripts/fetch_news_cron.py --mode sa                              # только ingest в KB
 ```
 
-LLM: тот же `OPENAI_*` / `ANTHROPIC_MODEL` (ProxyAPI). Выход дайджеста: signals / risks / macro / newtickers (+ trashNote), как во вкладке «Дайджесты».
+LLM: тот же `OPENAI_*` / `ANTHROPIC_MODEL` (ProxyAPI). Sentiment по SA-строкам — обычный `add_sentiment_to_news_cron` (как у RSS/NewsAPI).
 
 ## Данные
 

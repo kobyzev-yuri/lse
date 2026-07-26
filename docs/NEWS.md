@@ -20,7 +20,8 @@
 |---------|-----------|
 | **Экономический календарь Investing.com** | JSON API (`investing_calendar_api.py`), как NYSE; `save_events_to_db` и дедуп по `external_id`. См. `services/kb_extended_fields.py`, `services/investing_calendar_parser.py`. |
 | **Тикерные новости (как в NYSE `news_merge`)** | Модуль `services/ticker_news_merge_fetcher.py`: **Yahoo** (`yfinance.get_news`) + опционально **Marketaux** при `MARKETAUX_API_KEY`; merge/dedup; вставка с `external_id` / `content_sha256` / `raw_payload`. |
-| **Оркестратор** | `scripts/fetch_news_cron.py`: режимы `--mode tickers` (только TickerNews), `core` и `all` включают TickerNews; `core-fast` — RSS + Alpha Vantage + **календарь earnings Yahoo (yfinance)** **без** TickerNews. |
+| **Seeking Alpha Finance (тетрадка)** | `services/seeking_alpha_finance.py` → `knowledge_base` (`source='Seeking Alpha Finance'`); дайджест UI — `services/notebook_news_digest.py` читает KB + LLM. Cron: `fetch_news_cron.py --mode sa`. |
+| **Оркестратор** | `scripts/fetch_news_cron.py`: режимы `--mode tickers` (только TickerNews), `sa` (SA→KB), `core` и `all` включают TickerNews (+ SA в `all` при ключе); `core-fast` — RSS + Alpha Vantage + **календарь earnings Yahoo (yfinance)** **без** TickerNews. |
 | **Ключи и конфиг** | Имена `NEWSAPI_KEY`, `ALPHAVANTAGE_KEY`, `MARKETAUX_API_KEY` согласованы с NYSE; опционально `NYSE_CONFIG_PATH` подмешивает пустые ключи из `nyse/config.env` (`config_loader.py`). Шпаргалка — в `config.env.example` (блок «News: источники…»). |
 | **Диагностика** | `scripts/check_news_sources.py` показывает наличие ключа Marketaux и `NYSE_CONFIG_PATH`. |
 

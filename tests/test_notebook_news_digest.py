@@ -44,6 +44,26 @@ def test_flatten_news_items():
     assert "99" in rows[0]["link"]
 
 
+def test_items_to_kb_articles():
+    from services.seeking_alpha_finance import items_to_kb_articles
+
+    items = [
+        {
+            "id": "4618440",
+            "ticker": "MSFT",
+            "publishOn": "2026-07-26T10:31:29-04:00",
+            "title": "UBS on AI",
+            "summary_text": "Body text",
+            "link": "https://seekingalpha.com/news/4618440",
+        }
+    ]
+    arts = items_to_kb_articles(items)
+    assert len(arts) == 1
+    assert arts[0].symbol == "MSFT"
+    assert arts[0].source == "Seeking Alpha Finance"
+    assert len(arts[0].external_id_raw) >= 24
+
+
 def test_parse_llm_json_fenced():
     text = '```json\n{"filtered": 3, "kept": 1, "trashed": 2, "signals": [], "risks": [], "macro": [], "newtickers": [], "trashNote": "x"}\n```'
     obj = _parse_llm_json(text)
