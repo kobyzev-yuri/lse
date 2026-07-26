@@ -31,7 +31,8 @@ DEFAULT_DIGEST_PATH = DEFAULT_OUT_DIR / "digest_latest.json"
 DEFAULT_RAW_PATH = DEFAULT_OUT_DIR / "news_raw_latest.json"
 
 DIGEST_SYSTEM = """Ты — редактор утреннего дайджеста для торговой «Рабочей тетрадки».
-Вход: список новостей из knowledge_base LSE (Seeking Alpha Finance и др.) по тикерам тетрадки.
+Вход: список новостей из knowledge_base LSE (Seeking Alpha, Yahoo, Investing, Reuters и др.) по тикерам тетрадки.
+Повторы между источниками уже частично сняты кодом; оставшиеся дубли одной истории тоже схлопывай.
 Задача: отсеять шум (кликбейт, повторы без конкретики) и разложить остаток по корзинам ТЗ.
 
 Верни ТОЛЬКО JSON-объект без markdown:
@@ -49,8 +50,9 @@ DIGEST_SYSTEM = """Ты — редактор утреннего дайджест
 Правила:
 - signals: позитивные/нейтрально-полезные катализаторы по нашим тикерам; tac в терминах тетрадки (Buy Dip / Hold / пауза / ждать уровень).
 - risks: угрозы, даунсайд; tac часто Hold / не докупать / стоп-наблюдение.
-- macro: ФРС, сектор AI, широкие тренды; tac = влияние на Environment Check.
+- macro: ФРС, сектор AI, геополитика, широкие тренды; tac = влияние на Environment Check.
 - newtickers: имена НЕ из текущего списка тетрадки — кандидат «к рассмотрению» (не авто-добавление в группу).
+- Одна история из нескольких источников → ОДИН пункт; в src — основной источник.
 - text: 1–2 предложения по-русски.
 - Не выдумывай новости: только из входа. Если данных мало — пустые массивы ок.
 - Отсев 50–70% шума — норма.
@@ -67,6 +69,107 @@ def _unique_upper(seq: Sequence[str]) -> List[str]:
         seen.add(u)
         out.append(u)
     return out
+
+
+def _truthy_cfg(name: str, default: str = "0") -> bool:
+    return (get_config_value(name, default) or default).strip().lower() in ("1", "true", "yes", "on")
+
+
+_SOURCE_RANK = {
+    "seeking alpha finance": 0,
+    "seeking alpha": 1,
+    "reuters": 2,
+    "bloomberg": 3,
+    "the wall street journal": 4,
+    "barrons.com": 5,
+    "yahoo finance": 10,
+    "investing.com": 11,
+    "investing.com news": 11,
+}
+
+
+def _norm_link(url: str) -> str:
+    s = (url or "").strip().lower()
+    if not s:
+        return ""
+    for prefix in ("https://", "http://"):
+        if s.startswith(prefix):
+            s = s[len(prefix) :]
+            break
+    if s.startswith("www."):
+        s = s[4:]
+    s = s.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    return s
+
+
+def _norm_title(title: str) -> str:
+    t = (title or "").strip().lower()
+    t = re.sub(r"[^\w\s]+", " ", t, flags=re.UNICODE)
+    return " ".join(t.split())
+
+
+def _source_rank(src: str) -> int:
+    return _SOURCE_RANK.get((src or "").strip().lower(), 50)
+
+
+def dedupe_news_items(items: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop cross-source repeats: same link, or same ticker+normalized title.
+
+    Keeps the better source (SA/wire preferred) and longer summary when tied.
+    """
+
+    def _score(it: Dict[str, Any]) -> tuple:
+        return (
+            -_source_rank(str(it.get("src") or "")),
+            len(str(it.get("summary_text") or "")),
+        )
+
+    # Pass 1: group by keys, pick winner per group, then merge overlapping groups.
+    groups: List[Dict[str, Any]] = []  # {keys: set, item: dict}
+
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        link_k = _norm_link(str(it.get("link") or ""))
+        sym = str(it.get("ticker") or "").strip().upper()
+        title_k = _norm_title(str(it.get("title") or ""))
+        keys: Set[str] = set()
+        if link_k:
+            keys.add(f"url:{link_k}")
+        if sym and title_k:
+            keys.add(f"tt:{sym}|{title_k}")
+        if not keys:
+            keys.add(f"id:{it.get('id') or it.get('kb_id') or id(it)}")
+
+        hit_idx = None
+        for i, g in enumerate(groups):
+            if keys & g["keys"]:
+                hit_idx = i
+                break
+        if hit_idx is None:
+            groups.append({"keys": set(keys), "item": dict(it)})
+            continue
+        g = groups[hit_idx]
+        g["keys"] |= keys
+        if _score(it) > _score(g["item"]):
+            g["item"] = dict(it)
+        # Merge any other groups that now overlap (rare title/url chain)
+        changed = True
+        while changed:
+            changed = False
+            for j in range(len(groups) - 1, -1, -1):
+                if j == hit_idx:
+                    continue
+                if groups[j]["keys"] & groups[hit_idx]["keys"]:
+                    other = groups.pop(j)
+                    if j < hit_idx:
+                        hit_idx -= 1
+                    groups[hit_idx]["keys"] |= other["keys"]
+                    if _score(other["item"]) > _score(groups[hit_idx]["item"]):
+                        groups[hit_idx]["item"] = other["item"]
+                    changed = True
+
+    return [g["item"] for g in groups]
 
 
 def _tickers_from_notebook_data() -> Dict[str, List[str]]:
@@ -321,17 +424,19 @@ def run_notebook_news_digest(
         if lookback_hours is not None
         else (get_config_value("NOTEBOOK_NEWS_KB_LOOKBACK_HOURS", "72") or 72)
     )
-    # Default: only SA Finance rows. NOTEBOOK_NEWS_KB_ALL_SOURCES=1 → any NEWS for tickers.
-    if (get_config_value("NOTEBOOK_NEWS_KB_ALL_SOURCES", "") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    ):
+    # Default: all NEWS sources in KB (Yahoo/Marketaux/Investing/SA/…).
+    # NOTEBOOK_NEWS_KB_ALL_SOURCES=0 → only NOTEBOOK_NEWS_KB_SOURCE (default SA).
+    if _truthy_cfg("NOTEBOOK_NEWS_KB_ALL_SOURCES", "1"):
         kb_src: Optional[str] = None
     else:
         kb_src = (get_config_value("NOTEBOOK_NEWS_KB_SOURCE", KB_SOURCE) or KB_SOURCE).strip() or KB_SOURCE
 
     requested = wanted[: mx or len(wanted)]
+    kb_tickers = list(requested)
+    include_macro = _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_MACRO", "1")
+    if include_macro and "MACRO" not in kb_tickers:
+        kb_tickers.append("MACRO")
+
     fetch_meta: Dict[str, Any] = {"skipped": not fetch_sa}
     kb_inserted = 0
     api_items: List[Dict[str, Any]] = []
@@ -366,14 +471,19 @@ def run_notebook_news_digest(
                 "note": "save_kb=false",
             }
 
+    raw_count = 0
+    deduped_drop = 0
     items: List[Dict[str, Any]] = []
     if from_kb:
         try:
+            # Wider cap when multi-source: more rows before dedupe.
+            lim = max(40, per * max(1, len(kb_tickers)) * (3 if kb_src is None else 1))
+            lim = min(lim, 400)
             items = load_kb_news_items(
-                requested,
+                kb_tickers,
                 lookback_hours=lb,
                 source=kb_src,
-                limit=max(20, per * max(1, len(requested))),
+                limit=lim,
             )
         except Exception as e:
             logger.exception("KB load for digest failed: %s", e)
@@ -382,7 +492,13 @@ def run_notebook_news_digest(
     else:
         items = api_items
 
+    raw_count = len(items)
+    items = dedupe_news_items(items)
+    deduped_drop = max(0, raw_count - len(items))
     filtered = len(items)
+    fetch_meta["raw_item_count"] = raw_count
+    fetch_meta["deduped_drop"] = deduped_drop
+    fetch_meta["item_count_after_dedupe"] = filtered
 
     if use_llm and items:
         try:
@@ -437,9 +553,12 @@ def run_notebook_news_digest(
             "fetch_sa": fetch_sa,
             "save_kb": save_kb,
             "from_kb": from_kb,
-            "kb_source": kb_src,
+            "kb_source": kb_src or "ALL",
+            "include_macro": include_macro,
             "lookback_hours": lb,
             "kb_inserted": kb_inserted,
+            "deduped_drop": deduped_drop,
+            "raw_item_count": raw_count,
         },
         "raw": {
             **fetch_meta,

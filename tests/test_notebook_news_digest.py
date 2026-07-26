@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from services.notebook_news_digest import _parse_llm_json, build_news_universe
+from services.notebook_news_digest import (
+    _parse_llm_json,
+    build_news_universe,
+    dedupe_news_items,
+)
 from services.seeking_alpha_finance import flatten_news_items
 
 
@@ -91,3 +95,45 @@ def test_parse_llm_json_fenced():
     obj = _parse_llm_json(text)
     assert obj["filtered"] == 3
     assert obj["kept"] == 1
+
+
+def test_dedupe_news_items_by_link_and_title():
+    items = [
+        {
+            "id": "1",
+            "ticker": "INTC",
+            "title": "Intel's CapEx Increase Positive for Foundry",
+            "summary_text": "short",
+            "link": "https://seekingalpha.com/news/4618091?utm=x",
+            "src": "Yahoo Finance",
+        },
+        {
+            "id": "2",
+            "ticker": "INTC",
+            "title": "Intel's CapEx Increase Positive for Foundry",
+            "summary_text": "longer body from SA about fabs and Wedbush",
+            "link": "https://www.seekingalpha.com/news/4618091",
+            "src": "Seeking Alpha Finance",
+        },
+        {
+            "id": "3",
+            "ticker": "MSFT",
+            "title": "Different story",
+            "summary_text": "ok",
+            "link": "https://example.com/a",
+            "src": "Motley Fool",
+        },
+        {
+            "id": "4",
+            "ticker": "INTC",
+            "title": "Intel's capex increase positive for foundry!!!",
+            "summary_text": "yahoo rewrite",
+            "link": "https://finance.yahoo.com/news/other-url",
+            "src": "Yahoo Finance",
+        },
+    ]
+    out = dedupe_news_items(items)
+    assert len(out) == 2
+    by_sym = {x["ticker"]: x for x in out}
+    assert by_sym["INTC"]["src"] == "Seeking Alpha Finance"
+    assert by_sym["MSFT"]["id"] == "3"
