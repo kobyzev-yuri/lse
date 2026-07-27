@@ -1247,7 +1247,7 @@ async def options_money_map_page(request: Request):
 
 @app.get("/options/tools", response_class=HTMLResponse)
 async def options_tools_page(request: Request):
-    """Option chain sentiment (Polygon/yfinance) + Put / Put Spread calculator."""
+    """Option chain sentiment + Put / Put Spread calculator (yfinance)."""
     ctx = {"request": request}
     ctx.update(await asyncio.to_thread(_options_tickers_page_context))
     return HTMLResponse(
@@ -1329,45 +1329,47 @@ async def api_options_tickers():
 
 
 @app.get("/api/options/expirations/{ticker}", response_class=JSONResponse)
-async def api_options_expirations(ticker: str, source: str = "polygon"):
-    from services.polygon_options import fetch_option_expiration_dates, polygon_options_available
+async def api_options_expirations(ticker: str, source: str = "yfinance"):
     from services.yfinance_options import fetch_yfinance_option_expirations
 
     t = (ticker or "").strip().upper()
     if not t:
         raise HTTPException(status_code=400, detail="ticker required")
-    src = (source or "polygon").strip().lower()
-    if src == "yfinance":
-        exps = await asyncio.to_thread(fetch_yfinance_option_expirations, t)
-        return {"ticker": t, "source": "yfinance", "expirations": exps}
-    if not polygon_options_available():
-        return {"ticker": t, "source": "polygon", "expirations": [], "error": "POLYGON_API_KEY not configured"}
-    exps = await asyncio.to_thread(fetch_option_expiration_dates, t)
-    return {"ticker": t, "source": "polygon", "expirations": exps}
+    src = (source or "yfinance").strip().lower()
+    if src != "yfinance":
+        return {
+            "ticker": t,
+            "source": src,
+            "expirations": [],
+            "error": "только yfinance (polygon отключён в /options/tools)",
+        }
+    exps = await asyncio.to_thread(fetch_yfinance_option_expirations, t)
+    return {"ticker": t, "source": "yfinance", "expirations": exps}
 
 
 @app.get("/api/options/sentiment/{ticker}", response_class=JSONResponse)
-async def api_options_sentiment(ticker: str, expiration_date: Optional[str] = None, source: str = "polygon"):
-    from services.options_chain_sentiment import (
-        build_chain_sentiment_report,
-        build_yfinance_chain_sentiment_report,
-    )
+async def api_options_sentiment(ticker: str, expiration_date: Optional[str] = None, source: str = "yfinance"):
+    from services.options_chain_sentiment import build_yfinance_chain_sentiment_report
 
     t = (ticker or "").strip().upper()
     if not t:
         raise HTTPException(status_code=400, detail="ticker required")
-    src = (source or "polygon").strip().lower()
+    src = (source or "yfinance").strip().lower()
+    if src != "yfinance":
+        return _to_jsonable(
+            {
+                "status": "error",
+                "ticker": t,
+                "source": src,
+                "error": "только yfinance (polygon отключён в /options/tools)",
+            }
+        )
     try:
-        if src == "yfinance":
-            payload = await asyncio.to_thread(
-                build_yfinance_chain_sentiment_report,
-                t,
-                expiration_date=expiration_date or None,
-            )
-        else:
-            payload = await asyncio.to_thread(
-                build_chain_sentiment_report, t, expiration_date=expiration_date or None
-            )
+        payload = await asyncio.to_thread(
+            build_yfinance_chain_sentiment_report,
+            t,
+            expiration_date=expiration_date or None,
+        )
         return _to_jsonable(payload)
     except Exception as e:
         logger.exception("api_options_sentiment %s source=%s", t, src)
@@ -1418,22 +1420,10 @@ async def api_options_calculator_polygon_prefill(
     expiration_date: Optional[str] = None,
     strategy: str = "pure_put",
 ):
-    """Spot + страйки/премии из Polygon snapshot для калькулятора."""
-    from services.options_calculator_prefill import fetch_calculator_polygon_prefill
-
-    t = (ticker or "").strip().upper()
-    if not t:
-        raise HTTPException(status_code=400, detail="ticker required")
-    strat = (strategy or "pure_put").strip().lower()
-    if strat not in ("pure_put", "put_spread"):
-        raise HTTPException(status_code=400, detail="strategy must be pure_put or put_spread")
-    return _to_jsonable(
-        await asyncio.to_thread(
-            fetch_calculator_polygon_prefill,
-            t,
-            expiration_date=expiration_date or None,
-            strategy=strat,
-        )
+    """Устарело: в /options/tools оставлен только yfinance."""
+    raise HTTPException(
+        status_code=410,
+        detail="polygon-prefill отключён; используйте /api/options/calculator/yfinance-prefill/{ticker}",
     )
 
 
@@ -1464,7 +1454,7 @@ async def api_options_calculator_yfinance_prefill(
 
 @app.get("/api/options/calculator/calendar/{ticker}", response_class=JSONResponse)
 async def api_options_calculator_calendar(ticker: str):
-    """Earnings из knowledge_base; экспирация — Polygon reference (если ключ есть)."""
+    """Earnings из knowledge_base; экспирация — yfinance option dates."""
     from services.options_calculator_prefill import load_ticker_earnings_calendar
 
     t = (ticker or "").strip().upper()
@@ -1475,7 +1465,7 @@ async def api_options_calculator_calendar(ticker: str):
 
 @app.get("/api/options/calculator/examples", response_class=JSONResponse)
 async def api_options_calculator_examples():
-    """Демо-пресеты для калькулятора (без Polygon)."""
+    """Демо-пресеты для калькулятора."""
     from services.options_calculator import list_calculator_demo_examples
 
     return _to_jsonable({"examples": list_calculator_demo_examples()})
@@ -4098,6 +4088,42 @@ async def api_notebook_ticker_consensus(sym: str, request: Request):
     except Exception as e:
         logger.exception("PATCH /api/notebook/tickers/%s/consensus: %s", sym, e)
         raise HTTPException(status_code=500, detail=f"Ошибка notebook consensus: {e!s}")
+
+
+@app.post("/api/notebook/tickers/{sym}/houses/refresh", response_class=JSONResponse)
+async def api_notebook_ticker_houses_refresh(sym: str, request: Request):
+    """Обновить houses + consensus с stockanalysis.com → overlay."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    updated_by = str(body.get("updated_by") or body.get("updatedBy") or "notebook-ui")[:80]
+    limit = body.get("limit", 12)
+    try:
+        limit_i = int(limit)
+    except (TypeError, ValueError):
+        limit_i = 12
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import refresh_ticker_houses_from_stockanalysis
+
+        return refresh_ticker_houses_from_stockanalysis(
+            sym, limit=limit_i, updated_by=updated_by
+        )
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("POST /api/notebook/tickers/%s/houses/refresh: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка stockanalysis houses: {e!s}")
 
 
 @app.patch("/api/notebook/tickers/{sym}/profile", response_class=JSONResponse)

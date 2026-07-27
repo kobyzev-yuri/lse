@@ -106,7 +106,7 @@ def fetch_spot_yfinance(ticker: str) -> Dict[str, Any]:
 def load_ticker_earnings_calendar(engine: Engine, ticker: str) -> Dict[str, Any]:
     """
     Даты earnings из knowledge_base (+ метаданные earnings_event_detail).
-    Предлагает ближайшую будущую дату; экспирацию — первая из Polygon reference >= earnings.
+    Предлагает ближайшую будущую дату; экспирацию — первая из yfinance >= earnings.
     """
     sym = (ticker or "").strip().upper()
     if not sym:
@@ -178,16 +178,14 @@ def load_ticker_earnings_calendar(engine: Engine, ticker: str) -> Dict[str, Any]
 
 
 def _suggest_expiration(ticker: str, earnings_date: str) -> tuple[Optional[str], Optional[str]]:
-    """Первая дата экспирации из Polygon reference API на/после earnings."""
+    """Первая дата экспирации из yfinance на/после earnings."""
     try:
-        from services.polygon_options import fetch_option_expiration_dates, polygon_options_available
+        from services.yfinance_options import fetch_yfinance_option_expirations
 
-        if not polygon_options_available():
-            return None, None
-        exps = fetch_option_expiration_dates(ticker)
-        for exp in exps:
-            if exp >= earnings_date:
-                return exp, "polygon_reference"
+        exps = fetch_yfinance_option_expirations(ticker)
+        for exp in exps or []:
+            if str(exp) >= earnings_date:
+                return str(exp), "yfinance"
     except Exception as e:
         logger.debug("expiration suggest %s: %s", ticker, e)
     return None, None

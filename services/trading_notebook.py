@@ -201,6 +201,15 @@ def apply_ticker_overrides(
                     base_c[k] = v
                 d["consensus"] = base_c
                 d["consensus_override"] = True
+            if isinstance(patch.get("houses"), list):
+                d["houses"] = [
+                    dict(h) for h in patch["houses"] if isinstance(h, dict)
+                ]
+                d["houses_override"] = True
+                if patch.get("houses_source"):
+                    d["houses_source"] = str(patch.get("houses_source"))[:40]
+            if patch.get("houseNote") is not None:
+                d["houseNote"] = str(patch.get("houseNote") or "")[:800]
             if patch.get("horizon") is not None:
                 d["horizon"] = str(patch.get("horizon") or "")[:160]
                 d["profile_override"] = True
@@ -401,6 +410,66 @@ def update_ticker_consensus(
     return {
         "ticker": u,
         "consensus": dict(row["consensus"]),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+def refresh_ticker_houses_from_stockanalysis(
+    sym: str,
+    *,
+    limit: int = 12,
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+    client: Any = None,
+) -> Dict[str, Any]:
+    """Pull analyst ratings from stockanalysis.com → houses + consensus overlay."""
+    from services.stockanalysis_ratings import StockAnalysisClient, to_notebook_houses
+
+    u, _base_row = _find_base_ticker(sym)
+    lim = max(1, min(int(limit or 12), 40))
+    sa = client or StockAnalysisClient()
+    bundle = sa.get_analyst_bundle(u)
+    mapped = to_notebook_houses(bundle, limit=lim)
+
+    counts = mapped.get("counts") if isinstance(mapped.get("counts"), dict) else {}
+    buy = int(counts.get("buy") or 0)
+    hold = int(counts.get("hold") or 0)
+    sell = int(counts.get("sell") or 0)
+    house_note = (
+        f"StockAnalysis: Buy {buy} · Hold {hold} · Sell {sell}. "
+        "Карточки — последние рейтинги домов; консенсус тоже обновлён в overlay."
+    )
+
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    now = datetime.now(timezone.utc).isoformat()
+    houses = mapped.get("houses") if isinstance(mapped.get("houses"), list) else []
+    consensus = mapped.get("consensus") if isinstance(mapped.get("consensus"), dict) else {}
+    row["houses"] = [dict(h) for h in houses if isinstance(h, dict)]
+    row["consensus"] = {
+        "rating": str(consensus.get("rating") or "—")[:80],
+        "pt": str(consensus.get("pt") or "—")[:80],
+        "low": str(consensus.get("low") or "—")[:80],
+        "high": str(consensus.get("high") or "—")[:80],
+        "n": str(consensus.get("n") or "—")[:80],
+        "upd": str(consensus.get("upd") or "stockanalysis")[:80],
+    }
+    row["houseNote"] = house_note[:800]
+    row["houses_source"] = "stockanalysis"
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    return {
+        "ticker": u,
+        "houses": list(row["houses"]),
+        "consensus": dict(row["consensus"]),
+        "houseNote": row["houseNote"],
+        "houses_source": "stockanalysis",
+        "counts": counts,
+        "source": getattr(bundle, "source", "stockanalysis"),
+        "asof": getattr(bundle, "asof", None),
         "updated_at_utc": now,
         "updated_by": row["updated_by"],
     }

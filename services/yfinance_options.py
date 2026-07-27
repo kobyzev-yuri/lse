@@ -1,5 +1,5 @@
 """
-Option chain через Yahoo Finance (yfinance) — для сравнения с Polygon snapshot.
+Option chain через Yahoo Finance (yfinance).
 """
 
 from __future__ import annotations

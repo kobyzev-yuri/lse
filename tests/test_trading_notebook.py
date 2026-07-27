@@ -183,3 +183,72 @@ def test_ticker_consensus_overrides_roundtrip(tmp_path: Path):
     )
     assert merged["MSFT"]["consensus"]["pt"] == "480"
     assert merged["MSFT"]["consensus_override"] is True
+
+
+def test_refresh_houses_from_stockanalysis_writes_overlay(tmp_path: Path):
+    from dataclasses import dataclass
+
+    from services.stockanalysis_ratings import (
+        AnalystBundle,
+        AnalystConsensus,
+        AnalystRating,
+        AnalystRatingCounts,
+    )
+    from services.trading_notebook import refresh_ticker_houses_from_stockanalysis
+
+    @dataclass
+    class _FakeClient:
+        def get_analyst_bundle(self, ticker: str) -> AnalystBundle:
+            return AnalystBundle(
+                ticker=ticker.upper(),
+                ratings=[
+                    AnalystRating(
+                        date="2026-07-24",
+                        firm="Goldman Sachs",
+                        position="Buy",
+                        action="Maintains",
+                        price_target="$2200",
+                        upside_downside="+10%",
+                    )
+                ],
+                counts=AnalystRatingCounts(
+                    buy=20, hold=3, sell=1, total=24, consensus="Buy"
+                ),
+                consensus=AnalystConsensus(
+                    rating="Buy",
+                    price_target=2100.0,
+                    low=1000.0,
+                    high=3250.0,
+                    count=24,
+                ),
+                source="test",
+                asof="2026-07-27T00:00:00Z",
+            )
+
+    ov = tmp_path / "ticker_overrides.json"
+    out = refresh_ticker_houses_from_stockanalysis(
+        "MSFT",
+        limit=5,
+        updated_by="test",
+        path=ov,
+        client=_FakeClient(),
+    )
+    assert out["houses"][0]["firm"] == "Goldman Sachs"
+    assert out["consensus"]["rating"] == "Buy"
+    assert out["counts"]["buy"] == 20
+    merged = apply_ticker_overrides(
+        {"MSFT": {"houses": [], "consensus": {"rating": "—"}}},
+        {
+            "tickers": {
+                "MSFT": {
+                    "houses": out["houses"],
+                    "consensus": out["consensus"],
+                    "houseNote": out["houseNote"],
+                    "houses_source": "stockanalysis",
+                }
+            }
+        },
+    )
+    assert merged["MSFT"]["houses_override"] is True
+    assert merged["MSFT"]["houses"][0]["pt"] == "$2200"
+    assert "Buy 20" in merged["MSFT"]["houseNote"]

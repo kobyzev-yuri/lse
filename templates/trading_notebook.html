@@ -144,6 +144,8 @@
   }
   .edit-btn:hover{background:rgba(74,158,218,.28);}
   .edit-btn:disabled{opacity:.45;cursor:wait;}
+  .houses-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px;}
+  .houses-toolbar .flag-status{margin:0;}
   .env-state-btns{display:flex;gap:4px;flex:none;}
   .env-sbtn{
     cursor:pointer;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);
@@ -322,6 +324,7 @@ let DATA = {};
 let WATCHLIST = {rules:[], flash:{}};
 let DIGEST = {date:"", filtered:0, kept:0, trashed:0, signals:[], risks:[], macro:[], newtickers:[], trashNote:""};
 let DIGEST_BUCKETS = [];
+let housesRefreshFlash = null; // {sym, ok, text}
 
 const TABS = [
   {id:"verdict",label:"⚡ Вердикт",stub:false},
@@ -683,15 +686,25 @@ function renderContent(){
     <span class="firm">${esc(h.firm)}</span><span class="rate">${esc(h.rate)}</span><span class="pt">${esc(h.pt)}</span></div>
     <div class="quote">${esc(h.quote)}</div><div class="tac">${h.tac||''}</div></div>`).join("");
   const cons = d.consensus || {};
-  html += tabWrap("houses", `<div class="card"><h3>Оценки инвестдомов ${manualBadge("консенсус на Вердикте")}<span class="upd">${esc(cons.upd||'')}</span></h3>
-    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">Консенсус</b> — rate / pt / low / high править в строке «Инвестдома» на Вердикте. Карточки домов ниже — справочный JSON.</div>
+  const housesBadge = d.houses_override
+    ? liveBadge(d.houses_source || "stockanalysis")
+    : manualBadge("консенсус на Вердикте");
+  const flash = (housesRefreshFlash && housesRefreshFlash.sym === current) ? housesRefreshFlash : null;
+  const flashCls = flash ? (flash.ok ? "flag-status ok" : "flag-status err") : "flag-status";
+  const flashTxt = flash ? esc(flash.text || "") : "";
+  html += tabWrap("houses", `<div class="card"><h3>Оценки инвестдомов ${housesBadge}<span class="upd">${esc(cons.upd||'')}</span></h3>
+    <div class="houses-toolbar">
+      <button type="button" class="edit-btn" id="houses-refresh" onclick="refreshHouses()">Обновить с StockAnalysis</button>
+      <span class="${flashCls}" id="housesStatus">${flashTxt}</span>
+    </div>
+    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">Консенсус</b> — rate / pt / low / high также правятся в строке «Инвестдома» на Вердикте. Кнопка тянет свежие рейтинги домов и summary с stockanalysis.com.</div>
     <div class="concens">
       <div class="cell"><span class="cl">Консенсус</span><span class="cv">${esc(cons.rating||'—')}</span></div>
       <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(cons.pt||'—')}</span></div>
       <div class="cell"><span class="cl">Low</span><span class="cv down">${esc(cons.low||'—')}</span></div>
       <div class="cell"><span class="cl">High</span><span class="cv up">${esc(cons.high||'—')}</span></div>
       <div class="cell"><span class="cl">Выборка</span><span class="cv" style="font-size:13px">${esc(cons.n||'—')}</span></div>
-    </div>${houses || '<p class="note">Пока пусто.</p>'}
+    </div>${houses || '<p class="note">Пока пусто — нажмите «Обновить с StockAnalysis».</p>'}
     <div class="note">${esc(d.houseNote||'')}</div></div>`);
 
   html += renderFundament(d);
@@ -1100,6 +1113,47 @@ async function saveConsensus(){
     renderContent();
   } catch(e){
     if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function refreshHouses(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("housesStatus");
+  const btn = document.getElementById("houses-refresh");
+  if(btn) btn.disabled = true;
+  housesRefreshFlash = {sym, ok: true, text: "тянем StockAnalysis…"};
+  if(status){ status.className = "flag-status"; status.textContent = "тянем StockAnalysis…"; }
+  try {
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/houses/refresh`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({limit: 12}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      const detail = (j && (j.detail || j.error)) || (`HTTP ${r.status}`);
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    if(Array.isArray(j.houses)) DATA[sym].houses = j.houses;
+    if(j.consensus) DATA[sym].consensus = Object.assign({}, DATA[sym].consensus || {}, j.consensus);
+    if(j.houseNote != null) DATA[sym].houseNote = j.houseNote;
+    DATA[sym].houses_override = true;
+    DATA[sym].houses_source = "stockanalysis";
+    DATA[sym].consensus_override = true;
+    applyOverrideMeta(sym, j);
+    const n = (j.houses || []).length;
+    const c = j.counts || {};
+    housesRefreshFlash = {
+      sym,
+      ok: true,
+      text: `ок · ${n} домов · Buy ${c.buy??"—"} / Hold ${c.hold??"—"} / Sell ${c.sell??"—"}`,
+    };
+    renderContent();
+  } catch(e){
+    housesRefreshFlash = {sym, ok: false, text: "ошибка: " + (e.message || e)};
+    if(status){ status.className = "flag-status err"; status.textContent = housesRefreshFlash.text; }
     if(btn) btn.disabled = false;
   }
 }

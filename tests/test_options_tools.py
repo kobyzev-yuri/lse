@@ -160,7 +160,7 @@ def test_load_calendar_picks_nearest_future(monkeypatch):
 
     monkeypatch.setattr(
         "services.options_calculator_prefill._suggest_expiration",
-        lambda t, e: ("2099-06-28", "polygon_reference"),
+        lambda t, e: ("2099-06-28", "yfinance"),
     )
 
     r = load_ticker_earnings_calendar(engine, "MU")
