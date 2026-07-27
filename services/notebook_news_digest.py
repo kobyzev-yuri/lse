@@ -19,6 +19,7 @@ from services.earnings_intelligence_universe import is_equity_symbol
 from services.seeking_alpha_finance import (
     KB_SOURCE,
     fetch_and_save_sa_news,
+    load_kb_earnings_items,
     load_kb_news_items,
 )
 from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_game_5m
@@ -48,13 +49,14 @@ def _json_default(obj: Any):
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 DIGEST_SYSTEM = """Ты — редактор утреннего дайджеста для торговой «Рабочей тетрадки».
-Вход: список новостей из knowledge_base LSE (Seeking Alpha, Yahoo, Investing, Reuters и др.) по тикерам тетрадки.
+Вход: (1) новости из knowledge_base LSE (Seeking Alpha, Yahoo, Investing, Reuters и др.);
+(2) календарь/факты EARNINGS из Yahoo/yfinance по тем же тикерам (если переданы).
 Повторы между источниками уже частично сняты кодом; оставшиеся дубли одной истории тоже схлопывай.
 Задача: отсеять шум (кликбейт, повторы без конкретики) и разложить остаток по корзинам ТЗ.
 
 Верни ТОЛЬКО JSON-объект без markdown:
 {
-  "filtered": <int всего входных>,
+  "filtered": <int всего входных новостей>,
   "kept": <int оставленных в дайджесте>,
   "trashed": <int отсеянных>,
   "signals": [{"sym":"MSFT","src":"...","text":"...","tac":"<b>Тактика:</b> ...","link":"...","prem":""}],
@@ -66,10 +68,11 @@ DIGEST_SYSTEM = """Ты — редактор утреннего дайджест
 
 Правила:
 - signals: позитивные/нейтрально-полезные катализаторы по нашим тикерам; tac в терминах тетрадки (Buy Dip / Hold / пауза / ждать уровень).
-- risks: угрозы, даунсайд; tac часто Hold / не докупать / стоп-наблюдение.
+- risks: угрозы, даунсайд, отчёт в ближайшие дни; tac часто Hold / не докупать / стоп-наблюдение / пауза до earnings.
 - macro: ФРС, сектор AI, геополитика, широкие тренды; tac = влияние на Environment Check.
-- newtickers: имена НЕ из текущего списка тетрадки — кандидат «к рассмотрению» (не авто-добавление в группу).
+- newtickers: имена НЕ из текущего списка тетрадки (не ALAB/AMD/… уже в groups) — кандидат «к рассмотрению».
 - Одна история из нескольких источников → ОДИН пункт; в src — основной источник.
+- Если в блоке earnings указан ближайший отчёт — обязательно учти в risks или signals (пауза/не наращивать до цифр; peer spillover: память MU↔SNDK, оптика LITE↔CIEN, hyperscalers).
 - text: 1–2 предложения по-русски.
 - Не выдумывай новости: только из входа. Если данных мало — пустые массивы ок.
 - Отсев 50–70% шума — норма.
@@ -353,7 +356,12 @@ def _parse_llm_json(text: str) -> Dict[str, Any]:
     return {"raw_text": text}
 
 
-def _llm_digest(items: List[Dict[str, Any]], *, membership: Dict[str, List[str]]) -> Dict[str, Any]:
+def _llm_digest(
+    items: List[Dict[str, Any]],
+    *,
+    membership: Dict[str, List[str]],
+    earnings: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     from services.llm_service import LLMService
 
     slim = []
@@ -370,14 +378,29 @@ def _llm_digest(items: List[Dict[str, Any]], *, membership: Dict[str, List[str]]
                 "src": it.get("src"),
             }
         )
+    earn_slim = []
+    for it in earnings or []:
+        earn_slim.append(
+            {
+                "ticker": it.get("ticker"),
+                "groups": membership.get(str(it.get("ticker") or "").upper(), []),
+                "date": it.get("publishOn"),
+                "title": it.get("title"),
+                "text": it.get("summary_text"),
+                "src": it.get("src"),
+            }
+        )
+    known = sorted({str(t).upper() for t in membership.keys()})
     user = (
-        "Новости для дайджеста (JSON):\n"
-        + json.dumps(slim, ensure_ascii=False)[:28000]
+        "Тикеры уже в тетрадке (НЕ класть в newtickers): "
+        + ", ".join(known)
+        + "\n\nНовости для дайджеста (JSON):\n"
+        + json.dumps(slim, ensure_ascii=False)[:24000]
+        + "\n\nEARNINGS календарь Yahoo/yfinance (JSON):\n"
+        + json.dumps(earn_slim, ensure_ascii=False)[:4000]
         + "\n\nСобери дайджест по схеме."
     )
     llm = LLMService()
-    # Optional override model via NOTEBOOK_NEWS_DIGEST_MODEL is handled by env if set on LLMService —
-    # we pass temperature low for structured output.
     out = llm.generate_response(
         messages=[{"role": "user", "content": user}],
         system_prompt=DIGEST_SYSTEM,
@@ -517,9 +540,18 @@ def run_notebook_news_digest(
     fetch_meta["deduped_drop"] = deduped_drop
     fetch_meta["item_count_after_dedupe"] = filtered
 
+    earnings_items: List[Dict[str, Any]] = []
+    if from_kb and _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_EARNINGS", "1"):
+        try:
+            earnings_items = load_kb_earnings_items(requested, days_back=7, days_ahead=45, limit=40)
+        except Exception as e:
+            logger.exception("KB earnings load for digest failed: %s", e)
+            fetch_meta["kb_earnings_error"] = str(e)
+    fetch_meta["earnings_count"] = len(earnings_items)
+
     if use_llm and items:
         try:
-            digest_body = _llm_digest(items, membership=membership)
+            digest_body = _llm_digest(items, membership=membership, earnings=earnings_items)
         except Exception as e:
             logger.exception("LLM digest failed: %s", e)
             digest_body = _empty_digest(filtered=filtered, note=f"LLM ошибка: {e}")
@@ -572,6 +604,8 @@ def run_notebook_news_digest(
             "from_kb": from_kb,
             "kb_source": kb_src or "ALL",
             "include_macro": include_macro,
+            "include_earnings": bool(earnings_items) or _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_EARNINGS", "1"),
+            "earnings_count": len(earnings_items),
             "lookback_hours": lb,
             "kb_inserted": kb_inserted,
             "deduped_drop": deduped_drop,
@@ -581,6 +615,7 @@ def run_notebook_news_digest(
             **fetch_meta,
             "item_count": filtered,
             "items_from": "knowledge_base" if from_kb and not fetch_meta.get("kb_load_error") else "api",
+            "earnings_sample": earnings_items[:15],
         },
         "digest": digest,
         "items_sample": items[:20],

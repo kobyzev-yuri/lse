@@ -276,6 +276,78 @@ def load_kb_news_items(
     return rows
 
 
+def load_kb_earnings_items(
+    tickers: Sequence[str],
+    *,
+    days_back: int = 7,
+    days_ahead: int = 45,
+    limit: int = 40,
+) -> List[Dict[str, Any]]:
+    """Upcoming/recent EARNINGS rows (Yahoo/yfinance etc.) for notebook digest context."""
+    from sqlalchemy import bindparam, create_engine, text
+
+    from config_loader import get_database_url
+    from services.kb_extended_fields import kb_legacy_ticker
+
+    wanted = [str(t).strip().upper() for t in tickers if str(t).strip()]
+    if not wanted:
+        return []
+    legacy = [kb_legacy_ticker(t) for t in wanted]
+    legacy = [t for t in legacy if t]
+    back = max(0, int(days_back))
+    ahead = max(1, int(days_ahead))
+    lim = max(1, min(int(limit), 200))
+
+    sql = text(
+        """
+        SELECT id, ts, ticker, source, content, link,
+               COALESCE(NULLIF(symbol, ''), ticker) AS sym
+        FROM knowledge_base
+        WHERE event_type = 'EARNINGS'
+          AND ts >= (CURRENT_DATE - make_interval(days => :back))
+          AND ts <= (CURRENT_DATE + make_interval(days => :ahead))
+          AND (
+                UPPER(TRIM(ticker)) IN :tickers
+             OR UPPER(TRIM(COALESCE(symbol, ''))) IN :symbols
+          )
+        ORDER BY ts ASC
+        LIMIT :lim
+        """
+    ).bindparams(bindparam("tickers", expanding=True), bindparam("symbols", expanding=True))
+
+    engine = create_engine(get_database_url())
+    rows: List[Dict[str, Any]] = []
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                sql,
+                {"back": back, "ahead": ahead, "tickers": legacy, "symbols": wanted, "lim": lim},
+            )
+            for r in result.mappings():
+                content = str(r.get("content") or "")
+                title = content.split("\n", 1)[0].strip()[:300]
+                body = content.strip()[:500]
+                sym = str(r.get("sym") or r.get("ticker") or "").strip().upper()
+                ts = r.get("ts")
+                publish = ts.isoformat() if hasattr(ts, "isoformat") else str(ts or "")
+                rows.append(
+                    {
+                        "id": f"earn-{r.get('id')}",
+                        "kb_id": r.get("id"),
+                        "type": "earnings",
+                        "ticker": sym,
+                        "publishOn": publish,
+                        "title": title or f"Earnings {sym}",
+                        "summary_text": body,
+                        "link": str(r.get("link") or ""),
+                        "src": str(r.get("source") or "Yahoo Finance (yfinance)"),
+                    }
+                )
+    finally:
+        engine.dispose()
+    return rows
+
+
 def fetch_news_for_tickers(
     tickers: Sequence[str],
     *,
