@@ -189,6 +189,140 @@ def merge_prices_into_tickers(
     return merged
 
 
+def _vix_env_thresholds() -> tuple[float, float]:
+    """ok below lo, mid until hi, bad at/above hi. TZ mock: норма <20."""
+    try:
+        from config_loader import get_config_value
+
+        lo = float(get_config_value("NOTEBOOK_VIX_OK_BELOW", "20") or 20)
+        hi = float(get_config_value("NOTEBOOK_VIX_BAD_AT", "25") or 25)
+    except Exception:
+        lo, hi = 20.0, 25.0
+    if hi <= lo:
+        hi = lo + 5.0
+    return lo, hi
+
+
+def fetch_vix_snapshot() -> Optional[Dict[str, Any]]:
+    """Live ^VIX from quotes/yfinance for Environment Check."""
+    px = fetch_closes(["^VIX"]).get("^VIX") or fetch_closes(["VIX"]).get("VIX")
+    if not px or px.get("close") is None:
+        return None
+    val = float(px["close"])
+    lo, hi = _vix_env_thresholds()
+    if val < lo:
+        state = "ok"
+        label = f"норма · {val:.1f} (<{lo:g})"
+    elif val < hi:
+        state = "mid"
+        label = f"повышен · {val:.1f} ({lo:g}–{hi:g})"
+    else:
+        state = "bad"
+        label = f"высокий · {val:.1f} (≥{hi:g})"
+    chg_s, _ = _fmt_chg(px)
+    if chg_s and chg_s != "—":
+        label = f"{label} · дн. {chg_s}"
+    return {
+        "lbl": "VIX",
+        "st": label,
+        "state": state,
+        "live": True,
+        "source": f"live · {px.get('source') or 'quotes'}",
+        "value": val,
+        "asof": px.get("asof"),
+    }
+
+
+def _fed_hint_from_digest(digest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Soft hint for Fed rhetoric from morning digest macro bucket (not a full NLP classifier)."""
+    rows = digest.get("macro") if isinstance(digest.get("macro"), list) else []
+    hits = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        blob = " ".join(
+            str(r.get(k) or "") for k in ("sym", "text", "tac", "src")
+        ).lower()
+        if any(k in blob for k in ("фрс", "fed", "fomc", "powell", "ястреб", "hawk")):
+            hits.append(r)
+    if not hits:
+        return None
+    text = str(hits[0].get("text") or hits[0].get("sym") or "")[:160]
+    hawk = any(k in text.lower() for k in ("ястреб", "hawk", "ужесточ", "hike", "higher for longer"))
+    dove = any(k in text.lower() for k in ("голуб", "dove", "смягч", "cut", "снижен"))
+    if hawk and not dove:
+        state, st = "mid", f"по дайджесту · ястребиный тон — {text[:80]}"
+    elif dove and not hawk:
+        state, st = "ok", f"по дайджесту · мягче — {text[:80]}"
+    else:
+        state, st = "mid", f"по дайджесту · смотреть — {text[:80]}"
+    return {
+        "lbl": "Риторика ФРС",
+        "st": st,
+        "state": state,
+        "live": True,
+        "source": "live · макро-дайджест KB/LLM",
+    }
+
+
+def apply_live_env_to_tickers(
+    tickers: Dict[str, Any],
+    *,
+    digest: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Overlay live VIX (+ optional Fed hint from digest) onto each ticker env list."""
+    vix = fetch_vix_snapshot()
+    fed = _fed_hint_from_digest(digest or {}) if digest else None
+    out: Dict[str, Any] = {}
+    for sym, row in (tickers or {}).items():
+        if not isinstance(row, dict):
+            continue
+        d = dict(row)
+        env = list(d.get("env") or []) if isinstance(d.get("env"), list) else []
+        new_env: List[Dict[str, Any]] = []
+        seen_vix = seen_fed = False
+        for e in env:
+            if not isinstance(e, dict):
+                continue
+            e2 = dict(e)
+            lbl = str(e2.get("lbl") or "")
+            low = lbl.lower()
+            if vix and "vix" in low:
+                e2.update(vix)
+                seen_vix = True
+            elif fed and ("фрс" in low or "fed" in low):
+                e2.update(fed)
+                seen_fed = True
+            else:
+                # Placeholder stubs must not force yellow Environment gate.
+                st = str(e2.get("st") or "").lower()
+                placeholder = any(
+                    p in st
+                    for p in (
+                        "обновлять вручную",
+                        "авто из quotes",
+                        "следить",
+                        "tbd",
+                        "вручную",
+                    )
+                ) and len(st) < 40
+                e2.setdefault("live", False)
+                e2.setdefault("source", "заглушка · вручную / новости PT")
+                if placeholder and e2.get("state") == "mid":
+                    e2["state"] = "ok"
+                    e2["st"] = (str(e2.get("st") or "нет сигнала") + " · ждать ручного апдейта").strip()
+            new_env.append(e2)
+        if vix and not seen_vix:
+            new_env.insert(0, dict(vix))
+        if fed and not seen_fed:
+            # after VIX
+            idx = 1 if new_env and "vix" in str(new_env[0].get("lbl") or "").lower() else 0
+            new_env.insert(idx, dict(fed))
+        d["env"] = new_env
+        out[str(sym).upper()] = d
+    return out
+
+
 def build_notebook_payload(
     *,
     path: Optional[Path] = None,
@@ -221,6 +355,18 @@ def build_notebook_payload(
     except Exception as e:
         logger.debug("notebook digest overlay skipped: %s", e)
 
+    if with_prices:
+        try:
+            tickers = apply_live_env_to_tickers(tickers, digest=digest)
+        except Exception as e:
+            logger.debug("live env overlay skipped: %s", e)
+
+    vix_meta = None
+    try:
+        vix_meta = fetch_vix_snapshot()
+    except Exception:
+        vix_meta = None
+
     return {
         "schema_version": int(data.get("schema_version") or SCHEMA_VERSION),
         "asof_label": data.get("asof_label") or "",
@@ -231,5 +377,6 @@ def build_notebook_payload(
         "digest_buckets": data.get("digest_buckets") if isinstance(data.get("digest_buckets"), list) else [],
         "watchlist": data.get("watchlist") if isinstance(data.get("watchlist"), dict) else {},
         "prices": prices,
+        "env_live": {"vix": vix_meta},
         "data_path": str(path or notebook_data_path()),
     }

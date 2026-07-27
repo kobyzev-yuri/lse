@@ -265,7 +265,7 @@ const TABS = [
   {id:"profile",label:"Профиль",stub:true},
   {id:"triggers",label:"Триггеры Buy / Sell",stub:true},
   {id:"entry",label:"Тактика входа / выхода",stub:true},
-  {id:"env",label:"Окружение",stub:true},
+  {id:"env",label:"Окружение",stub:true},  // VIX live; ФРС/PT — частично stub
   {id:"houses",label:"Инвестдома",stub:true},
   {id:"fundament",label:"Фундамент",stub:true},
   {id:"digest",label:"Дайджесты",stub:false},
@@ -457,13 +457,18 @@ function renderContent(){
     <ul class="clean">${(d.exit||[]).map(e=>`<li>${e}</li>`).join("")}</ul>
     <div class="macro"><b>Макро-контекст (поверх техники):</b> ${esc(d.macro||'')}</div></div>`);
 
-  const envs = (d.env||[]).map(e =>
-    `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span>${stubBadge(envSourceHint(e.lbl))}</div>`
-  ).join("");
-  html += tabWrap("env", `<div class="card"><h3>Environment Check ${stubBadge("пока JSON · VIX не live")}<span class="hint">фильтр скрытых угроз поверх логики входа</span></h3>
-    ${stubBox("Окружение", "VIX — планируется quotes/yfinance (ещё не в карточке). ФРС / cut PT вне earnings — вручную или из дайджеста/KB. Сейчас state=mid из JSON.")}
+  const envs = (d.env||[]).map(e => {
+    const live = !!e.live;
+    const badge = live
+      ? liveBadge(e.source || "quotes/yfinance")
+      : stubBadge(e.source || envSourceHint(e.lbl));
+    return `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span>${badge}</div>`;
+  }).join("");
+  const hasLiveVix = (d.env||[]).some(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
+  html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):stubBadge("VIX недоступен")}<span class="hint">фильтр скрытых угроз поверх логики входа</span></h3>
+    ${stubBox("По ТЗ три стоп-фактора", "1) VIX — live из quotes/^VIX (пороги <20 ok, ≥25 bad). 2) Риторика ФРС — из макро-дайджеста (мягкий хинт) или вручную. 3) Понижения таргетов вне earnings — вручную / headlines SA·Yahoo → вкладка Инвестдома.")}
     ${envs}
-    <div class="note">Красный/жёлтый по любому пункту = входы на паузу.</div></div>`);
+    <div class="note">Красный/жёлтый по любому пункту = входы на паузу. VIX, ястребиная ФРС и внезапные cut PT вне earnings — стоп-факторы независимо от техники.</div></div>`);
 
   const houses = (d.houses||[]).map(h => `<div class="house"><div class="hh">
     <span class="firm">${esc(h.firm)}</span><span class="rate">${esc(h.rate)}</span><span class="pt">${esc(h.pt)}</span></div>
@@ -512,7 +517,8 @@ function computeVerdict(d){
     name:"Environment Check",
     state: worstEnv,
     gate: worstEnv==="bad",
-    stub: "JSON · не live VIX",
+    live: (env||[]).some(e => e.live) ? "VIX/ФРС" : null,
+    stub: (env||[]).some(e => !e.live) ? "часть строк вручную" : null,
     val: worstEnv==="ok" ? "чисто — угроз нет"
        : worstEnv==="mid" ? `жёлтый: ${yellowEnv.map(e=>e.lbl).join(", ")}`
        : `КРАСНЫЙ: ${redEnv.map(e=>e.lbl).join(", ")}`
