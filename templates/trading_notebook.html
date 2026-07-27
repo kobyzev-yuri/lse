@@ -670,7 +670,18 @@ function computeVerdict(d){
   let action, cls, why;
   if(worstEnv==="bad" || macroBroken){
     action="СТОП · ВНЕ ИГРЫ"; cls="stop";
-    why="Сработал блокирующий фактор (красный Environment Check или слом макро-тезиса). Входы на паузу независимо от техники.";
+    const reasons = [];
+    if(macroBroken){
+      if(!sig.macroAlive) reasons.push("Макро: тезис AI выкл (macroAlive)");
+      if(sig.sentimentBroken) reasons.push("Макро: sentiment сломан");
+    }
+    if(worstEnv==="bad"){
+      const names = redEnv.map(e => e.lbl).filter(Boolean);
+      reasons.push(names.length
+        ? `Environment красный: ${names.join(", ")}`
+        : "Environment Check красный");
+    }
+    why = reasons.join(". ") + ". Входы на паузу.";
   } else if(triggerHit==="sell"){
     action="ФИКСИРОВАТЬ"; cls="sell";
     why="Close достиг заранее заданного уровня Sell. Решение принято раньше — просто исполняем.";
@@ -679,7 +690,10 @@ function computeVerdict(d){
     why="Close коснулся заданного Buy Dip, окружение чистое, макро жив. Исполняем план.";
   } else if(triggerHit==="buy" && worstEnv==="mid"){
     action="ЖДАТЬ · жёлтое окружение"; cls="wait";
-    why="Уровень входа достигнут, НО Environment Check жёлтый. Вход запрещён до снятия предупреждения.";
+    const names = yellowEnv.map(e => e.lbl).filter(Boolean);
+    why = names.length
+      ? `Buy Dip достигнут, но жёлтый Environment: ${names.join(", ")}. Ждём снятия.`
+      : "Buy Dip достигнут, но Environment Check жёлтый. Ждём снятия.";
   } else if(triggerHit==="wait" || triggerHit==="manual"){
     if(String(d.group)==="1"){
       action="ДЕРЖАТЬ"; cls="hold";
@@ -692,7 +706,10 @@ function computeVerdict(d){
     action="ДЕРЖАТЬ"; cls="hold"; why="Нейтральное состояние — следим за триггерами.";
   }
   if(worstEnv==="mid" && cls==="hold"){
-    why += " ⚠ Environment Check жёлтый — при сигнале входа сначала дождись снятия предупреждения.";
+    const names = yellowEnv.map(e => e.lbl).filter(Boolean);
+    why += names.length
+      ? ` ⚠ Жёлтый Environment: ${names.join(", ")}.`
+      : " ⚠ Environment Check жёлтый.";
   }
   return {action, cls, why, indicators};
 }
