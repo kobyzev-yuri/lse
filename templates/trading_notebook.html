@@ -256,6 +256,8 @@
   .macro-inline .mi b{color:var(--ink);font-weight:600;}
   .ind-row.macro-edit{flex-wrap:wrap;align-items:flex-start;}
   .ind-row.macro-edit .ival{min-width:min(100%,220px);}
+  .levels-inline{width:100%;margin-top:10px;}
+  .levels-inline .edit-grid{margin-top:0;}
 
   /* fundament (NBIS-style) */
   .fund-tag{font-size:13.5px;color:var(--muted);line-height:1.5;margin-bottom:14px;}
@@ -499,7 +501,7 @@ function renderContent(){
       <div class="desc">${esc(t.desc)}</div><div class="cond">${esc(t.cond)}</div></div></div>`;
   }).join("");
   html += tabWrap("triggers", `<div class="card"><h3>Триггеры ${manualBadge("уровни на Вердикте")}<span class="hint">решение принято заранее — при срабатывании просто исполняем</span></h3>
-    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">Buy Dip / Sell</b> — править на вкладке «Вердикт» (overlay). Текст ниже справочный.</div>
+    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">Buy Dip / Sell</b> — править в строке «Цена vs уровень» на Вердикте. Текст триггеров ниже справочный.</div>
     ${trigs}</div>`);
 
   html += tabWrap("entry", `<div class="card">
@@ -627,7 +629,7 @@ function computeVerdict(d){
     name:"Макро (SocGen)",
     state: macroBroken ? "bad" : "ok",
     gate: macroBroken,
-    editable: true,
+    editKind: "macro",
     val: macroBroken ? "тезис AI под вопросом — фон против входа" : "тезис AI жив до сер. 2027 — фон поддерживающий"
   });
 
@@ -653,10 +655,7 @@ function computeVerdict(d){
     state:priceState,
     gate:false,
     live: px != null ? "Close · quotes" : null,
-    manual: (L.buyDip!=null || L.sell!=null)
-      ? (d.levels_override ? "overlay · Buy Dip/Sell" : (L.note || "Buy Dip/Sell"))
-      : null,
-    stub: (L.buyDip==null && L.sell==null) ? "уровни TBD · форма ниже" : null,
+    editKind: "levels",
     val:priceVal
   });
 
@@ -720,28 +719,25 @@ function renderMacroInlineControls(d){
     </div>`;
 }
 
-function renderLevelsEditor(d){
+function renderLevelsInline(d){
   const L = d.levels || {};
   const buy = L.buyDip != null ? L.buyDip : "";
   const sell = L.sell != null ? L.sell : "";
   const note = L.note != null ? L.note : "";
-  const hint = d.levels_override
-    ? "сохранено в overlay · local/notebook"
-    : "пустое поле + Сохранить очищает уровень в overlay";
+  const hint = d.levels_override ? "overlay" : "пустое + Сохранить = очистить";
   return `
-    <div class="card">
-      <h3>Уровни Buy Dip / Sell ${manualBadge("overlay")}<span class="hint">вердикт сверяет Close с этими числами</span></h3>
+    <div class="levels-inline">
       <div class="edit-grid">
         <div class="edit-field"><label>Buy Dip</label>
           <input type="number" step="any" id="lvl-buyDip" value="${esc(buy)}" placeholder="например 350"></div>
         <div class="edit-field"><label>Sell</label>
           <input type="number" step="any" id="lvl-sell" value="${esc(sell)}" placeholder="например 450"></div>
         <div class="edit-field" style="grid-column:1/-1"><label>Заметка</label>
-          <input type="text" id="lvl-note" value="${esc(note)}" placeholder="Buy Dip $… · Sell $… (кто задал)"></div>
+          <input type="text" id="lvl-note" value="${esc(note)}" placeholder="кто задал · контекст"></div>
       </div>
       <div class="edit-actions">
-        <button type="button" class="edit-btn" id="lvl-save" onclick="saveLevels()">Сохранить уровни</button>
-        <span class="flag-status" id="lvlStatus">${hint}</span>
+        <button type="button" class="edit-btn" id="lvl-save" onclick="saveLevels()">Сохранить</button>
+        <span class="flag-status" id="lvlStatus" style="margin-top:0">${hint}</span>
       </div>
     </div>`;
 }
@@ -909,18 +905,21 @@ async function setEnvState(key, state, idSuffix){
 
 function renderVerdict(d){
   const v = computeVerdict(d);
-  const inds = v.indicators.map(i => `
-    <div class="ind-row ${i.editable?'macro-edit':''}">
+  const inds = v.indicators.map(i => {
+    const editHtml = i.editKind==="macro" ? renderMacroInlineControls(d)
+      : (i.editKind==="levels" ? renderLevelsInline(d) : "");
+    const editBadge = i.editKind ? manualBadge("настройка здесь") : "";
+    return `
+    <div class="ind-row ${i.editKind?'macro-edit':''}">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}${i.live?liveBadge(i.live):""}${i.manual?manualBadge(i.manual):""}${i.stub?stubBadge(i.stub):""}${i.editable?manualBadge("настройка здесь"):""}</span>
+      <span class="ival">${esc(i.val)}${i.live?liveBadge(i.live):""}${i.manual?manualBadge(i.manual):""}${i.stub?stubBadge(i.stub):""}${editBadge}</span>
       ${i.gate?'<span class="igate">БЛОК</span>':''}
-      ${i.editable?renderMacroInlineControls(d):""}
-    </div>`).join("");
+      ${editHtml}
+    </div>`;
+  }).join("");
   const src = d.price_source ? ` · ${d.price_source}` : "";
   const asof = d.price_asof ? ` · ${d.price_asof}` : "";
-  const L = d.levels || {};
-  const hasLevels = L.buyDip != null || L.sell != null;
   return `
     <div class="verdict-hero ${v.cls}">
       <div class="vlabel">Итоговый вердикт · ${esc(d.sym)} ${liveBadge("Close · quotes/yfinance")}</div>
@@ -929,14 +928,11 @@ function renderVerdict(d){
       <div class="vprice">Close ${fmtPx(d.px)} ${esc(d.chg||"")}${esc(src)}${esc(asof)} · горизонт: ${esc(d.horizon||"")}</div>
     </div>
     <div class="card">
-      <h3>Как собрался вердикт <span class="hint">Close сверяется с ручными Buy Dip / Sell — не авто-сигнал</span></h3>
-      ${stubBox("Смешанный вердикт", hasLevels
-        ? "Цена — live. Макро — переключатели в строке. Уровни и Env ФРС·PT — формы ниже."
-        : "Цена — live. Задайте Buy Dip/Sell ниже, иначе вердикт без ценового триггера.")}
+      <h3>Как собрался вердикт <span class="hint">Close vs Buy Dip / Sell — не авто-сигнал</span></h3>
+      ${stubBox("Смешанный вердикт", "Цена — live. Макро и уровни — в строках индикаторов. Env ФРС·PT — блок ниже.")}
       ${inds}
-      <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs уровни из формы.</div>
+      <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs уровни в строке «Цена vs уровень».</div>
     </div>
-    ${renderLevelsEditor(d)}
     ${renderEnvEditorCard(d)}`;
 }
 
