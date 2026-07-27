@@ -3971,6 +3971,60 @@ async def api_trading_notebook_prices(tickers: str = ""):
         raise HTTPException(status_code=500, detail=f"Ошибка notebook prices: {e!s}")
 
 
+@app.patch("/api/notebook/tickers/{sym}/signals", response_class=JSONResponse)
+async def api_notebook_ticker_signals(sym: str, request: Request):
+    """Ручные макро-гейты (macroAlive / sentimentBroken) → local/notebook/ticker_overrides.json."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    def _parse_bool(val: Any) -> Optional[bool]:
+        if val is None:
+            return None
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        s = str(val).strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return True
+        if s in ("0", "false", "no", "off"):
+            return False
+        return None
+
+    macro_alive = _parse_bool(body.get("macroAlive"))
+    if macro_alive is None and "macro_alive" in body:
+        macro_alive = _parse_bool(body.get("macro_alive"))
+    sentiment_broken = _parse_bool(body.get("sentimentBroken"))
+    if sentiment_broken is None and "sentiment_broken" in body:
+        sentiment_broken = _parse_bool(body.get("sentiment_broken"))
+    updated_by = str(body.get("updated_by") or body.get("updatedBy") or "notebook-ui")[:80]
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import update_ticker_signals
+
+        return update_ticker_signals(
+            sym,
+            macro_alive=macro_alive,
+            sentiment_broken=sentiment_broken,
+            updated_by=updated_by,
+        )
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("PATCH /api/notebook/tickers/%s/signals: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка notebook signals: {e!s}")
+
+
 @app.get("/portfolio/shape-clusters", response_class=HTMLResponse)
 async def portfolio_shape_clusters_page(request: Request):
     """UI: кластеры похожести формы 6м-графиков + навигация по группе."""

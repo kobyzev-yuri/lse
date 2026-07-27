@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -12,10 +13,140 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_PATH = _REPO_ROOT / "nastya" / "notebook" / "notebook_data.json"
+DEFAULT_OVERRIDE_PATH = _REPO_ROOT / "local" / "notebook" / "ticker_overrides.json"
 
 
 def notebook_data_path() -> Path:
     return DEFAULT_DATA_PATH
+
+
+def notebook_override_path() -> Path:
+    return DEFAULT_OVERRIDE_PATH
+
+
+def load_notebook_overrides(path: Optional[Path] = None) -> Dict[str, Any]:
+    p = path or notebook_override_path()
+    if not p.is_file():
+        return {"schema_version": 1, "tickers": {}}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("notebook overrides read failed: %s", e)
+        return {"schema_version": 1, "tickers": {}}
+    if not isinstance(raw, dict):
+        return {"schema_version": 1, "tickers": {}}
+    tickers = raw.get("tickers") if isinstance(raw.get("tickers"), dict) else {}
+    return {"schema_version": int(raw.get("schema_version") or 1), "tickers": tickers}
+
+
+def save_notebook_overrides(data: Dict[str, Any], path: Optional[Path] = None) -> Path:
+    p = path or notebook_override_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": int(data.get("schema_version") or 1),
+        "tickers": data.get("tickers") if isinstance(data.get("tickers"), dict) else {},
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(p)
+    return p
+
+
+def apply_ticker_overrides(
+    tickers: Dict[str, Any],
+    overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Merge local/notebook/ticker_overrides.json onto ticker cards (signals, levels, …)."""
+    ov_root = overrides if overrides is not None else load_notebook_overrides()
+    ov_tickers_raw = ov_root.get("tickers") if isinstance(ov_root.get("tickers"), dict) else {}
+    ov_tickers = {
+        str(k).upper(): v for k, v in ov_tickers_raw.items() if isinstance(v, dict)
+    }
+    out: Dict[str, Any] = {}
+    for sym, row in (tickers or {}).items():
+        if not isinstance(row, dict):
+            continue
+        u = str(sym).upper()
+        d = dict(row)
+        patch = ov_tickers.get(u) or {}
+        if patch:
+            if isinstance(patch.get("signals"), dict):
+                base_sig = dict(d.get("signals") or {}) if isinstance(d.get("signals"), dict) else {}
+                for k, v in patch["signals"].items():
+                    base_sig[k] = v
+                d["signals"] = base_sig
+                d["signals_override"] = True
+            if isinstance(patch.get("levels"), dict):
+                base_lv = dict(d.get("levels") or {}) if isinstance(d.get("levels"), dict) else {}
+                base_lv.update(patch["levels"])
+                d["levels"] = base_lv
+                d["levels_override"] = True
+            if patch.get("updated_at_utc"):
+                d["override_updated_at_utc"] = patch.get("updated_at_utc")
+            if patch.get("updated_by"):
+                d["override_updated_by"] = patch.get("updated_by")
+        out[u] = d
+    return out
+
+
+def update_ticker_signals(
+    sym: str,
+    *,
+    macro_alive: Optional[bool] = None,
+    sentiment_broken: Optional[bool] = None,
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist macro gate flags for one ticker into overrides overlay."""
+    u = str(sym or "").strip().upper()
+    if not u:
+        raise ValueError("empty ticker")
+    if macro_alive is None and sentiment_broken is None:
+        raise ValueError("no signal fields to update")
+
+    base = load_notebook_data()
+    base_tickers = base.get("tickers") if isinstance(base.get("tickers"), dict) else {}
+    base_row = None
+    for k, v in base_tickers.items():
+        if str(k).upper() == u and isinstance(v, dict):
+            base_row = v
+            break
+    if base_row is None:
+        raise KeyError(f"ticker {u} not in notebook_data")
+
+    ov = load_notebook_overrides(path)
+    tickers = {
+        str(k).upper(): dict(v)
+        for k, v in (ov.get("tickers") or {}).items()
+        if isinstance(v, dict)
+    }
+    row = dict(tickers.get(u) or {})
+    base_sig = dict(base_row.get("signals") or {}) if isinstance(base_row.get("signals"), dict) else {}
+    prev_sig = dict(row.get("signals") or {}) if isinstance(row.get("signals"), dict) else {}
+    sig = {**base_sig, **prev_sig}
+    if macro_alive is not None:
+        sig["macroAlive"] = bool(macro_alive)
+    if sentiment_broken is not None:
+        sig["sentimentBroken"] = bool(sentiment_broken)
+
+    now = datetime.now(timezone.utc).isoformat()
+    # Persist only the gate flags (full effective pair for audit).
+    row["signals"] = {
+        "macroAlive": bool(sig.get("macroAlive", True)),
+        "sentimentBroken": bool(sig.get("sentimentBroken", False)),
+    }
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    return {
+        "ticker": u,
+        "signals": dict(row["signals"]),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
 
 
 def load_notebook_data(path: Optional[Path] = None) -> Dict[str, Any]:
@@ -360,6 +491,11 @@ def build_notebook_payload(
             tickers = apply_live_env_to_tickers(tickers, digest=digest)
         except Exception as e:
             logger.debug("live env overlay skipped: %s", e)
+
+    try:
+        tickers = apply_ticker_overrides(tickers)
+    except Exception as e:
+        logger.debug("ticker overrides skipped: %s", e)
 
     vix_meta = None
     try:

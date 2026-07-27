@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from services.trading_notebook import (
+    apply_ticker_overrides,
     build_notebook_payload,
     load_notebook_data,
     merge_prices_into_tickers,
     notebook_data_path,
+    update_ticker_signals,
 )
 
 
@@ -57,3 +59,27 @@ def test_build_payload_without_prices():
     assert "MSFT" in payload["tickers"]
     assert payload["tickers"]["MSFT"]["levels"]["sell"] == 450
     assert Path(payload["data_path"]).name == "notebook_data.json"
+
+
+def test_ticker_signal_overrides_roundtrip(tmp_path: Path):
+    ov = tmp_path / "ticker_overrides.json"
+    out = update_ticker_signals(
+        "MSFT",
+        macro_alive=False,
+        sentiment_broken=True,
+        updated_by="test",
+        path=ov,
+    )
+    assert out["signals"]["macroAlive"] is False
+    assert out["signals"]["sentimentBroken"] is True
+    assert ov.is_file()
+
+    base = {
+        "MSFT": {
+            "sym": "MSFT",
+            "signals": {"macroAlive": True, "sentimentBroken": False},
+        }
+    }
+    merged = apply_ticker_overrides(base, {"tickers": {"MSFT": {"signals": out["signals"]}}})
+    assert merged["MSFT"]["signals"]["macroAlive"] is False
+    assert merged["MSFT"]["signals_override"] is True

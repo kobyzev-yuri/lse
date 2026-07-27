@@ -113,6 +113,22 @@
   .macro b{color:var(--ink);}
   .upd{font-size:11px;font-family:var(--mono);color:var(--dim);float:right;font-weight:400;text-transform:none;letter-spacing:0;}
 
+  .flag-panel{margin-top:14px;padding-top:14px;border-top:1px solid var(--line);}
+  .flag-panel h4{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600;}
+  .flag-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line);font-size:13.5px;}
+  .flag-row:first-of-type{border-top:none;}
+  .flag-row .fl{color:var(--ink);}
+  .flag-row .fh{display:block;font-size:11.5px;color:var(--dim);margin-top:2px;font-weight:400;}
+  .flag-toggle{position:relative;width:44px;height:24px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);cursor:pointer;flex:none;transition:.15s;padding:0;}
+  .flag-toggle.on{background:rgba(46,160,67,.35);border-color:rgba(46,160,67,.55);}
+  .flag-toggle.warn{background:rgba(217,83,79,.35);border-color:rgba(217,83,79,.55);}
+  .flag-toggle:disabled{opacity:.45;cursor:wait;}
+  .flag-toggle .knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--ink);transition:.15s;}
+  .flag-toggle.on .knob,.flag-toggle.warn .knob{left:22px;}
+  .flag-status{font-size:11.5px;font-family:var(--mono);color:var(--dim);margin-top:8px;min-height:1.2em;}
+  .flag-status.err{color:#ef8582;}
+  .flag-status.ok{color:#5fd67c;}
+
   .stub-tag,.live-tag,.manual-tag{
     display:inline-flex;align-items:center;gap:5px;margin-left:8px;padding:2px 8px;border-radius:999px;
     font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.2px;vertical-align:middle;
@@ -246,9 +262,10 @@
   <div id="content"><div class="card"><p class="note">Загрузка данных…</p></div></div>
 
   <footer>
-    Уровни Buy Dip / Sell — ручные (команда): правки в <code>nastya/notebook/notebook_data.json</code> → deploy; UI-редактор — позже (фаза D).
-    Close — справочная цена из quotes, не авто-сигнал BUY. План и вопросы Насте: docs/TRADING_NOTEBOOK.md.
-    Отдельный UI от «Портфель · карточки» / коридоров / GAME_5M. Не является инвестиционной рекомендацией.
+    Макро-гейты (macroAlive / sentimentBroken) — переключатели на вкладке «Вердикт», пишутся в <code>local/notebook/ticker_overrides.json</code> (не в git).
+    Уровни Buy Dip / Sell — ручные: <code>nastya/notebook/notebook_data.json</code> → deploy; UI-редактор уровней — позже (фаза D).
+    Close — справочная цена из quotes, не авто-сигнал BUY. План: docs/TRADING_NOTEBOOK.md.
+    Отдельный UI от «Портфель · карточки» / GAME_5M. Не является инвестиционной рекомендацией.
   </footer>
 </div>
 
@@ -575,7 +592,7 @@ function computeVerdict(d){
     name:"Макро (SocGen)",
     state: macroBroken ? "bad" : "ok",
     gate: macroBroken,
-    stub: "флаг в JSON",
+    manual: d.signals_override ? "overlay · local/notebook" : "ручной флаг",
     val: macroBroken ? "тезис AI под вопросом — фон против входа" : "тезис AI жив до сер. 2027 — фон поддерживающий"
   });
 
@@ -648,6 +665,67 @@ function computeVerdict(d){
   return {action, cls, why, indicators};
 }
 
+function renderMacroFlags(d){
+  const sig = d.signals || {};
+  const alive = !!sig.macroAlive;
+  const broken = !!sig.sentimentBroken;
+  const by = d.override_updated_by ? ` · ${esc(d.override_updated_by)}` : "";
+  const at = d.override_updated_at_utc ? ` · ${esc(String(d.override_updated_at_utc).slice(0,19))}Z` : "";
+  const ovHint = d.signals_override
+    ? `сохранено в overlay${by}${at}`
+    : "дефолт из notebook_data.json · переключите — запишется в local/notebook";
+  return `
+    <div class="card">
+      <h3>Макро-гейты ${manualBadge("пользователь")}<span class="hint">блокируют вход при красном</span></h3>
+      <div class="flag-panel" style="margin-top:0;padding-top:0;border-top:none">
+        <div class="flag-row">
+          <div class="fl">Тезис AI жив<span class="fh">macroAlive · выкл = блок входа</span></div>
+          <button type="button" class="flag-toggle ${alive?'on':''}" id="flg-macroAlive"
+            onclick="toggleMacroFlag('macroAlive', ${alive? 'false':'true'})" title="macroAlive"
+            aria-pressed="${alive?'true':'false'}"><span class="knob"></span></button>
+        </div>
+        <div class="flag-row">
+          <div class="fl">Sentiment сломан<span class="fh">sentimentBroken · вкл = блок входа</span></div>
+          <button type="button" class="flag-toggle ${broken?'warn':''}" id="flg-sentimentBroken"
+            onclick="toggleMacroFlag('sentimentBroken', ${broken? 'false':'true'})" title="sentimentBroken"
+            aria-pressed="${broken?'true':'false'}"><span class="knob"></span></button>
+        </div>
+        <div class="flag-status" id="flagStatus">${ovHint}</div>
+      </div>
+    </div>`;
+}
+
+async function toggleMacroFlag(field, nextVal){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("flagStatus");
+  const btn = document.getElementById(field === "macroAlive" ? "flg-macroAlive" : "flg-sentimentBroken");
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "сохраняю…"; }
+  const body = {};
+  body[field] = !!nextVal;
+  try {
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/signals`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    const sig = (j && j.signals) || {};
+    DATA[sym].signals = Object.assign({}, DATA[sym].signals || {}, sig);
+    DATA[sym].signals_override = true;
+    if(j.updated_at_utc) DATA[sym].override_updated_at_utc = j.updated_at_utc;
+    if(j.updated_by) DATA[sym].override_updated_by = j.updated_by;
+    renderContent();
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    if(btn) btn.disabled = false;
+  }
+}
+
 function renderVerdict(d){
   const v = computeVerdict(d);
   const inds = v.indicators.map(i => `
@@ -671,11 +749,12 @@ function renderVerdict(d){
     <div class="card">
       <h3>Как собрался вердикт <span class="hint">Close сверяется с ручными Buy Dip / Sell — не авто-сигнал</span></h3>
       ${stubBox("Смешанный вердикт", hasLevels
-        ? "Цена — live. Уровни — из JSON. Env/макро/дома в индикаторах ниже — пока заглушки."
+        ? "Цена — live. Уровни — из JSON. Макро-гейты — переключатели ниже (overlay). Env/дома — частично заглушки."
         : "Цена — live. Уровни Buy Dip/Sell ещё не вписаны → вердикт без ценового триггера.")}
       ${inds}
       <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs заранее вписанные уровни.</div>
-    </div>`;
+    </div>
+    ${renderMacroFlags(d)}`;
 }
 
 function digestItem(it, cls){

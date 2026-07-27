@@ -23,6 +23,7 @@
 | Списки/уровни Насти | **частично** | G1=portfolio, G2=GAME_5M уже в JSON; уровни/G3/Новые — ждём п.1–5 |
 | Фундамент / дома / env-ручное | **ждём п.11–13** | эталон NBIS есть; VIX уже авто |
 | UI-редактор уровней | **фаза D** | спека готова, код по запросу |
+| UI макро-гейтов (`macroAlive` / `sentimentBroken`) | **сделано** | `PATCH /api/notebook/tickers/{sym}/signals` → `local/notebook/ticker_overrides.json` |
 
 ---
 
