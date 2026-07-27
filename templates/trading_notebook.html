@@ -258,6 +258,15 @@
   .ind-row.macro-edit .ival{min-width:min(100%,220px);}
   .levels-inline{width:100%;margin-top:10px;}
   .levels-inline .edit-grid{margin-top:0;}
+  .lvl-one{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:8px;vertical-align:middle;}
+  .lvl-one .lk{font-size:11px;font-family:var(--mono);color:var(--dim);text-transform:uppercase;}
+  .lvl-one input{
+    width:78px;background:var(--bg);border:1px solid var(--line);border-radius:6px;color:var(--ink);
+    font-family:var(--mono);font-size:13px;padding:4px 7px;
+  }
+  .lvl-one input:focus{outline:none;border-color:var(--accent);}
+  .lvl-one .edit-btn{padding:4px 10px;font-size:12px;}
+  .lvl-one .flag-status{margin:0;font-size:11px;}
 
   /* fundament (NBIS-style) */
   .fund-tag{font-size:13.5px;color:var(--muted);line-height:1.5;margin-bottom:14px;}
@@ -723,23 +732,17 @@ function renderLevelsInline(d){
   const L = d.levels || {};
   const buy = L.buyDip != null ? L.buyDip : "";
   const sell = L.sell != null ? L.sell : "";
-  const note = L.note != null ? L.note : "";
-  const hint = d.levels_override ? "overlay" : "пустое + Сохранить = очистить";
+  // note kept in DATA; not shown in the one-line UI
   return `
-    <div class="levels-inline">
-      <div class="edit-grid">
-        <div class="edit-field"><label>Buy Dip</label>
-          <input type="number" step="any" id="lvl-buyDip" value="${esc(buy)}" placeholder="например 350"></div>
-        <div class="edit-field"><label>Sell</label>
-          <input type="number" step="any" id="lvl-sell" value="${esc(sell)}" placeholder="например 450"></div>
-        <div class="edit-field" style="grid-column:1/-1"><label>Заметка</label>
-          <input type="text" id="lvl-note" value="${esc(note)}" placeholder="кто задал · контекст"></div>
-      </div>
-      <div class="edit-actions">
-        <button type="button" class="edit-btn" id="lvl-save" onclick="saveLevels()">Сохранить</button>
-        <span class="flag-status" id="lvlStatus" style="margin-top:0">${hint}</span>
-      </div>
-    </div>`;
+    <span class="lvl-one">
+      <span class="lk">buy</span>
+      <input type="number" step="any" id="lvl-buyDip" value="${esc(buy)}" placeholder="—">
+      <span class="lk">sell</span>
+      <input type="number" step="any" id="lvl-sell" value="${esc(sell)}" placeholder="—">
+      <input type="hidden" id="lvl-note" value="${esc(L.note != null ? L.note : "")}">
+      <button type="button" class="edit-btn" id="lvl-save" onclick="saveLevels()">OK</button>
+      <span class="flag-status" id="lvlStatus"></span>
+    </span>`;
 }
 
 function envEditableKey(lbl){
@@ -906,11 +909,18 @@ async function setEnvState(key, state, idSuffix){
 function renderVerdict(d){
   const v = computeVerdict(d);
   const inds = v.indicators.map(i => {
-    const editHtml = i.editKind==="macro" ? renderMacroInlineControls(d)
-      : (i.editKind==="levels" ? renderLevelsInline(d) : "");
-    const editBadge = i.editKind ? manualBadge("настройка здесь") : "";
+    if(i.editKind === "levels"){
+      return `
+    <div class="ind-row">
+      <span class="idot ${esc(i.state)}"></span>
+      <span class="iname">${esc(i.name)}</span>
+      <span class="ival">${esc(i.val)}${i.live?liveBadge("Close"):""}${renderLevelsInline(d)}</span>
+    </div>`;
+    }
+    const editHtml = i.editKind==="macro" ? renderMacroInlineControls(d) : "";
+    const editBadge = i.editKind==="macro" ? manualBadge("настройка здесь") : "";
     return `
-    <div class="ind-row ${i.editKind?'macro-edit':''}">
+    <div class="ind-row ${i.editKind==="macro"?'macro-edit':''}">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
       <span class="ival">${esc(i.val)}${i.live?liveBadge(i.live):""}${i.manual?manualBadge(i.manual):""}${i.stub?stubBadge(i.stub):""}${editBadge}</span>
@@ -931,7 +941,7 @@ function renderVerdict(d){
       <h3>Как собрался вердикт <span class="hint">Close vs Buy Dip / Sell — не авто-сигнал</span></h3>
       ${stubBox("Смешанный вердикт", "Цена — live. Макро и уровни — в строках индикаторов. Env ФРС·PT — блок ниже.")}
       ${inds}
-      <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs уровни в строке «Цена vs уровень».</div>
+      <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs buy/sell в той же строке.</div>
     </div>
     ${renderEnvEditorCard(d)}`;
 }
