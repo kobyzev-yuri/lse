@@ -50,6 +50,24 @@
   .tk .chg{font-size:12px;font-family:var(--mono);}
   .up{color:var(--buy);} .down{color:var(--sell);}
   .empty-grp{color:var(--dim);font-size:13px;padding:18px 4px;font-style:italic;}
+  .grp-tools{
+    display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;margin-bottom:14px;
+  }
+  .grp-tools .gt-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);font-weight:700;margin-right:4px;}
+  .grp-tools input[type=text]{
+    width:88px;background:var(--bg);border:1px solid var(--line);border-radius:7px;
+    color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;
+  }
+  .grp-tools select{
+    background:var(--bg);border:1px solid var(--line);border-radius:7px;color:var(--ink);
+    font-size:12.5px;padding:6px 8px;max-width:160px;
+  }
+  .grp-tools .gt-status{font-size:12px;color:var(--muted);min-height:1em;}
+  .grp-tools .gt-status.err{color:#ef8582;} .grp-tools .gt-status.ok{color:#5fd67c;}
+  .grp-tools .gt-sep{width:1px;height:22px;background:var(--line);margin:0 2px;}
+  @media(max-width:640px){.grp-tools .gt-sep{display:none;}}
 
   /* tabs */
   nav.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:20px;overflow-x:auto;}
@@ -252,6 +270,14 @@
   .ind-row .iname{width:170px;font-size:13px;font-weight:600;flex:none;}
   .ind-row .ival{font-size:13px;color:var(--muted);flex:1;}
   .ind-row .igate{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:5px;background:var(--sell-soft);color:#ef8582;flex:none;}
+  .nsent-avg{font-family:var(--mono);font-size:13px;}
+  .nsent-avg.bull{color:#5fd67c;} .nsent-avg.bear{color:#ef8582;} .nsent-avg.neut{color:var(--muted);}
+  .nsent-arts{margin-top:10px;width:100%;}
+  .nsent-arts .na{padding:8px 0;border-top:1px solid var(--line);font-size:12.5px;}
+  .nsent-arts .na .nt{color:var(--ink);line-height:1.35;}
+  .nsent-arts .na .nm{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:3px;}
+  .nsent-arts .na a{color:var(--accent);text-decoration:none;margin-left:8px;}
+  .nsent-arts .na a:hover{text-decoration:underline;}
   @media(max-width:640px){.ind-row .iname{width:auto;}.ind-row{flex-wrap:wrap;}}
   .macro-inline{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-left:8px;vertical-align:middle;}
   .macro-inline .mi{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);}
@@ -306,6 +332,7 @@
 
   <div class="group-nav" id="groupNav"></div>
   <div class="gmeta" id="groupMeta"></div>
+  <div class="grp-tools" id="groupTools"></div>
   <div class="ticker-bar" id="tickerBar"></div>
 
   <nav class="tabs" id="tabs"></nav>
@@ -349,13 +376,6 @@ function manualBadge(where){
 }
 function stubBox(title, where){
   return `<div class="stub-box"><b>${esc(title)}</b> — брать из: ${esc(where)}</div>`;
-}
-function dataLegend(){
-  return `<div class="data-legend">
-    ${liveBadge("авто / KB / quotes")}
-    ${stubBadge("ждёт ручной ввод или источник")}
-    <span class="hint-txt">Жёлтая точка на вкладке = в основном заглушка.</span>
-  </div>`;
 }
 
 let digestVariant = "digest";
@@ -434,6 +454,124 @@ function tickersInGroup(g){
   return Object.values(DATA).filter(d => String(d.group) === gk);
 }
 
+function groupSelectHtml(id, selected){
+  const opts = [
+    {k:"1", l:"G1 · Удержание"},
+    {k:"2", l:"G2 · Активное"},
+    {k:"3", l:"G3 · Кандидаты"},
+    {k:"n", l:"Новые"},
+  ];
+  return `<select id="${esc(id)}">${opts.map(o =>
+    `<option value="${o.k}" ${String(selected)===o.k?"selected":""}>${esc(o.l)}</option>`
+  ).join("")}</select>`;
+}
+
+function renderGroupTools(){
+  const el = document.getElementById("groupTools");
+  if(!el) return;
+  const cur = current && DATA[current] ? DATA[current] : null;
+  const moveSym = cur ? cur.sym : "";
+  const moveG = cur ? String(cur.group) : String(currentGroup);
+  el.innerHTML = `
+    <span class="gt-label">Добавить</span>
+    <input type="text" id="addSym" placeholder="TICKER" maxlength="12" autocomplete="off" spellcheck="false">
+    ${groupSelectHtml("addGroup", currentGroup)}
+    <button type="button" class="edit-btn" id="addBtn" onclick="addTickerToGroup()" title="Карточка + дневные свечи (quotes) + новости SA/Yahoo">В группу</button>
+    <span class="gt-sep"></span>
+    <span class="gt-label">Перенести</span>
+    <span class="gt-label" style="text-transform:none;letter-spacing:0;font-family:var(--mono);color:var(--ink)">${esc(moveSym || "—")}</span>
+    ${groupSelectHtml("moveGroup", moveG)}
+    <button type="button" class="edit-btn" id="moveBtn" onclick="moveTickerGroup()" ${moveSym?"":"disabled"}>OK</button>
+    <span class="gt-status" id="grpToolStatus"></span>
+  `;
+  const inp = document.getElementById("addSym");
+  if(inp){
+    inp.addEventListener("keydown", (ev) => {
+      if(ev.key === "Enter"){ ev.preventDefault(); addTickerToGroup(); }
+    });
+  }
+}
+
+function setGrpToolStatus(msg, kind){
+  const el = document.getElementById("grpToolStatus");
+  if(!el) return;
+  el.className = "gt-status" + (kind ? " " + kind : "");
+  el.textContent = msg || "";
+}
+
+async function addTickerToGroup(){
+  const inp = document.getElementById("addSym");
+  const sel = document.getElementById("addGroup");
+  const btn = document.getElementById("addBtn");
+  const sym = String((inp && inp.value) || "").trim().toUpperCase();
+  const group = String((sel && sel.value) || currentGroup || "n");
+  if(!sym){ setGrpToolStatus("укажите тикер", "err"); return; }
+  if(btn) btn.disabled = true;
+  setGrpToolStatus("добавляю + свечи/новости…");
+  try{
+    const r = await fetch("/api/notebook/tickers", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({sym, group, updated_by:"notebook-ui", bootstrap:true}),
+    });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.detail || j.error || ("HTTP "+r.status));
+    const card = j.card || {sym: j.ticker || sym, group: j.group || group, px:null, chg:"—", up:true, name:sym};
+    const u = String(card.sym || j.ticker || sym).toUpperCase();
+    DATA[u] = Object.assign({}, DATA[u] || {}, card, {sym:u, group:String(j.group || group)});
+    if(inp) inp.value = "";
+    currentGroup = String(DATA[u].group);
+    current = u;
+    const boot = j.bootstrap || {};
+    const q = boot.quotes || {};
+    const sa = boot.news_sa || {};
+    const yh = boot.news_yahoo || {};
+    const bits = [];
+    if(q.ok) bits.push(`свечи ${q.rows_upserted|0}`);
+    else if(q.error) bits.push("свечи ✗");
+    if(sa.ok) bits.push(`SA +${sa.kb_inserted|0}`);
+    else if(sa.skipped) bits.push("SA skip");
+    else if(sa.error) bits.push("SA ✗");
+    if(yh.ok) bits.push(`Yahoo +${yh.kb_inserted|0}`);
+    else if(yh.error) bits.push("Yahoo ✗");
+    setGrpToolStatus(`${u} → GRP ${DATA[u].group}` + (bits.length ? ` · ${bits.join(" · ")}` : ""), "ok");
+    renderGroupNav(); renderGroupTools(); renderTickers(); renderContent();
+  }catch(e){
+    setGrpToolStatus(String(e.message || e), "err");
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function moveTickerGroup(){
+  const sel = document.getElementById("moveGroup");
+  const btn = document.getElementById("moveBtn");
+  const sym = current;
+  const group = String((sel && sel.value) || "");
+  if(!sym || !DATA[sym]){ setGrpToolStatus("выберите тикер", "err"); return; }
+  if(String(DATA[sym].group) === group){ setGrpToolStatus("уже в этой группе", "ok"); return; }
+  if(btn) btn.disabled = true;
+  setGrpToolStatus("переношу…");
+  try{
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/group`, {
+      method: "PATCH",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({group, updated_by:"notebook-ui"}),
+    });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.detail || j.error || ("HTTP "+r.status));
+    DATA[sym].group = String(j.group || group);
+    DATA[sym].group_override = true;
+    currentGroup = String(DATA[sym].group);
+    setGrpToolStatus(`${sym}: ${j.from_group || "?"} → ${DATA[sym].group}`, "ok");
+    renderGroupNav(); renderGroupTools(); renderTickers(); renderContent();
+  }catch(e){
+    setGrpToolStatus(String(e.message || e), "err");
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
 function renderGroupNav(){
   const counts = {1:0,2:0,3:0,n:0};
   Object.values(DATA).forEach(d => { counts[String(d.group)] = (counts[String(d.group)]||0)+1; });
@@ -444,6 +582,7 @@ function renderGroupNav(){
     </div>`).join('');
   const meta = (GROUPS[currentGroup] && GROUPS[currentGroup].meta) || "";
   document.getElementById("groupMeta").innerHTML = meta;
+  renderGroupTools();
 }
 
 function fmtPx(px){
@@ -457,7 +596,7 @@ function renderTickers(){
   const list = tickersInGroup(currentGroup);
   const bar = document.getElementById("tickerBar");
   if(list.length===0){
-    bar.innerHTML = `<div class="empty-grp">В этой группе пока нет проработанных тикеров. Входные параметры прописываются заранее — при их достижении тикер переходит в детальную проработку.</div>`;
+    bar.innerHTML = `<div class="empty-grp">В этой группе пока нет тикеров. Добавьте символ выше или перенесите из другой группы.</div>`;
     return;
   }
   bar.innerHTML = list.map(d => {
@@ -483,7 +622,7 @@ function selectGroup(g){
   current = list.length ? list[0].sym : null;
   renderGroupNav(); renderTickers(); renderContent();
 }
-function selectTicker(s){ current = s; renderTickers(); renderContent(); }
+function selectTicker(s){ current = s; renderGroupTools(); renderTickers(); renderContent(); }
 function selectTab(t){ activeTab = t; renderTabs(); renderContent(); }
 
 function tabWrap(id, inner){
@@ -690,7 +829,7 @@ function renderContent(){
   }
   const d = DATA[current];
   if(!d){ c.innerHTML = `<div class="load-err">Тикер ${esc(current)} не найден в данных</div>`; return; }
-  let html = (activeTab === "verdict" || activeTab === "profile" || activeTab === "triggers" || activeTab === "houses" || activeTab === "env") ? "" : dataLegend();
+  let html = "";
   const L = d.levels || {};
   html += tabWrap("verdict", renderVerdict(d));
 
@@ -716,9 +855,9 @@ function renderContent(){
     return `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span>${badge}</div>`;
   }).join("");
   const hasLiveVix = (d.env||[]).some(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
-  html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):""}<span class="hint">ФРС / PT — на Вердикте</span></h3>
+  html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):""}<span class="hint">VIX / NDX / нефть — live; ФРС / таргеты — вручную на Вердикте</span></h3>
     ${envs}
-    <div class="note">Красный/жёлтый = пауза входов. Правка ФРС/PT — в строке Environment Check на Вердикте.</div></div>`);
+    <div class="note">Красный/жёлтый = пауза входов. <b>таргеты</b> = PT (Price Target): внезапные понижения таргетов аналитиков вне earnings. Нефть вверх = геополитический стресс.</div></div>`);
 
   const houses = (d.houses||[]).map(h => {
     const quote = houseQuoteLine(h);
@@ -756,9 +895,11 @@ function renderContent(){
 
 function envSourceHint(lbl){
   const s = String(lbl||"").toLowerCase();
-  if(s.includes("vix")) return "источник: quotes/yfinance (подключить)";
+  if(s.includes("vix")) return "live quotes/^VIX";
+  if(s.includes("ndx") || s.includes("nasdaq")) return "live quotes/^NDX";
+  if(s.includes("нефт") || s.includes("oil") || s.includes("геопол")) return "live quotes/CL=F";
   if(s.includes("фрс") || s.includes("fed")) return "вручную / макро-дайджест KB";
-  if(s.includes("таргет") || s.includes("pt")) return "вручную / SA·Yahoo headlines";
+  if(s.includes("таргет") || s.includes("pt")) return "вручную · PT cuts вне earnings";
   return "вручную JSON";
 }
 
@@ -780,8 +921,21 @@ function vixFearLabel(val, state){
   return "паника / extreme fear";
 }
 
+function findLiveEnvRow(env, key){
+  const k = String(key||"").toLowerCase();
+  return (env||[]).find(e => {
+    if(!e || !e.live) return false;
+    if(e.metric && String(e.metric).toLowerCase() === k) return true;
+    const lbl = String(e.lbl||"").toLowerCase();
+    if(k === "vix") return lbl.includes("vix");
+    if(k === "ndx") return lbl.includes("ndx") || lbl.includes("nasdaq");
+    if(k === "oil") return lbl.includes("нефт") || lbl.includes("oil") || lbl.includes("геопол");
+    return false;
+  }) || null;
+}
+
 function findLiveVix(env){
-  const row = (env||[]).find(e => e && e.live && String(e.lbl||"").toLowerCase().includes("vix"));
+  const row = findLiveEnvRow(env, "vix");
   if(!row) return null;
   const val = row.value != null ? Number(row.value) : null;
   return {
@@ -790,6 +944,33 @@ function findLiveVix(env){
     st: row.st || "",
     fear: vixFearLabel(val, row.state),
   };
+}
+
+function formatEnvLiveBits(env){
+  const bits = [];
+  const vix = findLiveEnvRow(env, "vix");
+  if(vix && vix.value != null && Number.isFinite(Number(vix.value))){
+    bits.push(`VIX ${Number(vix.value).toFixed(1)}`);
+  }
+  const ndx = findLiveEnvRow(env, "ndx");
+  if(ndx){
+    const v = Number(ndx.value);
+    const chg = ndx.chg_pct != null && Number.isFinite(Number(ndx.chg_pct))
+      ? `${Number(ndx.chg_pct) >= 0 ? "+" : ""}${Number(ndx.chg_pct).toFixed(1)}%`
+      : null;
+    if(Number.isFinite(v)) bits.push(chg ? `NDX ${Math.round(v).toLocaleString("en-US")} (${chg})` : `NDX ${Math.round(v).toLocaleString("en-US")}`);
+    else if(ndx.st) bits.push(`NDX ${ndx.st}`);
+  }
+  const oil = findLiveEnvRow(env, "oil");
+  if(oil){
+    const v = Number(oil.value);
+    const chg = oil.chg_pct != null && Number.isFinite(Number(oil.chg_pct))
+      ? `${Number(oil.chg_pct) >= 0 ? "+" : ""}${Number(oil.chg_pct).toFixed(1)}%`
+      : null;
+    if(Number.isFinite(v)) bits.push(chg ? `нефть $${v.toFixed(2)} (${chg})` : `нефть $${v.toFixed(2)}`);
+    else if(oil.st) bits.push(`нефть ${oil.st}`);
+  }
+  return bits;
 }
 
 function computeVerdict(d){
@@ -802,16 +983,16 @@ function computeVerdict(d){
   const yellowEnv = env.filter(e => e.state==="mid");
   const sig = d.signals || {};
   const macroBroken = !!sig.sentimentBroken || !sig.macroAlive;
-  const vix = findLiveVix(env);
+  const liveBits = formatEnvLiveBits(env);
 
   const indicators = [];
-  // One Environment row: VIX lives here (no separate VIX indicator).
+  // One Environment row: VIX + NDX + oil live here.
   let envVal;
   if(worstEnv==="ok") envVal = "чисто";
   else if(worstEnv==="mid") envVal = `жёлтый: ${yellowEnv.map(e=>e.lbl).join(", ")}`;
   else envVal = `КРАСНЫЙ: ${redEnv.map(e=>e.lbl).join(", ")}`;
-  if(vix && vix.value != null){
-    envVal = `VIX ${vix.value.toFixed(1)} · ${envVal}`;
+  if(liveBits.length){
+    envVal = `${liveBits.join(" · ")} · ${envVal}`;
   }
   indicators.push({
     name:"Environment Check",
@@ -825,6 +1006,13 @@ function computeVerdict(d){
     state: macroBroken ? "bad" : "ok",
     gate: macroBroken,
     editKind: "macro",
+    val: ""
+  });
+  indicators.push({
+    name:"News sentiment",
+    state: "neutral",
+    gate: false,
+    editKind: "newsSent",
     val: ""
   });
 
@@ -922,9 +1110,9 @@ function renderMacroInlineControls(d){
           onclick="toggleMacroFlag('macroAlive', ${alive? 'false':'true'})" title="macroAlive — тезис AI жив"
           aria-pressed="${alive?'true':'false'}"><span class="knob"></span></button>
       </span>
-      <span class="mi"><b>sentiment</b>
+      <span class="mi"><b>сент. сломан</b>
         <button type="button" class="flag-toggle ${broken?'warn':''}" id="flg-sentimentBroken"
-          onclick="toggleMacroFlag('sentimentBroken', ${broken? 'false':'true'})" title="sentimentBroken — сломан"
+          onclick="toggleMacroFlag('sentimentBroken', ${broken? 'false':'true'})" title="Ручной флаг SocGen (не FinBert из KB)"
           aria-pressed="${broken?'true':'false'}"><span class="knob"></span></button>
       </span>
       <span class="flag-status" id="flagStatus"></span>
@@ -948,8 +1136,8 @@ function renderEnvInlineControls(d){
   ).join("");
   return `
     <span class="lvl-one" style="margin-left:10px">
-      <span class="lk">фрс</span><span class="env-state-btns">${btns("fed", fed)}</span>
-      <span class="lk">pt</span><span class="env-state-btns">${btns("pt", pt)}</span>
+      <span class="lk" title="Риторика ФРС / FOMC">фрс</span><span class="env-state-btns">${btns("fed", fed)}</span>
+      <span class="lk" title="PT = Price Target: внезапные понижения таргетов аналитиков вне earnings">таргеты</span><span class="env-state-btns">${btns("pt", pt)}</span>
       <span class="flag-status" id="envStatus-verdict"></span>
     </span>`;
 }
@@ -1268,6 +1456,18 @@ function renderVerdict(d){
       <span class="ival">${i.gate?'<span class="igate">БЛОК</span>':''}${renderMacroInlineControls(d)}</span>
     </div>`;
     }
+    if(i.editKind === "newsSent"){
+      return `
+    <div class="ind-row" style="flex-wrap:wrap;align-items:flex-start">
+      <span class="idot ${esc(i.state)}" id="nsent-dot"></span>
+      <span class="iname">${esc(i.name)}</span>
+      <span class="ival" id="nsent-val">
+        <span class="note">FinBert · загрузка…</span>
+        <button type="button" class="edit-btn" id="nsent-btn" onclick="toggleNewsSentimentArticles()" disabled>статьи</button>
+      </span>
+      <div class="nsent-arts" id="nsent-arts" hidden></div>
+    </div>`;
+    }
     return `
     <div class="ind-row">
       <span class="idot ${esc(i.state)}"></span>
@@ -1276,7 +1476,7 @@ function renderVerdict(d){
       ${i.gate?'<span class="igate">БЛОК</span>':''}
     </div>`;
   }).join("");
-  return `
+  const html = `
     <div class="verdict-hero ${v.cls}">
       <div class="vlabel">${esc(d.sym)}</div>
       <div class="vaction">${esc(v.action)}</div>
@@ -1286,6 +1486,78 @@ function renderVerdict(d){
     <div class="card">
       ${inds}
     </div>`;
+  queueMicrotask(() => loadNewsSentiment(d.sym));
+  return html;
+}
+
+let _newsSentCache = null;
+let _newsSentOpen = false;
+
+function newsSentStateClass(label){
+  const L = String(label||"").toLowerCase();
+  if(L === "bullish") return {dot:"ok", avg:"bull"};
+  if(L === "bearish") return {dot:"bad", avg:"bear"};
+  if(L === "neutral") return {dot:"mid", avg:"neut"};
+  return {dot:"neutral", avg:"neut"};
+}
+
+async function loadNewsSentiment(sym){
+  const u = String(sym||"").toUpperCase();
+  const valEl = document.getElementById("nsent-val");
+  const dotEl = document.getElementById("nsent-dot");
+  const btn = document.getElementById("nsent-btn");
+  const arts = document.getElementById("nsent-arts");
+  if(!valEl || !u) return;
+  _newsSentOpen = false;
+  if(arts){ arts.hidden = true; arts.innerHTML = ""; }
+  try{
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(u)}/news-sentiment?lookback_hours=168&limit=40`);
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.detail || j.error || ("HTTP "+r.status));
+    _newsSentCache = j;
+    const avg = j.avg_sentiment;
+    const label = j.label || "—";
+    const scored = j.scored_count|0;
+    const n = j.news_count|0;
+    const st = newsSentStateClass(label);
+    if(dotEl){ dotEl.className = "idot " + st.dot; }
+    const avgTxt = (avg != null && Number.isFinite(Number(avg)))
+      ? `<span class="nsent-avg ${st.avg}">${Number(avg).toFixed(2)} · ${esc(label)}</span>`
+      : `<span class="nsent-avg neut">нет скоров</span>`;
+    valEl.innerHTML = `${avgTxt}
+      <span class="note" style="margin-left:8px">FinBert · ${scored}/${n} за 7д</span>
+      <button type="button" class="edit-btn" id="nsent-btn" onclick="toggleNewsSentimentArticles()" ${n?"":"disabled"}>статьи</button>`;
+  }catch(e){
+    _newsSentCache = null;
+    if(dotEl) dotEl.className = "idot neutral";
+    valEl.innerHTML = `<span class="note">FinBert · ошибка: ${esc(e.message||e)}</span>
+      <button type="button" class="edit-btn" id="nsent-btn" onclick="loadNewsSentiment('${esc(u)}')">повторить</button>`;
+  }
+}
+
+function toggleNewsSentimentArticles(){
+  const arts = document.getElementById("nsent-arts");
+  if(!arts || !_newsSentCache) return;
+  _newsSentOpen = !_newsSentOpen;
+  if(!_newsSentOpen){ arts.hidden = true; return; }
+  const list = _newsSentCache.articles || [];
+  if(!list.length){
+    arts.innerHTML = `<p class="note">Нет статей в KB за окно.</p>`;
+    arts.hidden = false;
+    return;
+  }
+  arts.innerHTML = list.map(a => {
+    const sc = a.sentiment_score != null ? Number(a.sentiment_score).toFixed(2) : "—";
+    const href = String(a.link||"").trim();
+    const link = href
+      ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">↗ первоисточник</a>`
+      : "";
+    return `<div class="na">
+      <div class="nt">${esc(a.title||"(без заголовка)")}</div>
+      <div class="nm">${esc(sc)} · ${esc(a.label||"—")} · ${esc(a.source||"")}${link}</div>
+    </div>`;
+  }).join("");
+  arts.hidden = false;
 }
 
 function digestItem(it, cls){
@@ -1293,12 +1565,16 @@ function digestItem(it, cls){
   const inData = !!DATA[sym];
   const click = inData ? ` style="cursor:pointer" onclick="selectTicker('${esc(sym)}');selectTab('verdict')"` : "";
   const openHint = inData ? `<span class="dlink" style="margin-left:8px">открыть в тетрадке</span>` : "";
+  const href = String(it.link||"").trim();
+  const linkHtml = href
+    ? `<a class="dlink" href="${esc(href)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">↗ первоисточник</a>`
+    : "";
   return `<div class="ditem ${cls}"${click}>
     <span class="dsym">${esc(it.sym)}</span><span class="dsrc">${esc(it.src||"")}</span>${openHint}
     <div class="dtext">${esc(it.text||"")}</div>
     ${it.prem?`<div class="dprem up">${esc(it.prem)}</div>`:""}
     <div class="dtac">${it.tac||""}</div>
-    ${it.link?`<span class="dlink">↗ ${esc(it.link)}</span>`:""}
+    ${linkHtml}
   </div>`;
 }
 
@@ -1313,21 +1589,18 @@ function renderDigest(){
   if(digestVariant==="logic"){
     const buckets = (DIGEST_BUCKETS||[]).map(b => `<div class="bucket"><span class="bico">${esc(b.ico)}</span>
       <div class="bbody"><div class="btitle">${esc(b.title)}</div><div class="bdesc">${esc(b.desc)}</div></div></div>`).join("");
-    return tabWrap("digest", dataLegend() + variantSwitch + `
-      <div class="card"><h3>Автоматический фильтр ${stubBadge("схема · не live")}</h3>
-        ${stubBox("Логика корзин", "описание процесса. Живой дайджест — во вкладке «Дайджест»: KB (SA/Yahoo/…) + LLM cron ≈08:30 ET. Telegram /digest читает кэш.")}
+    return tabWrap("digest", variantSwitch + `
+      <div class="card"><h3>Автоматический фильтр</h3>
+        <p class="note">Живой дайджест: KB (SA/Yahoo/…) + LLM cron ≈08:30 ET. Telegram /digest читает кэш.</p>
         ${buckets}
-        <div class="tg-hint"><b>Live:</b> Telegram <code>/digest</code> уже читает кэш без повторного LLM.</div>
       </div>`);
   }
 
   const empty = (arr, label) => (arr&&arr.length) ? arr.map(x=>digestItem(x,label)).join("") : `<p class="note">Пока пусто.</p>`;
-  return tabWrap("digest", dataLegend() + variantSwitch + `
+  return tabWrap("digest", variantSwitch + `
     <div class="card">
-      <div class="digest-head"><h3 style="margin:0">📊 Утренний дайджест ${hasLive?liveBadge("KB + LLM cron"):stubBadge("нет кэша")}</h3><span class="dt">${esc(d.date||"")}</span></div>
-      ${hasLive
-        ? stubBox("Источник", "knowledge_base (Seeking Alpha + Yahoo/Marketaux/Investing/…) + Yahoo EARNINGS → LLM. Кэш local/notebook/digest_latest.json.")
-        : stubBox("Нет свежего дайджеста", "дождаться cron 12:30 UTC или scripts/run_notebook_news_digest.py --from-kb-only")}
+      <div class="digest-head"><h3 style="margin:0">📊 Утренний дайджест ${hasLive?liveBadge("KB + LLM cron"):""}</h3><span class="dt">${esc(d.date||"")}</span></div>
+      ${hasLive ? "" : `<p class="note">Нет свежего дайджеста — cron 12:30 UTC или scripts/run_notebook_news_digest.py --from-kb-only</p>`}
       <div class="filterstat">
         <span class="fstat"><b>${d.filtered||0}</b> статей обработано</span>
         <span class="fstat keep">➔ <b>${d.kept||0}</b> в дайджест</span>
@@ -1344,12 +1617,11 @@ function renderDigest(){
 function renderWatchlist(){
   const w = WATCHLIST || {};
   const flash = w.flash || {};
-  return tabWrap("watchlist", dataLegend() + `
-    <div class="card"><h3>Правила работы с Watchlist ${stubBadge("текст JSON")}</h3>
-      ${stubBox("Watchlist", "правила вручную в notebook_data.json. Live Most Active (Investing/SA) — пока не подключены к этой вкладке.")}
+  return tabWrap("watchlist", `
+    <div class="card"><h3>Правила работы с Watchlist</h3>
+      <p class="note">Правила из notebook_data.json.</p>
       <ul class="clean">${(w.rules||[]).map(r=>`<li>${r}</li>`).join("")}</ul></div>
-    <div class="card"><h3>Flash Crash ${stubBadge("правило-заглушка")}<span class="hint">спекулятивные входы ВНЕ списка</span></h3>
-      ${stubBox("Flash Crash", "дисциплинарное правило из шаблона (JSON). Не live-алерты; доработка по ответу Насти (п.15).")}
+    <div class="card"><h3>Flash Crash<span class="hint">спекулятивные входы ВНЕ списка</span></h3>
       <div class="kv" style="grid-template-columns:auto 1fr;gap:10px 16px;">
         <div class="k">Прецедент</div><div class="v" style="text-align:left;font-family:var(--sans)">${esc(flash.precedent||"")}</div>
         <div class="k">Вопрос</div><div class="v" style="text-align:left;font-family:var(--sans);color:var(--muted)">${esc(flash.question||"")}</div>

@@ -57,13 +57,17 @@ _ENV_STATES = frozenset({"ok", "mid", "bad"})
 
 
 def _env_label_key(lbl: str) -> Optional[str]:
-    """Normalize env row label to a stable override key; VIX is never overridable."""
+    """Normalize env row label to a stable override key; live metrics are never overridable."""
     low = str(lbl or "").lower()
     if "vix" in low:
         return None
+    if "ndx" in low or "nasdaq" in low:
+        return None
+    if "нефт" in low or "oil" in low or "cl=f" in low or "геопол" in low:
+        return None
     if "фрс" in low or "fed" in low:
         return "fed"
-    if "таргет" in low or "pt" in low:
+    if "таргет" in low or low.strip() == "pt" or "price target" in low:
         return "pt"
     return None
 
@@ -77,6 +81,21 @@ def _find_base_ticker(sym: str) -> tuple[str, Dict[str, Any]]:
     for k, v in base_tickers.items():
         if str(k).upper() == u and isinstance(v, dict):
             return u, v
+    # Overlay-only (added via UI)
+    ov = load_notebook_overrides()
+    ov_tickers = ov.get("tickers") if isinstance(ov.get("tickers"), dict) else {}
+    for k, v in ov_tickers.items():
+        if str(k).upper() != u or not isinstance(v, dict):
+            continue
+        if v.get("is_new") or v.get("group") is not None or v.get("sym"):
+            stub = blank_ticker_card(
+                u,
+                str(v.get("group") or "n"),
+                name=str(v.get("name") or ""),
+            )
+            merged = dict(stub)
+            merged.update({kk: vv for kk, vv in v.items() if kk not in ("updated_at_utc", "updated_by")})
+            return u, merged
     raise KeyError(f"ticker {u} not in notebook_data")
 
 
@@ -169,7 +188,7 @@ def apply_ticker_overrides(
     tickers: Dict[str, Any],
     overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Merge local/notebook/ticker_overrides.json onto ticker cards (signals, levels, env)."""
+    """Merge local/notebook/ticker_overrides.json onto ticker cards (signals, levels, env, group)."""
     ov_root = overrides if overrides is not None else load_notebook_overrides()
     ov_tickers_raw = ov_root.get("tickers") if isinstance(ov_root.get("tickers"), dict) else {}
     ov_tickers = {
@@ -183,62 +202,508 @@ def apply_ticker_overrides(
         d = dict(row)
         patch = ov_tickers.get(u) or {}
         if patch:
-            if isinstance(patch.get("signals"), dict):
-                base_sig = dict(d.get("signals") or {}) if isinstance(d.get("signals"), dict) else {}
-                for k, v in patch["signals"].items():
-                    base_sig[k] = v
-                d["signals"] = base_sig
-                d["signals_override"] = True
-            if isinstance(patch.get("levels"), dict):
-                base_lv = dict(d.get("levels") or {}) if isinstance(d.get("levels"), dict) else {}
-                for k, v in patch["levels"].items():
-                    base_lv[k] = v  # None clears over base
-                d["levels"] = base_lv
-                d["levels_override"] = True
-            if isinstance(patch.get("consensus"), dict):
-                base_c = dict(d.get("consensus") or {}) if isinstance(d.get("consensus"), dict) else {}
-                for k, v in patch["consensus"].items():
-                    base_c[k] = v
-                d["consensus"] = base_c
-                d["consensus_override"] = True
-            if isinstance(patch.get("houses"), list):
-                d["houses"] = [
-                    dict(h) for h in patch["houses"] if isinstance(h, dict)
-                ]
-                d["houses_override"] = True
-                if patch.get("houses_source"):
-                    d["houses_source"] = str(patch.get("houses_source"))[:40]
-            if patch.get("houseNote") is not None:
-                d["houseNote"] = str(patch.get("houseNote") or "")[:800]
-            if patch.get("horizon") is not None:
-                d["horizon"] = str(patch.get("horizon") or "")[:160]
-                d["profile_override"] = True
-            if isinstance(patch.get("profile"), dict):
-                base_pf = dict(d.get("profile") or {}) if isinstance(d.get("profile"), dict) else {}
-                for k, v in patch["profile"].items():
-                    base_pf[k] = v
-                d["profile"] = base_pf
-                d["profile_override"] = True
-            if isinstance(patch.get("triggers"), list):
-                d["triggers"] = _merge_triggers(
-                    list(d.get("triggers") or []) if isinstance(d.get("triggers"), list) else [],
-                    patch.get("triggers"),
-                    levels=d.get("levels") if isinstance(d.get("levels"), dict) else None,
-                )
-                d["triggers_override"] = True
-            if patch.get("env") is not None:
-                base_env = list(d.get("env") or []) if isinstance(d.get("env"), list) else []
-                d["env"] = _merge_env_rows(base_env, patch.get("env"))
-                d["env_override"] = True
-            if patch.get("updated_at_utc"):
-                d["override_updated_at_utc"] = patch.get("updated_at_utc")
-            if patch.get("updated_by"):
-                d["override_updated_by"] = patch.get("updated_by")
+            d = _apply_one_ticker_patch(d, patch)
         # Keep buy/sell trigger labels in sync with effective levels.
         if isinstance(d.get("levels"), dict) and isinstance(d.get("triggers"), list):
             d["triggers"] = _merge_triggers(d["triggers"], [], levels=d.get("levels"))
         out[u] = d
+
+    # Overlay-only tickers (added via UI, not in notebook_data.json yet).
+    for u, patch in ov_tickers.items():
+        if u in out or not isinstance(patch, dict):
+            continue
+        if not (patch.get("is_new") or patch.get("group") or patch.get("sym")):
+            continue
+        stub = blank_ticker_card(
+            u,
+            str(patch.get("group") or "n"),
+            name=str(patch.get("name") or ""),
+        )
+        d = _apply_one_ticker_patch(stub, patch)
+        d["is_new"] = True
+        if isinstance(d.get("levels"), dict) and isinstance(d.get("triggers"), list):
+            d["triggers"] = _merge_triggers(d["triggers"], [], levels=d.get("levels"))
+        out[u] = d
     return out
+
+
+def _apply_one_ticker_patch(d: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply a single override patch onto a ticker card dict."""
+    if not patch:
+        return d
+    if patch.get("group") is not None:
+        g = str(patch.get("group") or "").strip()
+        if g in VALID_NOTEBOOK_GROUPS:
+            d["group"] = g
+            d["group_override"] = True
+    if patch.get("name") is not None and str(patch.get("name") or "").strip():
+        d["name"] = str(patch.get("name") or "").strip()[:120]
+    if patch.get("is_new"):
+        d["is_new"] = True
+    if isinstance(patch.get("signals"), dict):
+        base_sig = dict(d.get("signals") or {}) if isinstance(d.get("signals"), dict) else {}
+        for k, v in patch["signals"].items():
+            base_sig[k] = v
+        d["signals"] = base_sig
+        d["signals_override"] = True
+    if isinstance(patch.get("levels"), dict):
+        base_lv = dict(d.get("levels") or {}) if isinstance(d.get("levels"), dict) else {}
+        for k, v in patch["levels"].items():
+            base_lv[k] = v  # None clears over base
+        d["levels"] = base_lv
+        d["levels_override"] = True
+    if isinstance(patch.get("consensus"), dict):
+        base_c = dict(d.get("consensus") or {}) if isinstance(d.get("consensus"), dict) else {}
+        for k, v in patch["consensus"].items():
+            base_c[k] = v
+        d["consensus"] = base_c
+        d["consensus_override"] = True
+    if isinstance(patch.get("houses"), list):
+        d["houses"] = [dict(h) for h in patch["houses"] if isinstance(h, dict)]
+        d["houses_override"] = True
+        if patch.get("houses_source"):
+            d["houses_source"] = str(patch.get("houses_source"))[:40]
+    if patch.get("houseNote") is not None:
+        d["houseNote"] = str(patch.get("houseNote") or "")[:800]
+    if patch.get("horizon") is not None:
+        d["horizon"] = str(patch.get("horizon") or "")[:160]
+        d["profile_override"] = True
+    if isinstance(patch.get("profile"), dict):
+        base_pf = dict(d.get("profile") or {}) if isinstance(d.get("profile"), dict) else {}
+        for k, v in patch["profile"].items():
+            base_pf[k] = v
+        d["profile"] = base_pf
+        d["profile_override"] = True
+    if isinstance(patch.get("triggers"), list):
+        d["triggers"] = _merge_triggers(
+            list(d.get("triggers") or []) if isinstance(d.get("triggers"), list) else [],
+            patch.get("triggers"),
+            levels=d.get("levels") if isinstance(d.get("levels"), dict) else None,
+        )
+        d["triggers_override"] = True
+    if patch.get("env") is not None:
+        base_env = list(d.get("env") or []) if isinstance(d.get("env"), list) else []
+        d["env"] = _merge_env_rows(base_env, patch.get("env"))
+        d["env_override"] = True
+    if patch.get("updated_at_utc"):
+        d["override_updated_at_utc"] = patch.get("updated_at_utc")
+    if patch.get("updated_by"):
+        d["override_updated_by"] = patch.get("updated_by")
+    return d
+
+
+VALID_NOTEBOOK_GROUPS = frozenset({"1", "2", "3", "n"})
+
+
+def normalize_notebook_group(group: Any) -> str:
+    g = str(group or "").strip().lower()
+    if g in ("1", "g1", "group1", "grp1"):
+        return "1"
+    if g in ("2", "g2", "group2", "grp2"):
+        return "2"
+    if g in ("3", "g3", "group3", "grp3"):
+        return "3"
+    if g in ("n", "new", "новые", "novye", "gn"):
+        return "n"
+    raise ValueError("group must be 1, 2, 3, or n")
+
+
+def normalize_notebook_symbol(sym: Any) -> str:
+    u = str(sym or "").strip().upper()
+    # Allow ^VIX / CL=F style later, but notebook equities are A-Z0-9.-
+    if not u or len(u) > 12:
+        raise ValueError("invalid ticker symbol")
+    if not all(ch.isalnum() or ch in ".-^=" for ch in u):
+        raise ValueError("invalid ticker symbol")
+    return u
+
+
+def blank_ticker_card(sym: str, group: str, *, name: str = "") -> Dict[str, Any]:
+    """Minimal notebook card for a newly added ticker."""
+    u = normalize_notebook_symbol(sym)
+    g = normalize_notebook_group(group)
+    role = {
+        "1": "G1 удержание",
+        "2": "G2 активное",
+        "3": "G3 кандидат",
+        "n": "Новые · первичный анализ",
+    }.get(g, "тетрадка")
+    return {
+        "sym": u,
+        "name": (name or u).strip()[:120],
+        "group": g,
+        "tags": ["manual"],
+        "horizon": "",
+        "profile": {
+            "Сектор / слой": "уточнять",
+            "Роль в тетрадке": role,
+            "Отчёт (след.)": "уточнять",
+            "Целевая прибыль": "уровни TBD",
+        },
+        "triggers": [
+            {
+                "t": "buy",
+                "lvl": "Buy Dip · TBD",
+                "manual": True,
+                "desc": "Уровень вписать вручную",
+                "cond": "после согласования",
+            },
+            {
+                "t": "sell",
+                "lvl": "Sell · TBD",
+                "manual": True,
+                "desc": "Уровень фиксации TBD",
+                "cond": "после согласования",
+            },
+            {
+                "t": "watch",
+                "lvl": "Наблюдение",
+                "manual": False,
+                "desc": "Макро / катализаторы",
+                "cond": "следить",
+            },
+        ],
+        "entry": ["Техника первой — уровни вписываем вручную.", "Макро поверх техники."],
+        "exit": ["Sell-уровень задаём заранее после согласования."],
+        "env": [
+            {"lbl": "VIX", "st": "авто из quotes", "state": "mid"},
+            {"lbl": "Риторика ФРС", "st": "обновлять вручную", "state": "mid"},
+            {
+                "lbl": "Понижения таргетов (вне earnings)",
+                "st": "следить",
+                "state": "mid",
+            },
+        ],
+        "consensus": {
+            "rating": "—",
+            "pt": "—",
+            "low": "—",
+            "high": "—",
+            "n": "—",
+            "upd": "вручную",
+        },
+        "houses": [],
+        "houseNote": "Заполнить вручную или обновить с StockAnalysis.",
+        "macro": "Макро накладываем поверх техники.",
+        "levels": {"buyDip": None, "sell": None, "note": "уровни не вписаны — ждать согласования"},
+        "signals": {"macroAlive": True, "sentimentBroken": False},
+    }
+
+
+def _ticker_exists(sym: str, path: Optional[Path] = None) -> bool:
+    u = normalize_notebook_symbol(sym)
+    try:
+        _find_base_ticker(u)
+        return True
+    except KeyError:
+        pass
+    ov = load_notebook_overrides(path)
+    tickers = ov.get("tickers") if isinstance(ov.get("tickers"), dict) else {}
+    return any(str(k).upper() == u for k in tickers)
+
+
+def add_notebook_ticker(
+    sym: str,
+    group: str,
+    *,
+    name: str = "",
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+    bootstrap: bool = True,
+) -> Dict[str, Any]:
+    """Add a new ticker stub into the current group (overlay). Fails if already present.
+
+    When bootstrap=True (default), also pull daily quotes + news into Postgres.
+    """
+    u = normalize_notebook_symbol(sym)
+    g = normalize_notebook_group(group)
+    if _ticker_exists(u, path):
+        raise ValueError(f"{u} уже в тетрадке — используйте перенос группы")
+
+    stub = blank_ticker_card(u, g, name=name)
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    now = datetime.now(timezone.utc).isoformat()
+    row.update(stub)
+    row["is_new"] = True
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    out: Dict[str, Any] = {
+        "ticker": u,
+        "group": g,
+        "created": True,
+        "card": stub,
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+    if bootstrap:
+        try:
+            from config_loader import get_config_value
+
+            raw = (get_config_value("NOTEBOOK_ADD_BOOTSTRAP", "1") or "1").strip().lower()
+            do_boot = raw not in ("0", "false", "no", "off")
+        except Exception:
+            do_boot = True
+        if do_boot:
+            out["bootstrap"] = bootstrap_notebook_ticker_resources(u)
+        else:
+            out["bootstrap"] = {"skipped": True, "reason": "NOTEBOOK_ADD_BOOTSTRAP=0"}
+    return out
+
+
+def bootstrap_notebook_ticker_resources(
+    sym: str,
+    *,
+    quotes_days: Optional[int] = None,
+    sa_per_ticker: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Pull daily OHLC into quotes + news into knowledge_base for a newly added ticker."""
+    u = normalize_notebook_symbol(sym)
+    try:
+        from config_loader import get_config_value
+
+        days = int(
+            quotes_days
+            if quotes_days is not None
+            else (get_config_value("NOTEBOOK_ADD_QUOTES_DAYS", "90") or 90)
+        )
+        sa_n = int(
+            sa_per_ticker
+            if sa_per_ticker is not None
+            else (get_config_value("NOTEBOOK_ADD_SA_PER_TICKER", "10") or 10)
+        )
+    except Exception:
+        days, sa_n = 90, 10
+    days = max(10, min(days, 400))
+    sa_n = max(1, min(sa_n, 40))
+
+    result: Dict[str, Any] = {
+        "ticker": u,
+        "quotes": {"ok": False},
+        "news_sa": {"ok": False},
+        "news_yahoo": {"ok": False},
+    }
+
+    # 1) Daily candles → public.quotes
+    try:
+        from sqlalchemy import create_engine
+
+        from config_loader import get_database_url
+        from update_prices import update_ticker_prices
+
+        engine = create_engine(get_database_url())
+        try:
+            n = int(
+                update_ticker_prices(
+                    engine, u, days_back=days, force_days_back=days
+                )
+                or 0
+            )
+            result["quotes"] = {"ok": True, "rows_upserted": n, "days": days}
+        finally:
+            engine.dispose()
+    except Exception as e:
+        logger.warning("notebook bootstrap quotes %s: %s", u, e)
+        result["quotes"] = {"ok": False, "error": str(e)[:300], "days": days}
+
+    # 2) Seeking Alpha Finance → knowledge_base
+    try:
+        from services.seeking_alpha_finance import fetch_and_save_sa_news, rapidapi_key
+
+        if not rapidapi_key():
+            result["news_sa"] = {"ok": False, "skipped": "no RAPIDAPI key"}
+        else:
+            bundle = fetch_and_save_sa_news([u], per_ticker=sa_n, sleep_sec=0.25)
+            result["news_sa"] = {
+                "ok": True,
+                "api_items": len(bundle.get("items") or []),
+                "kb_inserted": int(bundle.get("kb_inserted") or 0),
+                "errors": bundle.get("errors") or {},
+            }
+            if bundle.get("kb_error"):
+                result["news_sa"]["kb_error"] = str(bundle.get("kb_error"))[:200]
+    except Exception as e:
+        logger.warning("notebook bootstrap SA news %s: %s", u, e)
+        result["news_sa"] = {"ok": False, "error": str(e)[:300]}
+
+    # 3) Yahoo (+ Marketaux if key) → knowledge_base
+    try:
+        from config_loader import get_config_value
+        from services.ticker_news_merge_fetcher import (
+            fetch_marketaux_news,
+            fetch_yahoo_news,
+            merge_articles,
+            save_articles_to_kb,
+        )
+
+        yahoo = fetch_yahoo_news([u], lookback_hours=72, max_per_ticker=40, exchange="NYSE")
+        mx_key = (get_config_value("MARKETAUX_API_KEY", "") or "").strip()
+        marketaux = []
+        if mx_key:
+            marketaux = fetch_marketaux_news(
+                mx_key, [u], lookback_hours=72, exchange="NYSE", limit=40
+            )
+        merged = merge_articles(yahoo, marketaux)
+        inserted = int(save_articles_to_kb(merged) or 0)
+        result["news_yahoo"] = {
+            "ok": True,
+            "yahoo": len(yahoo),
+            "marketaux": len(marketaux),
+            "merged": len(merged),
+            "kb_inserted": inserted,
+        }
+    except Exception as e:
+        logger.warning("notebook bootstrap Yahoo news %s: %s", u, e)
+        result["news_yahoo"] = {"ok": False, "error": str(e)[:300]}
+
+    result["ok"] = bool(
+        result.get("quotes", {}).get("ok")
+        or result.get("news_sa", {}).get("ok")
+        or result.get("news_yahoo", {}).get("ok")
+    )
+    return result
+
+
+def set_notebook_ticker_group(
+    sym: str,
+    group: str,
+    *,
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Move ticker to another notebook group (overlay group field)."""
+    u = normalize_notebook_symbol(sym)
+    g = normalize_notebook_group(group)
+    if not _ticker_exists(u, path):
+        raise KeyError(f"ticker {u} not in notebook")
+
+    prev_group = None
+    try:
+        _, base = _find_base_ticker(u)
+        prev_group = str(base.get("group") or "")
+    except KeyError:
+        prev_group = None
+
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    if prev_group is None and row.get("group"):
+        prev_group = str(row.get("group"))
+    now = datetime.now(timezone.utc).isoformat()
+    row["group"] = g
+    row["sym"] = u
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    # Keep overlay-only stubs usable after move.
+    if row.get("is_new") or prev_group is None:
+        row.setdefault("is_new", True)
+        if "levels" not in row:
+            stub = blank_ticker_card(u, g, name=str(row.get("name") or ""))
+            for k, v in stub.items():
+                row.setdefault(k, v)
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    return {
+        "ticker": u,
+        "group": g,
+        "from_group": prev_group,
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+def _sentiment_label_01(score: Optional[float]) -> str:
+    """Map KB/FinBERT scale 0..1 → short RU label."""
+    if score is None:
+        return "—"
+    s = float(score)
+    if s >= 0.6:
+        return "bullish"
+    if s <= 0.4:
+        return "bearish"
+    return "neutral"
+
+
+def get_ticker_kb_news_sentiment(
+    sym: str,
+    *,
+    lookback_hours: int = 168,
+    limit: int = 40,
+    include_macro: bool = False,
+) -> Dict[str, Any]:
+    """Average FinBERT/KB sentiment_score for ticker news (+ optional MACRO rows).
+
+    Scores are 0..1 (ProsusAI/finbert via add_sentiment_to_news_cron). Rows without
+    sentiment_score are counted but excluded from the mean.
+    """
+    u = str(sym or "").strip().upper()
+    if not u:
+        raise ValueError("empty ticker")
+
+    tickers = [u]
+    if include_macro:
+        tickers.extend(["MACRO", "US_MACRO"])
+
+    hours = max(1, min(int(lookback_hours), 24 * 30))
+    lim = max(1, min(int(limit), 100))
+
+    try:
+        from services.seeking_alpha_finance import load_kb_news_items
+
+        items = load_kb_news_items(tickers, lookback_hours=hours, source=None, limit=lim)
+    except Exception as e:
+        logger.warning("KB news sentiment load failed for %s: %s", u, e)
+        return {
+            "ticker": u,
+            "lookback_hours": hours,
+            "news_count": 0,
+            "scored_count": 0,
+            "avg_sentiment": None,
+            "label": "—",
+            "method": "FinBERT/KB",
+            "error": str(e),
+            "articles": [],
+        }
+
+    # Prefer exact ticker rows for the mean; MACRO only if include_macro and no ticker rows.
+    ticker_items = [it for it in items if str(it.get("ticker") or "").upper() == u]
+    pool = ticker_items if ticker_items else (items if include_macro else [])
+
+    scores: List[float] = []
+    articles: List[Dict[str, Any]] = []
+    for it in pool:
+        sc = it.get("sentiment_score")
+        sc_f: Optional[float] = None
+        if sc is not None:
+            try:
+                sc_f = float(sc)
+                scores.append(sc_f)
+            except (TypeError, ValueError):
+                sc_f = None
+        title = str(it.get("title") or it.get("summary_text") or "")[:220]
+        articles.append(
+            {
+                "title": title,
+                "link": str(it.get("link") or "").strip(),
+                "source": str(it.get("src") or it.get("source") or ""),
+                "publishOn": str(it.get("publishOn") or ""),
+                "sentiment_score": round(sc_f, 3) if sc_f is not None else None,
+                "label": _sentiment_label_01(sc_f),
+            }
+        )
+
+    avg = round(sum(scores) / len(scores), 3) if scores else None
+    return {
+        "ticker": u,
+        "lookback_hours": hours,
+        "news_count": len(pool),
+        "scored_count": len(scores),
+        "avg_sentiment": avg,
+        "label": _sentiment_label_01(avg),
+        "method": "FinBERT/KB",
+        "articles": articles,
+    }
 
 
 def update_ticker_signals(
@@ -688,7 +1153,7 @@ def update_ticker_env(
         if key is None:
             low = str(it.get("lbl") or "").lower()
             if "vix" in low:
-                raise ValueError("VIX is live-only and cannot be overridden")
+                raise ValueError("VIX / NDX / нефть — только live, не вручную")
             raise ValueError(f"unknown env label: {it.get('lbl')}")
         state = str(it.get("state") or "").lower()
         if state not in _ENV_STATES:
@@ -959,6 +1424,109 @@ def fetch_vix_snapshot() -> Optional[Dict[str, Any]]:
         "source": f"live · {px.get('source') or 'quotes'}",
         "value": val,
         "asof": px.get("asof"),
+        "metric": "vix",
+    }
+
+
+def fetch_ndx_snapshot() -> Optional[Dict[str, Any]]:
+    """Live Nasdaq-100 (^NDX, QQQ fallback) — index context for Environment Check."""
+    bundle = fetch_closes(["^NDX", "QQQ"])
+    px = bundle.get("^NDX") or bundle.get("QQQ")
+    if not px or px.get("close") is None:
+        return None
+    val = float(px["close"])
+    chg_pct = px.get("chg_pct")
+    try:
+        from config_loader import get_config_value
+
+        soft = float(get_config_value("NOTEBOOK_NDX_OK_ABS_PCT", "1.2") or 1.2)
+        hard = float(get_config_value("NOTEBOOK_NDX_BAD_ABS_PCT", "2.5") or 2.5)
+    except Exception:
+        soft, hard = 1.2, 2.5
+    if hard <= soft:
+        hard = soft + 1.0
+
+    if chg_pct is None:
+        state = "ok"
+        move = "нет дн. %"
+    else:
+        abs_m = abs(float(chg_pct))
+        if abs_m < soft:
+            state = "ok"
+        elif abs_m < hard:
+            state = "mid"
+        else:
+            state = "bad"
+        sign = "+" if float(chg_pct) >= 0 else ""
+        move = f"{sign}{float(chg_pct):.2f}%"
+
+    src = px.get("source") or "quotes"
+    label = f"{val:,.0f} · дн. {move}"
+    return {
+        "lbl": "NDX",
+        "st": label,
+        "state": state,
+        "live": True,
+        "source": f"live · {src}",
+        "value": val,
+        "chg_pct": chg_pct,
+        "asof": px.get("asof"),
+        "metric": "ndx",
+    }
+
+
+def fetch_oil_snapshot() -> Optional[Dict[str, Any]]:
+    """Live crude (CL=F) as geopolitics proxy: spike up = stress."""
+    try:
+        from config_loader import get_config_value
+
+        oil_t = (get_config_value("NOTEBOOK_OIL_TICKER", "CL=F") or "CL=F").strip() or "CL=F"
+        soft = float(get_config_value("NOTEBOOK_OIL_STRESS_MID_PCT", "2.0") or 2.0)
+        hard = float(get_config_value("NOTEBOOK_OIL_STRESS_BAD_PCT", "3.5") or 3.5)
+    except Exception:
+        oil_t, soft, hard = "CL=F", 2.0, 3.5
+    if hard <= soft:
+        hard = soft + 1.0
+
+    wanted = [oil_t]
+    if oil_t.upper() != "BZ=F":
+        wanted.append("BZ=F")
+    bundle = fetch_closes(wanted)
+    px = bundle.get(oil_t.upper())
+    used = oil_t
+    if (not px or px.get("close") is None) and "BZ=F" in bundle:
+        px = bundle.get("BZ=F")
+        used = "BZ=F"
+    if not px or px.get("close") is None:
+        return None
+    val = float(px["close"])
+    chg_pct = px.get("chg_pct")
+    # Geopolitics: oil UP is stress; oil down is usually ok.
+    if chg_pct is None:
+        state = "ok"
+        move = "нет дн. %"
+    else:
+        m = float(chg_pct)
+        if m >= hard:
+            state = "bad"
+        elif m >= soft:
+            state = "mid"
+        else:
+            state = "ok"
+        sign = "+" if m >= 0 else ""
+        move = f"{sign}{m:.2f}%"
+
+    label = f"${val:.2f} · дн. {move}"
+    return {
+        "lbl": "Нефть (геополитика)",
+        "st": label,
+        "state": state,
+        "live": True,
+        "source": f"live · {used} · {px.get('source') or 'quotes'}",
+        "value": val,
+        "chg_pct": chg_pct,
+        "asof": px.get("asof"),
+        "metric": "oil",
     }
 
 
@@ -994,14 +1562,31 @@ def _fed_hint_from_digest(digest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _is_live_env_lbl(lbl: str) -> Optional[str]:
+    low = str(lbl or "").lower()
+    if "vix" in low:
+        return "vix"
+    if "ndx" in low or "nasdaq" in low:
+        return "ndx"
+    if "нефт" in low or "oil" in low or "геопол" in low:
+        return "oil"
+    if "фрс" in low or "fed" in low:
+        return "fed"
+    return None
+
+
 def apply_live_env_to_tickers(
     tickers: Dict[str, Any],
     *,
     digest: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Overlay live VIX (+ optional Fed hint from digest) onto each ticker env list."""
+    """Overlay live VIX / NDX / oil (+ optional Fed hint) onto each ticker env list."""
     vix = fetch_vix_snapshot()
+    ndx = fetch_ndx_snapshot()
+    oil = fetch_oil_snapshot()
     fed = _fed_hint_from_digest(digest or {}) if digest else None
+    live_by_key = {"vix": vix, "ndx": ndx, "oil": oil, "fed": fed}
+
     out: Dict[str, Any] = {}
     for sym, row in (tickers or {}).items():
         if not isinstance(row, dict):
@@ -1009,21 +1594,35 @@ def apply_live_env_to_tickers(
         d = dict(row)
         env = list(d.get("env") or []) if isinstance(d.get("env"), list) else []
         new_env: List[Dict[str, Any]] = []
-        seen_vix = seen_fed = False
+        seen = {k: False for k in live_by_key}
         for e in env:
             if not isinstance(e, dict):
                 continue
             e2 = dict(e)
-            lbl = str(e2.get("lbl") or "")
-            low = lbl.lower()
-            if vix and "vix" in low:
-                e2.update(vix)
-                seen_vix = True
-            elif fed and ("фрс" in low or "fed" in low):
-                e2.update(fed)
-                seen_fed = True
-            else:
-                # Placeholder stubs must not force yellow Environment gate.
+            key = _is_live_env_lbl(str(e2.get("lbl") or ""))
+            snap = live_by_key.get(key) if key else None
+            if key and snap:
+                e2.update(snap)
+                seen[key] = True
+            elif key == "fed" and not snap:
+                # keep manual / placeholder handling below
+                st = str(e2.get("st") or "").lower()
+                placeholder = any(
+                    p in st
+                    for p in (
+                        "обновлять вручную",
+                        "авто из quotes",
+                        "следить",
+                        "tbd",
+                        "вручную",
+                    )
+                ) and len(st) < 40
+                e2.setdefault("live", False)
+                e2.setdefault("source", "заглушка · вручную / макро")
+                if placeholder and e2.get("state") == "mid":
+                    e2["state"] = "ok"
+                    e2["st"] = (str(e2.get("st") or "нет сигнала") + " · ждать ручного апдейта").strip()
+            elif not key:
                 st = str(e2.get("st") or "").lower()
                 placeholder = any(
                     p in st
@@ -1041,13 +1640,14 @@ def apply_live_env_to_tickers(
                     e2["state"] = "ok"
                     e2["st"] = (str(e2.get("st") or "нет сигнала") + " · ждать ручного апдейта").strip()
             new_env.append(e2)
-        if vix and not seen_vix:
-            new_env.insert(0, dict(vix))
-        if fed and not seen_fed:
-            # after VIX
-            idx = 1 if new_env and "vix" in str(new_env[0].get("lbl") or "").lower() else 0
-            new_env.insert(idx, dict(fed))
-        d["env"] = new_env
+
+        # Ensure live rows exist even if JSON template omitted them.
+        missing: List[Dict[str, Any]] = []
+        for key in ("vix", "ndx", "oil", "fed"):
+            snap = live_by_key.get(key)
+            if snap and not seen.get(key):
+                missing.append(dict(snap))
+        d["env"] = missing + new_env
         out[str(sym).upper()] = d
     return out
 

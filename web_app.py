@@ -3924,6 +3924,88 @@ async def trading_notebook_page(request: Request):
     )
 
 
+@app.post("/api/notebook/tickers", response_class=JSONResponse)
+async def api_notebook_ticker_add(request: Request):
+    """Добавить тикер в группу + подкачка дневных quotes и новостей (SA/Yahoo)."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    sym = body.get("sym") or body.get("ticker") or body.get("symbol")
+    group = body.get("group") or body.get("grp") or "n"
+    name = str(body.get("name") or "")
+    updated_by = str(body.get("updated_by") or body.get("updatedBy") or "notebook-ui")[:80]
+    bootstrap = body.get("bootstrap")
+    if bootstrap is None:
+        do_boot = True
+    else:
+        do_boot = str(bootstrap).strip().lower() not in ("0", "false", "no", "off")
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import add_notebook_ticker, build_notebook_payload
+
+        out = add_notebook_ticker(
+            str(sym or ""),
+            str(group),
+            name=name,
+            updated_by=updated_by,
+            bootstrap=do_boot,
+        )
+        # Attach refreshed card with live prices when possible.
+        try:
+            payload = build_notebook_payload(
+                with_prices=True, tickers_filter=[out["ticker"]]
+            )
+            card = (payload.get("tickers") or {}).get(out["ticker"])
+            if card:
+                out["card"] = card
+        except Exception:
+            pass
+        return out
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("POST /api/notebook/tickers: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка add ticker: {e!s}")
+
+
+@app.patch("/api/notebook/tickers/{sym}/group", response_class=JSONResponse)
+async def api_notebook_ticker_group(sym: str, request: Request):
+    """Перенести тикер в другую группу (1/2/3/n)."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    group = body.get("group") or body.get("grp")
+    updated_by = str(body.get("updated_by") or body.get("updatedBy") or "notebook-ui")[:80]
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import set_notebook_ticker_group
+
+        return set_notebook_ticker_group(sym, str(group or ""), updated_by=updated_by)
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("PATCH /api/notebook/tickers/%s/group: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка move group: {e!s}")
+
+
 @app.get("/api/notebook", response_class=JSONResponse)
 async def api_trading_notebook(prices: int = 1):
     """Группы + тикеры + дайджест; prices=1 — подмешать live Close."""
@@ -4088,6 +4170,30 @@ async def api_notebook_ticker_consensus(sym: str, request: Request):
     except Exception as e:
         logger.exception("PATCH /api/notebook/tickers/%s/consensus: %s", sym, e)
         raise HTTPException(status_code=500, detail=f"Ошибка notebook consensus: {e!s}")
+
+
+@app.get("/api/notebook/tickers/{sym}/news-sentiment", response_class=JSONResponse)
+async def api_notebook_ticker_news_sentiment(
+    sym: str,
+    lookback_hours: int = 168,
+    limit: int = 40,
+):
+    """Средний sentiment_score новостей KB (FinBERT) по тикеру + список статей."""
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import get_ticker_kb_news_sentiment
+
+        return get_ticker_kb_news_sentiment(
+            sym, lookback_hours=lookback_hours, limit=limit, include_macro=False
+        )
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("GET /api/notebook/tickers/%s/news-sentiment: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка news sentiment: {e!s}")
 
 
 @app.post("/api/notebook/tickers/{sym}/houses/refresh", response_class=JSONResponse)

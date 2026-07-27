@@ -31,6 +31,156 @@ def test_notebook_data_file_exists_and_samples():
     assert tickers["NBIS"]["fundament"]["metrics"]
 
 
+def test_add_and_move_notebook_ticker(tmp_path: Path):
+    from services.trading_notebook import (
+        add_notebook_ticker,
+        apply_ticker_overrides,
+        set_notebook_ticker_group,
+    )
+
+    ov = tmp_path / "ticker_overrides.json"
+    created = add_notebook_ticker(
+        "ZZTOP", "n", name="ZZ Top Inc", path=ov, updated_by="test", bootstrap=False
+    )
+    assert created["ticker"] == "ZZTOP"
+    assert created["group"] == "n"
+    assert created["created"] is True
+
+    try:
+        add_notebook_ticker("ZZTOP", "2", path=ov, bootstrap=False)
+        assert False, "expected duplicate error"
+    except ValueError as e:
+        assert "уже" in str(e).lower() or "ZZTOP" in str(e)
+
+    moved = set_notebook_ticker_group("ZZTOP", "2", path=ov, updated_by="test")
+    assert moved["group"] == "2"
+    assert moved["from_group"] == "n"
+
+    # Existing base ticker move (MSFT in notebook_data)
+    moved_msft = set_notebook_ticker_group("MSFT", "3", path=ov, updated_by="test")
+    assert moved_msft["group"] == "3"
+
+    base = {
+        "MSFT": {"sym": "MSFT", "group": "1", "levels": {"buyDip": 350, "sell": 450}},
+    }
+    ov_data = {
+        "tickers": {
+            "MSFT": {"group": "3"},
+            "ZZTOP": {
+                "is_new": True,
+                "group": "2",
+                "sym": "ZZTOP",
+                "name": "ZZ Top Inc",
+            },
+        }
+    }
+    merged = apply_ticker_overrides(base, ov_data)
+    assert merged["MSFT"]["group"] == "3"
+    assert merged["ZZTOP"]["group"] == "2"
+    assert merged["ZZTOP"]["is_new"] is True
+    assert merged["ZZTOP"]["levels"]["buyDip"] is None
+
+
+def test_bootstrap_notebook_ticker_resources(monkeypatch):
+    from services import trading_notebook as tn
+
+    class _Eng:
+        def dispose(self):
+            return None
+
+    monkeypatch.setattr(
+        "sqlalchemy.create_engine",
+        lambda *a, **k: _Eng(),
+    )
+    monkeypatch.setattr(
+        "config_loader.get_database_url",
+        lambda: "postgresql://x",
+    )
+    monkeypatch.setattr(
+        "update_prices.update_ticker_prices",
+        lambda engine, ticker, days_back=30, force_days_back=None: 42,
+    )
+    monkeypatch.setattr(
+        "services.seeking_alpha_finance.rapidapi_key",
+        lambda: "k",
+    )
+    monkeypatch.setattr(
+        "services.seeking_alpha_finance.fetch_and_save_sa_news",
+        lambda tickers, **kw: {"items": [{"id": 1}], "kb_inserted": 1, "errors": {}},
+    )
+    monkeypatch.setattr(
+        "services.ticker_news_merge_fetcher.fetch_yahoo_news",
+        lambda *a, **k: [{"id": "y1"}],
+    )
+    monkeypatch.setattr(
+        "services.ticker_news_merge_fetcher.fetch_marketaux_news",
+        lambda *a, **k: [],
+    )
+    monkeypatch.setattr(
+        "services.ticker_news_merge_fetcher.merge_articles",
+        lambda *a, **k: [{"id": "y1"}],
+    )
+    monkeypatch.setattr(
+        "services.ticker_news_merge_fetcher.save_articles_to_kb",
+        lambda articles: 1,
+    )
+
+    out = tn.bootstrap_notebook_ticker_resources("ABC")
+    assert out["ticker"] == "ABC"
+    assert out["quotes"]["ok"] is True and out["quotes"]["rows_upserted"] == 42
+    assert out["news_sa"]["ok"] is True and out["news_sa"]["kb_inserted"] == 1
+    assert out["news_yahoo"]["ok"] is True and out["news_yahoo"]["kb_inserted"] == 1
+    assert out["ok"] is True
+
+
+def test_sentiment_label_and_kb_agg(monkeypatch):
+    from services import trading_notebook as tn
+
+    assert tn._sentiment_label_01(0.72) == "bullish"
+    assert tn._sentiment_label_01(0.3) == "bearish"
+    assert tn._sentiment_label_01(0.5) == "neutral"
+    assert tn._sentiment_label_01(None) == "—"
+
+    fake = [
+        {
+            "ticker": "MU",
+            "title": "MU up",
+            "link": "https://example.com/1",
+            "src": "Seeking Alpha Finance",
+            "publishOn": "2026-07-27T12:00:00",
+            "sentiment_score": 0.8,
+        },
+        {
+            "ticker": "MU",
+            "title": "MU flat",
+            "link": "",
+            "src": "Yahoo",
+            "publishOn": "2026-07-26T12:00:00",
+            "sentiment_score": None,
+        },
+        {
+            "ticker": "MU",
+            "title": "MU soft",
+            "link": "https://example.com/2",
+            "src": "Yahoo",
+            "publishOn": "2026-07-25T12:00:00",
+            "sentiment_score": 0.4,
+        },
+    ]
+
+    monkeypatch.setattr(
+        "services.seeking_alpha_finance.load_kb_news_items",
+        lambda *a, **k: fake,
+    )
+    out = tn.get_ticker_kb_news_sentiment("mu", lookback_hours=48, limit=10)
+    assert out["ticker"] == "MU"
+    assert out["news_count"] == 3
+    assert out["scored_count"] == 2
+    assert out["avg_sentiment"] == 0.6
+    assert out["label"] == "bullish"
+    assert len(out["articles"]) == 3
+
+
 def test_merge_prices_sets_px_for_verdict():
     tickers = {
         "MSFT": {
@@ -123,6 +273,85 @@ def test_ticker_levels_overrides_roundtrip(tmp_path: Path):
         base, {"tickers": {"MSFT": {"levels": cleared["levels"]}}}
     )
     assert merged2["MSFT"]["levels"]["buyDip"] is None
+
+
+def test_live_ndx_oil_injected(monkeypatch):
+    from services import trading_notebook as tn
+
+    monkeypatch.setattr(
+        tn,
+        "fetch_vix_snapshot",
+        lambda: {
+            "lbl": "VIX",
+            "st": "17",
+            "state": "ok",
+            "live": True,
+            "value": 17.0,
+            "metric": "vix",
+        },
+    )
+    monkeypatch.setattr(
+        tn,
+        "fetch_ndx_snapshot",
+        lambda: {
+            "lbl": "NDX",
+            "st": "22000 · дн. -0.4%",
+            "state": "ok",
+            "live": True,
+            "value": 22000.0,
+            "chg_pct": -0.4,
+            "metric": "ndx",
+        },
+    )
+    monkeypatch.setattr(
+        tn,
+        "fetch_oil_snapshot",
+        lambda: {
+            "lbl": "Нефть (геополитика)",
+            "st": "$78 · дн. +2.5%",
+            "state": "mid",
+            "live": True,
+            "value": 78.0,
+            "chg_pct": 2.5,
+            "metric": "oil",
+        },
+    )
+    monkeypatch.setattr(tn, "_fed_hint_from_digest", lambda d: None)
+
+    base = {
+        "MU": {
+            "sym": "MU",
+            "env": [
+                {"lbl": "VIX", "state": "mid", "st": "stub"},
+                {"lbl": "Понижения таргетов (вне earnings)", "state": "mid", "st": "следить"},
+            ],
+        }
+    }
+    out = tn.apply_live_env_to_tickers(base, digest={})
+    env = out["MU"]["env"]
+    labels = [e["lbl"] for e in env]
+    assert "VIX" in labels and "NDX" in labels
+    assert any("Нефть" in x for x in labels)
+    oil = next(e for e in env if "Нефть" in e["lbl"])
+    assert oil["state"] == "mid" and oil["live"] is True
+    pt = next(e for e in env if "таргет" in e["lbl"].lower())
+    assert pt["state"] == "ok"  # placeholder mid → ok
+
+
+def test_oil_spike_is_stress(monkeypatch):
+    from services import trading_notebook as tn
+
+    monkeypatch.setattr(
+        tn,
+        "fetch_closes",
+        lambda tickers, **kw: {
+            "CL=F": {"close": 85.0, "chg_pct": 4.0, "chg": 3.2, "source": "test", "asof": "2026-07-27"}
+        },
+    )
+    oil = tn.fetch_oil_snapshot()
+    assert oil is not None
+    assert oil["state"] == "bad"
+    assert oil["metric"] == "oil"
 
 
 def test_ticker_env_overrides_skip_vix(tmp_path: Path):
