@@ -4006,6 +4006,39 @@ async def api_notebook_ticker_group(sym: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка move group: {e!s}")
 
 
+@app.get("/api/notebook/calendar", response_class=JSONResponse)
+async def api_notebook_calendar(days: int = 21, symbol: str = ""):
+    """FOMC + FRED + Yahoo earnings (per-ticker Events tab / fallback panel).
+
+    If ``symbol`` is set, earnings are fetched only for that ticker (faster).
+    Macro rows (FOMC / FRED) are always included.
+    """
+
+    def _run() -> Dict[str, Any]:
+        from services.macro_events_calendar import build_macro_events
+        from services.trading_notebook import build_notebook_payload
+
+        sym = str(symbol or "").strip().upper()
+        if sym:
+            syms = [sym]
+        else:
+            payload = build_notebook_payload(with_prices=False)
+            syms = list((payload.get("tickers") or {}).keys())
+        out = build_macro_events(
+            days=max(1, min(int(days or 21), 90)),
+            symbols=syms,
+        )
+        if sym:
+            out["focus_symbol"] = sym
+        return out
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        logger.exception("GET /api/notebook/calendar: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка calendar: {e!s}")
+
+
 @app.get("/api/notebook", response_class=JSONResponse)
 async def api_trading_notebook(prices: int = 1):
     """Группы + тикеры + дайджест; prices=1 — подмешать live Close."""

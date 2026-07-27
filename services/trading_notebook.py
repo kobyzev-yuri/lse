@@ -265,6 +265,16 @@ def _apply_one_ticker_patch(d: Dict[str, Any], patch: Dict[str, Any]) -> Dict[st
             d["houses_source"] = str(patch.get("houses_source"))[:40]
     if patch.get("houseNote") is not None:
         d["houseNote"] = str(patch.get("houseNote") or "")[:800]
+    if isinstance(patch.get("houses_counts"), dict):
+        d["houses_counts"] = {
+            "buy": int(patch["houses_counts"].get("buy") or 0),
+            "hold": int(patch["houses_counts"].get("hold") or 0),
+            "sell": int(patch["houses_counts"].get("sell") or 0),
+            "total": int(patch["houses_counts"].get("total") or 0),
+        }
+        d["houses_override"] = True
+    if patch.get("houses_source") and not d.get("houses_source"):
+        d["houses_source"] = str(patch.get("houses_source"))[:40]
     if patch.get("horizon") is not None:
         d["horizon"] = str(patch.get("horizon") or "")[:160]
         d["profile_override"] = True
@@ -933,6 +943,14 @@ def refresh_ticker_houses_from_stockanalysis(
     }
     row["houseNote"] = house_note[:240]
     row["houses_source"] = "stockanalysis"
+    row["houses_counts"] = {
+        "buy": int(counts.get("buy") or 0),
+        "hold": int(counts.get("hold") or 0),
+        "sell": int(counts.get("sell") or 0),
+        "total": int(counts.get("total") or 0),
+        "strong_buy": int(counts.get("strong_buy") or 0),
+        "strong_sell": int(counts.get("strong_sell") or 0),
+    }
     row["updated_at_utc"] = now
     row["updated_by"] = (updated_by or "notebook-ui")[:80]
     tickers[u] = row
@@ -944,7 +962,8 @@ def refresh_ticker_houses_from_stockanalysis(
         "consensus": dict(row["consensus"]),
         "houseNote": row["houseNote"],
         "houses_source": "stockanalysis",
-        "counts": counts,
+        "houses_counts": dict(row["houses_counts"]),
+        "counts": dict(row["houses_counts"]),
         "source": getattr(bundle, "source", "stockanalysis"),
         "asof": getattr(bundle, "asof", None),
         "updated_at_utc": now,
@@ -1580,11 +1599,20 @@ def apply_live_env_to_tickers(
     *,
     digest: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Overlay live VIX / NDX / oil (+ optional Fed hint) onto each ticker env list."""
+    """Overlay live VIX / NDX / oil / FOMC (+ optional Fed digest hint) onto each ticker env list."""
     vix = fetch_vix_snapshot()
     ndx = fetch_ndx_snapshot()
     oil = fetch_oil_snapshot()
-    fed = _fed_hint_from_digest(digest or {}) if digest else None
+    fed = None
+    try:
+        from services.macro_events_calendar import fomc_env_snapshot
+
+        fed = fomc_env_snapshot()
+    except Exception as e:
+        logger.debug("FOMC env snapshot skipped: %s", e)
+        fed = None
+    if fed is None:
+        fed = _fed_hint_from_digest(digest or {}) if digest else None
     live_by_key = {"vix": vix, "ndx": ndx, "oil": oil, "fed": fed}
 
     out: Dict[str, Any] = {}
@@ -1701,6 +1729,26 @@ def build_notebook_payload(
     except Exception:
         vix_meta = None
 
+    calendar: Dict[str, Any] = {"events": [], "days": 21, "asof_utc": "", "counts": {}}
+    fomc_next = None
+    try:
+        from services.macro_events_calendar import build_macro_events, next_fomc_decision
+
+        # Boot: FOMC (+ FRED if key). Earnings are heavier — UI loads via /api/notebook/calendar.
+        calendar = build_macro_events(
+            days=21, symbols=None, include_earnings=False, include_fred=True, include_fomc=True
+        )
+        fomc_next = next_fomc_decision()
+    except Exception as e:
+        logger.debug("macro calendar skipped: %s", e)
+        calendar = {
+            "events": [],
+            "days": 21,
+            "asof_utc": "",
+            "counts": {},
+            "errors": {"calendar": str(e)[:200]},
+        }
+
     return {
         "schema_version": int(data.get("schema_version") or SCHEMA_VERSION),
         "asof_label": data.get("asof_label") or "",
@@ -1711,6 +1759,7 @@ def build_notebook_payload(
         "digest_buckets": data.get("digest_buckets") if isinstance(data.get("digest_buckets"), list) else [],
         "watchlist": data.get("watchlist") if isinstance(data.get("watchlist"), dict) else {},
         "prices": prices,
-        "env_live": {"vix": vix_meta},
+        "env_live": {"vix": vix_meta, "fomc": fomc_next},
+        "calendar": calendar,
         "data_path": str(path or notebook_data_path()),
     }

@@ -69,6 +69,27 @@
   .grp-tools .gt-sep{width:1px;height:22px;background:var(--line);margin:0 2px;}
   @media(max-width:640px){.grp-tools .gt-sep{display:none;}}
 
+  /* macro calendar (calendar.html style) */
+  .cal-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:0;}
+  .cal-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+  .cal-head h4{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);}
+  .cal-head .gen{font-family:var(--mono);font-size:11px;color:var(--dim);}
+  .cal-toolbar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+  .erow{display:grid;grid-template-columns:62px 10px minmax(0,1fr) 58px;align-items:center;gap:8px;min-height:32px;padding:7px 12px;border-bottom:1px solid var(--line);font-size:13px;}
+  .erow:last-child{border-bottom:0;}
+  .erow.focus{background:rgba(46,194,126,.08);}
+  .erow .date{font-family:var(--mono);font-weight:700;font-size:12px;white-space:nowrap;}
+  .erow .title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
+  .erow .symbol{font-family:var(--mono);font-weight:800;font-size:12px;text-align:right;color:var(--ink);}
+  .erow .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);}
+  .erow.economic .dot{background:#4c7dff;}
+  .erow.fomc .dot{background:#f5c542;}
+  .erow.earnings .dot{background:#2ec27e;}
+  .cal-empty{padding:20px;text-align:center;color:var(--dim);font-family:var(--mono);font-size:12px;}
+  .cal-legend{display:flex;gap:12px;padding:8px 12px;font-size:11px;color:var(--dim);border-top:1px solid var(--line);flex-wrap:wrap;}
+  .cal-legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+  .cal-legend .lg-e{background:#4c7dff;} .cal-legend .lg-f{background:#f5c542;} .cal-legend .lg-a{background:#2ec27e;}
+
   /* tabs */
   nav.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:20px;overflow-x:auto;}
   nav.tabs button{background:none;border:none;color:var(--muted);font-family:var(--sans);font-size:13.5px;font-weight:500;padding:10px 14px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:.15s;}
@@ -121,10 +142,15 @@
   .house .tac{color:var(--ink);font-size:13px;margin-top:6px;}
   .house .tac b{color:#ff8a3d;}
 
-  .concens{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px;padding:12px 16px;background:var(--panel-2);border-radius:10px;}
+  .concens{
+    display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end;
+    margin:0 0 14px;padding:12px 16px;background:var(--panel-2);border-radius:10px;
+  }
   .concens .cell{display:flex;flex-direction:column;gap:2px;}
   .concens .cl{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;}
   .concens .cv{font-family:var(--mono);font-size:16px;font-weight:700;}
+  .houses-list{margin-top:4px;}
+  .houses-list .house:first-of-type{border-top:none;padding-top:4px;}
 
   .note{font-size:12px;color:var(--dim);margin-top:10px;line-height:1.45;}
   .macro{background:var(--panel-2);border-radius:10px;padding:13px 15px;font-size:13px;color:var(--muted);margin-top:12px;}
@@ -351,6 +377,7 @@ let DATA = {};
 let WATCHLIST = {rules:[], flash:{}};
 let DIGEST = {date:"", filtered:0, kept:0, trashed:0, signals:[], risks:[], macro:[], newtickers:[], trashNote:""};
 let DIGEST_BUCKETS = [];
+let CALENDAR = {events:[], days:21, asof_utc:"", counts:{}};
 let housesRefreshFlash = null; // {sym, ok, text}
 
 const TABS = [
@@ -359,6 +386,7 @@ const TABS = [
   {id:"triggers",label:"Триггеры Buy / Sell",stub:false},
   {id:"entry",label:"Тактика входа / выхода",stub:true},
   {id:"env",label:"Окружение",stub:false},  // VIX live + ФРС/PT editable
+  {id:"events",label:"Events",stub:false},
   {id:"houses",label:"Инвестдома",stub:false},
   {id:"fundament",label:"Фундамент",stub:true},
   {id:"digest",label:"Дайджесты",stub:false},
@@ -403,10 +431,44 @@ function houseQuoteLine(h){
 function cleanHouseNote(note){
   let s = String(note || "").trim();
   if(/карточки|overlay|консенсус тоже/i.test(s)){
-    const m = s.match(/Buy\s+\d+\s*·\s*Hold\s+\d+\s*·\s*Sell\s+\d+/i);
-    return m ? m[0] : "";
+    const m = s.match(/Buy\s+\d+\s*[·\/]\s*Hold\s+\d+\s*[·\/]\s*Sell\s+\d+/i);
+    return m ? m[0].replace(/\//g, "·") : "";
   }
   return s.replace(/^StockAnalysis:\s*/i, "");
+}
+
+/** Analyst Buy/Hold/Sell totals for the bottom consensus panel. */
+function housesRatingStats(d){
+  const c = (d && d.houses_counts) || {};
+  let buy = Number(c.buy);
+  let hold = Number(c.hold);
+  let sell = Number(c.sell);
+  if(!Number.isFinite(buy) || !Number.isFinite(hold) || !Number.isFinite(sell) || (buy+hold+sell) === 0){
+    const note = cleanHouseNote(d && d.houseNote);
+    const m = String(note||"").match(/Buy\s+(\d+)\s*[·\/]\s*Hold\s+(\d+)\s*[·\/]\s*Sell\s+(\d+)/i);
+    if(m){
+      buy = Number(m[1]); hold = Number(m[2]); sell = Number(m[3]);
+    }
+  }
+  // Last resort: tally visible house cards (subset, not full SA sample).
+  if(!Number.isFinite(buy) || !Number.isFinite(hold) || !Number.isFinite(sell) || (buy+hold+sell) === 0){
+    buy = hold = sell = 0;
+    (d.houses||[]).forEach(h => {
+      const r = String((h && h.rate) || "").toLowerCase();
+      if(/strong\s*buy|buy|overweight|outperform|accumulate/i.test(r) && !/sell/.test(r)) buy += 1;
+      else if(/hold|neutral|equal|market\s*perform|peer/i.test(r)) hold += 1;
+      else if(/sell|underweight|underperform|reduce/i.test(r)) sell += 1;
+    });
+  }
+  const cards = (d.houses||[]).length;
+  const total = (Number.isFinite(buy)?buy:0) + (Number.isFinite(hold)?hold:0) + (Number.isFinite(sell)?sell:0);
+  return {
+    buy: Number.isFinite(buy) ? buy : 0,
+    hold: Number.isFinite(hold) ? hold : 0,
+    sell: Number.isFinite(sell) ? sell : 0,
+    total,
+    cards,
+  };
 }
 
 function consensusPtDisplay(cons, houses){
@@ -433,6 +495,7 @@ function applyBoot(boot){
   WATCHLIST = boot.watchlist || {rules:[], flash:{}};
   DIGEST = boot.digest || DIGEST;
   DIGEST_BUCKETS = boot.digest_buckets || [];
+  CALENDAR = boot.calendar || CALENDAR;
   const principle = boot.principle_ru || "";
   document.getElementById("principle").innerHTML = principle;
   document.getElementById("asof").textContent = boot.asof_label || ("schema v"+(boot.schema_version||""));
@@ -855,9 +918,12 @@ function renderContent(){
     return `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span>${badge}</div>`;
   }).join("");
   const hasLiveVix = (d.env||[]).some(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
-  html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):""}<span class="hint">VIX / NDX / нефть — live; ФРС / таргеты — вручную на Вердикте</span></h3>
+  html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):""}<span class="hint">VIX / NDX / нефть / FOMC — live; таргеты — вручную на Вердикте</span></h3>
     ${envs}
-    <div class="note">Красный/жёлтый = пауза входов. <b>таргеты</b> = PT (Price Target): внезапные понижения таргетов аналитиков вне earnings. Нефть вверх = геополитический стресс.</div></div>`);
+    <div class="note">Красный/жёлтый = пауза входов. <b>ФРС</b> = ближайший FOMC с federalreserve.gov. <b>таргеты</b> = PT cuts вне earnings. Нефть вверх = гео-стресс. Календарь событий — вкладка <b>Events</b>.</div>
+    </div>`);
+
+  html += tabWrap("events", renderEventsTab(d));
 
   const houses = (d.houses||[]).map(h => {
     const quote = houseQuoteLine(h);
@@ -867,6 +933,7 @@ function renderContent(){
   }).join("");
   const cons = d.consensus || {};
   const consPt = consensusPtDisplay(cons, d.houses||[]);
+  const rs = housesRatingStats(d);
   const housesBadge = d.houses_override
     ? liveBadge(d.houses_source || "stockanalysis")
     : manualBadge("консенсус на Вердикте");
@@ -879,13 +946,21 @@ function renderContent(){
       <span class="${flashCls}" id="housesStatus">${flashTxt}</span>
     </div>
     <div class="concens">
+      <div class="cell" style="align-items:flex-start;text-align:left;margin-right:auto">
+        <span class="cl">Сводка</span>
+        <span class="cv" style="font-size:13px;font-weight:600">${rs.cards} домов · Buy ${rs.buy} / Hold ${rs.hold} / Sell ${rs.sell}</span>
+      </div>
+      <div class="cell"><span class="cl">Buy</span><span class="cv up">${rs.buy}</span></div>
+      <div class="cell"><span class="cl">Hold</span><span class="cv" style="color:var(--warn)">${rs.hold}</span></div>
+      <div class="cell"><span class="cl">Sell</span><span class="cv down">${rs.sell}</span></div>
       <div class="cell"><span class="cl">Консенсус</span><span class="cv">${esc(cons.rating||'—')}</span></div>
       <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(consPt)}</span></div>
       <div class="cell"><span class="cl">Low</span><span class="cv down">${esc(cons.low||'—')}</span></div>
       <div class="cell"><span class="cl">High</span><span class="cv up">${esc(cons.high||'—')}</span></div>
       <div class="cell"><span class="cl">Выборка</span><span class="cv" style="font-size:13px">${esc(cons.n||'—')}</span></div>
-    </div>${houses || '<p class="note">Пока пусто — нажмите «Обновить с StockAnalysis».</p>'}
-    <div class="note">${esc(cleanHouseNote(d.houseNote))}</div></div>`);
+    </div>
+    <div class="houses-list">${houses || '<p class="note">Пока пусто — нажмите «Обновить с StockAnalysis».</p>'}</div>
+    </div>`);
 
   html += renderFundament(d);
   html += renderDigest();
@@ -898,7 +973,7 @@ function envSourceHint(lbl){
   if(s.includes("vix")) return "live quotes/^VIX";
   if(s.includes("ndx") || s.includes("nasdaq")) return "live quotes/^NDX";
   if(s.includes("нефт") || s.includes("oil") || s.includes("геопол")) return "live quotes/CL=F";
-  if(s.includes("фрс") || s.includes("fed")) return "вручную / макро-дайджест KB";
+  if(s.includes("фрс") || s.includes("fed")) return "live · federalreserve.gov FOMC";
   if(s.includes("таргет") || s.includes("pt")) return "вручную · PT cuts вне earnings";
   return "вручную JSON";
 }
@@ -982,7 +1057,12 @@ function computeVerdict(d){
   const redEnv = env.filter(e => e.state==="bad");
   const yellowEnv = env.filter(e => e.state==="mid");
   const sig = d.signals || {};
-  const macroBroken = !!sig.sentimentBroken || !sig.macroAlive;
+  // Thesis only (SocGen). «сент. сломан» replaced by FinBert News sentiment.
+  const thesisOff = sig.macroAlive === false;
+  const ns = d._newsSent || null;
+  const nsLabel = String((ns && ns.label) || "").toLowerCase();
+  const newsBearish = nsLabel === "bearish";
+  const newsPending = !ns;
   const liveBits = formatEnvLiveBits(env);
 
   const indicators = [];
@@ -1002,16 +1082,21 @@ function computeVerdict(d){
     val: envVal
   });
   indicators.push({
-    name:"Макро (SocGen)",
-    state: macroBroken ? "bad" : "ok",
-    gate: macroBroken,
+    name:"Макро · тезис",
+    state: thesisOff ? "bad" : "ok",
+    gate: thesisOff,
     editKind: "macro",
     val: ""
   });
+  let newsState = "neutral";
+  if(newsBearish) newsState = "bad";
+  else if(nsLabel === "bullish") newsState = "ok";
+  else if(nsLabel === "neutral") newsState = "mid";
+  else if(newsPending) newsState = "neutral";
   indicators.push({
     name:"News sentiment",
-    state: "neutral",
-    gate: false,
+    state: newsState,
+    gate: newsBearish,
     editKind: "newsSent",
     val: ""
   });
@@ -1052,13 +1137,15 @@ function computeVerdict(d){
     val: ""
   });
 
+  const stopGate = worstEnv==="bad" || thesisOff || newsBearish;
   let action, cls, why;
-  if(worstEnv==="bad" || macroBroken){
+  if(stopGate){
     action="СТОП · ВНЕ ИГРЫ"; cls="stop";
     const reasons = [];
-    if(macroBroken){
-      if(!sig.macroAlive) reasons.push("Макро: тезис AI выкл (macroAlive)");
-      if(sig.sentimentBroken) reasons.push("Макро: sentiment сломан");
+    if(thesisOff) reasons.push("Макро: тезис AI выкл (macroAlive)");
+    if(newsBearish){
+      const avg = ns && ns.avg_sentiment != null ? Number(ns.avg_sentiment).toFixed(2) : "—";
+      reasons.push(`News sentiment bearish (FinBert ${avg})`);
     }
     if(worstEnv==="bad"){
       const names = redEnv.map(e => e.lbl).filter(Boolean);
@@ -1101,19 +1188,13 @@ function computeVerdict(d){
 
 function renderMacroInlineControls(d){
   const sig = d.signals || {};
-  const alive = !!sig.macroAlive;
-  const broken = !!sig.sentimentBroken;
+  const alive = sig.macroAlive !== false;
   return `
     <span class="macro-inline">
       <span class="mi"><b>тезис</b>
         <button type="button" class="flag-toggle ${alive?'on':''}" id="flg-macroAlive"
           onclick="toggleMacroFlag('macroAlive', ${alive? 'false':'true'})" title="macroAlive — тезис AI жив"
           aria-pressed="${alive?'true':'false'}"><span class="knob"></span></button>
-      </span>
-      <span class="mi"><b>сент. сломан</b>
-        <button type="button" class="flag-toggle ${broken?'warn':''}" id="flg-sentimentBroken"
-          onclick="toggleMacroFlag('sentimentBroken', ${broken? 'false':'true'})" title="Ручной флаг SocGen (не FinBert из KB)"
-          aria-pressed="${broken?'true':'false'}"><span class="knob"></span></button>
       </span>
       <span class="flag-status" id="flagStatus"></span>
     </span>`;
@@ -1239,12 +1320,13 @@ function applyOverrideMeta(sym, j){
 async function toggleMacroFlag(field, nextVal){
   const sym = current;
   if(!sym || !DATA[sym]) return;
+  // Only macroAlive is editable; sentimentBroken replaced by FinBert News sentiment.
+  if(field !== "macroAlive") return;
   const status = document.getElementById("flagStatus");
-  const btn = document.getElementById(field === "macroAlive" ? "flg-macroAlive" : "flg-sentimentBroken");
+  const btn = document.getElementById("flg-macroAlive");
   if(btn) btn.disabled = true;
   if(status){ status.className = "flag-status"; status.textContent = "сохраняю…"; }
-  const body = {};
-  body[field] = !!nextVal;
+  const body = { macroAlive: !!nextVal };
   try {
     const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/signals`, {
       method: "PATCH",
@@ -1368,18 +1450,24 @@ async function refreshHouses(){
     if(Array.isArray(j.houses)) DATA[sym].houses = j.houses;
     if(j.consensus) DATA[sym].consensus = Object.assign({}, DATA[sym].consensus || {}, j.consensus);
     if(j.houseNote != null) DATA[sym].houseNote = j.houseNote;
+    if(j.houses_counts) DATA[sym].houses_counts = j.houses_counts;
+    else if(j.counts) DATA[sym].houses_counts = j.counts;
     DATA[sym].houses_override = true;
     DATA[sym].houses_source = "stockanalysis";
     DATA[sym].consensus_override = true;
     applyOverrideMeta(sym, j);
     const n = (j.houses || []).length;
-    const c = j.counts || {};
-    housesRefreshFlash = {
-      sym,
-      ok: true,
-      text: `ок · ${n} домов · Buy ${c.buy??"—"} / Hold ${c.hold??"—"} / Sell ${c.sell??"—"}`,
-    };
+    // Stats live in the consensus panel — keep toolbar status short.
+    housesRefreshFlash = {sym, ok: true, text: `ок · ${n} карточек`};
     renderContent();
+    if(btn) btn.disabled = false;
+    setTimeout(() => {
+      if(housesRefreshFlash && housesRefreshFlash.sym === sym && housesRefreshFlash.ok){
+        housesRefreshFlash = null;
+        const el = document.getElementById("housesStatus");
+        if(el){ el.className = "flag-status"; el.textContent = ""; }
+      }
+    }, 2500);
   } catch(e){
     housesRefreshFlash = {sym, ok: false, text: "ошибка: " + (e.message || e)};
     if(status){ status.className = "flag-status err"; status.textContent = housesRefreshFlash.text; }
@@ -1457,12 +1545,14 @@ function renderVerdict(d){
     </div>`;
     }
     if(i.editKind === "newsSent"){
+      const gate = i.gate ? `<span class="igate">БЛОК</span>` : "";
       return `
     <div class="ind-row" style="flex-wrap:wrap;align-items:flex-start">
       <span class="idot ${esc(i.state)}" id="nsent-dot"></span>
       <span class="iname">${esc(i.name)}</span>
       <span class="ival" id="nsent-val">
-        <span class="note">FinBert · загрузка…</span>
+        ${gate}
+        <span class="note">FinBert · ${(d._newsSent)?"кэш":"загрузка…"}</span>
         <button type="button" class="edit-btn" id="nsent-btn" onclick="toggleNewsSentimentArticles()" disabled>статьи</button>
       </span>
       <div class="nsent-arts" id="nsent-arts" hidden></div>
@@ -1490,6 +1580,119 @@ function renderVerdict(d){
   return html;
 }
 
+function fmtCalDate(iso){
+  if(!iso) return "";
+  const d = new Date(iso + "T12:00:00Z");
+  if(Number.isNaN(d.getTime())) return esc(iso);
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${String(d.getUTCDate()).padStart(2,"0")} ${months[d.getUTCMonth()]}`;
+}
+
+/** Events for ticker tab: macro (FOMC/FRED) + earnings of focus symbol. */
+function filterEventsForTicker(events, sym){
+  const u = String(sym || "").toUpperCase();
+  return (events || []).filter(ev => {
+    const kind = String(ev.kind || "");
+    if(kind === "fomc" || kind === "economic") return true;
+    if(kind === "earnings"){
+      if(!u) return true;
+      return String(ev.symbol || "").toUpperCase() === u;
+    }
+    // unknown kinds: keep if no symbol or matches focus
+    const es = String(ev.symbol || "").toUpperCase();
+    return !es || es === u;
+  });
+}
+
+function calendarRowsHtml(events, focusSym){
+  const u = String(focusSym || "").toUpperCase();
+  let lastDate = "";
+  const rows = (events || []).slice(0, 60).map(ev => {
+    const iso = String(ev.date || "");
+    const showDate = iso !== lastDate ? fmtCalDate(iso) : "";
+    if(iso) lastDate = iso;
+    const kind = String(ev.kind || "other");
+    const es = String(ev.symbol || "").toUpperCase();
+    const focus = u && es === u ? " focus" : "";
+    return `<div class="erow ${esc(kind)}${focus}">
+      <span class="date">${esc(showDate)}</span>
+      <span class="dot"></span>
+      <span class="title" title="${esc(ev.title||"")}">${esc(ev.title||"")}</span>
+      <span class="symbol">${esc(ev.symbol||"")}</span>
+    </div>`;
+  }).join("");
+  return rows || `<div class="cal-empty">нет событий · FOMC / FRED / earnings</div>`;
+}
+
+function renderEventsTab(d){
+  const sym = String((d && d.sym) || current || "").toUpperCase();
+  const cal = CALENDAR || {};
+  const filtered = filterEventsForTicker(cal.events || [], sym);
+  const cnt = cal.counts || {};
+  const gen = cal.asof_utc || "";
+  const earnN = filtered.filter(e => e.kind === "earnings").length;
+  queueMicrotask(() => refreshCalendarForTicker(sym, false));
+  return `<div class="card" style="padding:0;overflow:hidden">
+    <div class="cal-head">
+      <h4>Events · ${esc(sym)} · ${esc(String(cal.days||21))}д ${liveBadge("FOMC / FRED / Yahoo")}</h4>
+      <span class="gen" id="calGen">${esc(gen)} · FOMC ${cnt.fomc||0} · eco ${cnt.economic||0} · earn ${earnN}</span>
+    </div>
+    <div class="cal-toolbar">
+      <button type="button" class="edit-btn" id="cal-refresh" onclick="refreshCalendarForTicker(current, true)">Обновить</button>
+      <span class="flag-status" id="calStatus"></span>
+    </div>
+    <div id="calBody">${calendarRowsHtml(filtered, sym)}</div>
+    <div class="cal-legend">
+      <span><i class="lg-f"></i>FOMC</span>
+      <span><i class="lg-e"></i>macro (FRED)</span>
+      <span><i class="lg-a"></i>earnings · ${esc(sym)}</span>
+      <span style="margin-left:auto">Investing → KB; здесь live fallback</span>
+    </div>
+  </div>
+  <p class="note" style="margin:10px 2px 0">По тикеру — дата отчёта (Yahoo). FOMC и FRED общие для всех. Переключите тикер сверху — список earnings обновится.</p>`;
+}
+
+let _calLoadedFor = "";
+let _calInflight = "";
+
+async function refreshCalendarForTicker(sym, force){
+  const u = String(sym || current || "").toUpperCase();
+  if(!u) return;
+  if(!force && _calLoadedFor === u){
+    const body = document.getElementById("calBody");
+    if(body) body.innerHTML = calendarRowsHtml(filterEventsForTicker(CALENDAR.events||[], u), u);
+    return;
+  }
+  if(!force && _calInflight === u) return;
+  _calInflight = u;
+  const status = document.getElementById("calStatus");
+  const btn = document.getElementById("cal-refresh");
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = force ? "обновляем…" : "подгружаем earnings…"; }
+  try{
+    const r = await fetch(`/api/notebook/calendar?days=21&symbol=${encodeURIComponent(u)}`);
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error((j && (j.detail||j.error)) || (`HTTP ${r.status}`));
+    CALENDAR = j;
+    _calLoadedFor = u;
+    // If user switched ticker while we were loading, don't overwrite their view.
+    if(String(current||"").toUpperCase() !== u && !force) return;
+    const filtered = filterEventsForTicker(j.events || [], u);
+    const body = document.getElementById("calBody");
+    const gen = document.getElementById("calGen");
+    if(body) body.innerHTML = calendarRowsHtml(filtered, u);
+    const cnt = j.counts || {};
+    const earnN = filtered.filter(e => e.kind === "earnings").length;
+    if(gen) gen.textContent = `${j.asof_utc||""} · FOMC ${cnt.fomc||0} · eco ${cnt.economic||0} · earn ${earnN}`;
+    if(status){ status.className = "flag-status ok"; status.textContent = force ? "ок" : ""; }
+  }catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message||e); }
+  }finally{
+    if(_calInflight === u) _calInflight = "";
+    if(btn) btn.disabled = false;
+  }
+}
+
 let _newsSentCache = null;
 let _newsSentOpen = false;
 
@@ -1505,15 +1708,9 @@ async function loadNewsSentiment(sym){
   const u = String(sym||"").toUpperCase();
   const valEl = document.getElementById("nsent-val");
   const dotEl = document.getElementById("nsent-dot");
-  const btn = document.getElementById("nsent-btn");
-  const arts = document.getElementById("nsent-arts");
-  if(!valEl || !u) return;
-  _newsSentOpen = false;
-  if(arts){ arts.hidden = true; arts.innerHTML = ""; }
-  try{
-    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(u)}/news-sentiment?lookback_hours=168&limit=40`);
-    const j = await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(j.detail || j.error || ("HTTP "+r.status));
+  if(!u || !DATA[u]) return;
+
+  const paint = (j) => {
     _newsSentCache = j;
     const avg = j.avg_sentiment;
     const label = j.label || "—";
@@ -1521,17 +1718,47 @@ async function loadNewsSentiment(sym){
     const n = j.news_count|0;
     const st = newsSentStateClass(label);
     if(dotEl){ dotEl.className = "idot " + st.dot; }
+    const gate = String(label).toLowerCase() === "bearish"
+      ? `<span class="igate">БЛОК</span>` : "";
     const avgTxt = (avg != null && Number.isFinite(Number(avg)))
       ? `<span class="nsent-avg ${st.avg}">${Number(avg).toFixed(2)} · ${esc(label)}</span>`
       : `<span class="nsent-avg neut">нет скоров</span>`;
-    valEl.innerHTML = `${avgTxt}
-      <span class="note" style="margin-left:8px">FinBert · ${scored}/${n} за 7д</span>
-      <button type="button" class="edit-btn" id="nsent-btn" onclick="toggleNewsSentimentArticles()" ${n?"":"disabled"}>статьи</button>`;
+    if(valEl){
+      valEl.innerHTML = `${gate}${avgTxt}
+        <span class="note" style="margin-left:8px">FinBert · ${scored}/${n} за 7д</span>
+        <button type="button" class="edit-btn" id="nsent-btn" onclick="toggleNewsSentimentArticles()" ${n?"":"disabled"}>статьи</button>`;
+    }
+  };
+
+  // Re-use cache: paint + skip network (verdict already used _newsSent for gates).
+  if(DATA[u]._newsSent && DATA[u]._newsSentKey){
+    paint(DATA[u]._newsSent);
+    return;
+  }
+  if(!valEl) return;
+  _newsSentOpen = false;
+  const arts = document.getElementById("nsent-arts");
+  if(arts){ arts.hidden = true; arts.innerHTML = ""; }
+  try{
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(u)}/news-sentiment?lookback_hours=168&limit=40`);
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.detail || j.error || ("HTTP "+r.status));
+    const key = `${j.avg_sentiment}|${j.label}|${j.scored_count}|${j.news_count}`;
+    const prevKey = DATA[u]._newsSentKey || "";
+    DATA[u]._newsSent = j;
+    DATA[u]._newsSentKey = key;
+    paint(j);
+    // Re-render verdict once so STOP / БЛОК pick up FinBert (replaces sentimentBroken).
+    if(key !== prevKey && current === u){
+      renderContent();
+    }
   }catch(e){
     _newsSentCache = null;
     if(dotEl) dotEl.className = "idot neutral";
-    valEl.innerHTML = `<span class="note">FinBert · ошибка: ${esc(e.message||e)}</span>
-      <button type="button" class="edit-btn" id="nsent-btn" onclick="loadNewsSentiment('${esc(u)}')">повторить</button>`;
+    if(valEl){
+      valEl.innerHTML = `<span class="note">FinBert · ошибка: ${esc(e.message||e)}</span>
+        <button type="button" class="edit-btn" id="nsent-btn" onclick="loadNewsSentiment('${esc(u)}')">повторить</button>`;
+    }
   }
 }
 

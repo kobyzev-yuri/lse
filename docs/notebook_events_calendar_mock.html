@@ -1,0 +1,491 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Events</title>
+    <style>
+        :root {
+            --bg: #0f1115;
+            --card: #171a21;
+            --line: #262b36;
+            --text: #e6e9ef;
+            --muted: #8b93a3;
+            --economic: #4c7dff;
+            --fomc: #f5c542;
+            --earnings: #2ec27e;
+            --other: #8b93a3;
+            --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 14px 10px 32px;
+        }
+
+        .head {
+            max-width: 720px;
+            margin: 0 auto 12px;
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 10px;
+            border-bottom: 1px solid var(--line);
+            padding-bottom: 9px;
+        }
+
+        .head h1 {
+            margin: 0;
+            font-size: 18px;
+            letter-spacing: -0.02em;
+        }
+
+        .head .gen {
+            color: var(--muted);
+            font-size: 11px;
+            font-family: var(--mono);
+            white-space: nowrap;
+        }
+
+        .card {
+            max-width: 720px;
+            margin: 0 auto;
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .erow {
+            display: grid;
+            grid-template-columns: 62px 10px minmax(0, 1fr) 58px;
+            align-items: center;
+            gap: 8px;
+            min-height: 32px;
+            padding: 7px 10px;
+            border-bottom: 1px solid var(--line);
+            font-size: 13px;
+        }
+
+        .erow:last-child {
+            border-bottom: 0;
+        }
+
+        .erow:hover {
+            background: rgba(255, 255, 255, 0.025);
+        }
+
+        .date,
+        .symbol {
+            font-family: var(--mono);
+            white-space: nowrap;
+        }
+
+        .date {
+            color: var(--text);
+            font-weight: 700;
+            font-size: 12px;
+        }
+
+        .title {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-weight: 600;
+        }
+
+        .symbol {
+            color: var(--text);
+            font-weight: 800;
+            font-size: 12px;
+            text-align: right;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .symbol:empty {
+            opacity: 0;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--other);
+        }
+
+        .erow.economic .dot {
+            background: var(--economic);
+        }
+
+        .erow.fomc .dot {
+            background: var(--fomc);
+        }
+
+        .erow.earnings .dot {
+            background: var(--earnings);
+        }
+
+        .empty {
+            padding: 26px 16px;
+            text-align: center;
+            color: var(--muted);
+            font-family: var(--mono);
+            font-size: 13px;
+        }
+
+        @media (max-width: 420px) {
+            body {
+                padding-left: 8px;
+                padding-right: 8px;
+            }
+
+            .head .gen {
+                font-size: 10px;
+            }
+
+            .erow {
+                grid-template-columns: 52px 9px minmax(0, 1fr) 48px;
+                gap: 7px;
+                padding: 7px 8px;
+                font-size: 12px;
+            }
+
+            .date,
+            .symbol {
+                font-size: 11px;
+            }
+
+            .dot {
+                width: 7px;
+                height: 7px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="head">
+        <h1>Events</h1>
+        <span class="gen">2026-07-23 10:28 UTC</span>
+    </div>
+
+    <section class="card">
+        
+        
+<div class="erow economic">
+    <span class="date">23 Jul</span>
+    <span class="dot"></span>
+    <span class="title" title="Jobless Claims release">Jobless Claims release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="INTC earnings">INTC earnings</span>
+    <span class="symbol">INTC</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="MXL earnings">MXL earnings</span>
+    <span class="symbol">MXL</span>
+</div>
+
+<div class="erow economic">
+    <span class="date">27 Jul</span>
+    <span class="dot"></span>
+    <span class="title" title="Durable Goods release">Durable Goods release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="AMKR earnings">AMKR earnings</span>
+    <span class="symbol">AMKR</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="CDNS earnings">CDNS earnings</span>
+    <span class="symbol">CDNS</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date">28 Jul</span>
+    <span class="dot"></span>
+    <span class="title" title="KLAC earnings">KLAC earnings</span>
+    <span class="symbol">KLAC</span>
+</div>
+
+<div class="erow fomc">
+    <span class="date">29 Jul</span>
+    <span class="dot"></span>
+    <span class="title" title="FOMC decision">FOMC decision</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="ARM earnings">ARM earnings</span>
+    <span class="symbol">ARM</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="LRCX earnings">LRCX earnings</span>
+    <span class="symbol">LRCX</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="META earnings">META earnings</span>
+    <span class="symbol">META</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="MSFT earnings">MSFT earnings</span>
+    <span class="symbol">MSFT</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="QCOM earnings">QCOM earnings</span>
+    <span class="symbol">QCOM</span>
+</div>
+
+<div class="erow economic">
+    <span class="date">30 Jul</span>
+    <span class="dot"></span>
+    <span class="title" title="GDP release">GDP release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow economic">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="Jobless Claims release">Jobless Claims release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow economic">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="PCE release">PCE release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="AMZN earnings">AMZN earnings</span>
+    <span class="symbol">AMZN</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="RBLX earnings">RBLX earnings</span>
+    <span class="symbol">RBLX</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date">03 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="AEIS earnings">AEIS earnings</span>
+    <span class="symbol">AEIS</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="PLTR earnings">PLTR earnings</span>
+    <span class="symbol">PLTR</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="STRL earnings">STRL earnings</span>
+    <span class="symbol">STRL</span>
+</div>
+
+<div class="erow economic">
+    <span class="date">04 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="Durable Goods release">Durable Goods release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="ENTG earnings">ENTG earnings</span>
+    <span class="symbol">ENTG</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="ALAB earnings">ALAB earnings</span>
+    <span class="symbol">ALAB</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="ANET earnings">ANET earnings</span>
+    <span class="symbol">ANET</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="SPCX earnings">SPCX earnings</span>
+    <span class="symbol">SPCX</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date">05 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="SNDK earnings">SNDK earnings</span>
+    <span class="symbol">SNDK</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="TTMI earnings">TTMI earnings</span>
+    <span class="symbol">TTMI</span>
+</div>
+
+<div class="erow economic">
+    <span class="date">06 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="Jobless Claims release">Jobless Claims release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="DDOG earnings">DDOG earnings</span>
+    <span class="symbol">DDOG</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="NBIS earnings">NBIS earnings</span>
+    <span class="symbol">NBIS</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="AAOI earnings">AAOI earnings</span>
+    <span class="symbol">AAOI</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="ONTO earnings">ONTO earnings</span>
+    <span class="symbol">ONTO</span>
+</div>
+
+<div class="erow economic">
+    <span class="date">07 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="NFP release">NFP release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow earnings">
+    <span class="date">11 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="LITE earnings">LITE earnings</span>
+    <span class="symbol">LITE</span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="SMCI earnings">SMCI earnings</span>
+    <span class="symbol">SMCI</span>
+</div>
+
+<div class="erow economic">
+    <span class="date">12 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="CPI release">CPI release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="COHR earnings">COHR earnings</span>
+    <span class="symbol">COHR</span>
+</div>
+
+<div class="erow economic">
+    <span class="date">13 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="Jobless Claims release">Jobless Claims release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow economic">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="PPI release">PPI release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow economic">
+    <span class="date">14 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="Retail Sales release">Retail Sales release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow economic">
+    <span class="date">20 Aug</span>
+    <span class="dot"></span>
+    <span class="title" title="Jobless Claims release">Jobless Claims release</span>
+    <span class="symbol"></span>
+</div>
+
+<div class="erow earnings">
+    <span class="date"></span>
+    <span class="dot"></span>
+    <span class="title" title="INTU earnings">INTU earnings</span>
+    <span class="symbol">INTU</span>
+</div>
+
+        
+    </section>
+</body>
+
+</html>
