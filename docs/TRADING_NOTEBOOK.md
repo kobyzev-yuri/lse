@@ -83,7 +83,7 @@
 
 | Источник | Cron / mode | Что даёт | В дайджесте |
 |----------|-------------|----------|-------------|
-| **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные новости SA по universe тетрадки | да (`source=Seeking Alpha Finance`) |
+| **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные новости SA по universe тетрадки **+ extras** (`SPY,QQQ,NVDA,INTC,AAPL,PYPL,KEYS,VZ`; `NOTEBOOK_NEWS_SA_EXTRA`) | да (`source=Seeking Alpha Finance`) |
 | **Yahoo + Marketaux** | `5 */2` · `--mode tickers` | Тикерные новости (Motley Fool, Zacks, Reuters, Yahoo, …) | да (разные `source`) |
 | **Investing.com News** (+ calendar) | `0 */2` · `--mode investing` | Лента + экономкалендарь | новости — да; календарь — другой `event_type` |
 | **RSS ЦБ / Alpha Vantage** | `*/15` · `--mode core-fast` | Макро/календарные потоки | если попали как NEWS/MACRO по тикерам |

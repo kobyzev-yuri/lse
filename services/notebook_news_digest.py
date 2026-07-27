@@ -78,6 +78,19 @@ DIGEST_SYSTEM = """Ты — редактор утреннего дайджест
 - Отсев 50–70% шума — норма.
 """
 
+# Extra SA RapidAPI tickers beyond notebook universe (macro / peers from RTA email overlap).
+# Override via NOTEBOOK_NEWS_SA_EXTRA=SPY,QQQ,... or empty to disable.
+DEFAULT_SA_EXTRA_TICKERS: tuple[str, ...] = (
+    "SPY",
+    "QQQ",
+    "NVDA",
+    "INTC",
+    "AAPL",
+    "PYPL",
+    "KEYS",
+    "VZ",
+)
+
 
 def _unique_upper(seq: Sequence[str]) -> List[str]:
     seen: Set[str] = set()
@@ -285,6 +298,40 @@ def build_news_universe(*, equity_only: bool = True) -> Dict[str, Any]:
         "membership": membership,
         "source": source,
         "note_ru": note,
+    }
+
+
+def sa_extra_tickers_from_config() -> List[str]:
+    """NOTEBOOK_NEWS_SA_EXTRA — comma list; unset → DEFAULT_SA_EXTRA_TICKERS; empty string → []."""
+    raw = get_config_value("NOTEBOOK_NEWS_SA_EXTRA", None)
+    if raw is None:
+        return list(DEFAULT_SA_EXTRA_TICKERS)
+    s = str(raw).strip()
+    if not s or s.lower() in ("0", "none", "off", "-"):
+        return []
+    return _unique_upper(x.strip() for x in s.split(",") if x.strip())
+
+
+def build_sa_fetch_tickers(*, equity_only: bool = True) -> Dict[str, Any]:
+    """
+    Tickers for Seeking Alpha Finance ingest cron.
+
+    Notebook universe ∪ NOTEBOOK_NEWS_SA_EXTRA (macro/peers: SPY, INTC, …).
+    Extras are NOT added to digest group membership — only widen SA API coverage.
+    Keep ETFs like SPY/QQQ in extras even when equity_only=True (macro proxies).
+    """
+    uni = build_news_universe(equity_only=equity_only)
+    base = list(uni.get("group3_union") or [])
+    extra = sa_extra_tickers_from_config()
+    merged = _unique_upper(base + extra)
+    return {
+        **uni,
+        "sa_extra": extra,
+        "sa_fetch_tickers": merged,
+        "note_ru": (
+            f"{uni.get('note_ru') or ''} SA fetch = notebook ({len(base)}) "
+            f"+ extras ({len(extra)}): {', '.join(extra) or '—'}"
+        ).strip(),
     }
 
 

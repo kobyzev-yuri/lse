@@ -150,14 +150,20 @@ def fetch_all_news_sources(mode: str = "all"):
     if run_sa:
         try:
             logger.info("\n📰 Источник SA: Seeking Alpha Finance → knowledge_base")
-            from services.notebook_news_digest import build_news_universe
+            from services.notebook_news_digest import build_sa_fetch_tickers
             from services.seeking_alpha_finance import fetch_and_save_sa_news, rapidapi_key
 
             if not rapidapi_key():
                 sources_status["SeekingAlphaFinance"] = "⚠️ нет SEEKING_ALPHA_RAPIDAPI_KEY / RAPIDAPI_KEY"
             else:
-                uni = build_news_universe(equity_only=True)
-                tickers = list(uni.get("group3_union") or [])
+                uni = build_sa_fetch_tickers(equity_only=True)
+                tickers = list(uni.get("sa_fetch_tickers") or uni.get("group3_union") or [])
+                extra_n = len(uni.get("sa_extra") or [])
+                logger.info(
+                    "SA universe: %s tickers (notebook+%s extras)",
+                    len(tickers),
+                    extra_n,
+                )
                 try:
                     per = int((get_config_value("NOTEBOOK_NEWS_PER_TICKER", "5") or "5").strip())
                 except (ValueError, TypeError):
@@ -177,7 +183,8 @@ def fetch_all_news_sources(mode: str = "all"):
                 sa_news_saved = int(bundle.get("kb_inserted") or 0)
                 err_n = len(bundle.get("errors") or {})
                 sources_status["SeekingAlphaFinance"] = (
-                    f"✅ KB +{sa_news_saved}, api_items={len(bundle.get('items') or [])}, errors={err_n}"
+                    f"✅ KB +{sa_news_saved}, api_items={len(bundle.get('items') or [])}, "
+                    f"tickers={len(tickers)} (+{extra_n} extra), errors={err_n}"
                 )
         except Exception as e:
             logger.error("❌ Ошибка Seeking Alpha Finance: %s", e)

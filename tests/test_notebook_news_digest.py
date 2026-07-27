@@ -5,7 +5,9 @@ from __future__ import annotations
 from services.notebook_news_digest import (
     _parse_llm_json,
     build_news_universe,
+    build_sa_fetch_tickers,
     dedupe_news_items,
+    DEFAULT_SA_EXTRA_TICKERS,
 )
 from services.seeking_alpha_finance import flatten_news_items
 
@@ -24,6 +26,27 @@ def test_build_news_universe_has_three_groups():
         tags = uni["membership"][t]
         assert tags
         assert set(tags) <= {"g1", "g2", "g3", "new", "notebook"}
+
+
+def test_build_sa_fetch_tickers_adds_macro_extras(monkeypatch):
+    import services.notebook_news_digest as m
+    from config_loader import get_config_value as real_get
+
+    def _cfg(key, default=None):
+        if key == "NOTEBOOK_NEWS_SA_EXTRA":
+            return default  # unset → DEFAULT_SA_EXTRA_TICKERS
+        return real_get(key, default)
+
+    monkeypatch.setattr(m, "get_config_value", _cfg)
+    uni = build_sa_fetch_tickers(equity_only=True)
+    base = set(uni["group3_union"])
+    fetch = set(uni["sa_fetch_tickers"])
+    extras = set(uni["sa_extra"])
+    assert extras == set(DEFAULT_SA_EXTRA_TICKERS)
+    assert base <= fetch
+    assert {"SPY", "QQQ", "INTC", "NVDA"} <= fetch
+    # Digests still use notebook membership — extras not forced in.
+    assert "SPY" not in uni["membership"] or "SPY" in base
 
 
 def test_format_digest_telegram_empty():
