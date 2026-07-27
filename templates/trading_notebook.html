@@ -113,13 +113,14 @@
   .macro b{color:var(--ink);}
   .upd{font-size:11px;font-family:var(--mono);color:var(--dim);float:right;font-weight:400;text-transform:none;letter-spacing:0;}
 
-  .stub-tag,.live-tag{
+  .stub-tag,.live-tag,.manual-tag{
     display:inline-flex;align-items:center;gap:5px;margin-left:8px;padding:2px 8px;border-radius:999px;
     font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.2px;vertical-align:middle;
     white-space:nowrap;max-width:min(100%,420px);overflow:hidden;text-overflow:ellipsis;
   }
   .stub-tag{background:rgba(232,198,90,.18);color:#e8c65a;border:1px solid rgba(232,198,90,.45);}
   .live-tag{background:rgba(46,160,67,.14);color:#5fd67c;border:1px solid rgba(46,160,67,.35);}
+  .manual-tag{background:rgba(74,158,218,.14);color:#7cc0ef;border:1px solid rgba(74,158,218,.4);}
   .stub-box{
     margin:10px 0 14px;padding:10px 12px;border-radius:10px;
     background:rgba(232,198,90,.08);border:1px dashed rgba(232,198,90,.4);
@@ -277,6 +278,9 @@ function stubBadge(where){
 }
 function liveBadge(where){
   return `<span class="live-tag" title="${esc(where)}">live · ${esc(where)}</span>`;
+}
+function manualBadge(where){
+  return `<span class="manual-tag" title="${esc(where)}">вручную · ${esc(where)}</span>`;
 }
 function stubBox(title, where){
   return `<div class="stub-box"><b>${esc(title)}</b> — брать из: ${esc(where)}</div>`;
@@ -552,8 +556,12 @@ function computeVerdict(d){
     name:"Цена vs уровень",
     state:priceState,
     gate:false,
-    live: px != null ? "Close" : null,
-    stub: (L.buyDip==null && L.sell==null) ? "уровни TBD · вручную" : "уровни из JSON",
+    live: px != null ? "Close · quotes" : null,
+    // Filled levels are intentional manual inputs (not a stub gap).
+    manual: (L.buyDip!=null || L.sell!=null)
+      ? (L.note || "Buy Dip/Sell из notebook_data.json")
+      : null,
+    stub: (L.buyDip==null && L.sell==null) ? "уровни TBD · вписать вручную" : null,
     val:priceVal
   });
 
@@ -602,7 +610,7 @@ function renderVerdict(d){
     <div class="ind-row">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}${i.stub?stubBadge(i.stub):""}${i.live?liveBadge(i.live):""}</span>
+      <span class="ival">${esc(i.val)}${i.live?liveBadge(i.live):""}${i.manual?manualBadge(i.manual):""}${i.stub?stubBadge(i.stub):""}</span>
       ${i.gate?'<span class="igate">БЛОК</span>':''}
     </div>`).join("");
   const src = d.price_source ? ` · ${d.price_source}` : "";
