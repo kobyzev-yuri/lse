@@ -251,9 +251,10 @@
   .ind-row .ival{font-size:13px;color:var(--muted);flex:1;}
   .ind-row .igate{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:5px;background:var(--sell-soft);color:#ef8582;flex:none;}
   @media(max-width:640px){.ind-row .iname{width:auto;}.ind-row{flex-wrap:wrap;}}
-  .macro-inline{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:8px;width:100%;}
-  .macro-inline .mi{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);}
-  .macro-inline .mi b{color:var(--ink);font-weight:600;}
+  .macro-inline{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-left:8px;vertical-align:middle;}
+  .macro-inline .mi{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);}
+  .macro-inline .mi b{color:var(--ink);font-weight:600;font-size:11px;font-family:var(--mono);text-transform:uppercase;}
+  .macro-inline .flag-status{margin:0;font-size:11px;}
   .ind-row.macro-edit{flex-wrap:wrap;align-items:flex-start;}
   .ind-row.macro-edit .ival{min-width:min(100%,220px);}
   .levels-inline{width:100%;margin-top:10px;}
@@ -609,37 +610,26 @@ function computeVerdict(d){
   const vix = findLiveVix(env);
 
   const indicators = [];
+  // One Environment row: VIX lives here (no separate VIX indicator).
   let envVal;
-  if(worstEnv==="ok") envVal = "чисто — угроз нет";
+  if(worstEnv==="ok") envVal = "чисто";
   else if(worstEnv==="mid") envVal = `жёлтый: ${yellowEnv.map(e=>e.lbl).join(", ")}`;
   else envVal = `КРАСНЫЙ: ${redEnv.map(e=>e.lbl).join(", ")}`;
-  if(vix){
-    const vx = vix.value != null ? vix.value.toFixed(1) : "?";
-    envVal = `VIX ${vx} · ${vix.fear} · ${envVal}`;
+  if(vix && vix.value != null){
+    envVal = `VIX ${vix.value.toFixed(1)} · ${envVal}`;
   }
   indicators.push({
     name:"Environment Check",
     state: worstEnv,
     gate: worstEnv==="bad",
-    live: vix ? `VIX ${vix.value!=null?vix.value.toFixed(1):""}` : ((env||[]).some(e => e.live) ? "частично live" : null),
-    // Fed/PT details live in the Env editor below — no duplicate stub/manual badge here.
     val: envVal
   });
-  if(vix){
-    indicators.push({
-      name:"VIX",
-      state: vix.state,
-      gate: vix.state==="bad",
-      live: "quotes/^VIX",
-      val: `${vix.value!=null?("уровень "+vix.value.toFixed(1)):vix.st} · оценка: ${vix.fear}${vix.st?(" · "+vix.st):""}`
-    });
-  }
   indicators.push({
     name:"Макро (SocGen)",
     state: macroBroken ? "bad" : "ok",
     gate: macroBroken,
     editKind: "macro",
-    val: macroBroken ? "тезис AI под вопросом — фон против входа" : "тезис AI жив до сер. 2027 — фон поддерживающий"
+    val: macroBroken ? "блок" : "ок"
   });
 
   const L = d.levels || {};
@@ -711,21 +701,20 @@ function renderMacroInlineControls(d){
   const sig = d.signals || {};
   const alive = !!sig.macroAlive;
   const broken = !!sig.sentimentBroken;
-  const hint = d.signals_override ? "overlay" : "дефолт · клик сохранит";
   return `
-    <div class="macro-inline">
-      <div class="mi"><b>тезис жив</b>
+    <span class="macro-inline">
+      <span class="mi"><b>тезис</b>
         <button type="button" class="flag-toggle ${alive?'on':''}" id="flg-macroAlive"
-          onclick="toggleMacroFlag('macroAlive', ${alive? 'false':'true'})" title="macroAlive"
+          onclick="toggleMacroFlag('macroAlive', ${alive? 'false':'true'})" title="macroAlive — тезис AI жив"
           aria-pressed="${alive?'true':'false'}"><span class="knob"></span></button>
-      </div>
-      <div class="mi"><b>sentiment сломан</b>
+      </span>
+      <span class="mi"><b>sentiment</b>
         <button type="button" class="flag-toggle ${broken?'warn':''}" id="flg-sentimentBroken"
-          onclick="toggleMacroFlag('sentimentBroken', ${broken? 'false':'true'})" title="sentimentBroken"
+          onclick="toggleMacroFlag('sentimentBroken', ${broken? 'false':'true'})" title="sentimentBroken — сломан"
           aria-pressed="${broken?'true':'false'}"><span class="knob"></span></button>
-      </div>
-      <span class="flag-status" id="flagStatus" style="margin-top:0">${hint}</span>
-    </div>`;
+      </span>
+      <span class="flag-status" id="flagStatus"></span>
+    </span>`;
 }
 
 function renderLevelsInline(d){
@@ -917,15 +906,20 @@ function renderVerdict(d){
       <span class="ival">${esc(i.val)}${renderLevelsInline(d)}</span>
     </div>`;
     }
-    const editHtml = i.editKind==="macro" ? renderMacroInlineControls(d) : "";
-    const editBadge = i.editKind==="macro" ? manualBadge("настройка здесь") : "";
-    return `
-    <div class="ind-row ${i.editKind==="macro"?'macro-edit':''}">
+    if(i.editKind === "macro"){
+      return `
+    <div class="ind-row">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}${i.live?liveBadge(i.live):""}${i.manual?manualBadge(i.manual):""}${i.stub?stubBadge(i.stub):""}${editBadge}</span>
+      <span class="ival">${esc(i.val)}${i.gate?'<span class="igate" style="margin-left:8px">БЛОК</span>':''}${renderMacroInlineControls(d)}</span>
+    </div>`;
+    }
+    return `
+    <div class="ind-row">
+      <span class="idot ${esc(i.state)}"></span>
+      <span class="iname">${esc(i.name)}</span>
+      <span class="ival">${esc(i.val)}${i.live?liveBadge(i.live):""}${i.manual?manualBadge(i.manual):""}${i.stub?stubBadge(i.stub):""}</span>
       ${i.gate?'<span class="igate">БЛОК</span>':''}
-      ${editHtml}
     </div>`;
   }).join("");
   const src = d.price_source ? ` · ${d.price_source}` : "";
@@ -939,7 +933,7 @@ function renderVerdict(d){
     </div>
     <div class="card">
       <h3>Как собрался вердикт <span class="hint">Close vs Buy Dip / Sell — не авто-сигнал</span></h3>
-      ${stubBox("Смешанный вердикт", "Цена — live. Макро и уровни — в строках индикаторов. Env ФРС·PT — блок ниже.")}
+      ${stubBox("Смешанный вердикт", "VIX в Environment Check. Макро и уровни — переключатели/поля в строке. ФРС·PT — блок ниже.")}
       ${inds}
       <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs buy/sell в той же строке.</div>
     </div>
