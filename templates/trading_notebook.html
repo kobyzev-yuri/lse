@@ -113,6 +113,26 @@
   .macro b{color:var(--ink);}
   .upd{font-size:11px;font-family:var(--mono);color:var(--dim);float:right;font-weight:400;text-transform:none;letter-spacing:0;}
 
+  .stub-tag,.live-tag{
+    display:inline-flex;align-items:center;gap:5px;margin-left:8px;padding:2px 8px;border-radius:999px;
+    font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.2px;vertical-align:middle;
+    white-space:nowrap;max-width:min(100%,420px);overflow:hidden;text-overflow:ellipsis;
+  }
+  .stub-tag{background:rgba(232,198,90,.18);color:#e8c65a;border:1px solid rgba(232,198,90,.45);}
+  .live-tag{background:rgba(46,160,67,.14);color:#5fd67c;border:1px solid rgba(46,160,67,.35);}
+  .stub-box{
+    margin:10px 0 14px;padding:10px 12px;border-radius:10px;
+    background:rgba(232,198,90,.08);border:1px dashed rgba(232,198,90,.4);
+    font-size:12.5px;color:var(--muted);line-height:1.45;
+  }
+  .stub-box b{color:#e8c65a;}
+  .data-legend{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px;align-items:center;}
+  .data-legend .hint-txt{font-size:12px;color:var(--dim);}
+  nav.tabs button .tab-stub{
+    display:inline-block;width:7px;height:7px;border-radius:50%;background:#e8c65a;margin-left:6px;
+    vertical-align:middle;opacity:.95;
+  }
+
   footer{color:var(--dim);font-size:11.5px;margin-top:26px;line-height:1.5;border-top:1px solid var(--line);padding-top:14px;}
 
   /* digest */
@@ -241,16 +261,33 @@ let DIGEST = {date:"", filtered:0, kept:0, trashed:0, signals:[], risks:[], macr
 let DIGEST_BUCKETS = [];
 
 const TABS = [
-  {id:"verdict",label:"⚡ Вердикт"},
-  {id:"profile",label:"Профиль"},
-  {id:"triggers",label:"Триггеры Buy / Sell"},
-  {id:"entry",label:"Тактика входа / выхода"},
-  {id:"env",label:"Окружение"},
-  {id:"houses",label:"Инвестдома"},
-  {id:"fundament",label:"Фундамент"},
-  {id:"digest",label:"Дайджесты"},
-  {id:"watchlist",label:"Watchlist · Flash Crash"},
+  {id:"verdict",label:"⚡ Вердикт",stub:false},
+  {id:"profile",label:"Профиль",stub:true},
+  {id:"triggers",label:"Триггеры Buy / Sell",stub:true},
+  {id:"entry",label:"Тактика входа / выхода",stub:true},
+  {id:"env",label:"Окружение",stub:true},
+  {id:"houses",label:"Инвестдома",stub:true},
+  {id:"fundament",label:"Фундамент",stub:true},
+  {id:"digest",label:"Дайджесты",stub:false},
+  {id:"watchlist",label:"Watchlist · Flash Crash",stub:true},
 ];
+
+function stubBadge(where){
+  return `<span class="stub-tag" title="${esc(where)}">заглушка · ${esc(where)}</span>`;
+}
+function liveBadge(where){
+  return `<span class="live-tag" title="${esc(where)}">live · ${esc(where)}</span>`;
+}
+function stubBox(title, where){
+  return `<div class="stub-box"><b>${esc(title)}</b> — брать из: ${esc(where)}</div>`;
+}
+function dataLegend(){
+  return `<div class="data-legend">
+    ${liveBadge("авто / KB / quotes")}
+    ${stubBadge("ждёт ручной ввод или источник")}
+    <span class="hint-txt">Жёлтая точка на вкладке = в основном заглушка.</span>
+  </div>`;
+}
 
 let digestVariant = "digest";
 let currentGroup = "1";
@@ -329,7 +366,7 @@ function renderTickers(){
 
 function renderTabs(){
   document.getElementById("tabs").innerHTML = TABS.map(t =>
-    `<button class="${t.id===activeTab?'on':''}" onclick="selectTab('${t.id}')">${t.label}</button>`
+    `<button class="${t.id===activeTab?'on':''}" onclick="selectTab('${t.id}')">${t.label}${t.stub?'<span class="tab-stub" title="заглушка"></span>':''}</button>`
   ).join("");
 }
 
@@ -349,8 +386,9 @@ function tabWrap(id, inner){
 function renderFundament(d){
   const f = d.fundament;
   if(!f){
-    return tabWrap("fundament", `<div class="card"><h3>Фундамент</h3>
-      <p class="note">Карточка-справка ещё не заполнена для ${esc(d.sym)}. Эталон секции — NBIS (кэш / FCF / долг / плюсы / риски).</p></div>`);
+    return tabWrap("fundament", `<div class="card"><h3>Фундамент ${stubBadge("вручную JSON")}</h3>
+      ${stubBox("Карточка не заполнена", "вручную в nastya/notebook/notebook_data.json (эталон — NBIS: кэш / FCF / долг / плюсы / риски). Авто из SA financials пока нет.")}
+      <p class="note">Для ${esc(d.sym)} фундаментальная справка ещё не внесена.</p></div>`);
   }
   const metrics = (f.metrics||[]).map(m => `
     <div class="fund-m">
@@ -362,7 +400,8 @@ function renderFundament(d){
   const risks = (f.risks||[]).map(x=>`<li>${esc(x)}</li>`).join("");
   return tabWrap("fundament", `
     <div class="card">
-      <h3>${esc(d.name)} · фундамент <span class="hint">краткая справка · не сигнал BUY</span></h3>
+      <h3>${esc(d.name)} · фундамент ${stubBadge("вручную JSON · эталон NBIS")}<span class="hint">краткая справка · не сигнал BUY</span></h3>
+      ${stubBox("Не live API", "редактировать вручную в notebook_data.json; позже — возможный парсинг отчётов / 10-Q.")}
       <div class="fund-tag">${esc(f.tagline||'')}</div>
       <div class="fund-grid">${metrics}</div>
       ${f.margin_ru?`<div class="fund-sec"><b>Маржа:</b> ${esc(f.margin_ru)}</div>`:''}
@@ -385,55 +424,74 @@ function renderContent(){
   }
   const d = DATA[current];
   if(!d){ c.innerHTML = `<div class="load-err">Тикер ${esc(current)} не найден в данных</div>`; return; }
-  let html = "";
+  let html = dataLegend();
+  const L = d.levels || {};
+  const levelsFilled = L.buyDip != null || L.sell != null;
   html += tabWrap("verdict", renderVerdict(d));
 
   const kv = Object.entries(d.profile||{}).map(([k,v]) =>
     `<div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>`).join("");
   const gname = (GROUPS[String(d.group)] && GROUPS[String(d.group)].name) || ("GRP "+d.group);
-  html += tabWrap("profile", `<div class="card"><h3>${esc(d.name)} · ${esc((gname||'').split(' · ')[0])}</h3>
+  html += tabWrap("profile", `<div class="card"><h3>${esc(d.name)} · ${esc((gname||'').split(' · ')[0])} ${stubBadge("вручную JSON")}</h3>
+    ${stubBox("Профиль тикера", "вручную: nastya/notebook/notebook_data.json (роль, слой, отчёт, целевая прибыль).")}
     <div class="kv"><div class="k">Горизонт</div><div class="v">${esc(d.horizon||'')}</div>${kv}</div></div>`);
 
   const trigs = (d.triggers||[]).map(t => {
     const map = {buy:["b-buy","BUY"],sell:["b-sell","SELL"],add:["b-add","ADD"],watch:["b-watch","WATCH"]};
     const [cls,txt] = map[t.t] || ["b-watch","?"];
+    const lvlStr = String(t.lvl||"");
+    const isTbd = /TBD|не впис|уточн/i.test(lvlStr) || (t.t==="buy" && L.buyDip==null) || (t.t==="sell" && L.sell==null && /Sell/i.test(lvlStr));
     return `<div class="trig"><span class="badge ${cls}">${txt}</span><div class="body">
-      <div class="lvl">${esc(t.lvl)}${t.manual?'<span class="manual">впис. вручную</span>':''}</div>
+      <div class="lvl">${esc(t.lvl)}${t.manual?'<span class="manual">впис. вручную</span>':''}${isTbd?stubBadge("уровни TBD · вручную"):''}</div>
       <div class="desc">${esc(t.desc)}</div><div class="cond">${esc(t.cond)}</div></div></div>`;
   }).join("");
-  html += tabWrap("triggers", `<div class="card"><h3>Триггеры <span class="hint">решение принято заранее — при срабатывании просто исполняем</span></h3>${trigs}</div>`);
+  html += tabWrap("triggers", `<div class="card"><h3>Триггеры ${stubBadge("уровни вручную в JSON")}<span class="hint">решение принято заранее — при срабатывании просто исполняем</span></h3>
+    ${stubBox("Buy Dip / Sell", levelsFilled ? "часть уровней уже в JSON; правки — вручную (позже UI-редактор)." : "вписать Buy Dip / Sell вручную в notebook_data.json или Excel Насти.")}
+    ${trigs}</div>`);
 
   html += tabWrap("entry", `<div class="card">
-    <h3>Стратегия входа <span class="hint">техника первой, макро — поверх</span></h3>
+    <h3>Стратегия входа ${stubBadge("вручную JSON")}<span class="hint">техника первой, макро — поверх</span></h3>
+    ${stubBox("Тактика", "текст правил вручную в notebook_data.json (entry/exit/macro).")}
     <ul class="clean">${(d.entry||[]).map(e=>`<li>${e}</li>`).join("")}</ul></div>
-    <div class="card"><h3>Стратегия выхода</h3>
+    <div class="card"><h3>Стратегия выхода ${stubBadge("вручную JSON")}</h3>
     <ul class="clean">${(d.exit||[]).map(e=>`<li>${e}</li>`).join("")}</ul>
     <div class="macro"><b>Макро-контекст (поверх техники):</b> ${esc(d.macro||'')}</div></div>`);
 
   const envs = (d.env||[]).map(e =>
-    `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span></div>`
+    `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span>${stubBadge(envSourceHint(e.lbl))}</div>`
   ).join("");
-  html += tabWrap("env", `<div class="card"><h3>Environment Check <span class="hint">фильтр скрытых угроз поверх логики входа</span></h3>${envs}
+  html += tabWrap("env", `<div class="card"><h3>Environment Check ${stubBadge("пока JSON · VIX не live")}<span class="hint">фильтр скрытых угроз поверх логики входа</span></h3>
+    ${stubBox("Окружение", "VIX — планируется quotes/yfinance (ещё не в карточке). ФРС / cut PT вне earnings — вручную или из дайджеста/KB. Сейчас state=mid из JSON.")}
+    ${envs}
     <div class="note">Красный/жёлтый по любому пункту = входы на паузу.</div></div>`);
 
   const houses = (d.houses||[]).map(h => `<div class="house"><div class="hh">
     <span class="firm">${esc(h.firm)}</span><span class="rate">${esc(h.rate)}</span><span class="pt">${esc(h.pt)}</span></div>
     <div class="quote">${esc(h.quote)}</div><div class="tac">${h.tac||''}</div></div>`).join("");
   const cons = d.consensus || {};
-  html += tabWrap("houses", `<div class="card"><h3>Оценки инвестдомов <span class="upd">${esc(cons.upd||'')}</span><span class="hint">обновляется вручную</span></h3>
+  html += tabWrap("houses", `<div class="card"><h3>Оценки инвестдомов ${stubBadge("вручную JSON")}<span class="upd">${esc(cons.upd||'')}</span></h3>
+    ${stubBox("Инвестдома / консенсус", "вручную в notebook_data.json (firm / rate / pt / quote / tac). Заголовки PT из SA/Yahoo news — только в дайджесте, не в этой вкладке. Авто-API рейтингов нет.")}
     <div class="concens">
       <div class="cell"><span class="cl">Консенсус</span><span class="cv">${esc(cons.rating||'—')}</span></div>
       <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(cons.pt||'—')}</span></div>
       <div class="cell"><span class="cl">Low</span><span class="cv down">${esc(cons.low||'—')}</span></div>
       <div class="cell"><span class="cl">High</span><span class="cv up">${esc(cons.high||'—')}</span></div>
       <div class="cell"><span class="cl">Выборка</span><span class="cv" style="font-size:13px">${esc(cons.n||'—')}</span></div>
-    </div>${houses || '<p class="note">Пока пусто — заполняется вручную в JSON.</p>'}
+    </div>${houses || '<p class="note">Пока пусто.</p>'}
     <div class="note">${esc(d.houseNote||'')}</div></div>`);
 
   html += renderFundament(d);
   html += renderDigest();
   html += renderWatchlist();
   c.innerHTML = html;
+}
+
+function envSourceHint(lbl){
+  const s = String(lbl||"").toLowerCase();
+  if(s.includes("vix")) return "источник: quotes/yfinance (подключить)";
+  if(s.includes("фрс") || s.includes("fed")) return "вручную / макро-дайджест KB";
+  if(s.includes("таргет") || s.includes("pt")) return "вручную / SA·Yahoo headlines";
+  return "вручную JSON";
 }
 
 function setDigestVariant(v){ digestVariant = v; renderContent(); }
@@ -454,6 +512,7 @@ function computeVerdict(d){
     name:"Environment Check",
     state: worstEnv,
     gate: worstEnv==="bad",
+    stub: "JSON · не live VIX",
     val: worstEnv==="ok" ? "чисто — угроз нет"
        : worstEnv==="mid" ? `жёлтый: ${yellowEnv.map(e=>e.lbl).join(", ")}`
        : `КРАСНЫЙ: ${redEnv.map(e=>e.lbl).join(", ")}`
@@ -462,6 +521,7 @@ function computeVerdict(d){
     name:"Макро (SocGen)",
     state: macroBroken ? "bad" : "ok",
     gate: macroBroken,
+    stub: "флаг в JSON",
     val: macroBroken ? "тезис AI под вопросом — фон против входа" : "тезис AI жив до сер. 2027 — фон поддерживающий"
   });
 
@@ -482,13 +542,21 @@ function computeVerdict(d){
     priceVal = px == null ? `нет Close · ${L.note||"уровни ручные"}` : (L.note || "уровни не вписаны");
     triggerHit = "manual";
   }
-  indicators.push({name:"Цена vs уровень", state:priceState, gate:false, val:priceVal});
+  indicators.push({
+    name:"Цена vs уровень",
+    state:priceState,
+    gate:false,
+    live: px != null ? "Close" : null,
+    stub: (L.buyDip==null && L.sell==null) ? "уровни TBD · вручную" : "уровни из JSON",
+    val:priceVal
+  });
 
   const c = d.consensus || {};
   indicators.push({
     name:"Инвестдома",
     state:"ok",
     gate:false,
+    stub: "вручную JSON",
     val:`консенсус ${c.rating||"—"} · ср. таргет ${c.pt||"—"} (коридор ${c.low||"—"}–${c.high||"—"})`
   });
 
@@ -528,20 +596,25 @@ function renderVerdict(d){
     <div class="ind-row">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}</span>
+      <span class="ival">${esc(i.val)}${i.stub?stubBadge(i.stub):""}${i.live?liveBadge(i.live):""}</span>
       ${i.gate?'<span class="igate">БЛОК</span>':''}
     </div>`).join("");
   const src = d.price_source ? ` · ${d.price_source}` : "";
   const asof = d.price_asof ? ` · ${d.price_asof}` : "";
+  const L = d.levels || {};
+  const hasLevels = L.buyDip != null || L.sell != null;
   return `
     <div class="verdict-hero ${v.cls}">
-      <div class="vlabel">Итоговый вердикт · ${esc(d.sym)}</div>
+      <div class="vlabel">Итоговый вердикт · ${esc(d.sym)} ${liveBadge("Close · quotes/yfinance")}</div>
       <div class="vaction">${esc(v.action)}</div>
       <div class="vwhy">${esc(v.why)}</div>
       <div class="vprice">Close ${fmtPx(d.px)} ${esc(d.chg||"")}${esc(src)}${esc(asof)} · горизонт: ${esc(d.horizon||"")}</div>
     </div>
     <div class="card">
       <h3>Как собрался вердикт <span class="hint">Close сверяется с ручными Buy Dip / Sell — не авто-сигнал</span></h3>
+      ${stubBox("Смешанный вердикт", hasLevels
+        ? "Цена — live. Уровни — из JSON. Env/макро/дома в индикаторах ниже — пока заглушки."
+        : "Цена — live. Уровни Buy Dip/Sell ещё не вписаны → вердикт без ценового триггера.")}
       ${inds}
       <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs заранее вписанные уровни.</div>
     </div>`;
@@ -563,6 +636,7 @@ function digestItem(it, cls){
 
 function renderDigest(){
   const d = DIGEST;
+  const hasLive = !!(d && ((d.kept||0) > 0 || (d.signals||[]).length || (d.date||"").includes("UTC") || (d.date||"").includes("2026")));
   const variantSwitch = `<div class="variant-switch">
     <div class="vbtn ${digestVariant==="digest"?"on":""}" onclick="setDigestVariant('digest')">Дайджест (по запросу)</div>
     <div class="vbtn ${digestVariant==="logic"?"on":""}" onclick="setDigestVariant('logic')">Логика фильтра</div>
@@ -571,18 +645,21 @@ function renderDigest(){
   if(digestVariant==="logic"){
     const buckets = (DIGEST_BUCKETS||[]).map(b => `<div class="bucket"><span class="bico">${esc(b.ico)}</span>
       <div class="bbody"><div class="btitle">${esc(b.title)}</div><div class="bdesc">${esc(b.desc)}</div></div></div>`).join("");
-    return tabWrap("digest", variantSwitch + `
-      <div class="card"><h3>Автоматический фильтр <span class="hint">SA email — следующая фаза</span></h3>
-        <p class="note" style="margin-top:0;margin-bottom:12px">После решения по оплате: письма → корзины шум / макро / тикеры.</p>
+    return tabWrap("digest", dataLegend() + variantSwitch + `
+      <div class="card"><h3>Автоматический фильтр ${stubBadge("схема · не live")}</h3>
+        ${stubBox("Логика корзин", "описание процесса. Живой дайджест — во вкладке «Дайджест»: KB (SA/Yahoo/…) + LLM cron ≈08:30 ET. Telegram /digest читает кэш.")}
         ${buckets}
-        <div class="tg-hint"><b>Позже:</b> Telegram <code>/digest</code> · сейчас данные вручную в JSON.</div>
+        <div class="tg-hint"><b>Live:</b> Telegram <code>/digest</code> уже читает кэш без повторного LLM.</div>
       </div>`);
   }
 
-  const empty = (arr, label) => (arr&&arr.length) ? arr.map(x=>digestItem(x,label)).join("") : `<p class="note">Пока пусто (демо-день-заглушка).</p>`;
-  return tabWrap("digest", variantSwitch + `
+  const empty = (arr, label) => (arr&&arr.length) ? arr.map(x=>digestItem(x,label)).join("") : `<p class="note">Пока пусто.</p>`;
+  return tabWrap("digest", dataLegend() + variantSwitch + `
     <div class="card">
-      <div class="digest-head"><h3 style="margin:0">📊 Утренний дайджест</h3><span class="dt">${esc(d.date||"")}</span></div>
+      <div class="digest-head"><h3 style="margin:0">📊 Утренний дайджест ${hasLive?liveBadge("KB + LLM cron"):stubBadge("нет кэша")}</h3><span class="dt">${esc(d.date||"")}</span></div>
+      ${hasLive
+        ? stubBox("Источник", "knowledge_base (Seeking Alpha + Yahoo/Marketaux/Investing/…) + Yahoo EARNINGS → LLM. Кэш local/notebook/digest_latest.json.")
+        : stubBox("Нет свежего дайджеста", "дождаться cron 12:30 UTC или scripts/run_notebook_news_digest.py --from-kb-only")}
       <div class="filterstat">
         <span class="fstat"><b>${d.filtered||0}</b> статей обработано</span>
         <span class="fstat keep">➔ <b>${d.kept||0}</b> в дайджест</span>
@@ -599,10 +676,12 @@ function renderDigest(){
 function renderWatchlist(){
   const w = WATCHLIST || {};
   const flash = w.flash || {};
-  return tabWrap("watchlist", `
-    <div class="card"><h3>Правила работы с Watchlist</h3>
+  return tabWrap("watchlist", dataLegend() + `
+    <div class="card"><h3>Правила работы с Watchlist ${stubBadge("текст JSON")}</h3>
+      ${stubBox("Watchlist", "правила вручную в notebook_data.json. Live Most Active (Investing/SA) — пока не подключены к этой вкладке.")}
       <ul class="clean">${(w.rules||[]).map(r=>`<li>${r}</li>`).join("")}</ul></div>
-    <div class="card"><h3>Flash Crash <span class="hint">спекулятивные входы ВНЕ списка</span></h3>
+    <div class="card"><h3>Flash Crash ${stubBadge("правило-заглушка")}<span class="hint">спекулятивные входы ВНЕ списка</span></h3>
+      ${stubBox("Flash Crash", "дисциплинарное правило из шаблона (JSON). Не live-алерты; доработка по ответу Насти (п.15).")}
       <div class="kv" style="grid-template-columns:auto 1fr;gap:10px 16px;">
         <div class="k">Прецедент</div><div class="v" style="text-align:left;font-family:var(--sans)">${esc(flash.precedent||"")}</div>
         <div class="k">Вопрос</div><div class="v" style="text-align:left;font-family:var(--sans);color:var(--muted)">${esc(flash.question||"")}</div>
