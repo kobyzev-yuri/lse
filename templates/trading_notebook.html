@@ -251,6 +251,11 @@
   .ind-row .ival{font-size:13px;color:var(--muted);flex:1;}
   .ind-row .igate{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:5px;background:var(--sell-soft);color:#ef8582;flex:none;}
   @media(max-width:640px){.ind-row .iname{width:auto;}.ind-row{flex-wrap:wrap;}}
+  .macro-inline{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:8px;width:100%;}
+  .macro-inline .mi{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);}
+  .macro-inline .mi b{color:var(--ink);font-weight:600;}
+  .ind-row.macro-edit{flex-wrap:wrap;align-items:flex-start;}
+  .ind-row.macro-edit .ival{min-width:min(100%,220px);}
 
   /* fundament (NBIS-style) */
   .fund-tag{font-size:13.5px;color:var(--muted);line-height:1.5;margin-bottom:14px;}
@@ -622,7 +627,7 @@ function computeVerdict(d){
     name:"Макро (SocGen)",
     state: macroBroken ? "bad" : "ok",
     gate: macroBroken,
-    manual: d.signals_override ? "overlay · local/notebook" : "ручной флаг",
+    editable: true,
     val: macroBroken ? "тезис AI под вопросом — фон против входа" : "тезис AI жив до сер. 2027 — фон поддерживающий"
   });
 
@@ -694,33 +699,24 @@ function computeVerdict(d){
   return {action, cls, why, indicators};
 }
 
-function renderMacroFlags(d){
+function renderMacroInlineControls(d){
   const sig = d.signals || {};
   const alive = !!sig.macroAlive;
   const broken = !!sig.sentimentBroken;
-  const by = d.override_updated_by ? ` · ${esc(d.override_updated_by)}` : "";
-  const at = d.override_updated_at_utc ? ` · ${esc(String(d.override_updated_at_utc).slice(0,19))}Z` : "";
-  const ovHint = d.signals_override
-    ? `сохранено в overlay${by}${at}`
-    : "дефолт из notebook_data.json · переключите — запишется в local/notebook";
+  const hint = d.signals_override ? "overlay" : "дефолт · клик сохранит";
   return `
-    <div class="card">
-      <h3>Макро-гейты ${manualBadge("пользователь")}<span class="hint">блокируют вход при красном</span></h3>
-      <div class="flag-panel" style="margin-top:0;padding-top:0;border-top:none">
-        <div class="flag-row">
-          <div class="fl">Тезис AI жив<span class="fh">macroAlive · выкл = блок входа</span></div>
-          <button type="button" class="flag-toggle ${alive?'on':''}" id="flg-macroAlive"
-            onclick="toggleMacroFlag('macroAlive', ${alive? 'false':'true'})" title="macroAlive"
-            aria-pressed="${alive?'true':'false'}"><span class="knob"></span></button>
-        </div>
-        <div class="flag-row">
-          <div class="fl">Sentiment сломан<span class="fh">sentimentBroken · вкл = блок входа</span></div>
-          <button type="button" class="flag-toggle ${broken?'warn':''}" id="flg-sentimentBroken"
-            onclick="toggleMacroFlag('sentimentBroken', ${broken? 'false':'true'})" title="sentimentBroken"
-            aria-pressed="${broken?'true':'false'}"><span class="knob"></span></button>
-        </div>
-        <div class="flag-status" id="flagStatus">${ovHint}</div>
+    <div class="macro-inline">
+      <div class="mi"><b>тезис жив</b>
+        <button type="button" class="flag-toggle ${alive?'on':''}" id="flg-macroAlive"
+          onclick="toggleMacroFlag('macroAlive', ${alive? 'false':'true'})" title="macroAlive"
+          aria-pressed="${alive?'true':'false'}"><span class="knob"></span></button>
       </div>
+      <div class="mi"><b>sentiment сломан</b>
+        <button type="button" class="flag-toggle ${broken?'warn':''}" id="flg-sentimentBroken"
+          onclick="toggleMacroFlag('sentimentBroken', ${broken? 'false':'true'})" title="sentimentBroken"
+          aria-pressed="${broken?'true':'false'}"><span class="knob"></span></button>
+      </div>
+      <span class="flag-status" id="flagStatus" style="margin-top:0">${hint}</span>
     </div>`;
 }
 
@@ -914,11 +910,12 @@ async function setEnvState(key, state, idSuffix){
 function renderVerdict(d){
   const v = computeVerdict(d);
   const inds = v.indicators.map(i => `
-    <div class="ind-row">
+    <div class="ind-row ${i.editable?'macro-edit':''}">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}${i.live?liveBadge(i.live):""}${i.manual?manualBadge(i.manual):""}${i.stub?stubBadge(i.stub):""}</span>
+      <span class="ival">${esc(i.val)}${i.live?liveBadge(i.live):""}${i.manual?manualBadge(i.manual):""}${i.stub?stubBadge(i.stub):""}${i.editable?manualBadge("настройка здесь"):""}</span>
       ${i.gate?'<span class="igate">БЛОК</span>':''}
+      ${i.editable?renderMacroInlineControls(d):""}
     </div>`).join("");
   const src = d.price_source ? ` · ${d.price_source}` : "";
   const asof = d.price_asof ? ` · ${d.price_asof}` : "";
@@ -934,14 +931,13 @@ function renderVerdict(d){
     <div class="card">
       <h3>Как собрался вердикт <span class="hint">Close сверяется с ручными Buy Dip / Sell — не авто-сигнал</span></h3>
       ${stubBox("Смешанный вердикт", hasLevels
-        ? "Цена — live. Уровни / макро / Env ФРС·PT — редакторы ниже (overlay). Дома — справочно."
+        ? "Цена — live. Макро — переключатели в строке. Уровни и Env ФРС·PT — формы ниже."
         : "Цена — live. Задайте Buy Dip/Sell ниже, иначе вердикт без ценового триггера.")}
       ${inds}
       <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs уровни из формы.</div>
     </div>
     ${renderLevelsEditor(d)}
-    ${renderEnvEditorCard(d)}
-    ${renderMacroFlags(d)}`;
+    ${renderEnvEditorCard(d)}`;
 }
 
 function digestItem(it, cls){
