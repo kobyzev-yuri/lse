@@ -606,8 +606,7 @@ function computeVerdict(d){
     state: worstEnv,
     gate: worstEnv==="bad",
     live: vix ? `VIX ${vix.value!=null?vix.value.toFixed(1):""}` : ((env||[]).some(e => e.live) ? "частично live" : null),
-    manual: d.env_override ? "ФРС/PT · overlay" : null,
-    stub: (!d.env_override && (env||[]).some(e => !e.live && !e.manual)) ? "ФРС/PT вручную на Вердикте" : null,
+    // Fed/PT details live in the Env editor below — no duplicate stub/manual badge here.
     val: envVal
   });
   if(vix){
