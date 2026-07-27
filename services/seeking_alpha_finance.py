@@ -265,7 +265,9 @@ def load_kb_news_items(
                         "summary_text": (body or title)[:900],
                         "link": str(r.get("link") or ""),
                         "src": str(r.get("source") or KB_SOURCE),
-                        "sentiment_score": r.get("sentiment_score"),
+                        "sentiment_score": float(r["sentiment_score"])
+                        if r.get("sentiment_score") is not None
+                        else None,
                         "insight": r.get("insight"),
                     }
                 )

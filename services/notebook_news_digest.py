@@ -30,6 +30,23 @@ DEFAULT_OUT_DIR = _REPO_ROOT / "local" / "notebook"
 DEFAULT_DIGEST_PATH = DEFAULT_OUT_DIR / "digest_latest.json"
 DEFAULT_RAW_PATH = DEFAULT_OUT_DIR / "news_raw_latest.json"
 
+
+def _json_default(obj: Any):
+    """Serialize Decimal/date from KB rows for digest cache files."""
+    try:
+        from decimal import Decimal
+
+        if isinstance(obj, Decimal):
+            return float(obj)
+    except Exception:
+        pass
+    if hasattr(obj, "isoformat"):
+        try:
+            return obj.isoformat()
+        except Exception:
+            pass
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
 DIGEST_SYSTEM = """Ты — редактор утреннего дайджеста для торговой «Рабочей тетрадки».
 Вход: список новостей из knowledge_base LSE (Seeking Alpha, Yahoo, Investing, Reuters и др.) по тикерам тетрадки.
 Повторы между источниками уже частично сняты кодом; оставшиеся дубли одной истории тоже схлопывай.
@@ -584,6 +601,7 @@ def run_notebook_news_digest(
                 },
                 ensure_ascii=False,
                 indent=2,
+                default=_json_default,
             ),
             encoding="utf-8",
         )
@@ -595,6 +613,7 @@ def run_notebook_news_digest(
                 },
                 ensure_ascii=False,
                 indent=2,
+                default=_json_default,
             ),
             encoding="utf-8",
         )
