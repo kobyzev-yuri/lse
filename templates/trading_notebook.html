@@ -649,21 +649,21 @@ function computeVerdict(d){
     const price = Number(px);
     const buy = Number(L.buyDip);
     const distBuy = ((price - buy) / buy * 100);
-    if(price <= buy){ priceState="ok"; priceVal=`Close $${price.toFixed(2)} ≤ Buy Dip $${buy} → триггер входа`; triggerHit="buy"; }
-    else if(L.sell != null && price >= Number(L.sell)){ priceState="ok"; priceVal=`Close $${price.toFixed(2)} ≥ Sell $${L.sell} → фиксация`; triggerHit="sell"; }
-    else { priceState="mid"; priceVal=`Close $${price.toFixed(2)} · до Buy Dip $${buy} ещё ${distBuy.toFixed(0)}%`; triggerHit="wait"; }
+    // Short status only — buy/sell numbers live in the inputs, don't repeat them.
+    if(price <= buy){ priceState="ok"; priceVal=`$${price.toFixed(2)} · триггер buy`; triggerHit="buy"; }
+    else if(L.sell != null && price >= Number(L.sell)){ priceState="ok"; priceVal=`$${price.toFixed(2)} · фиксация`; triggerHit="sell"; }
+    else { priceState="mid"; priceVal=`$${price.toFixed(2)} · ещё ${distBuy.toFixed(0)}%`; triggerHit="wait"; }
   } else if(L.sell != null && px != null && Number.isFinite(Number(px)) && Number(px) >= Number(L.sell)){
-    priceState="ok"; priceVal=`Close $${Number(px).toFixed(2)} ≥ Sell $${L.sell} → фиксация`; triggerHit="sell";
+    priceState="ok"; priceVal=`$${Number(px).toFixed(2)} · фиксация`; triggerHit="sell";
   } else {
     priceState="neutral";
-    priceVal = px == null ? `нет Close · ${L.note||"уровни ручные"}` : (L.note || "уровни не вписаны");
+    priceVal = px == null ? "нет Close" : (L.buyDip==null && L.sell==null ? "нет уровней" : `$${Number(px).toFixed(2)}`);
     triggerHit = "manual";
   }
   indicators.push({
     name:"Цена vs уровень",
     state:priceState,
     gate:false,
-    live: px != null ? "Close · quotes" : null,
     editKind: "levels",
     val:priceVal
   });
@@ -914,7 +914,7 @@ function renderVerdict(d){
     <div class="ind-row">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}${i.live?liveBadge("Close"):""}${renderLevelsInline(d)}</span>
+      <span class="ival">${esc(i.val)}${renderLevelsInline(d)}</span>
     </div>`;
     }
     const editHtml = i.editKind==="macro" ? renderMacroInlineControls(d) : "";
