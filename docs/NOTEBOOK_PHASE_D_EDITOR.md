@@ -1,20 +1,25 @@
-# Тетрадка — спецификация редактора уровней (фаза D)
+# Тетрадка — редакторы гейтов вердикта (фаза D)
 
-Статус: **отложено до запроса Насти** (вопрос 14 в `nastya/NOTEBOOK_QUESTIONS_FOR_NASTYA.md`).
+Статус: **уровни + Env + макро-гейты сделаны** (overlay на VM).
 
-## Сейчас
+## Сейчас (UI на вкладке «Вердикт»)
 
-- Правка уровней: [`nastya/notebook/notebook_data.json`](../nastya/notebook/notebook_data.json) → commit → deploy.
-- **Макро-гейты:** UI на вкладке «Вердикт» → `PATCH /api/notebook/tickers/{sym}/signals` → overlay [`local/notebook/ticker_overrides.json`](../local/notebook/ticker_overrides.json) (на VM volume, не в git).
-- Flash Crash: вкладка Watchlist на `/notebook` (правило из ТЗ).
+Все правки пишутся в overlay [`local/notebook/ticker_overrides.json`](../local/notebook/ticker_overrides.json) (volume на VM, не в git). Базовый [`notebook_data.json`](../nastya/notebook/notebook_data.json) остаётся шаблоном в репо.
 
-## Когда попросят UI-редактор уровней
+| Поле | API | UI |
+|------|-----|-----|
+| `macroAlive` / `sentimentBroken` | `PATCH /api/notebook/tickers/{sym}/signals` | переключатели |
+| `buyDip` / `sell` / `note` | `PATCH /api/notebook/tickers/{sym}/levels` | форма + «Сохранить» |
+| Env ФРС / cut PT (`ok`/`mid`/`bad`) | `PATCH /api/notebook/tickers/{sym}/env` | кнопки ok/mid/bad |
+| VIX | — | только live (quotes/`^VIX`), override запрещён |
 
-Минимальный MVP:
+Порядок в payload: base → live VIX (+ soft Fed из дайджеста) → **user overlay поверх**.
 
-1. `PATCH /api/notebook/tickers/{sym}/levels` — body `{ "buyDip": number|null, "sell": number|null, "note": "..." }` (auth как у web).
-2. Тот же overlay `local/notebook/ticker_overrides.json` (поле `levels`), чтобы не коммитить с VM.
-3. Кнопка на карточке тикера: «Сохранить уровни» → перезагрузка вердикта.
-4. Аудит: кто/когда изменил (уже есть для signals: `updated_by` / `updated_at_utc`).
+Аудит: `updated_by` / `updated_at_utc` в overlay.
 
-Не делать: авто-BUY, смешение с GAME_5M UI.
+Flash Crash: вкладка Watchlist (правило из ТЗ; без UI-редактора).
+
+## Не делается здесь
+
+- Профиль / entry-exit / инвестдома / фундамент — по-прежнему JSON или отдельный запрос.
+- Авто-BUY, смешение с GAME_5M UI.

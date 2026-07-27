@@ -53,11 +53,123 @@ def save_notebook_overrides(data: Dict[str, Any], path: Optional[Path] = None) -
     return p
 
 
+_ENV_STATES = frozenset({"ok", "mid", "bad"})
+
+
+def _env_label_key(lbl: str) -> Optional[str]:
+    """Normalize env row label to a stable override key; VIX is never overridable."""
+    low = str(lbl or "").lower()
+    if "vix" in low:
+        return None
+    if "фрс" in low or "fed" in low:
+        return "fed"
+    if "таргет" in low or "pt" in low:
+        return "pt"
+    return None
+
+
+def _find_base_ticker(sym: str) -> tuple[str, Dict[str, Any]]:
+    u = str(sym or "").strip().upper()
+    if not u:
+        raise ValueError("empty ticker")
+    base = load_notebook_data()
+    base_tickers = base.get("tickers") if isinstance(base.get("tickers"), dict) else {}
+    for k, v in base_tickers.items():
+        if str(k).upper() == u and isinstance(v, dict):
+            return u, v
+    raise KeyError(f"ticker {u} not in notebook_data")
+
+
+def _load_override_ticker_row(
+    u: str, path: Optional[Path] = None
+) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    ov = load_notebook_overrides(path)
+    tickers = {
+        str(k).upper(): dict(v)
+        for k, v in (ov.get("tickers") or {}).items()
+        if isinstance(v, dict)
+    }
+    row = dict(tickers.get(u) or {})
+    return ov, tickers, row
+
+
+def _merge_env_rows(
+    base_env: List[Any],
+    patch_env: Any,
+) -> List[Dict[str, Any]]:
+    """Apply overlay env patches by label key (fed/pt). Skip VIX."""
+    patches: Dict[str, Dict[str, Any]] = {}
+    if isinstance(patch_env, list):
+        for item in patch_env:
+            if not isinstance(item, dict):
+                continue
+            key = _env_label_key(str(item.get("lbl") or item.get("key") or ""))
+            if not key:
+                continue
+            patches[key] = item
+    elif isinstance(patch_env, dict):
+        for k, item in patch_env.items():
+            if not isinstance(item, dict):
+                continue
+            key = _env_label_key(str(k)) or (
+                str(k).lower() if str(k).lower() in ("fed", "pt") else None
+            )
+            if key in ("fed", "pt"):
+                patches[key] = item
+
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for e in base_env or []:
+        if not isinstance(e, dict):
+            continue
+        e2 = dict(e)
+        key = _env_label_key(str(e2.get("lbl") or ""))
+        if key and key in patches:
+            p = patches[key]
+            state = str(p.get("state") or e2.get("state") or "ok").lower()
+            if state not in _ENV_STATES:
+                state = "ok"
+            e2["state"] = state
+            if p.get("st") is not None:
+                e2["st"] = str(p.get("st"))[:200]
+            elif not e2.get("st"):
+                e2["st"] = "ручной override"
+            e2["live"] = False
+            e2["source"] = "manual · overlay"
+            e2["manual"] = True
+            seen.add(key)
+        out.append(e2)
+
+    # Ensure Fed/PT rows exist if only provided via overlay
+    defaults = {
+        "fed": "Риторика ФРС",
+        "pt": "Понижения таргетов (вне earnings)",
+    }
+    for key, lbl in defaults.items():
+        if key in seen or key not in patches:
+            continue
+        p = patches[key]
+        state = str(p.get("state") or "ok").lower()
+        if state not in _ENV_STATES:
+            state = "ok"
+        out.append(
+            {
+                "lbl": lbl,
+                "st": str(p.get("st") or "ручной override")[:200],
+                "state": state,
+                "live": False,
+                "source": "manual · overlay",
+                "manual": True,
+            }
+        )
+    return out
+
+
 def apply_ticker_overrides(
     tickers: Dict[str, Any],
     overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Merge local/notebook/ticker_overrides.json onto ticker cards (signals, levels, …)."""
+    """Merge local/notebook/ticker_overrides.json onto ticker cards (signals, levels, env)."""
     ov_root = overrides if overrides is not None else load_notebook_overrides()
     ov_tickers_raw = ov_root.get("tickers") if isinstance(ov_root.get("tickers"), dict) else {}
     ov_tickers = {
@@ -79,9 +191,14 @@ def apply_ticker_overrides(
                 d["signals_override"] = True
             if isinstance(patch.get("levels"), dict):
                 base_lv = dict(d.get("levels") or {}) if isinstance(d.get("levels"), dict) else {}
-                base_lv.update(patch["levels"])
+                for k, v in patch["levels"].items():
+                    base_lv[k] = v  # None clears over base
                 d["levels"] = base_lv
                 d["levels_override"] = True
+            if patch.get("env") is not None:
+                base_env = list(d.get("env") or []) if isinstance(d.get("env"), list) else []
+                d["env"] = _merge_env_rows(base_env, patch.get("env"))
+                d["env_override"] = True
             if patch.get("updated_at_utc"):
                 d["override_updated_at_utc"] = patch.get("updated_at_utc")
             if patch.get("updated_by"):
@@ -99,29 +216,11 @@ def update_ticker_signals(
     path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Persist macro gate flags for one ticker into overrides overlay."""
-    u = str(sym or "").strip().upper()
-    if not u:
-        raise ValueError("empty ticker")
+    u, base_row = _find_base_ticker(sym)
     if macro_alive is None and sentiment_broken is None:
         raise ValueError("no signal fields to update")
 
-    base = load_notebook_data()
-    base_tickers = base.get("tickers") if isinstance(base.get("tickers"), dict) else {}
-    base_row = None
-    for k, v in base_tickers.items():
-        if str(k).upper() == u and isinstance(v, dict):
-            base_row = v
-            break
-    if base_row is None:
-        raise KeyError(f"ticker {u} not in notebook_data")
-
-    ov = load_notebook_overrides(path)
-    tickers = {
-        str(k).upper(): dict(v)
-        for k, v in (ov.get("tickers") or {}).items()
-        if isinstance(v, dict)
-    }
-    row = dict(tickers.get(u) or {})
+    ov, tickers, row = _load_override_ticker_row(u, path)
     base_sig = dict(base_row.get("signals") or {}) if isinstance(base_row.get("signals"), dict) else {}
     prev_sig = dict(row.get("signals") or {}) if isinstance(row.get("signals"), dict) else {}
     sig = {**base_sig, **prev_sig}
@@ -131,7 +230,6 @@ def update_ticker_signals(
         sig["sentimentBroken"] = bool(sentiment_broken)
 
     now = datetime.now(timezone.utc).isoformat()
-    # Persist only the gate flags (full effective pair for audit).
     row["signals"] = {
         "macroAlive": bool(sig.get("macroAlive", True)),
         "sentimentBroken": bool(sig.get("sentimentBroken", False)),
@@ -144,6 +242,164 @@ def update_ticker_signals(
     return {
         "ticker": u,
         "signals": dict(row["signals"]),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+def _parse_level_number(val: Any, *, field: str) -> Optional[float]:
+    if val is None:
+        return None
+    if isinstance(val, str) and not val.strip():
+        return None
+    try:
+        n = float(val)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"{field} must be a number or null") from e
+    if not (n == n) or n <= 0:  # NaN / non-positive
+        raise ValueError(f"{field} must be a positive number or null")
+    return float(n)
+
+
+def update_ticker_levels(
+    sym: str,
+    *,
+    buy_dip: Any = ...,
+    sell: Any = ...,
+    note: Any = ...,
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist Buy Dip / Sell into overrides overlay (null clears a field)."""
+    u, base_row = _find_base_ticker(sym)
+    if buy_dip is ... and sell is ... and note is ...:
+        raise ValueError("no level fields to update")
+
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    base_lv = dict(base_row.get("levels") or {}) if isinstance(base_row.get("levels"), dict) else {}
+    prev_lv = dict(row.get("levels") or {}) if isinstance(row.get("levels"), dict) else {}
+    levels = {**base_lv, **prev_lv}
+
+    if buy_dip is not ...:
+        if buy_dip is None or (isinstance(buy_dip, str) and not str(buy_dip).strip()):
+            levels["buyDip"] = None
+        else:
+            levels["buyDip"] = _parse_level_number(buy_dip, field="buyDip")
+    if sell is not ...:
+        if sell is None or (isinstance(sell, str) and not str(sell).strip()):
+            levels["sell"] = None
+        else:
+            levels["sell"] = _parse_level_number(sell, field="sell")
+    if note is not ...:
+        if note is None:
+            levels["note"] = None
+        else:
+            levels["note"] = str(note)[:240]
+
+    now = datetime.now(timezone.utc).isoformat()
+    # Keep explicit nulls so clear sticks over base JSON.
+    row["levels"] = {
+        "buyDip": levels.get("buyDip"),
+        "sell": levels.get("sell"),
+        "note": levels.get("note"),
+    }
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    return {
+        "ticker": u,
+        "levels": dict(row["levels"]),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+def update_ticker_env(
+    sym: str,
+    *,
+    items: Optional[Sequence[Dict[str, Any]]] = None,
+    fed: Optional[Dict[str, Any]] = None,
+    pt_cuts: Optional[Dict[str, Any]] = None,
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist manual Env gate states (Fed / PT cuts). VIX is rejected."""
+    u, base_row = _find_base_ticker(sym)
+
+    patch_list: List[Dict[str, Any]] = []
+    if items:
+        for it in items:
+            if isinstance(it, dict):
+                patch_list.append(it)
+    if isinstance(fed, dict):
+        patch_list.append({"lbl": "Риторика ФРС", **fed})
+    if isinstance(pt_cuts, dict):
+        patch_list.append({"lbl": "Понижения таргетов (вне earnings)", **pt_cuts})
+    if not patch_list:
+        raise ValueError("no env fields to update")
+
+    normalized: List[Dict[str, Any]] = []
+    for it in patch_list:
+        key = _env_label_key(str(it.get("lbl") or it.get("key") or ""))
+        if key is None:
+            low = str(it.get("lbl") or "").lower()
+            if "vix" in low:
+                raise ValueError("VIX is live-only and cannot be overridden")
+            raise ValueError(f"unknown env label: {it.get('lbl')}")
+        state = str(it.get("state") or "").lower()
+        if state not in _ENV_STATES:
+            raise ValueError("env state must be ok, mid, or bad")
+        entry: Dict[str, Any] = {
+            "lbl": "Риторика ФРС" if key == "fed" else "Понижения таргетов (вне earnings)",
+            "key": key,
+            "state": state,
+            "live": False,
+            "source": "manual · overlay",
+        }
+        if it.get("st") is not None:
+            entry["st"] = str(it.get("st"))[:200]
+        else:
+            entry["st"] = {
+                "ok": "чисто · ручной",
+                "mid": "жёлтый · ручной",
+                "bad": "красный · ручной",
+            }[state]
+        normalized.append(entry)
+
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    prev = row.get("env")
+    # Store as map keyed by fed/pt for stable merges
+    env_map: Dict[str, Dict[str, Any]] = {}
+    if isinstance(prev, dict):
+        for k, v in prev.items():
+            if isinstance(v, dict) and k in ("fed", "pt"):
+                env_map[k] = dict(v)
+    elif isinstance(prev, list):
+        for v in prev:
+            if isinstance(v, dict):
+                k = _env_label_key(str(v.get("lbl") or ""))
+                if k:
+                    env_map[k] = dict(v)
+    for entry in normalized:
+        env_map[str(entry["key"])] = entry
+
+    now = datetime.now(timezone.utc).isoformat()
+    row["env"] = env_map
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+
+    # Return effective env list for UI (base + override)
+    base_env = list(base_row.get("env") or []) if isinstance(base_row.get("env"), list) else []
+    effective = _merge_env_rows(base_env, env_map)
+    return {
+        "ticker": u,
+        "env": effective,
+        "env_override": env_map,
         "updated_at_utc": now,
         "updated_by": row["updated_by"],
     }

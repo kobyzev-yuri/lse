@@ -22,8 +22,8 @@
 | Email SA 35–40/день | **ждём п.7** | не подключено |
 | Списки/уровни Насти | **частично** | G1=portfolio, G2=GAME_5M уже в JSON; уровни/G3/Новые — ждём п.1–5 |
 | Фундамент / дома / env-ручное | **ждём п.11–13** | эталон NBIS есть; VIX уже авто |
-| UI-редактор уровней | **фаза D** | спека готова, код по запросу |
-| UI макро-гейтов (`macroAlive` / `sentimentBroken`) | **сделано** | `PATCH /api/notebook/tickers/{sym}/signals` → `local/notebook/ticker_overrides.json` |
+| UI гейтов вердикта (уровни + Env ФРС/PT + макро) | **сделано** | `PATCH …/levels`, `…/env`, `…/signals` → `local/notebook/ticker_overrides.json` |
+| UI профиль / дома / фундамент / watchlist | **не делали** | ждут отдельного запроса |
 
 ---
 
@@ -72,7 +72,7 @@
 
 | # | Вопрос | Наш статус |
 |---|--------|------------|
-| 14 | Кто правит уровни день за днём? Нужен UI-редактор (фаза D)? | **открыт** — спека [`NOTEBOOK_PHASE_D_EDITOR.md`](NOTEBOOK_PHASE_D_EDITOR.md) |
+| 14 | Кто правит уровни день за днём? Нужен UI-редактор (фаза D)? | **закрыт** — UI на Вердикте; см. [`NOTEBOOK_PHASE_D_EDITOR.md`](NOTEBOOK_PHASE_D_EDITOR.md) |
 | 15 | Flash Crash вне Watchlist: правило как в шаблоне или отложить? | **открыт** — вкладка Watchlist уже есть |
 
 ---

@@ -129,6 +129,35 @@
   .flag-status.err{color:#ef8582;}
   .flag-status.ok{color:#5fd67c;}
 
+  .edit-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px 12px;margin-top:4px;}
+  .edit-field label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin-bottom:4px;font-weight:600;}
+  .edit-field input,.edit-field textarea{
+    width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--ink);
+    font-family:var(--mono);font-size:14px;padding:8px 10px;
+  }
+  .edit-field textarea{font-family:var(--sans);font-size:13px;min-height:56px;resize:vertical;}
+  .edit-field input:focus,.edit-field textarea:focus{outline:none;border-color:var(--accent);}
+  .edit-actions{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;}
+  .edit-btn{
+    cursor:pointer;border:1px solid rgba(74,158,218,.45);background:rgba(74,158,218,.16);color:#7cc0ef;
+    border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;font-family:var(--sans);
+  }
+  .edit-btn:hover{background:rgba(74,158,218,.28);}
+  .edit-btn:disabled{opacity:.45;cursor:wait;}
+  .env-state-btns{display:flex;gap:4px;flex:none;}
+  .env-sbtn{
+    cursor:pointer;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);
+    border-radius:6px;padding:4px 9px;font-size:11px;font-family:var(--mono);font-weight:700;
+  }
+  .env-sbtn.on.ok{background:rgba(46,160,67,.28);border-color:rgba(46,160,67,.5);color:#5fd67c;}
+  .env-sbtn.on.mid{background:rgba(214,165,22,.28);border-color:rgba(214,165,22,.5);color:#e8c65a;}
+  .env-sbtn.on.bad{background:rgba(217,83,79,.28);border-color:rgba(217,83,79,.5);color:#ef8582;}
+  .env-sbtn:disabled{opacity:.45;cursor:wait;}
+  .env-edit-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:13.5px;}
+  .env-edit-row:first-of-type{border-top:none;}
+  .env-edit-row .el{color:var(--ink);flex:1;}
+  .env-edit-row .es{display:block;font-size:11.5px;color:var(--dim);margin-top:2px;}
+
   .stub-tag,.live-tag,.manual-tag{
     display:inline-flex;align-items:center;gap:5px;margin-left:8px;padding:2px 8px;border-radius:999px;
     font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.2px;vertical-align:middle;
@@ -262,8 +291,7 @@
   <div id="content"><div class="card"><p class="note">Загрузка данных…</p></div></div>
 
   <footer>
-    Макро-гейты (macroAlive / sentimentBroken) — переключатели на вкладке «Вердикт», пишутся в <code>local/notebook/ticker_overrides.json</code> (не в git).
-    Уровни Buy Dip / Sell — ручные: <code>nastya/notebook/notebook_data.json</code> → deploy; UI-редактор уровней — позже (фаза D).
+    Гейты вердикта (Buy Dip/Sell, Env ФРС/PT, макро-флаги) — на вкладке «Вердикт», пишутся в <code>local/notebook/ticker_overrides.json</code> (не в git).
     Close — справочная цена из quotes, не авто-сигнал BUY. План: docs/TRADING_NOTEBOOK.md.
     Отдельный UI от «Портфель · карточки» / GAME_5M. Не является инвестиционной рекомендацией.
   </footer>
@@ -447,7 +475,6 @@ function renderContent(){
   if(!d){ c.innerHTML = `<div class="load-err">Тикер ${esc(current)} не найден в данных</div>`; return; }
   let html = dataLegend();
   const L = d.levels || {};
-  const levelsFilled = L.buyDip != null || L.sell != null;
   html += tabWrap("verdict", renderVerdict(d));
 
   const kv = Object.entries(d.profile||{}).map(([k,v]) =>
@@ -466,8 +493,8 @@ function renderContent(){
       <div class="lvl">${esc(t.lvl)}${t.manual?'<span class="manual">впис. вручную</span>':''}${isTbd?stubBadge("уровни TBD · вручную"):''}</div>
       <div class="desc">${esc(t.desc)}</div><div class="cond">${esc(t.cond)}</div></div></div>`;
   }).join("");
-  html += tabWrap("triggers", `<div class="card"><h3>Триггеры ${stubBadge("уровни вручную в JSON")}<span class="hint">решение принято заранее — при срабатывании просто исполняем</span></h3>
-    ${stubBox("Buy Dip / Sell", levelsFilled ? "часть уровней уже в JSON; правки — вручную (позже UI-редактор)." : "вписать Buy Dip / Sell вручную в notebook_data.json или Excel Насти.")}
+  html += tabWrap("triggers", `<div class="card"><h3>Триггеры ${manualBadge("уровни на Вердикте")}<span class="hint">решение принято заранее — при срабатывании просто исполняем</span></h3>
+    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">Buy Dip / Sell</b> — править на вкладке «Вердикт» (overlay). Текст ниже справочный.</div>
     ${trigs}</div>`);
 
   html += tabWrap("entry", `<div class="card">
@@ -482,13 +509,16 @@ function renderContent(){
     const live = !!e.live;
     const badge = live
       ? liveBadge(e.source || "quotes/yfinance")
-      : stubBadge(e.source || envSourceHint(e.lbl));
+      : (e.manual || d.env_override)
+        ? manualBadge(e.source || "overlay")
+        : stubBadge(e.source || envSourceHint(e.lbl));
     return `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span>${badge}</div>`;
   }).join("");
   const hasLiveVix = (d.env||[]).some(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
   html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):stubBadge("VIX недоступен")}<span class="hint">фильтр скрытых угроз поверх логики входа</span></h3>
-    ${stubBox("По ТЗ три стоп-фактора", "1) VIX — live из quotes/^VIX (пороги <20 ok, ≥25 bad). 2) Риторика ФРС — из макро-дайджеста (мягкий хинт) или вручную. 3) Понижения таргетов вне earnings — вручную / headlines SA·Yahoo → вкладка Инвестдома.")}
+    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">ФРС / cut PT</b> — переключатели ниже (и на Вердикте). VIX — только live.</div>
     ${envs}
+    ${renderEnvEditor(d, "-envtab")}
     <div class="note">Красный/жёлтый по любому пункту = входы на паузу. VIX, ястребиная ФРС и внезапные cut PT вне earnings — стоп-факторы независимо от техники.</div></div>`);
 
   const houses = (d.houses||[]).map(h => `<div class="house"><div class="hh">
@@ -576,7 +606,8 @@ function computeVerdict(d){
     state: worstEnv,
     gate: worstEnv==="bad",
     live: vix ? `VIX ${vix.value!=null?vix.value.toFixed(1):""}` : ((env||[]).some(e => e.live) ? "частично live" : null),
-    stub: (env||[]).some(e => !e.live) ? "ФРС/PT вручную" : null,
+    manual: d.env_override ? "ФРС/PT · overlay" : null,
+    stub: (!d.env_override && (env||[]).some(e => !e.live && !e.manual)) ? "ФРС/PT вручную на Вердикте" : null,
     val: envVal
   });
   if(vix){
@@ -618,11 +649,10 @@ function computeVerdict(d){
     state:priceState,
     gate:false,
     live: px != null ? "Close · quotes" : null,
-    // Filled levels are intentional manual inputs (not a stub gap).
     manual: (L.buyDip!=null || L.sell!=null)
-      ? (L.note || "Buy Dip/Sell из notebook_data.json")
+      ? (d.levels_override ? "overlay · Buy Dip/Sell" : (L.note || "Buy Dip/Sell"))
       : null,
-    stub: (L.buyDip==null && L.sell==null) ? "уровни TBD · вписать вручную" : null,
+    stub: (L.buyDip==null && L.sell==null) ? "уровни TBD · форма ниже" : null,
     val:priceVal
   });
 
@@ -695,6 +725,86 @@ function renderMacroFlags(d){
     </div>`;
 }
 
+function renderLevelsEditor(d){
+  const L = d.levels || {};
+  const buy = L.buyDip != null ? L.buyDip : "";
+  const sell = L.sell != null ? L.sell : "";
+  const note = L.note != null ? L.note : "";
+  const hint = d.levels_override
+    ? "сохранено в overlay · local/notebook"
+    : "пустое поле + Сохранить очищает уровень в overlay";
+  return `
+    <div class="card">
+      <h3>Уровни Buy Dip / Sell ${manualBadge("overlay")}<span class="hint">вердикт сверяет Close с этими числами</span></h3>
+      <div class="edit-grid">
+        <div class="edit-field"><label>Buy Dip</label>
+          <input type="number" step="any" id="lvl-buyDip" value="${esc(buy)}" placeholder="например 350"></div>
+        <div class="edit-field"><label>Sell</label>
+          <input type="number" step="any" id="lvl-sell" value="${esc(sell)}" placeholder="например 450"></div>
+        <div class="edit-field" style="grid-column:1/-1"><label>Заметка</label>
+          <input type="text" id="lvl-note" value="${esc(note)}" placeholder="Buy Dip $… · Sell $… (кто задал)"></div>
+      </div>
+      <div class="edit-actions">
+        <button type="button" class="edit-btn" id="lvl-save" onclick="saveLevels()">Сохранить уровни</button>
+        <span class="flag-status" id="lvlStatus">${hint}</span>
+      </div>
+    </div>`;
+}
+
+function envEditableKey(lbl){
+  const s = String(lbl||"").toLowerCase();
+  if(s.includes("vix")) return null;
+  if(s.includes("фрс") || s.includes("fed")) return "fed";
+  if(s.includes("таргет") || s.includes("pt")) return "pt";
+  return null;
+}
+
+function renderEnvEditor(d, idSuffix){
+  const suf = idSuffix || "";
+  const statusId = "envStatus" + suf;
+  const rows = (d.env||[]).filter(e => envEditableKey(e.lbl));
+  const have = new Set(rows.map(e => envEditableKey(e.lbl)));
+  const extras = [];
+  if(!have.has("fed")) extras.push({lbl:"Риторика ФРС", state:"ok", st:"задать вручную", live:false});
+  if(!have.has("pt")) extras.push({lbl:"Понижения таргетов (вне earnings)", state:"ok", st:"задать вручную", live:false});
+  const all = rows.concat(extras);
+  const btns = (lbl, state) => {
+    const key = envEditableKey(lbl);
+    return ["ok","mid","bad"].map(s =>
+      `<button type="button" class="env-sbtn ${state===s?'on '+s:''}" data-env-key="${esc(key)}" data-env-suf="${esc(suf)}"
+        onclick="setEnvState('${esc(key)}','${s}','${esc(suf)}')">${s}</button>`
+    ).join("");
+  };
+  const list = all.map(e => `
+    <div class="env-edit-row">
+      <div class="el">${esc(e.lbl)}<span class="es">${esc(e.st||"")}</span></div>
+      <div class="env-state-btns">${btns(e.lbl, e.state||"ok")}</div>
+    </div>`).join("");
+  const hint = d.env_override
+    ? "ручной Env в overlay (поверх дайджеста для ФРС)"
+    : "ok / mid / bad → overlay; VIX только live";
+  return `
+    <div class="flag-panel" style="margin-top:12px">
+      <h4 style="margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Ручные Env-гейты ${manualBadge("ФРС / PT")}</h4>
+      ${list}
+      <div class="flag-status" id="${statusId}">${hint}</div>
+    </div>`;
+}
+
+function renderEnvEditorCard(d){
+  return `
+    <div class="card">
+      <h3>Окружение · ручные гейты ${manualBadge("overlay")}<span class="hint">жёлтый/красный = пауза входов</span></h3>
+      ${renderEnvEditor(d, "-verdict")}
+    </div>`;
+}
+
+function applyOverrideMeta(sym, j){
+  if(!DATA[sym] || !j) return;
+  if(j.updated_at_utc) DATA[sym].override_updated_at_utc = j.updated_at_utc;
+  if(j.updated_by) DATA[sym].override_updated_by = j.updated_by;
+}
+
 async function toggleMacroFlag(field, nextVal){
   const sym = current;
   if(!sym || !DATA[sym]) return;
@@ -717,12 +827,88 @@ async function toggleMacroFlag(field, nextVal){
     const sig = (j && j.signals) || {};
     DATA[sym].signals = Object.assign({}, DATA[sym].signals || {}, sig);
     DATA[sym].signals_override = true;
-    if(j.updated_at_utc) DATA[sym].override_updated_at_utc = j.updated_at_utc;
-    if(j.updated_by) DATA[sym].override_updated_by = j.updated_by;
+    applyOverrideMeta(sym, j);
     renderContent();
   } catch(e){
     if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
     if(btn) btn.disabled = false;
+  }
+}
+
+async function saveLevels(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("lvlStatus");
+  const btn = document.getElementById("lvl-save");
+  const buyEl = document.getElementById("lvl-buyDip");
+  const sellEl = document.getElementById("lvl-sell");
+  const noteEl = document.getElementById("lvl-note");
+  const parseOrNull = (el) => {
+    const raw = (el && el.value != null) ? String(el.value).trim() : "";
+    if(!raw) return null;
+    const n = Number(raw);
+    if(!Number.isFinite(n)) throw new Error("нечисловой уровень");
+    return n;
+  };
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "сохраняю…"; }
+  try {
+    const body = {
+      buyDip: parseOrNull(buyEl),
+      sell: parseOrNull(sellEl),
+      note: (noteEl && noteEl.value != null) ? String(noteEl.value).trim() : "",
+    };
+    if(!body.note) body.note = null;
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/levels`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    DATA[sym].levels = Object.assign({}, DATA[sym].levels || {}, j.levels || body);
+    DATA[sym].levels_override = true;
+    applyOverrideMeta(sym, j);
+    renderContent();
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function setEnvState(key, state, idSuffix){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const suf = idSuffix || "";
+  const status = document.getElementById("envStatus" + suf);
+  if(status){ status.className = "flag-status"; status.textContent = "сохраняю…"; }
+  document.querySelectorAll(`.env-sbtn[data-env-key="${key}"]`).forEach(b => b.disabled = true);
+  const body = key === "fed"
+    ? {fed: {state}}
+    : {ptCuts: {state}};
+  try {
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/env`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    if(Array.isArray(j.env)){
+      const vix = (DATA[sym].env||[]).filter(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
+      const rest = j.env.filter(e => !String(e.lbl||"").toLowerCase().includes("vix"));
+      DATA[sym].env = vix.concat(rest);
+    }
+    DATA[sym].env_override = true;
+    applyOverrideMeta(sym, j);
+    renderContent();
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    document.querySelectorAll(`.env-sbtn[data-env-key="${key}"]`).forEach(b => b.disabled = false);
   }
 }
 
@@ -749,11 +935,13 @@ function renderVerdict(d){
     <div class="card">
       <h3>Как собрался вердикт <span class="hint">Close сверяется с ручными Buy Dip / Sell — не авто-сигнал</span></h3>
       ${stubBox("Смешанный вердикт", hasLevels
-        ? "Цена — live. Уровни — из JSON. Макро-гейты — переключатели ниже (overlay). Env/дома — частично заглушки."
-        : "Цена — live. Уровни Buy Dip/Sell ещё не вписаны → вердикт без ценового триггера.")}
+        ? "Цена — live. Уровни / макро / Env ФРС·PT — редакторы ниже (overlay). Дома — справочно."
+        : "Цена — live. Задайте Buy Dip/Sell ниже, иначе вердикт без ценового триггера.")}
       ${inds}
-      <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs заранее вписанные уровни.</div>
+      <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs уровни из формы.</div>
     </div>
+    ${renderLevelsEditor(d)}
+    ${renderEnvEditorCard(d)}
     ${renderMacroFlags(d)}`;
 }
 

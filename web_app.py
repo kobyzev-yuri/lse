@@ -4025,6 +4025,84 @@ async def api_notebook_ticker_signals(sym: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка notebook signals: {e!s}")
 
 
+@app.patch("/api/notebook/tickers/{sym}/levels", response_class=JSONResponse)
+async def api_notebook_ticker_levels(sym: str, request: Request):
+    """Buy Dip / Sell → local/notebook/ticker_overrides.json."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    updated_by = str(body.get("updated_by") or body.get("updatedBy") or "notebook-ui")[:80]
+    kwargs: Dict[str, Any] = {"updated_by": updated_by}
+    if "buyDip" in body or "buy_dip" in body:
+        kwargs["buy_dip"] = body["buyDip"] if "buyDip" in body else body.get("buy_dip")
+    if "sell" in body:
+        kwargs["sell"] = body.get("sell")
+    if "note" in body:
+        kwargs["note"] = body.get("note")
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import update_ticker_levels
+
+        return update_ticker_levels(sym, **kwargs)
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("PATCH /api/notebook/tickers/%s/levels: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка notebook levels: {e!s}")
+
+
+@app.patch("/api/notebook/tickers/{sym}/env", response_class=JSONResponse)
+async def api_notebook_ticker_env(sym: str, request: Request):
+    """Ручные Env-гейты (ФРС / cut PT) → overlay. VIX не принимается."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    updated_by = str(body.get("updated_by") or body.get("updatedBy") or "notebook-ui")[:80]
+    items = body.get("items") if isinstance(body.get("items"), list) else None
+    fed = body.get("fed") if isinstance(body.get("fed"), dict) else None
+    pt_cuts = None
+    if isinstance(body.get("ptCuts"), dict):
+        pt_cuts = body.get("ptCuts")
+    elif isinstance(body.get("pt_cuts"), dict):
+        pt_cuts = body.get("pt_cuts")
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import update_ticker_env
+
+        return update_ticker_env(
+            sym,
+            items=items,
+            fed=fed,
+            pt_cuts=pt_cuts,
+            updated_by=updated_by,
+        )
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("PATCH /api/notebook/tickers/%s/env: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка notebook env: {e!s}")
+
+
 @app.get("/portfolio/shape-clusters", response_class=HTMLResponse)
 async def portfolio_shape_clusters_page(request: Request):
     """UI: кластеры похожести формы 6м-графиков + навигация по группе."""
