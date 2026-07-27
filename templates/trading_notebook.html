@@ -369,6 +369,44 @@ function esc(s){
     .replace(/"/g,"&quot;");
 }
 
+/** Strip leftover HTML / «Источник» lines from older StockAnalysis overlays. */
+function houseQuoteLine(h){
+  let q = String((h && h.quote) || "").trim();
+  const tac = String((h && h.tac) || "").trim();
+  if(/источник|stockanalysis|<\s*b\s*>/i.test(q)) q = "";
+  if(tac && !/источник|stockanalysis|<\s*\/?\s*b\s*>/i.test(tac) && tac !== q){
+    q = q ? (q + " · " + tac) : tac;
+  }
+  return q;
+}
+
+function cleanHouseNote(note){
+  let s = String(note || "").trim();
+  if(/карточки|overlay|консенсус тоже/i.test(s)){
+    const m = s.match(/Buy\s+\d+\s*·\s*Hold\s+\d+\s*·\s*Sell\s+\d+/i);
+    return m ? m[0] : "";
+  }
+  return s.replace(/^StockAnalysis:\s*/i, "");
+}
+
+function consensusPtDisplay(cons, houses){
+  const raw = cons && cons.pt != null ? String(cons.pt).trim() : "";
+  if(raw && raw !== "—" && raw !== "-" && raw !== "–") return raw;
+  // Fallback: mean of latest house targets (rightmost $ number) if overlay still empty.
+  const vals = [];
+  (houses || []).forEach(h => {
+    const s = String((h && h.pt) || "");
+    const nums = s.replace(/,/g, "").match(/\$?\s*(\d+(?:\.\d+)?)/g);
+    if(!nums || !nums.length) return;
+    const last = nums[nums.length - 1].replace(/[^\d.]/g, "");
+    const v = parseFloat(last);
+    if(Number.isFinite(v) && v > 0) vals.push(v);
+  });
+  if(!vals.length) return "—";
+  const avg = vals.reduce((a,b)=>a+b,0) / vals.length;
+  return "$" + (Math.abs(avg - Math.round(avg)) < 0.05 ? String(Math.round(avg)) : avg.toFixed(2));
+}
+
 function applyBoot(boot){
   GROUPS = boot.groups || {};
   DATA = boot.tickers || {};
@@ -682,10 +720,14 @@ function renderContent(){
     ${envs}
     <div class="note">Красный/жёлтый = пауза входов. Правка ФРС/PT — в строке Environment Check на Вердикте.</div></div>`);
 
-  const houses = (d.houses||[]).map(h => `<div class="house"><div class="hh">
+  const houses = (d.houses||[]).map(h => {
+    const quote = houseQuoteLine(h);
+    return `<div class="house"><div class="hh">
     <span class="firm">${esc(h.firm)}</span><span class="rate">${esc(h.rate)}</span><span class="pt">${esc(h.pt)}</span></div>
-    <div class="quote">${esc(h.quote)}</div>${h.tac?`<div class="tac muted">${esc(h.tac)}</div>`:''}</div>`).join("");
+    ${quote?`<div class="quote">${esc(quote)}</div>`:''}</div>`;
+  }).join("");
   const cons = d.consensus || {};
+  const consPt = consensusPtDisplay(cons, d.houses||[]);
   const housesBadge = d.houses_override
     ? liveBadge(d.houses_source || "stockanalysis")
     : manualBadge("консенсус на Вердикте");
@@ -699,12 +741,12 @@ function renderContent(){
     </div>
     <div class="concens">
       <div class="cell"><span class="cl">Консенсус</span><span class="cv">${esc(cons.rating||'—')}</span></div>
-      <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(cons.pt||'—')}</span></div>
+      <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(consPt)}</span></div>
       <div class="cell"><span class="cl">Low</span><span class="cv down">${esc(cons.low||'—')}</span></div>
       <div class="cell"><span class="cl">High</span><span class="cv up">${esc(cons.high||'—')}</span></div>
       <div class="cell"><span class="cl">Выборка</span><span class="cv" style="font-size:13px">${esc(cons.n||'—')}</span></div>
     </div>${houses || '<p class="note">Пока пусто — нажмите «Обновить с StockAnalysis».</p>'}
-    <div class="note">${esc(d.houseNote||'')}</div></div>`);
+    <div class="note">${esc(cleanHouseNote(d.houseNote))}</div></div>`);
 
   html += renderFundament(d);
   html += renderDigest();

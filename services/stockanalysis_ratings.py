@@ -478,14 +478,14 @@ def to_notebook_houses(
     for r in bundle.ratings[:limit]:
         if not r.firm:
             continue
-        quote_bits = [x for x in (r.action, r.upside_downside) if x]
+        quote_bits = [x for x in (r.date, r.action, r.upside_downside) if x]
         houses.append(
             {
                 "firm": r.firm,
                 "rate": r.position or "—",
                 "pt": r.price_target or "—",
-                "quote": " · ".join(quote_bits) if quote_bits else (r.date or ""),
-                "tac": r.date or "",
+                "quote": " · ".join(quote_bits),
+                "tac": "",
             }
         )
 
@@ -498,6 +498,9 @@ def to_notebook_houses(
     n = counts.total or cons.count
     n_s = f"{n} аналитиков" if n else "—"
     today = date.today().isoformat()
+    buy = int(counts.buy or 0)
+    hold = int(counts.hold or 0)
+    sell = int(counts.sell or 0)
     return {
         "houses": houses,
         "consensus": {
@@ -508,6 +511,7 @@ def to_notebook_houses(
             "n": n_s,
             "upd": f"обн. {today}",
         },
+        "houseNote": f"Buy {buy} · Hold {hold} · Sell {sell}",
         "counts": asdict(counts),
     }
 

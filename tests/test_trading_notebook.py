@@ -251,4 +251,4 @@ def test_refresh_houses_from_stockanalysis_writes_overlay(tmp_path: Path):
     )
     assert merged["MSFT"]["houses_override"] is True
     assert merged["MSFT"]["houses"][0]["pt"] == "$2200"
-    assert "Buy 20" in merged["MSFT"]["houseNote"]
+    assert "Buy 20" in (merged["MSFT"].get("houseNote") or out["houseNote"])

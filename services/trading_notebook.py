@@ -433,28 +433,40 @@ def refresh_ticker_houses_from_stockanalysis(
     mapped = to_notebook_houses(bundle, limit=lim)
 
     counts = mapped.get("counts") if isinstance(mapped.get("counts"), dict) else {}
-    buy = int(counts.get("buy") or 0)
-    hold = int(counts.get("hold") or 0)
-    sell = int(counts.get("sell") or 0)
-    house_note = (
-        f"StockAnalysis: Buy {buy} · Hold {hold} · Sell {sell}. "
-        "Карточки — последние рейтинги домов; консенсус тоже обновлён в overlay."
-    )
+    house_note = str(mapped.get("houseNote") or "").strip()
+    if not house_note:
+        buy = int(counts.get("buy") or 0)
+        hold = int(counts.get("hold") or 0)
+        sell = int(counts.get("sell") or 0)
+        house_note = f"Buy {buy} · Hold {hold} · Sell {sell}"
 
     ov, tickers, row = _load_override_ticker_row(u, path)
     now = datetime.now(timezone.utc).isoformat()
     houses = mapped.get("houses") if isinstance(mapped.get("houses"), list) else []
     consensus = mapped.get("consensus") if isinstance(mapped.get("consensus"), dict) else {}
-    row["houses"] = [dict(h) for h in houses if isinstance(h, dict)]
+    clean_houses: List[Dict[str, Any]] = []
+    for h in houses:
+        if not isinstance(h, dict):
+            continue
+        clean_houses.append(
+            {
+                "firm": str(h.get("firm") or "")[:80],
+                "rate": str(h.get("rate") or "—")[:40],
+                "pt": str(h.get("pt") or "—")[:40],
+                "quote": str(h.get("quote") or "")[:200],
+                "tac": "",
+            }
+        )
+    row["houses"] = clean_houses
     row["consensus"] = {
         "rating": str(consensus.get("rating") or "—")[:80],
         "pt": str(consensus.get("pt") or "—")[:80],
         "low": str(consensus.get("low") or "—")[:80],
         "high": str(consensus.get("high") or "—")[:80],
         "n": str(consensus.get("n") or "—")[:80],
-        "upd": str(consensus.get("upd") or "stockanalysis")[:80],
+        "upd": str(consensus.get("upd") or f"обн. {now[:10]}")[:80],
     }
-    row["houseNote"] = house_note[:800]
+    row["houseNote"] = house_note[:240]
     row["houses_source"] = "stockanalysis"
     row["updated_at_utc"] = now
     row["updated_by"] = (updated_by or "notebook-ui")[:80]
