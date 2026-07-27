@@ -310,9 +310,7 @@
   <div id="content"><div class="card"><p class="note">Загрузка данных…</p></div></div>
 
   <footer>
-    Гейты вердикта (Buy Dip/Sell, Env ФРС/PT, макро-флаги) — на вкладке «Вердикт», пишутся в <code>local/notebook/ticker_overrides.json</code> (не в git).
-    Close — справочная цена из quotes, не авто-сигнал BUY. План: docs/TRADING_NOTEBOOK.md.
-    Отдельный UI от «Портфель · карточки» / GAME_5M. Не является инвестиционной рекомендацией.
+    Вердикт: гейты и уровни пишутся в <code>local/notebook/ticker_overrides.json</code>. Close — справочно, не авто-BUY.
   </footer>
 </div>
 
@@ -330,7 +328,7 @@ const TABS = [
   {id:"profile",label:"Профиль",stub:true},
   {id:"triggers",label:"Триггеры Buy / Sell",stub:true},
   {id:"entry",label:"Тактика входа / выхода",stub:true},
-  {id:"env",label:"Окружение",stub:true},  // VIX live; ФРС/PT — частично stub
+  {id:"env",label:"Окружение",stub:false},  // VIX live + ФРС/PT editable
   {id:"houses",label:"Инвестдома",stub:false},
   {id:"fundament",label:"Фундамент",stub:true},
   {id:"digest",label:"Дайджесты",stub:false},
@@ -492,7 +490,7 @@ function renderContent(){
   }
   const d = DATA[current];
   if(!d){ c.innerHTML = `<div class="load-err">Тикер ${esc(current)} не найден в данных</div>`; return; }
-  let html = dataLegend();
+  let html = (activeTab === "verdict") ? "" : dataLegend();
   const L = d.levels || {};
   html += tabWrap("verdict", renderVerdict(d));
 
@@ -534,11 +532,9 @@ function renderContent(){
     return `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span>${badge}</div>`;
   }).join("");
   const hasLiveVix = (d.env||[]).some(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
-  html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):stubBadge("VIX недоступен")}<span class="hint">фильтр скрытых угроз поверх логики входа</span></h3>
-    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">ФРС / cut PT</b> — переключатели ниже (и на Вердикте). VIX — только live.</div>
+  html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):""}<span class="hint">ФРС / PT — на Вердикте</span></h3>
     ${envs}
-    ${renderEnvEditor(d, "-envtab")}
-    <div class="note">Красный/жёлтый по любому пункту = входы на паузу. VIX, ястребиная ФРС и внезапные cut PT вне earnings — стоп-факторы независимо от техники.</div></div>`);
+    <div class="note">Красный/жёлтый = пауза входов. Правка ФРС/PT — в строке Environment Check на Вердикте.</div></div>`);
 
   const houses = (d.houses||[]).map(h => `<div class="house"><div class="hh">
     <span class="firm">${esc(h.firm)}</span><span class="rate">${esc(h.rate)}</span><span class="pt">${esc(h.pt)}</span></div>
@@ -624,6 +620,7 @@ function computeVerdict(d){
     name:"Environment Check",
     state: worstEnv,
     gate: worstEnv==="bad",
+    editKind: "env",
     val: envVal
   });
   indicators.push({
@@ -631,7 +628,7 @@ function computeVerdict(d){
     state: macroBroken ? "bad" : "ok",
     gate: macroBroken,
     editKind: "macro",
-    val: macroBroken ? "блок" : "ок"
+    val: ""
   });
 
   const L = d.levels || {};
@@ -641,15 +638,15 @@ function computeVerdict(d){
     const price = Number(px);
     const buy = Number(L.buyDip);
     const distBuy = ((price - buy) / buy * 100);
-    // Short status only — buy/sell numbers live in the inputs, don't repeat them.
-    if(price <= buy){ priceState="ok"; priceVal=`$${price.toFixed(2)} · триггер buy`; triggerHit="buy"; }
-    else if(L.sell != null && price >= Number(L.sell)){ priceState="ok"; priceVal=`$${price.toFixed(2)} · фиксация`; triggerHit="sell"; }
-    else { priceState="mid"; priceVal=`$${price.toFixed(2)} · ещё ${distBuy.toFixed(0)}%`; triggerHit="wait"; }
+    // Distance/trigger only — Close already in hero.
+    if(price <= buy){ priceState="ok"; priceVal="триггер buy"; triggerHit="buy"; }
+    else if(L.sell != null && price >= Number(L.sell)){ priceState="ok"; priceVal="фиксация"; triggerHit="sell"; }
+    else { priceState="mid"; priceVal=`ещё ${distBuy.toFixed(0)}%`; triggerHit="wait"; }
   } else if(L.sell != null && px != null && Number.isFinite(Number(px)) && Number(px) >= Number(L.sell)){
-    priceState="ok"; priceVal=`$${Number(px).toFixed(2)} · фиксация`; triggerHit="sell";
+    priceState="ok"; priceVal="фиксация"; triggerHit="sell";
   } else {
     priceState="neutral";
-    priceVal = px == null ? "нет Close" : (L.buyDip==null && L.sell==null ? "нет уровней" : `$${Number(px).toFixed(2)}`);
+    priceVal = px == null ? "нет Close" : (L.buyDip==null && L.sell==null ? "нет уровней" : "");
     triggerHit = "manual";
   }
   indicators.push({
@@ -717,6 +714,29 @@ function renderMacroInlineControls(d){
           aria-pressed="${broken?'true':'false'}"><span class="knob"></span></button>
       </span>
       <span class="flag-status" id="flagStatus"></span>
+    </span>`;
+}
+
+function envRowState(d, key){
+  const rows = d.env || [];
+  for(const e of rows){
+    if(envEditableKey(e.lbl) === key) return e.state || "ok";
+  }
+  return "ok";
+}
+
+function renderEnvInlineControls(d){
+  const fed = envRowState(d, "fed");
+  const pt = envRowState(d, "pt");
+  const btns = (key, state) => ["ok","mid","bad"].map(s =>
+    `<button type="button" class="env-sbtn ${state===s?'on '+s:''}" data-env-key="${esc(key)}"
+      onclick="setEnvState('${esc(key)}','${s}','-verdict')">${s}</button>`
+  ).join("");
+  return `
+    <span class="lvl-one" style="margin-left:10px">
+      <span class="lk">фрс</span><span class="env-state-btns">${btns("fed", fed)}</span>
+      <span class="lk">pt</span><span class="env-state-btns">${btns("pt", pt)}</span>
+      <span class="flag-status" id="envStatus-verdict"></span>
     </span>`;
 }
 
@@ -961,12 +981,20 @@ async function setEnvState(key, state, idSuffix){
 function renderVerdict(d){
   const v = computeVerdict(d);
   const inds = v.indicators.map(i => {
+    if(i.editKind === "env"){
+      return `
+    <div class="ind-row">
+      <span class="idot ${esc(i.state)}"></span>
+      <span class="iname">${esc(i.name)}</span>
+      <span class="ival">${esc(i.val)}${i.gate?'<span class="igate" style="margin-left:8px">БЛОК</span>':''}${renderEnvInlineControls(d)}</span>
+    </div>`;
+    }
     if(i.editKind === "levels"){
       return `
     <div class="ind-row">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}${renderLevelsInline(d)}</span>
+      <span class="ival">${esc(i.val)}${i.val?" ":""}${renderLevelsInline(d)}</span>
     </div>`;
     }
     if(i.editKind === "consensus"){
@@ -982,33 +1010,27 @@ function renderVerdict(d){
     <div class="ind-row">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}${i.gate?'<span class="igate" style="margin-left:8px">БЛОК</span>':''}${renderMacroInlineControls(d)}</span>
+      <span class="ival">${i.gate?'<span class="igate">БЛОК</span>':''}${renderMacroInlineControls(d)}</span>
     </div>`;
     }
     return `
     <div class="ind-row">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}${i.live?liveBadge(i.live):""}${i.manual?manualBadge(i.manual):""}${i.stub?stubBadge(i.stub):""}</span>
+      <span class="ival">${esc(i.val)}</span>
       ${i.gate?'<span class="igate">БЛОК</span>':''}
     </div>`;
   }).join("");
-  const src = d.price_source ? ` · ${d.price_source}` : "";
-  const asof = d.price_asof ? ` · ${d.price_asof}` : "";
   return `
     <div class="verdict-hero ${v.cls}">
-      <div class="vlabel">Итоговый вердикт · ${esc(d.sym)} ${liveBadge("Close · quotes/yfinance")}</div>
+      <div class="vlabel">${esc(d.sym)}</div>
       <div class="vaction">${esc(v.action)}</div>
       <div class="vwhy">${esc(v.why)}</div>
-      <div class="vprice">Close ${fmtPx(d.px)} ${esc(d.chg||"")}${esc(src)}${esc(asof)} · горизонт: ${esc(d.horizon||"")}</div>
+      <div class="vprice">Close ${fmtPx(d.px)} ${esc(d.chg||"")}${d.horizon?` · ${esc(d.horizon)}`:""}</div>
     </div>
     <div class="card">
-      <h3>Как собрался вердикт <span class="hint">Close vs Buy Dip / Sell — не авто-сигнал</span></h3>
-      ${stubBox("Смешанный вердикт", "VIX в Environment Check. Макро, уровни и консенсус — в строках. ФРС·PT — блок ниже.")}
       ${inds}
-      <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs buy/sell в той же строке.</div>
-    </div>
-    ${renderEnvEditorCard(d)}`;
+    </div>`;
 }
 
 function digestItem(it, cls){
