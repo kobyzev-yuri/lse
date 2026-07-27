@@ -3,7 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
 <title>Тетрадка · Рабочее пространство</title>
+<!-- notebook-ui: houses-v2 ratings-after-sample -->
 <style>
   :root{
     --bg:#0e1116;--panel:#161b22;--panel-2:#1c232d;--line:#2a323d;
@@ -945,19 +948,19 @@ function renderContent(){
       <button type="button" class="edit-btn" id="houses-refresh" onclick="refreshHouses()">Обновить с StockAnalysis</button>
       <span class="${flashCls}" id="housesStatus">${flashTxt}</span>
     </div>
-    <div class="concens">
-      <div class="cell" style="align-items:flex-start;text-align:left;margin-right:auto">
-        <span class="cl">Сводка</span>
-        <span class="cv" style="font-size:13px;font-weight:600">${rs.cards} домов · Buy ${rs.buy} / Hold ${rs.hold} / Sell ${rs.sell}</span>
-      </div>
-      <div class="cell"><span class="cl">Buy</span><span class="cv up">${rs.buy}</span></div>
-      <div class="cell"><span class="cl">Hold</span><span class="cv" style="color:var(--warn)">${rs.hold}</span></div>
-      <div class="cell"><span class="cl">Sell</span><span class="cv down">${rs.sell}</span></div>
+    <div class="concens" data-houses-ui="v2">
       <div class="cell"><span class="cl">Консенсус</span><span class="cv">${esc(cons.rating||'—')}</span></div>
       <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(consPt)}</span></div>
       <div class="cell"><span class="cl">Low</span><span class="cv down">${esc(cons.low||'—')}</span></div>
       <div class="cell"><span class="cl">High</span><span class="cv up">${esc(cons.high||'—')}</span></div>
       <div class="cell"><span class="cl">Выборка</span><span class="cv" style="font-size:13px">${esc(cons.n||'—')}</span></div>
+      <div class="cell" style="align-items:flex-start;text-align:left">
+        <span class="cl">Рейтинги</span>
+        <span class="cv" style="font-size:13px;font-weight:600">${rs.cards} домов · Buy ${rs.buy} / Hold ${rs.hold} / Sell ${rs.sell}</span>
+      </div>
+      <div class="cell"><span class="cl">Buy</span><span class="cv up">${rs.buy}</span></div>
+      <div class="cell"><span class="cl">Hold</span><span class="cv" style="color:var(--warn)">${rs.hold}</span></div>
+      <div class="cell"><span class="cl">Sell</span><span class="cv down">${rs.sell}</span></div>
     </div>
     <div class="houses-list">${houses || '<p class="note">Пока пусто — нажмите «Обновить с StockAnalysis».</p>'}</div>
     </div>`);
@@ -1457,17 +1460,16 @@ async function refreshHouses(){
     DATA[sym].consensus_override = true;
     applyOverrideMeta(sym, j);
     const n = (j.houses || []).length;
-    // Stats live in the consensus panel — keep toolbar status short.
-    housesRefreshFlash = {sym, ok: true, text: `ок · ${n} карточек`};
+    // Stats belong in consensus panel (after Выборка) — never in toolbar flash.
+    housesRefreshFlash = null;
     renderContent();
+    const el = document.getElementById("housesStatus");
+    if(el){ el.className = "flag-status ok"; el.textContent = `ок · ${n} карточек`; }
     if(btn) btn.disabled = false;
     setTimeout(() => {
-      if(housesRefreshFlash && housesRefreshFlash.sym === sym && housesRefreshFlash.ok){
-        housesRefreshFlash = null;
-        const el = document.getElementById("housesStatus");
-        if(el){ el.className = "flag-status"; el.textContent = ""; }
-      }
-    }, 2500);
+      const st = document.getElementById("housesStatus");
+      if(st && /карточек/.test(st.textContent||"")){ st.className = "flag-status"; st.textContent = ""; }
+    }, 2000);
   } catch(e){
     housesRefreshFlash = {sym, ok: false, text: "ошибка: " + (e.message || e)};
     if(status){ status.className = "flag-status err"; status.textContent = housesRefreshFlash.text; }
