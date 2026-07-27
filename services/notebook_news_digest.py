@@ -405,10 +405,20 @@ def _llm_digest(
         messages=[{"role": "user", "content": user}],
         system_prompt=DIGEST_SYSTEM,
         temperature=float(get_config_value("NOTEBOOK_NEWS_DIGEST_TEMPERATURE", "0.2") or 0.2),
-        max_tokens=int(get_config_value("NOTEBOOK_NEWS_DIGEST_MAX_TOKENS", "3500") or 3500),
+        max_tokens=int(get_config_value("NOTEBOOK_NEWS_DIGEST_MAX_TOKENS", "6000") or 6000),
     )
     text = (out or {}).get("response") or ""
     parsed = _parse_llm_json(text)
+    if not any(parsed.get(k) for k in ("signals", "risks", "macro", "newtickers")) and not parsed.get("trashNote"):
+        logger.warning(
+            "LLM digest parse empty/weak (len=%s keys=%s head=%s)",
+            len(text),
+            list(parsed.keys())[:12],
+            (text or "")[:240].replace("\n", " "),
+        )
+        if parsed.get("raw_text") or parsed.get("raw"):
+            parsed = _empty_digest(filtered=len(items), note="LLM вернул неразборчивый JSON (возможен обрез max_tokens).")
+            parsed["llm_parse_error"] = True
     parsed["_llm"] = {
         "model": (out or {}).get("model"),
         "usage": (out or {}).get("usage"),
@@ -551,7 +561,20 @@ def run_notebook_news_digest(
 
     if use_llm and items:
         try:
-            digest_body = _llm_digest(items, membership=membership, earnings=earnings_items)
+            # Cap input size so completion is not truncated (earnings block also consumes tokens).
+            llm_items = items[:120]
+            digest_body = _llm_digest(llm_items, membership=membership, earnings=earnings_items)
+            if digest_body.get("llm_parse_error") or (
+                not any(digest_body.get(k) for k in ("signals", "risks", "macro", "newtickers"))
+                and int(digest_body.get("kept") or 0) == 0
+                and filtered > 0
+            ):
+                logger.warning("LLM digest empty despite %s items — retry once with smaller input", filtered)
+                digest_body = _llm_digest(
+                    llm_items[:60],
+                    membership=membership,
+                    earnings=earnings_items[:20],
+                )
         except Exception as e:
             logger.exception("LLM digest failed: %s", e)
             digest_body = _empty_digest(filtered=filtered, note=f"LLM ошибка: {e}")
