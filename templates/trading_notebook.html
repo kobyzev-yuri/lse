@@ -505,6 +505,34 @@ function envSourceHint(lbl){
 
 function setDigestVariant(v){ digestVariant = v; renderContent(); }
 
+function vixFearLabel(val, state){
+  const v = Number(val);
+  if(!Number.isFinite(v)){
+    if(state==="bad") return "сильный страх";
+    if(state==="mid") return "повышенная тревога";
+    if(state==="ok") return "спокойный рынок";
+    return "нет оценки";
+  }
+  // Align with notebook thresholds: <20 ok, 20–25 mid, ≥25 bad
+  if(v < 15) return "очень спокойно (low fear)";
+  if(v < 20) return "спокойный рынок (не сильный страх)";
+  if(v < 25) return "повышенная тревога";
+  if(v < 30) return "сильный страх";
+  return "паника / extreme fear";
+}
+
+function findLiveVix(env){
+  const row = (env||[]).find(e => e && e.live && String(e.lbl||"").toLowerCase().includes("vix"));
+  if(!row) return null;
+  const val = row.value != null ? Number(row.value) : null;
+  return {
+    value: Number.isFinite(val) ? val : null,
+    state: row.state || "mid",
+    st: row.st || "",
+    fear: vixFearLabel(val, row.state),
+  };
+}
+
 function computeVerdict(d){
   const env = d.env || [];
   const worstEnv = env.reduce((w,e)=>{
@@ -515,18 +543,34 @@ function computeVerdict(d){
   const yellowEnv = env.filter(e => e.state==="mid");
   const sig = d.signals || {};
   const macroBroken = !!sig.sentimentBroken || !sig.macroAlive;
+  const vix = findLiveVix(env);
 
   const indicators = [];
+  let envVal;
+  if(worstEnv==="ok") envVal = "чисто — угроз нет";
+  else if(worstEnv==="mid") envVal = `жёлтый: ${yellowEnv.map(e=>e.lbl).join(", ")}`;
+  else envVal = `КРАСНЫЙ: ${redEnv.map(e=>e.lbl).join(", ")}`;
+  if(vix){
+    const vx = vix.value != null ? vix.value.toFixed(1) : "?";
+    envVal = `VIX ${vx} · ${vix.fear} · ${envVal}`;
+  }
   indicators.push({
     name:"Environment Check",
     state: worstEnv,
     gate: worstEnv==="bad",
-    live: (env||[]).some(e => e.live) ? "VIX/ФРС" : null,
-    stub: (env||[]).some(e => !e.live) ? "часть строк вручную" : null,
-    val: worstEnv==="ok" ? "чисто — угроз нет"
-       : worstEnv==="mid" ? `жёлтый: ${yellowEnv.map(e=>e.lbl).join(", ")}`
-       : `КРАСНЫЙ: ${redEnv.map(e=>e.lbl).join(", ")}`
+    live: vix ? `VIX ${vix.value!=null?vix.value.toFixed(1):""}` : ((env||[]).some(e => e.live) ? "частично live" : null),
+    stub: (env||[]).some(e => !e.live) ? "ФРС/PT вручную" : null,
+    val: envVal
   });
+  if(vix){
+    indicators.push({
+      name:"VIX",
+      state: vix.state,
+      gate: vix.state==="bad",
+      live: "quotes/^VIX",
+      val: `${vix.value!=null?("уровень "+vix.value.toFixed(1)):vix.st} · оценка: ${vix.fear}${vix.st?(" · "+vix.st):""}`
+    });
+  }
   indicators.push({
     name:"Макро (SocGen)",
     state: macroBroken ? "bad" : "ok",
