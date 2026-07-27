@@ -4100,6 +4100,40 @@ async def api_notebook_ticker_consensus(sym: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка notebook consensus: {e!s}")
 
 
+@app.patch("/api/notebook/tickers/{sym}/profile", response_class=JSONResponse)
+async def api_notebook_ticker_profile(sym: str, request: Request):
+    """Горизонт + поля профиля → overlay (без Buy Dip/Sell)."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    updated_by = str(body.get("updated_by") or body.get("updatedBy") or "notebook-ui")[:80]
+    kwargs: Dict[str, Any] = {"updated_by": updated_by}
+    if "horizon" in body:
+        kwargs["horizon"] = body.get("horizon")
+    if isinstance(body.get("profile"), dict):
+        kwargs["profile"] = body.get("profile")
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import update_ticker_profile
+
+        return update_ticker_profile(sym, **kwargs)
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("PATCH /api/notebook/tickers/%s/profile: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка notebook profile: {e!s}")
+
+
 @app.patch("/api/notebook/tickers/{sym}/env", response_class=JSONResponse)
 async def api_notebook_ticker_env(sym: str, request: Request):
     """Ручные Env-гейты (ФРС / cut PT) → overlay. VIX не принимается."""

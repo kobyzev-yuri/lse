@@ -325,7 +325,7 @@ let DIGEST_BUCKETS = [];
 
 const TABS = [
   {id:"verdict",label:"⚡ Вердикт",stub:false},
-  {id:"profile",label:"Профиль",stub:true},
+  {id:"profile",label:"Профиль",stub:false},
   {id:"triggers",label:"Триггеры Buy / Sell",stub:true},
   {id:"entry",label:"Тактика входа / выхода",stub:true},
   {id:"env",label:"Окружение",stub:false},  // VIX live + ФРС/PT editable
@@ -449,6 +449,77 @@ function tabWrap(id, inner){
   return `<div class="tab-body ${id===activeTab?'on':''}" id="tab-${id}">${inner}</div>`;
 }
 
+function renderProfile(d, gname){
+  const pf = d.profile || {};
+  const L = d.levels || {};
+  const levelsHint = (L.buyDip != null || L.sell != null)
+    ? `Buy Dip ${L.buyDip != null ? "$"+L.buyDip : "—"} · Sell ${L.sell != null ? "$"+L.sell : "—"} · на Вердикте`
+    : "уровни ещё не заданы · Вердикт";
+  const field = (id, label, val, ph) => `
+    <div class="edit-field" style="grid-column:1/-1">
+      <label>${esc(label)}</label>
+      <input type="text" id="${esc(id)}" value="${esc(val||'')}" placeholder="${esc(ph||'')}">
+    </div>`;
+  return `<div class="card">
+    <h3>${esc(d.name)} · ${esc((gname||'').split(' · ')[0])}</h3>
+    <div class="edit-grid" style="margin-top:8px">
+      ${field("pf-horizon", "Горизонт", d.horizon, "3–6 месяцев")}
+      ${field("pf-sector", "Сектор / слой", pf["Сектор / слой"], "software / semis / …")}
+      ${field("pf-role", "Роль в тетрадке", pf["Роль в тетрадке"], "ядро удержания / активный вход")}
+      ${field("pf-earn", "Отчёт (след.)", pf["Отчёт (след.)"], "дата или «уточнять»")}
+    </div>
+    <div class="kv" style="margin-top:14px">
+      <div class="k">Целевая прибыль</div>
+      <div class="v" style="text-align:left;font-family:var(--sans);color:var(--muted)">${esc(levelsHint)}</div>
+    </div>
+    <div class="edit-actions">
+      <button type="button" class="edit-btn" id="pf-save" onclick="saveProfile()">Сохранить профиль</button>
+      <span class="flag-status" id="pfStatus"></span>
+    </div>
+  </div>`;
+}
+
+async function saveProfile(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("pfStatus");
+  const btn = document.getElementById("pf-save");
+  const val = (id) => {
+    const el = document.getElementById(id);
+    return (el && el.value != null) ? String(el.value).trim() : "";
+  };
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "…"; }
+  try {
+    const body = {
+      horizon: val("pf-horizon") || null,
+      profile: {
+        "Сектор / слой": val("pf-sector"),
+        "Роль в тетрадке": val("pf-role"),
+        "Отчёт (след.)": val("pf-earn"),
+      },
+    };
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/profile`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    if(j.horizon != null) DATA[sym].horizon = j.horizon;
+    DATA[sym].profile = Object.assign({}, DATA[sym].profile || {}, j.profile || body.profile);
+    delete DATA[sym].profile["Целевая прибыль"];
+    DATA[sym].profile_override = true;
+    applyOverrideMeta(sym, j);
+    renderContent();
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    if(btn) btn.disabled = false;
+  }
+}
+
 function renderFundament(d){
   const f = d.fundament;
   if(!f){
@@ -490,16 +561,12 @@ function renderContent(){
   }
   const d = DATA[current];
   if(!d){ c.innerHTML = `<div class="load-err">Тикер ${esc(current)} не найден в данных</div>`; return; }
-  let html = (activeTab === "verdict") ? "" : dataLegend();
+  let html = (activeTab === "verdict" || activeTab === "profile") ? "" : dataLegend();
   const L = d.levels || {};
   html += tabWrap("verdict", renderVerdict(d));
 
-  const kv = Object.entries(d.profile||{}).map(([k,v]) =>
-    `<div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>`).join("");
   const gname = (GROUPS[String(d.group)] && GROUPS[String(d.group)].name) || ("GRP "+d.group);
-  html += tabWrap("profile", `<div class="card"><h3>${esc(d.name)} · ${esc((gname||'').split(' · ')[0])} ${stubBadge("вручную JSON")}</h3>
-    ${stubBox("Профиль тикера", "вручную: nastya/notebook/notebook_data.json (роль, слой, отчёт, целевая прибыль).")}
-    <div class="kv"><div class="k">Горизонт</div><div class="v">${esc(d.horizon||'')}</div>${kv}</div></div>`);
+  html += tabWrap("profile", renderProfile(d, gname));
 
   const trigs = (d.triggers||[]).map(t => {
     const map = {buy:["b-buy","BUY"],sell:["b-sell","SELL"],add:["b-add","ADD"],watch:["b-watch","WATCH"]};

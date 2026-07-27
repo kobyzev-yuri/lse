@@ -201,6 +201,15 @@ def apply_ticker_overrides(
                     base_c[k] = v
                 d["consensus"] = base_c
                 d["consensus_override"] = True
+            if patch.get("horizon") is not None:
+                d["horizon"] = str(patch.get("horizon") or "")[:160]
+                d["profile_override"] = True
+            if isinstance(patch.get("profile"), dict):
+                base_pf = dict(d.get("profile") or {}) if isinstance(d.get("profile"), dict) else {}
+                for k, v in patch["profile"].items():
+                    base_pf[k] = v
+                d["profile"] = base_pf
+                d["profile_override"] = True
             if patch.get("env") is not None:
                 base_env = list(d.get("env") or []) if isinstance(d.get("env"), list) else []
                 d["env"] = _merge_env_rows(base_env, patch.get("env"))
@@ -382,6 +391,65 @@ def update_ticker_consensus(
     return {
         "ticker": u,
         "consensus": dict(row["consensus"]),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+_PROFILE_KEYS = (
+    "Сектор / слой",
+    "Роль в тетрадке",
+    "Отчёт (след.)",
+)
+
+
+def update_ticker_profile(
+    sym: str,
+    *,
+    horizon: Any = ...,
+    profile: Optional[Dict[str, Any]] = None,
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist horizon + profile fields (not levels — those live on Verdict)."""
+    u, base_row = _find_base_ticker(sym)
+    if horizon is ... and not profile:
+        raise ValueError("no profile fields to update")
+
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    base_pf = dict(base_row.get("profile") or {}) if isinstance(base_row.get("profile"), dict) else {}
+    prev_pf = dict(row.get("profile") or {}) if isinstance(row.get("profile"), dict) else {}
+    pf = {**base_pf, **prev_pf}
+
+    if isinstance(profile, dict):
+        for key in _PROFILE_KEYS:
+            if key in profile:
+                val = profile.get(key)
+                if val is None or (isinstance(val, str) and not str(val).strip()):
+                    pf[key] = ""
+                else:
+                    pf[key] = str(val)[:240]
+
+    # Drop duplicate of Verdict levels if present in overlay profile.
+    pf.pop("Целевая прибыль", None)
+
+    now = datetime.now(timezone.utc).isoformat()
+    if horizon is not ...:
+        row["horizon"] = "" if horizon is None else str(horizon).strip()[:160]
+    row["profile"] = {k: pf.get(k, "") for k in _PROFILE_KEYS}
+    # Keep any other non-target keys from previous overlay (except target profit).
+    for k, v in pf.items():
+        if k not in row["profile"] and k != "Целевая прибыль":
+            row["profile"][k] = v
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    return {
+        "ticker": u,
+        "horizon": row.get("horizon", base_row.get("horizon")),
+        "profile": dict(row["profile"]),
         "updated_at_utc": now,
         "updated_by": row["updated_by"],
     }
