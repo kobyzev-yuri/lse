@@ -268,6 +268,8 @@
   .lvl-one input:focus{outline:none;border-color:var(--accent);}
   .lvl-one .edit-btn{padding:4px 10px;font-size:12px;}
   .lvl-one .flag-status{margin:0;font-size:11px;}
+  .lvl-one input.wide{width:96px;}
+  .lvl-one input.rating{width:88px;}
 
   /* fundament (NBIS-style) */
   .fund-tag{font-size:13.5px;color:var(--muted);line-height:1.5;margin-bottom:14px;}
@@ -329,7 +331,7 @@ const TABS = [
   {id:"triggers",label:"Триггеры Buy / Sell",stub:true},
   {id:"entry",label:"Тактика входа / выхода",stub:true},
   {id:"env",label:"Окружение",stub:true},  // VIX live; ФРС/PT — частично stub
-  {id:"houses",label:"Инвестдома",stub:true},
+  {id:"houses",label:"Инвестдома",stub:false},
   {id:"fundament",label:"Фундамент",stub:true},
   {id:"digest",label:"Дайджесты",stub:false},
   {id:"watchlist",label:"Watchlist · Flash Crash",stub:true},
@@ -542,8 +544,8 @@ function renderContent(){
     <span class="firm">${esc(h.firm)}</span><span class="rate">${esc(h.rate)}</span><span class="pt">${esc(h.pt)}</span></div>
     <div class="quote">${esc(h.quote)}</div><div class="tac">${h.tac||''}</div></div>`).join("");
   const cons = d.consensus || {};
-  html += tabWrap("houses", `<div class="card"><h3>Оценки инвестдомов ${stubBadge("вручную JSON")}<span class="upd">${esc(cons.upd||'')}</span></h3>
-    ${stubBox("Инвестдома / консенсус", "вручную в notebook_data.json (firm / rate / pt / quote / tac). Заголовки PT из SA/Yahoo news — только в дайджесте, не в этой вкладке. Авто-API рейтингов нет.")}
+  html += tabWrap("houses", `<div class="card"><h3>Оценки инвестдомов ${manualBadge("консенсус на Вердикте")}<span class="upd">${esc(cons.upd||'')}</span></h3>
+    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">Консенсус</b> — rate / pt / low / high править в строке «Инвестдома» на Вердикте. Карточки домов ниже — справочный JSON.</div>
     <div class="concens">
       <div class="cell"><span class="cl">Консенсус</span><span class="cv">${esc(cons.rating||'—')}</span></div>
       <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(cons.pt||'—')}</span></div>
@@ -659,12 +661,13 @@ function computeVerdict(d){
   });
 
   const c = d.consensus || {};
+  const consEmpty = !c.rating || c.rating === "—" || c.rating === "-";
   indicators.push({
     name:"Инвестдома",
-    state:"ok",
+    state: consEmpty ? "neutral" : "ok",
     gate:false,
-    stub: "вручную JSON",
-    val:`консенсус ${c.rating||"—"} · ср. таргет ${c.pt||"—"} (коридор ${c.low||"—"}–${c.high||"—"})`
+    editKind: "consensus",
+    val: ""
   });
 
   let action, cls, why;
@@ -731,6 +734,29 @@ function renderLevelsInline(d){
       <input type="hidden" id="lvl-note" value="${esc(L.note != null ? L.note : "")}">
       <button type="button" class="edit-btn" id="lvl-save" onclick="saveLevels()">OK</button>
       <span class="flag-status" id="lvlStatus"></span>
+    </span>`;
+}
+
+function _consField(v){
+  if(v == null) return "";
+  const s = String(v).trim();
+  return (s === "—" || s === "-" || s === "–") ? "" : s;
+}
+
+function renderConsensusInline(d){
+  const c = d.consensus || {};
+  return `
+    <span class="lvl-one">
+      <span class="lk">rate</span>
+      <input type="text" class="rating" id="cons-rating" value="${esc(_consField(c.rating))}" placeholder="Buy">
+      <span class="lk">pt</span>
+      <input type="text" class="wide" id="cons-pt" value="${esc(_consField(c.pt))}" placeholder="450">
+      <span class="lk">low</span>
+      <input type="text" id="cons-low" value="${esc(_consField(c.low))}" placeholder="—">
+      <span class="lk">high</span>
+      <input type="text" id="cons-high" value="${esc(_consField(c.high))}" placeholder="—">
+      <button type="button" class="edit-btn" id="cons-save" onclick="saveConsensus()">OK</button>
+      <span class="flag-status" id="consStatus"></span>
     </span>`;
 }
 
@@ -861,6 +887,43 @@ async function saveLevels(){
   }
 }
 
+async function saveConsensus(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("consStatus");
+  const btn = document.getElementById("cons-save");
+  const val = (id) => {
+    const el = document.getElementById(id);
+    return (el && el.value != null) ? String(el.value).trim() : "";
+  };
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "…"; }
+  try {
+    const body = {
+      rating: val("cons-rating") || null,
+      pt: val("cons-pt") || null,
+      low: val("cons-low") || null,
+      high: val("cons-high") || null,
+    };
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/consensus`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    DATA[sym].consensus = Object.assign({}, DATA[sym].consensus || {}, j.consensus || body);
+    DATA[sym].consensus_override = true;
+    applyOverrideMeta(sym, j);
+    renderContent();
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    if(btn) btn.disabled = false;
+  }
+}
+
 async function setEnvState(key, state, idSuffix){
   const sym = current;
   if(!sym || !DATA[sym]) return;
@@ -906,6 +969,14 @@ function renderVerdict(d){
       <span class="ival">${esc(i.val)}${renderLevelsInline(d)}</span>
     </div>`;
     }
+    if(i.editKind === "consensus"){
+      return `
+    <div class="ind-row">
+      <span class="idot ${esc(i.state)}"></span>
+      <span class="iname">${esc(i.name)}</span>
+      <span class="ival">${renderConsensusInline(d)}</span>
+    </div>`;
+    }
     if(i.editKind === "macro"){
       return `
     <div class="ind-row">
@@ -933,7 +1004,7 @@ function renderVerdict(d){
     </div>
     <div class="card">
       <h3>Как собрался вердикт <span class="hint">Close vs Buy Dip / Sell — не авто-сигнал</span></h3>
-      ${stubBox("Смешанный вердикт", "VIX в Environment Check. Макро и уровни — переключатели/поля в строке. ФРС·PT — блок ниже.")}
+      ${stubBox("Смешанный вердикт", "VIX в Environment Check. Макро, уровни и консенсус — в строках. ФРС·PT — блок ниже.")}
       ${inds}
       <div class="note">Логика: <b>Environment Check и Макро — гейты</b>. Цена = live Close vs buy/sell в той же строке.</div>
     </div>

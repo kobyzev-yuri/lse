@@ -161,3 +161,25 @@ def test_ticker_env_overrides_skip_vix(tmp_path: Path):
         assert False, "expected ValueError for VIX"
     except ValueError as e:
         assert "VIX" in str(e)
+
+
+def test_ticker_consensus_overrides_roundtrip(tmp_path: Path):
+    ov = tmp_path / "ticker_overrides.json"
+    from services.trading_notebook import update_ticker_consensus
+
+    out = update_ticker_consensus(
+        "MSFT",
+        rating="Buy",
+        pt="480",
+        low="400",
+        high="520",
+        updated_by="test",
+        path=ov,
+    )
+    assert out["consensus"]["rating"] == "Buy"
+    merged = apply_ticker_overrides(
+        {"MSFT": {"consensus": {"rating": "—", "pt": "—"}}},
+        {"tickers": {"MSFT": {"consensus": out["consensus"]}}},
+    )
+    assert merged["MSFT"]["consensus"]["pt"] == "480"
+    assert merged["MSFT"]["consensus_override"] is True

@@ -195,6 +195,12 @@ def apply_ticker_overrides(
                     base_lv[k] = v  # None clears over base
                 d["levels"] = base_lv
                 d["levels_override"] = True
+            if isinstance(patch.get("consensus"), dict):
+                base_c = dict(d.get("consensus") or {}) if isinstance(d.get("consensus"), dict) else {}
+                for k, v in patch["consensus"].items():
+                    base_c[k] = v
+                d["consensus"] = base_c
+                d["consensus_override"] = True
             if patch.get("env") is not None:
                 base_env = list(d.get("env") or []) if isinstance(d.get("env"), list) else []
                 d["env"] = _merge_env_rows(base_env, patch.get("env"))
@@ -311,6 +317,71 @@ def update_ticker_levels(
     return {
         "ticker": u,
         "levels": dict(row["levels"]),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+def _consensus_str(val: Any, *, empty_as_dash: bool = True) -> Optional[str]:
+    if val is None:
+        return None if not empty_as_dash else None
+    s = str(val).strip()
+    if not s or s in ("—", "-", "–"):
+        return None
+    return s[:80]
+
+
+def update_ticker_consensus(
+    sym: str,
+    *,
+    rating: Any = ...,
+    pt: Any = ...,
+    low: Any = ...,
+    high: Any = ...,
+    n: Any = ...,
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist consensus (rating / PT corridor) into overrides overlay."""
+    u, base_row = _find_base_ticker(sym)
+    if all(x is ... for x in (rating, pt, low, high, n)):
+        raise ValueError("no consensus fields to update")
+
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    base_c = dict(base_row.get("consensus") or {}) if isinstance(base_row.get("consensus"), dict) else {}
+    prev_c = dict(row.get("consensus") or {}) if isinstance(row.get("consensus"), dict) else {}
+    cons = {**base_c, **prev_c}
+
+    def _set(key: str, val: Any) -> None:
+        if val is ...:
+            return
+        parsed = _consensus_str(val)
+        cons[key] = parsed if parsed is not None else "—"
+
+    _set("rating", rating)
+    _set("pt", pt)
+    _set("low", low)
+    _set("high", high)
+    _set("n", n)
+    cons["upd"] = "overlay"
+
+    now = datetime.now(timezone.utc).isoformat()
+    row["consensus"] = {
+        "rating": cons.get("rating") or "—",
+        "pt": cons.get("pt") or "—",
+        "low": cons.get("low") or "—",
+        "high": cons.get("high") or "—",
+        "n": cons.get("n") or "—",
+        "upd": "overlay",
+    }
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    return {
+        "ticker": u,
+        "consensus": dict(row["consensus"]),
         "updated_at_utc": now,
         "updated_by": row["updated_by"],
     }
