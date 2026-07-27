@@ -4134,6 +4134,38 @@ async def api_notebook_ticker_profile(sym: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка notebook profile: {e!s}")
 
 
+@app.patch("/api/notebook/tickers/{sym}/triggers", response_class=JSONResponse)
+async def api_notebook_ticker_triggers(sym: str, request: Request):
+    """Тексты триггеров Buy/Sell/Watch → overlay. $ уровни — на Вердикте."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    updated_by = str(body.get("updated_by") or body.get("updatedBy") or "notebook-ui")[:80]
+    triggers = body.get("triggers") if isinstance(body.get("triggers"), list) else None
+    if not triggers:
+        raise HTTPException(status_code=400, detail="triggers list required")
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import update_ticker_triggers
+
+        return update_ticker_triggers(sym, triggers=triggers, updated_by=updated_by)
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("PATCH /api/notebook/tickers/%s/triggers: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка notebook triggers: {e!s}")
+
+
 @app.patch("/api/notebook/tickers/{sym}/env", response_class=JSONResponse)
 async def api_notebook_ticker_env(sym: str, request: Request):
     """Ручные Env-гейты (ФРС / cut PT) → overlay. VIX не принимается."""

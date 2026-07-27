@@ -210,6 +210,13 @@ def apply_ticker_overrides(
                     base_pf[k] = v
                 d["profile"] = base_pf
                 d["profile_override"] = True
+            if isinstance(patch.get("triggers"), list):
+                d["triggers"] = _merge_triggers(
+                    list(d.get("triggers") or []) if isinstance(d.get("triggers"), list) else [],
+                    patch.get("triggers"),
+                    levels=d.get("levels") if isinstance(d.get("levels"), dict) else None,
+                )
+                d["triggers_override"] = True
             if patch.get("env") is not None:
                 base_env = list(d.get("env") or []) if isinstance(d.get("env"), list) else []
                 d["env"] = _merge_env_rows(base_env, patch.get("env"))
@@ -218,6 +225,9 @@ def apply_ticker_overrides(
                 d["override_updated_at_utc"] = patch.get("updated_at_utc")
             if patch.get("updated_by"):
                 d["override_updated_by"] = patch.get("updated_by")
+        # Keep buy/sell trigger labels in sync with effective levels.
+        if isinstance(d.get("levels"), dict) and isinstance(d.get("triggers"), list):
+            d["triggers"] = _merge_triggers(d["triggers"], [], levels=d.get("levels"))
         out[u] = d
     return out
 
@@ -402,6 +412,54 @@ _PROFILE_KEYS = (
     "Отчёт (след.)",
 )
 
+_TRIGGER_TYPES = frozenset({"buy", "sell", "add", "watch"})
+
+
+def _merge_triggers(
+    base: List[Any],
+    patch: Any,
+    *,
+    levels: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    by_t: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for item in base or []:
+        if not isinstance(item, dict):
+            continue
+        t = str(item.get("t") or "").lower()
+        if t not in _TRIGGER_TYPES:
+            continue
+        by_t[t] = dict(item)
+        if t not in order:
+            order.append(t)
+    if isinstance(patch, list):
+        for item in patch:
+            if not isinstance(item, dict):
+                continue
+            t = str(item.get("t") or "").lower()
+            if t not in _TRIGGER_TYPES:
+                continue
+            cur = dict(by_t.get(t) or {"t": t})
+            if "lvl" in item and item.get("lvl") is not None:
+                cur["lvl"] = str(item.get("lvl"))[:120]
+            if "desc" in item and item.get("desc") is not None:
+                cur["desc"] = str(item.get("desc"))[:500]
+            if "cond" in item and item.get("cond") is not None:
+                cur["cond"] = str(item.get("cond"))[:240]
+            cur["manual"] = True
+            by_t[t] = cur
+            if t not in order:
+                order.append(t)
+    # Sync buy/sell labels from levels when present.
+    lv = levels or {}
+    if "buy" in by_t and lv.get("buyDip") is not None:
+        by_t["buy"]["lvl"] = f"${lv['buyDip']} · Buy Dip"
+        by_t["buy"]["manual"] = True
+    if "sell" in by_t and lv.get("sell") is not None:
+        by_t["sell"]["lvl"] = f"${lv['sell']} · Sell"
+        by_t["sell"]["manual"] = True
+    return [by_t[t] for t in order if t in by_t]
+
 
 def update_ticker_profile(
     sym: str,
@@ -450,6 +508,70 @@ def update_ticker_profile(
         "ticker": u,
         "horizon": row.get("horizon", base_row.get("horizon")),
         "profile": dict(row["profile"]),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+def update_ticker_triggers(
+    sym: str,
+    *,
+    triggers: Sequence[Dict[str, Any]],
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist trigger texts (buy/sell/watch). Buy/Sell $ levels stay on Verdict."""
+    u, base_row = _find_base_ticker(sym)
+    if not triggers:
+        raise ValueError("no triggers to update")
+
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    base_tr = list(base_row.get("triggers") or []) if isinstance(base_row.get("triggers"), list) else []
+    prev_tr = list(row.get("triggers") or []) if isinstance(row.get("triggers"), list) else []
+    # Prefer previous overlay as base for merge so partial saves keep other types.
+    seed = prev_tr if prev_tr else base_tr
+    levels = None
+    if isinstance(row.get("levels"), dict):
+        levels = row.get("levels")
+    elif isinstance(base_row.get("levels"), dict):
+        levels = base_row.get("levels")
+    # Also load effective levels from overlay merge with base
+    if isinstance(row.get("levels"), dict) or isinstance(base_row.get("levels"), dict):
+        bl = dict(base_row.get("levels") or {}) if isinstance(base_row.get("levels"), dict) else {}
+        ol = dict(row.get("levels") or {}) if isinstance(row.get("levels"), dict) else {}
+        levels = {**bl, **ol}
+
+    merged = _merge_triggers(seed, list(triggers), levels=levels)
+    # Persist only editable payload (t/lvl/desc/cond/manual)
+    stored = []
+    for item in merged:
+        t = str(item.get("t") or "")
+        entry: Dict[str, Any] = {
+            "t": t,
+            "desc": str(item.get("desc") or "")[:500],
+            "cond": str(item.get("cond") or "")[:240],
+            "manual": True,
+        }
+        # buy/sell lvl is derived from levels on read; still store watch/add lvl
+        if t in ("watch", "add") or levels is None:
+            entry["lvl"] = str(item.get("lvl") or "")[:120]
+        elif t == "buy" and levels.get("buyDip") is None:
+            entry["lvl"] = str(item.get("lvl") or "")[:120]
+        elif t == "sell" and levels.get("sell") is None:
+            entry["lvl"] = str(item.get("lvl") or "")[:120]
+        stored.append(entry)
+
+    now = datetime.now(timezone.utc).isoformat()
+    row["triggers"] = stored
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    effective = _merge_triggers(base_tr, stored, levels=levels)
+    return {
+        "ticker": u,
+        "triggers": effective,
         "updated_at_utc": now,
         "updated_by": row["updated_by"],
     }

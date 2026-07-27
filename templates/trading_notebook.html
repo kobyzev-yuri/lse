@@ -326,7 +326,7 @@ let DIGEST_BUCKETS = [];
 const TABS = [
   {id:"verdict",label:"⚡ Вердикт",stub:false},
   {id:"profile",label:"Профиль",stub:false},
-  {id:"triggers",label:"Триггеры Buy / Sell",stub:true},
+  {id:"triggers",label:"Триггеры Buy / Sell",stub:false},
   {id:"entry",label:"Тактика входа / выхода",stub:true},
   {id:"env",label:"Окружение",stub:false},  // VIX live + ФРС/PT editable
   {id:"houses",label:"Инвестдома",stub:false},
@@ -520,6 +520,94 @@ async function saveProfile(){
   }
 }
 
+function triggerLvlDisplay(t, L){
+  const kind = String(t.t||"");
+  if(kind === "buy" && L.buyDip != null) return `$${L.buyDip} · Buy Dip`;
+  if(kind === "sell" && L.sell != null) return `$${L.sell} · Sell`;
+  return t.lvl || "";
+}
+
+function renderTriggers(d){
+  const L = d.levels || {};
+  const list = (d.triggers && d.triggers.length) ? d.triggers : [
+    {t:"buy", lvl:"", desc:"", cond:""},
+    {t:"sell", lvl:"", desc:"", cond:""},
+    {t:"watch", lvl:"Наблюдение", desc:"", cond:""},
+  ];
+  const map = {buy:["b-buy","BUY"],sell:["b-sell","SELL"],add:["b-add","ADD"],watch:["b-watch","WATCH"]};
+  const rows = list.map((t, idx) => {
+    const kind = String(t.t||"watch");
+    const [cls,txt] = map[kind] || ["b-watch","?"];
+    const lvl = triggerLvlDisplay(t, L);
+    const lvlLocked = (kind === "buy" || kind === "sell");
+    const lvlHint = lvlLocked
+      ? (lvl || "задайте на Вердикте")
+      : "";
+    return `<div class="trig" data-trig-idx="${idx}">
+      <span class="badge ${cls}">${txt}</span>
+      <div class="body" style="flex:1">
+        <input type="hidden" class="tr-t" value="${esc(kind)}">
+        ${lvlLocked
+          ? `<div class="lvl">${esc(lvlHint)} <span class="manual">$ на Вердикте</span></div>`
+          : `<div class="edit-field" style="margin:4px 0"><input type="text" class="tr-lvl" value="${esc(t.lvl||'')}" placeholder="заголовок Watch"></div>`}
+        <div class="edit-field" style="margin:6px 0"><label>Описание</label>
+          <textarea class="tr-desc" style="min-height:52px">${esc(t.desc||'')}</textarea></div>
+        <div class="edit-field"><label>Условие / комментарий</label>
+          <input type="text" class="tr-cond" value="${esc(t.cond||'')}" placeholder="когда пересматривать"></div>
+      </div>
+    </div>`;
+  }).join("");
+  return `<div class="card">
+    <h3>Триггеры <span class="hint">Buy/Sell $ — на Вердикте; тексты и Watch — здесь</span></h3>
+    ${rows}
+    <div class="edit-actions">
+      <button type="button" class="edit-btn" id="tr-save" onclick="saveTriggers()">Сохранить триггеры</button>
+      <span class="flag-status" id="trStatus"></span>
+    </div>
+  </div>`;
+}
+
+async function saveTriggers(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("trStatus");
+  const btn = document.getElementById("tr-save");
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "…"; }
+  try {
+    const triggers = [];
+    document.querySelectorAll(".trig[data-trig-idx]").forEach(row => {
+      const t = (row.querySelector(".tr-t") || {}).value || "watch";
+      const descEl = row.querySelector(".tr-desc");
+      const condEl = row.querySelector(".tr-cond");
+      const lvlEl = row.querySelector(".tr-lvl");
+      const item = {
+        t,
+        desc: descEl ? String(descEl.value||"").trim() : "",
+        cond: condEl ? String(condEl.value||"").trim() : "",
+      };
+      if(lvlEl) item.lvl = String(lvlEl.value||"").trim();
+      triggers.push(item);
+    });
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/triggers`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({triggers}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    if(Array.isArray(j.triggers)) DATA[sym].triggers = j.triggers;
+    DATA[sym].triggers_override = true;
+    applyOverrideMeta(sym, j);
+    renderContent();
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    if(btn) btn.disabled = false;
+  }
+}
+
 function renderFundament(d){
   const f = d.fundament;
   if(!f){
@@ -561,25 +649,13 @@ function renderContent(){
   }
   const d = DATA[current];
   if(!d){ c.innerHTML = `<div class="load-err">Тикер ${esc(current)} не найден в данных</div>`; return; }
-  let html = (activeTab === "verdict" || activeTab === "profile") ? "" : dataLegend();
+  let html = (activeTab === "verdict" || activeTab === "profile" || activeTab === "triggers") ? "" : dataLegend();
   const L = d.levels || {};
   html += tabWrap("verdict", renderVerdict(d));
 
   const gname = (GROUPS[String(d.group)] && GROUPS[String(d.group)].name) || ("GRP "+d.group);
   html += tabWrap("profile", renderProfile(d, gname));
-
-  const trigs = (d.triggers||[]).map(t => {
-    const map = {buy:["b-buy","BUY"],sell:["b-sell","SELL"],add:["b-add","ADD"],watch:["b-watch","WATCH"]};
-    const [cls,txt] = map[t.t] || ["b-watch","?"];
-    const lvlStr = String(t.lvl||"");
-    const isTbd = /TBD|не впис|уточн/i.test(lvlStr) || (t.t==="buy" && L.buyDip==null) || (t.t==="sell" && L.sell==null && /Sell/i.test(lvlStr));
-    return `<div class="trig"><span class="badge ${cls}">${txt}</span><div class="body">
-      <div class="lvl">${esc(t.lvl)}${t.manual?'<span class="manual">впис. вручную</span>':''}${isTbd?stubBadge("уровни TBD · вручную"):''}</div>
-      <div class="desc">${esc(t.desc)}</div><div class="cond">${esc(t.cond)}</div></div></div>`;
-  }).join("");
-  html += tabWrap("triggers", `<div class="card"><h3>Триггеры ${manualBadge("уровни на Вердикте")}<span class="hint">решение принято заранее — при срабатывании просто исполняем</span></h3>
-    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">Buy Dip / Sell</b> — править в строке «Цена vs уровень» на Вердикте. Текст триггеров ниже справочный.</div>
-    ${trigs}</div>`);
+  html += tabWrap("triggers", renderTriggers(d));
 
   html += tabWrap("entry", `<div class="card">
     <h3>Стратегия входа ${stubBadge("вручную JSON")}<span class="hint">техника первой, макро — поверх</span></h3>
