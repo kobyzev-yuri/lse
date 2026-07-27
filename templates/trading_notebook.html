@@ -652,7 +652,7 @@ function renderContent(){
   }
   const d = DATA[current];
   if(!d){ c.innerHTML = `<div class="load-err">Тикер ${esc(current)} не найден в данных</div>`; return; }
-  let html = (activeTab === "verdict" || activeTab === "profile" || activeTab === "triggers") ? "" : dataLegend();
+  let html = (activeTab === "verdict" || activeTab === "profile" || activeTab === "triggers" || activeTab === "houses" || activeTab === "env") ? "" : dataLegend();
   const L = d.levels || {};
   html += tabWrap("verdict", renderVerdict(d));
 
@@ -684,7 +684,7 @@ function renderContent(){
 
   const houses = (d.houses||[]).map(h => `<div class="house"><div class="hh">
     <span class="firm">${esc(h.firm)}</span><span class="rate">${esc(h.rate)}</span><span class="pt">${esc(h.pt)}</span></div>
-    <div class="quote">${esc(h.quote)}</div><div class="tac">${h.tac||''}</div></div>`).join("");
+    <div class="quote">${esc(h.quote)}</div>${h.tac?`<div class="tac muted">${esc(h.tac)}</div>`:''}</div>`).join("");
   const cons = d.consensus || {};
   const housesBadge = d.houses_override
     ? liveBadge(d.houses_source || "stockanalysis")
@@ -697,7 +697,6 @@ function renderContent(){
       <button type="button" class="edit-btn" id="houses-refresh" onclick="refreshHouses()">Обновить с StockAnalysis</button>
       <span class="${flashCls}" id="housesStatus">${flashTxt}</span>
     </div>
-    <div class="stub-box" style="border-color:rgba(74,158,218,.4);background:rgba(74,158,218,.08)"><b style="color:#7cc0ef">Консенсус</b> — rate / pt / low / high также правятся в строке «Инвестдома» на Вердикте. Кнопка тянет свежие рейтинги домов и summary с stockanalysis.com.</div>
     <div class="concens">
       <div class="cell"><span class="cl">Консенсус</span><span class="cv">${esc(cons.rating||'—')}</span></div>
       <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(cons.pt||'—')}</span></div>

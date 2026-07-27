@@ -265,7 +265,13 @@ def parse_ratings_payload(
     if last_price is None:
         last_price = _quote_last_from_shell(payload)
 
-    widget = root.get("widget") if isinstance(root.get("widget"), dict) else {}
+    widget_raw = root.get("widget") if isinstance(root.get("widget"), dict) else {}
+    # Live payload nests summary under widget.all; older fixtures may be flat.
+    widget = (
+        widget_raw.get("all")
+        if isinstance(widget_raw.get("all"), dict)
+        else widget_raw
+    )
     currency = str(widget.get("currency") or "USD")
     consensus = AnalystConsensus(
         rating=_na_to_none(widget.get("consensus")),
@@ -317,26 +323,24 @@ def parse_forecast_counts(payload: Dict[str, Any]) -> Tuple[AnalystRatingCounts,
     )
 
     pt_block = root.get("priceTargets") if isinstance(root.get("priceTargets"), dict) else {}
+
+    def _pt_num(*keys: str) -> Optional[float]:
+        for k in keys:
+            v = pt_block.get(k)
+            if isinstance(v, (int, float)):
+                return float(v)
+        return None
+
     consensus = AnalystConsensus(
         rating=counts.consensus,
-        price_target=float(pt_block["average"])
-        if isinstance(pt_block.get("average"), (int, float))
-        else (
-            float(pt_block["consensus"])
-            if isinstance(pt_block.get("consensus"), (int, float))
-            else None
-        ),
-        currency="USD",
-        count=counts.total,
-        low=float(pt_block["low"]) if isinstance(pt_block.get("low"), (int, float)) else None,
-        high=float(pt_block["high"]) if isinstance(pt_block.get("high"), (int, float)) else None,
+        price_target=_pt_num("avg", "average", "consensus", "median"),
+        currency=str(pt_block.get("currency") or "USD"),
+        count=int(pt_block["numPriceTargets"])
+        if isinstance(pt_block.get("numPriceTargets"), (int, float))
+        else counts.total,
+        low=_pt_num("low", "min"),
+        high=_pt_num("high", "max"),
     )
-    # Some payloads nest low/high differently — scan common keys.
-    if consensus.low is None or consensus.high is None:
-        for key, attr in (("low", "low"), ("high", "high"), ("min", "low"), ("max", "high")):
-            v = pt_block.get(key)
-            if isinstance(v, (int, float)) and getattr(consensus, attr) is None:
-                setattr(consensus, attr, float(v))
     return counts, consensus
 
 
@@ -481,7 +485,7 @@ def to_notebook_houses(
                 "rate": r.position or "—",
                 "pt": r.price_target or "—",
                 "quote": " · ".join(quote_bits) if quote_bits else (r.date or ""),
-                "tac": f"<b>Источник:</b> stockanalysis · {r.date}",
+                "tac": r.date or "",
             }
         )
 
@@ -502,7 +506,7 @@ def to_notebook_houses(
             "low": low,
             "high": high,
             "n": n_s,
-            "upd": f"stockanalysis {today}",
+            "upd": f"обн. {today}",
         },
         "counts": asdict(counts),
     }

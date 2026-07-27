@@ -20,7 +20,7 @@ def _ratings_fixture() -> dict:
     # Minimal SvelteKit-shaped payload mirroring live /ratings/__data.json
     data = [
         {"widget": 1, "ratings": 2},
-        {"count": 3, "consensus": 4, "price_target": 5, "currency": 6},
+        {"all": 20},
         [7, 14],
         2,
         "Buy",
@@ -53,6 +53,7 @@ def _ratings_fixture() -> dict:
         None,
         "Morgan Stanley",
         "2026-07-14",
+        {"count": 3, "consensus": 4, "price_target": 5, "currency": 6},
     ]
     return {
         "type": "data",
@@ -91,7 +92,7 @@ def _forecast_fixture() -> dict:
             "score": 8,
             "count": 9,
         },
-        {"average": 10, "low": 11, "high": 12},
+        {"avg": 10, "low": 11, "high": 12, "numPriceTargets": 9},
         10,
         34,
         4,
