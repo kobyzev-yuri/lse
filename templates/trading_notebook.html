@@ -1232,9 +1232,6 @@ function renderContent(){
         <span class="cl">В списке</span>
         <span class="cv" style="font-size:13px;font-weight:600">${rs.cards} ${rs.cards === 1 ? "дом" : "домов"} · последние обновления</span>
       </div>
-      <div class="cell"><span class="cl">Buy SA</span><span class="cv up">${rs.buy}</span></div>
-      <div class="cell"><span class="cl">Hold SA</span><span class="cv" style="color:var(--warn)">${rs.hold}</span></div>
-      <div class="cell"><span class="cl">Sell SA</span><span class="cv down">${rs.sell}</span></div>
     </div>
     <div class="houses-list">${houses || '<p class="note">Пока пусто — нажмите «Обновить с StockAnalysis».</p>'}</div>
     </div>`);
