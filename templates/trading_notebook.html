@@ -253,6 +253,16 @@
   /* digest */
   .digest-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
   .digest-head .dt{font-family:var(--mono);font-size:13px;color:var(--muted);}
+  .digest-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px;padding:10px 12px;background:var(--panel-2);border-radius:10px;}
+  .digest-nav select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;font-family:var(--mono);max-width:min(100%,320px);}
+  .digest-nav .edit-btn{padding:4px 10px;}
+  .digest-nav .dn-meta{font-size:12px;color:var(--muted);font-family:var(--mono);}
+  .digest-nav .dn-live{font-size:11px;color:#5fd67c;font-family:var(--mono);}
+  .pipe-table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0 4px;}
+  .pipe-table th,.pipe-table td{text-align:left;padding:8px 10px;border-top:1px solid var(--line);vertical-align:top;}
+  .pipe-table th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px;width:32%;}
+  .pipe-table td{color:var(--muted);}
+  .pipe-table .pval{color:var(--ink);font-family:var(--mono);font-size:12.5px;}
   .filterstat{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;font-family:var(--mono);margin-bottom:14px;}
   .fstat{padding:4px 10px;border-radius:7px;background:var(--panel-2);color:var(--muted);}
   .fstat b{color:var(--ink);}
@@ -415,6 +425,10 @@ let DATA = {};
 let WATCHLIST = {rules:[], flash:{}};
 let DIGEST = {date:"", filtered:0, kept:0, trashed:0, signals:[], risks:[], macro:[], newtickers:[], trashNote:""};
 let DIGEST_BUCKETS = [];
+let DIGEST_PIPELINE = {};
+let DIGEST_SNAPSHOT_ID = "latest";
+let DIGEST_SNAPSHOTS = []; // [{id, date, ...}]
+let DIGEST_RETAIN_DAYS = 14;
 let CALENDAR = {events:[], days:21, asof_utc:"", counts:{}};
 let housesRefreshFlash = null; // {sym, ok, text}
 
@@ -537,6 +551,8 @@ function applyBoot(boot){
   WATCHLIST = boot.watchlist || {rules:[], flash:{}};
   DIGEST = boot.digest || DIGEST;
   DIGEST_BUCKETS = boot.digest_buckets || [];
+  DIGEST_PIPELINE = boot.digest_pipeline || {};
+  DIGEST_SNAPSHOT_ID = boot.digest_snapshot_id || "latest";
   CALENDAR = boot.calendar || CALENDAR;
   const principle = boot.principle_ru || "";
   document.getElementById("principle").innerHTML = principle;
@@ -2276,6 +2292,123 @@ function digestItem(it, cls){
   </div>`;
 }
 
+function digestSnapshotLabel(row){
+  if(!row) return "—";
+  const d = String(row.date || row.generated_at_utc || row.id || "").slice(0, 22);
+  const bits = [];
+  if(row.is_latest) bits.push("актуальный");
+  if(row.kept != null) bits.push(`kept ${row.kept}`);
+  return bits.length ? `${d} · ${bits.join(" · ")}` : d;
+}
+
+function digestNavHtml(){
+  const rows = DIGEST_SNAPSHOTS || [];
+  const cur = DIGEST_SNAPSHOT_ID || "latest";
+  const idx = Math.max(0, rows.findIndex(r => String(r.id) === String(cur)));
+  const opts = rows.length
+    ? rows.map(r => `<option value="${esc(r.id)}" ${String(r.id)===String(cur)?"selected":""}>${esc(digestSnapshotLabel(r))}</option>`).join("")
+    : `<option value="latest">latest</option>`;
+  const isLive = String(cur) === "latest" || (rows[idx] && rows[idx].is_latest);
+  return `<div class="digest-nav">
+    <button type="button" class="edit-btn" onclick="shiftDigestSnapshot(-1)" title="Более новый" ${idx<=0?"disabled":""}>←</button>
+    <select id="digestSnapSel" onchange="selectDigestSnapshot(this.value)">${opts}</select>
+    <button type="button" class="edit-btn" onclick="shiftDigestSnapshot(1)" title="Более старый" ${idx<0||idx>=rows.length-1?"disabled":""}>→</button>
+    <span class="dn-meta">снимки · ${esc(String(DIGEST_RETAIN_DAYS))}д</span>
+    ${isLive?`<span class="dn-live">актуальный</span>`:""}
+  </div>`;
+}
+
+const DIGEST_PIPE_LABELS = [
+  {key:"lookback_hours", title:"Окно KB (часы)", help:"За какой срок новости из knowledge_base попадают в сборку дайджеста (~72ч)."},
+  {key:"kb_source", title:"Источник KB", help:"ALL = все source в KB; иначе один фильтр (например Seeking Alpha Finance)."},
+  {key:"include_macro", title:"MACRO", help:"Добавлять строки MACRO/US_MACRO (макро/гео) к выборке по тикерам групп."},
+  {key:"per_ticker_g1", title:"Лимит G1 / тикер", help:"Сколько статей максимум на тикер группы 1 (пассивное) в SA ingest и fair-sample."},
+  {key:"per_ticker_g2", title:"Лимит G2 / тикер", help:"Сколько статей максимум на тикер группы 2 (активное). Можно снизить отдельно от G1."},
+  {key:"macro_limit", title:"Бюджет MACRO", help:"Сколько MACRO/US_MACRO строк резервируем во входе LLM."},
+  {key:"llm_max_items", title:"Потолок LLM (статей)", help:"Максимум новостей после fair-sample во вход утреннего LLM."},
+  {key:"include_earnings", title:"Earnings", help:"Подмешивать календарь/факты отчётов из KB к промпту LLM."},
+  {key:"requested_ticker_count", title:"Тикеров в запросе", help:"Сколько тикеров групп тетрадки вошло в этот прогон."},
+  {key:"raw_item_count", title:"Статей до дедупа", help:"Сколько строк прочитали из KB до снятия дублей."},
+  {key:"deduped_drop", title:"Снято дублей", help:"Сколько повторов убрали по link / ticker+title."},
+  {key:"item_count_after_dedupe", title:"После дедупа", help:"Перед fair-sample (квоты G1/G2/MACRO)."},
+  {key:"after_fair_sample", title:"После fair-sample", help:"Реальный вход в LLM: квоты на тикер + MACRO, затем кап llm_max_items."},
+  {key:"fair_sample_macro_count", title:"MACRO в выборке", help:"Сколько макро-строк попало во вход после квоты."},
+  {key:"kb_inserted", title:"SA → KB за прогон", help:"Сколько новых строк Seeking Alpha записали в KB в этом запуске (0 если --from-kb-only)."},
+  {key:"fetch_sa", title:"Был fetch SA", help:"true = дергали Seeking Alpha API; false = только чтение KB."},
+  {key:"from_kb", title:"Дайджест из KB", help:"true = текст дайджеста собран из knowledge_base."},
+  {key:"digest_max_tokens", title:"max_tokens ответа", help:"Лимит токенов completion JSON дайджеста."},
+];
+
+function formatPipeVal(key, v){
+  if(v == null || v === "") return "—";
+  if(typeof v === "boolean") return v ? "да" : "нет";
+  return String(v);
+}
+
+function digestPipelineHtml(pipe){
+  const p = pipe || {};
+  const rows = DIGEST_PIPE_LABELS.map(meta => {
+    let val = p[meta.key];
+    if(meta.key === "requested_ticker_count" && (val == null) && Array.isArray(p.requested_tickers)){
+      val = p.requested_tickers.length;
+    }
+    return `<tr>
+      <th>${esc(meta.title)}</th>
+      <td><div class="pval">${esc(formatPipeVal(meta.key, val))}</div>${esc(meta.help)}</td>
+    </tr>`;
+  }).join("");
+  return `<table class="pipe-table">${rows}</table>
+    <p class="note">Только чтение. Меняется в config / следующем утреннем cron (~08:30 ET), не с этой вкладки.</p>`;
+}
+
+async function ensureDigestSnapshots(force){
+  if(!force && DIGEST_SNAPSHOTS && DIGEST_SNAPSHOTS.length > 1) return;
+  try {
+    const r = await fetch("/api/notebook/digest/snapshots?limit=40");
+    const j = await r.json().catch(() => ({}));
+    if(r.ok){
+      DIGEST_SNAPSHOTS = Array.isArray(j.snapshots) ? j.snapshots : [];
+      if(j.retain_days != null) DIGEST_RETAIN_DAYS = Number(j.retain_days) || 14;
+    }
+  } catch(e){ /* ignore */ }
+  if(!DIGEST_SNAPSHOTS.length){
+    DIGEST_SNAPSHOTS = [{
+      id: DIGEST_SNAPSHOT_ID || "latest",
+      date: DIGEST.date || "",
+      generated_at_utc: "",
+      filtered: DIGEST.filtered,
+      kept: DIGEST.kept,
+      trashed: DIGEST.trashed,
+      is_latest: true,
+    }];
+  }
+}
+
+async function selectDigestSnapshot(id){
+  const sid = String(id || "latest");
+  try {
+    const r = await fetch(`/api/notebook/digest/snapshots/${encodeURIComponent(sid)}`);
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error((j && j.detail) || (`HTTP ${r.status}`));
+    if(j.digest) DIGEST = j.digest;
+    DIGEST_PIPELINE = j.pipeline || {};
+    DIGEST_SNAPSHOT_ID = j.id || sid;
+    renderContent();
+  } catch(e){
+    console.warn("digest snapshot", e);
+  }
+}
+
+function shiftDigestSnapshot(dir){
+  const rows = DIGEST_SNAPSHOTS || [];
+  if(!rows.length) return;
+  let idx = rows.findIndex(r => String(r.id) === String(DIGEST_SNAPSHOT_ID));
+  if(idx < 0) idx = 0;
+  const next = idx + (dir < 0 ? -1 : 1);
+  if(next < 0 || next >= rows.length) return;
+  selectDigestSnapshot(rows[next].id);
+}
+
 function renderDigest(){
   const d = DIGEST;
   const hasLive = !!(d && ((d.kept||0) > 0 || (d.signals||[]).length || (d.date||"").includes("UTC") || (d.date||"").includes("2026")));
@@ -2284,20 +2417,34 @@ function renderDigest(){
     <div class="vbtn ${digestVariant==="logic"?"on":""}" onclick="setDigestVariant('logic')">Логика фильтра</div>
   </div>`;
 
+  queueMicrotask(() => {
+    ensureDigestSnapshots(true).then(() => {
+      const sel = document.getElementById("digestSnapSel");
+      if(sel && DIGEST_SNAPSHOTS.length && sel.options.length !== DIGEST_SNAPSHOTS.length){
+        renderContent();
+      }
+    });
+  });
+
   if(digestVariant==="logic"){
     const buckets = (DIGEST_BUCKETS||[]).map(b => `<div class="bucket"><span class="bico">${esc(b.ico)}</span>
       <div class="bbody"><div class="btitle">${esc(b.title)}</div><div class="bdesc">${esc(b.desc)}</div></div></div>`).join("");
-    return tabWrap("digest", variantSwitch + `
+    return tabWrap("digest", variantSwitch + digestNavHtml() + `
       <div class="card"><h3>Автоматический фильтр</h3>
-        <p class="note">Живой дайджест: KB (SA/Yahoo/…) + LLM cron ≈08:30 ET. Telegram /digest читает кэш.</p>
+        <p class="note">Живой дайджест: KB (SA/Yahoo/…) + LLM cron ≈08:30 ET. Telegram /digest читает кэш. Ниже — <b>параметры запроса</b> выбранного снимка (readonly).</p>
         ${buckets}
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3>Параметры запроса (этот снимок)</h3>
+        ${digestPipelineHtml(DIGEST_PIPELINE)}
       </div>`);
   }
 
   const empty = (arr, label) => (arr&&arr.length) ? arr.map(x=>digestItem(x,label)).join("") : `<p class="note">Пока пусто.</p>`;
-  return tabWrap("digest", variantSwitch + `
+  return tabWrap("digest", variantSwitch + digestNavHtml() + `
     <div class="card">
       <div class="digest-head"><h3 style="margin:0">📊 Утренний дайджест ${hasLive?liveBadge("KB + LLM cron"):""}</h3><span class="dt">${esc(d.date||"")}</span></div>
+      <p class="note">Это <b>не лента всех новостей</b>. Один утренний снимок (кэш): LLM за окно KB → 4 корзины. Навигация ←/→ по истории (~${esc(String(DIGEST_RETAIN_DAYS))}д). Параметры запроса — во вкладке «Логика фильтра».</p>
       ${hasLive ? "" : `<p class="note">Нет свежего дайджеста — cron 12:30 UTC или scripts/run_notebook_news_digest.py --from-kb-only</p>`}
       <div class="filterstat">
         <span class="fstat"><b>${d.filtered||0}</b> статей обработано</span>
@@ -2326,7 +2473,7 @@ function renderGuideTab(){
         <tr><th>Events</th><td>Календарь FOMC / FRED / earnings тикера — фон риска даты, не вход.</td></tr>
         <tr><th>Инвестдома</th><td>Консенсус Street (StockAnalysis). Фон ~12м, не ваш ордер.</td></tr>
         <tr><th>Фундамент</th><td>Справка по компании; можно подтянуть черновик из Yahoo.</td></tr>
-        <tr><th>Дайджесты</th><td>Отфильтрованная лента сигналов/рисков/макро по группам.</td></tr>
+        <tr><th>Дайджесты</th><td>Утренний срез: Сигналы / Риски / Макро и сектор / Новые тикеры. См. блок «Дайджест · корзины» ниже.</td></tr>
         <tr><th>Пояснения</th><td>Эта инструкция.</td></tr>
       </table>
     </div>
@@ -2384,9 +2531,39 @@ function renderGuideTab(){
       <table class="guide-table">
         <tr><th>Профиль</th><td>Сектор / роль / дата отчёта — чтобы помнить «зачем тикер в группе».</td></tr>
         <tr><th>Events</th><td>FOMC и FRED общие; earnings — по выбранному тикеру (Yahoo). Смотрите даты риска, не сигнал «покупай».</td></tr>
-        <tr><th>Дайджесты</th><td>Сводка новостей/сигналов по правилам тетрадки. Trash — отсеянное.</td></tr>
+        <tr><th>Дайджесты</th><td>Утренний LLM-срез KB по правилам тетрадки. Четыре корзины ниже. Trash — отсеянный шум.</td></tr>
         <tr><th>Триггеры</th><td>Словесные условия; исполнение всё равно по Close vs Buy/Sell на Вердикте.</td></tr>
       </table>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Дайджест · корзины</h3>
+      <p>Не ордера и не группы. LLM раскладывает новости KB после дедупа. Тикер <b>уже в группах</b> → Сигналы/Риски; <b>ещё нет</b> → Новые тикеры.</p>
+      <table class="guide-table">
+        <tr><th>Сигналы и тикеры</th><td>Полезные катализаторы по <b>нашим</b> тикерам; тактика в терминах Buy Dip / Hold / ждать уровень.</td></tr>
+        <tr><th>Риски и тикеры</th><td>Угрозы / отчёты по <b>нашим</b>; часто Hold / не докупать / пауза до earnings.</td></tr>
+        <tr><th>Макро и сектор</th><td>ФРС, геополитика, широкий сектор (AI/semis/…). Влияние на Environment / тезис, <b>не</b> «купи конкретный тикер».</td></tr>
+        <tr><th>Новые тикеры</th><td>Имена <b>вне</b> групп 1/2/3/n — кандидаты «к рассмотрению». В G3 сами не попадают.</td></tr>
+      </table>
+      <h4>Как устроен Дайджест (срок и хранение)</h4>
+      <table class="guide-table">
+        <tr><th>Что на вкладке</th><td><b>Утренние снимки</b> (кэш), не лента и не архив всех статей KB. Навигация ←/→ / select по истории.</td></tr>
+        <tr><th>Окно входа</th><td>При сборке — новости KB за окно <code>lookback_hours</code> (~72ч) по тикерам групп (+ MACRO). См. «Логика фильтра».</td></tr>
+        <tr><th>Когда обновляется</th><td>Cron ≈ <b>08:30 ET</b>. Новый прогон пишет <b>latest</b> и добавляет снимок в историю (~14д, <code>NOTEBOOK_DIGEST_RETAIN_DAYS</code>).</td></tr>
+        <tr><th>Параметры запроса</th><td><b>Только чтение</b> на подвкладке «Логика фильтра» (окно часов, source, MACRO, дедуп…). Правка — в config / следующий cron.</td></tr>
+        <tr><th>«N обработано»</th><td>Сколько статей ушло в LLM <b>в этот</b> снимок (после дедупа). Не «все за месяц на экране».</td></tr>
+        <tr><th>Где живут статьи</th><td>Полный архив — <code>knowledge_base</code>. Вкладка Дайджесты показывает только выжимку снимка.</td></tr>
+      </table>
+      <h4>Лимиты (что режет объём)</h4>
+      <table class="guide-table">
+        <tr><th>Ingest SA</th><td>До <b>40</b> заголовков на тикер за cron (<code>NOTEBOOK_NEWS_PER_TICKER</code>). Yahoo ticker-news — до <b>5</b>.</td></tr>
+        <tr><th>KB → дайджест</th><td>Окно ~72ч; чтение до ~400 строк (все источники), затем дедуп.</td></tr>
+        <tr><th>Вход в LLM</th><td>Первые <b>120</b> новостей + до <b>20</b> earnings.</td></tr>
+        <tr><th>Корзины макро / новые</th><td><b>Жёсткого N на секцию нет</b> — сколько уложится в ответ LLM (~6000 tokens) после отсева (норма 50–70%). Telegram — до 4 пунктов на корзину.</td></tr>
+      </table>
+      <div class="gex"><b>Если кажется, что «все статьи»</b>
+        Смотрите счётчик: обработано → kept. На экране только kept, разложенный по корзинам. Это выжимка одного утра, не бесконечная лента.
+      </div>
     </div>
 
     <div class="card guide-card">
@@ -2417,7 +2594,8 @@ function renderGuideTab(){
       <p>Итог = <b>худшая</b> из строк: ok &lt; mid &lt; bad. Любой <b>bad</b> → весь Check красный + БЛОК входов.</p>
       <table class="guide-table">
         <tr><th>VIX / NDX / нефть</th><td>Live с котировок. Нефть: вверх = геостресс; вниз обычно ok.</td></tr>
-        <tr><th>ФРС</th><td>Live: дата FOMC (fed.gov) + <b>FedWatch</b> hold/cut/hike % (публичный расчёт по CME settlements + FRED, не платный API). Ручные ok/mid/bad поверх. Инструмент CME: <a href="https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html" target="_blank" rel="noopener">FedWatch Tool</a>.</td></tr>        <tr><th>Таргеты (PT cuts)</th><td><b>Только вручную</b> на Вердикте (кнопки «таргеты»). Это не ваш Sell и не средний PT с «Инвестдома». Гейт про <b>волну cut PT вне earnings</b>.</td></tr>
+        <tr><th>ФРС</th><td>Live: дата FOMC (fed.gov) + <b>FedWatch</b> hold/cut/hike % (публичный расчёт по CME settlements + FRED, не платный API). Ручные ok/mid/bad поверх. Инструмент CME: <a href="https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html" target="_blank" rel="noopener">FedWatch Tool</a>.</td></tr>
+        <tr><th>Таргеты (PT cuts)</th><td><b>Только вручную</b> на Вердикте (кнопки «таргеты»). Это не ваш Sell и не средний PT с «Инвестдома». Гейт про <b>волну cut PT вне earnings</b>.</td></tr>
       </table>
       <div class="gex"><b>Как ставить таргеты</b>
         Факты — с вкладки «Инвестдома» (lowered PT) и дайджеста.

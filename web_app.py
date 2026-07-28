@@ -3908,6 +3908,8 @@ async def trading_notebook_page(request: Request):
             "groups": {},
             "tickers": {},
             "digest": {},
+            "digest_pipeline": {},
+            "digest_snapshot_id": "latest",
             "digest_buckets": [],
             "watchlist": {},
             "prices": {},
@@ -4037,6 +4039,60 @@ async def api_notebook_calendar(days: int = 21, symbol: str = ""):
     except Exception as e:
         logger.exception("GET /api/notebook/calendar: %s", e)
         raise HTTPException(status_code=500, detail=f"Ошибка calendar: {e!s}")
+
+
+@app.get("/api/notebook/digest/snapshots", response_class=JSONResponse)
+async def api_notebook_digest_snapshots(limit: int = 40):
+    """List morning digest snapshots (latest + archive, newest first)."""
+
+    def _run() -> Dict[str, Any]:
+        from services.notebook_news_digest import digest_retain_days, list_digest_snapshots
+
+        lim = max(1, min(int(limit or 40), 90))
+        rows = list_digest_snapshots(limit=lim)
+        return {
+            "snapshots": rows,
+            "retain_days": digest_retain_days(),
+            "count": len(rows),
+        }
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        logger.exception("GET /api/notebook/digest/snapshots: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка digest snapshots: {e!s}")
+
+
+@app.get("/api/notebook/digest/snapshots/{snapshot_id}", response_class=JSONResponse)
+async def api_notebook_digest_snapshot(snapshot_id: str):
+    """One digest snapshot: digest buckets + readonly pipeline params."""
+
+    def _run() -> Dict[str, Any]:
+        from services.notebook_news_digest import load_digest_snapshot
+
+        pack = load_digest_snapshot(snapshot_id)
+        if not pack:
+            raise KeyError(f"snapshot not found: {snapshot_id}")
+        dig = pack.get("digest") if isinstance(pack.get("digest"), dict) else {}
+        pipe = pack.get("pipeline") if isinstance(pack.get("pipeline"), dict) else {}
+        uni = pack.get("universe") if isinstance(pack.get("universe"), dict) else {}
+        return {
+            "id": pack.get("id") or snapshot_id,
+            "is_latest": bool(pack.get("is_latest")),
+            "generated_at_utc": pack.get("generated_at_utc"),
+            "digest": dig,
+            "pipeline": pipe,
+            "requested_tickers": pack.get("requested_tickers") or [],
+            "universe_count": len(uni.get("group3_union") or []),
+        }
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GET /api/notebook/digest/snapshots/%s: %s", snapshot_id, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка digest snapshot: {e!s}")
 
 
 @app.get("/api/notebook", response_class=JSONResponse)

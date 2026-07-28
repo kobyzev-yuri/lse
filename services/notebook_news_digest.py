@@ -30,6 +30,218 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = _REPO_ROOT / "local" / "notebook"
 DEFAULT_DIGEST_PATH = DEFAULT_OUT_DIR / "digest_latest.json"
 DEFAULT_RAW_PATH = DEFAULT_OUT_DIR / "news_raw_latest.json"
+DEFAULT_DIGESTS_DIR = DEFAULT_OUT_DIR / "digests"
+
+
+def digest_retain_days() -> int:
+    try:
+        n = int((get_config_value("NOTEBOOK_DIGEST_RETAIN_DAYS", "14") or "14").strip())
+    except (TypeError, ValueError):
+        n = 14
+    return max(1, min(n, 90))
+
+
+def digests_dir(path: Optional[Path] = None) -> Path:
+    return path or DEFAULT_DIGESTS_DIR
+
+
+def _snapshot_payload(
+    *,
+    digest: Dict[str, Any],
+    universe: Dict[str, Any],
+    generated_at_utc: str,
+    pipeline: Dict[str, Any],
+    requested_tickers: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    pipe = dict(pipeline or {})
+    if requested_tickers is not None and "requested_ticker_count" not in pipe:
+        pipe["requested_ticker_count"] = len(list(requested_tickers))
+    return {
+        "digest": digest,
+        "universe": universe,
+        "generated_at_utc": generated_at_utc,
+        "pipeline": pipe,
+        "requested_tickers": list(requested_tickers or []),
+    }
+
+
+def _stamp_from_generated_at(generated_at_utc: str) -> str:
+    """UTC stamp for filename: 20260728T123045Z."""
+    s = str(generated_at_utc or "").strip()
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%Y%m%dT%H%M%SZ")
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def prune_digest_snapshots(
+    *,
+    retain_days: Optional[int] = None,
+    directory: Optional[Path] = None,
+) -> int:
+    """Delete archived digests older than retain_days. Returns number removed."""
+    days = int(retain_days if retain_days is not None else digest_retain_days())
+    root = digests_dir(directory)
+    if not root.is_dir():
+        return 0
+    cutoff = datetime.now(timezone.utc).timestamp() - (days * 86400)
+    removed = 0
+    for p in root.glob("*.json"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink(missing_ok=True)
+                removed += 1
+        except Exception as e:
+            logger.debug("prune digest %s: %s", p, e)
+    return removed
+
+
+def archive_digest_snapshot(
+    payload: Dict[str, Any],
+    *,
+    directory: Optional[Path] = None,
+) -> Path:
+    """Write one snapshot file and prune old ones. Returns path written."""
+    root = digests_dir(directory)
+    root.mkdir(parents=True, exist_ok=True)
+    stamp = _stamp_from_generated_at(str(payload.get("generated_at_utc") or ""))
+    path = root / f"{stamp}.json"
+    n = 1
+    while path.is_file():
+        path = root / f"{stamp}_{n}.json"
+        n += 1
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
+    prune_digest_snapshots(directory=root)
+    return path
+
+
+def list_digest_snapshots(
+    *,
+    directory: Optional[Path] = None,
+    limit: int = 60,
+) -> List[Dict[str, Any]]:
+    """Newest-first list of digests: synthetic `latest` + archived files."""
+    root = digests_dir(directory)
+    out: List[Dict[str, Any]] = []
+
+    def _meta_from_file(p: Path, *, sid: str, is_latest: bool = False) -> Optional[Dict[str, Any]]:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        dig = data.get("digest") if isinstance(data.get("digest"), dict) else {}
+        if not dig and "signals" in data:
+            dig = data
+        gen = str(data.get("generated_at_utc") or dig.get("date") or "")
+        pipe = data.get("pipeline") if isinstance(data.get("pipeline"), dict) else {}
+        return {
+            "id": sid,
+            "generated_at_utc": gen,
+            "date": dig.get("date") or gen,
+            "filtered": int(dig.get("filtered") or 0),
+            "kept": int(dig.get("kept") or 0),
+            "trashed": int(dig.get("trashed") or 0),
+            "is_latest": bool(is_latest),
+            "lookback_hours": pipe.get("lookback_hours"),
+        }
+
+    if DEFAULT_DIGEST_PATH.is_file():
+        m = _meta_from_file(DEFAULT_DIGEST_PATH, sid="latest", is_latest=True)
+        if m:
+            out.append(m)
+
+    if root.is_dir():
+        files = sorted(root.glob("*.json"), key=lambda x: x.name, reverse=True)
+        for p in files:
+            m = _meta_from_file(p, sid=p.stem, is_latest=False)
+            if m:
+                out.append(m)
+
+    return out[: max(1, int(limit))]
+
+
+def load_digest_snapshot(
+    snapshot_id: str,
+    *,
+    directory: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    """Load full snapshot payload by id (`latest` or archive stamp)."""
+    sid = str(snapshot_id or "").strip()
+    if not sid:
+        return None
+    if sid == "latest":
+        return load_latest_digest_pack()
+    # Allow only safe filenames
+    if not re.match(r"^[\w.\-]+$", sid) or ".." in sid or "/" in sid or "\\" in sid:
+        return None
+    root = digests_dir(directory)
+    path = root / f"{sid}.json"
+    if not path.is_file():
+        # try prefix match for stamped variants
+        matches = sorted(root.glob(f"{sid}*.json")) if root.is_dir() else []
+        if not matches:
+            return None
+        path = matches[0]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug("load digest snapshot %s: %s", sid, e)
+        return None
+    if not isinstance(data, dict):
+        return None
+    dig = data.get("digest") if isinstance(data.get("digest"), dict) else None
+    if dig is None and "signals" in data:
+        dig = data
+        data = {
+            "digest": dig,
+            "universe": {},
+            "generated_at_utc": dig.get("date"),
+            "pipeline": {},
+        }
+    if not isinstance(dig, dict):
+        return None
+    data = dict(data)
+    data["id"] = sid
+    data["is_latest"] = False
+    return data
+
+
+def load_latest_digest_pack(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """Full latest file: digest + pipeline + universe (for boot / API)."""
+    p = path or DEFAULT_DIGEST_PATH
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug("load digest pack failed: %s", e)
+        return None
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("digest"), dict):
+        out = dict(data)
+        out["id"] = "latest"
+        out["is_latest"] = True
+        return out
+    if "signals" in data:
+        return {
+            "id": "latest",
+            "is_latest": True,
+            "digest": data,
+            "universe": {},
+            "generated_at_utc": data.get("date"),
+            "pipeline": {},
+        }
+    return None
 
 
 def _json_default(obj: Any):
@@ -106,6 +318,165 @@ def _unique_upper(seq: Sequence[str]) -> List[str]:
 
 def _truthy_cfg(name: str, default: str = "0") -> bool:
     return (get_config_value(name, default) or default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _cfg_int(name: str, default: int) -> int:
+    try:
+        return int((get_config_value(name, str(default)) or str(default)).strip())
+    except (TypeError, ValueError):
+        return int(default)
+
+
+_MACRO_SYMS = frozenset({"MACRO", "US_MACRO"})
+
+
+def news_quota_config() -> Dict[str, int]:
+    """Resolved per-group / MACRO / LLM caps for ingest + fair-sample."""
+    fallback = max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER", 40))
+    return {
+        "fallback": fallback,
+        "g1": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_G1", fallback)),
+        "g2": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_G2", fallback)),
+        "g3": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_G3", fallback)),
+        "new": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_NEW", fallback)),
+        "extra": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_EXTRA", fallback)),
+        "macro_limit": max(0, _cfg_int("NOTEBOOK_NEWS_MACRO_LIMIT", 80)),
+        "llm_max_items": max(1, _cfg_int("NOTEBOOK_NEWS_LLM_MAX_ITEMS", 600)),
+    }
+
+
+def per_ticker_limit_for(
+    sym: str,
+    membership: Optional[Dict[str, List[str]]] = None,
+    *,
+    quotas: Optional[Dict[str, int]] = None,
+    is_extra: bool = False,
+) -> int:
+    """Max articles for one symbol (ingest or fair-sample). Multi-group → max of caps."""
+    q = quotas or news_quota_config()
+    if is_extra:
+        return int(q.get("extra") or q.get("fallback") or 40)
+    u = str(sym or "").strip().upper()
+    if u in _MACRO_SYMS:
+        return int(q.get("macro_limit") or 0)
+    tags = list((membership or {}).get(u) or [])
+    tag_to_key = {"g1": "g1", "g2": "g2", "g3": "g3", "new": "new"}
+    caps = [int(q[tag_to_key[t]]) for t in tags if t in tag_to_key and tag_to_key[t] in q]
+    if caps:
+        return max(caps)
+    return int(q.get("fallback") or 40)
+
+
+def per_ticker_limits_map(
+    *,
+    membership: Dict[str, List[str]],
+    sa_extra: Optional[Sequence[str]] = None,
+    quotas: Optional[Dict[str, int]] = None,
+) -> Dict[str, int]:
+    """Symbol → SA fetch / sample limit for cron + digest ingest."""
+    q = quotas or news_quota_config()
+    out: Dict[str, int] = {}
+    for sym, tags in (membership or {}).items():
+        u = str(sym or "").strip().upper()
+        if not u or u in _MACRO_SYMS:
+            continue
+        out[u] = per_ticker_limit_for(u, {u: list(tags or [])}, quotas=q)
+    for t in sa_extra or []:
+        u = str(t or "").strip().upper()
+        if not u or u in _MACRO_SYMS:
+            continue
+        if u not in out:
+            out[u] = per_ticker_limit_for(u, membership, quotas=q, is_extra=True)
+    return out
+
+
+def _item_publish_key(it: Dict[str, Any]) -> str:
+    return str(it.get("publishOn") or it.get("ts") or "")
+
+
+def fair_sample_for_digest(
+    items: Sequence[Dict[str, Any]],
+    membership: Dict[str, List[str]],
+    *,
+    quotas: Optional[Dict[str, int]] = None,
+    include_macro: bool = True,
+) -> Dict[str, Any]:
+    """Cap per ticker by group + MACRO budget, then pack to llm_max_items (newest first)."""
+    q = quotas or news_quota_config()
+    macro_lim = int(q.get("macro_limit") or 0) if include_macro else 0
+    llm_max = int(q.get("llm_max_items") or 600)
+
+    by_sym: Dict[str, List[Dict[str, Any]]] = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        sym = str(it.get("ticker") or "").strip().upper() or "UNKNOWN"
+        by_sym.setdefault(sym, []).append(it)
+
+    for rows in by_sym.values():
+        rows.sort(key=_item_publish_key, reverse=True)
+
+    picked: List[Dict[str, Any]] = []
+    per_counts: Dict[str, int] = {}
+    macro_n = 0
+
+    for sym, rows in by_sym.items():
+        if sym in _MACRO_SYMS:
+            take = rows[:macro_lim]
+            macro_n += len(take)
+            picked.extend(take)
+            per_counts[sym] = len(take)
+            continue
+        lim = per_ticker_limit_for(sym, membership, quotas=q)
+        take = rows[:lim]
+        per_counts[sym] = len(take)
+        picked.extend(take)
+
+    picked.sort(key=_item_publish_key, reverse=True)
+    before_pack = len(picked)
+    if len(picked) > llm_max:
+        buckets: Dict[str, List[Dict[str, Any]]] = {}
+        for it in picked:
+            sym = str(it.get("ticker") or "").strip().upper() or "UNKNOWN"
+            buckets.setdefault(sym, []).append(it)
+        for rows in buckets.values():
+            rows.sort(key=_item_publish_key, reverse=True)
+        packed: List[Dict[str, Any]] = []
+        while len(packed) < llm_max and buckets:
+            progressed = False
+            for sym in list(buckets.keys()):
+                if len(packed) >= llm_max:
+                    break
+                rows = buckets.get(sym) or []
+                if not rows:
+                    buckets.pop(sym, None)
+                    continue
+                packed.append(rows.pop(0))
+                progressed = True
+                if not rows:
+                    buckets.pop(sym, None)
+            if not progressed:
+                break
+        packed.sort(key=_item_publish_key, reverse=True)
+        picked = packed
+
+    return {
+        "items": picked,
+        "after_fair_sample": len(picked),
+        "before_pack": before_pack,
+        "per_ticker_counts": per_counts,
+        "macro_count": macro_n,
+        "macro_limit": macro_lim,
+        "llm_max_items": llm_max,
+        "quotas": {
+            "g1": q.get("g1"),
+            "g2": q.get("g2"),
+            "g3": q.get("g3"),
+            "new": q.get("new"),
+            "extra": q.get("extra"),
+            "fallback": q.get("fallback"),
+        },
+    }
 
 
 _SOURCE_RANK = {
@@ -445,13 +816,21 @@ def _llm_digest(
             }
         )
     known = sorted({str(t).upper() for t in membership.keys()})
+    news_json = json.dumps(slim, ensure_ascii=False)
+    earn_json = json.dumps(earn_slim, ensure_ascii=False)
+    # Large fair-sample payloads; keep a high ceiling so we do not silently drop half the input.
+    try:
+        news_cap = int(get_config_value("NOTEBOOK_NEWS_DIGEST_INPUT_CHARS", "400000") or 400000)
+    except (TypeError, ValueError):
+        news_cap = 400000
+    news_cap = max(24000, news_cap)
     user = (
         "Тикеры уже в тетрадке (НЕ класть в newtickers): "
         + ", ".join(known)
         + "\n\nНовости для дайджеста (JSON):\n"
-        + json.dumps(slim, ensure_ascii=False)[:24000]
+        + news_json[:news_cap]
         + "\n\nEARNINGS календарь Yahoo/yfinance (JSON):\n"
-        + json.dumps(earn_slim, ensure_ascii=False)[:4000]
+        + earn_json[:8000]
         + "\n\nСобери дайджест по схеме."
     )
     llm = LLMService()
@@ -459,7 +838,7 @@ def _llm_digest(
         messages=[{"role": "user", "content": user}],
         system_prompt=DIGEST_SYSTEM,
         temperature=float(get_config_value("NOTEBOOK_NEWS_DIGEST_TEMPERATURE", "0.2") or 0.2),
-        max_tokens=int(get_config_value("NOTEBOOK_NEWS_DIGEST_MAX_TOKENS", "6000") or 6000),
+        max_tokens=int(get_config_value("NOTEBOOK_NEWS_DIGEST_MAX_TOKENS", "16000") or 16000),
     )
     text = (out or {}).get("response") or ""
     parsed = _parse_llm_json(text)
@@ -517,7 +896,14 @@ def run_notebook_news_digest(
         if t not in membership or not membership[t]:
             membership[t] = ["manual"]
 
-    per = int(per_ticker if per_ticker is not None else (get_config_value("NOTEBOOK_NEWS_PER_TICKER", "40") or 40))
+    quotas = news_quota_config()
+    if per_ticker is not None:
+        quotas = dict(quotas)
+        quotas["fallback"] = int(per_ticker)
+        for k in ("g1", "g2", "g3", "new", "extra"):
+            quotas[k] = int(per_ticker)
+    per = int(quotas.get("fallback") or 40)
+    sa_limits = per_ticker_limits_map(membership=membership, quotas=quotas)
     mx = max_tickers
     if mx is None:
         raw_mx = (get_config_value("NOTEBOOK_NEWS_MAX_TICKERS", "") or "").strip()
@@ -538,8 +924,10 @@ def run_notebook_news_digest(
     requested = wanted[: mx or len(wanted)]
     kb_tickers = list(requested)
     include_macro = _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_MACRO", "1")
-    if include_macro and "MACRO" not in kb_tickers:
-        kb_tickers.append("MACRO")
+    if include_macro:
+        for m in ("MACRO", "US_MACRO"):
+            if m not in kb_tickers:
+                kb_tickers.append(m)
 
     fetch_meta: Dict[str, Any] = {"skipped": not fetch_sa}
     kb_inserted = 0
@@ -550,6 +938,7 @@ def run_notebook_news_digest(
             bundle = fetch_and_save_sa_news(
                 requested,
                 per_ticker=per,
+                per_ticker_limits=sa_limits,
                 sleep_sec=sl,
                 max_tickers=None,
             )
@@ -565,7 +954,9 @@ def run_notebook_news_digest(
         else:
             from services.seeking_alpha_finance import fetch_news_for_tickers
 
-            bundle = fetch_news_for_tickers(requested, per_ticker=per, sleep_sec=sl)
+            bundle = fetch_news_for_tickers(
+                requested, per_ticker=per, per_ticker_limits=sa_limits, sleep_sec=sl
+            )
             api_items = list(bundle.get("items") or [])
             fetch_meta = {
                 "fetched_at": bundle.get("fetched_at"),
@@ -580,9 +971,12 @@ def run_notebook_news_digest(
     items: List[Dict[str, Any]] = []
     if from_kb:
         try:
-            # Wider cap when multi-source: more rows before dedupe.
-            lim = max(40, per * max(1, len(kb_tickers)) * (3 if kb_src is None else 1))
-            lim = min(lim, 400)
+            # Load enough rows for fair-sample (per-ticker × groups + MACRO).
+            lim = max(
+                int(quotas.get("llm_max_items") or 600),
+                per * max(1, len(kb_tickers)) * (3 if kb_src is None else 1),
+            )
+            lim = min(lim, 2000)
             items = load_kb_news_items(
                 kb_tickers,
                 lookback_hours=lb,
@@ -599,10 +993,20 @@ def run_notebook_news_digest(
     raw_count = len(items)
     items = dedupe_news_items(items)
     deduped_drop = max(0, raw_count - len(items))
-    filtered = len(items)
+    after_dedupe = len(items)
     fetch_meta["raw_item_count"] = raw_count
     fetch_meta["deduped_drop"] = deduped_drop
-    fetch_meta["item_count_after_dedupe"] = filtered
+    fetch_meta["item_count_after_dedupe"] = after_dedupe
+
+    sample = fair_sample_for_digest(
+        items, membership, quotas=quotas, include_macro=include_macro
+    )
+    llm_items = list(sample["items"])
+    filtered = int(sample["after_fair_sample"])
+    fetch_meta["item_count_after_fair_sample"] = filtered
+    fetch_meta["fair_sample_before_pack"] = sample.get("before_pack")
+    fetch_meta["fair_sample_per_ticker"] = sample.get("per_ticker_counts")
+    fetch_meta["fair_sample_macro_count"] = sample.get("macro_count")
 
     earnings_items: List[Dict[str, Any]] = []
     if from_kb and _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_EARNINGS", "1"):
@@ -613,10 +1017,8 @@ def run_notebook_news_digest(
             fetch_meta["kb_earnings_error"] = str(e)
     fetch_meta["earnings_count"] = len(earnings_items)
 
-    if use_llm and items:
+    if use_llm and llm_items:
         try:
-            # Cap input size so completion is not truncated (earnings block also consumes tokens).
-            llm_items = items[:120]
             digest_body = _llm_digest(llm_items, membership=membership, earnings=earnings_items)
             if digest_body.get("llm_parse_error") or (
                 not any(digest_body.get(k) for k in ("signals", "risks", "macro", "newtickers"))
@@ -625,7 +1027,7 @@ def run_notebook_news_digest(
             ):
                 logger.warning("LLM digest empty despite %s items — retry once with smaller input", filtered)
                 digest_body = _llm_digest(
-                    llm_items[:60],
+                    llm_items[: max(60, filtered // 2)],
                     membership=membership,
                     earnings=earnings_items[:20],
                 )
@@ -633,7 +1035,7 @@ def run_notebook_news_digest(
             logger.exception("LLM digest failed: %s", e)
             digest_body = _empty_digest(filtered=filtered, note=f"LLM ошибка: {e}")
             digest_body["llm_error"] = str(e)
-    elif use_llm and not items:
+    elif use_llm and not llm_items:
         digest_body = _empty_digest(filtered=0, note="Пустой KB/fetch — LLM не вызывался.")
     else:
         digest_body = _empty_digest(filtered=filtered, note="LLM отключён — сырой список в signals.")
@@ -648,15 +1050,15 @@ def run_notebook_news_digest(
                 "link": it.get("link"),
                 "prem": it.get("publishOn"),
             }
-            for it in items
+            for it in llm_items
         ]
 
-    if "filtered" not in digest_body:
-        digest_body["filtered"] = filtered
+    # Prefer pipeline truth over LLM's self-reported filtered count.
+    digest_body["filtered"] = filtered
     digest = {
         "date": digest_body.get("date")
         or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        "filtered": int(digest_body.get("filtered") or filtered),
+        "filtered": filtered,
         "kept": int(digest_body.get("kept") or 0),
         "trashed": int(digest_body.get("trashed") or 0),
         "signals": digest_body.get("signals") if isinstance(digest_body.get("signals"), list) else [],
@@ -670,24 +1072,37 @@ def run_notebook_news_digest(
     if digest_body.get("llm_error"):
         digest["llm_error"] = digest_body["llm_error"]
 
+    pipe_base = {
+        "fetch_sa": fetch_sa,
+        "save_kb": save_kb,
+        "from_kb": from_kb,
+        "kb_source": kb_src or "ALL",
+        "include_macro": include_macro,
+        "include_earnings": bool(earnings_items) or _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_EARNINGS", "1"),
+        "earnings_count": len(earnings_items),
+        "lookback_hours": lb,
+        "kb_inserted": kb_inserted,
+        "deduped_drop": deduped_drop,
+        "raw_item_count": raw_count,
+        "item_count_after_dedupe": after_dedupe,
+        "after_fair_sample": filtered,
+        "per_ticker_g1": quotas.get("g1"),
+        "per_ticker_g2": quotas.get("g2"),
+        "per_ticker_g3": quotas.get("g3"),
+        "per_ticker_new": quotas.get("new"),
+        "per_ticker_extra": quotas.get("extra"),
+        "macro_limit": quotas.get("macro_limit"),
+        "llm_max_items": quotas.get("llm_max_items"),
+        "fair_sample_macro_count": sample.get("macro_count"),
+        "digest_max_tokens": int(get_config_value("NOTEBOOK_NEWS_DIGEST_MAX_TOKENS", "16000") or 16000),
+    }
+
     result = {
         "schema_version": 1,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "universe": uni,
         "requested_tickers": requested,
-        "pipeline": {
-            "fetch_sa": fetch_sa,
-            "save_kb": save_kb,
-            "from_kb": from_kb,
-            "kb_source": kb_src or "ALL",
-            "include_macro": include_macro,
-            "include_earnings": bool(earnings_items) or _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_EARNINGS", "1"),
-            "earnings_count": len(earnings_items),
-            "lookback_hours": lb,
-            "kb_inserted": kb_inserted,
-            "deduped_drop": deduped_drop,
-            "raw_item_count": raw_count,
-        },
+        "pipeline": pipe_base,
         "raw": {
             **fetch_meta,
             "item_count": filtered,
@@ -695,7 +1110,7 @@ def run_notebook_news_digest(
             "earnings_sample": earnings_items[:15],
         },
         "digest": digest,
-        "items_sample": items[:20],
+        "items_sample": llm_items[:20],
     }
 
     if write:
@@ -703,25 +1118,28 @@ def run_notebook_news_digest(
         rpath = out_raw or DEFAULT_RAW_PATH
         dpath.parent.mkdir(parents=True, exist_ok=True)
         rpath.parent.mkdir(parents=True, exist_ok=True)
+        snap = _snapshot_payload(
+            digest=digest,
+            universe=uni,
+            generated_at_utc=result["generated_at_utc"],
+            pipeline=result["pipeline"],
+            requested_tickers=requested,
+        )
+        snap["pipeline"] = {
+            **snap["pipeline"],
+            "requested_ticker_count": len(requested),
+        }
+        result["pipeline"] = snap["pipeline"]
         dpath.write_text(
-            json.dumps(
-                {
-                    "digest": digest,
-                    "universe": uni,
-                    "generated_at_utc": result["generated_at_utc"],
-                    "pipeline": result["pipeline"],
-                },
-                ensure_ascii=False,
-                indent=2,
-                default=_json_default,
-            ),
+            json.dumps(snap, ensure_ascii=False, indent=2, default=_json_default),
             encoding="utf-8",
         )
         rpath.write_text(
             json.dumps(
                 {
                     "raw": result["raw"],
-                    "items": items,
+                    "items": llm_items,
+                    "items_before_fair_sample": items,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -729,22 +1147,23 @@ def run_notebook_news_digest(
             ),
             encoding="utf-8",
         )
-        result["wrote"] = {"digest": str(dpath), "raw": str(rpath)}
+        arch_path = None
+        try:
+            arch_path = archive_digest_snapshot(snap)
+        except Exception as e:
+            logger.warning("digest archive failed: %s", e)
+        result["wrote"] = {
+            "digest": str(dpath),
+            "raw": str(rpath),
+            "archive": str(arch_path) if arch_path else None,
+        }
 
     return result
 
 
 def load_latest_digest(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    p = path or DEFAULT_DIGEST_PATH
-    if not p.is_file():
+    pack = load_latest_digest_pack(path)
+    if not pack:
         return None
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.debug("load digest failed: %s", e)
-        return None
-    if isinstance(data, dict) and isinstance(data.get("digest"), dict):
-        return data["digest"]
-    if isinstance(data, dict) and "signals" in data:
-        return data
-    return None
+    dig = pack.get("digest")
+    return dig if isinstance(dig, dict) else None

@@ -2003,15 +2003,20 @@ def build_notebook_payload(
     groups = data.get("groups") if isinstance(data.get("groups"), dict) else {}
 
     digest = data.get("digest") if isinstance(data.get("digest"), dict) else {}
+    digest_pipeline: Dict[str, Any] = {}
+    digest_snapshot_id = "latest"
     # Prefer latest pipeline output if present (local/notebook/digest_latest.json).
     try:
-        from services.notebook_news_digest import load_latest_digest
+        from services.notebook_news_digest import load_latest_digest_pack
 
-        live = load_latest_digest()
-        if isinstance(live, dict) and (
-            live.get("signals") is not None or live.get("date")
-        ):
-            digest = live
+        pack = load_latest_digest_pack()
+        if isinstance(pack, dict):
+            live = pack.get("digest") if isinstance(pack.get("digest"), dict) else None
+            if live and (live.get("signals") is not None or live.get("date")):
+                digest = live
+            if isinstance(pack.get("pipeline"), dict):
+                digest_pipeline = dict(pack["pipeline"])
+            digest_snapshot_id = str(pack.get("id") or "latest")
     except Exception as e:
         logger.debug("notebook digest overlay skipped: %s", e)
 
@@ -2059,6 +2064,8 @@ def build_notebook_payload(
         "groups": groups,
         "tickers": tickers,
         "digest": digest,
+        "digest_pipeline": digest_pipeline,
+        "digest_snapshot_id": digest_snapshot_id,
         "digest_buckets": data.get("digest_buckets") if isinstance(data.get("digest_buckets"), list) else [],
         "watchlist": data.get("watchlist") if isinstance(data.get("watchlist"), dict) else {},
         "prices": prices,

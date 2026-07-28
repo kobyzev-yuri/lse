@@ -164,19 +164,28 @@ def fetch_all_news_sources(mode: str = "all"):
                     len(tickers),
                     extra_n,
                 )
-                try:
-                    per = int((get_config_value("NOTEBOOK_NEWS_PER_TICKER", "40") or "40").strip())
-                except (ValueError, TypeError):
-                    per = 40
+                from services.notebook_news_digest import (
+                    news_quota_config,
+                    per_ticker_limits_map,
+                )
+
+                quotas = news_quota_config()
+                per = int(quotas.get("fallback") or 40)
                 try:
                     sleep = float((get_config_value("NOTEBOOK_NEWS_SLEEP_SEC", "0.35") or "0.35").strip())
                 except (ValueError, TypeError):
                     sleep = 0.35
                 raw_mx = (get_config_value("NOTEBOOK_NEWS_MAX_TICKERS", "") or "").strip()
                 max_t = int(raw_mx) if raw_mx.isdigit() else None
+                sa_limits = per_ticker_limits_map(
+                    membership=uni.get("membership") or {},
+                    sa_extra=uni.get("sa_extra") or [],
+                    quotas=quotas,
+                )
                 bundle = fetch_and_save_sa_news(
                     tickers,
                     per_ticker=per,
+                    per_ticker_limits=sa_limits,
                     sleep_sec=sleep,
                     max_tickers=max_t,
                 )

@@ -202,3 +202,83 @@ def test_dedupe_news_items_by_link_and_title():
     by_sym = {x["ticker"]: x for x in out}
     assert by_sym["INTC"]["src"] == "Seeking Alpha Finance"
     assert by_sym["MSFT"]["id"] == "3"
+
+
+def test_per_ticker_limit_for_uses_group_max(monkeypatch):
+    import services.notebook_news_digest as m
+
+    def _cfg(key, default=None):
+        vals = {
+            "NOTEBOOK_NEWS_PER_TICKER": "40",
+            "NOTEBOOK_NEWS_PER_TICKER_G1": "40",
+            "NOTEBOOK_NEWS_PER_TICKER_G2": "10",
+            "NOTEBOOK_NEWS_MACRO_LIMIT": "80",
+            "NOTEBOOK_NEWS_LLM_MAX_ITEMS": "600",
+        }
+        return vals.get(key, default)
+
+    monkeypatch.setattr(m, "get_config_value", _cfg)
+    q = m.news_quota_config()
+    assert q["g1"] == 40
+    assert q["g2"] == 10
+    assert m.per_ticker_limit_for("MSFT", {"MSFT": ["g1"]}, quotas=q) == 40
+    assert m.per_ticker_limit_for("SNDK", {"SNDK": ["g2"]}, quotas=q) == 10
+    # Multi-group → max
+    assert m.per_ticker_limit_for("MU", {"MU": ["g1", "g2"]}, quotas=q) == 40
+
+
+def test_fair_sample_respects_g2_and_macro_and_llm_max(monkeypatch):
+    import services.notebook_news_digest as m
+
+    def _cfg(key, default=None):
+        vals = {
+            "NOTEBOOK_NEWS_PER_TICKER": "40",
+            "NOTEBOOK_NEWS_PER_TICKER_G1": "40",
+            "NOTEBOOK_NEWS_PER_TICKER_G2": "10",
+            "NOTEBOOK_NEWS_MACRO_LIMIT": "5",
+            "NOTEBOOK_NEWS_LLM_MAX_ITEMS": "100",
+        }
+        return vals.get(key, default)
+
+    monkeypatch.setattr(m, "get_config_value", _cfg)
+    membership = {"MSFT": ["g1"], "SNDK": ["g2"]}
+    items = []
+    for i in range(50):
+        items.append(
+            {
+                "id": f"msft-{i}",
+                "ticker": "MSFT",
+                "title": f"MSFT {i}",
+                "publishOn": f"2026-07-28T{i:02d}:00:00Z" if i < 24 else f"2026-07-27T{i-24:02d}:00:00Z",
+            }
+        )
+    for i in range(30):
+        items.append(
+            {
+                "id": f"sndk-{i}",
+                "ticker": "SNDK",
+                "title": f"SNDK {i}",
+                "publishOn": f"2026-07-28T{i:02d}:00:00Z" if i < 24 else f"2026-07-27T{i-24:02d}:00:00Z",
+            }
+        )
+    for i in range(20):
+        items.append(
+            {
+                "id": f"macro-{i}",
+                "ticker": "MACRO",
+                "title": f"Macro {i}",
+                "publishOn": f"2026-07-28T{i:02d}:00:00Z" if i < 24 else f"2026-07-27T00:00:00Z",
+            }
+        )
+
+    sample = m.fair_sample_for_digest(items, membership, include_macro=True)
+    assert sample["after_fair_sample"] <= 100
+    assert sample["per_ticker_counts"].get("MSFT", 0) <= 40
+    assert sample["per_ticker_counts"].get("SNDK", 0) <= 10
+    assert sample["macro_count"] <= 5
+    # With room under llm_max, G2 should keep its full 10
+    assert sample["per_ticker_counts"].get("SNDK") == 10
+    assert sample["macro_count"] == 5
+    # Before pack: 40+10+5=55 ≤ 100 → no trim
+    assert sample["before_pack"] == 55
+    assert sample["after_fair_sample"] == 55

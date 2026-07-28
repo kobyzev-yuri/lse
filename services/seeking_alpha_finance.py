@@ -164,6 +164,7 @@ def fetch_and_save_sa_news(
     tickers: Sequence[str],
     *,
     per_ticker: int = 40,
+    per_ticker_limits: Optional[Dict[str, int]] = None,
     sleep_sec: float = 0.35,
     max_tickers: Optional[int] = None,
     exchange: str = "NYSE",
@@ -173,6 +174,7 @@ def fetch_and_save_sa_news(
     bundle = fetch_news_for_tickers(
         tickers,
         per_ticker=per_ticker,
+        per_ticker_limits=per_ticker_limits,
         sleep_sec=sleep_sec,
         max_tickers=max_tickers,
         api_key=api_key,
@@ -352,22 +354,29 @@ def fetch_news_for_tickers(
     tickers: Sequence[str],
     *,
     per_ticker: int = 40,
+    per_ticker_limits: Optional[Dict[str, int]] = None,
     category: str = "all",
     sleep_sec: float = 0.35,
     api_key: Optional[str] = None,
     max_tickers: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Fetch news for many tickers; continue on per-ticker errors."""
+    """Fetch news for many tickers; continue on per-ticker errors.
+
+    ``per_ticker_limits`` overrides the default ``per_ticker`` for specific symbols.
+    """
     wanted = [str(t).strip().upper() for t in tickers if str(t).strip()]
     if max_tickers is not None:
         wanted = wanted[: max(0, int(max_tickers))]
+    limits = {str(k).strip().upper(): int(v) for k, v in (per_ticker_limits or {}).items() if str(k).strip()}
     by_ticker: Dict[str, List[Dict[str, Any]]] = {}
     errors: Dict[str, str] = {}
     all_items: List[Dict[str, Any]] = []
     for i, t in enumerate(wanted):
+        lim = int(limits.get(t, per_ticker))
+        lim = max(0, lim)
         try:
             raw = fetch_symbol_news(t, category=category, page_number=1, api_key=api_key)
-            items = flatten_news_items(raw["payload"], ticker=t, limit=per_ticker)
+            items = flatten_news_items(raw["payload"], ticker=t, limit=lim)
             by_ticker[t] = items
             all_items.extend(items)
         except Exception as e:
@@ -382,4 +391,6 @@ def fetch_news_for_tickers(
         "items": all_items,
         "errors": errors,
         "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "per_ticker_default": int(per_ticker),
+        "per_ticker_limits": limits,
     }
