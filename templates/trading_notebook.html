@@ -280,7 +280,8 @@
   .ditem .dsym{font-family:var(--mono);font-weight:700;font-size:14px;}
   .ditem .dsrc{font-size:11px;color:var(--dim);font-family:var(--mono);margin-left:6px;}
   .ditem .dtext{font-size:13px;color:var(--muted);margin-top:3px;}
-  .ditem .dprem{font-family:var(--mono);font-size:12px;margin-top:4px;}
+  .ditem .dprem{font-family:var(--mono);font-size:11px;margin-top:4px;color:var(--dim);}
+  .ditem .ddate{font-family:var(--mono);font-size:11px;color:var(--dim);margin-left:8px;}
   .ditem .dtac{font-size:12.5px;margin-top:4px;color:var(--ink);}
   .ditem .dtac b{color:#ff8a3d;}
   .ditem .dlink{font-size:11px;font-family:var(--mono);color:var(--accent);text-decoration:none;margin-top:4px;display:inline-block;}
@@ -2283,10 +2284,11 @@ function digestItem(it, cls){
   const linkHtml = href
     ? `<a class="dlink" href="${esc(href)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">↗ первоисточник</a>`
     : "";
+  const when = String(it.date || it.prem || "").trim();
+  const dateHtml = when ? `<span class="ddate">${esc(when)}</span>` : "";
   return `<div class="ditem ${cls}"${click}>
-    <span class="dsym">${esc(it.sym)}</span><span class="dsrc">${esc(it.src||"")}</span>${openHint}
+    <span class="dsym">${esc(it.sym)}</span><span class="dsrc">${esc(it.src||"")}</span>${dateHtml}${openHint}
     <div class="dtext">${esc(it.text||"")}</div>
-    ${it.prem?`<div class="dprem up">${esc(it.prem)}</div>`:""}
     <div class="dtac">${it.tac||""}</div>
     ${linkHtml}
   </div>`;

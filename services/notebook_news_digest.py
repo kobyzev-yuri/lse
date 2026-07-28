@@ -271,10 +271,10 @@ DIGEST_SYSTEM = """Ты — редактор утреннего дайджест
   "filtered": <int всего входных новостей>,
   "kept": <int оставленных в дайджесте>,
   "trashed": <int отсеянных>,
-  "signals": [{"sym":"MSFT","src":"...","text":"...","tac":"<b>Тактика:</b> ...","link":"...","prem":""}],
+  "signals": [{"sym":"MSFT","src":"...","text":"...","tac":"<b>Тактика:</b> ...","link":"...","date":"2026-07-28 09:15 UTC"}],
   "risks": [тот же формат],
-  "macro": [{"sym":"МАКРО · …","src":"...","text":"...","tac":"<b>Влияние:</b> ...","link":"..."}],
-  "newtickers": [{"sym":"XYZ","src":"...","text":"...","tac":"<b>Обоснование:</b> ...","link":"..."}],
+  "macro": [{"sym":"МАКРО · …","src":"...","text":"...","tac":"<b>Влияние:</b> ...","link":"...","date":"..."}],
+  "newtickers": [{"sym":"XYZ","src":"...","text":"...","tac":"<b>Обоснование:</b> ...","link":"...","date":"..."}],
   "trashNote": "кратко что отсеяно"
 }
 
@@ -284,6 +284,7 @@ DIGEST_SYSTEM = """Ты — редактор утреннего дайджест
 - macro: ФРС, сектор AI, геополитика, широкие тренды; tac = влияние на Environment Check.
 - newtickers: имена НЕ из текущего списка тетрадки (не ALAB/AMD/… уже в groups) — кандидат «к рассмотрению».
 - Одна история из нескольких источников → ОДИН пункт; в src — основной источник.
+- date: дата/время публикации из входа (publishOn), UTC, кратко; не выдумывай.
 - Если в блоке earnings указан ближайший отчёт — обязательно учти в risks или signals (пауза/не наращивать до цифр; peer spillover: память MU↔SNDK, оптика LITE↔CIEN, hyperscalers).
 - text: 1–2 предложения по-русски.
 - Не выдумывай новости: только из входа. Если данных мало — пустые массивы ок.
@@ -302,6 +303,63 @@ DEFAULT_SA_EXTRA_TICKERS: tuple[str, ...] = (
     "KEYS",
     "VZ",
 )
+
+
+def _format_article_date(raw: Any) -> str:
+    """Human UTC stamp for digest cards, e.g. 2026-07-28 14:30 UTC."""
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        # Already short / human — keep as-is (trim noise).
+        return s[:32]
+
+
+def enrich_digest_rows_with_dates(
+    rows: Sequence[Dict[str, Any]],
+    source_items: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Fill missing date/prem from KB/API publishOn matched by link (or title)."""
+    by_link: Dict[str, str] = {}
+    by_title: Dict[str, str] = {}
+    for it in source_items:
+        if not isinstance(it, dict):
+            continue
+        stamp = _format_article_date(it.get("publishOn") or it.get("ts"))
+        if not stamp:
+            continue
+        lk = _norm_link(str(it.get("link") or ""))
+        if lk and lk not in by_link:
+            by_link[lk] = stamp
+        tk = _norm_title(str(it.get("title") or ""))
+        if tk and tk not in by_title:
+            by_title[tk] = stamp
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        r = dict(row)
+        existing = _format_article_date(r.get("date") or r.get("prem"))
+        if not existing:
+            lk = _norm_link(str(r.get("link") or ""))
+            existing = by_link.get(lk, "") if lk else ""
+        if not existing:
+            tk = _norm_title(str(r.get("text") or r.get("title") or ""))
+            # text is RU paraphrase — title match is weak; skip if no link
+            existing = by_title.get(tk, "") if tk else ""
+        if existing:
+            r["date"] = existing
+            if not r.get("prem"):
+                r["prem"] = existing
+        out.append(r)
+    return out
 
 
 def _unique_upper(seq: Sequence[str]) -> List[str]:
@@ -1048,7 +1106,8 @@ def run_notebook_news_digest(
                 "text": it.get("title"),
                 "tac": "",
                 "link": it.get("link"),
-                "prem": it.get("publishOn"),
+                "date": _format_article_date(it.get("publishOn")),
+                "prem": _format_article_date(it.get("publishOn")),
             }
             for it in llm_items
         ]
@@ -1067,6 +1126,8 @@ def run_notebook_news_digest(
         "newtickers": digest_body.get("newtickers") if isinstance(digest_body.get("newtickers"), list) else [],
         "trashNote": digest_body.get("trashNote") or "",
     }
+    for _bucket in ("signals", "risks", "macro", "newtickers"):
+        digest[_bucket] = enrich_digest_rows_with_dates(digest[_bucket], llm_items)
     if digest_body.get("_llm"):
         digest["_llm"] = digest_body["_llm"]
     if digest_body.get("llm_error"):

@@ -204,6 +204,29 @@ def test_dedupe_news_items_by_link_and_title():
     assert by_sym["MSFT"]["id"] == "3"
 
 
+def test_enrich_digest_rows_with_dates_by_link():
+    from services.notebook_news_digest import enrich_digest_rows_with_dates
+
+    sources = [
+        {
+            "title": "AMD raises target",
+            "link": "https://seekingalpha.com/news/4618672?utm=1",
+            "publishOn": "2026-07-28T09:15:00Z",
+        }
+    ]
+    rows = [
+        {
+            "sym": "AMD",
+            "text": "Wedbush повысил таргет",
+            "link": "https://www.seekingalpha.com/news/4618672",
+            "prem": "",
+        }
+    ]
+    out = enrich_digest_rows_with_dates(rows, sources)
+    assert out[0]["date"] == "2026-07-28 09:15 UTC"
+    assert out[0]["prem"] == "2026-07-28 09:15 UTC"
+
+
 def test_per_ticker_limit_for_uses_group_max(monkeypatch):
     import services.notebook_news_digest as m
 
