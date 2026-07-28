@@ -93,6 +93,25 @@
   .cal-legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle;}
   .cal-legend .lg-e{background:#4c7dff;} .cal-legend .lg-f{background:#f5c542;} .cal-legend .lg-a{background:#2ec27e;}
 
+  /* guide / glossary */
+  .guide-card h3{margin:0 0 10px;}
+  .guide-card h4{margin:18px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600;}
+  .guide-card p,.guide-card li{color:var(--muted);font-size:13.5px;line-height:1.5;}
+  .guide-card p{margin:0 0 10px;}
+  .guide-card ul{margin:0 0 10px;padding-left:18px;}
+  .guide-card li{margin:5px 0;}
+  .guide-card b{color:var(--ink);font-weight:600;}
+  .guide-card .gex{background:var(--panel-2);border-radius:10px;padding:12px 14px;margin:10px 0 14px;border-left:3px solid var(--accent);}
+  .guide-card .gex b{display:block;margin-bottom:4px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);}
+  .guide-table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0 14px;}
+  .guide-table th,.guide-table td{text-align:left;padding:8px 10px;border-top:1px solid var(--line);vertical-align:top;}
+  .guide-table th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px;width:28%;}
+  .guide-table td{color:var(--muted);}
+  .guide-table tr:first-child th,.guide-table tr:first-child td{border-top:none;}
+  .guide-ol{margin:0;padding-left:20px;}
+  .guide-ol li{margin:8px 0;color:var(--muted);font-size:13.5px;}
+  .guide-ol b{color:var(--ink);}
+
   /* tabs */
   nav.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:20px;overflow-x:auto;}
   nav.tabs button{background:none;border:none;color:var(--muted);font-family:var(--sans);font-size:13.5px;font-weight:500;padding:10px 14px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:.15s;}
@@ -394,6 +413,7 @@ const TABS = [
   {id:"fundament",label:"Фундамент",stub:true},
   {id:"digest",label:"Дайджесты",stub:false},
   {id:"watchlist",label:"Watchlist · Flash Crash",stub:true},
+  {id:"guide",label:"Пояснения",stub:false},
 ];
 
 function stubBadge(where){
@@ -889,8 +909,9 @@ function renderContent(){
   if(!current){
     if(activeTab==="watchlist"){ c.innerHTML = renderWatchlist(); }
     else if(activeTab==="digest"){ c.innerHTML = renderDigest(); }
+    else if(activeTab==="guide"){ c.innerHTML = renderGuideTab(); }
     else c.innerHTML = tabWrap(activeTab, `<div class="card"><h3>Нет активного тикера</h3>
-      <p class="note">Выберите группу с тикерами, либо откройте «Дайджесты» / «Watchlist».</p></div>`);
+      <p class="note">Выберите группу с тикерами, либо откройте «Дайджесты» / «Watchlist» / «Пояснения».</p></div>`);
     return;
   }
   const d = DATA[current];
@@ -948,6 +969,7 @@ function renderContent(){
       <button type="button" class="edit-btn" id="houses-refresh" onclick="refreshHouses()">Обновить с StockAnalysis</button>
       <span class="${flashCls}" id="housesStatus">${flashTxt}</span>
     </div>
+    <p class="note" style="margin:0 0 10px">Консенсус отсюда же показывается на Вердикте <b>только для чтения</b>. Buy Dip / Sell — отдельные ваши уровни.</p>
     <div class="concens" data-houses-ui="v2">
       <div class="cell"><span class="cl">Консенсус</span><span class="cv">${esc(cons.rating||'—')}</span></div>
       <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(consPt)}</span></div>
@@ -968,6 +990,7 @@ function renderContent(){
   html += renderFundament(d);
   html += renderDigest();
   html += renderWatchlist();
+  html += renderGuideTab();
   c.innerHTML = html;
 }
 
@@ -1251,18 +1274,28 @@ function _consField(v){
 
 function renderConsensusInline(d){
   const c = d.consensus || {};
+  const rs = housesRatingStats(d);
+  const pt = consensusPtDisplay(c, d.houses || []);
+  const empty = (!c.rating || c.rating === "—" || c.rating === "-") && pt === "—";
+  if(empty){
+    return `<span class="note">нет данных · обновите на вкладке «Инвестдома»</span>
+      <button type="button" class="edit-btn" onclick="selectTab('houses')">Инвестдома →</button>`;
+  }
+  const src = d.houses_override
+    ? liveBadge(d.houses_source || "stockanalysis")
+    : manualBadge("консенсус");
+  const ratings = (rs.total > 0)
+    ? ` · Buy ${rs.buy} / Hold ${rs.hold} / Sell ${rs.sell}`
+    : "";
   return `
-    <span class="lvl-one">
-      <span class="lk">rate</span>
-      <input type="text" class="rating" id="cons-rating" value="${esc(_consField(c.rating))}" placeholder="Buy">
-      <span class="lk">pt</span>
-      <input type="text" class="wide" id="cons-pt" value="${esc(_consField(c.pt))}" placeholder="450">
-      <span class="lk">low</span>
-      <input type="text" id="cons-low" value="${esc(_consField(c.low))}" placeholder="—">
-      <span class="lk">high</span>
-      <input type="text" id="cons-high" value="${esc(_consField(c.high))}" placeholder="—">
-      <button type="button" class="edit-btn" id="cons-save" onclick="saveConsensus()">OK</button>
-      <span class="flag-status" id="consStatus"></span>
+    <span class="lvl-one" style="flex-wrap:wrap">
+      <span class="lk">rate</span><span class="cv" style="font-family:var(--mono);font-weight:700">${esc(c.rating||"—")}</span>
+      <span class="lk">pt</span><span class="cv" style="font-family:var(--mono);font-weight:700;color:var(--accent)">${esc(pt)}</span>
+      <span class="lk">low</span><span class="cv" style="font-family:var(--mono);color:var(--sell)">${esc(c.low||"—")}</span>
+      <span class="lk">high</span><span class="cv" style="font-family:var(--mono);color:var(--buy)">${esc(c.high||"—")}</span>
+      ${src}
+      <span class="note">${esc(c.n||"")}${ratings}</span>
+      <button type="button" class="edit-btn" onclick="selectTab('houses')" title="Обновление и карточки домов — на вкладке Инвестдома">правится на Инвестдома →</button>
     </span>`;
 }
 
@@ -1862,6 +1895,108 @@ function renderWatchlist(){
       </div>
       <div class="note">${esc(flash.why||"")}</div>
     </div>`);
+}
+
+function renderGuideTab(){
+  return tabWrap("guide", `
+    <div class="card guide-card">
+      <h3>Как читать тетрадку</h3>
+      <p>Вердикт <b>не советует «купить потому что Strong Buy»</b>. Он отвечает: дошла ли цена до <b>заранее записанного</b> уровня и <b>можно ли сейчас исполнять</b> план (Environment, тезис, news). Решение о входе/выходе пишется заранее; когда триггер сработал — исполняем без эмоций.</p>
+      <div class="gex"><b>Пример MSFT (G1)</b>
+        Buy Dip <b>$361</b> (ваш), Sell <b>$450</b> (ваш), горизонт 3–6 мес.
+        Консенсус домов Strong Buy, PT ~$557 — <b>фон Street на ~год</b>, не ваш ордер.
+        При Close ~$389 вердикт в духе «держать / ждать уровень», а не догонять.
+      </div>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Уровень · Buy Dip · Sell</h3>
+      <p><b>Уровень</b> — заранее выбранная цена, при которой вы уже решили, что делать. Не «кажется дешево», а записанная граница на Вердикте.</p>
+      <table class="guide-table">
+        <tr><th>Buy Dip</th><td>Цена покупки / докупки на откате. Триггер, когда <b>Close ≤ buy</b>.</td></tr>
+        <tr><th>Sell</th><td>Цена <b>фиксации</b> прибыли (план), не стоп-лосс. Триггер, когда <b>Close ≥ sell</b>.</td></tr>
+        <tr><th>«ещё N%»</th><td>Сколько % цены ещё выше Buy Dip — до уровня не дошли.</td></tr>
+        <tr><th>G1 vs G2</th><td>G1 — обычно один чёткий уровень, удержание 3–6 мес. G2 — активнее, горизонт дни–неделя.</td></tr>
+      </table>
+      <p>Уровни вводите только вы (поля buy / sell + OK). Макро и инвестдома уровень <b>не рисуют</b>.</p>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Тезис (Макро · тезис)</h3>
+      <p>Тумблер <b>тезис</b> на Вердикте — <b>ручной</b>. Автопроверки нет: система не решает за вас, жива ли инвестиционная история.</p>
+      <ul>
+        <li><b>Вкл</b> — тезис жив, при чистом Environment и касании Buy Dip можно исполнять план.</li>
+        <li><b>Выкл</b> — тезис сломан → <b>СТОП · ВНЕ ИГРЫ</b>, даже если цена «красивая».</li>
+      </ul>
+      <div class="gex"><b>Пример тезиса MSFT</b>
+        «AI / Azure — фон на горизонт плана; капекс гиперскейлеров — главный медвежий фактор.»
+        Выкл, когда для вас это уже не шум, а смена истории (не путать с одной плохой новостью — для тона ленты есть News sentiment).
+      </div>
+    </div>
+
+    <div class="card guide-card">
+      <h3>News sentiment</h3>
+      <p>Заменил ручной флаг «сент. сломан». Считается <b>автоматически</b> (FinBert по новостям KB за ~7 дней).</p>
+      <ul>
+        <li><b>bearish</b> → БЛОК / СТОП (как раньше включённый «сент. сломан»).</li>
+        <li><b>bullish / neutral</b> → фон, без жёсткого блока.</li>
+        <li>Это тон ленты, <b>не</b> замена тезиса SocGen / вашей истории.</li>
+      </ul>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Environment Check</h3>
+      <p>Итог = <b>худшая</b> из строк: ok &lt; mid &lt; bad. Любой <b>bad</b> → весь Check красный + БЛОК входов.</p>
+      <table class="guide-table">
+        <tr><th>VIX / NDX / нефть</th><td>Live с котировок. Нефть: вверх = геостресс; вниз обычно ok.</td></tr>
+        <tr><th>ФРС</th><td>Live с календаря FOMC (≤1 дня до решения → bad), либо ручные ok/mid/bad поверх.</td></tr>
+        <tr><th>Таргеты</th><td>Только вручную — mass cut PT вне earnings.</td></tr>
+      </table>
+      <p>Цифры в строке (VIX 17.6 · NDX …) — справка; цвет и БЛОК — от <b>state</b> строк.</p>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Инвестдома vs ваши уровни</h3>
+      <table class="guide-table">
+        <tr><th>На Вердикте</th><td><b>Только чтение</b> того же консенсуса, что на вкладке «Инвестдома». Править / обновлять — там (StockAnalysis).</td></tr>
+        <tr><th>rate / pt / low / high</th><td>Консенсус Street (~12 мес). Не ваш Buy Dip / Sell.</td></tr>
+        <tr><th>Выборка 56</th><td>Полная статистика рейтингов/таргетов.</td></tr>
+        <tr><th>8 домов · Buy 53…</th><td>53/3/0 — полная выборка; «8 домов» — карточки свежих нот внизу вкладки.</td></tr>
+      </table>
+      <ul>
+        <li><b>Strong Buy ≠ покупай сейчас.</b></li>
+        <li><b>Ср. таргет ≠ ваш Sell</b> (Sell свой; PT — чужой ориентир).</li>
+        <li><b>Low</b> — медвежий коридор ожиданий Street, не обязательно ваш стоп.</li>
+        <li>Техника первая; дома — фон и проверка «не сломан ли консенсус».</li>
+      </ul>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Чеклист перед сделкой</h3>
+      <ol class="guide-ol">
+        <li><b>Группа и горизонт</b> — G1 месяцами, не интрадей.</li>
+        <li><b>Уровни записаны?</b> — buy / sell на Вердикте.</li>
+        <li><b>Где Close?</b> — далеко / у Buy Dip / у Sell.</li>
+        <li><b>Тезис вкл?</b></li>
+        <li><b>Environment</b> не красный? (жёлтый у Buy Dip → ждать)</li>
+        <li><b>News sentiment</b> не bearish-блок?</li>
+        <li><b>Дома как фон</b> — нет свежих mass cut PT; не сидим у High без смысла.</li>
+        <li>Всё ок и Close у уровня → <b>исполняем записанный план</b>.</li>
+      </ol>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Словарь</h3>
+      <table class="guide-table">
+        <tr><th>Вердикт</th><td>Стоп / ждать / докупать / фиксировать — по правилам.</td></tr>
+        <tr><th>Close</th><td>Цена закрытия (live) для сравнения с уровнями.</td></tr>
+        <tr><th>Горизонт</th><td>На сколько рассчитан план (G1: 3–6 мес; G2: дни–неделя).</td></tr>
+        <tr><th>Триггер</th><td>Условие «пора исполнять» (цена у уровня + гейты ок).</td></tr>
+        <tr><th>Events</th><td>FOMC / macro / earnings тикера — календарь, не сигнал входа.</td></tr>
+      </table>
+      <p class="note">Не смешивать с GAME_5M и «Портфель · карточки»: тетрадка — ручная дисциплина уровней.</p>
+    </div>
+  `);
 }
 
 function bootApp(){
