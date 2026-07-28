@@ -495,12 +495,17 @@ def to_notebook_houses(
     pt = _fmt_money(cons.price_target) or "—"
     low = _fmt_money(cons.low) or "—"
     high = _fmt_money(cons.high) or "—"
-    n = counts.total or cons.count
-    n_s = f"{n} аналитиков" if n else "—"
+    n_ratings = int(counts.total) if counts.total else None
+    # priceTargets.numPriceTargets (may differ from ratings count)
+    n_targets = int(cons.count) if cons.count else n_ratings
     today = date.today().isoformat()
     buy = int(counts.buy or 0)
     hold = int(counts.hold or 0)
     sell = int(counts.sell or 0)
+    if n_ratings:
+        n_s = f"{n_ratings} аналит. (рейтинги SA)"
+    else:
+        n_s = "—"
     return {
         "houses": houses,
         "consensus": {
@@ -509,10 +514,15 @@ def to_notebook_houses(
             "low": low,
             "high": high,
             "n": n_s,
+            "n_ratings": n_ratings,
+            "n_targets": n_targets,
             "upd": f"обн. {today}",
         },
         "houseNote": f"Buy {buy} · Hold {hold} · Sell {sell}",
-        "counts": asdict(counts),
+        "counts": {
+            **asdict(counts),
+            "pt_total": n_targets,
+        },
     }
 
 

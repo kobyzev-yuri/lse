@@ -190,7 +190,10 @@ def test_to_notebook_houses_shape():
     out = to_notebook_houses(bundle)
     assert out["houses"][0]["firm"] == "Wedbush"
     assert out["consensus"]["rating"] == "Strong Buy"
-    assert "аналитиков" in out["consensus"]["n"]
+    assert out["consensus"]["n_ratings"] == 46
+    assert out["consensus"]["n_targets"] == 46
+    assert "рейтинги SA" in out["consensus"]["n"]
+    assert out["counts"]["pt_total"] == 46
 
 
 def test_html_fallback_parsers():

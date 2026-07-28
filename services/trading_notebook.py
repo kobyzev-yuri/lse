@@ -266,12 +266,19 @@ def _apply_one_ticker_patch(d: Dict[str, Any], patch: Dict[str, Any]) -> Dict[st
     if patch.get("houseNote") is not None:
         d["houseNote"] = str(patch.get("houseNote") or "")[:800]
     if isinstance(patch.get("houses_counts"), dict):
-        d["houses_counts"] = {
+        hc = {
             "buy": int(patch["houses_counts"].get("buy") or 0),
             "hold": int(patch["houses_counts"].get("hold") or 0),
             "sell": int(patch["houses_counts"].get("sell") or 0),
             "total": int(patch["houses_counts"].get("total") or 0),
         }
+        try:
+            pt_total = int(patch["houses_counts"].get("pt_total") or 0)
+        except (TypeError, ValueError):
+            pt_total = 0
+        if pt_total > 0:
+            hc["pt_total"] = pt_total
+        d["houses_counts"] = hc
         d["houses_override"] = True
     if patch.get("houses_source") and not d.get("houses_source"):
         d["houses_source"] = str(patch.get("houses_source"))[:40]
@@ -951,6 +958,8 @@ def refresh_ticker_houses_from_stockanalysis(
         "low": str(consensus.get("low") or "—")[:80],
         "high": str(consensus.get("high") or "—")[:80],
         "n": str(consensus.get("n") or "—")[:80],
+        "n_ratings": consensus.get("n_ratings"),
+        "n_targets": consensus.get("n_targets"),
         "upd": str(consensus.get("upd") or f"обн. {now[:10]}")[:80],
     }
     row["houseNote"] = house_note[:240]
@@ -963,6 +972,15 @@ def refresh_ticker_houses_from_stockanalysis(
         "strong_buy": int(counts.get("strong_buy") or 0),
         "strong_sell": int(counts.get("strong_sell") or 0),
     }
+    pt_n = counts.get("pt_total")
+    if pt_n is None:
+        pt_n = consensus.get("n_targets")
+    try:
+        pt_n_i = int(pt_n) if pt_n is not None else 0
+    except (TypeError, ValueError):
+        pt_n_i = 0
+    if pt_n_i > 0:
+        row["houses_counts"]["pt_total"] = pt_n_i
     row["updated_at_utc"] = now
     row["updated_by"] = (updated_by or "notebook-ui")[:80]
     tickers[u] = row

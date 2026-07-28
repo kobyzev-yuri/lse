@@ -520,12 +520,23 @@ function housesRatingStats(d){
   }
   const cards = (d.houses||[]).length;
   const total = (Number.isFinite(buy)?buy:0) + (Number.isFinite(hold)?hold:0) + (Number.isFinite(sell)?sell:0);
+  const nRatings = Number(c.total);
+  const nTargets = Number(c.pt_total);
+  const cons = (d && d.consensus) || {};
+  let fromConsN = null;
+  const mN = String(cons.n || "").match(/(\d+)/);
+  if(mN) fromConsN = Number(mN[1]);
   return {
     buy: Number.isFinite(buy) ? buy : 0,
     hold: Number.isFinite(hold) ? hold : 0,
     sell: Number.isFinite(sell) ? sell : 0,
     total,
     cards,
+    nRatings: Number.isFinite(nRatings) && nRatings > 0 ? nRatings
+      : (Number.isFinite(Number(cons.n_ratings)) ? Number(cons.n_ratings)
+      : (Number.isFinite(fromConsN) ? fromConsN : total || null)),
+    nTargets: Number.isFinite(nTargets) && nTargets > 0 ? nTargets
+      : (Number.isFinite(Number(cons.n_targets)) ? Number(cons.n_targets) : null),
   };
 }
 
@@ -1207,20 +1218,23 @@ function renderContent(){
       <button type="button" class="edit-btn" id="houses-refresh" onclick="refreshHouses()">Обновить с StockAnalysis</button>
       <span class="${flashCls}" id="housesStatus">${flashTxt}</span>
     </div>
-    <p class="note" style="margin:0 0 10px">Консенсус отсюда же показывается на Вердикте <b>только для чтения</b>. Buy Dip / Sell — отдельные ваши уровни.</p>
+    <p class="note" style="margin:0 0 10px">Консенсус и таргеты — <b>полная статистика StockAnalysis</b> (не среднее по списку ниже). В списке — до ~10–12 последних домов (лимит парсинга). На Вердикте консенсус <b>только для чтения</b>. Buy Dip / Sell — ваши уровни.</p>
     <div class="concens" data-houses-ui="v2">
-      <div class="cell"><span class="cl">Консенсус</span><span class="cv">${esc(cons.rating||'—')}</span></div>
-      <div class="cell"><span class="cl">Ср. таргет</span><span class="cv" style="color:var(--accent)">${esc(consPt)}</span></div>
-      <div class="cell"><span class="cl">Low</span><span class="cv down">${esc(cons.low||'—')}</span></div>
-      <div class="cell"><span class="cl">High</span><span class="cv up">${esc(cons.high||'—')}</span></div>
-      <div class="cell"><span class="cl">Выборка</span><span class="cv" style="font-size:13px">${esc(cons.n||'—')}</span></div>
+      <div class="cell"><span class="cl">Консенсус SA</span><span class="cv">${esc(cons.rating||'—')}</span></div>
+      <div class="cell"><span class="cl">Ср. таргет SA</span><span class="cv" style="color:var(--accent)">${esc(consPt)}${rs.nTargets ? `<span class="note" style="display:block;font-weight:400;margin-top:2px">n=${esc(String(rs.nTargets))} PT</span>` : ""}</span></div>
+      <div class="cell"><span class="cl">Low SA</span><span class="cv down">${esc(cons.low||'—')}</span></div>
+      <div class="cell"><span class="cl">High SA</span><span class="cv up">${esc(cons.high||'—')}</span></div>
       <div class="cell" style="align-items:flex-start;text-align:left">
-        <span class="cl">Рейтинги</span>
-        <span class="cv" style="font-size:13px;font-weight:600">${rs.cards} домов · Buy ${rs.buy} / Hold ${rs.hold} / Sell ${rs.sell}</span>
+        <span class="cl">Рейтинги SA</span>
+        <span class="cv" style="font-size:13px;font-weight:600">${rs.nRatings != null ? esc(String(rs.nRatings)) + " аналит." : "—"} · Buy ${rs.buy} / Hold ${rs.hold} / Sell ${rs.sell}</span>
       </div>
-      <div class="cell"><span class="cl">Buy</span><span class="cv up">${rs.buy}</span></div>
-      <div class="cell"><span class="cl">Hold</span><span class="cv" style="color:var(--warn)">${rs.hold}</span></div>
-      <div class="cell"><span class="cl">Sell</span><span class="cv down">${rs.sell}</span></div>
+      <div class="cell" style="align-items:flex-start;text-align:left">
+        <span class="cl">В списке</span>
+        <span class="cv" style="font-size:13px;font-weight:600">${rs.cards} ${rs.cards === 1 ? "дом" : "домов"} · последние обновления</span>
+      </div>
+      <div class="cell"><span class="cl">Buy SA</span><span class="cv up">${rs.buy}</span></div>
+      <div class="cell"><span class="cl">Hold SA</span><span class="cv" style="color:var(--warn)">${rs.hold}</span></div>
+      <div class="cell"><span class="cl">Sell SA</span><span class="cv down">${rs.sell}</span></div>
     </div>
     <div class="houses-list">${houses || '<p class="note">Пока пусто — нажмите «Обновить с StockAnalysis».</p>'}</div>
     </div>`);
@@ -1567,6 +1581,11 @@ function renderConsensusInline(d){
   const ratings = (rs.total > 0)
     ? ` · Buy ${rs.buy} / Hold ${rs.hold} / Sell ${rs.sell}`
     : "";
+  const sampleBits = [];
+  if(rs.nRatings != null) sampleBits.push(`рейтинги SA: ${rs.nRatings}`);
+  if(rs.nTargets != null) sampleBits.push(`PT n=${rs.nTargets}`);
+  if(rs.cards) sampleBits.push(`в списке: ${rs.cards}`);
+  const sampleNote = sampleBits.length ? sampleBits.join(" · ") : esc(c.n || "");
   return `
     <span class="lvl-one" style="flex-wrap:wrap">
       <span class="lk">rate</span><span class="cv" style="font-family:var(--mono);font-weight:700">${esc(c.rating||"—")}</span>
@@ -1574,7 +1593,7 @@ function renderConsensusInline(d){
       <span class="lk">low</span><span class="cv" style="font-family:var(--mono);color:var(--sell)">${esc(c.low||"—")}</span>
       <span class="lk">high</span><span class="cv" style="font-family:var(--mono);color:var(--buy)">${esc(c.high||"—")}</span>
       ${src}
-      <span class="note">${esc(c.n||"")}${ratings}</span>
+      <span class="note">${sampleNote}${ratings}</span>
       <button type="button" class="edit-btn" onclick="selectTab('houses')" title="Обновление и карточки домов — на вкладке Инвестдома">правится на Инвестдома →</button>
     </span>`;
 }
@@ -2620,9 +2639,9 @@ function renderGuideTab(){
       <h3>Инвестдома vs ваши уровни</h3>
       <table class="guide-table">
         <tr><th>На Вердикте</th><td><b>Только чтение</b> того же консенсуса, что на вкладке «Инвестдома». Править / обновлять — там (StockAnalysis).</td></tr>
-        <tr><th>rate / pt / low / high</th><td>Консенсус Street (~12 мес). Не ваш Buy Dip / Sell.</td></tr>
-        <tr><th>Выборка 56</th><td>Полная статистика рейтингов/таргетов.</td></tr>
-        <tr><th>8 домов · Buy 53…</th><td>53/3/0 — полная выборка; «8 домов» — карточки свежих нот внизу вкладки.</td></tr>
+        <tr><th>Консенсус / ср. таргет SA</th><td>Полная статистика StockAnalysis (~12 мес). Не ваш Buy Dip / Sell и не среднее по списку домов.</td></tr>
+        <tr><th>Рейтинги SA (напр. 56)</th><td>Выборка Buy/Hold/Sell на SA. Таргеты могут иметь свой n (PT n).</td></tr>
+        <tr><th>В списке (напр. 8 домов)</th><td>Карточки последних нот — лимит парсинга ~10–12, не вся выборка SA.</td></tr>
       </table>
       <ul>
         <li><b>Strong Buy ≠ покупай сейчас.</b></li>
