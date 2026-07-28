@@ -829,6 +829,63 @@ async function savePlan(){
   }
 }
 
+function _fundTone(val){
+  const s = String(val||"").toLowerCase();
+  if(/отриц|риск|плох|высокий долг|weak|neg/.test(s)) return "bad";
+  if(/лучш|сильн|минимал|good|strong|запас/.test(s)) return "good";
+  return "";
+}
+
+async function saveFundament(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("fundStatus");
+  const btn = document.getElementById("fund-save");
+  const val = (id) => {
+    const el = document.getElementById(id);
+    return (el && el.value != null) ? String(el.value).trim() : "";
+  };
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "сохраняю…"; }
+  const metrics = [];
+  for(let i=0;i<4;i++){
+    const k = val("fund-mk-"+i);
+    const v = val("fund-mv-"+i);
+    const note = val("fund-mn-"+i);
+    if(!k && !v && !note) continue;
+    metrics.push({k: k || ("M"+(i+1)), v: v || "—", note, tone: _fundTone(v+" "+note)});
+  }
+  const body = {
+    fundament: {
+      tagline: val("fund-tagline"),
+      metrics,
+      margin_ru: val("fund-margin"),
+      financing_ru: val("fund-financing"),
+      pluses: _planLines("fund-pluses"),
+      risks: _planLines("fund-risks"),
+    },
+  };
+  try {
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/fundament`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    if(j.fundament) DATA[sym].fundament = j.fundament;
+    DATA[sym].fundament_override = true;
+    applyOverrideMeta(sym, j);
+    if(status){ status.className = "flag-status ok"; status.textContent = "сохранено"; }
+    renderContent();
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    if(btn) btn.disabled = false;
+  }
+}
+
 function triggerLvlDisplay(t, L){
   const kind = String(t.t||"");
   if(kind === "buy" && L.buyDip != null) return `$${L.buyDip} · Buy Dip`;
@@ -918,32 +975,59 @@ async function saveTriggers(){
 }
 
 function renderFundament(d){
-  const f = d.fundament;
-  if(!f){
-    return tabWrap("fundament", `<div class="card"><h3>Фундамент <span class="hint">опционально · не гейт Вердикта</span></h3>
-      <p class="note">Краткая справка по компании (кэш, FCF, долг, плюсы/риски) — <b>фон для тезиса</b>, не сигнал входа. Для ${esc(d.sym)} карточка пока пустая; на решение Buy Dip / Sell это не влияет. Заполнение — по желанию (эталон в данных — NBIS).</p>
-    </div>`);
-  }
-  const metrics = (f.metrics||[]).map(m => `
-    <div class="fund-m">
-      <div class="fk">${esc(m.k)}</div>
-      <div class="fv ${esc(m.tone||'')}">${esc(m.v)}</div>
-      <div class="fn">${esc(m.note||'')}</div>
-    </div>`).join("");
-  const pluses = (f.pluses||[]).map(x=>`<li>${esc(x)}</li>`).join("");
-  const risks = (f.risks||[]).map(x=>`<li>${esc(x)}</li>`).join("");
-  return tabWrap("fundament", `
-    <div class="card">
-      <h3>${esc(d.name)} · фундамент<span class="hint">краткая справка · не сигнал BUY · не гейт Вердикта</span></h3>
-      <div class="fund-tag">${esc(f.tagline||'')}</div>
-      <div class="fund-grid">${metrics}</div>
-      ${f.margin_ru?`<div class="fund-sec"><b>Маржа:</b> ${esc(f.margin_ru)}</div>`:''}
-      ${f.financing_ru?`<div class="fund-sec"><b>Финансирование:</b> ${esc(f.financing_ru)}</div>`:''}
-      <div class="fund-cols">
-        <div><h3 style="margin-bottom:8px">Плюсы</h3><ul class="fund-list plus">${pluses}</ul></div>
-        <div><h3 style="margin-bottom:8px">Риски</h3><ul class="fund-list risk">${risks}</ul></div>
+  const f = d.fundament || {};
+  const metrics = Array.isArray(f.metrics) ? f.metrics : [];
+  const mAt = (i) => metrics[i] || {};
+  const slots = [
+    {i:0, defK:"КЭШ"},
+    {i:1, defK:"FCF"},
+    {i:2, defK:"Прямой долг"},
+    {i:3, defK:"Запас прочности"},
+  ];
+  const metricFields = slots.map(({i, defK}) => {
+    const m = mAt(i);
+    return `<div class="edit-grid" style="margin-top:8px;padding:10px;background:var(--panel-2);border-radius:8px">
+      <div class="edit-field"><label>Метрика ${i+1}</label>
+        <input type="text" id="fund-mk-${i}" value="${esc(m.k||defK)}" placeholder="${esc(defK)}"></div>
+      <div class="edit-field"><label>Значение</label>
+        <input type="text" id="fund-mv-${i}" value="${esc(m.v||'')}" placeholder="—"></div>
+      <div class="edit-field" style="grid-column:1/-1"><label>Комментарий</label>
+        <input type="text" id="fund-mn-${i}" value="${esc(m.note||'')}" placeholder="кратко"></div>
+    </div>`;
+  }).join("");
+  const pluses = (f.pluses||[]).join("\n");
+  const risks = (f.risks||[]).join("\n");
+  return tabWrap("fundament", `<div class="card">
+    <h3>Фундамент<span class="hint">опциональная справка · не гейт Вердикта · не тактика</span></h3>
+    <p class="note">Краткий фон по компании для тезиса удержания. <b>План входа/выхода</b> — на вкладке «Тактика входа / выхода». Цифры Buy/Sell — на Вердикте.</p>
+    <div class="edit-field" style="margin-top:10px">
+      <label>Суть бизнеса (tagline)</label>
+      <textarea id="fund-tagline" style="min-height:64px" placeholder="Одной-двумя фразами: что за бизнес и почему в тетрадке.">${esc(f.tagline||"")}</textarea>
+    </div>
+    ${metricFields}
+    <div class="edit-field" style="margin-top:10px">
+      <label>Маржа</label>
+      <textarea id="fund-margin" style="min-height:52px" placeholder="Откуда маржа / контракты…">${esc(f.margin_ru||"")}</textarea>
+    </div>
+    <div class="edit-field" style="margin-top:10px">
+      <label>Финансирование</label>
+      <textarea id="fund-financing" style="min-height:52px" placeholder="Кэш, долг, инвесторы…">${esc(f.financing_ru||"")}</textarea>
+    </div>
+    <div class="edit-grid" style="margin-top:10px">
+      <div class="edit-field">
+        <label>Плюсы (по строкам)</label>
+        <textarea id="fund-pluses" style="min-height:80px" placeholder="Один плюс на строку">${esc(pluses)}</textarea>
       </div>
-    </div>`);
+      <div class="edit-field">
+        <label>Риски (по строкам)</label>
+        <textarea id="fund-risks" style="min-height:80px" placeholder="Один риск на строку">${esc(risks)}</textarea>
+      </div>
+    </div>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button type="button" class="edit-btn" id="fund-save" onclick="saveFundament()">OK · сохранить фундамент</button>
+      <span class="flag-status" id="fundStatus"></span>
+    </div>
+  </div>`);
 }
 
 function renderContent(){
@@ -996,11 +1080,20 @@ function renderContent(){
 
   const envs = (d.env||[]).map(e => {
     const live = !!e.live;
-    const badge = live
-      ? liveBadge(e.source || "quotes/yfinance")
-      : (e.manual || d.env_override)
-        ? manualBadge(e.source || "overlay")
-        : stubBadge(e.source || envSourceHint(e.lbl));
+    const key = envEditableKey(e.lbl);
+    let src = String(e.source || "").replace(/^заглушка\s*[·:]\s*/i, "").trim();
+    let badge;
+    if(live){
+      badge = liveBadge(src || "quotes/yfinance");
+    } else if(key === "pt"){
+      badge = manualBadge("кнопки «таргеты» на Вердикте");
+    } else if(key === "fed"){
+      badge = e.manual ? manualBadge("override · Вердикт") : manualBadge(src || "ФРС");
+    } else if(e.manual || d.env_override){
+      badge = manualBadge(src || "overlay");
+    } else {
+      badge = stubBadge(src || envSourceHint(e.lbl));
+    }
     return `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span>${badge}</div>`;
   }).join("");
   const hasLiveVix = (d.env||[]).some(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
@@ -1974,6 +2067,16 @@ function renderGuideTab(){
         Вердикт отвечает «пора ли исполнять». Тактика отвечает «какой план мы заранее записали».
         Без плана можно торговать по уровням, но легче сбиться на эмоциях.
       </div>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Фундамент</h3>
+      <p>Вкладка <b>«Фундамент»</b> — опциональная справка по компании (tagline, кэш/FCF/долг, плюсы/риски). Вводите там же → <b>OK · сохранить фундамент</b>.</p>
+      <ul>
+        <li><b>Не</b> сигнал входа и не гейт Вердикта.</li>
+        <li><b>Не</b> путать с «Тактикой входа / выхода» (там план сделки).</li>
+        <li>Нужна для фона тезиса удержания; пустая карточка нормальна.</li>
+      </ul>
     </div>
 
     <div class="card guide-card">

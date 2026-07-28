@@ -293,6 +293,9 @@ def _apply_one_ticker_patch(d: Dict[str, Any], patch: Dict[str, Any]) -> Dict[st
     if patch.get("macro") is not None:
         d["macro"] = str(patch.get("macro") or "")[:800]
         d["plan_override"] = True
+    if isinstance(patch.get("fundament"), dict):
+        d["fundament"] = _normalize_fundament(patch.get("fundament"))
+        d["fundament_override"] = True
     if isinstance(patch.get("triggers"), list):
         d["triggers"] = _merge_triggers(
             list(d.get("triggers") or []) if isinstance(d.get("triggers"), list) else [],
@@ -1082,6 +1085,76 @@ def update_ticker_profile(
         "ticker": u,
         "horizon": row.get("horizon", base_row.get("horizon")),
         "profile": dict(row["profile"]),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+def _normalize_fundament(raw: Any) -> Dict[str, Any]:
+    """Clamp fundament card for overlay storage."""
+    if not isinstance(raw, dict):
+        return {}
+    metrics_out: List[Dict[str, str]] = []
+    metrics = raw.get("metrics") if isinstance(raw.get("metrics"), list) else []
+    for m in metrics[:8]:
+        if not isinstance(m, dict):
+            continue
+        k = str(m.get("k") or "").strip()[:40]
+        v = str(m.get("v") or "").strip()[:80]
+        note = str(m.get("note") or "").strip()[:160]
+        tone = str(m.get("tone") or "").strip()[:12]
+        if not (k or v or note):
+            continue
+        metrics_out.append(
+            {"k": k or "—", "v": v or "—", "note": note, "tone": tone if tone in ("good", "bad", "mid") else ""}
+        )
+
+    def _lines(key: str) -> List[str]:
+        items = raw.get(key)
+        if not isinstance(items, list):
+            return []
+        out: List[str] = []
+        for x in items:
+            s = str(x or "").strip()
+            if s:
+                out.append(s[:240])
+            if len(out) >= 12:
+                break
+        return out
+
+    return {
+        "tagline": str(raw.get("tagline") or "")[:500],
+        "metrics": metrics_out,
+        "margin_ru": str(raw.get("margin_ru") or "")[:500],
+        "financing_ru": str(raw.get("financing_ru") or "")[:500],
+        "pluses": _lines("pluses"),
+        "risks": _lines("risks"),
+    }
+
+
+def update_ticker_fundament(
+    sym: str,
+    *,
+    fundament: Dict[str, Any],
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist optional fundament card into overrides overlay."""
+    u, _base_row = _find_base_ticker(sym)
+    if not isinstance(fundament, dict):
+        raise ValueError("fundament object required")
+    cleaned = _normalize_fundament(fundament)
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    now = datetime.now(timezone.utc).isoformat()
+    row["fundament"] = cleaned
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    return {
+        "ticker": u,
+        "fundament": dict(cleaned),
         "updated_at_utc": now,
         "updated_by": row["updated_by"],
     }
