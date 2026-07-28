@@ -261,7 +261,7 @@ def fetch_and_save_ticker_news() -> int:
     Конфиг:
       - TICKER_NEWS_TICKERS: список тикеров (по умолчанию TICKERS_FAST)
       - TICKER_NEWS_LOOKBACK_HOURS: окно (по умолчанию 48)
-      - TICKER_NEWS_MAX_PER_TICKER: cap для Yahoo (по умолчанию 40)
+      - TICKER_NEWS_MAX_PER_TICKER: cap для Yahoo (по умолчанию 5)
       - TICKER_NEWS_EXCHANGE: метка exchange (по умолчанию NYSE)
       - MARKETAUX_API_KEY: ключ Marketaux (если задан — добавляем источник)
     """
@@ -277,9 +277,9 @@ def fetch_and_save_ticker_news() -> int:
     except (ValueError, TypeError):
         lookback_hours = 48
     try:
-        max_per_ticker = int((get_config_value("TICKER_NEWS_MAX_PER_TICKER", "40") or "40").strip())
+        max_per_ticker = int((get_config_value("TICKER_NEWS_MAX_PER_TICKER", "5") or "5").strip())
     except (ValueError, TypeError):
-        max_per_ticker = 40
+        max_per_ticker = 5
     exchange = (get_config_value("TICKER_NEWS_EXCHANGE", "NYSE") or "NYSE").strip().upper()[:16]
 
     log.info("📰 Ticker news: tickers=%s lookback_hours=%s", tickers[:20], lookback_hours)

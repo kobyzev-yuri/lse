@@ -165,9 +165,9 @@ def fetch_all_news_sources(mode: str = "all"):
                     extra_n,
                 )
                 try:
-                    per = int((get_config_value("NOTEBOOK_NEWS_PER_TICKER", "5") or "5").strip())
+                    per = int((get_config_value("NOTEBOOK_NEWS_PER_TICKER", "40") or "40").strip())
                 except (ValueError, TypeError):
-                    per = 5
+                    per = 40
                 try:
                     sleep = float((get_config_value("NOTEBOOK_NEWS_SLEEP_SEC", "0.35") or "0.35").strip())
                 except (ValueError, TypeError):

@@ -4299,6 +4299,26 @@ async def api_notebook_ticker_profile(sym: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка notebook profile: {e!s}")
 
 
+@app.get("/api/notebook/tickers/{sym}/fundament/suggest", response_class=JSONResponse)
+async def api_notebook_ticker_fundament_suggest(sym: str):
+    """Черновик фундамента из Yahoo (yfinance info) — без записи в overlay."""
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import suggest_fundament_from_yfinance
+
+        return suggest_fundament_from_yfinance(sym)
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("GET /api/notebook/tickers/%s/fundament/suggest: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка notebook fundament suggest: {e!s}")
+
+
 @app.patch("/api/notebook/tickers/{sym}/fundament", response_class=JSONResponse)
 async def api_notebook_ticker_fundament(sym: str, request: Request):
     """Опциональная фундаментальная карточка → overlay."""

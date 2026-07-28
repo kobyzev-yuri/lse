@@ -7,6 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <title>Тетрадка · Рабочее пространство</title>
 <!-- notebook-ui: houses-v2 ratings-after-sample -->
+{% include "partials/chart_js_async.html" %}
 <style>
   :root{
     --bg:#0e1116;--panel:#161b22;--panel-2:#1c232d;--line:#2a323d;
@@ -366,6 +367,19 @@
   .nb-home a{color:var(--accent);text-decoration:none;}
   .nb-home a:hover{text-decoration:underline;}
   .load-err{color:var(--sell);padding:20px;font-size:14px;}
+  .nb-miss{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;padding:12px 14px;margin:0 0 12px;}
+  .nb-miss h4{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--warn);}
+  .nb-miss ul{margin:0;padding-left:18px;}
+  .nb-miss li{margin:4px 0;color:var(--muted);font-size:13px;}
+  .nb-miss button.linkish{background:none;border:none;color:var(--accent);cursor:pointer;padding:0;font:inherit;text-decoration:underline;}
+  button.linkish{background:none;border:none;color:var(--accent);cursor:pointer;padding:0;font:inherit;text-decoration:underline;}
+  .nb-chart-card{margin-top:12px;}
+  .nb-chart-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px;}
+  .nb-chart-head h4{margin:0;font-size:13px;}
+  .nb-chart-head a{color:var(--accent);font-size:12px;text-decoration:none;}
+  .nb-chart-head a:hover{text-decoration:underline;}
+  .nb-chart-wrap{position:relative;height:260px;}
+  .nb-chart-status{font-size:12px;color:var(--dim);margin-top:6px;min-height:1.2em;}
 
 </style>
 </head>
@@ -404,6 +418,7 @@ let housesRefreshFlash = null; // {sym, ok, text}
 
 const TABS = [
   {id:"verdict",label:"⚡ Вердикт",stub:false},
+  {id:"chart",label:"График",stub:false},
   {id:"profile",label:"Профиль",stub:false},
   {id:"triggers",label:"Триггеры Buy / Sell",stub:false},
   {id:"entry",label:"Тактика входа / выхода",stub:false},
@@ -886,6 +901,47 @@ async function saveFundament(){
   }
 }
 
+async function suggestFundament(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("fundSuggestStatus");
+  const btn = document.getElementById("fund-suggest");
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "Yahoo…"; }
+  try {
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/fundament/suggest`);
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    const f = j.fundament || {};
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if(el && v != null) el.value = String(v);
+    };
+    set("fund-tagline", f.tagline || "");
+    set("fund-margin", f.margin_ru || "");
+    set("fund-financing", f.financing_ru || "");
+    const metrics = Array.isArray(f.metrics) ? f.metrics : [];
+    for(let i=0;i<4;i++){
+      const m = metrics[i] || {};
+      set("fund-mk-"+i, m.k || "");
+      set("fund-mv-"+i, m.v || "");
+      set("fund-mn-"+i, m.note || "");
+    }
+    // pluses/risks not autofilled
+    const filled = Array.isArray(j.filled) ? j.filled.join(", ") : "";
+    if(status){
+      status.className = "flag-status ok";
+      status.textContent = (j.note || "черновик") + (filled ? ` · ${filled}` : "") + " · сохраните OK";
+    }
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
 function triggerLvlDisplay(t, L){
   const kind = String(t.t||"");
   if(kind === "buy" && L.buyDip != null) return `$${L.buyDip} · Buy Dip`;
@@ -1000,6 +1056,11 @@ function renderFundament(d){
   return tabWrap("fundament", `<div class="card">
     <h3>Фундамент<span class="hint">опциональная справка · не гейт Вердикта · не тактика</span></h3>
     <p class="note">Краткий фон по компании для тезиса удержания. <b>План входа/выхода</b> — на вкладке «Тактика входа / выхода». Цифры Buy/Sell — на Вердикте.</p>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament()">Подтянуть из Yahoo</button>
+      <span class="flag-status" id="fundSuggestStatus"></span>
+    </div>
+    <p class="note" style="margin-top:6px">Черновик: кэш / FCF / долг / current ratio / маржи. Плюсы и риски — только вручную. После подтягивания нажмите «сохранить».</p>
     <div class="edit-field" style="margin-top:10px">
       <label>Суть бизнеса (tagline)</label>
       <textarea id="fund-tagline" style="min-height:64px" placeholder="Одной-двумя фразами: что за бизнес и почему в тетрадке.">${esc(f.tagline||"")}</textarea>
@@ -1031,6 +1092,7 @@ function renderFundament(d){
 }
 
 function renderContent(){
+  destroyNbDailyChart();
   const c = document.getElementById("content");
   if(!current){
     if(activeTab==="digest"){ c.innerHTML = renderDigest(); }
@@ -1044,6 +1106,7 @@ function renderContent(){
   let html = "";
   const L = d.levels || {};
   html += tabWrap("verdict", renderVerdict(d));
+  html += tabWrap("chart", renderChartTab(d));
 
   const gname = (GROUPS[String(d.group)] && GROUPS[String(d.group)].name) || ("GRP "+d.group);
   html += tabWrap("profile", renderProfile(d, gname));
@@ -1755,6 +1818,12 @@ function renderVerdict(d){
       ${i.gate?'<span class="igate">БЛОК</span>':''}
     </div>`;
   }).join("");
+  const miss = incompletenessItems(d);
+  const missHtml = miss.length ? `
+    <div class="nb-miss">
+      <h4>Что не заполнено</h4>
+      <ul>${miss.map(m => `<li><button type="button" class="linkish" onclick="goNotebookTab('${esc(m.tab)}')">${esc(m.text)}</button></li>`).join("")}</ul>
+    </div>` : "";
   const html = `
     <div class="verdict-hero ${v.cls}">
       <div class="vlabel">${esc(d.sym)}</div>
@@ -1762,11 +1831,176 @@ function renderVerdict(d){
       <div class="vwhy">${esc(v.why)}</div>
       <div class="vprice">Close ${fmtPx(d.px)} ${esc(d.chg||"")}${d.horizon?` · ${esc(d.horizon)}`:""}</div>
     </div>
+    ${missHtml}
     <div class="card">
       ${inds}
-    </div>`;
+    </div>
+    <p class="note" style="margin:10px 2px 0">Daily-график с Buy Dip / Sell — вкладка <button type="button" class="linkish" onclick="goNotebookTab('chart')">График</button>.</p>`;
   queueMicrotask(() => loadNewsSentiment(d.sym));
   return html;
+}
+
+function renderChartTab(d){
+  const L = d.levels || {};
+  const buyN = L.buyDip != null ? Number(L.buyDip) : null;
+  const sellN = L.sell != null ? Number(L.sell) : null;
+  const buyHint = Number.isFinite(buyN) ? `$${buyN}` : "не задан";
+  const sellHint = Number.isFinite(sellN) ? `$${sellN}` : "не задан";
+  queueMicrotask(() => {
+    if(activeTab === "chart"){
+      loadVerdictDailyChart(d.sym, buyN, sellN);
+    }
+  });
+  return `<div class="card nb-chart-card">
+    <div class="nb-chart-head">
+      <h4>${esc(d.sym)} · Daily · quotes ${liveBadge("1d")}</h4>
+      <a href="/portfolio/daily?ticker=${encodeURIComponent(d.sym)}" target="_blank" rel="noopener">полный daily →</a>
+    </div>
+    <p class="note" style="margin:0 0 8px">Close + SMA5 из <code>/api/portfolio/chart</code>. Линии: Buy Dip <b>${esc(buyHint)}</b>, Sell <b>${esc(sellHint)}</b> (уровни с Вердикта).</p>
+    <div class="nb-chart-wrap" style="height:320px"><canvas id="nb-daily-chart"></canvas></div>
+    <div class="nb-chart-status" id="nb-chart-status">загрузка…</div>
+  </div>`;
+}
+
+function goNotebookTab(tabId){
+  const id = String(tabId || "");
+  if(!TABS.some(t => t.id === id)) return;
+  activeTab = id;
+  renderTabs();
+  renderContent();
+}
+
+function incompletenessItems(d){
+  const miss = [];
+  const L = (d && d.levels) || {};
+  if(L.buyDip == null || !Number.isFinite(Number(L.buyDip))){
+    miss.push({tab:"verdict", text:"нет Buy Dip — впишите уровень на Вердикте"});
+  }
+  if(L.sell == null || !Number.isFinite(Number(L.sell))){
+    miss.push({tab:"verdict", text:"нет Sell — впишите уровень на Вердикте"});
+  }
+  const entry = (d.entry || []).filter(x => String(x || "").trim());
+  const exitP = (d.exit || []).filter(x => String(x || "").trim());
+  if(!entry.length){
+    miss.push({tab:"entry", text:"пустая тактика входа"});
+  }
+  if(!exitP.length){
+    miss.push({tab:"entry", text:"пустая тактика выхода"});
+  }
+  const counts = (d && d.houses_counts) || {};
+  const total = Number(counts.total) || 0;
+  const cards = (d.houses || []).length;
+  if(!cards && total <= 0){
+    miss.push({tab:"houses", text:"нет инвестдомов — обновите StockAnalysis"});
+  } else {
+    const asof = d.override_updated_at_utc || "";
+    if(d.houses_override && asof){
+      const t = Date.parse(asof);
+      if(Number.isFinite(t)){
+        const days = (Date.now() - t) / 86400000;
+        if(days > 21){
+          miss.push({tab:"houses", text:`инвестдома не обновлялись ~${Math.floor(days)}д`});
+        }
+      }
+    }
+  }
+  return miss;
+}
+
+let _nbDailyChart = null;
+
+function destroyNbDailyChart(){
+  if(_nbDailyChart){
+    try { _nbDailyChart.destroy(); } catch(e) {}
+    _nbDailyChart = null;
+  }
+}
+
+function waitForChartJs(timeoutMs){
+  return new Promise(function(resolve, reject){
+    if(window.Chart){ resolve(); return; }
+    const t0 = Date.now();
+    const iv = setInterval(function(){
+      if(window.Chart){ clearInterval(iv); resolve(); return; }
+      if(Date.now() - t0 > (timeoutMs || 20000)){
+        clearInterval(iv);
+        reject(new Error("Chart.js timeout"));
+      }
+    }, 50);
+  });
+}
+
+async function loadVerdictDailyChart(sym, buy, sell){
+  const canvas = document.getElementById("nb-daily-chart");
+  const status = document.getElementById("nb-chart-status");
+  if(!canvas) return;
+  destroyNbDailyChart();
+  if(status) status.textContent = "загрузка…";
+  try {
+    await waitForChartJs(20000);
+    const r = await fetch(`/api/portfolio/chart/${encodeURIComponent(sym)}?days=180`);
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    const bars = j.bars || [];
+    if(!bars.length){
+      if(status) status.textContent = "нет дневных quotes";
+      return;
+    }
+    const labels = bars.map(b => String(b.date || "").slice(0, 10));
+    const closes = bars.map(b => b.close != null ? Number(b.close) : null);
+    const sma = bars.map(b => b.sma_5 != null ? Number(b.sma_5) : null);
+    const datasets = [
+      { label: "Close", data: closes, borderColor: "#38bdf8", tension: 0.1, spanGaps: true, pointRadius: 0 },
+      { label: "SMA5", data: sma, borderColor: "#a78bfa", tension: 0.1, spanGaps: true, pointRadius: 0 },
+    ];
+    if(Number.isFinite(buy) && buy > 0){
+      datasets.push({
+        label: "Buy Dip @ " + buy.toFixed(2),
+        data: labels.map(() => buy),
+        borderColor: "#2ea043",
+        borderDash: [6, 4],
+        borderWidth: 1.4,
+        fill: false,
+        pointRadius: 0,
+      });
+    }
+    if(Number.isFinite(sell) && sell > 0){
+      datasets.push({
+        label: "Sell @ " + sell.toFixed(2),
+        data: labels.map(() => sell),
+        borderColor: "#d9534f",
+        borderDash: [3, 2],
+        borderWidth: 1.4,
+        fill: false,
+        pointRadius: 0,
+      });
+    }
+    _nbDailyChart = new Chart(canvas, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: "#cbd5e1", boxWidth: 12, font: { size: 11 } } },
+        },
+        scales: {
+          x: { ticks: { color: "#94a3b8", maxTicksLimit: 10 } },
+          y: { ticks: { color: "#94a3b8" } },
+        },
+      },
+    });
+    if(status){
+      const src = j.source || "quotes";
+      status.textContent = `${sym} · ${labels.length}д · ${src}` +
+        (Number.isFinite(buy) ? ` · Buy ${buy}` : "") +
+        (Number.isFinite(sell) ? ` · Sell ${sell}` : "");
+    }
+  } catch(e){
+    if(status) status.textContent = "график: " + (e.message || e);
+  }
 }
 
 function fmtCalDate(iso){
@@ -2033,6 +2267,23 @@ function renderDigest(){
 function renderGuideTab(){
   return tabWrap("guide", `
     <div class="card guide-card">
+      <h3>Карта вкладок</h3>
+      <table class="guide-table">
+        <tr><th>Вердикт</th><td>Итог: стоп / ждать / исполнять. Уровни Buy/Sell, гейты.</td></tr>
+        <tr><th>График</th><td>Daily Close/SMA5 из <code>/api/portfolio/chart</code> + линии Buy Dip / Sell. Полный вид — <code>/portfolio/daily</code>.</td></tr>
+        <tr><th>Профиль</th><td>Кто тикер в тетрадке: сектор, роль, отчёт. Справка, не сигнал.</td></tr>
+        <tr><th>Триггеры</th><td>Тексты условий Buy/Sell/Watch. Цифры уровней — на Вердикте.</td></tr>
+        <tr><th>Тактика входа / выхода</th><td>План дисциплины словами (вход / выход / макро-тезис).</td></tr>
+        <tr><th>Окружение</th><td>Ручные Env-гейты (ФРС / PT cuts) поверх live VIX/NDX/нефть.</td></tr>
+        <tr><th>Events</th><td>Календарь FOMC / FRED / earnings тикера — фон риска даты, не вход.</td></tr>
+        <tr><th>Инвестдома</th><td>Консенсус Street (StockAnalysis). Фон ~12м, не ваш ордер.</td></tr>
+        <tr><th>Фундамент</th><td>Справка по компании; можно подтянуть черновик из Yahoo.</td></tr>
+        <tr><th>Дайджесты</th><td>Отфильтрованная лента сигналов/рисков/макро по группам.</td></tr>
+        <tr><th>Пояснения</th><td>Эта инструкция.</td></tr>
+      </table>
+    </div>
+
+    <div class="card guide-card">
       <h3>Как читать тетрадку</h3>
       <p>Вердикт <b>не советует «купить потому что Strong Buy»</b>. Он отвечает: дошла ли цена до <b>заранее записанного</b> уровня и <b>можно ли сейчас исполнять</b> план (Environment, тезис, news). Решение о входе/выходе пишется заранее; когда триггер сработал — исполняем без эмоций.</p>
       <div class="gex"><b>Пример MSFT (G1)</b>
@@ -2050,6 +2301,7 @@ function renderGuideTab(){
         <tr><th>Sell</th><td>Цена <b>фиксации</b> прибыли (план), не стоп-лосс. Триггер, когда <b>Close ≥ sell</b>.</td></tr>
         <tr><th>«ещё N%»</th><td>Сколько % цены ещё выше Buy Dip — до уровня не дошли.</td></tr>
         <tr><th>G1 vs G2</th><td>G1 — обычно один чёткий уровень, удержание 3–6 мес. G2 — активнее, горизонт дни–неделя.</td></tr>
+        <tr><th>График</th><td>Вкладка <b>График</b>: daily Close/SMA5 из <code>/api/portfolio/chart</code> + линии Buy/Sell. Полный вид — <code>/portfolio/daily?ticker=…</code>.</td></tr>
       </table>
       <p>Уровни вводите только вы (поля buy / sell + OK). Макро и инвестдома уровень <b>не рисуют</b>.</p>
     </div>
@@ -2071,12 +2323,22 @@ function renderGuideTab(){
 
     <div class="card guide-card">
       <h3>Фундамент</h3>
-      <p>Вкладка <b>«Фундамент»</b> — опциональная справка по компании (tagline, кэш/FCF/долг, плюсы/риски). Вводите там же → <b>OK · сохранить фундамент</b>.</p>
+      <p>Вкладка <b>«Фундамент»</b> — опциональная справка по компании (tagline, кэш/FCF/долг, плюсы/риски).</p>
       <ul>
-        <li><b>Не</b> сигнал входа и не гейт Вердикта.</li>
-        <li><b>Не</b> путать с «Тактикой входа / выхода» (там план сделки).</li>
-        <li>Нужна для фона тезиса удержания; пустая карточка нормальна.</li>
+        <li><b>Подтянуть из Yahoo</b> — черновик метрик (totalCash, FCF, debt, current ratio, маржи). Плюсы/риски не трогает.</li>
+        <li>После черновика нажмите <b>OK · сохранить фундамент</b> — иначе в overlay не попадёт.</li>
+        <li><b>Не</b> сигнал входа и не гейт Вердикта; <b>не</b> путать с тактикой входа/выхода.</li>
       </ul>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Профиль · Events · Дайджесты · Триггеры</h3>
+      <table class="guide-table">
+        <tr><th>Профиль</th><td>Сектор / роль / дата отчёта — чтобы помнить «зачем тикер в группе».</td></tr>
+        <tr><th>Events</th><td>FOMC и FRED общие; earnings — по выбранному тикеру (Yahoo). Смотрите даты риска, не сигнал «покупай».</td></tr>
+        <tr><th>Дайджесты</th><td>Сводка новостей/сигналов по правилам тетрадки. Trash — отсеянное.</td></tr>
+        <tr><th>Триггеры</th><td>Словесные условия; исполнение всё равно по Close vs Buy/Sell на Вердикте.</td></tr>
+      </table>
     </div>
 
     <div class="card guide-card">
@@ -2141,7 +2403,7 @@ function renderGuideTab(){
       <ol class="guide-ol">
         <li><b>Группа и горизонт</b> — G1 месяцами, не интрадей.</li>
         <li><b>Уровни записаны?</b> — buy / sell на Вердикте.</li>
-        <li><b>Где Close?</b> — далеко / у Buy Dip / у Sell.</li>
+        <li><b>Где Close?</b> — далеко / у Buy Dip / у Sell (смотрите daily на Вердикте).</li>
         <li><b>Тезис вкл?</b></li>
         <li><b>Environment</b> не красный? (жёлтый у Buy Dip → ждать)</li>
         <li><b>News sentiment</b> не bearish-блок?</li>
@@ -2169,7 +2431,7 @@ function renderGuideTab(){
         <tr><th>Триггер</th><td>Условие «пора исполнять» (цена у уровня + гейты ок).</td></tr>
         <tr><th>Events</th><td>FOMC / macro / earnings тикера — календарь, не сигнал входа.</td></tr>
       </table>
-      <p class="note">Не смешивать с GAME_5M и «Портфель · карточки»: тетрадка — ручная дисциплина уровней.</p>
+      <p class="note">Не смешивать с GAME_5M и «Портфель · карточки»: тетрадка — ручная дисциплина уровней. Daily на Вердикте = тот же источник, что у портфельного daily-графика.</p>
     </div>
   `);
 }

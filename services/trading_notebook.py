@@ -560,7 +560,7 @@ def bootstrap_notebook_ticker_resources(
             save_articles_to_kb,
         )
 
-        yahoo = fetch_yahoo_news([u], lookback_hours=72, max_per_ticker=40, exchange="NYSE")
+        yahoo = fetch_yahoo_news([u], lookback_hours=72, max_per_ticker=5, exchange="NYSE")
         mx_key = (get_config_value("MARKETAUX_API_KEY", "") or "").strip()
         marketaux = []
         if mx_key:
@@ -1492,6 +1492,168 @@ def fetch_closes_yfinance(tickers: Sequence[str]) -> Dict[str, Dict[str, Any]]:
         except Exception as e:
             logger.debug("yfinance close %s: %s", t, e)
     return out
+
+
+def _fmt_usd_compact(n: Any) -> Optional[str]:
+    try:
+        x = float(n)
+    except (TypeError, ValueError):
+        return None
+    if not (x == x):  # NaN
+        return None
+    ax = abs(x)
+    sign = "-" if x < 0 else ""
+    if ax >= 1e12:
+        return f"{sign}${ax / 1e12:.1f}T"
+    if ax >= 1e9:
+        return f"{sign}${ax / 1e9:.1f}B"
+    if ax >= 1e6:
+        return f"{sign}${ax / 1e6:.0f}M"
+    return f"{sign}${ax:,.0f}"
+
+
+def _fmt_pct_ratio(n: Any) -> Optional[str]:
+    try:
+        x = float(n)
+    except (TypeError, ValueError):
+        return None
+    if not (x == x):
+        return None
+    # yfinance margins are usually 0..1 ratios
+    if -1.5 <= x <= 1.5:
+        x *= 100.0
+    return f"{x:.1f}%"
+
+
+def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
+    """Gradual autofill draft for Fundament tab (Yahoo info). Does not persist."""
+    u = str(sym or "").strip().upper()
+    if not u:
+        raise ValueError("ticker required")
+    try:
+        import yfinance as yf
+    except Exception as e:
+        raise RuntimeError(f"yfinance unavailable: {e}") from e
+
+    info: Dict[str, Any] = {}
+    try:
+        raw = yf.Ticker(u).info
+        if isinstance(raw, dict):
+            info = raw
+    except Exception as e:
+        logger.debug("yfinance info %s: %s", u, e)
+        info = {}
+
+    if not info:
+        return {
+            "ticker": u,
+            "source": "yfinance",
+            "fundament": _normalize_fundament({}),
+            "filled": [],
+            "note": "Yahoo не отдал info — заполните вручную",
+        }
+
+    short = str(info.get("shortName") or info.get("longName") or u).strip()
+    sector = str(info.get("sector") or "").strip()
+    industry = str(info.get("industry") or "").strip()
+    bits = [short]
+    if sector or industry:
+        bits.append(" · ".join(x for x in (sector, industry) if x))
+    summary = str(info.get("longBusinessSummary") or "").strip()
+    if summary:
+        # first sentence only, keep short for tagline
+        cut = summary.split(". ")[0].strip()
+        if cut and not cut.endswith("."):
+            cut += "."
+        if len(cut) > 280:
+            cut = cut[:277].rstrip() + "…"
+        bits.append(cut)
+    tagline = " ".join(bits)[:500]
+
+    cash = _fmt_usd_compact(info.get("totalCash"))
+    fcf = _fmt_usd_compact(info.get("freeCashflow"))
+    debt = _fmt_usd_compact(info.get("totalDebt"))
+    cr = info.get("currentRatio")
+    try:
+        cr_f = float(cr) if cr is not None else None
+    except (TypeError, ValueError):
+        cr_f = None
+    reserve = f"current ratio {cr_f:.2f}" if cr_f is not None else None
+
+    metrics: List[Dict[str, str]] = []
+    filled: List[str] = []
+    if cash:
+        metrics.append({"k": "КЭШ", "v": cash, "note": "Yahoo totalCash", "tone": "good"})
+        filled.append("cash")
+    else:
+        metrics.append({"k": "КЭШ", "v": "—", "note": "", "tone": ""})
+    if fcf:
+        tone = "bad" if str(fcf).startswith("-") else "good"
+        metrics.append({"k": "FCF", "v": fcf, "note": "Yahoo freeCashflow", "tone": tone})
+        filled.append("fcf")
+    else:
+        metrics.append({"k": "FCF", "v": "—", "note": "", "tone": ""})
+    if debt:
+        metrics.append({"k": "Прямой долг", "v": debt, "note": "Yahoo totalDebt", "tone": ""})
+        filled.append("debt")
+    else:
+        metrics.append({"k": "Прямой долг", "v": "—", "note": "", "tone": ""})
+    if reserve:
+        tone = "good" if cr_f is not None and cr_f >= 1.2 else ("mid" if cr_f is not None else "")
+        metrics.append({"k": "Запас прочности", "v": reserve, "note": "Yahoo currentRatio", "tone": tone})
+        filled.append("reserve")
+    else:
+        metrics.append({"k": "Запас прочности", "v": "—", "note": "", "tone": ""})
+
+    gm = _fmt_pct_ratio(info.get("grossMargins"))
+    pm = _fmt_pct_ratio(info.get("profitMargins"))
+    om = _fmt_pct_ratio(info.get("operatingMargins"))
+    margin_bits = []
+    if gm:
+        margin_bits.append(f"gross {gm}")
+    if om:
+        margin_bits.append(f"oper {om}")
+    if pm:
+        margin_bits.append(f"net {pm}")
+    margin_ru = ("Маржа (Yahoo): " + " · ".join(margin_bits)) if margin_bits else ""
+    if margin_bits:
+        filled.append("margin")
+
+    dte = info.get("debtToEquity")
+    try:
+        dte_f = float(dte) if dte is not None else None
+    except (TypeError, ValueError):
+        dte_f = None
+    fin_bits = []
+    if cash:
+        fin_bits.append(f"кэш {cash}")
+    if debt:
+        fin_bits.append(f"долг {debt}")
+    if dte_f is not None:
+        fin_bits.append(f"D/E {dte_f:.1f}")
+    financing_ru = ("Yahoo: " + " · ".join(fin_bits)) if fin_bits else ""
+    if fin_bits:
+        filled.append("financing")
+    if tagline:
+        filled.append("tagline")
+
+    fundament = _normalize_fundament(
+        {
+            "tagline": tagline,
+            "metrics": metrics,
+            "margin_ru": margin_ru,
+            "financing_ru": financing_ru,
+            "pluses": [],
+            "risks": [],
+        }
+    )
+    return {
+        "ticker": u,
+        "source": "yfinance",
+        "fundament": fundament,
+        "filled": filled,
+        "note": "черновик из Yahoo · плюсы/риски только вручную · нажмите «сохранить»",
+    }
 
 
 def fetch_closes(tickers: Sequence[str], *, use_yfinance_fallback: bool = True) -> Dict[str, Dict[str, Any]]:

@@ -510,7 +510,7 @@ def run_notebook_news_digest(
         if t not in membership or not membership[t]:
             membership[t] = ["manual"]
 
-    per = int(per_ticker if per_ticker is not None else (get_config_value("NOTEBOOK_NEWS_PER_TICKER", "5") or 5))
+    per = int(per_ticker if per_ticker is not None else (get_config_value("NOTEBOOK_NEWS_PER_TICKER", "40") or 40))
     mx = max_tickers
     if mx is None:
         raw_mx = (get_config_value("NOTEBOOK_NEWS_MAX_TICKERS", "") or "").strip()

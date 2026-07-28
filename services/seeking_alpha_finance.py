@@ -163,7 +163,7 @@ def save_sa_items_to_kb(items: Sequence[Dict[str, Any]], *, exchange: str = "NYS
 def fetch_and_save_sa_news(
     tickers: Sequence[str],
     *,
-    per_ticker: int = 5,
+    per_ticker: int = 40,
     sleep_sec: float = 0.35,
     max_tickers: Optional[int] = None,
     exchange: str = "NYSE",
@@ -351,7 +351,7 @@ def load_kb_earnings_items(
 def fetch_news_for_tickers(
     tickers: Sequence[str],
     *,
-    per_ticker: int = 5,
+    per_ticker: int = 40,
     category: str = "all",
     sleep_sec: float = 0.35,
     api_key: Optional[str] = None,
