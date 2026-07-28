@@ -406,7 +406,7 @@ const TABS = [
   {id:"verdict",label:"⚡ Вердикт",stub:false},
   {id:"profile",label:"Профиль",stub:false},
   {id:"triggers",label:"Триггеры Buy / Sell",stub:false},
-  {id:"entry",label:"Тактика входа / выхода",stub:true},
+  {id:"entry",label:"Тактика входа / выхода",stub:false},
   {id:"env",label:"Окружение",stub:false},  // VIX live + ФРС/PT editable
   {id:"events",label:"Events",stub:false},
   {id:"houses",label:"Инвестдома",stub:false},
@@ -924,13 +924,22 @@ function renderContent(){
   html += tabWrap("profile", renderProfile(d, gname));
   html += tabWrap("triggers", renderTriggers(d));
 
+  const entryItems = (d.entry||[]).map(e=>`<li>${e}</li>`).join("");
+  const exitItems = (d.exit||[]).map(e=>`<li>${e}</li>`).join("");
+  const Lshow = d.levels || {};
+  const buyHint = Lshow.buyDip != null ? `$${Lshow.buyDip}` : "не задан";
+  const sellHint = Lshow.sell != null ? `$${Lshow.sell}` : "не задан";
   html += tabWrap("entry", `<div class="card">
-    <h3>Стратегия входа ${stubBadge("вручную JSON")}<span class="hint">техника первой, макро — поверх</span></h3>
-    ${stubBox("Тактика", "текст правил вручную в notebook_data.json (entry/exit/macro).")}
-    <ul class="clean">${(d.entry||[]).map(e=>`<li>${e}</li>`).join("")}</ul></div>
-    <div class="card"><h3>Стратегия выхода ${stubBadge("вручную JSON")}</h3>
-    <ul class="clean">${(d.exit||[]).map(e=>`<li>${e}</li>`).join("")}</ul>
-    <div class="macro"><b>Макро-контекст (поверх техники):</b> ${esc(d.macro||'')}</div></div>`);
+    <h3>Стратегия входа<span class="hint">зачем и как заходим · не ордер</span></h3>
+    <p class="note">Текстовый план по тикеру (дисциплина). <b>Числа Buy Dip / Sell для Вердикта</b> задаёте на вкладке Вердикт (сейчас buy ${esc(buyHint)}, sell ${esc(sellHint)}) — они могут отличаться от старых цифр в тексте ниже.</p>
+    ${entryItems ? `<ul class="clean">${entryItems}</ul>` : `<p class="note">План входа ещё не описан.</p>`}
+    </div>
+    <div class="card">
+    <h3>Стратегия выхода<span class="hint">когда фиксируем · не авто-продажа</span></h3>
+    ${exitItems ? `<ul class="clean">${exitItems}</ul>` : `<p class="note">План выхода ещё не описан.</p>`}
+    ${d.macro ? `<div class="macro"><b>Макро-контекст (поверх техники):</b> ${esc(d.macro)}</div>` : ""}
+    <p class="note" style="margin-top:12px">Тумблер <b>тезис</b> на Вердикте — жив ли этот макро-контекст. Выкл → СТОП, даже если цена у Buy Dip.</p>
+    </div>`);
 
   const envs = (d.env||[]).map(e => {
     const live = !!e.live;
