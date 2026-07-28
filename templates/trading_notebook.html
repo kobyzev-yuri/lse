@@ -278,10 +278,11 @@
 
   .ditem{border-left:2px solid var(--line);padding:8px 0 8px 12px;margin-bottom:8px;}
   .ditem .dsym{font-family:var(--mono);font-weight:700;font-size:14px;}
-  .ditem .dsrc{font-size:11px;color:var(--dim);font-family:var(--mono);margin-left:6px;}
+  .ditem .dmeta{font-size:11px;color:var(--dim);font-family:var(--mono);margin-top:2px;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;}
+  .ditem .dsrc{color:var(--dim);}
+  .ditem .ddate{color:var(--muted);}
   .ditem .dtext{font-size:13px;color:var(--muted);margin-top:3px;}
   .ditem .dprem{font-family:var(--mono);font-size:11px;margin-top:4px;color:var(--dim);}
-  .ditem .ddate{font-family:var(--mono);font-size:11px;color:var(--dim);margin-left:8px;}
   .ditem .dtac{font-size:12.5px;margin-top:4px;color:var(--ink);}
   .ditem .dtac b{color:#ff8a3d;}
   .ditem .dlink{font-size:11px;font-family:var(--mono);color:var(--accent);text-decoration:none;margin-top:4px;display:inline-block;}
@@ -2279,15 +2280,21 @@ function digestItem(it, cls){
   const sym = String(it.sym||"").toUpperCase();
   const inData = !!DATA[sym];
   const click = inData ? ` style="cursor:pointer" onclick="selectTicker('${esc(sym)}');selectTab('verdict')"` : "";
-  const openHint = inData ? `<span class="dlink" style="margin-left:8px">открыть в тетрадке</span>` : "";
+  const openHint = inData ? `<span class="dlink" style="margin-left:0">открыть в тетрадке</span>` : "";
   const href = String(it.link||"").trim();
   const linkHtml = href
     ? `<a class="dlink" href="${esc(href)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">↗ первоисточник</a>`
     : "";
   const when = String(it.date || it.prem || "").trim();
-  const dateHtml = when ? `<span class="ddate">${esc(when)}</span>` : "";
+  const src = String(it.src || "").trim();
+  const metaBits = [];
+  if(src) metaBits.push(`<span class="dsrc">${esc(src)}</span>`);
+  if(when) metaBits.push(`<span class="ddate">${esc(when)}</span>`);
+  if(openHint) metaBits.push(openHint);
+  const metaHtml = metaBits.length ? `<div class="dmeta">${metaBits.join("")}</div>` : "";
   return `<div class="ditem ${cls}"${click}>
-    <span class="dsym">${esc(it.sym)}</span><span class="dsrc">${esc(it.src||"")}</span>${dateHtml}${openHint}
+    <span class="dsym">${esc(it.sym)}</span>
+    ${metaHtml}
     <div class="dtext">${esc(it.text||"")}</div>
     <div class="dtac">${it.tac||""}</div>
     ${linkHtml}

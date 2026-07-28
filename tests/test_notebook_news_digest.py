@@ -212,7 +212,12 @@ def test_enrich_digest_rows_with_dates_by_link():
             "title": "AMD raises target",
             "link": "https://seekingalpha.com/news/4618672?utm=1",
             "publishOn": "2026-07-28T09:15:00Z",
-        }
+        },
+        {
+            "title": "Helios platform",
+            "link": "https://finance.yahoo.com/technology/ai/articles/amd-helios-ai-platform-full-151457060.htm",
+            "publishOn": "2026-07-27T18:14:57Z",
+        },
     ]
     rows = [
         {
@@ -220,11 +225,18 @@ def test_enrich_digest_rows_with_dates_by_link():
             "text": "Wedbush повысил таргет",
             "link": "https://www.seekingalpha.com/news/4618672",
             "prem": "",
-        }
+        },
+        {
+            "sym": "AMD",
+            "text": "Helios",
+            # LLM often truncates / changes path vs KB URL
+            "link": "https://finance.yahoo.com/markets/stocks/articles/amd-helios-ai-platform-full-151457060.ht",
+            "prem": "",
+        },
     ]
     out = enrich_digest_rows_with_dates(rows, sources)
     assert out[0]["date"] == "2026-07-28 09:15 UTC"
-    assert out[0]["prem"] == "2026-07-28 09:15 UTC"
+    assert out[1]["date"] == "2026-07-27 18:14 UTC"
 
 
 def test_per_ticker_limit_for_uses_group_max(monkeypatch):

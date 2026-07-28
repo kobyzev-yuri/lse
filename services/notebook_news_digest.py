@@ -321,25 +321,66 @@ def _format_article_date(raw: Any) -> str:
         return s[:32]
 
 
+def _link_match_keys(url: str) -> List[str]:
+    """Keys for fuzzy article match: full norm link, path slug, trailing numeric id."""
+    lk = _norm_link(url)
+    if not lk:
+        return []
+    keys: List[str] = [lk]
+    path = lk.split("/", 1)[-1] if "/" in lk else lk
+    last = path.rsplit("/", 1)[-1]
+    last = re.sub(r"\.(html?|htm)$", "", last, flags=re.I)
+    if last:
+        keys.append(f"slug:{last}")
+        # Truncated LLM links often drop the final letter(s) of the slug.
+        if len(last) >= 16:
+            keys.append(f"slugprefix:{last[:16]}")
+        m = re.search(r"(\d{8,})", last)
+        if m:
+            keys.append(f"id:{m.group(1)}")
+    return keys
+
+
 def enrich_digest_rows_with_dates(
     rows: Sequence[Dict[str, Any]],
     source_items: Sequence[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """Fill missing date/prem from KB/API publishOn matched by link (or title)."""
-    by_link: Dict[str, str] = {}
-    by_title: Dict[str, str] = {}
+    by_key: Dict[str, str] = {}
     for it in source_items:
         if not isinstance(it, dict):
             continue
         stamp = _format_article_date(it.get("publishOn") or it.get("ts"))
         if not stamp:
             continue
-        lk = _norm_link(str(it.get("link") or ""))
-        if lk and lk not in by_link:
-            by_link[lk] = stamp
+        for k in _link_match_keys(str(it.get("link") or "")):
+            by_key.setdefault(k, stamp)
         tk = _norm_title(str(it.get("title") or ""))
-        if tk and tk not in by_title:
-            by_title[tk] = stamp
+        if tk:
+            by_key.setdefault(f"title:{tk}", stamp)
+
+    def _lookup(link: str, text: str = "") -> str:
+        for k in _link_match_keys(link):
+            if k in by_key:
+                return by_key[k]
+        lk = _norm_link(link)
+        if lk:
+            for k, stamp in by_key.items():
+                if not k.startswith("slug:") and not k.startswith("id:") and not k.startswith("title:"):
+                    if k.startswith(lk) or lk.startswith(k):
+                        return stamp
+            # slug prefix vs full slug
+            for k, stamp in by_key.items():
+                if k.startswith("slug:") and lk:
+                    slug = k[5:]
+                    last = lk.rsplit("/", 1)[-1]
+                    last = re.sub(r"\.(html?|htm)$", "", last, flags=re.I)
+                    if slug.startswith(last) or last.startswith(slug[: max(12, len(last))]):
+                        return stamp
+        tk = _norm_title(text)
+        if tk:
+            return by_key.get(f"title:{tk}", "")
+        return ""
 
     out: List[Dict[str, Any]] = []
     for row in rows:
@@ -348,12 +389,7 @@ def enrich_digest_rows_with_dates(
         r = dict(row)
         existing = _format_article_date(r.get("date") or r.get("prem"))
         if not existing:
-            lk = _norm_link(str(r.get("link") or ""))
-            existing = by_link.get(lk, "") if lk else ""
-        if not existing:
-            tk = _norm_title(str(r.get("text") or r.get("title") or ""))
-            # text is RU paraphrase — title match is weak; skip if no link
-            existing = by_title.get(tk, "") if tk else ""
+            existing = _lookup(str(r.get("link") or ""), str(r.get("text") or r.get("title") or ""))
         if existing:
             r["date"] = existing
             if not r.get("prem"):
