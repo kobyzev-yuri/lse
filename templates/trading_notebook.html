@@ -380,6 +380,8 @@
   .nb-chart-head a:hover{text-decoration:underline;}
   .nb-chart-wrap{position:relative;height:260px;}
   .nb-chart-status{font-size:12px;color:var(--dim);margin-top:6px;min-height:1.2em;}
+  a.fw-link{color:var(--accent);font-size:12px;margin-left:8px;text-decoration:none;white-space:nowrap;}
+  a.fw-link:hover{text-decoration:underline;}
 
 </style>
 </head>
@@ -1162,7 +1164,7 @@ function renderContent(){
   const hasLiveVix = (d.env||[]).some(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
   html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):""}<span class="hint">VIX / NDX / нефть / FOMC — live; таргеты — вручную на Вердикте</span></h3>
     ${envs}
-    <div class="note">Красный/жёлтый = пауза входов. <b>ФРС</b> = ближайший FOMC (live). <b>Таргеты</b> — не ваш Sell и не ср. PT домов: ручной гейт «волна cut PT <i>вне</i> earnings». Смотрите карточки на «Инвестдома» → на Вердикте кнопки <b>таргеты</b> ok / mid / bad. Один cut ≠ сразу bad; серия cuts → mid/bad. Нефть вверх = гео-стресс.</div>
+    <div class="note">Красный/жёлтый = пауза входов. <b>ФРС</b> = дата FOMC + публичный FedWatch (hold/cut/hike %). <b>Таргеты</b> — не ваш Sell и не ср. PT домов: ручной гейт «волна cut PT <i>вне</i> earnings». Смотрите карточки на «Инвестдома» → на Вердикте кнопки <b>таргеты</b> ok / mid / bad. Один cut ≠ сразу bad; серия cuts → mid/bad. Нефть вверх = гео-стресс. <a href="https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html" target="_blank" rel="noopener">CME FedWatch</a></div>
     </div>`);
 
   html += tabWrap("events", renderEventsTab(d));
@@ -1291,6 +1293,41 @@ function formatEnvLiveBits(env){
   return bits;
 }
 
+const FEDWATCH_TOOL_URL = "https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html";
+
+function findFedEnvRow(env){
+  return (env || []).find(e => {
+    if(!e) return false;
+    if(String(e.metric || "").toLowerCase() === "fed") return true;
+    const lbl = String(e.lbl || "").toLowerCase();
+    return lbl.includes("фрс") || lbl.includes("fed") || lbl.includes("fomc");
+  }) || null;
+}
+
+/** FedWatch hold/cut/hike + link for Verdict Environment row. */
+function formatFedWatchBits(env){
+  const fed = findFedEnvRow(env);
+  const url = FEDWATCH_TOOL_URL;
+  if(!fed) return { text: "", url, fomcSt: "" };
+  const fw = fed.fedwatch;
+  let text = "";
+  if(fw && fw.buckets){
+    const b = fw.buckets;
+    const parts = [`hold ${Math.round(Number(b.hold_pct) || 0)}%`];
+    if((Number(b.cut_pct) || 0) >= 1) parts.push(`cut ${Math.round(Number(b.cut_pct))}%`);
+    if((Number(b.hike_pct) || 0) >= 1) parts.push(`hike ${Math.round(Number(b.hike_pct))}%`);
+    const md = fw.meeting_date ? String(fw.meeting_date) : "";
+    text = md ? `FedWatch ${md}: ${parts.join(" · ")}` : `FedWatch: ${parts.join(" · ")}`;
+  } else if(fw && fw.st_short){
+    text = String(fw.st_short);
+  } else if(/FedWatch/i.test(String(fed.st || ""))){
+    const m = String(fed.st).match(/FedWatch[^·]*/i);
+    text = m ? m[0].trim() : "";
+  }
+  const fomcSt = String(fed.st || "").replace(/\s*·\s*FedWatch[\s\S]*$/i, "").trim();
+  return { text, url: (fw && fw.url) || url, fomcSt };
+}
+
 function computeVerdict(d){
   const env = d.env || [];
   const worstEnv = env.reduce((w,e)=>{
@@ -1307,6 +1344,7 @@ function computeVerdict(d){
   const newsBearish = nsLabel === "bearish";
   const newsPending = !ns;
   const liveBits = formatEnvLiveBits(env);
+  const fwBits = formatFedWatchBits(env);
 
   const indicators = [];
   // One Environment row: VIX + NDX + oil live here.
@@ -1317,12 +1355,19 @@ function computeVerdict(d){
   if(liveBits.length){
     envVal = `${liveBits.join(" · ")} · ${envVal}`;
   }
+  if(fwBits.fomcSt){
+    envVal = `${envVal} · ${fwBits.fomcSt}`;
+  }
+  if(fwBits.text){
+    envVal = `${envVal} · ${fwBits.text}`;
+  }
   indicators.push({
     name:"Environment Check",
     state: worstEnv,
     gate: worstEnv==="bad",
     editKind: "env",
-    val: envVal
+    val: envVal,
+    fedwatchUrl: fwBits.url || FEDWATCH_TOOL_URL,
   });
   indicators.push({
     name:"Макро · тезис",
@@ -1765,11 +1810,14 @@ function renderVerdict(d){
   const v = computeVerdict(d);
   const inds = v.indicators.map(i => {
     if(i.editKind === "env"){
+      const fwHref = i.fedwatchUrl || FEDWATCH_TOOL_URL;
       return `
-    <div class="ind-row">
+    <div class="ind-row" style="flex-wrap:wrap;align-items:flex-start">
       <span class="idot ${esc(i.state)}"></span>
       <span class="iname">${esc(i.name)}</span>
-      <span class="ival">${esc(i.val)}${i.gate?'<span class="igate" style="margin-left:8px">БЛОК</span>':''}${renderEnvInlineControls(d)}</span>
+      <span class="ival">${esc(i.val)}${i.gate?'<span class="igate" style="margin-left:8px">БЛОК</span>':''}
+        <a class="fw-link" href="${esc(fwHref)}" target="_blank" rel="noopener" title="CME FedWatch Tool (публичный)">FedWatch ↗</a>
+        ${renderEnvInlineControls(d)}</span>
     </div>`;
     }
     if(i.editKind === "levels"){
@@ -2369,8 +2417,7 @@ function renderGuideTab(){
       <p>Итог = <b>худшая</b> из строк: ok &lt; mid &lt; bad. Любой <b>bad</b> → весь Check красный + БЛОК входов.</p>
       <table class="guide-table">
         <tr><th>VIX / NDX / нефть</th><td>Live с котировок. Нефть: вверх = геостресс; вниз обычно ok.</td></tr>
-        <tr><th>ФРС</th><td>Live с календаря FOMC (≤1 дня до решения → bad), либо ручные ok/mid/bad поверх.</td></tr>
-        <tr><th>Таргеты (PT cuts)</th><td><b>Только вручную</b> на Вердикте (кнопки «таргеты»). Это не ваш Sell и не средний PT с «Инвестдома». Гейт про <b>волну cut PT вне earnings</b>.</td></tr>
+        <tr><th>ФРС</th><td>Live: дата FOMC (fed.gov) + <b>FedWatch</b> hold/cut/hike % (публичный расчёт по CME settlements + FRED, не платный API). Ручные ok/mid/bad поверх. Инструмент CME: <a href="https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html" target="_blank" rel="noopener">FedWatch Tool</a>.</td></tr>        <tr><th>Таргеты (PT cuts)</th><td><b>Только вручную</b> на Вердикте (кнопки «таргеты»). Это не ваш Sell и не средний PT с «Инвестдома». Гейт про <b>волну cut PT вне earnings</b>.</td></tr>
       </table>
       <div class="gex"><b>Как ставить таргеты</b>
         Факты — с вкладки «Инвестдома» (lowered PT) и дайджеста.

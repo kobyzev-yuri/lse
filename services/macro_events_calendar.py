@@ -284,6 +284,18 @@ def next_fomc_decision(*, days_ahead: int = 120) -> Optional[Dict[str, Any]]:
 
 
 def fomc_env_snapshot() -> Optional[Dict[str, Any]]:
+    """Notebook Environment Check row for ФРС: FOMC date + public FedWatch probs."""
+    base = _fomc_env_snapshot_calendar()
+    try:
+        from services.fedwatch_public import enrich_fomc_env_row
+
+        return enrich_fomc_env_row(base)
+    except Exception as e:
+        logger.debug("FedWatch enrich skipped: %s", e)
+        return base
+
+
+def _fomc_env_snapshot_calendar() -> Dict[str, Any]:
     """Notebook Environment Check row for ФРС from official FOMC calendar."""
     nxt = next_fomc_decision()
     if not nxt:

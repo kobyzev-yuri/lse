@@ -22,10 +22,52 @@ def test_build_news_universe_has_three_groups():
     # Notebook samples include MSFT
     if uni.get("source") == "notebook":
         assert "MSFT" in u
+        note = str(uni.get("note_ru") or "")
+        assert "portfolio" in note.lower() or "не зависит" in note.lower() or "тетрад" in note.lower()
     for t in uni["group3_union"]:
         tags = uni["membership"][t]
         assert tags
         assert set(tags) <= {"g1", "g2", "g3", "new", "notebook"}
+
+
+def test_tickers_from_notebook_includes_overlay(tmp_path, monkeypatch):
+    """UI-added / group-moved tickers in overlay must enter news universe."""
+    import json
+    from pathlib import Path
+
+    import services.notebook_news_digest as m
+    import services.trading_notebook as tn
+
+    base = {
+        "schema_version": 1,
+        "groups": {"1": {"key": "1", "name": "G1"}, "2": {"key": "2", "name": "G2"},
+                   "3": {"key": "3", "name": "G3"}, "n": {"key": "n", "name": "New"}},
+        "tickers": {
+            "MSFT": {"sym": "MSFT", "group": "1", "name": "Microsoft"},
+        },
+    }
+    base_path = tmp_path / "notebook_data.json"
+    base_path.write_text(json.dumps(base), encoding="utf-8")
+    ov = {
+        "schema_version": 1,
+        "tickers": {
+            "ZZNEW": {"sym": "ZZNEW", "group": "n", "is_new": True, "name": "ZZ New"},
+            "MSFT": {"group": "2"},
+        },
+    }
+    ov_path = tmp_path / "overrides.json"
+    ov_path.write_text(json.dumps(ov), encoding="utf-8")
+
+    monkeypatch.setattr(tn, "DEFAULT_DATA_PATH", base_path)
+    monkeypatch.setattr(tn, "DEFAULT_OVERRIDE_PATH", ov_path)
+    monkeypatch.setattr(m, "get_config_value", lambda k, d=None: "notebook" if k == "NOTEBOOK_NEWS_UNIVERSE" else d)
+
+    uni = build_news_universe(equity_only=True)
+    assert uni["source"] == "notebook"
+    assert "ZZNEW" in uni["group3_union"]
+    assert "ZZNEW" in uni["group_new"]
+    assert "MSFT" in uni["group2_game_5m"]
+    assert "MSFT" not in uni["group1_portfolio"]
 
 
 def test_build_sa_fetch_tickers_adds_macro_extras(monkeypatch):

@@ -1,7 +1,7 @@
 """Notebook news digest: notebook groups → SA Finance → knowledge_base → LLM.
 
-Universe primary source: tickers in nastya/notebook/notebook_data.json (by group).
-Fallback: portfolio ∪ GAME_5M if notebook has no equities (until Nastya fills lists).
+Universe = tickers in notebook groups 1/2/3/n (notebook_data.json + UI overlay).
+Independent of portfolio / GAME_5M lists (those are fallback only if notebook is empty).
 Digest JSON is UI/Telegram cache only.
 """
 
@@ -206,24 +206,31 @@ def dedupe_news_items(items: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _tickers_from_notebook_data() -> Dict[str, List[str]]:
-    """Group key → tickers from nastya/notebook/notebook_data.json."""
+    """Group key → equities from notebook JSON + UI overlay (not portfolio / GAME_5M)."""
     try:
-        from services.trading_notebook import load_notebook_data
+        from services.trading_notebook import (
+            apply_ticker_overrides,
+            load_notebook_data,
+            load_notebook_overrides,
+            normalize_notebook_group,
+        )
 
         data = load_notebook_data()
+        base = data.get("tickers") if isinstance(data.get("tickers"), dict) else {}
+        merged = apply_ticker_overrides(base, overrides=load_notebook_overrides())
     except Exception as e:
-        logger.debug("notebook_data load for universe: %s", e)
+        logger.debug("notebook tickers load for universe: %s", e)
         return {"1": [], "2": [], "3": [], "n": []}
     by_g: Dict[str, List[str]] = {"1": [], "2": [], "3": [], "n": []}
-    tickers = data.get("tickers") if isinstance(data.get("tickers"), dict) else {}
-    for sym, row in tickers.items():
+    for sym, row in merged.items():
         if not isinstance(row, dict):
             continue
         u = str(sym or row.get("sym") or "").strip().upper()
         if not u or not is_equity_symbol(u):
             continue
-        g = str(row.get("group") or "").strip().lower()
-        if g not in by_g:
+        try:
+            g = normalize_notebook_group(row.get("group"))
+        except Exception:
             g = "3"
         if u not in by_g[g]:
             by_g[g].append(u)
@@ -231,7 +238,7 @@ def _tickers_from_notebook_data() -> Dict[str, List[str]]:
 
 
 def build_news_universe(*, equity_only: bool = True) -> Dict[str, Any]:
-    """Notebook JSON groups first; optional config fallback for empty notebook."""
+    """Notebook groups (base+overlay) first; portfolio∪5m only if notebook empty or forced."""
     mode = (get_config_value("NOTEBOOK_NEWS_UNIVERSE", "notebook") or "notebook").strip().lower()
     nb = _tickers_from_notebook_data()
     g1, g2, g3, gn = nb.get("1") or [], nb.get("2") or [], nb.get("3") or [], nb.get("n") or []
@@ -250,8 +257,8 @@ def build_news_universe(*, equity_only: bool = True) -> Dict[str, Any]:
         g3, gn = [], []
         union = _unique_upper(g1 + g2)
         note = (
-            "Fallback: notebook_data без тикеров → portfolio ∪ GAME_5M. "
-            "Заполните группы в nastya/notebook/notebook_data.json (ответы Насти)."
+            "Fallback: в тетрадке нет тикеров → portfolio ∪ GAME_5M. "
+            "Добавьте тикеры в группы на /notebook (или notebook_data.json)."
         )
         source = "config_fallback"
     elif mode in ("config", "portfolio_5m", "legacy"):
@@ -263,13 +270,13 @@ def build_news_universe(*, equity_only: bool = True) -> Dict[str, Any]:
         g1, g2 = portfolio, game5m
         g3, gn = [], []
         union = _unique_upper(g1 + g2)
-        note = "NOTEBOOK_NEWS_UNIVERSE=config: portfolio ∪ GAME_5M."
+        note = "NOTEBOOK_NEWS_UNIVERSE=config: portfolio ∪ GAME_5M (тетрадка игнорируется)."
         source = "config"
     else:
         union = notebook_union
         note = (
-            "Universe из notebook_data.json (группы 1/2/3/n). "
-            "Списки уточняются у Насти — см. nastya/NOTEBOOK_QUESTIONS_FOR_NASTYA.md."
+            "Universe = тикеры групп тетрадки 1/2/3/n (notebook_data + overlay UI). "
+            "Не зависит от portfolio / GAME_5M."
         )
         source = "notebook"
 

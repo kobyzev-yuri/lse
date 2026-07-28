@@ -259,16 +259,34 @@ def fetch_and_save_ticker_news() -> int:
     Главный entrypoint для cron: merge Yahoo + Marketaux и сохранить новые строки в KB.
 
     Конфиг:
-      - TICKER_NEWS_TICKERS: список тикеров (по умолчанию TICKERS_FAST)
+      - TICKER_NEWS_TICKERS: явный список (если задан — только он)
+      - иначе тикеры групп тетрадки (1/2/3/n, base+overlay), не portfolio/5m
+      - иначе legacy TICKERS_FAST
       - TICKER_NEWS_LOOKBACK_HOURS: окно (по умолчанию 48)
       - TICKER_NEWS_MAX_PER_TICKER: cap для Yahoo (по умолчанию 5)
       - TICKER_NEWS_EXCHANGE: метка exchange (по умолчанию NYSE)
       - MARKETAUX_API_KEY: ключ Marketaux (если задан — добавляем источник)
     """
     tickers_raw = (get_config_value("TICKER_NEWS_TICKERS", "") or "").strip()
-    if not tickers_raw:
-        tickers_raw = (get_config_value("TICKERS_FAST", "") or "").strip()
-    tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
+    tickers: List[str] = []
+    source_label = "explicit"
+    if tickers_raw:
+        tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
+        source_label = "TICKER_NEWS_TICKERS"
+    else:
+        try:
+            from services.notebook_news_digest import build_news_universe
+
+            uni = build_news_universe(equity_only=True)
+            tickers = list(uni.get("group3_union") or [])
+            if tickers:
+                source_label = f"notebook:{uni.get('source') or 'groups'}"
+        except Exception as e:
+            log.debug("ticker news notebook universe: %s", e)
+        if not tickers:
+            tickers_raw = (get_config_value("TICKERS_FAST", "") or "").strip()
+            tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
+            source_label = "TICKERS_FAST"
     if not tickers:
         return 0
 
@@ -282,7 +300,14 @@ def fetch_and_save_ticker_news() -> int:
         max_per_ticker = 5
     exchange = (get_config_value("TICKER_NEWS_EXCHANGE", "NYSE") or "NYSE").strip().upper()[:16]
 
-    log.info("📰 Ticker news: tickers=%s lookback_hours=%s", tickers[:20], lookback_hours)
+    log.info(
+        "📰 Ticker news: source=%s n=%s tickers=%s lookback_hours=%s max_per=%s",
+        source_label,
+        len(tickers),
+        tickers[:20],
+        lookback_hours,
+        max_per_ticker,
+    )
     yahoo = fetch_yahoo_news(tickers, lookback_hours=lookback_hours, max_per_ticker=max_per_ticker, exchange=exchange)
     log.info("📰 Ticker news: yahoo=%d", len(yahoo))
 

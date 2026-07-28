@@ -29,6 +29,8 @@ python-telegram-bot>=20.0  # Telegram Bot API
 
 # Парсинг и веб-скрапинг
 requests>=2.31.0  # HTTP запросы (Finviz, Investing.com, NewsAPI, Alpha Vantage)
+# Public FedWatch probabilities (CME settlements + FRED); soft-used in notebook Env ФРС
+cme-fedwatch>=0.1.3
 beautifulsoup4>=4.12.0  # Парсинг HTML (Finviz, Investing.com)
 lxml>=4.9.0  # Быстрый парсинг XML/HTML (Investing.com)
 pypdf>=4.0.0  # Текст из earnings PDF (presentation, transcript)
