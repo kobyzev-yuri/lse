@@ -1646,10 +1646,10 @@ def apply_live_env_to_tickers(
                     )
                 ) and len(st) < 40
                 e2.setdefault("live", False)
-                e2.setdefault("source", "заглушка · вручную / макро")
+                e2.setdefault("source", "вручную / макро")
                 if placeholder and e2.get("state") == "mid":
                     e2["state"] = "ok"
-                    e2["st"] = (str(e2.get("st") or "нет сигнала") + " · ждать ручного апдейта").strip()
+                    e2["st"] = "нет сигнала · ok/mid/bad на Вердикте"
             elif not key:
                 st = str(e2.get("st") or "").lower()
                 placeholder = any(
@@ -1663,10 +1663,11 @@ def apply_live_env_to_tickers(
                     )
                 ) and len(st) < 40
                 e2.setdefault("live", False)
-                e2.setdefault("source", "заглушка · вручную / новости PT")
+                # PT cuts gate: manual only — not auto from StockAnalysis consensus.
+                e2.setdefault("source", "вручную · PT cuts вне earnings")
                 if placeholder and e2.get("state") == "mid":
                     e2["state"] = "ok"
-                    e2["st"] = (str(e2.get("st") or "нет сигнала") + " · ждать ручного апдейта").strip()
+                    e2["st"] = "нет волны cut PT · ok/mid/bad на Вердикте (таргеты)"
             new_env.append(e2)
 
         # Ensure live rows exist even if JSON template omitted them.

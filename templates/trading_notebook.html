@@ -416,7 +416,10 @@ const TABS = [
 ];
 
 function stubBadge(where){
-  return `<span class="stub-tag" title="${esc(where)}">заглушка · ${esc(where)}</span>`;
+  let w = String(where || "").trim();
+  // Avoid "заглушка · заглушка · …" when source already carries the word.
+  w = w.replace(/^заглушка\s*[·:]\s*/i, "").trim();
+  return `<span class="stub-tag" title="${esc(w || "заглушка")}">заглушка · ${esc(w || "вручную")}</span>`;
 }
 function liveBadge(where){
   return `<span class="live-tag" title="${esc(where)}">live · ${esc(where)}</span>`;
@@ -942,7 +945,7 @@ function renderContent(){
   const hasLiveVix = (d.env||[]).some(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
   html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):""}<span class="hint">VIX / NDX / нефть / FOMC — live; таргеты — вручную на Вердикте</span></h3>
     ${envs}
-    <div class="note">Красный/жёлтый = пауза входов. <b>ФРС</b> = ближайший FOMC с federalreserve.gov. <b>таргеты</b> = PT cuts вне earnings. Нефть вверх = гео-стресс. Календарь событий — вкладка <b>Events</b>.</div>
+    <div class="note">Красный/жёлтый = пауза входов. <b>ФРС</b> = ближайший FOMC (live). <b>Таргеты</b> — не ваш Sell и не ср. PT домов: ручной гейт «волна cut PT <i>вне</i> earnings». Смотрите карточки на «Инвестдома» → на Вердикте кнопки <b>таргеты</b> ok / mid / bad. Один cut ≠ сразу bad; серия cuts → mid/bad. Нефть вверх = гео-стресс.</div>
     </div>`);
 
   html += tabWrap("events", renderEventsTab(d));
@@ -1241,7 +1244,7 @@ function renderEnvInlineControls(d){
   return `
     <span class="lvl-one" style="margin-left:10px">
       <span class="lk" title="Риторика ФРС / FOMC">фрс</span><span class="env-state-btns">${btns("fed", fed)}</span>
-      <span class="lk" title="PT = Price Target: внезапные понижения таргетов аналитиков вне earnings">таргеты</span><span class="env-state-btns">${btns("pt", pt)}</span>
+      <span class="lk" title="Волна понижений price target аналитиками ВНЕ отчёта (не ваш Sell / не ср. PT). Один cut → обычно ok/mid; серия → mid/bad.">таргеты</span><span class="env-state-btns">${btns("pt", pt)}</span>
       <span class="flag-status" id="envStatus-verdict"></span>
     </span>`;
 }
@@ -1926,8 +1929,15 @@ function renderGuideTab(){
       <table class="guide-table">
         <tr><th>VIX / NDX / нефть</th><td>Live с котировок. Нефть: вверх = геостресс; вниз обычно ok.</td></tr>
         <tr><th>ФРС</th><td>Live с календаря FOMC (≤1 дня до решения → bad), либо ручные ok/mid/bad поверх.</td></tr>
-        <tr><th>Таргеты</th><td>Только вручную — mass cut PT вне earnings.</td></tr>
+        <tr><th>Таргеты (PT cuts)</th><td><b>Только вручную</b> на Вердикте (кнопки «таргеты»). Это не ваш Sell и не средний PT с «Инвестдома». Гейт про <b>волну cut PT вне earnings</b>.</td></tr>
       </table>
+      <div class="gex"><b>Как ставить таргеты</b>
+        Факты — с вкладки «Инвестдома» (lowered PT) и дайджеста.
+        <b>ok</b> — тихо, нет волны cuts.
+        <b>mid</b> — 1–2 заметных cut, тезис ещё жив (у Buy Dip ждать).
+        <b>bad</b> — серия cuts / смена консенсуса вниз вне отчёта → БЛОК входов.
+        После успокоения верните ok. Один cut у одного дома редко = сразу bad.
+      </div>
       <p>Цифры в строке (VIX 17.6 · NDX …) — справка; цвет и БЛОК — от <b>state</b> строк.</p>
     </div>
 
