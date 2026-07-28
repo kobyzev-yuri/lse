@@ -412,7 +412,7 @@ const TABS = [
   {id:"houses",label:"Инвестдома",stub:false},
   {id:"fundament",label:"Фундамент",stub:true},
   {id:"digest",label:"Дайджесты",stub:false},
-  {id:"watchlist",label:"Watchlist · Flash Crash",stub:true},
+  {id:"watchlist",label:"Вне списка",stub:false},
   {id:"guide",label:"Пояснения",stub:false},
 ];
 
@@ -911,7 +911,7 @@ function renderContent(){
     else if(activeTab==="digest"){ c.innerHTML = renderDigest(); }
     else if(activeTab==="guide"){ c.innerHTML = renderGuideTab(); }
     else c.innerHTML = tabWrap(activeTab, `<div class="card"><h3>Нет активного тикера</h3>
-      <p class="note">Выберите группу с тикерами, либо откройте «Дайджесты» / «Watchlist» / «Пояснения».</p></div>`);
+      <p class="note">Выберите группу с тикерами, либо откройте «Дайджесты» / «Вне списка» / «Пояснения».</p></div>`);
     return;
   }
   const d = DATA[current];
@@ -1877,24 +1877,50 @@ function renderDigest(){
 }
 
 function renderWatchlist(){
-  const w = WATCHLIST || {};
-  const flash = w.flash || {};
+  const flash = (WATCHLIST && WATCHLIST.flash) || {};
+  const g3n = tickersInGroup("3").length;
+  const gn = tickersInGroup("n").length;
   return tabWrap("watchlist", `
-    <div class="card"><h3>Правила работы с Watchlist</h3>
-      <p class="note">Правила из notebook_data.json.</p>
-      <ul class="clean">${(w.rules||[]).map(r=>`<li>${r}</li>`).join("")}</ul></div>
-    <div class="card"><h3>Flash Crash<span class="hint">спекулятивные входы ВНЕ списка</span></h3>
-      <div class="kv" style="grid-template-columns:auto 1fr;gap:10px 16px;">
-        <div class="k">Прецедент</div><div class="v" style="text-align:left;font-family:var(--sans)">${esc(flash.precedent||"")}</div>
-        <div class="k">Вопрос</div><div class="v" style="text-align:left;font-family:var(--sans);color:var(--muted)">${esc(flash.question||"")}</div>
+    <div class="card guide-card">
+      <h3>Списка нет — тикеры сюда не попадают</h3>
+      <p>Вкладка <b>«Вне списка»</b> — это <b>не очередь и не авто-лист</b>. Cron / дайджест / сканер <b>ничего сюда не пишут</b>. Нет кнопки «добавить во Flash Crash».</p>
+      <div class="gex"><b>Как тикер «оказывается» в этой ситуации</b>
+        Только у вас в голове: увидели на ленте/TV/сканере чужой −14%, бумаги <b>нет</b> в G1–G3 и «Новые», захотелось откупить.
+        В тетрадке в этот момент карточки нет — это и есть «вне списка».
       </div>
-      <div class="macro" style="margin-top:14px"><b>Риски.</b> ${esc(flash.risk||"")}</div>
+      <p><b>Как тикер попадает в работу по правилам</b> — только вручную сверху:</p>
+      <ol class="guide-ol">
+        <li>Поле символа → группа <b>«Новые»</b> или <b>G3</b> → «В группу».</li>
+        <li>Прописать Buy Dip / Sell / тезис на Вердикте.</li>
+        <li>Дальше жить по Вердикту — уже <b>не</b> Flash Crash.</li>
+      </ol>
+      <p>Не хотите заводить карточку → <b>не торгуете</b>. Иначе это вход мимо дисциплины.</p>
+    </div>
+
+    <div class="card guide-card">
+      <h3>G3 ≠ Flash Crash</h3>
+      <table class="guide-table">
+        <tr><th>G1 / G2</th><td>Уже в тетрадке, план и уровни.</td></tr>
+        <tr><th>G3 · Кандидаты</th><td><b>Внутри</b> тетрадки (сейчас ${g3n}). Вы сами добавили «на проработку».</td></tr>
+        <tr><th>Новые стоки</th><td>Первичный разбор (сейчас ${gn}). Сами добавили из Most Active / SA / идеи.</td></tr>
+        <tr><th>Вне списка</th><td>Карточки <b>нет</b>. Никакой импорт. Только соблазн с рынка.</td></tr>
+      </table>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Если всё же соблазн (правило)</h3>
+      <div class="kv" style="grid-template-columns:auto 1fr;gap:10px 16px;">
+        <div class="k">Прецедент</div><div class="v" style="text-align:left;font-family:var(--sans)">${esc(flash.precedent || "Внезапный провал акции без карточки в тетрадке (пример: −14%).")}</div>
+        <div class="k">Вопрос</div><div class="v" style="text-align:left;font-family:var(--sans);color:var(--muted)">${esc(flash.question || "Стоит ли заходить ради быстрого отскока?")}</div>
+      </div>
+      <div class="macro" style="margin-top:14px"><b>Риски.</b> ${esc(flash.risk || "Нет гарантированных отскоков. Падение без причины может быть началом даунтренда.")}</div>
       <div class="trig" style="border-top:1px solid var(--line);margin-top:10px;padding-top:14px">
         <span class="badge b-watch">ПРАВИЛО</span>
-        <div class="body"><div class="desc" style="color:var(--ink)">${esc(flash.rule||"")}</div></div>
+        <div class="body"><div class="desc" style="color:var(--ink)">${esc(flash.rule || "По умолчанию не входим. Либо сначала карточка в «Новые»/G3, либо крошечный лимит + жёсткие критерии — иначе не трогаем.")}</div></div>
       </div>
-      <div class="note">${esc(flash.why||"")}</div>
-    </div>`);
+      <p class="note" style="margin-top:12px">${esc(flash.why || "После −14% одинаково вероятен отскок 5–7% или ещё −10–15%.")}</p>
+    </div>
+  `);
 }
 
 function renderGuideTab(){
@@ -1983,6 +2009,16 @@ function renderGuideTab(){
         <li><b>Дома как фон</b> — нет свежих mass cut PT; не сидим у High без смысла.</li>
         <li>Всё ок и Close у уровня → <b>исполняем записанный план</b>.</li>
       </ol>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Группы vs «Вне списка»</h3>
+      <table class="guide-table">
+        <tr><th>G1 / G2</th><td>Рабочий план: уровни, вердикт, дома.</td></tr>
+        <tr><th>G3</th><td>Кандидаты <b>уже заведённые</b> в тетрадку — не Flash Crash.</td></tr>
+        <tr><th>Новые</th><td>Первичный разбор; потом в G1–G3 или отсев.</td></tr>
+        <tr><th>Вне списка</th><td>«Левый» тикер без карточки (обвал на ленте). По умолчанию не торгуем; вкладка «Вне списка».</td></tr>
+      </table>
     </div>
 
     <div class="card guide-card">
