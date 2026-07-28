@@ -284,6 +284,15 @@ def _apply_one_ticker_patch(d: Dict[str, Any], patch: Dict[str, Any]) -> Dict[st
             base_pf[k] = v
         d["profile"] = base_pf
         d["profile_override"] = True
+    if isinstance(patch.get("entry"), list):
+        d["entry"] = [str(x)[:500] for x in patch["entry"] if str(x or "").strip()][:20]
+        d["plan_override"] = True
+    if isinstance(patch.get("exit"), list):
+        d["exit"] = [str(x)[:500] for x in patch["exit"] if str(x or "").strip()][:20]
+        d["plan_override"] = True
+    if patch.get("macro") is not None:
+        d["macro"] = str(patch.get("macro") or "")[:800]
+        d["plan_override"] = True
     if isinstance(patch.get("triggers"), list):
         d["triggers"] = _merge_triggers(
             list(d.get("triggers") or []) if isinstance(d.get("triggers"), list) else [],
@@ -1073,6 +1082,64 @@ def update_ticker_profile(
         "ticker": u,
         "horizon": row.get("horizon", base_row.get("horizon")),
         "profile": dict(row["profile"]),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+def update_ticker_plan(
+    sym: str,
+    *,
+    entry: Optional[Sequence[Any]] = None,
+    exit_plan: Optional[Sequence[Any]] = None,
+    macro: Any = ...,
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist entry/exit bullet plan + macro blurb into overrides overlay."""
+    u, base_row = _find_base_ticker(sym)
+    if entry is None and exit_plan is None and macro is ...:
+        raise ValueError("no plan fields to update")
+
+    def _bullets(raw: Optional[Sequence[Any]]) -> List[str]:
+        if raw is None:
+            return []
+        out: List[str] = []
+        for x in raw:
+            s = str(x or "").strip()
+            if not s:
+                continue
+            # Strip HTML-ish leftovers from older notebook samples.
+            s = s.replace("<b>", "").replace("</b>", "")
+            out.append(s[:500])
+            if len(out) >= 20:
+                break
+        return out
+
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    now = datetime.now(timezone.utc).isoformat()
+
+    if entry is not None:
+        row["entry"] = _bullets(entry)
+    if exit_plan is not None:
+        row["exit"] = _bullets(exit_plan)
+    if macro is not ...:
+        row["macro"] = "" if macro is None else str(macro).strip()[:800]
+
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+
+    eff_entry = row["entry"] if "entry" in row else list(base_row.get("entry") or [])
+    eff_exit = row["exit"] if "exit" in row else list(base_row.get("exit") or [])
+    eff_macro = row["macro"] if "macro" in row else str(base_row.get("macro") or "")
+    return {
+        "ticker": u,
+        "entry": list(eff_entry) if isinstance(eff_entry, list) else [],
+        "exit": list(eff_exit) if isinstance(eff_exit, list) else [],
+        "macro": str(eff_macro or ""),
         "updated_at_utc": now,
         "updated_by": row["updated_by"],
     }

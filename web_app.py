@@ -4299,6 +4299,42 @@ async def api_notebook_ticker_profile(sym: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка notebook profile: {e!s}")
 
 
+@app.patch("/api/notebook/tickers/{sym}/plan", response_class=JSONResponse)
+async def api_notebook_ticker_plan(sym: str, request: Request):
+    """Тексты стратегии входа / выхода / макро → overlay."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    updated_by = str(body.get("updated_by") or body.get("updatedBy") or "notebook-ui")[:80]
+    kwargs: Dict[str, Any] = {"updated_by": updated_by}
+    if "entry" in body:
+        kwargs["entry"] = body.get("entry")
+    if "exit" in body:
+        kwargs["exit_plan"] = body.get("exit")
+    if "macro" in body:
+        kwargs["macro"] = body.get("macro")
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import update_ticker_plan
+
+        return update_ticker_plan(sym, **kwargs)
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("PATCH /api/notebook/tickers/%s/plan: %s", sym, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка notebook plan: {e!s}")
+
+
 @app.patch("/api/notebook/tickers/{sym}/triggers", response_class=JSONResponse)
 async def api_notebook_ticker_triggers(sym: str, request: Request):
     """Тексты триггеров Buy/Sell/Watch → overlay. $ уровни — на Вердикте."""

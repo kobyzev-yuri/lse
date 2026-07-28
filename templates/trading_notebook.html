@@ -788,6 +788,47 @@ async function saveProfile(){
   }
 }
 
+function _planLines(id){
+  const el = document.getElementById(id);
+  const raw = (el && el.value != null) ? String(el.value) : "";
+  return raw.split(/\n+/).map(s => s.trim()).filter(Boolean);
+}
+
+async function savePlan(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("planStatus");
+  const btn = document.getElementById("plan-save");
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "сохраняю…"; }
+  const body = {
+    entry: _planLines("plan-entry"),
+    exit: _planLines("plan-exit"),
+    macro: (document.getElementById("plan-macro") || {}).value || "",
+  };
+  try {
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/plan`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    if(Array.isArray(j.entry)) DATA[sym].entry = j.entry;
+    if(Array.isArray(j.exit)) DATA[sym].exit = j.exit;
+    if(j.macro != null) DATA[sym].macro = j.macro;
+    DATA[sym].plan_override = true;
+    applyOverrideMeta(sym, j);
+    if(status){ status.className = "flag-status ok"; status.textContent = "сохранено"; }
+    renderContent();
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    if(btn) btn.disabled = false;
+  }
+}
+
 function triggerLvlDisplay(t, L){
   const kind = String(t.t||"");
   if(kind === "buy" && L.buyDip != null) return `$${L.buyDip} · Buy Dip`;
@@ -924,21 +965,33 @@ function renderContent(){
   html += tabWrap("profile", renderProfile(d, gname));
   html += tabWrap("triggers", renderTriggers(d));
 
-  const entryItems = (d.entry||[]).map(e=>`<li>${e}</li>`).join("");
-  const exitItems = (d.exit||[]).map(e=>`<li>${e}</li>`).join("");
+  const entryText = (d.entry||[]).map(x => String(x||"").replace(/<\/?b>/gi,"")).join("\n");
+  const exitText = (d.exit||[]).map(x => String(x||"").replace(/<\/?b>/gi,"")).join("\n");
   const Lshow = d.levels || {};
   const buyHint = Lshow.buyDip != null ? `$${Lshow.buyDip}` : "не задан";
   const sellHint = Lshow.sell != null ? `$${Lshow.sell}` : "не задан";
   html += tabWrap("entry", `<div class="card">
-    <h3>Стратегия входа<span class="hint">зачем и как заходим · не ордер</span></h3>
-    <p class="note">Текстовый план по тикеру (дисциплина). <b>Числа Buy Dip / Sell для Вердикта</b> задаёте на вкладке Вердикт (сейчас buy ${esc(buyHint)}, sell ${esc(sellHint)}) — они могут отличаться от старых цифр в тексте ниже.</p>
-    ${entryItems ? `<ul class="clean">${entryItems}</ul>` : `<p class="note">План входа ещё не описан.</p>`}
+    <h3>Стратегия входа / выхода<span class="hint">план словами · цифры buy/sell — на Вердикте</span></h3>
+    <p class="note">Впишите план здесь и нажмите OK. Сейчас на Вердикте: buy <b>${esc(buyHint)}</b>, sell <b>${esc(sellHint)}</b>. Каждая строка входа/выхода = один пункт.</p>
+    <div class="edit-grid" style="margin-top:10px">
+      <div class="edit-field" style="grid-column:1/-1">
+        <label>Вход (по пунктам)</label>
+        <textarea id="plan-entry" style="min-height:110px" placeholder="Один чёткий уровень. Buy Dip вписываем по технике.&#10;Держим 3–6 мес. Не активничаем внутри дня.">${esc(entryText)}</textarea>
+      </div>
+      <div class="edit-field" style="grid-column:1/-1">
+        <label>Выход (по пунктам)</label>
+        <textarea id="plan-exit" style="min-height:90px" placeholder="Sell — заранее заданный уровень.&#10;Пересчитываем только при смене макро-картины.">${esc(exitText)}</textarea>
+      </div>
+      <div class="edit-field" style="grid-column:1/-1">
+        <label>Макро-контекст (тезис словами)</label>
+        <textarea id="plan-macro" style="min-height:72px" placeholder="Например: тезис AI до 2027; капекс гиперскейлеров — главный риск.">${esc(d.macro||"")}</textarea>
+      </div>
     </div>
-    <div class="card">
-    <h3>Стратегия выхода<span class="hint">когда фиксируем · не авто-продажа</span></h3>
-    ${exitItems ? `<ul class="clean">${exitItems}</ul>` : `<p class="note">План выхода ещё не описан.</p>`}
-    ${d.macro ? `<div class="macro"><b>Макро-контекст (поверх техники):</b> ${esc(d.macro)}</div>` : ""}
-    <p class="note" style="margin-top:12px">Тумблер <b>тезис</b> на Вердикте — жив ли этот макро-контекст. Выкл → СТОП, даже если цена у Buy Dip.</p>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button type="button" class="edit-btn" id="plan-save" onclick="savePlan()">OK · сохранить план</button>
+      <span class="flag-status" id="planStatus"></span>
+    </div>
+    <p class="note" style="margin-top:12px">Тумблер <b>тезис</b> на Вердикте = этот макро ещё в силе. Выкл → СТОП. План не заменяет Buy Dip / Sell.</p>
     </div>`);
 
   const envs = (d.env||[]).map(e => {
@@ -1906,6 +1959,21 @@ function renderGuideTab(){
         <tr><th>G1 vs G2</th><td>G1 — обычно один чёткий уровень, удержание 3–6 мес. G2 — активнее, горизонт дни–неделя.</td></tr>
       </table>
       <p>Уровни вводите только вы (поля buy / sell + OK). Макро и инвестдома уровень <b>не рисуют</b>.</p>
+    </div>
+
+    <div class="card guide-card">
+      <h3>Тактика входа / выхода</h3>
+      <p>Вкладка <b>«Тактика входа / выхода»</b> — текстовый <b>план дисциплины</b> по тикеру: зачем входим, как держим, когда фиксируем, какой макро-тезис. Это <b>не ордер</b> и не замена Buy Dip / Sell.</p>
+      <table class="guide-table">
+        <tr><th>Вход</th><td>Пункты плана (по строкам). Пример: один уровень, горизонт 3–6 мес, не интрадей.</td></tr>
+        <tr><th>Выход</th><td>Как фиксируем и когда пересматриваем (не на каждом заголовке).</td></tr>
+        <tr><th>Макро-контекст</th><td>Тезис словами. Тумблер <b>тезис</b> на Вердикте = этот текст ещё в силе.</td></tr>
+        <tr><th>Кто вводит</th><td>Вы / Настя на этой вкладке → <b>OK · сохранить план</b>. Цифры уровней — отдельно на Вердикте.</td></tr>
+      </table>
+      <div class="gex"><b>Зачем отдельная вкладка</b>
+        Вердикт отвечает «пора ли исполнять». Тактика отвечает «какой план мы заранее записали».
+        Без плана можно торговать по уровням, но легче сбиться на эмоциях.
+      </div>
     </div>
 
     <div class="card guide-card">
