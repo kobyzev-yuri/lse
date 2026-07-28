@@ -387,7 +387,7 @@
   <div id="content"><div class="card"><p class="note">Загрузка данных…</p></div></div>
 
   <footer>
-    Вердикт: гейты и уровни пишутся в <code>local/notebook/ticker_overrides.json</code>. Close — справочно, не авто-BUY.
+    Уровни и гейты Вердикта сохраняются по кнопкам OK / переключателям. Close — справочно для сравнения с Buy Dip / Sell, не авто-покупка.
   </footer>
 </div>
 
@@ -410,7 +410,7 @@ const TABS = [
   {id:"env",label:"Окружение",stub:false},  // VIX live + ФРС/PT editable
   {id:"events",label:"Events",stub:false},
   {id:"houses",label:"Инвестдома",stub:false},
-  {id:"fundament",label:"Фундамент",stub:true},
+  {id:"fundament",label:"Фундамент",stub:false},
   {id:"digest",label:"Дайджесты",stub:false},
   {id:"guide",label:"Пояснения",stub:false},
 ];
@@ -879,9 +879,9 @@ async function saveTriggers(){
 function renderFundament(d){
   const f = d.fundament;
   if(!f){
-    return tabWrap("fundament", `<div class="card"><h3>Фундамент ${stubBadge("вручную JSON")}</h3>
-      ${stubBox("Карточка не заполнена", "вручную в nastya/notebook/notebook_data.json (эталон — NBIS: кэш / FCF / долг / плюсы / риски). Авто из SA financials пока нет.")}
-      <p class="note">Для ${esc(d.sym)} фундаментальная справка ещё не внесена.</p></div>`);
+    return tabWrap("fundament", `<div class="card"><h3>Фундамент <span class="hint">опционально · не гейт Вердикта</span></h3>
+      <p class="note">Краткая справка по компании (кэш, FCF, долг, плюсы/риски) — <b>фон для тезиса</b>, не сигнал входа. Для ${esc(d.sym)} карточка пока пустая; на решение Buy Dip / Sell это не влияет. Заполнение — по желанию (эталон в данных — NBIS).</p>
+    </div>`);
   }
   const metrics = (f.metrics||[]).map(m => `
     <div class="fund-m">
@@ -893,8 +893,7 @@ function renderFundament(d){
   const risks = (f.risks||[]).map(x=>`<li>${esc(x)}</li>`).join("");
   return tabWrap("fundament", `
     <div class="card">
-      <h3>${esc(d.name)} · фундамент ${stubBadge("вручную JSON · эталон NBIS")}<span class="hint">краткая справка · не сигнал BUY</span></h3>
-      ${stubBox("Не live API", "редактировать вручную в notebook_data.json; позже — возможный парсинг отчётов / 10-Q.")}
+      <h3>${esc(d.name)} · фундамент<span class="hint">краткая справка · не сигнал BUY · не гейт Вердикта</span></h3>
       <div class="fund-tag">${esc(f.tagline||'')}</div>
       <div class="fund-grid">${metrics}</div>
       ${f.margin_ru?`<div class="fund-sec"><b>Маржа:</b> ${esc(f.margin_ru)}</div>`:''}
