@@ -2009,6 +2009,13 @@ def build_notebook_payload(
 ) -> Dict[str, Any]:
     data = load_notebook_data(path)
     tickers_raw = data.get("tickers") if isinstance(data.get("tickers"), dict) else {}
+    # Overlay-only tickers (UI-added) must be present BEFORE price merge,
+    # otherwise GOOGL/TSLA/… get cards with px=None.
+    try:
+        tickers_raw = apply_ticker_overrides(tickers_raw)
+    except Exception as e:
+        logger.debug("ticker overrides skipped: %s", e)
+
     if tickers_filter:
         wanted = set(_normalize_tickers(tickers_filter))
         tickers_raw = {k: v for k, v in tickers_raw.items() if str(k).upper() in wanted}
@@ -2043,11 +2050,6 @@ def build_notebook_payload(
             tickers = apply_live_env_to_tickers(tickers, digest=digest)
         except Exception as e:
             logger.debug("live env overlay skipped: %s", e)
-
-    try:
-        tickers = apply_ticker_overrides(tickers)
-    except Exception as e:
-        logger.debug("ticker overrides skipped: %s", e)
 
     vix_meta = None
     try:
