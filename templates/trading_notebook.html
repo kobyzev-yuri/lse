@@ -292,7 +292,8 @@
   .ditem{border-left:2px solid var(--line);padding:8px 0 8px 12px;margin-bottom:8px;}
   .ditem .dsym{font-family:var(--mono);font-weight:700;font-size:14px;}
   .ditem .dmeta{font-size:11px;color:var(--dim);font-family:var(--mono);margin-top:2px;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;}
-  .ditem .dsrc{color:var(--dim);}
+  .ditem .dsrc{color:var(--muted);}
+  .ditem .dsrc b{color:var(--ink);font-weight:600;font-style:normal;font-family:var(--sans);}
   .ditem .ddate{color:var(--muted);}
   .ditem .dtext{font-size:13px;color:var(--muted);margin-top:3px;}
   .ditem .dprem{font-family:var(--mono);font-size:11px;margin-top:4px;color:var(--dim);}
@@ -446,6 +447,7 @@ let DIGEST_SNAPSHOTS = []; // [{id, date, ...}]
 let DIGEST_RETAIN_DAYS = 14;
 let NEWS_SOURCES = {ingest_channels:[], kb_sources_14d:[], note_ru:""};
 let digestTickerFilter = ""; // "" = all
+let digestSourceFilter = ""; // "" = all
 let CALENDAR = {events:[], days:21, asof_utc:"", counts:{}};
 let housesRefreshFlash = null; // {sym, ok, text}
 
@@ -1276,8 +1278,12 @@ function setDigestTickerFilter(v){
   digestTickerFilter = String(v || "").trim().toUpperCase();
   renderContent();
 }
+function setDigestSourceFilter(v){
+  digestSourceFilter = String(v || "").trim();
+  renderContent();
+}
 
-function digestItemMatchesFilter(it, filt){
+function digestItemMatchesTicker(it, filt){
   if(!filt) return true;
   const sym = String((it && it.sym) || "").toUpperCase();
   if(!sym) return false;
@@ -1285,6 +1291,17 @@ function digestItemMatchesFilter(it, filt){
   // "MSFT · Azure" or "МАКРО · semis" style labels
   const head = sym.split(/[·|,/\s]+/)[0];
   return head === filt || sym.indexOf(filt) >= 0;
+}
+
+function digestItemMatchesSource(it, filt){
+  if(!filt) return true;
+  const src = String((it && it.src) || "").toLowerCase();
+  if(!src) return false;
+  return src === filt.toLowerCase() || src.indexOf(filt.toLowerCase()) >= 0;
+}
+
+function digestItemMatchesFilter(it, tickerFilt, sourceFilt){
+  return digestItemMatchesTicker(it, tickerFilt) && digestItemMatchesSource(it, sourceFilt);
 }
 
 function digestFilterSyms(d){
@@ -1305,23 +1322,49 @@ function digestFilterSyms(d){
   return out.sort();
 }
 
+function digestFilterSources(d){
+  const seen = new Set();
+  const out = [];
+  ["signals","risks","macro","newtickers"].forEach(k => {
+    (d[k] || []).forEach(it => {
+      const raw = String((it && it.src) || "").trim();
+      if(!raw) return;
+      // LLM may merge "Reuters / WSJ" — keep full string as option
+      if(seen.has(raw)) return;
+      seen.add(raw);
+      out.push(raw);
+    });
+  });
+  return out.sort((a,b) => a.localeCompare(b, "en", {sensitivity:"base"}));
+}
+
 function digestFilterBar(d){
   const syms = digestFilterSyms(d);
-  const opts = [`<option value="">Все тикеры</option>`]
+  const sources = digestFilterSources(d);
+  const tickerOpts = [`<option value="">Все тикеры</option>`]
     .concat(syms.map(s => `<option value="${esc(s)}" ${digestTickerFilter===s?"selected":""}>${esc(s)}</option>`))
     .join("");
-  const filt = digestTickerFilter;
+  const sourceOpts = [`<option value="">Все источники</option>`]
+    .concat(sources.map(s => `<option value="${esc(s)}" ${digestSourceFilter===s?"selected":""}>${esc(s)}</option>`))
+    .join("");
+  const tFilt = digestTickerFilter;
+  const sFilt = digestSourceFilter;
   let n = 0;
-  if(filt){
+  if(tFilt || sFilt){
     ["signals","risks","macro","newtickers"].forEach(k => {
-      (d[k] || []).forEach(it => { if(digestItemMatchesFilter(it, filt)) n += 1; });
+      (d[k] || []).forEach(it => {
+        if(digestItemMatchesFilter(it, tFilt, sFilt)) n += 1;
+      });
     });
   }
+  const hasFilt = !!(tFilt || sFilt);
   return `<div class="digest-filter">
-    <label style="font-size:12px;color:var(--dim)">Фильтр по стоку</label>
-    <select id="digestTickerSel" onchange="setDigestTickerFilter(this.value)">${opts}</select>
-    ${filt ? `<span class="df-count">${esc(String(n))} пункт(ов) · ${esc(filt)}</span>
-      <button type="button" class="edit-btn" onclick="setDigestTickerFilter('')">Сбросить</button>` : ""}
+    <label style="font-size:12px;color:var(--dim)">Сток</label>
+    <select id="digestTickerSel" onchange="setDigestTickerFilter(this.value)">${tickerOpts}</select>
+    <label style="font-size:12px;color:var(--dim)">Источник</label>
+    <select id="digestSourceSel" onchange="setDigestSourceFilter(this.value)" style="max-width:min(100%,280px)">${sourceOpts}</select>
+    ${hasFilt ? `<span class="df-count">${esc(String(n))} пункт(ов)</span>
+      <button type="button" class="edit-btn" onclick="setDigestTickerFilter('');setDigestSourceFilter('')">Сбросить</button>` : ""}
   </div>`;
 }
 
@@ -2499,7 +2542,7 @@ function digestItem(it, cls){
   const when = String(it.date || it.prem || "").trim();
   const src = String(it.src || "").trim();
   const metaBits = [];
-  if(src) metaBits.push(`<span class="dsrc">${esc(src)}</span>`);
+  if(src) metaBits.push(`<span class="dsrc"><b>Источник</b> · ${esc(src)}</span>`);
   if(when) metaBits.push(`<span class="ddate">${esc(when)}</span>`);
   if(openHint) metaBits.push(openHint);
   const metaHtml = metaBits.length ? `<div class="dmeta">${metaBits.join("")}</div>` : "";
@@ -2661,15 +2704,19 @@ function renderDigest(){
       ${digestSourcesHtml()}`);
   }
 
-  const filt = digestTickerFilter;
+  const tFilt = digestTickerFilter;
+  const sFilt = digestSourceFilter;
   const empty = (arr, label) => {
-    const rows = (arr||[]).filter(x => digestItemMatchesFilter(x, filt));
-    return rows.length ? rows.map(x=>digestItem(x,label)).join("") : `<p class="note">Пока пусто${filt?` · нет пунктов по ${esc(filt)}`:""}.</p>`;
+    const rows = (arr||[]).filter(x => digestItemMatchesFilter(x, tFilt, sFilt));
+    const hint = (tFilt || sFilt)
+      ? ` · нет пунктов` + (tFilt ? ` по ${esc(tFilt)}` : "") + (sFilt ? ` · ${esc(sFilt)}` : "")
+      : "";
+    return rows.length ? rows.map(x=>digestItem(x,label)).join("") : `<p class="note">Пока пусто${hint}.</p>`;
   };
   return tabWrap("digest", variantSwitch + digestNavHtml() + digestFilterBar(d) + `
     <div class="card">
       <div class="digest-head"><h3 style="margin:0">📊 Утренний дайджест ${hasLive?liveBadge("KB + LLM cron"):""}</h3><span class="dt">${esc(d.date||"")}</span></div>
-      <p class="note">Это <b>не лента всех новостей</b>. Один утренний снимок (кэш): LLM за окно KB → 4 корзины. Фильтр по стоку — ниже. Полный список источников — во вкладке «Логика фильтра».</p>
+      <p class="note">Это <b>не лента всех новостей</b>. Один утренний снимок (кэш): LLM за окно KB → 4 корзины. Фильтры: сток и <b>источник</b>. Полный список каналов — «Логика фильтра».</p>
       ${hasLive ? "" : `<p class="note">Нет свежего дайджеста — cron 12:30 UTC или scripts/run_notebook_news_digest.py --from-kb-only</p>`}
       <div class="filterstat">
         <span class="fstat"><b>${d.filtered||0}</b> статей обработано</span>

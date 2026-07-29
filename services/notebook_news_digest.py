@@ -830,9 +830,13 @@ def format_digest_telegram(digest: Optional[Dict[str, Any]] = None, *, max_items
             if not isinstance(row, dict):
                 continue
             sym = row.get("sym") or "?"
+            src = str(row.get("src") or "").strip()
             text = str(row.get("text") or "").strip()
             tac = re.sub(r"<[^>]+>", "", str(row.get("tac") or "")).strip()
-            lines.append(f"  • {sym}: {text[:180]}")
+            head = f"  • {sym}"
+            if src:
+                head += f" [{src}]"
+            lines.append(f"{head}: {text[:180]}")
             if tac:
                 lines.append(f"    → {tac[:160]}")
         if len(rows) > max_items:
