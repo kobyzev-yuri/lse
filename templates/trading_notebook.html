@@ -446,8 +446,9 @@ let DIGEST_SNAPSHOT_ID = "latest";
 let DIGEST_SNAPSHOTS = []; // [{id, date, ...}]
 let DIGEST_RETAIN_DAYS = 14;
 let NEWS_SOURCES = {ingest_channels:[], kb_sources_14d:[], note_ru:""};
-let digestTickerFilter = ""; // "" = all
+let digestTickerFilter = ""; // "" = all (only when not following current)
 let digestSourceFilter = ""; // "" = all
+let digestTickerFollowCurrent = true; // default: filter = current ticker
 let CALENDAR = {events:[], days:21, asof_utc:"", counts:{}};
 let housesRefreshFlash = null; // {sym, ok, text}
 
@@ -775,8 +776,20 @@ function selectGroup(g){
   current = list.length ? list[0].sym : null;
   renderGroupNav(); renderTickers(); renderContent();
 }
-function selectTicker(s){ current = s; renderGroupTools(); renderTickers(); renderContent(); }
-function selectTab(t){ activeTab = t; renderTabs(); renderContent(); }
+function selectTicker(s){
+  current = s;
+  if(digestTickerFollowCurrent && s){
+    digestTickerFilter = String(s).toUpperCase();
+  }
+  renderGroupTools(); renderTickers(); renderContent();
+}
+function selectTab(t){
+  activeTab = t;
+  if(t === "digest" && digestTickerFollowCurrent && current){
+    digestTickerFilter = String(current).toUpperCase();
+  }
+  renderTabs(); renderContent();
+}
 
 function tabWrap(id, inner){
   return `<div class="tab-body ${id===activeTab?'on':''}" id="tab-${id}">${inner}</div>`;
@@ -1274,12 +1287,26 @@ function envSourceHint(lbl){
 }
 
 function setDigestVariant(v){ digestVariant = v; renderContent(); }
+function effectiveDigestTickerFilter(){
+  if(digestTickerFollowCurrent && current){
+    return String(current).toUpperCase();
+  }
+  return String(digestTickerFilter || "").trim().toUpperCase();
+}
+
 function setDigestTickerFilter(v){
   digestTickerFilter = String(v || "").trim().toUpperCase();
+  digestTickerFollowCurrent = false; // explicit pick (incl. «Все»)
   renderContent();
 }
 function setDigestSourceFilter(v){
   digestSourceFilter = String(v || "").trim();
+  renderContent();
+}
+function resetDigestFilters(){
+  digestTickerFollowCurrent = true;
+  digestTickerFilter = current ? String(current).toUpperCase() : "";
+  digestSourceFilter = "";
   renderContent();
 }
 
@@ -1339,16 +1366,17 @@ function digestFilterSources(d){
 }
 
 function digestFilterBar(d){
-  const syms = digestFilterSyms(d);
+  const tFilt = effectiveDigestTickerFilter();
+  const sFilt = digestSourceFilter;
+  let syms = digestFilterSyms(d);
+  if(tFilt && !syms.includes(tFilt)) syms = [tFilt].concat(syms);
   const sources = digestFilterSources(d);
   const tickerOpts = [`<option value="">Все тикеры</option>`]
-    .concat(syms.map(s => `<option value="${esc(s)}" ${digestTickerFilter===s?"selected":""}>${esc(s)}</option>`))
+    .concat(syms.map(s => `<option value="${esc(s)}" ${tFilt===s?"selected":""}>${esc(s)}${digestTickerFollowCurrent && current && s===String(current).toUpperCase()?" · текущий":""}</option>`))
     .join("");
   const sourceOpts = [`<option value="">Все источники</option>`]
-    .concat(sources.map(s => `<option value="${esc(s)}" ${digestSourceFilter===s?"selected":""}>${esc(s)}</option>`))
+    .concat(sources.map(s => `<option value="${esc(s)}" ${sFilt===s?"selected":""}>${esc(s)}</option>`))
     .join("");
-  const tFilt = digestTickerFilter;
-  const sFilt = digestSourceFilter;
   let n = 0;
   if(tFilt || sFilt){
     ["signals","risks","macro","newtickers"].forEach(k => {
@@ -1358,13 +1386,16 @@ function digestFilterBar(d){
     });
   }
   const hasFilt = !!(tFilt || sFilt);
+  const followHint = digestTickerFollowCurrent && tFilt
+    ? `<span class="df-count" title="Следит за выбранным тикером">по ${esc(tFilt)}</span>`
+    : (hasFilt ? `<span class="df-count">${esc(String(n))} пункт(ов)</span>` : "");
   return `<div class="digest-filter">
     <label style="font-size:12px;color:var(--dim)">Сток</label>
     <select id="digestTickerSel" onchange="setDigestTickerFilter(this.value)">${tickerOpts}</select>
     <label style="font-size:12px;color:var(--dim)">Источник</label>
     <select id="digestSourceSel" onchange="setDigestSourceFilter(this.value)" style="max-width:min(100%,280px)">${sourceOpts}</select>
-    ${hasFilt ? `<span class="df-count">${esc(String(n))} пункт(ов)</span>
-      <button type="button" class="edit-btn" onclick="setDigestTickerFilter('');setDigestSourceFilter('')">Сбросить</button>` : ""}
+    ${followHint}
+    ${hasFilt || sFilt ? `<button type="button" class="edit-btn" onclick="resetDigestFilters()" title="Вернуть фильтр к текущему тикеру">Сбросить</button>` : ""}
   </div>`;
 }
 
@@ -2704,7 +2735,7 @@ function renderDigest(){
       ${digestSourcesHtml()}`);
   }
 
-  const tFilt = digestTickerFilter;
+  const tFilt = effectiveDigestTickerFilter();
   const sFilt = digestSourceFilter;
   const empty = (arr, label) => {
     const rows = (arr||[]).filter(x => digestItemMatchesFilter(x, tFilt, sFilt));
@@ -2716,7 +2747,7 @@ function renderDigest(){
   return tabWrap("digest", variantSwitch + digestNavHtml() + digestFilterBar(d) + `
     <div class="card">
       <div class="digest-head"><h3 style="margin:0">📊 Утренний дайджест ${hasLive?liveBadge("KB + LLM cron"):""}</h3><span class="dt">${esc(d.date||"")}</span></div>
-      <p class="note">Это <b>не лента всех новостей</b>. Один утренний снимок (кэш): LLM за окно KB → 4 корзины. Фильтры: сток и <b>источник</b>. Полный список каналов — «Логика фильтра».</p>
+      <p class="note">Это <b>не лента всех новостей</b>. Один утренний снимок (кэш): LLM за окно KB → 4 корзины. Фильтр по стоку по умолчанию = <b>текущий тикер</b>; можно выбрать «Все» или другой. Плюс фильтр по источнику. Полный список каналов — «Логика фильтра».</p>
       ${hasLive ? "" : `<p class="note">Нет свежего дайджеста — cron 12:30 UTC или scripts/run_notebook_news_digest.py --from-kb-only</p>`}
       <div class="filterstat">
         <span class="fstat"><b>${d.filtered||0}</b> статей обработано</span>
