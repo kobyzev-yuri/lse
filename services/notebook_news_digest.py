@@ -1264,3 +1264,77 @@ def load_latest_digest(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
         return None
     dig = pack.get("digest")
     return dig if isinstance(dig, dict) else None
+
+
+# Ingest channels that feed knowledge_base → morning digest (cron fetch_news_cron).
+NOTEBOOK_NEWS_INGEST_CHANNELS: List[Dict[str, str]] = [
+    {"id": "Seeking Alpha Finance", "via": "RapidAPI SA → KB", "role": "primary ticker news"},
+    {"id": "Yahoo Finance", "via": "TickerNews merge", "role": "ticker headlines"},
+    {"id": "Marketaux", "via": "TickerNews merge (if key)", "role": "ticker headlines"},
+    {"id": "Investing.com News", "via": "fetch_news_cron investing", "role": "market / ticker"},
+    {"id": "Investing.com Economic Calendar", "via": "calendar cron", "role": "macro calendar"},
+    {"id": "NewsAPI", "via": "fetch_news_cron", "role": "wire / general"},
+    {"id": "Alpha Vantage", "via": "fetch_news_cron core", "role": "sentiment / headlines"},
+    {"id": "RSS", "via": "fetch_news_cron core", "role": "feeds"},
+    {"id": "Yahoo Earnings (yfinance)", "via": "earnings calendar", "role": "earnings dates (not headlines)"},
+]
+
+
+def notebook_news_sources_catalog(*, days: int = 14, limit: int = 80) -> Dict[str, Any]:
+    """Ingest channel list + live KB source counts (for Дайджест UI)."""
+    live: List[Dict[str, Any]] = []
+    err = ""
+    try:
+        from news_importer import get_news_sources_stats
+        from sqlalchemy import create_engine
+        from config_loader import get_database_url
+
+        eng = create_engine(get_database_url())
+        live = get_news_sources_stats(eng, days=max(1, int(days)))[: max(1, int(limit))]
+    except Exception as e:
+        err = str(e)[:240]
+        logger.debug("notebook news sources stats: %s", e)
+    return {
+        "ingest_channels": list(NOTEBOOK_NEWS_INGEST_CHANNELS),
+        "kb_sources_14d": live,
+        "days": int(days),
+        "error": err or None,
+        "note_ru": (
+            "Дайджест читает все источники KB за lookback (по умолчанию ALL), "
+            "не только Seeking Alpha. Ниже — каналы ingest cron и фактические source за 14д."
+        ),
+    }
+
+
+def watchlist_candidates_from_digest(digest: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Map digest «новые тикеры» → Watchlist candidates (SA/KB via morning LLM)."""
+    out: List[Dict[str, Any]] = []
+    if not isinstance(digest, dict):
+        return out
+    seen = set()
+    for it in digest.get("newtickers") or []:
+        if not isinstance(it, dict):
+            continue
+        sym = str(it.get("sym") or "").strip().upper()
+        if not sym or sym in seen:
+            continue
+        # Skip macro-ish labels
+        if "МАКРО" in sym or sym.startswith("MACRO"):
+            continue
+        seen.add(sym)
+        text = str(it.get("text") or "").strip()
+        tac = str(it.get("tac") or "").strip()
+        # Prefer plain rationale without HTML tags for watchlist card
+        tac_plain = re.sub(r"<[^>]+>", "", tac).strip()
+        out.append(
+            {
+                "sym": sym,
+                "src": str(it.get("src") or "Seeking Alpha / KB")[:80],
+                "text": text[:400],
+                "rationale": (tac_plain or text)[:400],
+                "link": str(it.get("link") or "")[:300],
+                "date": str(it.get("date") or it.get("prem") or "")[:40],
+                "via": "digest_newtickers",
+            }
+        )
+    return out

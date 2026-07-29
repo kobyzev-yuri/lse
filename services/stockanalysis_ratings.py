@@ -468,6 +468,42 @@ def format_analyst_report(bundle: AnalystBundle, *, limit: Optional[int] = None)
     return "\n".join(lines)
 
 
+def _house_thesis_line(r: AnalystRating) -> str:
+    """1–2 short sentences from SA action/rating/PT (no full research note on StockAnalysis)."""
+    action = (r.action or "").strip()
+    rate = (r.position or "").strip()
+    pt = (r.price_target or "").strip()
+    upside = (r.upside_downside or "").strip()
+    date_s = (r.date or "").strip()
+    analyst = (r.analyst or "").strip()
+
+    s1_bits: List[str] = []
+    if action and rate:
+        s1_bits.append(f"{action} → {rate}")
+    elif rate:
+        s1_bits.append(f"Рейтинг {rate}")
+    elif action:
+        s1_bits.append(action)
+    if pt:
+        s1_bits.append(f"PT {pt}" + (f" ({upside})" if upside else ""))
+    s1 = "; ".join(s1_bits)
+
+    s2_bits: List[str] = []
+    if analyst:
+        s2_bits.append(analyst)
+    if date_s:
+        s2_bits.append(f"обн. {date_s}")
+    s2 = ", ".join(s2_bits)
+
+    if s1 and s2:
+        return f"{s1}. {s2}."
+    if s1:
+        return s1 if s1.endswith(".") else f"{s1}."
+    if s2:
+        return s2 if s2.endswith(".") else f"{s2}."
+    return ""
+
+
 def to_notebook_houses(
     bundle: AnalystBundle,
     *,
@@ -478,13 +514,12 @@ def to_notebook_houses(
     for r in bundle.ratings[:limit]:
         if not r.firm:
             continue
-        quote_bits = [x for x in (r.date, r.action, r.upside_downside) if x]
         houses.append(
             {
                 "firm": r.firm,
                 "rate": r.position or "—",
                 "pt": r.price_target or "—",
-                "quote": " · ".join(quote_bits),
+                "quote": _house_thesis_line(r)[:320],
                 "tac": "",
             }
         )

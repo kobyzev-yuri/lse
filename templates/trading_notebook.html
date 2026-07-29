@@ -258,6 +258,19 @@
   .digest-nav .edit-btn{padding:4px 10px;}
   .digest-nav .dn-meta{font-size:12px;color:var(--muted);font-family:var(--mono);}
   .digest-nav .dn-live{font-size:11px;color:#5fd67c;font-family:var(--mono);}
+  .digest-filter{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px;}
+  .digest-filter select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;font-family:var(--mono);}
+  .digest-filter .df-count{font-size:12px;color:var(--muted);font-family:var(--mono);}
+  .src-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px;}
+  .src-table th,.src-table td{text-align:left;padding:5px 8px;border-top:1px solid var(--line);vertical-align:top;}
+  .src-table th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.4px;font-weight:600;}
+  .src-table .n{font-family:var(--mono);text-align:right;white-space:nowrap;}
+  .wl-cand{border-top:1px solid var(--line);padding:10px 0;}
+  .wl-cand:first-of-type{border-top:none;padding-top:0;}
+  .wl-cand .wl-sym{font-family:var(--mono);font-weight:700;font-size:14px;margin-right:8px;}
+  .wl-cand .wl-src{font-size:11px;color:var(--dim);font-family:var(--mono);}
+  .wl-cand .wl-text{font-size:13px;color:var(--muted);margin-top:4px;line-height:1.45;}
+  .wl-cand .wl-rat{font-size:12.5px;color:var(--ink);margin-top:4px;line-height:1.4;}
   .pipe-table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0 4px;}
   .pipe-table th,.pipe-table td{text-align:left;padding:8px 10px;border-top:1px solid var(--line);vertical-align:top;}
   .pipe-table th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px;width:32%;}
@@ -431,6 +444,8 @@ let DIGEST_PIPELINE = {};
 let DIGEST_SNAPSHOT_ID = "latest";
 let DIGEST_SNAPSHOTS = []; // [{id, date, ...}]
 let DIGEST_RETAIN_DAYS = 14;
+let NEWS_SOURCES = {ingest_channels:[], kb_sources_14d:[], note_ru:""};
+let digestTickerFilter = ""; // "" = all
 let CALENDAR = {events:[], days:21, asof_utc:"", counts:{}};
 let housesRefreshFlash = null; // {sym, ok, text}
 
@@ -445,6 +460,7 @@ const TABS = [
   {id:"houses",label:"Инвестдома",stub:false},
   {id:"fundament",label:"Фундамент",stub:false},
   {id:"digest",label:"Дайджесты",stub:false},
+  {id:"watchlist",label:"Watchlist",stub:false},
   {id:"guide",label:"Пояснения",stub:false},
 ];
 
@@ -566,6 +582,7 @@ function applyBoot(boot){
   DIGEST_BUCKETS = boot.digest_buckets || [];
   DIGEST_PIPELINE = boot.digest_pipeline || {};
   DIGEST_SNAPSHOT_ID = boot.digest_snapshot_id || "latest";
+  NEWS_SOURCES = boot.news_sources || NEWS_SOURCES;
   CALENDAR = boot.calendar || CALENDAR;
   const principle = boot.principle_ru || "";
   document.getElementById("principle").innerHTML = principle;
@@ -1127,9 +1144,10 @@ function renderContent(){
   const c = document.getElementById("content");
   if(!current){
     if(activeTab==="digest"){ c.innerHTML = renderDigest(); }
+    else if(activeTab==="watchlist"){ c.innerHTML = renderWatchlist(); }
     else if(activeTab==="guide"){ c.innerHTML = renderGuideTab(); }
     else c.innerHTML = tabWrap(activeTab, `<div class="card"><h3>Нет активного тикера</h3>
-      <p class="note">Выберите группу с тикерами, либо откройте «Дайджесты» / «Пояснения».</p></div>`);
+      <p class="note">Выберите группу с тикерами, либо откройте «Дайджесты» / «Watchlist» / «Пояснения».</p></div>`);
     return;
   }
   const d = DATA[current];
@@ -1218,7 +1236,7 @@ function renderContent(){
       <button type="button" class="edit-btn" id="houses-refresh" onclick="refreshHouses()">Обновить с StockAnalysis</button>
       <span class="${flashCls}" id="housesStatus">${flashTxt}</span>
     </div>
-    <p class="note" style="margin:0 0 10px">Консенсус и таргеты — <b>полная статистика StockAnalysis</b> (не среднее по списку ниже). В списке — до ~10–12 последних домов (лимит парсинга). На Вердикте консенсус <b>только для чтения</b>. Buy Dip / Sell — ваши уровни.</p>
+    <p class="note" style="margin:0 0 10px">Консенсус и таргеты — <b>полная статистика StockAnalysis</b> (не среднее по списку ниже). В списке — до ~10–12 последних домов. Под карточкой — <b>1–2 предложения</b> из действия/рейтинга/PT (полный research note SA не отдаёт). На Вердикте консенсус <b>только для чтения</b>. Buy Dip / Sell — ваши уровни.</p>
     <div class="concens" data-houses-ui="v2">
       <div class="cell"><span class="cl">Консенсус SA</span><span class="cv">${esc(cons.rating||'—')}</span></div>
       <div class="cell"><span class="cl">Ср. таргет SA</span><span class="cv" style="color:var(--accent)">${esc(consPt)}${rs.nTargets ? `<span class="note" style="display:block;font-weight:400;margin-top:2px">n=${esc(String(rs.nTargets))} PT</span>` : ""}</span></div>
@@ -1238,6 +1256,7 @@ function renderContent(){
 
   html += renderFundament(d);
   html += renderDigest();
+  html += renderWatchlist();
   html += renderGuideTab();
   c.innerHTML = html;
 }
@@ -1253,6 +1272,143 @@ function envSourceHint(lbl){
 }
 
 function setDigestVariant(v){ digestVariant = v; renderContent(); }
+function setDigestTickerFilter(v){
+  digestTickerFilter = String(v || "").trim().toUpperCase();
+  renderContent();
+}
+
+function digestItemMatchesFilter(it, filt){
+  if(!filt) return true;
+  const sym = String((it && it.sym) || "").toUpperCase();
+  if(!sym) return false;
+  if(sym === filt) return true;
+  // "MSFT · Azure" or "МАКРО · semis" style labels
+  const head = sym.split(/[·|,/\s]+/)[0];
+  return head === filt || sym.indexOf(filt) >= 0;
+}
+
+function digestFilterSyms(d){
+  const seen = new Set();
+  const out = [];
+  ["signals","risks","macro","newtickers"].forEach(k => {
+    (d[k] || []).forEach(it => {
+      const raw = String((it && it.sym) || "").trim();
+      if(!raw) return;
+      const u = raw.toUpperCase();
+      const head = u.split(/[·|,/\s]+/)[0];
+      const key = /^[A-Z.]{1,8}$/.test(head) ? head : u;
+      if(seen.has(key)) return;
+      seen.add(key);
+      out.push(key);
+    });
+  });
+  return out.sort();
+}
+
+function digestFilterBar(d){
+  const syms = digestFilterSyms(d);
+  const opts = [`<option value="">Все тикеры</option>`]
+    .concat(syms.map(s => `<option value="${esc(s)}" ${digestTickerFilter===s?"selected":""}>${esc(s)}</option>`))
+    .join("");
+  const filt = digestTickerFilter;
+  let n = 0;
+  if(filt){
+    ["signals","risks","macro","newtickers"].forEach(k => {
+      (d[k] || []).forEach(it => { if(digestItemMatchesFilter(it, filt)) n += 1; });
+    });
+  }
+  return `<div class="digest-filter">
+    <label style="font-size:12px;color:var(--dim)">Фильтр по стоку</label>
+    <select id="digestTickerSel" onchange="setDigestTickerFilter(this.value)">${opts}</select>
+    ${filt ? `<span class="df-count">${esc(String(n))} пункт(ов) · ${esc(filt)}</span>
+      <button type="button" class="edit-btn" onclick="setDigestTickerFilter('')">Сбросить</button>` : ""}
+  </div>`;
+}
+
+function digestSourcesHtml(){
+  const ns = NEWS_SOURCES || {};
+  const channels = ns.ingest_channels || [];
+  const live = ns.kb_sources_14d || [];
+  const chRows = channels.map(c => `<tr>
+    <td>${esc(c.id||"")}</td><td>${esc(c.via||"")}</td><td>${esc(c.role||"")}</td>
+  </tr>`).join("") || `<tr><td colspan="3" class="note">нет списка каналов</td></tr>`;
+  const liveRows = live.slice(0, 40).map(r => `<tr>
+    <td>${esc(r.source||"")}</td><td class="n">${esc(String(r.count||0))}</td>
+  </tr>`).join("") || `<tr><td colspan="2" class="note">нет статистики KB</td></tr>`;
+  return `<div class="card" style="margin-top:12px">
+    <h3>Источники новостей</h3>
+    <p class="note">${esc(ns.note_ru || "Каналы ingest → knowledge_base → утренний дайджест.")}</p>
+    <h4 style="margin:12px 0 4px;font-size:13px">Каналы ingest (cron)</h4>
+    <table class="src-table"><thead><tr><th>Источник</th><th>Как</th><th>Роль</th></tr></thead>
+      <tbody>${chRows}</tbody></table>
+    <h4 style="margin:14px 0 4px;font-size:13px">Фактически в KB за 14д (top)</h4>
+    <table class="src-table"><thead><tr><th>source</th><th class="n">N</th></tr></thead>
+      <tbody>${liveRows}</tbody></table>
+    ${ns.error ? `<p class="note" style="color:#ef8582">stats: ${esc(ns.error)}</p>` : ""}
+  </div>`;
+}
+
+function renderWatchlist(){
+  const wl = WATCHLIST || {};
+  const rules = (wl.rules || []).map(r => `<li>${r}</li>`).join("");
+  const flash = wl.flash || {};
+  const cands = wl.candidates || [];
+  const candHtml = cands.length
+    ? cands.map(c => {
+        const sym = String(c.sym || "").toUpperCase();
+        const inNb = !!DATA[sym];
+        const addHint = inNb
+          ? `<span class="note">уже в тетрадке (G${esc(String((DATA[sym].group)||"?"))})</span>`
+          : `<button type="button" class="edit-btn" onclick="addWatchlistCandidate('${esc(sym)}')">В группу 3 →</button>`;
+        const href = String(c.link || "").trim();
+        const link = href ? `<a class="dlink" href="${esc(href)}" target="_blank" rel="noopener">↗ SA/источник</a>` : "";
+        return `<div class="wl-cand">
+          <span class="wl-sym">${esc(sym)}</span>
+          <span class="wl-src">${esc(c.src||"")} · ${esc(c.date||"")}</span>
+          <div class="wl-text">${esc(c.text||"")}</div>
+          <div class="wl-rat"><b>Обоснование:</b> ${esc(c.rationale || c.text || "—")}</div>
+          <div style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">${addHint}${link}</div>
+        </div>`;
+      }).join("")
+    : `<p class="note">Пока пусто — утренний дайджест не вернул «Новые тикеры» (или снимок без кандидатов). Источник: SA/KB → LLM корзина newtickers.</p>`;
+  return tabWrap("watchlist", `<div class="card">
+    <h3>Watchlist · кандидаты с Seeking Alpha ${liveBadge(wl.candidates_via || "digest newtickers")}</h3>
+    <p class="note">В первую очередь — новые стоки из утреннего дайджеста (вне групп 1/2/3), с кратким обоснованием. Список правил ниже — черновик; критерии добавления уточним.</p>
+    <p class="note">Снимок: ${esc(wl.candidates_asof || DIGEST.date || "—")}</p>
+    ${candHtml}
+  </div>
+  <div class="card" style="margin-top:12px">
+    <h3>Правила (черновик)</h3>
+    <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--muted);line-height:1.5">${rules || "<li>пока не формализованы</li>"}</ul>
+    ${flash.rule ? `<div class="macro" style="margin-top:12px"><b>Flash crash вне списка</b><br>${esc(flash.rule)}<br><span class="note">${esc(flash.why||"")}</span></div>` : ""}
+  </div>`);
+}
+
+async function addWatchlistCandidate(sym){
+  const u = String(sym || "").trim().toUpperCase();
+  if(!u) return;
+  if(!confirm(`Добавить ${u} в группу 3 (новые)?`)) return;
+  try {
+    const r = await fetch("/api/notebook/tickers", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({sym:u, group:"3", updated_by:"watchlist-ui", bootstrap:true}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    const card = j.card || {sym:u, group:"3", name:u};
+    DATA[u] = Object.assign({sym:u, group:"3"}, card);
+    WATCHLIST = Object.assign({}, WATCHLIST, {
+      candidates: (WATCHLIST.candidates||[]).filter(c => String(c.sym).toUpperCase() !== u),
+    });
+    currentGroup = "3";
+    current = u;
+    activeTab = "verdict";
+    renderGroupTools(); renderTickers(); renderTabs(); renderContent();
+  } catch(e){
+    alert("Не удалось добавить: " + (e.message || e));
+  }
+}
 
 function vixFearLabel(val, state){
   const v = Number(val);
@@ -1935,10 +2091,10 @@ function renderChartTab(d){
   });
   return `<div class="card nb-chart-card">
     <div class="nb-chart-head">
-      <h4>${esc(d.sym)} · Daily · quotes ${liveBadge("1d")}</h4>
+      <h4>${esc(d.sym)} · Daily · quotes ${liveBadge("yfinance→DB")}</h4>
       <a href="/portfolio/daily?ticker=${encodeURIComponent(d.sym)}" target="_blank" rel="noopener">полный daily →</a>
     </div>
-    <p class="note" style="margin:0 0 8px">Close + SMA5 из <code>/api/portfolio/chart</code>. Линии: Buy Dip <b>${esc(buyHint)}</b>, Sell <b>${esc(sellHint)}</b> (уровни с Вердикта).</p>
+    <p class="note" style="margin:0 0 8px">Не live-стрим Yahoo. Дневной <b>Close + SMA5</b> из Postgres <code>quotes</code> (seed/cron через yfinance). Обновление котировок: ~каждые 2ч в торг. день + вечерний cron; график перечитывается при открытии вкладки. Наведите на точку — <b>дата и цена</b>. Линии: Buy Dip <b>${esc(buyHint)}</b>, Sell <b>${esc(sellHint)}</b>.</p>
     <div class="nb-chart-wrap" style="height:320px"><canvas id="nb-daily-chart"></canvas></div>
     <div class="nb-chart-status" id="nb-chart-status">загрузка…</div>
   </div>`;
@@ -2065,18 +2221,57 @@ async function loadVerdictDailyChart(sym, buy, sell){
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
         plugins: {
           legend: { labels: { color: "#cbd5e1", boxWidth: 12, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              title: function(items){
+                const i = items && items[0] ? items[0].dataIndex : 0;
+                return labels[i] || "";
+              },
+              label: function(ctx){
+                const v = ctx.parsed && ctx.parsed.y;
+                const name = (ctx.dataset && ctx.dataset.label) || "";
+                if(v == null || !Number.isFinite(v)) return name + ": —";
+                return name + ": $" + (Math.abs(v) >= 100 ? v.toFixed(2) : v.toFixed(2));
+              },
+            },
+          },
         },
         scales: {
-          x: { ticks: { color: "#94a3b8", maxTicksLimit: 10 } },
-          y: { ticks: { color: "#94a3b8" } },
+          x: {
+            ticks: {
+              color: "#94a3b8",
+              maxTicksLimit: 8,
+              maxRotation: 0,
+              callback: function(val, idx){
+                const lab = labels[idx] || "";
+                // YYYY-MM-DD → MM-DD
+                return lab.length >= 10 ? lab.slice(5, 10) : lab;
+              },
+            },
+          },
+          y: {
+            ticks: {
+              color: "#94a3b8",
+              callback: function(v){
+                const n = Number(v);
+                if(!Number.isFinite(n)) return v;
+                return "$" + (n >= 100 ? n.toFixed(0) : n.toFixed(2));
+              },
+            },
+          },
         },
       },
     });
     if(status){
       const src = j.source || "quotes";
+      const last = bars[bars.length - 1] || {};
+      const lastPx = last.close != null ? Number(last.close) : null;
+      const lastDt = String(last.date || "").slice(0, 10);
       status.textContent = `${sym} · ${labels.length}д · ${src}` +
+        (lastDt && Number.isFinite(lastPx) ? ` · посл. ${lastDt} Close $${lastPx.toFixed(2)}` : "") +
         (Number.isFinite(buy) ? ` · Buy ${buy}` : "") +
         (Number.isFinite(sell) ? ` · Sell ${sell}` : "");
     }
@@ -2462,14 +2657,19 @@ function renderDigest(){
       <div class="card" style="margin-top:12px">
         <h3>Параметры запроса (этот снимок)</h3>
         ${digestPipelineHtml(DIGEST_PIPELINE)}
-      </div>`);
+      </div>
+      ${digestSourcesHtml()}`);
   }
 
-  const empty = (arr, label) => (arr&&arr.length) ? arr.map(x=>digestItem(x,label)).join("") : `<p class="note">Пока пусто.</p>`;
-  return tabWrap("digest", variantSwitch + digestNavHtml() + `
+  const filt = digestTickerFilter;
+  const empty = (arr, label) => {
+    const rows = (arr||[]).filter(x => digestItemMatchesFilter(x, filt));
+    return rows.length ? rows.map(x=>digestItem(x,label)).join("") : `<p class="note">Пока пусто${filt?` · нет пунктов по ${esc(filt)}`:""}.</p>`;
+  };
+  return tabWrap("digest", variantSwitch + digestNavHtml() + digestFilterBar(d) + `
     <div class="card">
       <div class="digest-head"><h3 style="margin:0">📊 Утренний дайджест ${hasLive?liveBadge("KB + LLM cron"):""}</h3><span class="dt">${esc(d.date||"")}</span></div>
-      <p class="note">Это <b>не лента всех новостей</b>. Один утренний снимок (кэш): LLM за окно KB → 4 корзины. Навигация ←/→ по истории (~${esc(String(DIGEST_RETAIN_DAYS))}д). Параметры запроса — во вкладке «Логика фильтра».</p>
+      <p class="note">Это <b>не лента всех новостей</b>. Один утренний снимок (кэш): LLM за окно KB → 4 корзины. Фильтр по стоку — ниже. Полный список источников — во вкладке «Логика фильтра».</p>
       ${hasLive ? "" : `<p class="note">Нет свежего дайджеста — cron 12:30 UTC или scripts/run_notebook_news_digest.py --from-kb-only</p>`}
       <div class="filterstat">
         <span class="fstat"><b>${d.filtered||0}</b> статей обработано</span>
@@ -2490,15 +2690,16 @@ function renderGuideTab(){
       <h3>Карта вкладок</h3>
       <table class="guide-table">
         <tr><th>Вердикт</th><td>Итог: стоп / ждать / исполнять. Уровни Buy/Sell, гейты.</td></tr>
-        <tr><th>График</th><td>Daily Close/SMA5 из <code>/api/portfolio/chart</code> + линии Buy Dip / Sell. Полный вид — <code>/portfolio/daily</code>.</td></tr>
+        <tr><th>График</th><td>Daily Close/SMA5 из Postgres <code>quotes</code> (yfinance cron, не live Yahoo). Tooltip: дата + цена. Полный вид — <code>/portfolio/daily</code>.</td></tr>
         <tr><th>Профиль</th><td>Кто тикер в тетрадке: сектор, роль, отчёт. Справка, не сигнал.</td></tr>
         <tr><th>Триггеры</th><td>Тексты условий Buy/Sell/Watch. Цифры уровней — на Вердикте.</td></tr>
         <tr><th>Тактика входа / выхода</th><td>План дисциплины словами (вход / выход / макро-тезис).</td></tr>
         <tr><th>Окружение</th><td>Ручные Env-гейты (ФРС / PT cuts) поверх live VIX/NDX/нефть.</td></tr>
         <tr><th>Events</th><td>Календарь FOMC / FRED / earnings тикера — фон риска даты, не вход.</td></tr>
-        <tr><th>Инвестдома</th><td>Консенсус Street (StockAnalysis). Фон ~12м, не ваш ордер.</td></tr>
+        <tr><th>Инвестдома</th><td>Консенсус Street (StockAnalysis) + 1–2 предложения по действию/PT дома. Фон ~12м, не ваш ордер.</td></tr>
         <tr><th>Фундамент</th><td>Справка по компании; можно подтянуть черновик из Yahoo.</td></tr>
-        <tr><th>Дайджесты</th><td>Утренний срез: Сигналы / Риски / Макро и сектор / Новые тикеры. См. блок «Дайджест · корзины» ниже.</td></tr>
+        <tr><th>Дайджесты</th><td>Утренний срез + фильтр по стоку. Источники — «Логика фильтра».</td></tr>
+        <tr><th>Watchlist</th><td>Новые стоки из дайджеста (SA/KB) с кратким обоснованием → можно в G3.</td></tr>
         <tr><th>Пояснения</th><td>Эта инструкция.</td></tr>
       </table>
     </div>

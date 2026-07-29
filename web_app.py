@@ -3912,6 +3912,7 @@ async def trading_notebook_page(request: Request):
             "digest_snapshot_id": "latest",
             "digest_buckets": [],
             "watchlist": {},
+            "news_sources": {},
             "prices": {},
         }
     return HTMLResponse(
@@ -4093,6 +4094,22 @@ async def api_notebook_digest_snapshot(snapshot_id: str):
     except Exception as e:
         logger.exception("GET /api/notebook/digest/snapshots/%s: %s", snapshot_id, e)
         raise HTTPException(status_code=500, detail=f"Ошибка digest snapshot: {e!s}")
+
+
+@app.get("/api/notebook/news-sources", response_class=JSONResponse)
+async def api_notebook_news_sources(days: int = 14):
+    """Ingest channels + live KB source counts for Дайджест UI."""
+
+    def _run() -> Dict[str, Any]:
+        from services.notebook_news_digest import notebook_news_sources_catalog
+
+        return notebook_news_sources_catalog(days=max(1, min(int(days or 14), 90)), limit=100)
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        logger.exception("GET /api/notebook/news-sources: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка news-sources: {e!s}")
 
 
 @app.get("/api/notebook", response_class=JSONResponse)

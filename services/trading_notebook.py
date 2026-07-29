@@ -947,7 +947,7 @@ def refresh_ticker_houses_from_stockanalysis(
                 "firm": str(h.get("firm") or "")[:80],
                 "rate": str(h.get("rate") or "—")[:40],
                 "pt": str(h.get("pt") or "—")[:40],
-                "quote": str(h.get("quote") or "")[:200],
+                "quote": str(h.get("quote") or "")[:320],
                 "tac": "",
             }
         )
@@ -2075,6 +2075,28 @@ def build_notebook_payload(
             "errors": {"calendar": str(e)[:200]},
         }
 
+    watchlist = data.get("watchlist") if isinstance(data.get("watchlist"), dict) else {}
+    watchlist = dict(watchlist)
+    try:
+        from services.notebook_news_digest import watchlist_candidates_from_digest
+
+        cands = watchlist_candidates_from_digest(digest)
+        watchlist["candidates"] = cands
+        watchlist["candidates_asof"] = str(digest.get("date") or "")[:40]
+        watchlist["candidates_via"] = "morning digest · newtickers (SA/KB)"
+    except Exception as e:
+        logger.debug("watchlist candidates skipped: %s", e)
+        watchlist.setdefault("candidates", [])
+
+    news_sources: Dict[str, Any] = {}
+    try:
+        from services.notebook_news_digest import notebook_news_sources_catalog
+
+        news_sources = notebook_news_sources_catalog(days=14, limit=80)
+    except Exception as e:
+        logger.debug("news sources catalog skipped: %s", e)
+        news_sources = {"ingest_channels": [], "kb_sources_14d": [], "error": str(e)[:200]}
+
     return {
         "schema_version": int(data.get("schema_version") or SCHEMA_VERSION),
         "asof_label": data.get("asof_label") or "",
@@ -2085,7 +2107,8 @@ def build_notebook_payload(
         "digest_pipeline": digest_pipeline,
         "digest_snapshot_id": digest_snapshot_id,
         "digest_buckets": data.get("digest_buckets") if isinstance(data.get("digest_buckets"), list) else [],
-        "watchlist": data.get("watchlist") if isinstance(data.get("watchlist"), dict) else {},
+        "watchlist": watchlist,
+        "news_sources": news_sources,
         "prices": prices,
         "env_live": {"vix": vix_meta, "fomc": fomc_next},
         "calendar": calendar,
