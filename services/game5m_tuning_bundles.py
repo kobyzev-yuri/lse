@@ -151,6 +151,52 @@ ML_RESTORE_B_DEVELOPMENT_V1 = Game5mTuningBundle(
 BUNDLES[ML_FREEZE_A_CONTOURS_V1.bundle_id] = ML_FREEZE_A_CONTOURS_V1
 BUNDLES[ML_RESTORE_B_DEVELOPMENT_V1.bundle_id] = ML_RESTORE_B_DEVELOPMENT_V1
 
+# 2026-07-31: earnings week 23–30 Jul (GOOGL/TSLA/INTC → META/MSFT/AMZN/TER) + semis spillover.
+# Blind selective overnight (ALWAYS=false + bullish exceptions) дал bag 27→28 Jul (−4…−6%).
+# ВАЖНО: только GAME_5M / decision-stack. Портфельные STOP/EXIT_ONLY_TAKE сюда НЕ класть —
+# 31.07 смешивание с длинной портфельной игрой выбило bagholds одним циклом.
+EARNINGS_WEEK_DEFENSE_V1 = Game5mTuningBundle(
+    bundle_id="earnings_week_defense_v1",
+    description_ru="Защита GAME_5M на earnings-неделе: жёсткий EOD flat + fusion (без портфеля)",
+    rationale_ru=(
+        "23–30.07: mega-cap earnings + peer crush (SNDK/NBIS/LITE −10…−14%d). "
+        "5M overnight bag 27.07→TIME_EXIT 28.07; MU entry P≈0.38 при fusion=none. "
+        "Портфель — отдельный контур (долгая игра); см. portfolio_long_hold_v1."
+    ),
+    observe_days_default=5,
+    changes={
+        "GAME_5M_EOD_FLATTEN_ENABLED": "true",
+        "GAME_5M_EOD_FLATTEN_ALWAYS": "true",
+        "GAME_5M_EOD_FLATTEN_ALLOW_STRONG_BUY_HOLD": "false",
+        "GAME_5M_EOD_FLATTEN_ALLOW_HOLD_ON_BULLISH_MULTIDAY": "false",
+        "GAME_5M_MULTIDAY_OVERNIGHT_GATE_MODE": "apply",
+        "GAME_5M_MULTIDAY_HOLD_GATE_MODE": "apply",
+        "GAME_5M_CATBOOST_FUSION": "hold_if_buy_below_p",
+        "GAME_5M_CATBOOST_HOLD_BELOW_P": "0.50",
+        "DECISION_STACK_EARNINGS_TRUST_GATE_MODE": "apply",
+    },
+)
+
+BUNDLES[EARNINGS_WEEK_DEFENSE_V1.bundle_id] = EARNINGS_WEEK_DEFENSE_V1
+
+# 2026-07-31 rollback: вернуть долгую портфельную игру после ошибочного стоп-пакета.
+PORTFOLIO_LONG_HOLD_V1 = Game5mTuningBundle(
+    bundle_id="portfolio_long_hold_v1",
+    description_ru="Портфель: ждать / только тейк, без стопа (долгая игра)",
+    rationale_ru=(
+        "Откат смешивания earnings_week_defense_v1 с портфелем. "
+        "Долгая портфельная игра: PORTFOLIO_STOP_LOSS_ENABLED=false, "
+        "PORTFOLIO_EXIT_ONLY_TAKE=true. GAME_5M defense не трогаем."
+    ),
+    observe_days_default=5,
+    changes={
+        "PORTFOLIO_STOP_LOSS_ENABLED": "false",
+        "PORTFOLIO_EXIT_ONLY_TAKE": "true",
+    },
+)
+
+BUNDLES[PORTFOLIO_LONG_HOLD_V1.bundle_id] = PORTFOLIO_LONG_HOLD_V1
+
 
 def get_bundle(bundle_id: str) -> Game5mTuningBundle:
     bid = str(bundle_id or "").strip()

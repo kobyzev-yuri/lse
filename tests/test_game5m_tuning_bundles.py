@@ -52,6 +52,17 @@ class TestTuningBundles(unittest.TestCase):
         self.assertEqual(b.changes["GAME_5M_CONTINUATION_ML_ENABLED"], "true")
         self.assertEqual(b.changes["GAME_5M_MULTIDAY_HOLD_GATE_MODE"], "log_only")
 
+    def test_earnings_defense_no_portfolio_mix(self):
+        d = get_bundle("earnings_week_defense_v1")
+        self.assertNotIn("PORTFOLIO_STOP_LOSS_ENABLED", d.changes)
+        self.assertNotIn("PORTFOLIO_EXIT_ONLY_TAKE", d.changes)
+        self.assertEqual(d.changes["GAME_5M_EOD_FLATTEN_ALWAYS"], "true")
+
+    def test_portfolio_long_hold_restore(self):
+        p = get_bundle("portfolio_long_hold_v1")
+        self.assertEqual(p.changes["PORTFOLIO_STOP_LOSS_ENABLED"], "false")
+        self.assertEqual(p.changes["PORTFOLIO_EXIT_ONLY_TAKE"], "true")
+
     @patch("services.game5m_tuning_policy.update_config_key", return_value=True)
     def test_apply_bundle_dry_run(self, _mock_update):
         ok, payload = apply_game5m_bundle(

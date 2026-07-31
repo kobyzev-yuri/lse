@@ -302,6 +302,33 @@ GAME_5M_INTRADAY_REGIME_GATE_MODE=apply
 
 ---
 
+## Сессия 2026-07-31 — earnings_week_defense_v1
+
+**Контекст:** 23–30.07 mega-cap earnings week. Календарь KB: GOOGL/INTC 22–23, TER 28–29 (beat), META/MSFT 29, AMZN 30. Spillover: TSLA −14.5% (23), semis 24/27/28 −6…−14% (SNDK/NBIS/LITE), bounce 30.07. 5M: overnight bag 27→28 Jul; NBIS −5.6% 29; MU open 30. Portfolio: EXIT_ONLY_TAKE + stop off → META −9% на отчёте без выхода.
+
+**Bundle:** `earnings_week_defense_v1`
+
+| Ключ | Стало |
+|------|-------|
+| `GAME_5M_EOD_FLATTEN_ALWAYS` | **true** |
+| `GAME_5M_EOD_FLATTEN_ALLOW_STRONG_BUY_HOLD` | **false** |
+| `GAME_5M_EOD_FLATTEN_ALLOW_HOLD_ON_BULLISH_MULTIDAY` | **false** |
+| `GAME_5M_MULTIDAY_HOLD_GATE_MODE` | **apply** |
+| `GAME_5M_CATBOOST_FUSION` | **hold_if_buy_below_p** |
+| `GAME_5M_CATBOOST_HOLD_BELOW_P` | **0.50** |
+| `DECISION_STACK_EARNINGS_TRUST_GATE_MODE` | **apply** |
+
+**Ошибка (исправлено 31.07 вечер):** в бандл ошибочно попали `PORTFOLIO_EXIT_ONLY_TAKE=false` + `PORTFOLIO_STOP_LOSS_ENABLED=true`. Долгая портфельная игра должна **ждать**; смешение с 5m дало пакет STOP_LOSS 19:00 UTC (ORCL/MU/META/AMD/TER bagholds, est. −$5.7k). AMZN TP — отдельный плюс. Сделки из истории не удаляем (аудит); конфиг откатываем.
+
+### Rollback 2026-07-31 вечер — `portfolio_long_hold_v1`
+
+| Ключ | Стало |
+|------|-------|
+| `PORTFOLIO_STOP_LOSS_ENABLED` | **false** |
+| `PORTFOLIO_EXIT_ONLY_TAKE` | **true** |
+
+`earnings_week_defense_v1` очищен от портфельных ключей (только GAME_5M + earnings_trust). 5m-защита остаётся.
+
 ## Шаблон следующей записи
 
 ```markdown

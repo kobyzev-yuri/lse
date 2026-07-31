@@ -288,6 +288,7 @@ def validate_game5m_bundle(
     *,
     enforce_step_limits: bool = False,
 ) -> Tuple[bool, str, list]:
+    """Validate bundle keys (GAME_5M_* and PORTFOLIO_* via config_env validators)."""
     from services.game5m_tuning_bundles import get_bundle
 
     try:
@@ -296,7 +297,31 @@ def validate_game5m_bundle(
         return False, str(e), []
     results: list = []
     for key, proposed in bundle.changes.items():
-        vr = validate_game5m_update(key, proposed, enforce_step_limits=enforce_step_limits)
+        k = str(key or "").strip()
+        if k.startswith("PORTFOLIO_"):
+            vr = validate_portfolio_update(k, proposed, enforce_step_limits=enforce_step_limits)
+        elif k.startswith("GAME_5M_"):
+            vr = validate_game5m_update(k, proposed, enforce_step_limits=enforce_step_limits)
+        else:
+            # decision-stack / other editable keys: bool/mode strings only
+            proposed_s = normalize_value(proposed)
+            current_s = current_config_value(k)
+            if not is_editable_config_env_key(k):
+                vr = ValidationResult(False, "not_editable", k, proposed_s, current_s)
+            elif proposed_s.lower() in (
+                "true",
+                "false",
+                "1",
+                "0",
+                "yes",
+                "no",
+                "none",
+                "log_only",
+                "apply",
+            ):
+                vr = ValidationResult(True, "ok", k, proposed_s, current_s)
+            else:
+                vr = ValidationResult(False, "unsupported_bundle_key", k, proposed_s, current_s)
         results.append(vr)
         if not vr.ok:
             return False, vr.reason, results
@@ -332,13 +357,40 @@ def apply_game5m_bundle(
 
     records: list = []
     for key, proposed in bundle.changes.items():
-        rec_ok, record = apply_game5m_update(
-            key,
-            proposed,
-            source=source,
-            dry_run=dry_run,
-            enforce_step_limits=enforce_step_limits,
-        )
+        k = str(key or "").strip()
+        if k.startswith("PORTFOLIO_"):
+            rec_ok, record = apply_config_env_update(
+                k,
+                proposed,
+                source=source,
+                dry_run=dry_run,
+                enforce_step_limits=enforce_step_limits,
+            )
+        elif k.startswith("GAME_5M_"):
+            rec_ok, record = apply_game5m_update(
+                k,
+                proposed,
+                source=source,
+                dry_run=dry_run,
+                enforce_step_limits=enforce_step_limits,
+            )
+        else:
+            proposed_s = normalize_value(proposed)
+            record = {
+                "env_key": k,
+                "old_value": current_config_value(k),
+                "new_value": proposed_s,
+                "source": source,
+                "dry_run": bool(dry_run),
+                "validation": {"ok": True, "reason": "ok"},
+                "status": "not_applied",
+            }
+            if dry_run:
+                record["status"] = "dry_run"
+                rec_ok = True
+            else:
+                rec_ok = update_config_key(k, proposed_s)
+                record["status"] = "applied" if rec_ok else "write_failed"
         records.append(record)
         if not rec_ok:
             payload["records"] = records
