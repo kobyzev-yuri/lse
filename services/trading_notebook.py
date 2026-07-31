@@ -1579,6 +1579,47 @@ def _yfinance_annual_fcf(ticker: Any) -> Tuple[Optional[float], Optional[str]]:
     return None, None
 
 
+def _yfinance_interest_bearing_debt(ticker: Any) -> Tuple[Optional[float], Optional[str], str]:
+    """Balance-sheet interest-bearing debt (excl. operating leases).
+
+    ``info['totalDebt']`` is often inflated vs the annual balance sheet.
+    """
+    try:
+        bs = ticker.balance_sheet
+    except Exception:
+        bs = None
+    if bs is not None and not getattr(bs, "empty", True):
+        col = bs.columns[0]
+        try:
+            end = col.date().isoformat() if hasattr(col, "date") else str(col)[:10]
+        except Exception:
+            end = str(col)[:10]
+
+        def _row(*names: str) -> Optional[float]:
+            for name in names:
+                if name not in bs.index:
+                    continue
+                try:
+                    v = float(bs.loc[name].iloc[0])
+                except (TypeError, ValueError):
+                    continue
+                if v == v:  # not NaN
+                    return v
+            return None
+
+        ltd = _row("Long Term Debt", "LongTermDebt")
+        cur = _row("Current Debt", "CurrentDebt", "Other Current Borrowings")
+        if ltd is not None and cur is not None:
+            return ltd + cur, end, "Yahoo BS LT+current (без leases)"
+        if ltd is not None:
+            return ltd, end, "Yahoo BS long-term debt"
+        # Total Debt on Yahoo BS usually includes capital leases — only as fallback
+        total = _row("Total Debt", "TotalDebt")
+        if total is not None:
+            return total, end, "Yahoo BS totalDebt (может включать leases)"
+    return None, None, ""
+
+
 def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     """Gradual autofill draft for Fundament tab (Yahoo info). Does not persist."""
     u = str(sym or "").strip().upper()
@@ -1635,7 +1676,14 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     else:
         fcf = _fmt_usd_compact(info.get("freeCashflow"))
         fcf_note = "Yahoo info.freeCashflow (часто ≠ FY)"
-    debt = _fmt_usd_compact(info.get("totalDebt"))
+    debt_val, debt_end, debt_note = _yfinance_interest_bearing_debt(ticker)
+    if debt_val is not None:
+        debt = _fmt_usd_compact(debt_val)
+        if debt_end:
+            debt_note = f"{debt_note} {debt_end[:7]}"
+    else:
+        debt = _fmt_usd_compact(info.get("totalDebt"))
+        debt_note = "Yahoo info.totalDebt (часто завышен)"
     cr = info.get("currentRatio")
     try:
         cr_f = float(cr) if cr is not None else None
@@ -1657,7 +1705,7 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     else:
         metrics.append({"k": "FCF", "v": "—", "note": "", "tone": ""})
     if debt:
-        metrics.append({"k": "Прямой долг", "v": debt, "note": "Yahoo totalDebt", "tone": ""})
+        metrics.append({"k": "Прямой долг", "v": debt, "note": debt_note, "tone": ""})
         filled.append("debt")
     else:
         metrics.append({"k": "Прямой долг", "v": "—", "note": "", "tone": ""})

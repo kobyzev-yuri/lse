@@ -51,7 +51,7 @@ def test_suggest_edgar_msft_mocked():
                 "LongTermDebt": {
                     "units": {"USD": [{"end": "2026-03-31", "val": 4e10, "form": "10-Q"}]}
                 },
-                "DebtCurrent": {
+                "LongTermDebtCurrent": {
                     "units": {"USD": [{"end": "2026-03-31", "val": 1e10, "form": "10-Q"}]}
                 },
                 "NetCashProvidedByUsedInOperatingActivities": {

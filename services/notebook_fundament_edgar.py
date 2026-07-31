@@ -17,13 +17,12 @@ _CASH_TAGS: Sequence[str] = (
     "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
 )
 _LT_DEBT_TAGS: Sequence[str] = (
-    "LongTermDebt",
+    "LongTermDebt",  # often already includes current portion
     "LongTermDebtNoncurrent",
-    "LongTermDebtAndCapitalLeaseObligations",
 )
 _CUR_DEBT_TAGS: Sequence[str] = (
+    "LongTermDebtCurrent",
     "DebtCurrent",
-    "ShortTermBorrowings",
 )
 _OCF_TAGS: Sequence[str] = ("NetCashProvidedByUsedInOperatingActivities",)
 _CAPEX_TAGS: Sequence[str] = (
@@ -73,14 +72,18 @@ def _latest_usd_fact(
 
 
 def _sum_latest_debt(facts_us_gaap: dict) -> Optional[Tuple[float, str, str]]:
-    lt = _latest_usd_fact(facts_us_gaap, _LT_DEBT_TAGS)
+    """Interest-bearing debt (no operating leases). Prefer LongTermDebt total."""
+    total = _latest_usd_fact(facts_us_gaap, ("LongTermDebt",))
+    if total:
+        return float(total[0]), total[1], f"{total[2]} interest-bearing"
+    nc = _latest_usd_fact(facts_us_gaap, ("LongTermDebtNoncurrent",))
     cur = _latest_usd_fact(facts_us_gaap, _CUR_DEBT_TAGS)
-    if lt and cur and lt[1] == cur[1]:
-        return float(lt[0]) + float(cur[0]), lt[1], f"{lt[2]}+current"
-    if lt:
-        return float(lt[0]), lt[1], lt[2]
+    if nc and cur and nc[1] == cur[1]:
+        return float(nc[0]) + float(cur[0]), nc[1], f"{nc[2]}+current interest-bearing"
+    if nc:
+        return float(nc[0]), nc[1], f"{nc[2]} interest-bearing"
     if cur:
-        return float(cur[0]), cur[1], cur[2]
+        return float(cur[0]), cur[1], f"{cur[2]} interest-bearing"
     return None
 
 
@@ -200,7 +203,7 @@ def suggest_fundament_from_edgar(sym: str) -> Dict[str, Any]:
             {
                 "k": "Прямой долг",
                 "v": _fmt_usd_compact(v) or "—",
-                "note": f"SEC {form} {end[:7]}",
+                "note": f"SEC FY {form} {end[:7]} · без leases",
                 "tone": "",
             }
         )
