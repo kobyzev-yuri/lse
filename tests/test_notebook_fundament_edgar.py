@@ -70,6 +70,12 @@ def test_suggest_edgar_msft_mocked():
     cash_m = next(m for m in out["fundament"]["metrics"] if m["k"] == "КЭШ")
     assert cash_m["v"] == "$76.0B"
     assert "cash+STI" in cash_m["note"]
+    assert "промежуточный BS" in cash_m["note"]
+    fcf_m = next(m for m in out["fundament"]["metrics"] if m["k"] == "FCF")
+    assert "YTD" in fcf_m["note"]
+    assert "≠ Yahoo FY" in fcf_m["note"]
+    debt_m = next(m for m in out["fundament"]["metrics"] if m["k"] == "Прямой долг")
+    assert "без leases" in debt_m["note"]
     assert "debt" in out["filled"]
     assert "fcf" in out["filled"]
     assert out["fundament"]["pluses"] == []

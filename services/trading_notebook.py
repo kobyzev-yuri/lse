@@ -1668,22 +1668,30 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
 
     cash = _fmt_usd_compact(info.get("totalCash"))
     fcf_annual, fcf_end = _yfinance_annual_fcf(ticker)
-    fcf_note = "Yahoo FY cashflow"
+    fcf_note = "Yahoo annual FY cashflow · сравнимо с SEC 10-K FY"
     if fcf_annual is not None:
         fcf = _fmt_usd_compact(fcf_annual)
         if fcf_end:
-            fcf_note = f"Yahoo FY {fcf_end[:7]}"
+            fcf_note = (
+                f"Yahoo annual FY {fcf_end[:7]} · сравнимо с SEC 10-K FY "
+                f"(не с 10-Q YTD)"
+            )
     else:
         fcf = _fmt_usd_compact(info.get("freeCashflow"))
-        fcf_note = "Yahoo info.freeCashflow (часто ≠ FY)"
+        fcf_note = "Yahoo info.freeCashflow (часто TTM/короткое окно ≠ FY)"
     debt_val, debt_end, debt_note = _yfinance_interest_bearing_debt(ticker)
     if debt_val is not None:
         debt = _fmt_usd_compact(debt_val)
         if debt_end:
-            debt_note = f"{debt_note} {debt_end[:7]}"
+            debt_note = (
+                f"{debt_note} на {debt_end[:7]} · сравнимо с SEC LT debt "
+                f"того же периода"
+            )
+        else:
+            debt_note = f"{debt_note} · сравнимо с SEC LT debt того же периода"
     else:
         debt = _fmt_usd_compact(info.get("totalDebt"))
-        debt_note = "Yahoo info.totalDebt (часто завышен)"
+        debt_note = "Yahoo info.totalDebt (часто завышен / +leases)"
     cr = info.get("currentRatio")
     try:
         cr_f = float(cr) if cr is not None else None
@@ -1694,7 +1702,7 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     metrics: List[Dict[str, str]] = []
     filled: List[str] = []
     if cash:
-        metrics.append({"k": "КЭШ", "v": cash, "note": "Yahoo totalCash (cash+STI)", "tone": "good"})
+        metrics.append({"k": "КЭШ", "v": cash, "note": "Yahoo totalCash (cash+STI) · сравнимо с SEC cash+STI", "tone": "good"})
         filled.append("cash")
     else:
         metrics.append({"k": "КЭШ", "v": "—", "note": "", "tone": ""})

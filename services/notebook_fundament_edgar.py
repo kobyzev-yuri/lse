@@ -30,6 +30,7 @@ _CAPEX_TAGS: Sequence[str] = (
     "PaymentsToAcquireProductiveAssets",
 )
 _PREF_FORMS = ("10-Q", "10-K", "20-F", "6-K")
+_ANNUAL_FORMS = frozenset({"10-K", "10-K/A", "20-F", "20-F/A"})
 
 
 def _latest_usd_fact(
@@ -71,32 +72,53 @@ def _latest_usd_fact(
     return val, end, form, tag
 
 
+def _is_annual_form(form: str) -> bool:
+    f = str(form or "").strip().upper()
+    return f in _ANNUAL_FORMS or f.startswith("10-K") or f.startswith("20-F")
+
+
+def _bs_period_note(form: str, end: str) -> str:
+    """Balance-sheet point-in-time label for metric notes."""
+    ym = (end or "")[:7]
+    if _is_annual_form(form):
+        return f"SEC {form} на {ym} (FY BS)"
+    return f"SEC {form} на {ym} (промежуточный BS)"
+
+
+def _flow_period_note(form: str, end: str, how: str) -> str:
+    """Cash-flow period label — FY vs YTD so Yahoo annual is not confused with 10-Q."""
+    ym = (end or "")[:7]
+    if _is_annual_form(form):
+        return f"SEC {form} FY {ym} · {how} · сравнимо с Yahoo FY"
+    return f"SEC {form} YTD до {ym} · {how} · ≠ Yahoo FY (бери 10-K)"
+
+
 def _sum_latest_debt(facts_us_gaap: dict) -> Optional[Tuple[float, str, str]]:
     """Interest-bearing debt (no operating leases). Prefer LongTermDebt total."""
     total = _latest_usd_fact(facts_us_gaap, ("LongTermDebt",))
     if total:
-        return float(total[0]), total[1], f"{total[2]} interest-bearing"
+        return float(total[0]), total[1], total[2]
     nc = _latest_usd_fact(facts_us_gaap, ("LongTermDebtNoncurrent",))
     cur = _latest_usd_fact(facts_us_gaap, _CUR_DEBT_TAGS)
     if nc and cur and nc[1] == cur[1]:
-        return float(nc[0]) + float(cur[0]), nc[1], f"{nc[2]}+current interest-bearing"
+        return float(nc[0]) + float(cur[0]), nc[1], nc[2]
     if nc:
-        return float(nc[0]), nc[1], f"{nc[2]} interest-bearing"
+        return float(nc[0]), nc[1], nc[2]
     if cur:
-        return float(cur[0]), cur[1], f"{cur[2]} interest-bearing"
+        return float(cur[0]), cur[1], cur[2]
     return None
 
 
-def _fcf_proxy(facts_us_gaap: dict) -> Optional[Tuple[float, str, str]]:
+def _fcf_proxy(facts_us_gaap: dict) -> Optional[Tuple[float, str, str, str]]:
+    """Return (fcf, end, form, how) from latest matching OCF/CapEx facts."""
     ocf = _latest_usd_fact(facts_us_gaap, _OCF_TAGS)
     if not ocf:
         return None
     capex = _latest_usd_fact(facts_us_gaap, _CAPEX_TAGS)
     if capex and ocf[1][:7] == capex[1][:7]:
         fcf = float(ocf[0]) - abs(float(capex[0]))
-        return fcf, ocf[1], f"{ocf[2]} OCF-|CapEx|"
-    return float(ocf[0]), ocf[1], f"{ocf[2]} OCF (без CapEx)"
-
+        return fcf, ocf[1], ocf[2], "OCF-|CapEx|"
+    return float(ocf[0]), ocf[1], ocf[2], "OCF (без CapEx)"
 
 @lru_cache(maxsize=64)
 def _load_companyfacts(cik: str) -> Optional[dict]:
@@ -173,7 +195,7 @@ def suggest_fundament_from_edgar(sym: str) -> Dict[str, Any]:
             {
                 "k": "КЭШ",
                 "v": _fmt_usd_compact(v) or "—",
-                "note": f"SEC {form} {end[:7]} · {cash_scope}",
+                "note": f"{_bs_period_note(form, end)} · {cash_scope}",
                 "tone": "good",
             }
         )
@@ -183,12 +205,12 @@ def suggest_fundament_from_edgar(sym: str) -> Dict[str, Any]:
 
     fcf = _fcf_proxy(us_gaap)
     if fcf:
-        v, end, form = fcf
+        v, end, form, how = fcf
         metrics.append(
             {
                 "k": "FCF",
                 "v": _fmt_usd_compact(v) or "—",
-                "note": f"SEC FY {form} {end[:7]} · OCF-|CapEx|",
+                "note": _flow_period_note(form, end, how),
                 "tone": "bad" if v < 0 else "good",
             }
         )
@@ -203,14 +225,13 @@ def suggest_fundament_from_edgar(sym: str) -> Dict[str, Any]:
             {
                 "k": "Прямой долг",
                 "v": _fmt_usd_compact(v) or "—",
-                "note": f"SEC FY {form} {end[:7]} · без leases",
+                "note": f"{_bs_period_note(form, end)} · interest-bearing без leases",
                 "tone": "",
             }
         )
         filled.append("debt")
     else:
         metrics.append({"k": "Прямой долг", "v": "—", "note": "", "tone": ""})
-
     metrics.append({"k": "Запас прочности", "v": "—", "note": "вручную после сверки", "tone": ""})
 
     entity = str(raw.get("entityName") or u)
@@ -241,7 +262,7 @@ def suggest_fundament_from_edgar(sym: str) -> Dict[str, Any]:
         "filled": filled,
         "filing_url": filing_url,
         "note": (
-            "черновик из SEC XBRL · tagline/плюсы/риски не тронуты · "
-            "сверьте период формы · нажмите «сохранить»"
+            "черновик из SEC XBRL · FCF: 10-Q=YTD ≠ Yahoo FY; "
+            "сравнимо с Yahoo только 10-K FY / тот же BS-период · сохраните"
         ),
     }
