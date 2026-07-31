@@ -4373,10 +4373,16 @@ async def api_notebook_ticker_profile(sym: str, request: Request):
 
 
 @app.get("/api/notebook/tickers/{sym}/fundament/suggest", response_class=JSONResponse)
-async def api_notebook_ticker_fundament_suggest(sym: str):
-    """Черновик фундамента из Yahoo (yfinance info) — без записи в overlay."""
+async def api_notebook_ticker_fundament_suggest(sym: str, request: Request):
+    """Черновик фундамента: Yahoo (default) или SEC companyfacts (?source=edgar). Без записи в overlay."""
+
+    source = str(request.query_params.get("source") or "yahoo").strip().lower()
 
     def _run() -> Dict[str, Any]:
+        if source in ("edgar", "sec", "10-q", "xbrl"):
+            from services.notebook_fundament_edgar import suggest_fundament_from_edgar
+
+            return suggest_fundament_from_edgar(sym)
         from services.trading_notebook import suggest_fundament_from_yfinance
 
         return suggest_fundament_from_yfinance(sym)

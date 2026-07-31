@@ -966,15 +966,19 @@ async function saveFundament(){
   }
 }
 
-async function suggestFundament(){
+async function suggestFundament(source){
   const sym = current;
   if(!sym || !DATA[sym]) return;
+  const src = (source === "edgar") ? "edgar" : "yahoo";
   const status = document.getElementById("fundSuggestStatus");
-  const btn = document.getElementById("fund-suggest");
-  if(btn) btn.disabled = true;
-  if(status){ status.className = "flag-status"; status.textContent = "Yahoo…"; }
+  const btnY = document.getElementById("fund-suggest");
+  const btnE = document.getElementById("fund-suggest-edgar");
+  if(btnY) btnY.disabled = true;
+  if(btnE) btnE.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = src === "edgar" ? "SEC…" : "Yahoo…"; }
   try {
-    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/fundament/suggest`);
+    const q = src === "edgar" ? "?source=edgar" : "";
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/fundament/suggest${q}`);
     const j = await r.json().catch(() => ({}));
     if(!r.ok){
       throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
@@ -984,9 +988,21 @@ async function suggestFundament(){
       const el = document.getElementById(id);
       if(el && v != null) el.value = String(v);
     };
-    set("fund-tagline", f.tagline || "");
-    set("fund-margin", f.margin_ru || "");
-    set("fund-financing", f.financing_ru || "");
+    // Yahoo may fill tagline; SEC leaves narrative empty — don't wipe manual text on edgar
+    if(src === "yahoo" || (f.tagline && String(f.tagline).trim())){
+      set("fund-tagline", f.tagline || "");
+    }
+    if(src === "yahoo" || (f.margin_ru && String(f.margin_ru).trim())){
+      set("fund-margin", f.margin_ru || "");
+    }
+    if(f.financing_ru != null && String(f.financing_ru).trim()){
+      set("fund-financing", f.financing_ru || "");
+    }
+    if(f.filing_url){
+      set("fund-filing-url", f.filing_url);
+      const secA = document.getElementById("fund-sec");
+      if(secA){ secA.href = String(f.filing_url); secA.textContent = "Открыть сохранённый filing"; }
+    }
     const metrics = Array.isArray(f.metrics) ? f.metrics : [];
     for(let i=0;i<4;i++){
       const m = metrics[i] || {};
@@ -1003,7 +1019,8 @@ async function suggestFundament(){
   } catch(e){
     if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
   } finally {
-    if(btn) btn.disabled = false;
+    if(btnY) btnY.disabled = false;
+    if(btnE) btnE.disabled = false;
   }
 }
 
@@ -1137,11 +1154,12 @@ function renderFundament(d){
       Не путать с полем «Макро-контекст» на <b>Тактике</b> и тумблером <b>тезис</b> на Вердикте — это другой «тезис».
     </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament()">Подтянуть из Yahoo</button>
+      <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament('yahoo')">Подтянуть из Yahoo</button>
+      <button type="button" class="edit-btn" id="fund-suggest-edgar" onclick="suggestFundament('edgar')">Подтянуть из SEC</button>
       <a class="edit-btn" id="fund-sec" href="${esc(secHref)}" target="_blank" rel="noopener noreferrer">${esc(secLabel)}</a>
       <span class="flag-status" id="fundSuggestStatus"></span>
     </div>
-    <p class="note" style="margin-top:6px">Черновик Yahoo: кэш / FCF / долг / current ratio. Плюсы и риски — только вручную. После правок — «сохранить».</p>
+    <p class="note" style="margin-top:6px">Yahoo / SEC = черновик цифр (в note — источник). Плюсы и риски — только вручную. После правок — «сохранить».</p>
     <div class="edit-field" style="margin-top:10px">
       <label>Суть бизнеса (tagline)</label>
       <textarea id="fund-tagline" style="min-height:64px" placeholder="Одной-двумя фразами: что за бизнес и почему в тетрадке.">${esc(f.tagline||"")}</textarea>
@@ -2847,8 +2865,8 @@ function renderGuideTab(){
       <p>Вкладка <b>«Фундамент»</b> — справка по компании (~20 сек): tagline, кэш/FCF/долг/runway, маржа, финансирование, плюсы/риски.
         Полный регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
       <table class="guide-table">
-        <tr><th>1. Черновик</th><td><b>Подтянуть из Yahoo</b> — цифры (кэш, FCF, долг, ratio). Плюсы/риски не трогает.</td></tr>
-        <tr><th>2. Сверка</th><td>Кнопка <b>SEC / filings</b> (или своя ссылка на 10-Q / IR). После earnings T+1…2 сверить метрики.</td></tr>
+        <tr><th>1. Черновик</th><td><b>Yahoo</b> или <b>SEC</b> — цифры (кэш, FCF, долг). В note метка источника. Плюсы/риски не трогает.</td></tr>
+        <tr><th>2. Сверка</th><td>Кнопка <b>SEC / filings</b> или своя ссылка на 10-Q / IR. После earnings T+1…2 сверить метрики.</td></tr>
         <tr><th>3. Тезис</th><td>Tagline / маржа / финансирование / плюсы / риски — <b>только вручную</b> (Настя). SA/LLM не источник цифр.</td></tr>
         <tr><th>4. Сохранить</th><td><b>OK · сохранить фундамент</b> — иначе overlay не обновится.</td></tr>
         <tr><th>Охват</th><td>Полный NBIS-стиль — для <b>ядра по запросу</b>, не обязательно все тикеры сразу.</td></tr>
