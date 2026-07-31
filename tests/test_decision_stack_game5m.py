@@ -198,9 +198,15 @@ class TestDecisionStackGame5m(unittest.TestCase):
             "trust_labels": {},
         }
         d5 = {"technical_decision_core": "BUY", "ticker": "ORCL"}
+        # Force log_only so prod DECISION_STACK_EARNINGS_TRUST_GATE_MODE=apply
+        # does not turn this shadow telemetry assertion into downgrade.
+        env = {"DECISION_STACK_EARNINGS_TRUST_GATE_MODE": "log_only"}
         with patch(
             "services.earnings_trust_runtime.build_earnings_trust_runtime",
             return_value=sample,
+        ), patch(
+            "config_loader.get_config_value",
+            side_effect=lambda k, d=None: env.get(k, d),
         ):
             contribs = collect_game5m_contributions(d5, ticker="ORCL")
         et = next(c for c in contribs if c["contour_id"] == "earnings_trust")
