@@ -329,6 +329,8 @@ GAME_5M_INTRADAY_REGIME_GATE_MODE=apply
 
 `earnings_week_defense_v1` очищен от портфельных ключей (только GAME_5M + earnings_trust). 5m-защита остаётся.
 
+**Откат сделок:** удалены ошибочные `STOP_LOSS` SELL 31.07 19:00 (META/AMD/MU/ORCL/TER); CASH скорректирован на proceeds; `reconcile_portfolio_state` вернул позиции. AMZN `TAKE_PROFIT` и GAME_5M MU TP **оставлены** (не стоп-ошибка).
+
 ## Шаблон следующей записи
 
 ```markdown
