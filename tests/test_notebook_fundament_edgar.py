@@ -42,8 +42,11 @@ def test_suggest_edgar_msft_mocked():
         "entityName": "MICROSOFT CORP",
         "facts": {
             "us-gaap": {
+                "CashCashEquivalentsAndShortTermInvestments": {
+                    "units": {"USD": [{"end": "2026-03-31", "val": 7.6e10, "form": "10-Q"}]}
+                },
                 "CashAndCashEquivalentsAtCarryingValue": {
-                    "units": {"USD": [{"end": "2026-03-31", "val": 8e10, "form": "10-Q"}]}
+                    "units": {"USD": [{"end": "2026-03-31", "val": 2e10, "form": "10-Q"}]}
                 },
                 "LongTermDebt": {
                     "units": {"USD": [{"end": "2026-03-31", "val": 4e10, "form": "10-Q"}]}
@@ -64,11 +67,11 @@ def test_suggest_edgar_msft_mocked():
         out = suggest_fundament_from_edgar("MSFT")
     assert out["source"] == "edgar"
     assert "cash" in out["filled"]
+    cash_m = next(m for m in out["fundament"]["metrics"] if m["k"] == "КЭШ")
+    assert cash_m["v"] == "$76.0B"
+    assert "cash+STI" in cash_m["note"]
     assert "debt" in out["filled"]
     assert "fcf" in out["filled"]
-    metrics = out["fundament"]["metrics"]
-    notes = " ".join(m.get("note") or "" for m in metrics)
-    assert "SEC" in notes
     assert out["fundament"]["pluses"] == []
     assert out["fundament"]["risks"] == []
     assert out["fundament"]["tagline"] == ""

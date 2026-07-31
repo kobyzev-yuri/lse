@@ -10,10 +10,11 @@ from services.earnings_material_auto_sources import TICKER_CIK, _cik_padded, _se
 
 logger = logging.getLogger(__name__)
 
+# Prefer "cash + short-term investments" (aligns with Yahoo totalCash), then pure cash.
 _CASH_TAGS: Sequence[str] = (
+    "CashCashEquivalentsAndShortTermInvestments",
     "CashAndCashEquivalentsAtCarryingValue",
     "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
-    "CashCashEquivalentsAndShortTermInvestments",
 )
 _LT_DEBT_TAGS: Sequence[str] = (
     "LongTermDebt",
@@ -159,12 +160,17 @@ def suggest_fundament_from_edgar(sym: str) -> Dict[str, Any]:
 
     cash = _latest_usd_fact(us_gaap, _CASH_TAGS)
     if cash:
-        v, end, form, _tag = cash
+        v, end, form, tag = cash
+        cash_scope = (
+            "cash+STI"
+            if "ShortTermInvestments" in tag
+            else "cash only"
+        )
         metrics.append(
             {
                 "k": "КЭШ",
                 "v": _fmt_usd_compact(v) or "—",
-                "note": f"SEC {form} {end[:7]}",
+                "note": f"SEC {form} {end[:7]} · {cash_scope}",
                 "tone": "good",
             }
         )
