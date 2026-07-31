@@ -209,6 +209,7 @@
     cursor:pointer;border:1px solid rgba(74,158,218,.45);background:rgba(74,158,218,.16);color:#7cc0ef;
     border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;font-family:var(--sans);
   }
+  a.edit-btn{display:inline-block;text-decoration:none;box-sizing:border-box;}
   .edit-btn:hover{background:rgba(74,158,218,.28);}
   .edit-btn:disabled{opacity:.45;cursor:wait;}
   .houses-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px;}
@@ -941,6 +942,7 @@ async function saveFundament(){
       financing_ru: val("fund-financing"),
       pluses: _planLines("fund-pluses"),
       risks: _planLines("fund-risks"),
+      filing_url: val("fund-filing-url"),
     },
   };
   try {
@@ -1093,6 +1095,11 @@ async function saveTriggers(){
   }
 }
 
+function edgarSearchUrl(sym){
+  const t = encodeURIComponent(String(sym || "").trim().toUpperCase());
+  return `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${t}&owner=exclude&count=40`;
+}
+
 function renderFundament(d){
   const f = d.fundament || {};
   const metrics = Array.isArray(f.metrics) ? f.metrics : [];
@@ -1116,14 +1123,24 @@ function renderFundament(d){
   }).join("");
   const pluses = (f.pluses||[]).join("\n");
   const risks = (f.risks||[]).join("\n");
+  const filingSaved = String(f.filing_url || "").trim();
+  const secHref = filingSaved || edgarSearchUrl(current || d.ticker || "");
+  const secLabel = filingSaved ? "Открыть сохранённый filing" : "SEC / filings (EDGAR)";
   return tabWrap("fundament", `<div class="card">
-    <h3>Фундамент<span class="hint">опциональная справка · не гейт Вердикта · не тактика</span></h3>
-    <p class="note">Краткий фон по компании для тезиса удержания. <b>План входа/выхода</b> — на вкладке «Тактика входа / выхода». Цифры Buy/Sell — на Вердикте.</p>
+    <h3>Фундамент<span class="hint">справка · не гейт Вердикта · не тактика</span></h3>
+    <p class="note">Краткий фон для тезиса удержания (~20 сек). <b>План входа/выхода</b> — «Тактика». Цифры Buy/Sell — Вердикт.
+      Регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
+    <div class="gex" style="margin-top:10px"><b>По регламенту</b>
+      Yahoo = черновик цифр. Tagline / плюсы / риски — только вручную (Настя).
+      После earnings (T+1…2) сверить метрики с 10-Q / IR (или 20-F). Seeking Alpha — не источник цифр.
+      Полный NBIS-стиль обязателен для <b>ядра по запросу</b>, не для всех тикеров сразу.
+    </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament()">Подтянуть из Yahoo</button>
+      <a class="edit-btn" id="fund-sec" href="${esc(secHref)}" target="_blank" rel="noopener noreferrer">${esc(secLabel)}</a>
       <span class="flag-status" id="fundSuggestStatus"></span>
     </div>
-    <p class="note" style="margin-top:6px">Черновик: кэш / FCF / долг / current ratio / маржи. Плюсы и риски — только вручную. После подтягивания нажмите «сохранить».</p>
+    <p class="note" style="margin-top:6px">Черновик Yahoo: кэш / FCF / долг / current ratio. Плюсы и риски — только вручную. После правок — «сохранить».</p>
     <div class="edit-field" style="margin-top:10px">
       <label>Суть бизнеса (tagline)</label>
       <textarea id="fund-tagline" style="min-height:64px" placeholder="Одной-двумя фразами: что за бизнес и почему в тетрадке.">${esc(f.tagline||"")}</textarea>
@@ -1146,6 +1163,10 @@ function renderFundament(d){
         <label>Риски (по строкам)</label>
         <textarea id="fund-risks" style="min-height:80px" placeholder="Один риск на строку">${esc(risks)}</textarea>
       </div>
+    </div>
+    <div class="edit-field" style="margin-top:10px">
+      <label>Ссылка на filing (10-Q / 20-F / IR), опционально</label>
+      <input type="url" id="fund-filing-url" value="${esc(filingSaved)}" placeholder="https://… — иначе кнопка SEC ищет по тикеру">
     </div>
     <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button type="button" class="edit-btn" id="fund-save" onclick="saveFundament()">OK · сохранить фундамент</button>
@@ -2775,7 +2796,7 @@ function renderGuideTab(){
         <tr><th>Окружение</th><td>Ручные Env-гейты (ФРС / PT cuts) поверх live VIX/NDX/нефть.</td></tr>
         <tr><th>Events</th><td>Календарь FOMC / FRED / earnings тикера — фон риска даты, не вход.</td></tr>
         <tr><th>Инвестдома</th><td>Консенсус Street (StockAnalysis) + 1–2 предложения по действию/PT дома. Фон ~12м, не ваш ордер.</td></tr>
-        <tr><th>Фундамент</th><td>Справка по компании; можно подтянуть черновик из Yahoo.</td></tr>
+        <tr><th>Фундамент</th><td>Справка по компании (регламент NBIS-стиля). Yahoo-черновик + SEC filings; тезис вручную.</td></tr>
         <tr><th>Дайджесты</th><td>Утренний срез + фильтр по стоку. Источники — «Логика фильтра».</td></tr>
         <tr><th>Watchlist</th><td>Новые стоки из дайджеста (SA/KB) с кратким обоснованием → можно в G3.</td></tr>
         <tr><th>Пояснения</th><td>Эта инструкция.</td></tr>
@@ -2822,12 +2843,18 @@ function renderGuideTab(){
 
     <div class="card guide-card">
       <h3>Фундамент</h3>
-      <p>Вкладка <b>«Фундамент»</b> — опциональная справка по компании (tagline, кэш/FCF/долг, плюсы/риски).</p>
-      <ul>
-        <li><b>Подтянуть из Yahoo</b> — черновик метрик (totalCash, FCF, debt, current ratio, маржи). Плюсы/риски не трогает.</li>
-        <li>После черновика нажмите <b>OK · сохранить фундамент</b> — иначе в overlay не попадёт.</li>
-        <li><b>Не</b> сигнал входа и не гейт Вердикта; <b>не</b> путать с тактикой входа/выхода.</li>
-      </ul>
+      <p>Вкладка <b>«Фундамент»</b> — справка по компании (~20 сек): tagline, кэш/FCF/долг/runway, маржа, финансирование, плюсы/риски.
+        Полный регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
+      <table class="guide-table">
+        <tr><th>1. Черновик</th><td><b>Подтянуть из Yahoo</b> — цифры (кэш, FCF, долг, ratio). Плюсы/риски не трогает.</td></tr>
+        <tr><th>2. Сверка</th><td>Кнопка <b>SEC / filings</b> (или своя ссылка на 10-Q / IR). После earnings T+1…2 сверить метрики.</td></tr>
+        <tr><th>3. Тезис</th><td>Tagline / маржа / финансирование / плюсы / риски — <b>только вручную</b> (Настя). SA/LLM не источник цифр.</td></tr>
+        <tr><th>4. Сохранить</th><td><b>OK · сохранить фундамент</b> — иначе overlay не обновится.</td></tr>
+        <tr><th>Охват</th><td>Полный NBIS-стиль — для <b>ядра по запросу</b>, не обязательно все тикеры сразу.</td></tr>
+      </table>
+      <div class="gex"><b>Не путать</b>
+        Фундамент ≠ Вердикт и ≠ «Тактика входа / выхода». Слом тезиса отчётом → правьте риски + при необходимости тумблер «тезис» на Вердикте.
+      </div>
     </div>
 
     <div class="card guide-card">

@@ -1140,6 +1140,12 @@ def _normalize_fundament(raw: Any) -> Dict[str, Any]:
                 break
         return out
 
+    filing_url = str(raw.get("filing_url") or "").strip()[:500]
+    if filing_url and not (
+        filing_url.startswith("https://") or filing_url.startswith("http://")
+    ):
+        filing_url = ""
+
     return {
         "tagline": str(raw.get("tagline") or "")[:500],
         "metrics": metrics_out,
@@ -1147,6 +1153,7 @@ def _normalize_fundament(raw: Any) -> Dict[str, Any]:
         "financing_ru": str(raw.get("financing_ru") or "")[:500],
         "pluses": _lines("pluses"),
         "risks": _lines("risks"),
+        "filing_url": filing_url,
     }
 
 
