@@ -83,30 +83,52 @@ Yahoo «Подтянуть» — основной черновик **цифр**.
 |-----------|-----|--------|
 | **P0 (сейчас)** | Опираться на **yfinance** как на основной авточерновик | Стабильнее и полнее по G1, чем companyfacts |
 | **P0** | Сверка после earnings — **вручную по 10-K/10-Q/IR**, не по кнопке SEC XBRL | Companyfacts ≠ надёжный полный сверщик |
-| **P1** | Spike **FMP** (и опц. EODHD) на G1: кэш / FCF FY / долг vs Yahoo + 10-K | См. §3.4 |
-| **P2** | SEC companyfacts оставить в коде (`?source=edgar`) для ops/отладки FCF | FCF FY после фикса 2026-07-31 часто = Yahoo; кэш/долг — нет |
+| **P1** | FMP demo в `config.security.env`; при 402 на G1 — Starter | Cross-check, не truth |
+| **P1** | Intrinio: письмо `sales@intrinio.com` / consultation — план **Individual** | Self-serve trial сломан; см. §3.5 |
+| **P2** | SEC companyfacts оставить в коде (`?source=edgar`) для ops/отладки FCF | UI снят |
 | **Не делать** | LLM/SA → авто цифры или плюсы/риски без approve | См. §7 |
-| **Не делать сейчас** | Intrinio / Bloomberg как default | Дорого для черновика тетрадки |
+| **Не брать сейчас** | Intrinio Startup/Enterprise | Нет нужды в display/SLA |
 
-### 3.4 Альтернативы yfinance (vendor spike, 2026-07-31)
+### 3.4 Источники: draft vs результат (2026-07-31)
 
-SEC UI отключён. Yahoo остаётся рабочим default. Кандидаты **именно под 4 метрики Фундамента** (не под цены 5m):
+| Слой | Источник | Роль |
+|------|----------|------|
+| **Черновик** | Yahoo / yfinance | Оставляем. Быстрый autofill 4 метрик |
+| **Итог карточки** | 10-K / 10-Q / IR PDF | Primary truth; `filing_url` + note «сверено» |
+| **Cross-check API** | FMP (сейчас demo/free в `config.security.env`) | Второй глаз к Yahoo/filing; **не** замена PDF |
+| **SEC companyfacts** | API only, UI снят | Не использовать как истину |
+| **Intrinio** | Пока **без ключа** (self-serve trial на сайте не открылся) | Кандидат на качественный SEC-normalized cross-check — см. §3.5 |
 
-| Vendor | Плюсы для нас | Минусы | Вердикт spike |
-|--------|---------------|--------|----------------|
-| **Financial Modeling Prep (FMP)** | Явные annual/quarterly BS+CF; `cashAndCashEquivalents` / `freeCashFlow` / `totalDebt`; дешёвый старт (~$22/mo+); много тикеров | Качество нормализации ≠ Intrinio; следить за FY vs TTM в note | **#1 для spike** |
-| **EODHD** | Fundamentals + уже рыночные данные; умеренная цена | API surface шире, чем нужно | **#2 запасной** |
-| **Polygon / Massive** | У нас уже ментальная модель market data | Fundamentals вторичны; дороже ради того, что нам не нужно (ticks) | Не первый выбор для Фундамента |
-| **Alpha Vantage** | Free tier, statements есть | Жёсткие лимиты (≈25 req/day free) — мало для ядра | Только прототип |
-| **Intrinio** | Institutional SEC-normalized | $150+/mo или enterprise | Overkill, пока Yahoo+FMP хватает |
-| **SimFin** | Дешёвые statements | Узкий coverage / UX | Опционально |
-| **SEC companyfacts** | Бесплатно, «официально» | Уже пробовали: кэш/долг систематически мимо | **UI снят**; не альтернатива Yahoo |
+**FMP сейчас:** ключ `FMP_API_KEY` в `config.security.env` (не в git). Demo/free: FCF совпал с Yahoo; на части тикеров G1 — HTTP 402; `totalDebt` включает leases → для сверки брать LT+ST debt. Апгрейд при необходимости: [FMP Pricing → Starter](https://site.financialmodelingprep.com/developer/docs/pricing) (~$22/mo annual Personal).
 
-**Критерий выбора после spike на G1 (MSFT, META, AMZN, ORCL, AMD, TER, ALAB):**  
-≥5/7 тикеров: FCF FY совпадает с Yahoo annual (±2%); долг и кэш в пределах разумного vs 10-K (не cash-only vs cash+STI без пометки).  
-Если FMP проходит — добавить `Подтянуть из FMP` рядом с Yahoo; Yahoo оставить fallback.
+### 3.5 Intrinio — предложение плана и контакты (trial кнопка не работает)
 
-Полуавтомат: система даёт **Yahoo draft** + ссылку на filings; SEC — best-effort API only; смысл карточки — ручной.
+Self-serve **Start Free Trial** на [intrinio.com/pricing](https://intrinio.com/pricing) у нас не открылся → идём через sales/consultation, **пока без Intrinio в коде**.
+
+**Какой план нужен нам**
+
+| Нужда | План | Комментарий |
+|-------|------|-------------|
+| Внутренняя сверка Fundamentals для тетрадки (1 разработчик), без витрины данных наружу | **Individual ($150/mo)** | Включает **US Fundamentals** (standardized + as-reported из SEC). 1 seat, no external display — ок для ops |
+| Если данные когда-то показываем клиентам / commercial display | **Startup** (от $333/mo → дороже) | Избыточно на старте |
+| Кастомные фиды / SLA | Enterprise $1250+ | Не нужно |
+
+Нам достаточно **Individual + US Fundamentals** (уже в составе Individual на прайсе). Цены: [intrinio.com/pricing](https://intrinio.com/pricing). Продукт: [US Fundamentals](https://intrinio.com/products/us-fundamentals).
+
+**Куда писать, если trial/checkout сломан**
+
+1. **Sales (срочно / trial вручную):** `sales@intrinio.com` — на [Request a consultation](https://intrinio.com/request-a-consultation) прямо указано: *For urgent inquiries, email sales@intrinio.com*.  
+2. **Consultation form:** https://intrinio.com/request-a-consultation — ответ ~1 business day, custom proposal.  
+3. **Support (аккаунт/ключ после signup):** `support@intrinio.com` + live chat на сайте ([help](https://help.intrinio.com/i-just-signed-up-now-what-1)).  
+4. **Account / ключи после активации:** https://account.intrinio.com/ → API keys (production + sandbox).  
+5. Альтернативный self-serve URL (Startup): https://account.intrinio.com/pricing/startup — если Individual trial мёртв, попробовать этот путь или попросить sales включить **Individual trial**.
+
+**Черновик письма sales**
+
+> Subject: Individual plan trial — US Fundamentals only (API broken self-serve)  
+> We need a short trial of **Individual ($150/mo)** focused on **US Fundamentals** (balance sheet / cash flow / as-reported) for internal research notebook cross-checks vs SEC 10-K. Self-serve “Start Free Trial” on https://intrinio.com/pricing does not complete. Please enable trial + API keys for one seat, non-display use.
+
+**Решение сейчас:** Yahoo draft + filing truth; FMP demo в security env; Intrinio — после ответа sales / рабочего trial. Не брать Startup/Enterprise без display-требований.
 
 ### 3.3 Вердикт SEC 2026-07-31 (после починки парсера)
 
