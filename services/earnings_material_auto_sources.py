@@ -38,6 +38,8 @@ TICKER_CIK: dict[str, str] = {
     "PLTR": "1321655",
     "SNDK": "2026474",
     "TSM": "1046179",
+    "TSLA": "1318605",
+    "AAPL": "320193",
 }
 
 # Foreign ADRs file earnings on 6-K; domestic issuers use 8-K.
@@ -68,6 +70,8 @@ FOOL_SLUG_HINTS: dict[str, tuple[str, ...]] = {
     "PLTR": ("palantir-pltr", "palantir-technologies-pltr"),
     "ANET": ("arista-networks-anet", "arista-anet"),
     "ARM": ("arm-holdings-arm", "arm-arm"),
+    "TSLA": ("tesla-tsla",),
+    "AAPL": ("apple-aapl",),
     "TSM": (
         "taiwan-semiconductor-manufacturing-tsm",
         "taiwan-semiconductor-tsm",
