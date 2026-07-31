@@ -185,7 +185,7 @@ def suggest_fundament_from_edgar(sym: str) -> Dict[str, Any]:
             {
                 "k": "FCF",
                 "v": _fmt_usd_compact(v) or "—",
-                "note": f"SEC {form} {end[:7]}",
+                "note": f"SEC FY {form} {end[:7]} · OCF-|CapEx|",
                 "tone": "bad" if v < 0 else "good",
             }
         )

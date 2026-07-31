@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -1550,6 +1550,35 @@ def _fmt_pct_ratio(n: Any) -> Optional[str]:
     return f"{x:.1f}%"
 
 
+def _yfinance_annual_fcf(ticker: Any) -> Tuple[Optional[float], Optional[str]]:
+    """Prefer annual cashflow 'Free Cash Flow' (comparable to SEC FY OCF-CapEx).
+
+    ``info['freeCashflow']`` is often a short window (~1Q) and mismatches SEC FY.
+    """
+    try:
+        cf = ticker.cashflow
+    except Exception:
+        cf = None
+    if cf is not None and not getattr(cf, "empty", True):
+        for label in ("Free Cash Flow", "FreeCashFlow"):
+            if label not in cf.index:
+                continue
+            series = cf.loc[label].dropna()
+            if series.empty:
+                continue
+            try:
+                val = float(series.iloc[0])
+            except (TypeError, ValueError):
+                continue
+            col = series.index[0]
+            try:
+                end = col.date().isoformat() if hasattr(col, "date") else str(col)[:10]
+            except Exception:
+                end = str(col)[:10]
+            return val, end
+    return None, None
+
+
 def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     """Gradual autofill draft for Fundament tab (Yahoo info). Does not persist."""
     u = str(sym or "").strip().upper()
@@ -1560,9 +1589,10 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     except Exception as e:
         raise RuntimeError(f"yfinance unavailable: {e}") from e
 
+    ticker = yf.Ticker(u)
     info: Dict[str, Any] = {}
     try:
-        raw = yf.Ticker(u).info
+        raw = ticker.info
         if isinstance(raw, dict):
             info = raw
     except Exception as e:
@@ -1596,7 +1626,15 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     tagline = " ".join(bits)[:500]
 
     cash = _fmt_usd_compact(info.get("totalCash"))
-    fcf = _fmt_usd_compact(info.get("freeCashflow"))
+    fcf_annual, fcf_end = _yfinance_annual_fcf(ticker)
+    fcf_note = "Yahoo FY cashflow"
+    if fcf_annual is not None:
+        fcf = _fmt_usd_compact(fcf_annual)
+        if fcf_end:
+            fcf_note = f"Yahoo FY {fcf_end[:7]}"
+    else:
+        fcf = _fmt_usd_compact(info.get("freeCashflow"))
+        fcf_note = "Yahoo info.freeCashflow (часто ≠ FY)"
     debt = _fmt_usd_compact(info.get("totalDebt"))
     cr = info.get("currentRatio")
     try:
@@ -1608,13 +1646,13 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     metrics: List[Dict[str, str]] = []
     filled: List[str] = []
     if cash:
-        metrics.append({"k": "КЭШ", "v": cash, "note": "Yahoo totalCash", "tone": "good"})
+        metrics.append({"k": "КЭШ", "v": cash, "note": "Yahoo totalCash (cash+STI)", "tone": "good"})
         filled.append("cash")
     else:
         metrics.append({"k": "КЭШ", "v": "—", "note": "", "tone": ""})
     if fcf:
         tone = "bad" if str(fcf).startswith("-") else "good"
-        metrics.append({"k": "FCF", "v": fcf, "note": "Yahoo freeCashflow", "tone": tone})
+        metrics.append({"k": "FCF", "v": fcf, "note": fcf_note, "tone": tone})
         filled.append("fcf")
     else:
         metrics.append({"k": "FCF", "v": "—", "note": "", "tone": ""})
@@ -1677,7 +1715,7 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
         "source": "yfinance",
         "fundament": fundament,
         "filled": filled,
-        "note": "черновик из Yahoo · плюсы/риски только вручную · нажмите «сохранить»",
+        "note": "черновик из Yahoo · FCF=год из cashflow · плюсы/риски вручную · сохраните",
     }
 
 
