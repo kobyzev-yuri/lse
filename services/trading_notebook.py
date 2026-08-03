@@ -1255,6 +1255,160 @@ def update_ticker_report_expect(
     }
 
 
+def suggest_report_expect_from_sources(sym: str) -> Dict[str, Any]:
+    """Draft report_expect fact fields from KB news (+ optional earnings brief).
+
+    Does **not** fill Nastya judgment fields (tactics_map_ru, risk_shift_ru).
+    """
+    u = str(sym or "").strip().upper()
+    if not u:
+        raise ValueError("ticker required")
+
+    titles: List[str] = []
+    sources_hit: List[str] = []
+    try:
+        from services.seeking_alpha_finance import load_kb_news_items
+
+        items = load_kb_news_items([u], lookback_hours=24 * 21, source=None, limit=24)
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            t = str(it.get("title") or it.get("content") or "").strip()
+            if t:
+                titles.append(t[:220])
+            src = str(it.get("src") or it.get("source") or "").strip()
+            if src and src not in sources_hit:
+                sources_hit.append(src)
+    except Exception as e:
+        logger.warning("report_expect KB suggest failed for %s: %s", u, e)
+
+    brief_headline = ""
+    brief_tone = ""
+    brief_date = ""
+    brief_fwd = ""
+    try:
+        from sqlalchemy import create_engine
+
+        from config_loader import get_database_url
+        from services.earnings_intelligence_api import get_event_brief_payload
+
+        eng = create_engine(get_database_url(), pool_pre_ping=True)
+        try:
+            brief = get_event_brief_payload(eng, symbol=u)
+        finally:
+            eng.dispose()
+        if isinstance(brief, dict) and brief.get("status") in ("ok", "partial"):
+            brief_headline = str(brief.get("headline") or "").strip()[:400]
+            brief_tone = str(brief.get("management_tone") or "").strip()[:120]
+            brief_date = str(brief.get("event_date") or "").strip()[:32]
+            src_out = brief.get("source_outcomes") if isinstance(brief.get("source_outcomes"), dict) else {}
+            if src_out.get("forward_log_ret_1d") is not None:
+                try:
+                    import math
+
+                    pct = (math.expm1(float(src_out["forward_log_ret_1d"]))) * 100.0
+                    brief_fwd = f"реакция 1d {pct:+.1f}%"
+                except (TypeError, ValueError):
+                    brief_fwd = ""
+            if "earnings brief" not in sources_hit:
+                sources_hit.append("earnings brief")
+    except Exception as e:
+        logger.warning("report_expect brief suggest failed for %s: %s", u, e)
+
+    blob = " \n ".join(titles[:16]).lower()
+
+    def _pick(*needles: str, fallback: str = "") -> str:
+        for title in titles:
+            low = title.lower()
+            if any(n in low for n in needles):
+                return title[:500]
+        return fallback[:500] if fallback else ""
+
+    revenue = _pick(
+        "revenue", "выруч", "sales", "arr", "beat", "miss", "eps",
+        fallback=brief_headline,
+    )
+    capex = _pick("capex", "capex", "capital expenditure", "капекс", "capex")
+    guidance = _pick("guidance", "outlook", "гайд", "forecast", "expects")
+    leading = _pick("rpo", "backlog", "bookings", "contract", "capacity", "sold out")
+    margin = _pick("margin", "fcf", "free cash", "ebitda", "operating income")
+    driver = _pick(
+        "azure", "cloud", "ads", "ai ", "gpu", "demand",
+        fallback=(brief_headline or (titles[0] if titles else "")),
+    )
+
+    date_verdict = ""
+    if brief_date:
+        bits = [brief_date]
+        if brief_tone:
+            bits.append(brief_tone)
+        if brief_fwd:
+            bits.append(brief_fwd)
+        date_verdict = " · ".join(bits)[:500]
+    elif titles:
+        date_verdict = f"по KB · {titles[0][:160]}"
+
+    why = ""
+    if brief_headline:
+        why = brief_headline[:500]
+    elif titles:
+        why = titles[0][:500]
+
+    draft = _normalize_report_expect(
+        {
+            "watch": {
+                "driver_ru": driver,
+                "revenue_arr_ru": revenue,
+                "leading_ru": leading,
+                "capex_ru": capex,
+                "margin_path_ru": margin,
+                "guidance_ru": guidance,
+                # Nastya-only — leave empty
+                "tactics_map_ru": "",
+            },
+            "last": {
+                "date_verdict_ru": date_verdict,
+                "why_ru": why,
+                "risk_shift_ru": "",
+            },
+        }
+    )
+
+    fact_keys = (
+        "driver_ru",
+        "revenue_arr_ru",
+        "leading_ru",
+        "capex_ru",
+        "margin_path_ru",
+        "guidance_ru",
+    )
+    facts_filled = sum(1 for k in fact_keys if (draft["watch"].get(k) or "").strip())
+    has_kb = bool(titles)
+    has_brief = bool(brief_headline or brief_date)
+    sufficiency = {
+        "kb_news": has_kb,
+        "kb_news_n": len(titles),
+        "earnings_brief": has_brief,
+        "facts_drafted": facts_filled,
+        "facts_total": len(fact_keys),
+        "enough_for_draft": facts_filled >= 2 and (has_kb or has_brief),
+        "needs_nastya": ["tactics_map_ru", "risk_shift_ru"],
+        "note_ru": (
+            "Черновик фактов из KB/brief. Суждение (тактика, смещение риска) — только Настя. "
+            "Сверьте с IR/10-Q перед OK."
+        ),
+    }
+
+    return {
+        "ticker": u,
+        "report_expect": draft,
+        "sources": sources_hit[:12],
+        "sufficiency": sufficiency,
+        "note": sufficiency["note_ru"],
+        "filled": [k for k in fact_keys if (draft["watch"].get(k) or "").strip()],
+    }
+
+
 def update_ticker_plan(
     sym: str,
     *,

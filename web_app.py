@@ -4466,6 +4466,26 @@ async def api_notebook_ticker_report_expect(sym: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка notebook report-expect: {e!s}")
 
 
+@app.get("/api/notebook/tickers/{sym}/report-expect/suggest", response_class=JSONResponse)
+async def api_notebook_ticker_report_expect_suggest(sym: str):
+    """Черновик фактов ожиданий из KB + earnings brief. Без записи. Суждение Насти не трогает."""
+
+    def _run() -> Dict[str, Any]:
+        from services.trading_notebook import suggest_report_expect_from_sources
+
+        return suggest_report_expect_from_sources(sym)
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("GET /api/notebook/tickers/%s/report-expect/suggest: %s", sym, e)
+        raise HTTPException(
+            status_code=500, detail=f"Ошибка notebook report-expect suggest: {e!s}"
+        )
+
+
 @app.patch("/api/notebook/tickers/{sym}/plan", response_class=JSONResponse)
 async def api_notebook_ticker_plan(sym: str, request: Request):
     """Тексты стратегии входа / выхода / макро → overlay."""

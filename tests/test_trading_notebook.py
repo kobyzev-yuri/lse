@@ -99,6 +99,49 @@ def test_normalize_and_persist_fundament_report_expect(tmp_path: Path):
     assert merged["MSFT"]["report_expect_override"] is True
     assert merged["MSFT"]["fundament"]["exchange"] == "NASDAQ"
     assert merged["MSFT"]["report_expect"]["last"]["why_ru"] == "Azure accel"
+
+
+def test_suggest_report_expect_draft_skips_nastya_fields(monkeypatch):
+    from services import trading_notebook as tn
+
+    monkeypatch.setattr(
+        "services.seeking_alpha_finance.load_kb_news_items",
+        lambda *a, **k: [
+            {
+                "title": "MSFT Azure revenue grows 43%, CapEx guidance raised",
+                "src": "Seeking Alpha Finance",
+            },
+            {"title": "Microsoft issues FY guidance outlook", "src": "Yahoo"},
+        ],
+    )
+
+    class _Eng:
+        def dispose(self):
+            return None
+
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: _Eng())
+    monkeypatch.setattr("config_loader.get_database_url", lambda: "postgresql://x")
+    monkeypatch.setattr(
+        "services.earnings_intelligence_api.get_event_brief_payload",
+        lambda *a, **k: {
+            "status": "ok",
+            "headline": "Azure beat, CapEx higher",
+            "management_tone": "constructive",
+            "event_date": "2026-07-29",
+            "source_outcomes": {"forward_log_ret_1d": 0.077},
+        },
+    )
+
+    out = tn.suggest_report_expect_from_sources("MSFT")
+    re = out["report_expect"]
+    assert re["watch"]["tactics_map_ru"] == ""
+    assert re["last"]["risk_shift_ru"] == ""
+    assert re["watch"]["driver_ru"] or re["watch"]["revenue_arr_ru"] or re["watch"]["capex_ru"]
+    assert out["sufficiency"]["needs_nastya"] == ["tactics_map_ru", "risk_shift_ru"]
+    assert out["sufficiency"]["kb_news"] is True
+
+
+def test_add_and_move_notebook_ticker(tmp_path: Path):
     from services.trading_notebook import (
         add_notebook_ticker,
         apply_ticker_overrides,

@@ -395,9 +395,17 @@
   .fund-passport .fp-v{font-size:13px;color:var(--ink);margin-top:2px;line-height:1.35;}
   .fund-block-lbl{font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);font-weight:700;margin:14px 0 6px;}
   .fund-ro{margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line);}
-  .re-row{margin-top:8px;padding:10px;background:var(--panel-2);border-radius:8px;}
-  .re-row label{display:block;font-size:12px;color:var(--dim);margin-bottom:4px;}
-  .re-row .re-hint{font-size:11px;color:var(--dim);margin-top:4px;line-height:1.35;}
+  .re-row{margin-top:8px;padding:10px 12px;background:var(--panel-2);border-radius:8px;width:100%;box-sizing:border-box;}
+  .re-row label{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:var(--dim);margin-bottom:6px;}
+  .re-row input,.re-row textarea{
+    display:block;width:100%;max-width:100%;box-sizing:border-box;
+    background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--ink);
+    font-family:var(--sans);font-size:13px;padding:8px 10px;resize:vertical;
+  }
+  .re-row input{font-family:var(--mono);font-size:14px;}
+  .re-row input:focus,.re-row textarea:focus{outline:none;border-color:var(--accent);}
+  .re-row .re-hint{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.35;}
+  .re-src-ok{color:#5fd67c;} .re-src-miss{color:#e8c65a;} .re-src-bad{color:#ef8582;}
   .nb-home{font-size:12px;color:var(--dim);margin-left:auto;}
   .nb-home a{color:var(--accent);text-decoration:none;}
   .nb-home a:hover{text-decoration:underline;}
@@ -486,13 +494,17 @@ function stubBadge(where){
 function liveBadge(where){
   return `<span class="live-tag" title="${esc(where)}">live · ${esc(where)}</span>`;
 }
-/** Fields Nastya fills by hand (not knowledge_base / digest ingest). */
+/** Fields Nastya fills by hand (judgment / approve). */
 function nastyaTag(){
-  return `<span class="manual-tag" title="Заполняет Настя вручную · не из базы новостей / дайджеста">✓ Настя</span>`;
+  return `<span class="manual-tag" title="Суждение / правка Насти · не авто из KB">✓ Настя</span>`;
+}
+/** Facts drafted from earnings release / knowledge_base / news cron. */
+function reportSrcTag(){
+  return `<span class="live-tag" title="Факт из отчёта / IR / knowledge_base · кнопка «Подтянуть»">отчёт / KB</span>`;
 }
 /** Auto from news KB / digest pipeline. */
 function newsKbTag(){
-  return `<span class="live-tag" title="Из knowledge_base / news cron / дайджеста">KB / новости</span>`;
+  return reportSrcTag();
 }
 function manualBadge(where){
   return `<span class="manual-tag" title="${esc(where)}">вручную · ${esc(where)}</span>`;
@@ -1037,6 +1049,72 @@ async function saveReportExpect(){
   }
 }
 
+async function suggestReportExpect(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("reSuggestStatus");
+  const btn = document.getElementById("re-suggest");
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "KB / brief…"; }
+  try {
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/report-expect/suggest`);
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    const re = j.report_expect || {};
+    const w = re.watch || {};
+    const last = re.last || {};
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if(el && v != null && String(v).trim()) el.value = String(v);
+    };
+    // Fact fields only — never overwrite Nastya judgment if already filled
+    set("re-driver", w.driver_ru);
+    set("re-revenue", w.revenue_arr_ru);
+    set("re-leading", w.leading_ru);
+    set("re-capex", w.capex_ru);
+    set("re-margin", w.margin_path_ru);
+    set("re-guidance", w.guidance_ru);
+    set("re-verdict", last.date_verdict_ru);
+    const whyEl = document.getElementById("re-why");
+    if(whyEl && !String(whyEl.value||"").trim()) set("re-why", last.why_ru);
+    const suf = j.sufficiency || {};
+    const filled = Array.isArray(j.filled) ? j.filled.length : 0;
+    const enough = !!suf.enough_for_draft;
+    if(status){
+      status.className = "flag-status " + (enough ? "ok" : "err");
+      status.textContent = (enough ? "черновик ок" : "мало источников")
+        + ` · фактов ${filled}/${suf.facts_total||6}`
+        + (suf.kb_news_n != null ? ` · KB ${suf.kb_news_n}` : "")
+        + (suf.earnings_brief ? " · brief" : " · no brief")
+        + " · тактика/риск — Настя · сохраните OK";
+    }
+    const box = document.getElementById("reSufficiency");
+    if(box){
+      box.innerHTML = _reSufficiencyHtml(suf, j.sources || []);
+    }
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+function _reSufficiencyHtml(suf, sources){
+  const s = suf || {};
+  const srcList = (sources || []).slice(0, 6).map(x => esc(x)).join(", ") || "—";
+  const row = (ok, label) =>
+    `<li class="${ok ? "re-src-ok" : "re-src-miss"}">${ok ? "✓" : "○"} ${esc(label)}</li>`;
+  return `<ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;line-height:1.45">
+    ${row(!!s.kb_news, `Новости KB (21д): ${s.kb_news_n != null ? s.kb_news_n : "?"} шт`)}
+    ${row(!!s.earnings_brief, "Earnings brief в системе")}
+    ${row((s.facts_drafted||0) >= 2, `Черновик фактов: ${s.facts_drafted||0}/${s.facts_total||6}`)}
+    ${row(false, "Тактика + смещение риска — только Настя (кнопка не пишет)")}
+    <li class="re-src-miss">Источники: ${srcList}</li>
+  </ul>`;
+}
+
 async function suggestFundament(source){
   const sym = current;
   if(!sym || !DATA[sym]) return;
@@ -1236,11 +1314,11 @@ function renderFundament(d){
   const metricFields = slots.map(({i, defK}) => {
     const m = mAt(i);
     return `<div class="edit-grid" style="margin-top:8px;padding:10px;background:var(--panel-2);border-radius:8px">
-      <div class="edit-field"><label>Метрика ${i+1} ${nastyaTag()}</label>
+      <div class="edit-field"><label>Метрика ${i+1}</label>
         <input type="text" id="fund-mk-${i}" value="${esc(m.k||defK)}" placeholder="${esc(defK)}"></div>
-      <div class="edit-field"><label>Значение ${nastyaTag()}</label>
+      <div class="edit-field"><label>Значение</label>
         <input type="text" id="fund-mv-${i}" value="${esc(m.v||'')}" placeholder="—"></div>
-      <div class="edit-field" style="grid-column:1/-1"><label>Сноска-контекст ${nastyaTag()}</label>
+      <div class="edit-field" style="grid-column:1/-1"><label>Сноска-контекст</label>
         <input type="text" id="fund-mn-${i}" value="${esc(m.note||'')}" placeholder="кратко · цвет из тона value/note"></div>
     </div>`;
   }).join("");
@@ -1254,15 +1332,14 @@ function renderFundament(d){
     <p class="note">Справка «что за компания и выживет ли она» (~20 сек). Анализ отчёта — вкладка <b>Ожидания от репорта</b>.
       Регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
     <div class="data-legend">
-      ${nastyaTag()} <span class="hint-txt">= вручную Настя</span>
-      ${liveBadge("Yahoo draft")} <span class="hint-txt">= черновик цифр плиток (не KB)</span>
-      ${newsKbTag()} <span class="hint-txt">= дайджест / news cron (не эти поля)</span>
+      ${nastyaTag()} <span class="hint-txt">= текст паспорта (утверждает Настя)</span>
+      ${liveBadge("Yahoo draft")} <span class="hint-txt">= черновик цифр плиток</span>
+      ${reportSrcTag()} <span class="hint-txt">= ожидания / новости (другая вкладка)</span>
     </div>
     ${readOnly}
-    <div class="gex"><b>По регламенту</b>
-      Yahoo = черновик цифр плиток. Текст блоков A–E — ${nastyaTag()}. После earnings T+1…2 сверить метрики с filing/IR.
-      Сектор/слой правится на <b>Профиле</b>. Консенсус — с вкладки Инвестдома (только чтение здесь).
-      База новостей / дайджест эти поля <b>не</b> заполняет.
+    <div class="gex"><b>Регламент паспорта</b>
+      1) Yahoo → черновик 4 плиток. 2) Сверка с filing/IR (SEC). 3) Текст A/B/D/E ${nastyaTag()}. 4) OK сохранить.
+      Сектор/слой — на <b>Профиле</b>. Консенсус — Инвестдома (чтение). KB/дайджест паспорт не пишет.
     </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament('yahoo')">Подтянуть из Yahoo</button>
@@ -1271,46 +1348,46 @@ function renderFundament(d){
     </div>
     <div class="fund-block-lbl">A · Паспорт ${nastyaTag()}</div>
     <div class="edit-grid">
-      <div class="edit-field"><label>Биржа ${nastyaTag()}</label>
+      <div class="edit-field"><label>Биржа</label>
         <input type="text" id="fund-exchange" value="${esc(f.exchange||'')}" placeholder="NASDAQ"></div>
-      <div class="edit-field"><label>Штаб / юрисдикция ${nastyaTag()}</label>
+      <div class="edit-field"><label>Штаб / юрисдикция</label>
         <input type="text" id="fund-hq" value="${esc(f.hq_ru||'')}" placeholder="Amsterdam, Нидерланды"></div>
-      <div class="edit-field" style="grid-column:1/-1"><label>Год листинга / происхождение ${nastyaTag()}</label>
+      <div class="edit-field" style="grid-column:1/-1"><label>Год листинга / происхождение</label>
         <input type="text" id="fund-listing" value="${esc(f.listing_origin_ru||'')}" placeholder="2024 · выделилась из реструктуризации Yandex N.V."></div>
     </div>
     <div class="fund-block-lbl">B · Суть бизнеса ${nastyaTag()}</div>
     <div class="edit-field">
-      <label>Суть бизнеса (1–2 фразы + за счёт чего маржа) ${nastyaTag()}</label>
+      <label>Суть бизнеса (1–2 фразы + за счёт чего маржа)</label>
       <textarea id="fund-tagline" style="min-height:64px" placeholder="Не аренда сырых серверов, а готовые GPU-кластеры с софтом.">${esc(f.tagline||"")}</textarea>
     </div>
     <div class="edit-field" style="margin-top:8px">
-      <label>Ключевые клиенты (опц.) ${nastyaTag()}</label>
+      <label>Ключевые клиенты (опц.)</label>
       <input type="text" id="fund-clients" value="${esc(f.key_clients_ru||'')}" placeholder="Microsoft, Meta · или тип: hyperscalers">
     </div>
     <div class="edit-field" style="margin-top:8px">
-      <label>Маржа / откуда маржа ${nastyaTag()}</label>
+      <label>Маржа / откуда маржа</label>
       <textarea id="fund-margin" style="min-height:52px" placeholder="Софт/оркестрация + длинные контракты…">${esc(f.margin_ru||"")}</textarea>
     </div>
-    <div class="fund-block-lbl">C · Метрики (плитки) ${nastyaTag()} <span class="hint" style="text-transform:none;letter-spacing:0;font-weight:400">· черновик Yahoo ок, итог Настя</span></div>
+    <div class="fund-block-lbl">C · Метрики ${liveBadge("Yahoo draft")} → итог ${nastyaTag()}</div>
     ${metricFields}
     <div class="fund-block-lbl">D · Финансирование ${nastyaTag()}</div>
     <div class="edit-field">
-      <label>Кто оплачивает рост и на каких условиях ${nastyaTag()}</label>
+      <label>Кто оплачивает рост и на каких условиях</label>
       <textarea id="fund-financing" style="min-height:52px" placeholder="Источник капитала · качество долга · точка разрыва">${esc(f.financing_ru||"")}</textarea>
     </div>
     <div class="fund-block-lbl">E · Плюсы / Риски ${nastyaTag()}</div>
     <div class="edit-grid">
       <div class="edit-field">
-        <label>Плюсы (2–3 · по строкам) ${nastyaTag()}</label>
+        <label>Плюсы (2–3 · по строкам)</label>
         <textarea id="fund-pluses" style="min-height:80px" placeholder="Один плюс на строку">${esc(pluses)}</textarea>
       </div>
       <div class="edit-field">
-        <label>Риски (2–3 · по строкам) ${nastyaTag()}</label>
+        <label>Риски (2–3 · по строкам)</label>
         <textarea id="fund-risks" style="min-height:80px" placeholder="Один риск на строку">${esc(risks)}</textarea>
       </div>
     </div>
     <div class="edit-field" style="margin-top:10px">
-      <label>Ссылка на filing (10-Q / 20-F / IR), опционально ${nastyaTag()}</label>
+      <label>Ссылка на filing (10-Q / 20-F / IR), опционально</label>
       <input type="url" id="fund-filing-url" value="${esc(filingSaved)}" placeholder="https://… — иначе кнопка SEC ищет по тикеру">
     </div>
     <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -1324,20 +1401,39 @@ function renderReportExpect(d){
   const re = d.report_expect || {};
   const w = (re.watch && typeof re.watch === "object") ? re.watch : {};
   const last = (re.last && typeof re.last === "object") ? re.last : {};
-  const rows = [
-    {id:"re-driver", key:"driver_ru", lbl:"Драйвер-метрика №1", ph:"NBIS: sold out мощностей — спрос > предложения", hint:"Главное число для этой бизнес-модели + почему.", val:w.driver_ru},
-    {id:"re-revenue", key:"revenue_arr_ru", lbl:"Рост выручки / ARR", ph:"Q1: +684% до $399 млн", hint:"Ожидаемый % и абсолют.", val:w.revenue_arr_ru},
-    {id:"re-leading", key:"leading_ru", lbl:"Опережающие индикаторы", ph:"contracted power → 4 ГВт", hint:"Backlog / контракты / мощности.", val:w.leading_ru},
-    {id:"re-capex", key:"capex_ru", lbl:"CapEx / расходы", ph:"повышен до $20–25 млрд", hint:"Сумма + направление; жёлтый если двусмысленно.", val:w.capex_ru},
-    {id:"re-margin", key:"margin_path_ru", lbl:"Маржа / путь к прибыли", ph:"EBITDA AI 45% vs 24% кв. ранее", hint:"Динамика к безубыточности.", val:w.margin_path_ru},
-    {id:"re-guidance", key:"guidance_ru", lbl:"Гайденс на год", ph:"$3.0–3.4 млрд; run-rate $7–9 млрд · подняли", hint:"Диапазон + подняли/подтвердили/срезали.", val:w.guidance_ru},
+  const factRows = [
+    {id:"re-driver", lbl:"Драйвер-метрика №1", ph:"Azure growth / sold out мощностей…", hint:"Главное число бизнеса. Источник: call / IR / KB.", val:w.driver_ru},
+    {id:"re-revenue", lbl:"Рост выручки / ARR", ph:"Q1: +684% до $399 млн", hint:"% и абсолют из релиза / консенсуса.", val:w.revenue_arr_ru},
+    {id:"re-leading", lbl:"Опережающие индикаторы", ph:"RPO / backlog / contracted power", hint:"Контракты, мощности, bookings.", val:w.leading_ru},
+    {id:"re-capex", lbl:"CapEx / расходы", ph:"повышен до $…", hint:"Сумма + направление из гайденса.", val:w.capex_ru},
+    {id:"re-margin", lbl:"Маржа / путь к прибыли", ph:"EBITDA / FCF динамика", hint:"Из отчёта cash flow / margins.", val:w.margin_path_ru},
+    {id:"re-guidance", lbl:"Гайденс на год", ph:"диапазон · подняли/подтвердили/срезали", hint:"Прямо из пресс-релиза / call.", val:w.guidance_ru},
   ];
-  const watchFields = rows.map(r => `<div class="re-row">
-      <label>${esc(r.lbl)} ${nastyaTag()}</label>
-      <textarea id="${esc(r.id)}" style="min-height:44px" placeholder="${esc(r.ph)}">${esc(r.val||"")}</textarea>
+  const watchFields = factRows.map(r => `<div class="re-row">
+      <label><span>${esc(r.lbl)}</span> ${reportSrcTag()}</label>
+      <textarea id="${esc(r.id)}" style="min-height:52px" placeholder="${esc(r.ph)}">${esc(r.val||"")}</textarea>
       <div class="re-hint">${esc(r.hint)}</div>
     </div>`).join("");
-  const hasRo = !!(w.driver_ru || w.tactics_map_ru || last.date_verdict_ru || last.why_ru || last.risk_shift_ru);
+
+  const factN = factRows.filter(r => String(r.val||"").trim()).length;
+  const hasTactics = !!String(w.tactics_map_ru||"").trim();
+  const hasShift = !!String(last.risk_shift_ru||"").trim();
+  const hasVerdict = !!String(last.date_verdict_ru||"").trim();
+  const hasRo = !!(factN || hasTactics || hasVerdict || last.why_ru || hasShift);
+
+  const check = (ok, label) =>
+    `<li class="${ok ? "re-src-ok" : "re-src-miss"}">${ok ? "✓" : "○"} ${label}</li>`;
+  const sufficiencyNow = `<div id="reSufficiency" class="gex" style="margin-top:10px">
+    <b>Достаточность сейчас</b>
+    <ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;line-height:1.45">
+      ${check(factN >= 3, `Факты Block A заполнены: ${factN}/6 (нужно ≥3 или кнопка «Подтянуть»)`)}
+      ${check(hasVerdict, "Дата + вердикт прошлого отчёта")}
+      ${check(hasTactics, "«Как в тактику» — суждение Насти")}
+      ${check(hasShift, "«Куда сместился риск» — суждение Насти")}
+      <li class="re-src-miss">Итог: факты из отчёта/KB → правка → суждение Насти → OK. LLM не пишет карточку.</li>
+    </ul>
+  </div>`;
+
   const ro = hasRo ? `<div class="fund-ro">
       ${w.driver_ru ? `<div class="fund-sec"><b>Драйвер:</b> ${esc(w.driver_ru)}</div>` : ""}
       ${w.revenue_arr_ru ? `<div class="fund-sec"><b>Выручка/ARR:</b> ${esc(w.revenue_arr_ru)}</div>` : ""}
@@ -1349,34 +1445,51 @@ function renderReportExpect(d){
       ${last.date_verdict_ru ? `<div class="fund-sec" style="margin-top:10px"><b>Прошлый отчёт:</b> ${esc(last.date_verdict_ru)}</div>` : ""}
       ${last.why_ru ? `<div class="fund-sec"><b>За что:</b> ${esc(last.why_ru)}</div>` : ""}
       ${last.risk_shift_ru ? `<div class="fund-sec"><b>Риск сместился:</b> ${esc(last.risk_shift_ru)}</div>` : ""}
-    </div>` : `<div class="fund-ro"><p class="note">Пусто — кратко заполните вокруг даты earnings. Примеры стиля: MSFT / META (последние отчёты). Не доклад.</p></div>`;
+    </div>` : `<div class="fund-ro"><p class="note">Пусто — нажмите «Подтянуть из новостей / brief», сверьте с IR, допишите суждение ${nastyaTag()}.</p></div>`;
+
   return tabWrap("report_expect", `<div class="card">
     <h3>Ожидания от репорта<span class="hint">вокруг earnings · сверка после</span></h3>
-    <p class="note">«На что смотреть в этом отчёте и как реагировать». Паспорт компании — вкладка <b>Фундамент</b>. Вывод = сохранённые поля ниже.</p>
+    <p class="note">Паспорт компании — <b>Фундамент</b>. Здесь: на что смотреть в отчёте и память «наказания».</p>
     <div class="data-legend">
-      ${nastyaTag()} <span class="hint-txt">= все поля этой вкладки вручную</span>
-      ${newsKbTag()} <span class="hint-txt">= дайджест / KB (другая вкладка)</span>
+      ${reportSrcTag()} <span class="hint-txt">= факт из отчёта / IR / KB (кнопка)</span>
+      ${nastyaTag()} <span class="hint-txt">= суждение (тактика, смещение риска)</span>
     </div>
+    <div class="gex"><b>Регламент заполнения</b>
+      <ol style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.45;color:var(--muted)">
+        <li><b>Черновик фактов</b> — кнопка «Подтянуть из новостей / brief» (KB + earnings brief). Не дайджест LLM.</li>
+        <li><b>Сверка</b> — с пресс-релизом / 10-Q / IR (SEC на вкладке Фундамент). Поправить цифры.</li>
+        <li><b>Суждение</b> ${nastyaTag()} — «как в тактику» + «куда сместился риск» (и при необходимости «за что»).</li>
+        <li><b>OK · сохранить</b> — иначе overlay не обновится.</li>
+      </ol>
+    </div>
+    ${sufficiencyNow}
     ${ro}
-    <div class="fund-block-lbl">A · На что смотрят ${nastyaTag()}</div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button type="button" class="edit-btn" id="re-suggest" onclick="suggestReportExpect()">Подтянуть из новостей / brief</button>
+      <span class="flag-status" id="reSuggestStatus"></span>
+    </div>
+    <div class="fund-block-lbl">A · На что смотрят ${reportSrcTag()}</div>
     ${watchFields}
     <div class="re-row">
-      <label>Как это в тактику ${nastyaTag()}</label>
-      <textarea id="re-tactics" style="min-height:52px" placeholder="Сильный: beat + sold out + гайд↑ · Ловушка: CapEx↑ без роста контрактов">${esc(w.tactics_map_ru||"")}</textarea>
-      <div class="re-hint">Одно сочетание «сильный» и одно «ловушка».</div>
+      <label><span>Как это в тактику</span> ${nastyaTag()}</label>
+      <textarea id="re-tactics" style="min-height:56px" placeholder="Сильный: beat + sold out + гайд↑ · Ловушка: CapEx↑ без роста контрактов">${esc(w.tactics_map_ru||"")}</textarea>
+      <div class="re-hint">Только суждение. Кнопка черновика это поле не трогает.</div>
     </div>
-    <div class="fund-block-lbl">B · За что наказали в прошлый раз ${nastyaTag()}</div>
+    <div class="fund-block-lbl">B · За что наказали в прошлый раз</div>
     <div class="re-row">
-      <label>Дата + вердикт квартала ${nastyaTag()}</label>
+      <label><span>Дата + вердикт квартала</span> ${reportSrcTag()}</label>
       <input type="text" id="re-verdict" value="${esc(last.date_verdict_ru||'')}" placeholder="Q4 2025 · MISS · Q1 2026 · BEAT">
+      <div class="re-hint">Факт реакции / BEAT-MISS из brief или новости.</div>
     </div>
     <div class="re-row">
-      <label>За что наказали / наградили ${nastyaTag()}</label>
+      <label><span>За что наказали / наградили</span> ${reportSrcTag()} <span class="hint">+ правка</span> ${nastyaTag()}</label>
       <textarea id="re-why" style="min-height:52px" placeholder="Причина + факт">${esc(last.why_ru||"")}</textarea>
+      <div class="re-hint">Черновик из headline; формулировку утверждает Настя.</div>
     </div>
     <div class="re-row">
-      <label>Куда сместился риск ${nastyaTag()}</label>
-      <textarea id="re-shift" style="min-height:44px" placeholder="Одна строка → мостик к тактике перед следующим отчётом">${esc(last.risk_shift_ru||"")}</textarea>
+      <label><span>Куда сместился риск</span> ${nastyaTag()}</label>
+      <textarea id="re-shift" style="min-height:52px" placeholder="Одна строка → мостик к тактике перед следующим отчётом">${esc(last.risk_shift_ru||"")}</textarea>
+      <div class="re-hint">Только суждение. Кнопка черновика не пишет.</div>
     </div>
     <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button type="button" class="edit-btn" id="re-save" onclick="saveReportExpect()">OK · сохранить ожидания</button>
@@ -3059,12 +3172,10 @@ function renderGuideTab(){
         Вывод на экране = сохранённые поля (карточка сверху), не LLM. Эталон краткости — NBIS; примеры репорта — MSFT / META.
         Регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
       <table class="guide-table">
-        <tr><th>✓ Настя</th><td>Все поля паспорта и ожиданий — вручную. Не из knowledge_base / дайджеста.</td></tr>
-        <tr><th>Паспорт A–E</th><td>Биржа / HQ / листинг · суть · плитки кэш/FCF/долг/запас · финансирование · плюсы/риски. Слой — на Профиле.</td></tr>
-        <tr><th>Черновик цифр</th><td><b>Yahoo</b> → плитки (не KB). Сверка после earnings — filing/IR (кнопка SEC).</td></tr>
-        <tr><th>Ожидания A</th><td>Драйвер, выручка/ARR, опережающие, CapEx, маржа, гайденс + «как в тактику».</td></tr>
-        <tr><th>Ожидания B</th><td>Прошлый вердикт · за что наказали · куда сместился риск.</td></tr>
-        <tr><th>KB / новости</th><td>Вкладка Дайджесты / Watchlist — не Фундамент.</td></tr>
+        <tr><th>отчёт / KB</th><td>Факты Block A + дата/вердикт — кнопка «Подтянуть из новостей / brief», сверка с IR.</td></tr>
+        <tr><th>✓ Настя</th><td>Только суждение: «как в тактику», «куда сместился риск» (+ правка «за что»).</td></tr>
+        <tr><th>Паспорт A–E</th><td>Текст паспорта утверждает Настя; плитки — Yahoo draft → сверка filing.</td></tr>
+        <tr><th>Регламент ожиданий</th><td>1) Подтянуть факты 2) Сверить IR 3) Суждение Насти 4) OK. Чеклист достаточности на вкладке.</td></tr>
         <tr><th>Сохранить</th><td>OK на каждой вкладке отдельно. Без сохранения overlay не обновится.</td></tr>
       </table>
       <div class="gex"><b>Не путать</b>
