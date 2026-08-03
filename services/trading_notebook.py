@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -1419,8 +1420,55 @@ def _map_earnings_brief_to_report_fields(brief: Dict[str, Any]) -> Dict[str, str
     return out
 
 
+def _earnings_url_relevance_score(url: str, material_type: str = "", source_name: str = "") -> int:
+    """Higher = better for notebook filing_url (numbers live in Ex99 / IR PR, not 8-K shell)."""
+    u = str(url or "").lower()
+    mt = str(material_type or "").lower()
+    sn = str(source_name or "").lower()
+    score = 0
+    # Prefer earnings release exhibits over bare 8-K/6-K cover.
+    if any(
+        x in u
+        for x in (
+            "ex99",
+            "ex-99",
+            "exhibit99",
+            "exhibit-99",
+            "dex991",
+            "dex99_1",
+            "press-release",
+            "press_release",
+            "earnings-release",
+        )
+    ):
+        score += 100
+    if mt == "press_release":
+        score += 80
+    elif mt == "sec_filing" and any(x in u for x in ("ex99", "dex99", "ex-99")):
+        score += 90
+    elif mt == "transcript" and any(x in u for x in ("ex99", "dex99", "ex-99")):
+        # Often mislabeled Ex99 PR in earnings_material
+        score += 85
+    elif mt == "presentation":
+        score += 40
+    elif mt == "transcript":
+        score += 20
+    elif mt == "sec_filing":
+        score += 10
+    # Demote 8-K/6-K primary wrappers (Item 2.02 only).
+    if re.search(r"(?:^|/)(?:d\d+d)?8k\.htm", u) or re.search(r"-\d{8}\.htm$", u):
+        if not any(x in u for x in ("ex99", "dex99", "ex-99", "press")):
+            score -= 50
+    if "8-k" in sn and "exhibit" not in sn and score < 50:
+        score -= 10
+    return score
+
+
 def _latest_earnings_material_url(symbol: str) -> Dict[str, str]:
-    """Best IR/SEC URL from earnings_material for fundament.filing_url draft."""
+    """Best IR/SEC URL from earnings_material for fundament.filing_url draft.
+
+    Prefers Exhibit 99.1 / press release (actual results) over bare 8-K cover pages.
+    """
     empty = {"filing_url": "", "source_name": "", "material_type": ""}
     u = str(symbol or "").strip().upper()
     if not u:
@@ -1434,37 +1482,46 @@ def _latest_earnings_material_url(symbol: str) -> Dict[str, str]:
         try:
             q = text(
                 """
-                SELECT source_url, source_name, material_type
+                SELECT source_url, source_name, material_type, event_date
                 FROM earnings_material
                 WHERE UPPER(TRIM(symbol)) = :symbol
                   AND COALESCE(source_url, '') <> ''
                   AND COALESCE(parse_status, '') NOT IN ('failed', 'blocked')
-                ORDER BY
-                  CASE material_type
-                    WHEN 'sec_filing' THEN 0
-                    WHEN 'press_release' THEN 1
-                    WHEN 'presentation' THEN 2
-                    WHEN 'transcript' THEN 3
-                    ELSE 9
-                  END,
-                  COALESCE(event_date, DATE '1900-01-01') DESC,
-                  id DESC
-                LIMIT 1
+                ORDER BY COALESCE(event_date, DATE '1900-01-01') DESC, id DESC
+                LIMIT 40
                 """
             )
             with eng.connect() as conn:
-                row = conn.execute(q, {"symbol": u}).mappings().first()
+                rows = list(conn.execute(q, {"symbol": u}).mappings().all())
         finally:
             eng.dispose()
-        if not row:
+        if not rows:
             return empty
-        url = str(row.get("source_url") or "").strip()[:500]
-        if not (url.startswith("http://") or url.startswith("https://")):
+        # Newest event_date first; within same date pick highest relevance.
+        best = None
+        best_key = None
+        for row in rows:
+            url = str(row.get("source_url") or "").strip()[:500]
+            if not (url.startswith("http://") or url.startswith("https://")):
+                continue
+            ev = row.get("event_date")
+            ev_s = str(ev) if ev is not None else ""
+            rel = _earnings_url_relevance_score(
+                url,
+                str(row.get("material_type") or ""),
+                str(row.get("source_name") or ""),
+            )
+            key = (ev_s, rel)
+            if best_key is None or key > best_key:
+                best_key = key
+                best = row
+                best["source_url"] = url
+        if not best:
             return empty
         return {
-            "filing_url": url,
-            "source_name": str(row.get("source_name") or "").strip()[:120],
-            "material_type": str(row.get("material_type") or "").strip()[:40],
+            "filing_url": str(best.get("source_url") or "")[:500],
+            "source_name": str(best.get("source_name") or "").strip()[:120],
+            "material_type": str(best.get("material_type") or "").strip()[:40],
         }
     except Exception as e:
         logger.warning("earnings_material url for %s: %s", u, e)

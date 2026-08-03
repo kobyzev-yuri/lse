@@ -26,7 +26,7 @@
 | A3 | Yahoo TTM/leases ≠ 10-K FY | Черновик метрик врёт до сверки | Note + cross-check FMP/Intrinio; после earnings — filing |
 | A4 | Нет авто-обновления после нового earnings | Карточка устаревает, пока Настя не жмёт кнопку | Опц. «есть новый brief» badge / diff к сохранённому |
 | A5 | Иностранные эмитенты (нет 10-Q / другой IR) | SEC-путь и surprise % дырявые | Каталог IR + 6-K/20-F; явный статус «non-US» |
-| A6 | `filing_url` = один «лучший» material | Не всегда 10-K/10-Q PDF | Предпочитать 10-K/10-Q/20-F; иначе press + ручная правка |
+| A6 | `filing_url` брал голый 8-K | Обёртка без цифр | **частично:** ranking → Ex99.1 / press_release; 8-K shell demoted |
 | A7 | Суждение никогда не черновится | Пустые тактика/риск-shift | Оставить так *или* опц. draft-only под approve (не default) |
 | A8 | Нет единой кнопки «всё, что есть» | Две кнопки (Фундамент / Ожидания), разный охват | Одна «синхронизировать черновики» с чеклистом источников |
 
@@ -51,7 +51,7 @@
 
 1. **Ops brief:** G1 — materials + extract; в UI sufficiency показывать `partial` / no materials. *(A1)*
 2. **Жёсткий приоритет brief:** не затирать пустым KB title структурированные поля. *(A2)*
-3. **filing_url ranking** по типу формы SEC. *(A6)*
+3. ~~**filing_url ranking** по Ex99/press vs 8-K shell~~ *(A6 — сделано 2026-08-03)*. Дальше: 10-K/10-Q PDF preference.
 4. **FMP spike** на G1 кэш·FCF·долг → решить keep Yahoo / dual. *(B1, A3)*
 5. **Badge «новый earnings»** vs сохранённый overlay. *(A4)*
 6. **IR catalog** расширить non-US / JS-gap тикеры. *(A5, B4)*

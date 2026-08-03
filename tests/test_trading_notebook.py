@@ -173,6 +173,17 @@ def test_suggest_report_expect_draft_skips_nastya_fields(monkeypatch):
     assert out["sufficiency"]["earnings_llm_extract"] is True
 
 
+def test_earnings_url_relevance_prefers_ex99_over_8k_shell():
+    from services.trading_notebook import _earnings_url_relevance_score
+
+    shell = "https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-20260729.htm"
+    ex99 = "https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-ex99_1.htm"
+    assert _earnings_url_relevance_score(ex99, "transcript", "SEC EDGAR exhibit") > _earnings_url_relevance_score(
+        shell, "sec_filing", "SEC EDGAR"
+    )
+    assert _earnings_url_relevance_score(ex99, "press_release", "SEC EDGAR exhibit") >= 100
+
+
 def test_map_earnings_brief_to_report_fields_empty_partial():
     from services.trading_notebook import _map_earnings_brief_to_report_fields
 

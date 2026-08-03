@@ -464,20 +464,57 @@
         "macroAlive": true,
         "sentimentBroken": false
       },
-      "fundament": null,
+      "fundament": {
+        "exchange": "NASDAQ",
+        "hq_ru": "Redmond, США",
+        "listing_origin_ru": "листинг NASDAQ · Microsoft Corporation",
+        "key_clients_ru": "",
+        "tagline": "Cloud + AI platforms (Azure, Microsoft 365, Copilot). Гиперскейлер: software + infra под AI-трансформацию клиентов.",
+        "metrics": [
+          {
+            "k": "КЭШ",
+            "v": "$76.8 млрд",
+            "tone": "good",
+            "note": "cash+STI на 30.06.2026 · 8-K Ex99.1 (было $94.6B)"
+          },
+          {
+            "k": "FCF",
+            "v": "~$67 млрд FY",
+            "tone": "mid",
+            "note": "CFO $182.9B − CapEx PP&E $115.9B · 8-K Ex99.1 FY26"
+          },
+          {
+            "k": "Прямой долг",
+            "v": "~$40.3 млрд",
+            "tone": "",
+            "note": "LT $31.1B + current $9.2B · 8-K Ex99.1"
+          },
+          {
+            "k": "Запас прочности",
+            "v": "current assets $208B / CL $169B",
+            "tone": "good",
+            "note": "PP&E $313B (AI/infra) · 8-K Ex99.1"
+          }
+        ],
+        "margin_ru": "Q4 FY26 gross ~67% ($60.5B / $90.0B). Intelligent Cloud: рост COGS с AI/infra; Azure +43%.",
+        "financing_ru": "CapEx PP&E FY26 $115.9B (Q4 $35.8B) — оплата AI/datacenter ростом; кэш+STI сжался $94.6→$76.8B. Кто платит рост: CFO, не долг-спайк.",
+        "filing_url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-ex99_1.htm",
+        "pluses": [],
+        "risks": []
+      },
       "report_expect": {
         "watch": {
           "driver_ru": "Azure growth (cc) — главный индикатор AI/cloud спроса; capacity vs demand.",
-          "revenue_arr_ru": "Q4 FY26: выручка $90 млрд (+18%) · beat; Azure +43% cc (ускорение с 40%).",
+          "revenue_arr_ru": "Q4 FY26: выручка $90.0 млрд (+18%) · Azure +43% · Cloud $59.3B (+27%) · 8-K Ex99.1.",
           "leading_ru": "Commercial RPO $678 млрд (+84%) · Copilot >30 млн paid seats · Azure FY >$100 млрд.",
-          "capex_ru": "CapEx+leases кв. $41 млрд (+69%) · CY26 ~$175 млрд (сдвиг finance→operating leases); FY27 CapEx >$50 млрд.",
-          "margin_path_ru": "Hood: FCF+ в FY27 · short-lived assets (GPU/CPU) ~2/3 CapEx.",
-          "guidance_ru": "FQ1: Azure ~45% cc · выручка ~$89.85–90.95 млрд.",
+          "capex_ru": "8-K Ex99.1: CapEx PP&E Q4 $35.8B / FY $115.9B. Call (доп.): CapEx+leases / CY26 outlook — сверять отдельно.",
+          "margin_path_ru": "Gross Q4 ~67%. Hood/call: путь к FCF+ при коротких AI-активах — суждение после call.",
+          "guidance_ru": "В 8-K Ex99 guidance нет («на call»). Call: FQ1 Azure ~45% cc · rev ~$89.85–90.95B — не путать с Ex99.",
           "tactics_map_ru": "Сильный: Azure accel + RPO↑ + FCF+ подтверждён. Ловушка: CapEx↑ без ускорения Azure / capacity miss."
         },
         "last": {
           "date_verdict_ru": "Q4 FY26 (29 июл 2026) · BEAT · акция +~8% AH",
-          "why_ru": "Azure 43% > консенсуса ~40%; RPO и Copilot seats; гайд Azure 45% на FQ1. Дискреты (Anthropic gain) — шум к EPS.",
+          "why_ru": "Azure 43% > консенсуса ~40%; RPO и Copilot seats; дискреты (Anthropic gain / VRP vs Xbox) — шум к EPS. OpenAI MTM отдельно (non-GAAP).",
           "risk_shift_ru": "С «догонит ли Azure» на «окупится ли CapEx / останется ли FCF+» → чекать Azure vs CapEx и capacity timing."
         }
       }

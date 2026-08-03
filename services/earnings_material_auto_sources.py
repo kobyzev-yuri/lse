@@ -364,15 +364,42 @@ def _sec_edgar_exhibit_materials_near_date(
             if url in seen_urls:
                 continue
             seen_urls.add(url)
+            # Ex99 earnings release ≠ call transcript; classify for notebook/extract priority.
+            is_transcript = any(
+                h in low
+                for h in (
+                    "transcript",
+                    "earnings-call",
+                    "earnings_call",
+                    "earnings call",
+                    "conference-call",
+                    "confcall",
+                )
+            )
+            is_press = (not is_transcript) and any(
+                h in low
+                for h in (
+                    "ex99",
+                    "ex-99",
+                    "exhibit99",
+                    "exhibit-99",
+                    "exhibit 99",
+                    "earnings release",
+                    "financial results",
+                    "press-release",
+                )
+            )
+            mat_type = "transcript" if is_transcript else ("press_release" if is_press else "transcript")
+            title_bit = "earnings release" if mat_type == "press_release" else "exhibit transcript"
             out.append(
                 CatalogMaterial(
                     symbol=sym,
                     event_date=event_date,
                     fiscal_period=None,
-                    material_type="transcript",
+                    material_type=mat_type,
                     source_name="SEC EDGAR exhibit",
                     source_url=url,
-                    title=f"{sym} {form_u} exhibit transcript ({fdate.isoformat()})",
+                    title=f"{sym} {form_u} {title_bit} ({fdate.isoformat()})",
                     meta={"auto_source": auto_source, "filing_date": fdate.isoformat(), "accession": accession},
                 )
             )
