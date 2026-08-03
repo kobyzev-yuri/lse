@@ -1313,13 +1313,15 @@ function renderFundament(d){
 
   const metricFields = slots.map(({i, defK}) => {
     const m = mAt(i);
-    return `<div class="edit-grid" style="margin-top:8px;padding:10px;background:var(--panel-2);border-radius:8px">
-      <div class="edit-field"><label>Метрика ${i+1}</label>
-        <input type="text" id="fund-mk-${i}" value="${esc(m.k||defK)}" placeholder="${esc(defK)}"></div>
-      <div class="edit-field"><label>Значение</label>
-        <input type="text" id="fund-mv-${i}" value="${esc(m.v||'')}" placeholder="—"></div>
-      <div class="edit-field" style="grid-column:1/-1"><label>Сноска-контекст</label>
-        <input type="text" id="fund-mn-${i}" value="${esc(m.note||'')}" placeholder="кратко · цвет из тона value/note"></div>
+    return `<div class="re-row" style="margin-top:8px">
+      <div class="edit-grid">
+        <div class="edit-field"><label>Метрика ${i+1} ${liveBadge("Yahoo")}</label>
+          <input type="text" id="fund-mk-${i}" value="${esc(m.k||defK)}" placeholder="${esc(defK)}"></div>
+        <div class="edit-field"><label>Значение ${liveBadge("Yahoo")}</label>
+          <input type="text" id="fund-mv-${i}" value="${esc(m.v||'')}" placeholder="—"></div>
+        <div class="edit-field" style="grid-column:1/-1"><label>Сноска (источник / сверка)</label>
+          <input type="text" id="fund-mn-${i}" value="${esc(m.note||'')}" placeholder="Yahoo … · после earnings: сверено с 10-Q"></div>
+      </div>
     </div>`;
   }).join("");
   const pluses = (f.pluses||[]).join("\n");
@@ -1332,14 +1334,15 @@ function renderFundament(d){
     <p class="note">Справка «что за компания и выживет ли она» (~20 сек). Анализ отчёта — вкладка <b>Ожидания от репорта</b>.
       Регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
     <div class="data-legend">
-      ${nastyaTag()} <span class="hint-txt">= текст паспорта (утверждает Настя)</span>
-      ${liveBadge("Yahoo draft")} <span class="hint-txt">= черновик цифр плиток</span>
-      ${reportSrcTag()} <span class="hint-txt">= ожидания / новости (другая вкладка)</span>
+      ${liveBadge("Yahoo")} <span class="hint-txt">= цифры с кнопки «Подтянуть» (не Настя)</span>
+      ${nastyaTag()} <span class="hint-txt">= только ручной текст / суждение</span>
+      ${reportSrcTag()} <span class="hint-txt">= ожидания / KB (другая вкладка)</span>
     </div>
     ${readOnly}
-    <div class="gex"><b>Регламент паспорта</b>
-      1) Yahoo → черновик 4 плиток. 2) Сверка с filing/IR (SEC). 3) Текст A/B/D/E ${nastyaTag()}. 4) OK сохранить.
-      Сектор/слой — на <b>Профиле</b>. Консенсус — Инвестдома (чтение). KB/дайджест паспорт не пишет.
+    <div class="gex"><b>Кто что заполняет</b>
+      <b>Yahoo</b> → плитки C, черновик маржи и строки финансирования.
+      ${nastyaTag()} → паспорт A, суть/клиенты, плюсы/риски, правка формулировок после сверки с filing.
+      KB/дайджест паспорт <b>не</b> пишет.
     </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament('yahoo')">Подтянуть из Yahoo</button>
@@ -1355,39 +1358,39 @@ function renderFundament(d){
       <div class="edit-field" style="grid-column:1/-1"><label>Год листинга / происхождение</label>
         <input type="text" id="fund-listing" value="${esc(f.listing_origin_ru||'')}" placeholder="2024 · выделилась из реструктуризации Yandex N.V."></div>
     </div>
-    <div class="fund-block-lbl">B · Суть бизнеса ${nastyaTag()}</div>
+    <div class="fund-block-lbl">B · Суть бизнеса</div>
     <div class="edit-field">
-      <label>Суть бизнеса (1–2 фразы + за счёт чего маржа)</label>
+      <label>Суть бизнеса (1–2 фразы) ${nastyaTag()}</label>
       <textarea id="fund-tagline" style="min-height:64px" placeholder="Не аренда сырых серверов, а готовые GPU-кластеры с софтом.">${esc(f.tagline||"")}</textarea>
     </div>
     <div class="edit-field" style="margin-top:8px">
-      <label>Ключевые клиенты (опц.)</label>
+      <label>Ключевые клиенты (опц.) ${nastyaTag()}</label>
       <input type="text" id="fund-clients" value="${esc(f.key_clients_ru||'')}" placeholder="Microsoft, Meta · или тип: hyperscalers">
     </div>
     <div class="edit-field" style="margin-top:8px">
-      <label>Маржа / откуда маржа</label>
-      <textarea id="fund-margin" style="min-height:52px" placeholder="Софт/оркестрация + длинные контракты…">${esc(f.margin_ru||"")}</textarea>
+      <label>Маржа / цифры ${liveBadge("Yahoo")} <span class="hint">· смысл формулировки</span> ${nastyaTag()}</label>
+      <textarea id="fund-margin" style="min-height:52px" placeholder="Yahoo подтянет gross/oper/net % · Настя пишет «откуда маржа» своими словами">${esc(f.margin_ru||"")}</textarea>
     </div>
-    <div class="fund-block-lbl">C · Метрики ${liveBadge("Yahoo draft")} → итог ${nastyaTag()}</div>
+    <div class="fund-block-lbl">C · Метрики ${liveBadge("Yahoo")} <span class="hint" style="text-transform:none;letter-spacing:0;font-weight:400">· не Настя · после earnings сверить с filing</span></div>
     ${metricFields}
-    <div class="fund-block-lbl">D · Финансирование ${nastyaTag()}</div>
+    <div class="fund-block-lbl">D · Финансирование</div>
     <div class="edit-field">
-      <label>Кто оплачивает рост и на каких условиях</label>
-      <textarea id="fund-financing" style="min-height:52px" placeholder="Источник капитала · качество долга · точка разрыва">${esc(f.financing_ru||"")}</textarea>
+      <label>Кэш / долг (черновик) ${liveBadge("Yahoo")} <span class="hint">· нарратив «кто оплачивает рост»</span> ${nastyaTag()}</label>
+      <textarea id="fund-financing" style="min-height:52px" placeholder="Yahoo даст кэш/долг · Настя — источник капитала, качество долга, точка разрыва">${esc(f.financing_ru||"")}</textarea>
     </div>
     <div class="fund-block-lbl">E · Плюсы / Риски ${nastyaTag()}</div>
     <div class="edit-grid">
       <div class="edit-field">
         <label>Плюсы (2–3 · по строкам)</label>
-        <textarea id="fund-pluses" style="min-height:80px" placeholder="Один плюс на строку">${esc(pluses)}</textarea>
+        <textarea id="fund-pluses" style="min-height:80px" placeholder="Один плюс на строку — только вручную">${esc(pluses)}</textarea>
       </div>
       <div class="edit-field">
         <label>Риски (2–3 · по строкам)</label>
-        <textarea id="fund-risks" style="min-height:80px" placeholder="Один риск на строку">${esc(risks)}</textarea>
+        <textarea id="fund-risks" style="min-height:80px" placeholder="Один риск на строку — только вручную">${esc(risks)}</textarea>
       </div>
     </div>
     <div class="edit-field" style="margin-top:10px">
-      <label>Ссылка на filing (10-Q / 20-F / IR), опционально</label>
+      <label>Ссылка на filing (10-Q / 20-F / IR) ${nastyaTag()}</label>
       <input type="url" id="fund-filing-url" value="${esc(filingSaved)}" placeholder="https://… — иначе кнопка SEC ищет по тикеру">
     </div>
     <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
