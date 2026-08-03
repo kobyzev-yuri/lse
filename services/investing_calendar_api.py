@@ -221,6 +221,7 @@ def fetch_investing_calendar_api_events(
             "region": region,
             "event_type": _event_type_from_name(name),
             "event_date": event_dt,
+            "provider": "investing",
             "api_event_id": meta.get("event_id"),
             "api_occurrence_time": occ.get("occurrence_time"),
         }

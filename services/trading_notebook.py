@@ -2828,7 +2828,7 @@ def build_notebook_payload(
     try:
         from services.macro_events_calendar import build_macro_events, next_fomc_decision
 
-        # Boot: FOMC (+ FRED if key). Earnings are heavier — UI loads via /api/notebook/calendar.
+        # Boot: KB macro calendar first (+ live FRED/FOMC fallback). Earnings via /api/notebook/calendar.
         calendar = build_macro_events(
             days=21, symbols=None, include_earnings=False, include_fred=True, include_fomc=True
         )

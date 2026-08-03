@@ -42,7 +42,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 35 */2 * * * flock -n /tmp/lse_news_sa.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode sa >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 # Notebook digest (LLM ProxyAPI): будни 12:30 UTC ≈ 08:30 ET (за час до RTH 09:30). Из KB, без повторного SA fetch.
 30 12 * * 1-5 flock -n /tmp/lse_notebook_digest.lock docker exec lse-bot python scripts/run_notebook_news_digest.py --from-kb-only >> /home/ai8049520/lse/logs/notebook_news_digest.log 2>&1
-# Investing: economic calendar JSON (работает) + HTML news (может 403 без прокси).
+# Investing mode: FRED+FOMC → KB, then Investing calendar JSON (may 403 on GCP without proxy) + HTML news.
 0 */2 * * * flock -n /tmp/lse_news_investing.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode investing >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 # NewsAPI — выключено (NEWSAPI 426 Upgrade Required). Включить при платном плане:
 # 10 */2 * * * flock -n /tmp/lse_news_newsapi.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode newsapi >> /home/ai8049520/lse/logs/news_fetch.log 2>&1

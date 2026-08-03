@@ -31,9 +31,10 @@ import time
 from config_loader import get_config_value, get_database_url
 from services.http_outbound import outbound_session
 from services.kb_extended_fields import (
-    investing_calendar_external_id,
-    investing_calendar_raw_payload,
     kb_content_sha256,
+    macro_calendar_external_id,
+    macro_calendar_raw_payload,
+    macro_calendar_source_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -335,10 +336,24 @@ def fetch_all_regions_calendar() -> List[Dict]:
             )
             return api_events
         except Exception as e:
-            logger.error(
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            msg = str(e)
+            # Cloudflare/geo blocks from datacenter IPs are expected without a proxy;
+            # do not ERROR — cron_watchdog would treat each new timestamp as a fresh alert.
+            is_forbidden = status in (401, 403) or (
+                "403" in msg and "Forbidden" in msg
+            ) or "401" in msg
+            log_fn = logger.warning if is_forbidden else logger.error
+            log_fn(
                 "Investing.com calendar: ошибка JSON API (%s). HTML не используется; "
-                "для legacy-скрапинга задайте INVESTING_CALENDAR_USE_HTML=true.",
+                "для legacy-скрапинга задайте INVESTING_CALENDAR_USE_HTML=true%s.",
                 e,
+                (
+                    "; при 403/401 с GCP задайте прокси: INVESTING_CALENDAR_USE_SYSTEM_PROXY=true "
+                    "и HTTP(S)_PROXY/ALL_PROXY"
+                    if is_forbidden
+                    else ""
+                ),
             )
             return []
 
@@ -417,16 +432,23 @@ def save_events_to_db(events: List[Dict]) -> int:
                     continue
                 
                 # Определяем ticker / symbol (макро: US_MACRO vs MACRO)
-                ticker = 'US_MACRO' if event['region'] == 'USA' else 'MACRO'
+                region = event.get("region") or "USA"
+                ticker = "US_MACRO" if region == "USA" else "MACRO"
                 symbol = ticker
-                ext_id = investing_calendar_external_id(
-                    event["region"],
+                provider = str(event.get("provider") or "investing").strip().lower() or "investing"
+                source = (
+                    str(event.get("source") or "").strip()
+                    or macro_calendar_source_label(provider, region)
+                )
+                ext_id = macro_calendar_external_id(
+                    provider,
+                    region,
                     event["event_date"],
                     event.get("event") or "",
                     event["event_type"],
                 )
                 content_sha = kb_content_sha256(content)
-                raw_json = investing_calendar_raw_payload(event)
+                raw_json = macro_calendar_raw_payload(provider, event)
 
                 # Вставка с расширенной схемой; дедуп по partial UNIQUE(external_id)
                 result = conn.execute(
@@ -440,13 +462,13 @@ def save_events_to_db(events: List[Dict]) -> int:
                         ON CONFLICT DO NOTHING
                     """),
                     {
-                        "ts": event['event_date'],
+                        "ts": event["event_date"],
                         "ticker": ticker,
-                        "source": f"Investing.com Economic Calendar ({event['region']})",
+                        "source": source,
                         "content": content,
-                        "event_type": event['event_type'],
-                        "region": event['region'],
-                        "importance": event['importance'],
+                        "event_type": event["event_type"],
+                        "region": region,
+                        "importance": event["importance"],
                         "symbol": symbol,
                         "external_id": ext_id[:512],
                         "content_sha256": content_sha,

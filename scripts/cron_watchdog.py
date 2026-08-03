@@ -45,9 +45,14 @@ sys.path.insert(0, str(project_root))
 from config_loader import get_config_value
 from services.telegram_signal import get_signal_chat_ids, send_telegram_message
 
-# Паттерны, которые не считаем ошибками (шум yfinance при пустом ответе Yahoo)
+# Паттерны, которые не считаем ошибками (шум yfinance при пустом ответе Yahoo;
+# Investing calendar 403 — Cloudflare block с GCP без прокси, ожидаемый шум)
 IGNORE_LINE_PATTERNS = [
     re.compile(r"possibly delisted;\s*no price data found", re.IGNORECASE),
+    re.compile(
+        r"Investing\.com calendar:.*JSON API.*(403|Forbidden)",
+        re.IGNORECASE,
+    ),
 ]
 
 # Логи cron, которые смотрит watchdog (имена файлов относительно logs/)

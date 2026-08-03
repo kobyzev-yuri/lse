@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backfill macro_calendar_daily_features from knowledge_base (Investing economic calendar).
+Backfill macro_calendar_daily_features from knowledge_base (Investing / FRED / FOMC calendar).
 
   python scripts/ingest_macro_calendar_daily_features.py --from-date 2024-01-01 --ensure-table
 """
@@ -28,6 +28,7 @@ from services.ingest_multiday_lr_daily_features_common import (
     session_close_utc,
     trading_dates_from_quotes,
 )
+from services.kb_extended_fields import MACRO_CALENDAR_KB_SOURCE_SQL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -64,11 +65,11 @@ def _load_calendar_events(engine, d0: date, d1: date, region_filter: str) -> pd.
     with engine.connect() as conn:
         df = pd.read_sql(
             text(
-                """
+                f"""
                 SELECT ts, importance, event_type, content, region
                 FROM knowledge_base
                 WHERE ticker IN ('MACRO', 'US_MACRO')
-                  AND source ILIKE '%Investing.com%Economic%Calendar%'
+                  AND {MACRO_CALENDAR_KB_SOURCE_SQL}
                   AND ts >= :t0 AND ts <= :t1
                 """
             ),
@@ -178,7 +179,7 @@ def main() -> int:
                 "region": args.region,
                 "trade_date": td,
                 "snapshot_label": args.snapshot_label,
-                "source": "investing_calendar_kb",
+                "source": "macro_calendar_kb",
                 **feat,
             }
         )

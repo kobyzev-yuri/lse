@@ -66,23 +66,25 @@ def filter_relevant_kb_rows_for_ticker(df: pd.DataFrame, ticker: str) -> pd.Data
 
 
 def fetch_kb_macro_calendar_upcoming(engine: Any, ahead_hours: int = 72) -> pd.DataFrame:
-    """События Investing.com economic calendar в KB с ts в будущем (до ahead_hours от сейчас)."""
+    """События макро-календаря в KB (Investing / FRED / FOMC) с ts в будущем (до ahead_hours)."""
     if engine is None:
         return pd.DataFrame()
     ah = max(6, min(int(ahead_hours), 24 * 14))
     try:
         from sqlalchemy import text
 
+        from services.kb_extended_fields import MACRO_CALENDAR_KB_SOURCE_SQL
+
         now = datetime.utcnow()
         until = now + timedelta(hours=ah)
         with engine.connect() as conn:
             df = pd.read_sql(
                 text(
-                    """
+                    f"""
                     SELECT ts, ticker, source, content, event_type, importance, region
                     FROM knowledge_base
                     WHERE ticker IN ('MACRO', 'US_MACRO')
-                      AND source ILIKE '%Investing.com%Economic%Calendar%'
+                      AND {MACRO_CALENDAR_KB_SOURCE_SQL}
                       AND ts >= :now_ts
                       AND ts <= :until_ts
                     ORDER BY ts ASC
@@ -697,7 +699,7 @@ def build_kb_news_short_html(
         )
     else:
         lines.append(
-            f"<b>Календарь KB</b> (вперёд до {ah}ч): нет строк в БД (cron <code>fetch_and_save_investing_calendar</code>, 429 или пусто)."
+            f"<b>Календарь KB</b> (вперёд до {ah}ч): нет строк в БД (cron FRED/FOMC + Investing calendar, пусто или ещё не загружено)."
         )
     geo_rel = metrics.get("relevant_geopolitical") if isinstance(metrics.get("relevant_geopolitical"), dict) else {}
     rnote_r = str(geo_rel.get("regime_cluster_note") or "")
@@ -835,7 +837,7 @@ def build_kb_news_full_html(
 {_h(metrics["gate_reason"])}<br>
 Пороги как <code>decide_llm_mode</code> / <code>PROFILE_GAME5M</code>: t1={_T1}, t1×2={_T1*_FULL_BIAS_MULT},
 t2={_T2}, max_articles_full={_MAX_ARTICLES_FULL}, regime_stress_min={_REGIME_STRESS_MIN}.<br><br>
-<b>Календарь KB</b> (оверлей LSE): события Investing economic calendar в горизонте. Отдельной ветки GEO в гейте нет —
+<b>Календарь KB</b> (оверлей LSE): события макро-календаря в KB (FRED / FOMC / Investing) в горизонте. Отдельной ветки GEO в гейте нет —
 REG уже учтён в <code>regime_stress</code> и <code>draft_impulse</code>, как в nyse.
 </div>
 """

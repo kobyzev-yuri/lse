@@ -8,7 +8,7 @@
 | **NewsAPI** (`/v2/everything`) | `newsapi_fetcher.py` | **~100 запросов/сутки** (developer) | **Каждая страница** ответа = **отдельный** HTTP-запрос. Увеличить объём: платный план или `NEWSAPI_MAX_PAGES` / реже cron. После 429 — cooldown (`NEWSAPI_COOLDOWN_AFTER_429_HOURS`). |
 | **Alpha Vantage** | `alphavantage_fetcher.py` | **~25 запросов/сутки** (free) | Earnings + news sentiment быстро сжигают лимит. В конфиге по умолчанию выключены лишние серии. |
 | **Investing.com News** (HTML лента) | `investing_news_fetcher.py` | Нет квоты «как у API» | Риск **429/403/таймаутов**; прокси `INVESTING_NEWS_PROXY`, паузы в коде. |
-| **Investing.com Economic Calendar** (JSON API, как NYSE) | `investing_calendar_api.py` → `investing_calendar_parser.py` | Публичный эндпоинт без ключа | Пагинация, retry на **429**; без авто-fallback на HTML (legacy: `INVESTING_CALENDAR_USE_HTML=true`). |
+| **Investing.com Economic Calendar** (JSON API, как NYSE) | `investing_calendar_api.py` → `investing_calendar_parser.py` | Публичный эндпоинт без ключа | Пагинация, retry на **429**; без авто-fallback на HTML (legacy: `INVESTING_CALENDAR_USE_HTML=true`). С **GCP** Cloudflare часто отдаёт **403** на JSON и HTML — нужен прокси (`INVESTING_CALENDAR_USE_SYSTEM_PROXY=true` + `HTTP(S)_PROXY`/`ALL_PROXY`); 403 логируется как WARNING, не ERROR. |
 | **KB /news gate (nyse-конвейер)** | `services/nyse_news_pipeline.py` + `kb_news_report.py` | TF-IDF кластер REG (`NYSE_REGIME_CLUSTER*`, как в nyse) | `draft_impulse` → `single_scalar_draft_bias`; гейт без отдельной ветки GEO по словарю. |
 | **LLM** (генерация тем в вебе) | `llm_service.py` | Лимит вашего провайдера (ProxyAPI) | Оплачивается по токенам, не путать с лимитами NewsAPI. |
 

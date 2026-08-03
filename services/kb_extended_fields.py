@@ -63,6 +63,81 @@ def kb_legacy_ticker(symbol: str) -> str:
     return (s.lstrip("^")[:10] or s[:10]).strip()
 
 
+# Prefixes for external_id — investing keeps historical `inv_cal|…` for dedupe stability.
+_MACRO_CAL_ID_PREFIX = {
+    "investing": "inv_cal",
+    "fred": "fred_cal",
+    "fomc": "fomc_cal",
+}
+_MACRO_CAL_PAYLOAD_SLUG = {
+    "investing": "investing_calendar",
+    "fred": "fred_calendar",
+    "fomc": "fomc_calendar",
+}
+
+# Shared SQL fragment for KB macro calendar consumers (Investing + FRED + FOMC).
+# Use inside a larger SQL string; single % for ILIKE (not %-format).
+MACRO_CALENDAR_KB_SOURCE_SQL = """(
+  source ILIKE '%Investing.com%Economic%Calendar%'
+  OR source ILIKE 'FRED Economic Calendar%'
+  OR source ILIKE 'FOMC Calendar%'
+)"""
+
+
+def is_macro_calendar_kb_source(source: str) -> bool:
+    """True if knowledge_base.source is an official/Investing macro calendar row."""
+    s = (source or "").strip().lower()
+    if not s:
+        return False
+    if "investing.com" in s and "economic" in s and "calendar" in s:
+        return True
+    if s.startswith("fred economic calendar"):
+        return True
+    if s.startswith("fomc calendar"):
+        return True
+    return False
+
+
+def macro_calendar_source_label(provider: str, region: str) -> str:
+    """Canonical knowledge_base.source for macro calendar rows."""
+    p = (provider or "investing").strip().lower()
+    r = (region or "").strip() or "USA"
+    if p == "fred":
+        return "FRED Economic Calendar (USA)"
+    if p == "fomc":
+        return "FOMC Calendar (USA)"
+    return f"Investing.com Economic Calendar ({r})"
+
+
+def macro_calendar_external_id(
+    provider: str,
+    region: str,
+    event_dt: datetime,
+    event_name: str,
+    event_type: str,
+) -> str:
+    """Стабильный ключ дедупа для строк макро-календаря в KB."""
+    p = (provider or "investing").strip().lower()
+    prefix = _MACRO_CAL_ID_PREFIX.get(p, f"{p}_cal")
+    base = (
+        f"{prefix}|{region}|{event_dt.isoformat()}|{(event_name or '').strip()}|{event_type}"
+    )
+    return hashlib.sha256(base.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def macro_calendar_raw_payload(provider: str, event: Dict[str, Any]) -> str:
+    """JSON для raw_payload: datetime → ISO, плюс метка провайдера."""
+    p = (provider or "investing").strip().lower()
+    slug = _MACRO_CAL_PAYLOAD_SLUG.get(p, f"{p}_calendar")
+    out: Dict[str, Any] = {"provider": slug}
+    for k, v in event.items():
+        if k == "event_date" and isinstance(v, datetime):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return json.dumps(out, ensure_ascii=False)
+
+
 def investing_calendar_external_id(
     region: str,
     event_dt: datetime,
@@ -70,18 +145,9 @@ def investing_calendar_external_id(
     event_type: str,
 ) -> str:
     """Стабильный ключ дедупа для строк Investing.com economic calendar (HTML и JSON API)."""
-    base = (
-        f"inv_cal|{region}|{event_dt.isoformat()}|{event_name.strip()}|{event_type}"
-    )
-    return hashlib.sha256(base.encode("utf-8", errors="ignore")).hexdigest()
+    return macro_calendar_external_id("investing", region, event_dt, event_name, event_type)
 
 
 def investing_calendar_raw_payload(event: Dict[str, Any]) -> str:
     """JSON для raw_payload: datetime → ISO, плюс метка провайдера."""
-    out: Dict[str, Any] = {"provider": "investing_calendar"}
-    for k, v in event.items():
-        if k == "event_date" and isinstance(v, datetime):
-            out[k] = v.isoformat()
-        else:
-            out[k] = v
-    return json.dumps(out, ensure_ascii=False)
+    return macro_calendar_raw_payload("investing", event)

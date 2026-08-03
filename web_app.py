@@ -4011,10 +4011,10 @@ async def api_notebook_ticker_group(sym: str, request: Request):
 
 @app.get("/api/notebook/calendar", response_class=JSONResponse)
 async def api_notebook_calendar(days: int = 21, symbol: str = ""):
-    """FOMC + FRED + Yahoo earnings (per-ticker Events tab / fallback panel).
+    """FOMC + FRED (+ Investing enricher) from knowledge_base, Yahoo earnings live.
 
-    If ``symbol`` is set, earnings are fetched only for that ticker (faster).
-    Macro rows (FOMC / FRED) are always included.
+    Prefer KB for macro; live FRED/FOMC only if KB empty. If ``symbol`` is set,
+    earnings are fetched only for that ticker (faster).
     """
 
     def _run() -> Dict[str, Any]:

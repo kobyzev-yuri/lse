@@ -22,19 +22,12 @@ from services.alphavantage_fetcher import fetch_all_alphavantage_data
 from services.newsapi_fetcher import fetch_and_save_newsapi_news
 from services.ticker_news_merge_fetcher import fetch_and_save_ticker_news
 
-# Настройка логирования (если /app/logs смонтирован :ro — пишем только в stderr)
-log_dir = project_root / 'logs'
-handlers_list = [logging.StreamHandler()]
-try:
-    log_dir.mkdir(exist_ok=True)
-    handlers_list.insert(0, logging.FileHandler(log_dir / 'news_fetch.log'))
-except OSError:
-    pass  # read-only FS — только StreamHandler
-
+# StreamHandler only — cron already redirects stdout/stderr to news_fetch.log;
+# a FileHandler to the same path would duplicate every line.
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=handlers_list
+    handlers=[logging.StreamHandler()],
 )
 
 logger = logging.getLogger(__name__)
@@ -200,7 +193,25 @@ def fetch_all_news_sources(mode: str = "all"):
             sources_status["SeekingAlphaFinance"] = f"❌ Ошибка: {e}"
 
     if run_investing:
-        # 4. Investing.com Economic Calendar (JSON API по умолчанию; legacy HTML — INVESTING_CALENDAR_USE_HTML)
+        # 4a. Official macro calendar (FRED + FOMC) → KB — before Investing (may 403 on GCP)
+        try:
+            logger.info("\n📅 Источник investing 0/2: FRED + FOMC → knowledge_base")
+            from services.official_macro_calendar_kb import fetch_and_save_official_macro_calendar
+
+            n_off, n_off_saved = fetch_and_save_official_macro_calendar()
+            if n_off == 0:
+                sources_status["Official macro (FRED/FOMC)"] = (
+                    "⚠️ 0 событий (нужен FRED_API_KEY для FRED; FOMC без ключа)"
+                )
+            else:
+                sources_status["Official macro (FRED/FOMC)"] = (
+                    f"✅ событий: {n_off}, новых строк в KB: {n_off_saved}"
+                )
+        except Exception as e:
+            logger.error("❌ Ошибка Official macro calendar (FRED/FOMC): %s", e)
+            sources_status["Official macro (FRED/FOMC)"] = f"❌ Ошибка: {e}"
+
+        # 4b. Investing.com Economic Calendar (JSON API по умолчанию; legacy HTML — INVESTING_CALENDAR_USE_HTML)
         try:
             logger.info("\n📅 Источник investing 1/2: Investing.com Economic Calendar")
             n_ev, n_saved = fetch_and_save_investing_calendar()

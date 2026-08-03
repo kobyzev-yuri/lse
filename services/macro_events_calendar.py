@@ -6,10 +6,11 @@ Python port of wintermonth2298/marketdata calendar adapters (Go), for LSE:
 - FRED: release dates for CPI/PPI/NFP/… (needs FRED_API_KEY).
 - Earnings: next report via yfinance (Yahoo), for notebook tickers.
 
-Primary economic calendar in LSE remains Investing.com → knowledge_base.
-This module is:
+Shared store for LSE + notebook is Postgres ``knowledge_base`` (Investing optional,
+FRED+FOMC via ``official_macro_calendar_kb``). This module:
 1) live FOMC for notebook Verdict (ФРС row),
-2) fallback / secondary feed when Investing is empty or for UI calendar panel.
+2) builds UI calendar preferring KB rows, with live FRED/FOMC as fallback,
+3) Yahoo earnings (still live; not always in KB).
 """
 
 from __future__ import annotations
@@ -501,6 +502,100 @@ def fomc_to_events(meetings: Iterable[Dict[str, Any]]) -> List[MacroEvent]:
     return out
 
 
+def pd_to_date(ts: Any) -> date:
+    """Best-effort date from DB timestamp / string without requiring pandas."""
+    if isinstance(ts, datetime):
+        if ts.tzinfo is not None:
+            return ts.astimezone(timezone.utc).date()
+        return ts.date()
+    if isinstance(ts, date):
+        return ts
+    s = str(ts or "")[:10]
+    return date.fromisoformat(s)
+
+
+def _kb_row_to_macro_event(row: Dict[str, Any]) -> Optional[MacroEvent]:
+    """Map a knowledge_base macro calendar row to UI MacroEvent."""
+    src = str(row.get("source") or "")
+    content = str(row.get("content") or "").strip()
+    title = content.split("\n", 1)[0].strip() if content else ""
+    if not title:
+        return None
+    try:
+        d = pd_to_date(row.get("ts"))
+    except Exception:
+        return None
+    et = str(row.get("event_type") or "").upper()
+    src_l = src.lower()
+    if et == "RATE_DECISION" or src_l.startswith("fomc calendar") or "fomc" in title.lower():
+        kind = "fomc"
+        ui_source = "kb:fomc"
+    else:
+        kind = "economic"
+        if src_l.startswith("fred economic"):
+            ui_source = "kb:fred"
+        elif "investing.com" in src_l:
+            ui_source = "kb:investing"
+        else:
+            ui_source = "kb:macro"
+    return MacroEvent(date=d, kind=kind, title=title, source=ui_source)
+
+
+def fetch_macro_events_from_kb(
+    *,
+    days: int = 21,
+    include_fred: bool = True,
+    include_fomc: bool = True,
+) -> List[MacroEvent]:
+    """Load upcoming macro calendar rows from knowledge_base (Investing / FRED / FOMC)."""
+    days = max(1, min(int(days), 90))
+    try:
+        from sqlalchemy import create_engine, text
+
+        from config_loader import get_database_url
+        from services.kb_extended_fields import MACRO_CALENDAR_KB_SOURCE_SQL
+    except Exception as e:
+        logger.warning("fetch_macro_events_from_kb imports failed: %s", e)
+        return []
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    until = now + timedelta(days=days)
+    try:
+        engine = create_engine(get_database_url())
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT ts, source, content, event_type, importance, region
+                    FROM knowledge_base
+                    WHERE ticker IN ('MACRO', 'US_MACRO')
+                      AND {MACRO_CALENDAR_KB_SOURCE_SQL}
+                      AND ts >= :t0 AND ts <= :t1
+                    ORDER BY ts ASC
+                    LIMIT 200
+                    """
+                ),
+                {"t0": now, "t1": until},
+            ).mappings().all()
+        engine.dispose()
+    except Exception as e:
+        logger.warning("fetch_macro_events_from_kb query failed: %s", e)
+        return []
+
+    out: List[MacroEvent] = []
+    for row in rows:
+        ev = _kb_row_to_macro_event(dict(row))
+        if ev is None:
+            continue
+        if ev.kind == "fomc" and not include_fomc:
+            continue
+        if ev.kind == "economic" and not include_fred:
+            # include_fred gates all economic KB rows (FRED + Investing enrichers)
+            continue
+        out.append(ev)
+    return out
+
+
 def build_macro_events(
     *,
     days: int = 21,
@@ -508,23 +603,47 @@ def build_macro_events(
     include_fred: bool = True,
     include_fomc: bool = True,
     include_earnings: bool = True,
+    prefer_kb: bool = True,
 ) -> Dict[str, Any]:
-    """Merged calendar for UI (same shape as Go Events list / calendar.html)."""
+    """Merged calendar for UI (same shape as Go Events list / calendar.html).
+
+    Prefer knowledge_base for FOMC/economic; live FRED/FOMC only if KB empty for that kind.
+    Earnings remain live via yfinance when requested.
+    """
     days = max(1, min(int(days), 90))
     events: List[MacroEvent] = []
     errors: Dict[str, str] = {}
+    used_kb = False
+    used_live_fallback = False
 
-    if include_fomc:
+    if prefer_kb and (include_fred or include_fomc):
+        try:
+            kb_events = fetch_macro_events_from_kb(
+                days=days, include_fred=include_fred, include_fomc=include_fomc
+            )
+            if kb_events:
+                events.extend(kb_events)
+                used_kb = True
+        except Exception as e:
+            errors["kb"] = str(e)[:200]
+            logger.warning("build_macro_events KB: %s", e)
+
+    need_live_fomc = include_fomc and not any(e.kind == "fomc" for e in events)
+    need_live_fred = include_fred and not any(e.kind == "economic" for e in events)
+
+    if need_live_fomc:
         try:
             meetings = fetch_fomc_meetings(days_ahead=days, include_past_days=0)
             events.extend(fomc_to_events(meetings))
+            used_live_fallback = True
         except Exception as e:
             errors["fomc"] = str(e)[:200]
             logger.warning("build_macro_events FOMC: %s", e)
 
-    if include_fred:
+    if need_live_fred:
         try:
             events.extend(fetch_fred_releases(days_ahead=days))
+            used_live_fallback = True
         except Exception as e:
             errors["fred"] = str(e)[:200]
 
@@ -545,6 +664,15 @@ def build_macro_events(
         seen.add(k)
         uniq.append(e)
 
+    note_parts = []
+    if used_kb:
+        note_parts.append("macro=knowledge_base (FRED/FOMC/Investing)")
+    if used_live_fallback:
+        note_parts.append("live FRED/FOMC fallback")
+    if not note_parts:
+        note_parts.append("no macro rows")
+    note_parts.append("earnings=yfinance")
+
     return {
         "asof_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "days": days,
@@ -556,10 +684,9 @@ def build_macro_events(
             "earnings": sum(1 for e in uniq if e.kind == "earnings"),
         },
         "errors": errors,
-        "sources_note": (
-            "FOMC=federalreserve.gov; economic=FRED (FRED_API_KEY); "
-            "earnings=yfinance. Investing.com remains primary KB ingest."
-        ),
+        "sources_note": "; ".join(note_parts) + ".",
+        "from_kb": used_kb,
+        "live_fallback": used_live_fallback,
     }
 
 
