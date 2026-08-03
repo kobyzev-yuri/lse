@@ -381,20 +381,33 @@ def fetch_all_regions_calendar() -> List[Dict]:
     return all_events
 
 
-def _is_calendar_content_worth_saving(content: str, event_name: str) -> bool:
+def _is_calendar_content_worth_saving(
+    content: str,
+    event_name: str,
+    *,
+    provider: str = "investing",
+    event_type: str = "",
+) -> bool:
     """
     Решает, имеет ли смысл сохранять запись календаря в knowledge_base.
     Не сохраняем «шум»: только число (19.60M), без названия события или без текста.
+    Official FRED/FOMC titles are short by design (CPI, NFP) — allow them.
     """
     if not content or not content.strip():
         return False
     text = content.strip()
+    name = (event_name or "").strip()
+    p = (provider or "investing").strip().lower()
+    if p in ("fred", "fomc"):
+        return len(name) >= 2
     if len(text) < 25:
         return False
-    if not event_name or len(event_name.strip()) < 3:
+    if not name or len(name) < 3:
         return False
     if " " not in text:
         return False
+    # Keep event_type available for future filters / callers.
+    _ = event_type
     return True
 
 
@@ -427,7 +440,12 @@ def save_events_to_db(events: List[Dict]) -> int:
                 if event.get('actual'):
                     content += f"\nActual: {event['actual']}"
                 
-                if not _is_calendar_content_worth_saving(content, event.get('event') or ''):
+                if not _is_calendar_content_worth_saving(
+                    content,
+                    event.get("event") or "",
+                    provider=str(event.get("provider") or "investing"),
+                    event_type=str(event.get("event_type") or ""),
+                ):
                     skipped_noise += 1
                     continue
                 

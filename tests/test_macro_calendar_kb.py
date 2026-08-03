@@ -117,3 +117,17 @@ def test_kb_row_to_macro_event():
 def test_pd_to_date():
     assert pd_to_date(datetime(2026, 8, 1, 12, 0)) == date(2026, 8, 1)
     assert pd_to_date("2026-08-01 13:30:00") == date(2026, 8, 1)
+
+
+def test_official_short_titles_worth_saving():
+    from services.investing_calendar_parser import _is_calendar_content_worth_saving
+
+    assert _is_calendar_content_worth_saving(
+        "CPI", "CPI", provider="fred", event_type="CPI"
+    )
+    assert _is_calendar_content_worth_saving(
+        "NFP", "NFP", provider="fred", event_type="NFP"
+    )
+    assert not _is_calendar_content_worth_saving(
+        "CPI", "CPI", provider="investing", event_type="CPI"
+    )
