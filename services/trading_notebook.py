@@ -1498,24 +1498,25 @@ def _latest_earnings_material_url(symbol: str) -> Dict[str, str]:
         if not rows:
             return empty
         # Newest event_date first; within same date pick highest relevance.
-        best = None
+        best: Optional[Dict[str, Any]] = None
         best_key = None
         for row in rows:
-            url = str(row.get("source_url") or "").strip()[:500]
+            item = dict(row)
+            url = str(item.get("source_url") or "").strip()[:500]
             if not (url.startswith("http://") or url.startswith("https://")):
                 continue
-            ev = row.get("event_date")
+            ev = item.get("event_date")
             ev_s = str(ev) if ev is not None else ""
             rel = _earnings_url_relevance_score(
                 url,
-                str(row.get("material_type") or ""),
-                str(row.get("source_name") or ""),
+                str(item.get("material_type") or ""),
+                str(item.get("source_name") or ""),
             )
             key = (ev_s, rel)
             if best_key is None or key > best_key:
                 best_key = key
-                best = row
-                best["source_url"] = url
+                item["source_url"] = url
+                best = item
         if not best:
             return empty
         return {
