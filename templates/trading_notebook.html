@@ -3013,7 +3013,7 @@ function digestPipelineHtml(pipe){
 }
 
 async function ensureDigestSnapshots(force){
-  if(!force && DIGEST_SNAPSHOTS && DIGEST_SNAPSHOTS.length > 1) return;
+  if(!force && DIGEST_SNAPSHOTS && DIGEST_SNAPSHOTS.length > 1) return DIGEST_SNAPSHOTS;
   try {
     const r = await fetch("/api/notebook/digest/snapshots?limit=40");
     const j = await r.json().catch(() => ({}));
@@ -3033,6 +3033,25 @@ async function ensureDigestSnapshots(force){
       is_latest: true,
     }];
   }
+  return DIGEST_SNAPSHOTS;
+}
+
+function digestNeedsLatestRefresh(liveRow){
+  if(!liveRow) return false;
+  const sid = String(DIGEST_SNAPSHOT_ID || "latest");
+  // Never yank the user off an intentionally selected archive snapshot.
+  if(sid !== "latest" && !liveRow.is_latest) return false;
+  const liveKept = Number(liveRow.kept || 0);
+  const curKept = Number((DIGEST && DIGEST.kept) || 0);
+  const curErr = !!(DIGEST && DIGEST.llm_error);
+  const liveGen = String(liveRow.generated_at_utc || liveRow.date || "");
+  const curGen = String((DIGEST && (DIGEST.date || DIGEST.generated_at_utc)) || "");
+  // Boot/HTML may still show a failed empty snapshot while API already has a good latest.
+  if(liveKept <= 0) return false;
+  if(curErr) return true;
+  if(curKept === 0) return true;
+  if(liveGen && curGen && liveGen.slice(0, 16) !== curGen.slice(0, 16)) return true;
+  return false;
 }
 
 async function selectDigestSnapshot(id){
@@ -3069,11 +3088,15 @@ function renderDigest(){
   </div>`;
 
   queueMicrotask(() => {
-    ensureDigestSnapshots(true).then(() => {
+    ensureDigestSnapshots(true).then((rows) => {
+      const live = (rows || []).find(r => r && r.is_latest) || (rows || [])[0];
       const sel = document.getElementById("digestSnapSel");
-      if(sel && DIGEST_SNAPSHOTS.length && sel.options.length !== DIGEST_SNAPSHOTS.length){
-        renderContent();
+      const optsStale = !!(sel && rows && rows.length && sel.options.length !== rows.length);
+      if(digestNeedsLatestRefresh(live)){
+        selectDigestSnapshot("latest");
+        return;
       }
+      if(optsStale) renderContent();
     });
   });
 
