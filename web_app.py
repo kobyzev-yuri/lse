@@ -4398,6 +4398,50 @@ async def api_notebook_ticker_fundament_suggest(sym: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка notebook fundament suggest: {e!s}")
 
 
+@app.post("/api/notebook/tickers/{sym}/fundament/reconcile-llm", response_class=JSONResponse)
+async def api_notebook_ticker_fundament_reconcile_llm(sym: str, request: Request):
+    """Yahoo passport ↔ Ex99/IR text via LLM. Draft only — does not write overlay."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    dry_run = bool(body.get("dry_run") or body.get("dryRun"))
+    model = str(body.get("model") or "").strip() or None
+
+    def _run() -> Dict[str, Any]:
+        from services.notebook_fundament_reconcile import (
+            reconcile_fundament_with_earnings_llm,
+        )
+
+        return reconcile_fundament_with_earnings_llm(
+            sym, model=model, dry_run=dry_run
+        )
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        from services.notebook_fundament_reconcile import (
+            MaterialMissingError,
+            ReconcileLlmError,
+        )
+
+        if isinstance(e, MaterialMissingError):
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        if isinstance(e, ReconcileLlmError):
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        if isinstance(e, ValueError):
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        logger.exception(
+            "POST /api/notebook/tickers/%s/fundament/reconcile-llm: %s", sym, e
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Ошибка notebook fundament reconcile: {e!s}"
+        ) from e
+
+
 @app.patch("/api/notebook/tickers/{sym}/fundament", response_class=JSONResponse)
 async def api_notebook_ticker_fundament(sym: str, request: Request):
     """Опциональная фундаментальная карточка → overlay."""

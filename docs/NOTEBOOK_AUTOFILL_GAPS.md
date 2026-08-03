@@ -38,7 +38,7 @@ Backlog дыр. Правило не меняем: **кнопка → черно�
 |---|----------|--------------|------|--------|
 | A1 | Brief часто `partial` (нет extract / materials) | Без structured facts Ожидания бесполезны | G1: calendar → materials → extract; в UI — `partial` / no materials | открыто |
 | A2 | KB title эвристика затирает brief | Шум в watch-полях | Не заполнять value из KB, если brief уже дал поле | открыто |
-| A3 | Yahoo TTM / leases / состав кэша ≠ filing FY | Черновик врёт до сверки | Явный note «Yahoo, не сверено»; после earnings — Ex99/10-K; FMP spike только если Yahoo систематически расходится на G1 | открыто |
+| A3 | Yahoo TTM / leases / состав кэша ≠ filing FY | Черновик врёт до сверки | Кнопка **«Сверить с Ex99/IR (LLM)»** (`POST …/fundament/reconcile-llm`): Yahoo ↔ `earnings_material.content_text`, conflicts + draft metrics; без авто-OK. Без parsed text — ручной PDF | **сделано 2026-08-03** (draft); глаза Насти + OK всё ещё обязательны |
 | A4 | Нет сигнала «вышел новый earnings» | Карточка устаревает молча | Badge / diff brief.event_date vs сохранённого | открыто |
 | A5 | Non-US / без 10-Q | SEC-only путь дырявый | IR catalog + 6-K/20-F; статус non-US | открыто |
 | A6 | `filing_url` брал голый 8-K | Обёртка без цифр | Ranking: Ex99.1 / press_release > 8-K shell | **сделано 2026-08-03** |
@@ -52,7 +52,7 @@ Backlog дыр. Правило не меняем: **кнопка → черно�
 | # | Источник | Статус | Нужен? | Обоснование |
 |---|----------|--------|--------|-------------|
 | B1 | **Yahoo / yfinance** | в кнопке | **да, primary draft** | Рабочий авточерновик 4 метрик + паспорт A |
-| B2 | **Ex99 / 10-Q / 10-K / IR** | `filing_url` + ручная сверка | **да, truth** | Единственная опора после earnings |
+| B2 | **Ex99 / 10-Q / 10-K / IR** | `filing_url` + LLM reconcile + ручной OK | **да, truth** | Текст material → кнопка сверки; истина после OK Насти |
 | B3 | **Event Brief** (IR/SEC→LLM) | в кнопке Ожиданий | **да** | Structured watch/last; без него — только KB-шум |
 | B4 | **FMP** | demo; 402 на части G1 | **опц. cross-check** | Имеет смысл, если Yahoo ≠ filing на нескольких G1. Не замена Yahoo и не замена PDF |
 | B5 | **Intrinio** | нет ключа / нет кода | **не нужен сейчас** | Паспортные цифры уже из Yahoo. SEC-normalized API — роскошь для сверки, не блокер. Брать только если FMP/Yahoo стабильно расходятся с 10-K и ручная сверка не масштабируется |
@@ -68,7 +68,7 @@ Backlog дыр. Правило не меняем: **кнопка → черно�
 1. **A1** — ops: materials + extract на G1, sufficiency показывает дыры.  
 2. **A2** — brief не затирать KB.  
 3. ~~**A6**~~ — Ex99 ranking (готово). Дальше при желании: предпочитать 10-K/10-Q PDF, если есть.  
-4. **A3 / B4** — сверка Yahoo↔Ex99 на G1; FMP только по факту расхождений.  
+4. ~~**A3**~~ — кнопка LLM-сверки Yahoo↔Ex99 (готово 2026-08-03). **B4** FMP — только по факту расхождений на G1.  
 5. **A4** — badge нового earnings.  
 6. **A5 / B7** — non-US IR по запросу Насти.  
 7. **B5 Intrinio** — не планировать, пока не доказан gap, который не закрывают Yahoo + filing + FMP.

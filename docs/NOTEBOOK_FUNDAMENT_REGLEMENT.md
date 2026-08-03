@@ -7,7 +7,7 @@
 
 Вывод на экране = **сохранённые поля** (read-only карточка сверху). LLM / Seeking Alpha карточку не пишут.
 
-Связанные файлы: [`TRADING_NOTEBOOK.md`](TRADING_NOTEBOOK.md), [`nastya/FUNDAMENT_SCHEMA_NASTYA.md`](../nastya/FUNDAMENT_SCHEMA_NASTYA.md), UI `/notebook`, API `PATCH …/fundament`, `PATCH …/report-expect`, `GET …/fundament/suggest`.
+Связанные файлы: [`TRADING_NOTEBOOK.md`](TRADING_NOTEBOOK.md), [`nastya/FUNDAMENT_SCHEMA_NASTYA.md`](../nastya/FUNDAMENT_SCHEMA_NASTYA.md), UI `/notebook`, API `PATCH …/fundament`, `PATCH …/report-expect`, `GET …/fundament/suggest`, `POST …/fundament/reconcile-llm`.
 
 ---
 
@@ -55,7 +55,7 @@ Yahoo «Подтянуть» — черновик **цифр плиток** па
 | B | `tagline` | Yahoo summary (черновик) | переписать модель своими словами |
 | B | `key_clients_ru` | нет стабильного API | **вручную** (10-K / пресс-релиз) |
 | B | `margin_ru` | Yahoo % + IR/SEC margin notes | смысл «откуда маржа» |
-| C | `metrics[4]` | Yahoo BS/CF | сверка с filing после earnings |
+| C | `metrics[4]` | Yahoo BS/CF; после earnings — **Сверить с Ex99/IR (LLM)** | сверка глаз + OK |
 | D | `financing_ru` | Yahoo кэш/долг/D/E + CapEx из brief | нарратив: кто платит рост / точка разрыва |
 | E | `pluses`, `risks` | — | **только Настя** (+ консенсус Инвестдома) |
 
@@ -117,10 +117,11 @@ Companyfacts / кнопка «Подтянуть из SEC» — **не** ист�
 
 | Слой | Источник | Роль |
 |------|----------|------|
-| **Основной черновик цифр** | **Yahoo / yfinance** (`Подтянуть из Yahoo`) | Рабочий default для G1+: кэш, FCF (annual CF), долг (BS LT±current), current ratio. Note: «Yahoo …» |
+| **Основной черновик цифр** | **Yahoo / yfinance** (`Подтянуть Yahoo + IR/SEC`) | Рабочий default для G1+: кэш, FCF (annual CF), долг (BS LT±current), current ratio. Note: «Yahoo …» |
+| **Сверка с Ex99/IR (LLM)** | `POST …/fundament/reconcile-llm` · кнопка на Фундаменте | Yahoo draft ↔ `earnings_material.content_text` через ProxyAPI. Черновик метрик/маржи/финансов + список конфликтов. **Не** пишет overlay, **не** трогает pluses/risks/clients. Истина после OK Насти |
 | SEC companyfacts (API only) | `GET …/fundament/suggest?source=edgar` | **Не в UI.** После фикса FCF часто = Yahoo FY; кэш/долг часто нет. См. §3.3 |
-| Правда после earnings | **10-K / 10-Q / IR PDF** (§2.1: кнопка SEC / `filing_url`) | Ручная сверка |
-| Tagline, маржа, финансирование, плюсы, риски, паспорт A, ожидания | **Только Настя** | Текст карточек |
+| Правда после earnings | **10-K / 10-Q / IR PDF** (§2.1: кнопка SEC / `filing_url`) + опц. LLM-сверка выше | Ручной approve (OK); LLM = ускоритель, не авто-OK |
+| Tagline, плюсы, риски, клиенты, слой Профиля | **Только Настя** | Суждение / правка |
 | Макро-контекст плана | **Настя / редактор** на вкладке **Тактика** | Текст для тумблера Вердикта |
 | Seeking Alpha / дайджест LLM | Новости и контекст | **Не** источник истины по цифрам / ожиданиям |
 
@@ -141,7 +142,8 @@ Companyfacts / кнопка «Подтянуть из SEC» — **не** ист�
 | Приоритет | Что | Зачем |
 |-----------|-----|--------|
 | **P0 (сейчас)** | Опираться на **yfinance** как на основной авточерновик | Стабильнее и полнее по G1, чем companyfacts |
-| **P0** | Сверка после earnings — **вручную по 10-K/10-Q/IR**, не по кнопке SEC XBRL | Companyfacts ≠ надёжный полный сверщик |
+| **P0** | После earnings — кнопка **«Сверить с Ex99/IR (LLM)»** при наличии parsed material; иначе вручную по PDF | LLM черновит конфликты; OK только Настя |
+| **P0** | Сверка без material — **вручную по 10-K/10-Q/IR**, не по кнопке SEC XBRL | Companyfacts ≠ надёжный полный сверщик |
 | **P1** | FMP demo в `config.security.env`; при 402 на G1 — Starter | Cross-check, не truth |
 | **P1** | Intrinio: письмо `sales@intrinio.com` / consultation — план **Individual** | Self-serve trial сломан; см. §3.5 |
 | **P2** | SEC companyfacts оставить в коде (`?source=edgar`) для ops/отладки FCF | UI снят |

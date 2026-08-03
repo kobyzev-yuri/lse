@@ -394,6 +394,12 @@
   .fund-passport .fp-k{font-size:10px;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);font-weight:700;}
   .fund-passport .fp-v{font-size:13px;color:var(--ink);margin-top:2px;line-height:1.35;}
   .fund-block-lbl{font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);font-weight:700;margin:14px 0 6px;}
+  .fund-reconcile{margin:10px 0 0;padding:10px 12px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;font-size:13px;color:var(--muted);line-height:1.45;}
+  .fund-reconcile h4{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--dim);}
+  .fund-reconcile ul{margin:0;padding-left:18px;}
+  .fund-reconcile li{margin:4px 0;}
+  .fund-reconcile .fr-conflict{color:#e8c65a;}
+  .fund-reconcile .fr-quote{color:var(--dim);font-size:12px;}
   .fund-ro{margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line);}
   .re-row{margin-top:8px;padding:10px 12px;background:var(--panel-2);border-radius:8px;width:100%;box-sizing:border-box;}
   .re-row label{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:var(--dim);margin-bottom:6px;}
@@ -1128,7 +1134,9 @@ async function suggestFundament(source){
   const src = "yahoo";
   const status = document.getElementById("fundSuggestStatus");
   const btnY = document.getElementById("fund-suggest");
+  const btnR = document.getElementById("fund-reconcile");
   if(btnY) btnY.disabled = true;
+  if(btnR) btnR.disabled = true;
   if(status){ status.className = "flag-status"; status.textContent = "Yahoo…"; }
   try {
     const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/fundament/suggest`);
@@ -1136,32 +1144,7 @@ async function suggestFundament(source){
     if(!r.ok){
       throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
     }
-    const f = j.fundament || {};
-    const set = (id, v) => {
-      const el = document.getElementById(id);
-      if(el && v != null && String(v).trim()) el.value = String(v);
-    };
-    set("fund-exchange", f.exchange || "");
-    set("fund-hq", f.hq_ru || "");
-    set("fund-listing", f.listing_origin_ru || "");
-    set("fund-tagline", f.tagline || "");
-    set("fund-margin", f.margin_ru || "");
-    if(f.financing_ru != null && String(f.financing_ru).trim()){
-      set("fund-financing", f.financing_ru || "");
-    }
-    // key_clients / pluses / risks — не трогаем (Настя)
-    if(f.filing_url){
-      set("fund-filing-url", f.filing_url);
-      const secA = document.getElementById("fund-sec");
-      if(secA){ secA.href = String(f.filing_url); secA.textContent = "Открыть сохранённый filing"; }
-    }
-    const metrics = Array.isArray(f.metrics) ? f.metrics : [];
-    for(let i=0;i<4;i++){
-      const m = metrics[i] || {};
-      set("fund-mk-"+i, m.k || "");
-      set("fund-mv-"+i, m.v || "");
-      set("fund-mn-"+i, m.note || "");
-    }
+    applyFundamentDraft(j.fundament || {}, {touchNastya:false, touchPassportA:true, touchTagline:true});
     const filled = Array.isArray(j.filled) ? j.filled.join(", ") : "";
     const nastya = Array.isArray(j.nastya_only) ? j.nastya_only.length : 0;
     if(status){
@@ -1171,10 +1154,116 @@ async function suggestFundament(source){
         + (nastya ? ` · Настя: клиенты/плюсы/риски/слой` : "")
         + " · OK";
     }
+    const box = document.getElementById("fund-reconcile-box");
+    if(box){ box.hidden = true; box.innerHTML = ""; }
   } catch(e){
     if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
   } finally {
     if(btnY) btnY.disabled = false;
+    if(btnR) btnR.disabled = false;
+  }
+}
+
+function applyFundamentDraft(f, opts){
+  const o = opts || {};
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    if(el && v != null && String(v).trim()) el.value = String(v);
+  };
+  if(o.touchPassportA){
+    set("fund-exchange", f.exchange || "");
+    set("fund-hq", f.hq_ru || "");
+    set("fund-listing", f.listing_origin_ru || "");
+  }
+  if(o.touchTagline) set("fund-tagline", f.tagline || "");
+  set("fund-margin", f.margin_ru || "");
+  if(f.financing_ru != null && String(f.financing_ru).trim()){
+    set("fund-financing", f.financing_ru || "");
+  }
+  // key_clients / pluses / risks — не трогаем (Настя), даже если API прислал пустые
+  if(f.filing_url){
+    set("fund-filing-url", f.filing_url);
+    const secA = document.getElementById("fund-sec");
+    if(secA){ secA.href = String(f.filing_url); secA.textContent = "Открыть сохранённый filing"; }
+  }
+  const metrics = Array.isArray(f.metrics) ? f.metrics : [];
+  for(let i=0;i<4;i++){
+    const m = metrics[i] || {};
+    set("fund-mk-"+i, m.k || "");
+    set("fund-mv-"+i, m.v || "");
+    set("fund-mn-"+i, m.note || "");
+  }
+}
+
+function renderFundReconcileBox(j){
+  const box = document.getElementById("fund-reconcile-box");
+  if(!box) return;
+  const conflicts = Array.isArray(j.conflicts) ? j.conflicts : [];
+  const quotes = Array.isArray(j.evidence_quotes) ? j.evidence_quotes : [];
+  const meta = j.material_meta || {};
+  const bits = [];
+  if(meta.event_date) bits.push(String(meta.event_date).slice(0, 10));
+  if(meta.material_type) bits.push(String(meta.material_type));
+  if(j.filing_period) bits.push("период " + String(j.filing_period));
+  const head = bits.length ? bits.join(" · ") : "Ex99/IR";
+  let html = `<h4>Сверка LLM · ${esc(head)}</h4>`;
+  if(conflicts.length){
+    html += `<ul>${conflicts.map(c => {
+      const field = esc(c.field || "—");
+      const y = esc(c.yahoo || "—");
+      const f = esc(c.filing || "—");
+      const n = esc(c.note || "");
+      return `<li class="fr-conflict"><b>${field}</b>: Yahoo ${y} → filing ${f}${n ? ` · ${n}` : ""}</li>`;
+    }).join("")}</ul>`;
+  } else {
+    html += `<p class="note" style="margin:0">Явных конфликтов в ответе нет — всё равно сверьте глаза перед OK.</p>`;
+  }
+  if(quotes.length){
+    html += `<ul style="margin-top:8px">${quotes.map(q =>
+      `<li class="fr-quote">«${esc(q.quote||"")}» <span class="note">· ${esc(q.topic||"")}</span></li>`
+    ).join("")}</ul>`;
+  }
+  box.innerHTML = html;
+  box.hidden = false;
+}
+
+async function reconcileFundamentLlm(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("fundSuggestStatus");
+  const btnY = document.getElementById("fund-suggest");
+  const btnR = document.getElementById("fund-reconcile");
+  if(btnY) btnY.disabled = true;
+  if(btnR) btnR.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "сверка LLM…"; }
+  try {
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/fundament/reconcile-llm`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    // Metrics / margin / financing / filing only — do not wipe passport A or tagline from Yahoo.
+    applyFundamentDraft(j.fundament || {}, {touchNastya:false, touchPassportA:false, touchTagline:false});
+    renderFundReconcileBox(j);
+    const n = Number(j.conflict_count != null ? j.conflict_count : (j.conflicts || []).length) || 0;
+    if(status){
+      status.className = n ? "flag-status" : "flag-status ok";
+      status.textContent = (j.note || ("конфликтов: " + n)) + " · не сохранено";
+    }
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    const box = document.getElementById("fund-reconcile-box");
+    if(box){
+      box.hidden = false;
+      box.innerHTML = `<h4>Сверка LLM</h4><p class="note" style="margin:0;color:#ef8582">${esc(String(e.message||e))}</p>`;
+    }
+  } finally {
+    if(btnY) btnY.disabled = false;
+    if(btnR) btnR.disabled = false;
   }
 }
 
@@ -1347,21 +1436,24 @@ function renderFundament(d){
     <p class="note">Справка «что за компания и выживет ли она» (~20 сек). Анализ отчёта — вкладка <b>Ожидания от репорта</b>.
       Регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
     <div class="data-legend">
-      ${liveBadge("Yahoo")} <span class="hint-txt">= кнопка «Подтянуть» (биржа, HQ, листинг, метрики, маржа%, финансы + filing_url/CapEx из IR/SEC если есть)</span>
-      ${nastyaTag()} <span class="hint-txt">= клиенты, плюсы/риски, слой на Профиле, правка формулировок</span>
+      ${liveBadge("Yahoo")} <span class="hint-txt">= «Подтянуть» (биржа, HQ, листинг, метрики, маржа%, финансы + filing_url/CapEx из IR/SEC если есть)</span>
+      ${liveBadge("LLM сверка")} <span class="hint-txt">= «Сверить с Ex99/IR» · Yahoo ↔ текст material · конфликты · без авто-OK</span>
+      ${nastyaTag()} <span class="hint-txt">= клиенты, плюсы/риски, слой на Профиле, правка формулировок, OK</span>
       ${reportSrcTag()} <span class="hint-txt">= ожидания / KB (другая вкладка)</span>
     </div>
     ${readOnly}
     <div class="gex"><b>Кто что заполняет (по схеме Насти)</b>
       <b>Кнопка Yahoo</b> — биржа, HQ, год листинга, 4 метрики, % маржи, черновик tagline/финансов; если earnings pipeline уже прогнал материалы — ещё filing_url и CapEx/маржа из Event Brief.
       ${nastyaTag()} — слой тетрадки (Профиль), ключевые клиенты, плюсы/риски, «человеческая» правка сути и финансирования.
-      После earnings: сверить цифры с filing (SEC).
+      После earnings: кнопка <b>Сверить с Ex99/IR (LLM)</b> сравнивает Yahoo с текстом материала — черновик + конфликты; плюсы/риски не трогает. Истина после вашего OK.
     </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament('yahoo')">Подтянуть Yahoo + IR/SEC</button>
+      <button type="button" class="edit-btn" id="fund-reconcile" onclick="reconcileFundamentLlm()">Сверить с Ex99/IR (LLM)</button>
       <a class="edit-btn" id="fund-sec" href="${esc(secHref)}" target="_blank" rel="noopener noreferrer">${esc(secLabel)}</a>
       <span class="flag-status" id="fundSuggestStatus"></span>
     </div>
+    <div class="fund-reconcile" id="fund-reconcile-box" hidden></div>
     <div class="fund-block-lbl">A · Паспорт ${liveBadge("Yahoo")} <span class="hint" style="text-transform:none;letter-spacing:0;font-weight:400">· слой — Профиль ${nastyaTag()}</span></div>
     <div class="edit-grid">
       <div class="edit-field"><label>Биржа ${liveBadge("Yahoo")}</label>
