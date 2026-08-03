@@ -120,8 +120,8 @@
   nav.tabs button.on{color:var(--ink);border-bottom-color:var(--accent);}
 
   .tab-body{display:none;}
-  .tab-body.on{display:block;animation:fade .2s ease;}
-  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  /* No fade here: renderContent() rebuilds innerHTML often; animation looked like constant blinking. */
+  .tab-body.on{display:block;}
 
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:14px;}
   .card h3{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;}
@@ -461,7 +461,11 @@ let DIGEST_BUCKETS = [];
 let DIGEST_PIPELINE = {};
 let DIGEST_SNAPSHOT_ID = "latest";
 let DIGEST_SNAPSHOTS = []; // [{id, date, ...}]
+let DIGEST_SNAPSHOTS_LOADED = false;
 let DIGEST_RETAIN_DAYS = 14;
+let _digestHydrateInflight = false;
+let _digestAutoLatestTried = false;
+let _digestOptsSynced = false;
 let NEWS_SOURCES = {ingest_channels:[], kb_sources_14d:[], note_ru:""};
 let digestTickerFilter = ""; // "" = all (only when not following current)
 let digestSourceFilter = ""; // "" = all
@@ -1510,34 +1514,13 @@ function renderReportExpect(d){
   </div>`);
 }
 
-function renderContent(){
-  destroyNbDailyChart();
-  const c = document.getElementById("content");
-  if(!current){
-    if(activeTab==="digest"){ c.innerHTML = renderDigest(); }
-    else if(activeTab==="watchlist"){ c.innerHTML = renderWatchlist(); }
-    else if(activeTab==="guide"){ c.innerHTML = renderGuideTab(); }
-    else c.innerHTML = tabWrap(activeTab, `<div class="card"><h3>Нет активного тикера</h3>
-      <p class="note">Выберите группу с тикерами, либо откройте «Дайджесты» / «Watchlist» / «Пояснения».</p></div>`);
-    return;
-  }
-  const d = DATA[current];
-  if(!d){ c.innerHTML = `<div class="load-err">Тикер ${esc(current)} не найден в данных</div>`; return; }
-  let html = "";
-  const L = d.levels || {};
-  html += tabWrap("verdict", renderVerdict(d));
-  html += tabWrap("chart", renderChartTab(d));
-
-  const gname = (GROUPS[String(d.group)] && GROUPS[String(d.group)].name) || ("GRP "+d.group);
-  html += tabWrap("profile", renderProfile(d, gname));
-  html += tabWrap("triggers", renderTriggers(d));
-
+function renderEntryTab(d){
   const entryText = (d.entry||[]).map(x => String(x||"").replace(/<\/?b>/gi,"")).join("\n");
   const exitText = (d.exit||[]).map(x => String(x||"").replace(/<\/?b>/gi,"")).join("\n");
   const Lshow = d.levels || {};
   const buyHint = Lshow.buyDip != null ? `$${Lshow.buyDip}` : "не задан";
   const sellHint = Lshow.sell != null ? `$${Lshow.sell}` : "не задан";
-  html += tabWrap("entry", `<div class="card">
+  return `<div class="card">
     <h3>Стратегия входа / выхода<span class="hint">план словами · цифры buy/sell — на Вердикте</span></h3>
     <p class="note">Впишите план здесь и нажмите OK. Сейчас на Вердикте: buy <b>${esc(buyHint)}</b>, sell <b>${esc(sellHint)}</b>. Каждая строка входа/выхода = один пункт.</p>
     <div class="edit-grid" style="margin-top:10px">
@@ -1559,8 +1542,10 @@ function renderContent(){
       <span class="flag-status" id="planStatus"></span>
     </div>
     <p class="note" style="margin-top:12px">Тумблер <b>тезис</b> на Вердикте = этот макро ещё в силе. Выкл → СТОП. План не заменяет Buy Dip / Sell.</p>
-    </div>`);
+    </div>`;
+}
 
+function renderEnvTab(d){
   const envs = (d.env||[]).map(e => {
     const live = !!e.live;
     const key = envEditableKey(e.lbl);
@@ -1580,13 +1565,13 @@ function renderContent(){
     return `<div class="env"><span class="dot ${esc(e.state)}"></span><span class="lbl">${esc(e.lbl)}</span><span class="st">${esc(e.st)}</span>${badge}</div>`;
   }).join("");
   const hasLiveVix = (d.env||[]).some(e => e.live && String(e.lbl||"").toLowerCase().includes("vix"));
-  html += tabWrap("env", `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):""}<span class="hint">VIX / NDX / нефть / FOMC — live; таргеты — вручную на Вердикте</span></h3>
+  return `<div class="card"><h3>Environment Check ${hasLiveVix?liveBadge("VIX"):""}<span class="hint">VIX / NDX / нефть / FOMC — live; таргеты — вручную на Вердикте</span></h3>
     ${envs}
     <div class="note">Красный/жёлтый = пауза входов. <b>ФРС</b> = дата FOMC + публичный FedWatch (hold/cut/hike %). <b>Таргеты</b> — не ваш Sell и не ср. PT домов: ручной гейт «волна cut PT <i>вне</i> earnings». Смотрите карточки на «Инвестдома» → на Вердикте кнопки <b>таргеты</b> ok / mid / bad. Один cut ≠ сразу bad; серия cuts → mid/bad. Нефть вверх = гео-стресс. <a href="https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html" target="_blank" rel="noopener">CME FedWatch</a></div>
-    </div>`);
+    </div>`;
+}
 
-  html += tabWrap("events", renderEventsTab(d));
-
+function renderHousesTab(d){
   const houses = (d.houses||[]).map(h => {
     const quote = houseQuoteLine(h);
     return `<div class="house"><div class="hh">
@@ -1602,7 +1587,7 @@ function renderContent(){
   const flash = (housesRefreshFlash && housesRefreshFlash.sym === current) ? housesRefreshFlash : null;
   const flashCls = flash ? (flash.ok ? "flag-status ok" : "flag-status err") : "flag-status";
   const flashTxt = flash ? esc(flash.text || "") : "";
-  html += tabWrap("houses", `<div class="card"><h3>Оценки инвестдомов ${housesBadge}<span class="upd">${esc(cons.upd||'')}</span></h3>
+  return `<div class="card"><h3>Оценки инвестдомов ${housesBadge}<span class="upd">${esc(cons.upd||'')}</span></h3>
     <div class="houses-toolbar">
       <button type="button" class="edit-btn" id="houses-refresh" onclick="refreshHouses()">Обновить с StockAnalysis</button>
       <span class="${flashCls}" id="housesStatus">${flashTxt}</span>
@@ -1623,14 +1608,44 @@ function renderContent(){
       </div>
     </div>
     <div class="houses-list">${houses || '<p class="note">Пока пусто — нажмите «Обновить с StockAnalysis».</p>'}</div>
-    </div>`);
+    </div>`;
+}
 
-  html += renderFundament(d);
-  html += renderReportExpect(d);
-  html += renderDigest();
-  html += renderWatchlist();
-  html += renderGuideTab();
-  c.innerHTML = html;
+/** Only the active tab — full rebuild of all tabs caused open-time blinking. */
+function renderActivePanel(d){
+  const gname = (GROUPS[String(d.group)] && GROUPS[String(d.group)].name) || ("GRP "+d.group);
+  switch(activeTab){
+    case "verdict": return tabWrap("verdict", renderVerdict(d));
+    case "chart": return tabWrap("chart", renderChartTab(d));
+    case "profile": return tabWrap("profile", renderProfile(d, gname));
+    case "triggers": return tabWrap("triggers", renderTriggers(d));
+    case "entry": return tabWrap("entry", renderEntryTab(d));
+    case "env": return tabWrap("env", renderEnvTab(d));
+    case "events": return tabWrap("events", renderEventsTab(d));
+    case "houses": return tabWrap("houses", renderHousesTab(d));
+    case "fundament": return renderFundament(d);
+    case "report_expect": return renderReportExpect(d);
+    case "digest": return renderDigest();
+    case "watchlist": return renderWatchlist();
+    case "guide": return renderGuideTab();
+    default: return tabWrap(activeTab, `<div class="card"><h3>Нет вкладки</h3></div>`);
+  }
+}
+
+function renderContent(){
+  destroyNbDailyChart();
+  const c = document.getElementById("content");
+  if(!current){
+    if(activeTab==="digest"){ c.innerHTML = renderDigest(); }
+    else if(activeTab==="watchlist"){ c.innerHTML = renderWatchlist(); }
+    else if(activeTab==="guide"){ c.innerHTML = renderGuideTab(); }
+    else c.innerHTML = tabWrap(activeTab, `<div class="card"><h3>Нет активного тикера</h3>
+      <p class="note">Выберите группу с тикерами, либо откройте «Дайджесты» / «Watchlist» / «Пояснения».</p></div>`);
+    return;
+  }
+  const d = DATA[current];
+  if(!d){ c.innerHTML = `<div class="load-err">Тикер ${esc(current)} не найден в данных</div>`; return; }
+  c.innerHTML = renderActivePanel(d);
 }
 
 function envSourceHint(lbl){
@@ -2827,6 +2842,23 @@ async function refreshCalendarForTicker(sym, force){
 let _newsSentCache = null;
 let _newsSentOpen = false;
 
+/** Update verdict hero/gates after FinBert without wiping the whole panel. */
+function patchVerdictHero(sym){
+  const u = String(sym || "").toUpperCase();
+  if(!u || String(current || "").toUpperCase() !== u) return;
+  if(activeTab !== "verdict") return;
+  const d = DATA[u];
+  if(!d) return;
+  const v = computeVerdict(d);
+  const hero = document.querySelector("#tab-verdict .verdict-hero") || document.querySelector(".verdict-hero");
+  if(!hero) return;
+  hero.className = "verdict-hero " + v.cls;
+  const action = hero.querySelector(".vaction");
+  const why = hero.querySelector(".vwhy");
+  if(action) action.textContent = v.action;
+  if(why) why.textContent = v.why;
+}
+
 function newsSentStateClass(label){
   const L = String(label||"").toLowerCase();
   if(L === "bullish") return {dot:"ok", avg:"bull"};
@@ -2875,14 +2907,11 @@ async function loadNewsSentiment(sym){
     const j = await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.detail || j.error || ("HTTP "+r.status));
     const key = `${j.avg_sentiment}|${j.label}|${j.scored_count}|${j.news_count}`;
-    const prevKey = DATA[u]._newsSentKey || "";
     DATA[u]._newsSent = j;
     DATA[u]._newsSentKey = key;
     paint(j);
-    // Re-render verdict once so STOP / БЛОК pick up FinBert (replaces sentimentBroken).
-    if(key !== prevKey && current === u){
-      renderContent();
-    }
+    // Update STOP/БЛОК in place — full renderContent() here caused open-time blink.
+    patchVerdictHero(u);
   }catch(e){
     _newsSentCache = null;
     if(dotEl) dotEl.className = "idot neutral";
@@ -3013,13 +3042,14 @@ function digestPipelineHtml(pipe){
 }
 
 async function ensureDigestSnapshots(force){
-  if(!force && DIGEST_SNAPSHOTS && DIGEST_SNAPSHOTS.length > 1) return DIGEST_SNAPSHOTS;
+  if(!force && DIGEST_SNAPSHOTS_LOADED) return DIGEST_SNAPSHOTS;
   try {
     const r = await fetch("/api/notebook/digest/snapshots?limit=40");
     const j = await r.json().catch(() => ({}));
     if(r.ok){
       DIGEST_SNAPSHOTS = Array.isArray(j.snapshots) ? j.snapshots : [];
       if(j.retain_days != null) DIGEST_RETAIN_DAYS = Number(j.retain_days) || 14;
+      DIGEST_SNAPSHOTS_LOADED = true;
     }
   } catch(e){ /* ignore */ }
   if(!DIGEST_SNAPSHOTS.length){
@@ -3032,8 +3062,49 @@ async function ensureDigestSnapshots(force){
       trashed: DIGEST.trashed,
       is_latest: true,
     }];
+    DIGEST_SNAPSHOTS_LOADED = true;
   }
   return DIGEST_SNAPSHOTS;
+}
+
+function syncDigestSnapSelect(rows){
+  const sel = document.getElementById("digestSnapSel");
+  if(!sel || !rows || !rows.length) return;
+  const cur = String(DIGEST_SNAPSHOT_ID || "latest");
+  const html = rows.map(r =>
+    `<option value="${esc(r.id)}" ${String(r.id)===cur?"selected":""}>${esc(digestSnapshotLabel(r))}</option>`
+  ).join("");
+  sel.innerHTML = html;
+}
+
+/** Load snapshot index / fresher latest without full-page re-render (blinks). */
+async function hydrateDigestSnapshotsQuiet(){
+  if(_digestHydrateInflight || (_digestOptsSynced && _digestAutoLatestTried)) return;
+  _digestHydrateInflight = true;
+  try{
+    const rows = await ensureDigestSnapshots(false);
+    syncDigestSnapSelect(rows);
+    const live = (rows || []).find(r => r && r.is_latest) || (rows || [])[0];
+    if(!_digestAutoLatestTried && digestNeedsLatestRefresh(live)){
+      _digestAutoLatestTried = true;
+      try{
+        const r = await fetch("/api/notebook/digest/snapshots/latest");
+        const j = await r.json().catch(() => ({}));
+        if(r.ok){
+          if(j.digest) DIGEST = j.digest;
+          DIGEST_PIPELINE = j.pipeline || {};
+          DIGEST_SNAPSHOT_ID = j.id || "latest";
+          // Only repaint digest panel if user is looking at it.
+          if(activeTab === "digest") renderContent();
+          else syncDigestSnapSelect(DIGEST_SNAPSHOTS);
+        }
+      }catch(e){ /* ignore */ }
+    }
+    _digestAutoLatestTried = true;
+    _digestOptsSynced = true;
+  }finally{
+    _digestHydrateInflight = false;
+  }
 }
 
 function digestNeedsLatestRefresh(liveRow){
@@ -3087,18 +3158,8 @@ function renderDigest(){
     <div class="vbtn ${digestVariant==="logic"?"on":""}" onclick="setDigestVariant('logic')">Логика фильтра</div>
   </div>`;
 
-  queueMicrotask(() => {
-    ensureDigestSnapshots(true).then((rows) => {
-      const live = (rows || []).find(r => r && r.is_latest) || (rows || [])[0];
-      const sel = document.getElementById("digestSnapSel");
-      const optsStale = !!(sel && rows && rows.length && sel.options.length !== rows.length);
-      if(digestNeedsLatestRefresh(live)){
-        selectDigestSnapshot("latest");
-        return;
-      }
-      if(optsStale) renderContent();
-    });
-  });
+  // Snapshot list: patch <select> in place. Never call renderContent() from here.
+  queueMicrotask(() => { hydrateDigestSnapshotsQuiet(); });
 
   if(digestVariant==="logic"){
     const buckets = (DIGEST_BUCKETS||[]).map(b => `<div class="bucket"><span class="bico">${esc(b.ico)}</span>
@@ -3359,6 +3420,8 @@ function bootApp(){
     const boot = JSON.parse(el.textContent);
     applyBoot(boot);
     renderGroupNav(); renderTickers(); renderTabs(); renderContent();
+    // Background: refresh digest index without touching the visible verdict panel.
+    queueMicrotask(() => { hydrateDigestSnapshotsQuiet(); });
   } catch(e){
     document.getElementById("content").innerHTML = `<div class="load-err">Ошибка загрузки тетрадки: ${esc(e.message)}</div>`;
   }
