@@ -1844,8 +1844,95 @@ def _yfinance_interest_bearing_debt(ticker: Any) -> Tuple[Optional[float], Optio
     return None, None, ""
 
 
+def _yahoo_exchange_label(info: Dict[str, Any]) -> str:
+    """Map Yahoo exchange codes to human labels (NASDAQ / NYSE / …)."""
+    raw = str(
+        info.get("fullExchangeName")
+        or info.get("exchange")
+        or info.get("market")
+        or ""
+    ).strip()
+    if not raw:
+        return ""
+    up = raw.upper()
+    # Common Yahoo short codes
+    code_map = {
+        "NMS": "NASDAQ",
+        "NGM": "NASDAQ",
+        "NCM": "NASDAQ",
+        "NAS": "NASDAQ",
+        "NASDAQ": "NASDAQ",
+        "NYQ": "NYSE",
+        "NYSE": "NYSE",
+        "PCX": "NYSE Arca",
+        "ASE": "NYSE American",
+        "AMEX": "NYSE American",
+        "OTC": "OTC",
+        "PNK": "OTC",
+    }
+    if up in code_map:
+        return code_map[up]
+    if "NASDAQ" in up:
+        return "NASDAQ"
+    if "NYSE" in up:
+        return "NYSE"
+    return raw[:40]
+
+
+def _yahoo_hq_ru(info: Dict[str, Any]) -> str:
+    city = str(info.get("city") or "").strip()
+    state = str(info.get("state") or "").strip()
+    country = str(info.get("country") or "").strip()
+    # Prefer RU-friendly country names for common cases
+    country_ru = {
+        "United States": "США",
+        "Netherlands": "Нидерланды",
+        "United Kingdom": "Великобритания",
+        "Ireland": "Ирландия",
+        "Cayman Islands": "Каймановы о-ва",
+        "Taiwan": "Тайвань",
+        "China": "Китай",
+        "Israel": "Израиль",
+        "Germany": "Германия",
+        "France": "Франция",
+        "Canada": "Канада",
+        "Japan": "Япония",
+        "South Korea": "Южная Корея",
+        "Singapore": "Сингапур",
+    }.get(country, country)
+    bits = [x for x in (city, state, country_ru) if x]
+    return ", ".join(bits)[:160]
+
+
+def _yahoo_listing_origin_ru(info: Dict[str, Any], summary: str = "") -> str:
+    """IPO / first trade year + optional founded phrase from summary."""
+    parts: List[str] = []
+    epoch = info.get("firstTradeDateEpochUtc") or info.get("firstTradeDateEpoch")
+    try:
+        if epoch is not None:
+            from datetime import datetime, timezone
+
+            yr = datetime.fromtimestamp(int(epoch), tz=timezone.utc).year
+            if 1900 <= yr <= 2100:
+                parts.append(f"листинг с {yr} (Yahoo first trade)")
+    except (TypeError, ValueError, OSError):
+        pass
+    # "founded in 1975" / «основана в 1975»
+    import re
+
+    m = re.search(r"founded in (\d{4})", summary or "", flags=re.I)
+    if m:
+        parts.append(f"основана в {m.group(1)}")
+    return " · ".join(parts)[:240]
+
+
 def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
-    """Gradual autofill draft for Fundament tab (Yahoo info). Does not persist."""
+    """Gradual autofill draft for Fundament tab (Yahoo info). Does not persist.
+
+    Auto (button): exchange, HQ, listing year, metrics, margin %, financing numbers,
+    tagline draft from longBusinessSummary.
+    Manual (Nastya): key_clients, pluses/risks, sector/layer on Profile, narrative rewrite.
+    """
     u = str(sym or "").strip().upper()
     if not u:
         raise ValueError("ticker required")
@@ -1870,18 +1957,19 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
             "source": "yfinance",
             "fundament": _normalize_fundament({}),
             "filled": [],
+            "nastya_only": ["key_clients_ru", "pluses", "risks", "profile.sector"],
             "note": "Yahoo не отдал info — заполните вручную",
         }
 
     short = str(info.get("shortName") or info.get("longName") or u).strip()
     sector = str(info.get("sector") or "").strip()
     industry = str(info.get("industry") or "").strip()
+    summary = str(info.get("longBusinessSummary") or "").strip()
     bits = [short]
     if sector or industry:
         bits.append(" · ".join(x for x in (sector, industry) if x))
-    summary = str(info.get("longBusinessSummary") or "").strip()
     if summary:
-        # first sentence only, keep short for tagline
+        # first sentence only, keep short for tagline draft
         cut = summary.split(". ")[0].strip()
         if cut and not cut.endswith("."):
             cut += "."
@@ -1889,6 +1977,10 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
             cut = cut[:277].rstrip() + "…"
         bits.append(cut)
     tagline = " ".join(bits)[:500]
+
+    exchange = _yahoo_exchange_label(info)
+    hq_ru = _yahoo_hq_ru(info)
+    listing_origin_ru = _yahoo_listing_origin_ru(info, summary)
 
     cash = _fmt_usd_compact(info.get("totalCash"))
     fcf_annual, fcf_end = _yfinance_annual_fcf(ticker)
@@ -1925,6 +2017,12 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
 
     metrics: List[Dict[str, str]] = []
     filled: List[str] = []
+    if exchange:
+        filled.append("exchange")
+    if hq_ru:
+        filled.append("hq_ru")
+    if listing_origin_ru:
+        filled.append("listing_origin_ru")
     if cash:
         metrics.append({"k": "КЭШ", "v": cash, "note": "Yahoo totalCash (cash+STI) · сравнимо с SEC cash+STI", "tone": "good"})
         filled.append("cash")
@@ -1974,7 +2072,11 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
         fin_bits.append(f"долг {debt}")
     if dte_f is not None:
         fin_bits.append(f"D/E {dte_f:.1f}")
-    financing_ru = ("Yahoo: " + " · ".join(fin_bits)) if fin_bits else ""
+    financing_ru = (
+        ("Yahoo черновик цифр: " + " · ".join(fin_bits) + ". Настя: кто оплачивает рост / качество долга / точка разрыва.")
+        if fin_bits
+        else ""
+    )
     if fin_bits:
         filled.append("financing")
     if tagline:
@@ -1982,6 +2084,10 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
 
     fundament = _normalize_fundament(
         {
+            "exchange": exchange,
+            "hq_ru": hq_ru,
+            "listing_origin_ru": listing_origin_ru,
+            "key_clients_ru": "",  # Nastya — Yahoo rarely has reliable client list
             "tagline": tagline,
             "metrics": metrics,
             "margin_ru": margin_ru,
@@ -1993,9 +2099,23 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     return {
         "ticker": u,
         "source": "yfinance",
+        "name": str(info.get("longName") or info.get("shortName") or "").strip()[:120],
+        "yahoo_sector": sector,
+        "yahoo_industry": industry,
         "fundament": fundament,
         "filled": filled,
-        "note": "черновик из Yahoo · FCF=год из cashflow · плюсы/риски вручную · сохраните",
+        "nastya_only": [
+            "key_clients_ru",
+            "pluses",
+            "risks",
+            "profile.sector_layer",
+            "tagline_rewrite",
+            "financing_narrative",
+        ],
+        "note": (
+            "кнопка Yahoo: биржа/HQ/листинг/метрики/маржа% · "
+            "Настя: клиенты, плюсы/риски, слой на Профиле, правка сути/финансирования · сохраните OK"
+        ),
     }
 
 

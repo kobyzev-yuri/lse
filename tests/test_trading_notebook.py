@@ -141,6 +141,26 @@ def test_suggest_report_expect_draft_skips_nastya_fields(monkeypatch):
     assert out["sufficiency"]["kb_news"] is True
 
 
+def test_yahoo_passport_helpers():
+    from services.trading_notebook import (
+        _yahoo_exchange_label,
+        _yahoo_hq_ru,
+        _yahoo_listing_origin_ru,
+        _normalize_fundament,
+    )
+
+    assert _yahoo_exchange_label({"exchange": "NMS"}) == "NASDAQ"
+    assert "Amsterdam" in _yahoo_hq_ru(
+        {"city": "Amsterdam", "country": "Netherlands"}
+    )
+    assert "1975" in _yahoo_listing_origin_ru({}, "The company was founded in 1975 and is headquartered")
+    f = _normalize_fundament(
+        {"exchange": "NASDAQ", "hq_ru": "Redmond, США", "listing_origin_ru": "листинг с 1986"}
+    )
+    assert f["exchange"] == "NASDAQ"
+    assert f["hq_ru"].startswith("Redmond")
+
+
 def test_add_and_move_notebook_ticker(tmp_path: Path):
     from services.trading_notebook import (
         add_notebook_ticker,
