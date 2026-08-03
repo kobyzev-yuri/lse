@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -1255,9 +1256,225 @@ def update_ticker_report_expect(
     }
 
 
-def suggest_report_expect_from_sources(sym: str) -> Dict[str, Any]:
-    """Draft report_expect fact fields from KB news (+ optional earnings brief).
+def _join_signal_list(raw: Any, *, limit: int = 3) -> str:
+    if not isinstance(raw, list):
+        return ""
+    bits: List[str] = []
+    for item in raw:
+        s = str(item or "").strip()
+        if s:
+            bits.append(s)
+        if len(bits) >= limit:
+            break
+    return " · ".join(bits)
 
+
+def _fmt_surprise_label(pct: Any) -> str:
+    try:
+        v = float(pct)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(v):
+        return ""
+    return "BEAT" if v > 0.25 else ("MISS" if v < -0.25 else "INLINE")
+
+
+def _map_earnings_brief_to_report_fields(brief: Dict[str, Any]) -> Dict[str, str]:
+    """Map IR/SEC→LLM Event Brief into report_expect fact drafts (no Nastya judgment)."""
+    out: Dict[str, str] = {}
+    if not isinstance(brief, dict) or brief.get("status") not in ("ok", "partial"):
+        return out
+
+    g_raw = brief.get("guidance")
+    g = g_raw if isinstance(g_raw, dict) else {}
+    scen = brief.get("scenario") if isinstance(brief.get("scenario"), dict) else {}
+    src_out = brief.get("source_outcomes") if isinstance(brief.get("source_outcomes"), dict) else {}
+
+    ai = _join_signal_list(brief.get("ai_demand_signals"))
+    margin_sig = _join_signal_list(brief.get("margin_pressure_signals"))
+    supply = _join_signal_list(brief.get("inventory_or_supply_notes"))
+    qa = _join_signal_list(brief.get("qa_concerns"), limit=2)
+    capex_notes = str(brief.get("capex_notes") or "").strip()
+    tone = str(brief.get("management_tone") or "").strip()
+    headline = str(brief.get("headline") or "").strip()
+    fiscal = str(brief.get("fiscal_period") or "").strip()
+    ev_date = str(brief.get("event_date") or "").strip()
+
+    if ai:
+        out["driver_ru"] = ai[:500]
+    elif scen.get("rationale"):
+        out["driver_ru"] = str(scen.get("rationale")).strip()[:500]
+    elif headline:
+        out["driver_ru"] = headline[:500]
+
+    rev_bits: List[str] = []
+    ra, re_ = brief.get("revenue_actual"), brief.get("revenue_estimate")
+    if ra is not None:
+        try:
+            rev_bits.append(f"rev actual {_fmt_usd_compact(float(ra)) or ra}")
+        except (TypeError, ValueError):
+            rev_bits.append(f"rev actual {ra}")
+    if re_ is not None:
+        try:
+            rev_bits.append(f"est {_fmt_usd_compact(float(re_)) or re_}")
+        except (TypeError, ValueError):
+            rev_bits.append(f"est {re_}")
+    rs = brief.get("revenue_surprise_pct")
+    if rs is not None:
+        try:
+            rev_bits.append(f"surprise {float(rs):+.1f}%")
+        except (TypeError, ValueError):
+            pass
+    ea, ee = brief.get("eps_actual"), brief.get("eps_estimate")
+    if ea is not None or ee is not None:
+        eps_bit = "EPS"
+        if ea is not None:
+            eps_bit += f" {ea}"
+        if ee is not None:
+            eps_bit += f" vs est {ee}"
+        es = brief.get("eps_surprise_pct")
+        if es is not None:
+            try:
+                eps_bit += f" ({float(es):+.1f}%)"
+            except (TypeError, ValueError):
+                pass
+        rev_bits.append(eps_bit)
+    if rev_bits:
+        out["revenue_arr_ru"] = " · ".join(str(x) for x in rev_bits)[:500]
+
+    if supply:
+        out["leading_ru"] = supply[:500]
+    else:
+        quotes = brief.get("evidence_quotes") if isinstance(brief.get("evidence_quotes"), list) else []
+        for q in quotes:
+            if not isinstance(q, dict):
+                continue
+            topic = str(q.get("topic") or "").lower()
+            txt = str(q.get("quote") or "").strip()
+            if txt and any(t in topic for t in ("ai_demand", "other", "margin")):
+                if "backlog" in txt.lower() or "book" in txt.lower() or "capacity" in txt.lower() or "rpo" in txt.lower():
+                    out["leading_ru"] = txt[:500]
+                    break
+
+    capex_bits = [x for x in (str(g.get("capex_outlook") or "").strip(), capex_notes) if x]
+    if capex_bits:
+        out["capex_ru"] = " · ".join(capex_bits)[:500]
+
+    margin_bits = [x for x in (str(g.get("margin_outlook") or "").strip(), margin_sig) if x]
+    if margin_bits:
+        out["margin_path_ru"] = " · ".join(margin_bits)[:500]
+
+    g_bits: List[str] = []
+    direction = str(g.get("direction") or "").strip()
+    if direction and direction not in ("not_disclosed", "null"):
+        g_bits.append(direction)
+    for key in ("revenue_outlook", "eps_outlook"):
+        v = str(g.get(key) or "").strip()
+        if v:
+            g_bits.append(v)
+    if g_bits:
+        out["guidance_ru"] = " · ".join(g_bits)[:500]
+
+    # Last quarter verdict from surprises + reaction (log-return → %)
+    beat = (
+        _fmt_surprise_label(brief.get("eps_surprise_pct"))
+        or _fmt_surprise_label(brief.get("revenue_surprise_pct"))
+    )
+    verdict_bits: List[str] = []
+    if fiscal:
+        verdict_bits.append(fiscal)
+    if ev_date:
+        verdict_bits.append(ev_date)
+    if beat:
+        verdict_bits.append(beat)
+    if tone:
+        verdict_bits.append(tone)
+    if src_out.get("forward_log_ret_1d") is not None:
+        try:
+            pct = (math.expm1(float(src_out["forward_log_ret_1d"]))) * 100.0
+            verdict_bits.append(f"реакция 1d {pct:+.1f}%")
+        except (TypeError, ValueError):
+            pass
+    if verdict_bits:
+        out["date_verdict_ru"] = " · ".join(verdict_bits)[:500]
+
+    why_bits: List[str] = []
+    if scen.get("id"):
+        why_bits.append(str(scen.get("id")))
+    if scen.get("rationale"):
+        why_bits.append(str(scen.get("rationale")).strip())
+    elif headline:
+        why_bits.append(headline)
+    if qa:
+        why_bits.append(f"Q&A: {qa}")
+    quotes = brief.get("evidence_quotes") if isinstance(brief.get("evidence_quotes"), list) else []
+    for q in quotes[:2]:
+        if isinstance(q, dict):
+            txt = str(q.get("quote") or "").strip()
+            if txt and txt not in why_bits:
+                why_bits.append(txt)
+    if why_bits:
+        out["why_ru"] = " · ".join(why_bits)[:500]
+
+    return out
+
+
+def _latest_earnings_material_url(symbol: str) -> Dict[str, str]:
+    """Best IR/SEC URL from earnings_material for fundament.filing_url draft."""
+    empty = {"filing_url": "", "source_name": "", "material_type": ""}
+    u = str(symbol or "").strip().upper()
+    if not u:
+        return empty
+    try:
+        from sqlalchemy import create_engine, text
+
+        from config_loader import get_database_url
+
+        eng = create_engine(get_database_url(), pool_pre_ping=True)
+        try:
+            q = text(
+                """
+                SELECT source_url, source_name, material_type
+                FROM earnings_material
+                WHERE UPPER(TRIM(symbol)) = :symbol
+                  AND COALESCE(source_url, '') <> ''
+                  AND COALESCE(parse_status, '') NOT IN ('failed', 'blocked')
+                ORDER BY
+                  CASE material_type
+                    WHEN 'sec_filing' THEN 0
+                    WHEN 'press_release' THEN 1
+                    WHEN 'presentation' THEN 2
+                    WHEN 'transcript' THEN 3
+                    ELSE 9
+                  END,
+                  COALESCE(event_date, DATE '1900-01-01') DESC,
+                  id DESC
+                LIMIT 1
+                """
+            )
+            with eng.connect() as conn:
+                row = conn.execute(q, {"symbol": u}).mappings().first()
+        finally:
+            eng.dispose()
+        if not row:
+            return empty
+        url = str(row.get("source_url") or "").strip()[:500]
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return empty
+        return {
+            "filing_url": url,
+            "source_name": str(row.get("source_name") or "").strip()[:120],
+            "material_type": str(row.get("material_type") or "").strip()[:40],
+        }
+    except Exception as e:
+        logger.warning("earnings_material url for %s: %s", u, e)
+        return empty
+
+
+def suggest_report_expect_from_sources(sym: str) -> Dict[str, Any]:
+    """Draft report_expect fact fields from earnings brief (IR/SEC→LLM) + KB news.
+
+    Priority: structured Event Brief fields, then KB title keywords as fallback.
     Does **not** fill Nastya judgment fields (tactics_map_ru, risk_shift_ru).
     """
     u = str(sym or "").strip().upper()
@@ -1282,10 +1499,8 @@ def suggest_report_expect_from_sources(sym: str) -> Dict[str, Any]:
     except Exception as e:
         logger.warning("report_expect KB suggest failed for %s: %s", u, e)
 
-    brief_headline = ""
-    brief_tone = ""
-    brief_date = ""
-    brief_fwd = ""
+    brief: Dict[str, Any] = {}
+    brief_from_struct: Dict[str, str] = {}
     try:
         from sqlalchemy import create_engine
 
@@ -1294,28 +1509,17 @@ def suggest_report_expect_from_sources(sym: str) -> Dict[str, Any]:
 
         eng = create_engine(get_database_url(), pool_pre_ping=True)
         try:
-            brief = get_event_brief_payload(eng, symbol=u)
+            payload = get_event_brief_payload(eng, symbol=u)
         finally:
             eng.dispose()
-        if isinstance(brief, dict) and brief.get("status") in ("ok", "partial"):
-            brief_headline = str(brief.get("headline") or "").strip()[:400]
-            brief_tone = str(brief.get("management_tone") or "").strip()[:120]
-            brief_date = str(brief.get("event_date") or "").strip()[:32]
-            src_out = brief.get("source_outcomes") if isinstance(brief.get("source_outcomes"), dict) else {}
-            if src_out.get("forward_log_ret_1d") is not None:
-                try:
-                    import math
-
-                    pct = (math.expm1(float(src_out["forward_log_ret_1d"]))) * 100.0
-                    brief_fwd = f"реакция 1d {pct:+.1f}%"
-                except (TypeError, ValueError):
-                    brief_fwd = ""
-            if "earnings brief" not in sources_hit:
-                sources_hit.append("earnings brief")
+        if isinstance(payload, dict):
+            brief = payload
+            brief_from_struct = _map_earnings_brief_to_report_fields(brief)
+            if brief.get("status") in ("ok", "partial"):
+                if "earnings brief (IR/SEC→LLM)" not in sources_hit:
+                    sources_hit.append("earnings brief (IR/SEC→LLM)")
     except Exception as e:
         logger.warning("report_expect brief suggest failed for %s: %s", u, e)
-
-    blob = " \n ".join(titles[:16]).lower()
 
     def _pick(*needles: str, fallback: str = "") -> str:
         for title in titles:
@@ -1324,35 +1528,30 @@ def suggest_report_expect_from_sources(sym: str) -> Dict[str, Any]:
                 return title[:500]
         return fallback[:500] if fallback else ""
 
-    revenue = _pick(
-        "revenue", "выруч", "sales", "arr", "beat", "miss", "eps",
-        fallback=brief_headline,
-    )
-    capex = _pick("capex", "capex", "capital expenditure", "капекс", "capex")
-    guidance = _pick("guidance", "outlook", "гайд", "forecast", "expects")
-    leading = _pick("rpo", "backlog", "bookings", "contract", "capacity", "sold out")
-    margin = _pick("margin", "fcf", "free cash", "ebitda", "operating income")
-    driver = _pick(
+    # Brief structured first; KB titles only fill gaps.
+    driver = brief_from_struct.get("driver_ru") or _pick(
         "azure", "cloud", "ads", "ai ", "gpu", "demand",
-        fallback=(brief_headline or (titles[0] if titles else "")),
+        fallback=(titles[0] if titles else ""),
     )
-
-    date_verdict = ""
-    if brief_date:
-        bits = [brief_date]
-        if brief_tone:
-            bits.append(brief_tone)
-        if brief_fwd:
-            bits.append(brief_fwd)
-        date_verdict = " · ".join(bits)[:500]
-    elif titles:
-        date_verdict = f"по KB · {titles[0][:160]}"
-
-    why = ""
-    if brief_headline:
-        why = brief_headline[:500]
-    elif titles:
-        why = titles[0][:500]
+    revenue = brief_from_struct.get("revenue_arr_ru") or _pick(
+        "revenue", "выруч", "sales", "arr", "beat", "miss", "eps",
+    )
+    leading = brief_from_struct.get("leading_ru") or _pick(
+        "rpo", "backlog", "bookings", "contract", "capacity", "sold out",
+    )
+    capex = brief_from_struct.get("capex_ru") or _pick(
+        "capex", "capital expenditure", "капекс",
+    )
+    margin = brief_from_struct.get("margin_path_ru") or _pick(
+        "margin", "fcf", "free cash", "ebitda", "operating income",
+    )
+    guidance = brief_from_struct.get("guidance_ru") or _pick(
+        "guidance", "outlook", "гайд", "forecast", "expects",
+    )
+    date_verdict = brief_from_struct.get("date_verdict_ru") or (
+        f"по KB · {titles[0][:160]}" if titles else ""
+    )
+    why = brief_from_struct.get("why_ru") or (titles[0][:500] if titles else "")
 
     draft = _normalize_report_expect(
         {
@@ -1384,18 +1583,20 @@ def suggest_report_expect_from_sources(sym: str) -> Dict[str, Any]:
     )
     facts_filled = sum(1 for k in fact_keys if (draft["watch"].get(k) or "").strip())
     has_kb = bool(titles)
-    has_brief = bool(brief_headline or brief_date)
+    has_brief = brief.get("status") in ("ok", "partial")
+    has_llm = bool(brief.get("management_tone") or brief_from_struct.get("guidance_ru"))
     sufficiency = {
         "kb_news": has_kb,
         "kb_news_n": len(titles),
         "earnings_brief": has_brief,
+        "earnings_llm_extract": has_llm,
         "facts_drafted": facts_filled,
         "facts_total": len(fact_keys),
         "enough_for_draft": facts_filled >= 2 and (has_kb or has_brief),
         "needs_nastya": ["tactics_map_ru", "risk_shift_ru"],
         "note_ru": (
-            "Черновик фактов из KB/brief. Суждение (тактика, смещение риска) — только Настя. "
-            "Сверьте с IR/10-Q перед OK."
+            "Черновик: приоритет IR/SEC→LLM Event Brief, пробелы — KB. "
+            "Суждение (тактика, смещение риска) — только Настя. Сверьте с IR/10-Q перед OK."
         ),
     }
 
@@ -1406,6 +1607,8 @@ def suggest_report_expect_from_sources(sym: str) -> Dict[str, Any]:
         "sufficiency": sufficiency,
         "note": sufficiency["note_ru"],
         "filled": [k for k in fact_keys if (draft["watch"].get(k) or "").strip()],
+        "brief_status": brief.get("status"),
+        "brief_event_date": brief.get("event_date"),
     }
 
 
@@ -1952,13 +2155,20 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
         info = {}
 
     if not info:
+        mat = _latest_earnings_material_url(u)
+        fundament = _normalize_fundament({"filing_url": mat.get("filing_url") or ""})
+        filled = ["filing_url"] if fundament.get("filing_url") else []
         return {
             "ticker": u,
-            "source": "yfinance",
-            "fundament": _normalize_fundament({}),
-            "filled": [],
+            "source": "yfinance+earnings" if filled else "yfinance",
+            "fundament": fundament,
+            "filled": filled,
             "nastya_only": ["key_clients_ru", "pluses", "risks", "profile.sector"],
-            "note": "Yahoo не отдал info — заполните вручную",
+            "note": (
+                "Yahoo не отдал info — заполните вручную"
+                + ("; filing_url из earnings_material" if filled else "")
+            ),
+            "earnings_material": mat if filled else {},
         }
 
     short = str(info.get("shortName") or info.get("longName") or u).strip()
@@ -2082,6 +2292,54 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
     if tagline:
         filled.append("tagline")
 
+    # Reuse earnings intelligence materials + last LLM extract (passport draft only).
+    mat = _latest_earnings_material_url(u)
+    filing_url = mat.get("filing_url") or ""
+    earnings_bits: List[str] = []
+    try:
+        from sqlalchemy import create_engine
+
+        from config_loader import get_database_url
+        from services.earnings_intelligence_api import get_event_brief_payload
+
+        eng = create_engine(get_database_url(), pool_pre_ping=True)
+        try:
+            brief = get_event_brief_payload(eng, symbol=u)
+        finally:
+            eng.dispose()
+        if isinstance(brief, dict) and brief.get("status") in ("ok", "partial"):
+            g = brief.get("guidance") if isinstance(brief.get("guidance"), dict) else {}
+            m_out = str(g.get("margin_outlook") or "").strip()
+            m_sig = _join_signal_list(brief.get("margin_pressure_signals"))
+            if m_out or m_sig:
+                extra = " · ".join(x for x in (m_out, m_sig) if x)
+                if margin_ru:
+                    margin_ru = f"{margin_ru} · IR/SEC: {extra}"[:500]
+                else:
+                    margin_ru = f"IR/SEC: {extra}"[:500]
+                if "margin" not in filled:
+                    filled.append("margin")
+                earnings_bits.append("margin")
+            capex_notes = str(brief.get("capex_notes") or "").strip()
+            capex_out = str(g.get("capex_outlook") or "").strip()
+            capex_line = " · ".join(x for x in (capex_out, capex_notes) if x)
+            if capex_line:
+                if financing_ru:
+                    financing_ru = f"{financing_ru} CapEx/IR: {capex_line}"[:500]
+                else:
+                    financing_ru = (
+                        f"IR/SEC CapEx: {capex_line}. Настя: кто оплачивает рост / точка разрыва."
+                    )[:500]
+                if "financing" not in filled:
+                    filled.append("financing")
+                earnings_bits.append("capex")
+    except Exception as e:
+        logger.debug("fundament earnings enrich %s: %s", u, e)
+
+    if filing_url:
+        filled.append("filing_url")
+        earnings_bits.append(mat.get("material_type") or "material")
+
     fundament = _normalize_fundament(
         {
             "exchange": exchange,
@@ -2092,13 +2350,20 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
             "metrics": metrics,
             "margin_ru": margin_ru,
             "financing_ru": financing_ru,
+            "filing_url": filing_url,
             "pluses": [],
             "risks": [],
         }
     )
+    note = (
+        "кнопка: Yahoo цифры + filing_url/маржа·CapEx из earnings materials (IR/SEC→LLM) · "
+        "Настя: клиенты, плюсы/риски, слой на Профиле, правка сути/финансирования · сохраните OK"
+    )
+    if earnings_bits:
+        note = f"{note} · earnings: {', '.join(earnings_bits)}"
     return {
         "ticker": u,
-        "source": "yfinance",
+        "source": "yfinance+earnings",
         "name": str(info.get("longName") or info.get("shortName") or "").strip()[:120],
         "yahoo_sector": sector,
         "yahoo_industry": industry,
@@ -2112,10 +2377,8 @@ def suggest_fundament_from_yfinance(sym: str) -> Dict[str, Any]:
             "tagline_rewrite",
             "financing_narrative",
         ],
-        "note": (
-            "кнопка Yahoo: биржа/HQ/листинг/метрики/маржа% · "
-            "Настя: клиенты, плюсы/риски, слой на Профиле, правка сути/финансирования · сохраните OK"
-        ),
+        "note": note,
+        "earnings_material": mat if filing_url else {},
     }
 
 

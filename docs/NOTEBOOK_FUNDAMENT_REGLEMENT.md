@@ -27,7 +27,7 @@
 
 **Что править, если «сломался AI/макро-тезис»:** текст в **Тактике** → макро; тумблер **тезис** на **Вердикте** выкл. Параллельно: **Риски** на паспорте + Block B на **Ожиданиях** (§5).
 
-Yahoo «Подтянуть» — черновик **цифр плиток** паспорта. SEC companyfacts — не в UI. Плюсы/риски/нарратив автоматом не пишутся.
+Yahoo «Подтянуть» — черновик **цифр плиток** паспорта + `filing_url`/маржа·CapEx из earnings materials, если уже есть. SEC companyfacts — не в UI. Плюсы/риски/нарратив автоматом не пишутся.
 
 ---
 
@@ -54,29 +54,31 @@ Yahoo «Подтянуть» — черновик **цифр плиток** па
 | A | имя / `sym` | read-only из тикера | — |
 | B | `tagline` | Yahoo summary (черновик) | переписать модель своими словами |
 | B | `key_clients_ru` | нет стабильного API | **вручную** (10-K / пресс-релиз) |
-| B | `margin_ru` | Yahoo % | смысл «откуда маржа» |
+| B | `margin_ru` | Yahoo % + IR/SEC margin notes | смысл «откуда маржа» |
 | C | `metrics[4]` | Yahoo BS/CF | сверка с filing после earnings |
-| D | `financing_ru` | Yahoo кэш/долг/D/E | нарратив: кто платит рост / точка разрыва |
+| D | `financing_ru` | Yahoo кэш/долг/D/E + CapEx из brief | нарратив: кто платит рост / точка разрыва |
 | E | `pluses`, `risks` | — | **только Настя** (+ консенсус Инвестдома) |
 
-Опц. **`filing_url`** — 10-K / 10-Q / 20-F / IR PDF (§2.1).
+Опц. **`filing_url`** — из `earnings_material` (SEC/IR URL) при «Подтянуть», иначе вручную (§2.1).
 
-**Правило:** всё, что есть в Yahoo/KB — только по кнопке. Настя = суждение и поля без API.
+**Правило:** всё, что есть в Yahoo / Event Brief / KB — только по кнопке. Настя = суждение и поля без API.
 
 ### 2.0b Ожидания от репорта
 
-| Блок | Поле | Что писать |
-|------|------|------------|
-| A | `watch.driver_ru` | Главная метрика бизнеса + почему |
-| A | `watch.revenue_arr_ru` | % и абсолют роста |
-| A | `watch.leading_ru` | Backlog / контракты / мощности |
-| A | `watch.capex_ru` | Сумма + направление |
-| A | `watch.margin_path_ru` | Маржа / путь к прибыли |
-| A | `watch.guidance_ru` | Диапазон + подняли/подтвердили/срезали |
-| A | `watch.tactics_map_ru` | Сильный vs ловушка → тактика |
-| B | `last.date_verdict_ru` | Квартал · BEAT/MISS |
-| B | `last.why_ru` | За что наказали / наградили |
-| B | `last.risk_shift_ru` | Куда сместился риск (одна строка) |
+| Блок | Поле | Что писать | Черновик кнопки |
+|------|------|------------|-----------------|
+| A | `watch.driver_ru` | Главная метрика бизнеса + почему | `ai_demand_signals` / scenario rationale |
+| A | `watch.revenue_arr_ru` | % и абсолют роста | rev/EPS actual·est·surprise % |
+| A | `watch.leading_ru` | Backlog / контракты / мощности | `inventory_or_supply_notes` |
+| A | `watch.capex_ru` | Сумма + направление | `capex_outlook` + `capex_notes` |
+| A | `watch.margin_path_ru` | Маржа / путь к прибыли | `margin_outlook` / pressure signals |
+| A | `watch.guidance_ru` | Диапазон + подняли/подтвердили/срезали | `guidance.direction` + outlook |
+| A | `watch.tactics_map_ru` | Сильный vs ловушка → тактика | **не пишет** (Настя) |
+| B | `last.date_verdict_ru` | Квартал · BEAT/MISS | fiscal + surprise + tone + 1d |
+| B | `last.why_ru` | За что наказали / наградили | scenario + evidence quotes |
+| B | `last.risk_shift_ru` | Куда сместился риск (одна строка) | **не пишет** (Настя) |
+
+Кнопка **«Подтянуть из IR/SEC brief + KB»**: приоритет structured Event Brief (`earnings_event_detail` ← materials LLM), пробелы — заголовки KB (SA/Yahoo/…). Не авто-OK и не суждение.
 
 Стиль: **кратко**, как NBIS / сиды MSFT·META — не доклад.
 
@@ -276,12 +278,13 @@ Self-serve **Start Free Trial** на [intrinio.com/pricing](https://intrinio.com
 
 **Фаза 2 (код есть, UI снят):** `suggest_fundament_from_edgar` + FY-prefer; кнопка в UI **убрана** по вердикту §3.3. Ссылка EDGAR filings остаётся.
 
-**Фаза 3 (дальше):**
+**Фаза 3 (дальше):** см. backlog пробелов — [NOTEBOOK_AUTOFILL_GAPS.md](NOTEBOOK_AUTOFILL_GAPS.md).
 
-1. **Контент:** заполнить G1 (и ядро по запросу Насти) по DoD §6 — опора на Yahoo.
-2. **Vendor spike:** выбрать 1–2 fundamentals API (Polygon / FMP / Intrinio), сравнить G1 кэш·FCF·долг с Yahoo и 10-K; решить replace vs keep Yahoo.
-3. Не возвращать SEC XBRL-кнопку без решения по кэшу/долгу (не только FCF).
-4. Не автозаполнять **Ожидания** из LLM/SA без approve.
+1. **Контент:** заполнить G1 (и ядро по запросу Насти) по DoD §6 — опора на Yahoo + Event Brief.
+2. **Ops brief:** materials + extract на G1; не затирать brief пустым KB.
+3. **Vendor spike:** FMP / Intrinio vs Yahoo и 10-K; решить replace vs keep Yahoo.
+4. Не возвращать SEC XBRL-кнопку без решения по кэшу/долгу (не только FCF).
+5. Суждение (тактика / risk_shift / плюсы·риски) — только Настя (или draft под approve, не default).
 
 ---
 

@@ -126,9 +126,35 @@ def test_suggest_report_expect_draft_skips_nastya_fields(monkeypatch):
         lambda *a, **k: {
             "status": "ok",
             "headline": "Azure beat, CapEx higher",
-            "management_tone": "constructive",
+            "management_tone": "bullish",
             "event_date": "2026-07-29",
+            "fiscal_period": "FY26 Q4",
+            "revenue_actual": 76.4e9,
+            "revenue_estimate": 73.0e9,
+            "revenue_surprise_pct": 4.7,
+            "eps_actual": 3.65,
+            "eps_estimate": 3.35,
+            "eps_surprise_pct": 9.0,
+            "guidance": {
+                "direction": "raised",
+                "revenue_outlook": "Q1 rev above street",
+                "eps_outlook": None,
+                "capex_outlook": "CapEx ~$30B",
+                "margin_outlook": "gross margin stable",
+            },
+            "capex_notes": "AI infra spend accelerating",
+            "ai_demand_signals": ["Azure AI demand sold out"],
+            "margin_pressure_signals": [],
+            "inventory_or_supply_notes": ["GPU capacity backlog"],
+            "scenario": {
+                "id": "gap_up_follow_through",
+                "confidence": "high",
+                "rationale": "Beat + guide raise",
+            },
             "source_outcomes": {"forward_log_ret_1d": 0.077},
+            "evidence_quotes": [
+                {"topic": "guidance", "quote": "We raised the full-year outlook"},
+            ],
         },
     )
 
@@ -136,9 +162,31 @@ def test_suggest_report_expect_draft_skips_nastya_fields(monkeypatch):
     re = out["report_expect"]
     assert re["watch"]["tactics_map_ru"] == ""
     assert re["last"]["risk_shift_ru"] == ""
-    assert re["watch"]["driver_ru"] or re["watch"]["revenue_arr_ru"] or re["watch"]["capex_ru"]
+    assert "Azure AI" in re["watch"]["driver_ru"]
+    assert "CapEx" in re["watch"]["capex_ru"] or "30B" in re["watch"]["capex_ru"]
+    assert "raised" in re["watch"]["guidance_ru"]
+    assert "BEAT" in re["last"]["date_verdict_ru"]
+    assert "gap_up_follow_through" in re["last"]["why_ru"]
     assert out["sufficiency"]["needs_nastya"] == ["tactics_map_ru", "risk_shift_ru"]
     assert out["sufficiency"]["kb_news"] is True
+    assert out["sufficiency"]["earnings_brief"] is True
+    assert out["sufficiency"]["earnings_llm_extract"] is True
+
+
+def test_map_earnings_brief_to_report_fields_empty_partial():
+    from services.trading_notebook import _map_earnings_brief_to_report_fields
+
+    assert _map_earnings_brief_to_report_fields({}) == {}
+    assert _map_earnings_brief_to_report_fields({"status": "not_found"}) == {}
+    partial = _map_earnings_brief_to_report_fields(
+        {
+            "status": "partial",
+            "event_date": "2026-01-01",
+            "headline": "MSFT earnings event brief",
+        }
+    )
+    assert partial.get("date_verdict_ru", "").startswith("2026-01-01")
+    assert "MSFT" in (partial.get("driver_ru") or partial.get("why_ru") or "")
 
 
 def test_yahoo_passport_helpers():

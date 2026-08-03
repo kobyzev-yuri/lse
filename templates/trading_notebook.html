@@ -500,7 +500,7 @@ function nastyaTag(){
 }
 /** Facts drafted from earnings release / knowledge_base / news cron. */
 function reportSrcTag(){
-  return `<span class="live-tag" title="Факт из отчёта / IR / knowledge_base · кнопка «Подтянуть»">отчёт / KB</span>`;
+  return `<span class="live-tag" title="Факт из IR/SEC Event Brief + KB · кнопка «Подтянуть»">IR/SEC · KB</span>`;
 }
 /** Auto from news KB / digest pipeline. */
 function newsKbTag(){
@@ -1055,7 +1055,7 @@ async function suggestReportExpect(){
   const status = document.getElementById("reSuggestStatus");
   const btn = document.getElementById("re-suggest");
   if(btn) btn.disabled = true;
-  if(status){ status.className = "flag-status"; status.textContent = "KB / brief…"; }
+  if(status){ status.className = "flag-status"; status.textContent = "IR/SEC brief + KB…"; }
   try {
     const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/report-expect/suggest`);
     const j = await r.json().catch(() => ({}));
@@ -1088,6 +1088,7 @@ async function suggestReportExpect(){
         + ` · фактов ${filled}/${suf.facts_total||6}`
         + (suf.kb_news_n != null ? ` · KB ${suf.kb_news_n}` : "")
         + (suf.earnings_brief ? " · brief" : " · no brief")
+        + (suf.earnings_llm_extract ? " · LLM" : "")
         + " · тактика/риск — Настя · сохраните OK";
     }
     const box = document.getElementById("reSufficiency");
@@ -1107,8 +1108,9 @@ function _reSufficiencyHtml(suf, sources){
   const row = (ok, label) =>
     `<li class="${ok ? "re-src-ok" : "re-src-miss"}">${ok ? "✓" : "○"} ${esc(label)}</li>`;
   return `<ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;line-height:1.45">
+    ${row(!!s.earnings_brief, "Earnings Event Brief (IR/SEC materials)")}
+    ${row(!!s.earnings_llm_extract, "LLM extract: tone / guidance / CapEx")}
     ${row(!!s.kb_news, `Новости KB (21д): ${s.kb_news_n != null ? s.kb_news_n : "?"} шт`)}
-    ${row(!!s.earnings_brief, "Earnings brief в системе")}
     ${row((s.facts_drafted||0) >= 2, `Черновик фактов: ${s.facts_drafted||0}/${s.facts_total||6}`)}
     ${row(false, "Тактика + смещение риска — только Настя (кнопка не пишет)")}
     <li class="re-src-miss">Источники: ${srcList}</li>
@@ -1341,18 +1343,18 @@ function renderFundament(d){
     <p class="note">Справка «что за компания и выживет ли она» (~20 сек). Анализ отчёта — вкладка <b>Ожидания от репорта</b>.
       Регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
     <div class="data-legend">
-      ${liveBadge("Yahoo")} <span class="hint-txt">= кнопка «Подтянуть» (биржа, HQ, листинг, метрики, маржа%, черновик сути/финансов)</span>
+      ${liveBadge("Yahoo")} <span class="hint-txt">= кнопка «Подтянуть» (биржа, HQ, листинг, метрики, маржа%, финансы + filing_url/CapEx из IR/SEC если есть)</span>
       ${nastyaTag()} <span class="hint-txt">= клиенты, плюсы/риски, слой на Профиле, правка формулировок</span>
       ${reportSrcTag()} <span class="hint-txt">= ожидания / KB (другая вкладка)</span>
     </div>
     ${readOnly}
     <div class="gex"><b>Кто что заполняет (по схеме Насти)</b>
-      <b>Кнопка Yahoo</b> — биржа, HQ, год листинга, 4 метрики, % маржи, черновик tagline и цифр финансирования.
+      <b>Кнопка Yahoo</b> — биржа, HQ, год листинга, 4 метрики, % маржи, черновик tagline/финансов; если earnings pipeline уже прогнал материалы — ещё `filing_url` и CapEx/маржа из Event Brief.
       ${nastyaTag()} — слой тетрадки (Профиль), ключевые клиенты, плюсы/риски, «человеческая» правка сути и финансирования.
       После earnings: сверить цифры с filing (SEC).
     </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament('yahoo')">Подтянуть из Yahoo</button>
+      <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament('yahoo')">Подтянуть Yahoo + IR/SEC</button>
       <a class="edit-btn" id="fund-sec" href="${esc(secHref)}" target="_blank" rel="noopener noreferrer">${esc(secLabel)}</a>
       <span class="flag-status" id="fundSuggestStatus"></span>
     </div>
@@ -1455,7 +1457,7 @@ function renderReportExpect(d){
       ${last.date_verdict_ru ? `<div class="fund-sec" style="margin-top:10px"><b>Прошлый отчёт:</b> ${esc(last.date_verdict_ru)}</div>` : ""}
       ${last.why_ru ? `<div class="fund-sec"><b>За что:</b> ${esc(last.why_ru)}</div>` : ""}
       ${last.risk_shift_ru ? `<div class="fund-sec"><b>Риск сместился:</b> ${esc(last.risk_shift_ru)}</div>` : ""}
-    </div>` : `<div class="fund-ro"><p class="note">Пусто — нажмите «Подтянуть из новостей / brief», сверьте с IR, допишите суждение ${nastyaTag()}.</p></div>`;
+    </div>` : `<div class="fund-ro"><p class="note">Пусто — нажмите «Подтянуть из IR/SEC brief + KB», сверьте с IR, допишите суждение ${nastyaTag()}.</p></div>`;
 
   return tabWrap("report_expect", `<div class="card">
     <h3>Ожидания от репорта<span class="hint">вокруг earnings · сверка после</span></h3>
@@ -1466,7 +1468,7 @@ function renderReportExpect(d){
     </div>
     <div class="gex"><b>Регламент заполнения</b>
       <ol style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.45;color:var(--muted)">
-        <li><b>Черновик фактов</b> — кнопка «Подтянуть из новостей / brief» (KB + earnings brief). Не дайджест LLM.</li>
+        <li><b>Черновик фактов</b> — кнопка «Подтянуть»: приоритет IR/SEC→LLM Event Brief (guidance, CapEx, BEAT/MISS), пробелы — KB. Суждение не пишется.</li>
         <li><b>Сверка</b> — с пресс-релизом / 10-Q / IR (SEC на вкладке Фундамент). Поправить цифры.</li>
         <li><b>Суждение</b> ${nastyaTag()} — «как в тактику» + «куда сместился риск» (и при необходимости «за что»).</li>
         <li><b>OK · сохранить</b> — иначе overlay не обновится.</li>
@@ -1475,7 +1477,7 @@ function renderReportExpect(d){
     ${sufficiencyNow}
     ${ro}
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <button type="button" class="edit-btn" id="re-suggest" onclick="suggestReportExpect()">Подтянуть из новостей / brief</button>
+      <button type="button" class="edit-btn" id="re-suggest" onclick="suggestReportExpect()">Подтянуть из IR/SEC brief + KB</button>
       <span class="flag-status" id="reSuggestStatus"></span>
     </div>
     <div class="fund-block-lbl">A · На что смотрят ${reportSrcTag()}</div>
@@ -3182,7 +3184,7 @@ function renderGuideTab(){
         Вывод на экране = сохранённые поля (карточка сверху), не LLM. Эталон краткости — NBIS; примеры репорта — MSFT / META.
         Регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
       <table class="guide-table">
-        <tr><th>отчёт / KB</th><td>Факты Block A + дата/вердикт — кнопка «Подтянуть из новостей / brief», сверка с IR.</td></tr>
+        <tr><th>IR/SEC · KB</th><td>Факты Block A + дата/вердикт — кнопка «Подтянуть из IR/SEC brief + KB» (приоритет Event Brief), сверка с IR.</td></tr>
         <tr><th>✓ Настя</th><td>Только суждение: «как в тактику», «куда сместился риск» (+ правка «за что»).</td></tr>
         <tr><th>Паспорт A–E</th><td>Текст паспорта утверждает Настя; плитки — Yahoo draft → сверка filing.</td></tr>
         <tr><th>Регламент ожиданий</th><td>1) Подтянуть факты 2) Сверить IR 3) Суждение Насти 4) OK. Чеклист достаточности на вкладке.</td></tr>
