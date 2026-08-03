@@ -261,35 +261,75 @@ def _json_default(obj: Any):
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 DIGEST_SYSTEM = """Ты — редактор утреннего дайджеста для торговой «Рабочей тетрадки».
-Вход: (1) новости из knowledge_base LSE (Seeking Alpha, Yahoo, Investing, Reuters и др.);
-(2) календарь/факты EARNINGS из Yahoo/yfinance по тем же тикерам (если переданы).
-Повторы между источниками уже частично сняты кодом; оставшиеся дубли одной истории тоже схлопывай.
-Задача: отсеять шум (кликбейт, повторы без конкретики) и разложить остаток по корзинам ТЗ.
+Стиль — как паспорт NBIS: коротко, по делу, без доклада и без «стены текста».
+Вход: (1) новости KB (SA/Yahoo/Investing/…); (2) earnings-факты, если переданы.
+Дубли одной истории схлопывай.
 
-Верни ТОЛЬКО JSON-объект без markdown:
+Верни ТОЛЬКО JSON без markdown:
 {
-  "filtered": <int всего входных новостей>,
-  "kept": <int оставленных в дайджесте>,
-  "trashed": <int отсеянных>,
-  "signals": [{"sym":"MSFT","src":"...","text":"...","tac":"<b>Тактика:</b> ...","link":"...","date":"2026-07-28 09:15 UTC"}],
+  "filtered": <int>,
+  "kept": <int>,
+  "trashed": <int>,
+  "signals": [{"sym":"MSFT","src":"...","text":"...","tac":"<b>Тактика:</b> …","link":"...","date":"2026-07-28 09:15 UTC"}],
   "risks": [тот же формат],
-  "macro": [{"sym":"МАКРО · …","src":"...","text":"...","tac":"<b>Влияние:</b> ...","link":"...","date":"..."}],
-  "newtickers": [{"sym":"XYZ","src":"...","text":"...","tac":"<b>Обоснование:</b> ...","link":"...","date":"..."}],
-  "trashNote": "кратко что отсеяно"
+  "macro": [{"sym":"МАКРО · …","src":"...","text":"...","tac":"<b>Влияние:</b> …","link":"...","date":"..."}],
+  "newtickers": [{"sym":"XYZ","src":"...","text":"...","tac":"<b>Обоснование:</b> …","link":"...","date":"..."}],
+  "trashNote": "1 фраза: что отсеяно"
 }
 
-Правила:
-- signals: позитивные/нейтрально-полезные катализаторы по нашим тикерам; tac в терминах тетрадки (Buy Dip / Hold / пауза / ждать уровень).
-- risks: угрозы, даунсайд, отчёт в ближайшие дни; tac часто Hold / не докупать / стоп-наблюдение / пауза до earnings.
-- macro: ФРС, сектор AI, геополитика, широкие тренды; tac = влияние на Environment Check.
-- newtickers: имена НЕ из текущего списка тетрадки (не ALAB/AMD/… уже в groups) — кандидат «к рассмотрению».
-- Одна история из нескольких источников → ОДИН пункт; в src — основной источник.
-- date: дата/время публикации из входа (publishOn), UTC, кратко; не выдумывай.
-- Если в блоке earnings указан ближайший отчёт — обязательно учти в risks или signals (пауза/не наращивать до цифр; peer spillover: память MU↔SNDK, оптика LITE↔CIEN, hyperscalers).
-- text: 1–2 предложения по-русски.
-- Не выдумывай новости: только из входа. Если данных мало — пустые массивы ок.
-- Отсев 50–70% шума — норма.
+Лимиты (жёстко):
+- signals ≤ 8, risks ≤ 8, macro ≤ 4, newtickers ≤ 3.
+- text: ОДНО короткое предложение, ≤120 символов (факт + цифра). Не эссе.
+- tac: ≤80 символов; только действие тетрадки (Buy Dip / Hold / пауза / ждать уровень / не докупать).
+- Одна история → один пункт; src — главный источник; date из входа, не выдумывай.
+
+Корзины:
+- signals: катализатор по нашим тикерам.
+- risks: даунсайд / отчёт скоро / peer spillover (MU↔SNDK, LITE↔CIEN, hyperscalers).
+- macro: ФРС / сектор / гео → влияние на Environment.
+- newtickers: НЕ из текущего списка групп тетрадки.
+
+Не выдумывай новости. Отсев 50–70% шума — норма. Мало данных → пустые массивы ок.
 """
+
+
+def _clip_digest_field(val: Any, limit: int) -> str:
+    s = str(val or "").strip()
+    if len(s) <= limit:
+        return s
+    cut = s[: max(0, limit - 1)].rstrip(" ,.;:·")
+    return cut + "…"
+
+
+def clamp_digest_rows_brief(
+    rows: Any,
+    *,
+    max_rows: int = 8,
+    text_limit: int = 120,
+    tac_limit: int = 80,
+) -> List[Dict[str, Any]]:
+    """Enforce NBIS-style brevity on digest bucket rows (post-LLM)."""
+    if not isinstance(rows, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        row["sym"] = str(row.get("sym") or "").strip()[:40]
+        row["src"] = str(row.get("src") or "").strip()[:80]
+        row["link"] = str(row.get("link") or "").strip()[:400]
+        row["date"] = str(row.get("date") or "").strip()[:40]
+        row["text"] = _clip_digest_field(row.get("text"), text_limit)
+        tac = str(row.get("tac") or "").strip()
+        # Keep a simple HTML prefix if model used it; still hard-cap length.
+        row["tac"] = _clip_digest_field(tac, tac_limit)
+        if not row["text"] and not row["sym"]:
+            continue
+        out.append(row)
+        if len(out) >= max_rows:
+            break
+    return out
 
 # Extra SA RapidAPI tickers beyond notebook universe (macro / peers from RTA email overlap).
 # Override via NOTEBOOK_NEWS_SA_EXTRA=SPY,QQQ,... or empty to disable.
@@ -1166,8 +1206,20 @@ def run_notebook_news_digest(
         "newtickers": digest_body.get("newtickers") if isinstance(digest_body.get("newtickers"), list) else [],
         "trashNote": digest_body.get("trashNote") or "",
     }
-    for _bucket in ("signals", "risks", "macro", "newtickers"):
-        digest[_bucket] = enrich_digest_rows_with_dates(digest[_bucket], llm_items)
+    for _bucket, _max in (
+        ("signals", 8),
+        ("risks", 8),
+        ("macro", 4),
+        ("newtickers", 3),
+    ):
+        digest[_bucket] = clamp_digest_rows_brief(
+            enrich_digest_rows_with_dates(digest[_bucket], llm_items),
+            max_rows=_max,
+        )
+    kept_n = sum(len(digest[k]) for k in ("signals", "risks", "macro", "newtickers"))
+    digest["kept"] = kept_n
+    digest["trashed"] = max(0, filtered - kept_n)
+    digest["trashNote"] = _clip_digest_field(digest.get("trashNote"), 160)
     if digest_body.get("_llm"):
         digest["_llm"] = digest_body["_llm"]
     if digest_body.get("llm_error"):

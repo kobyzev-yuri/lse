@@ -239,6 +239,22 @@ def test_enrich_digest_rows_with_dates_by_link():
     assert out[1]["date"] == "2026-07-27 18:14 UTC"
 
 
+def test_clamp_digest_rows_brief_nbis_style():
+    from services.notebook_news_digest import clamp_digest_rows_brief
+
+    long = "A" * 200
+    rows = [
+        {"sym": "MSFT", "text": long, "tac": "<b>Тактика:</b> " + ("ждать уровень " * 10), "src": "SA", "link": "https://x"},
+        {"sym": "AMD", "text": "коротко", "tac": "Hold", "src": "Yahoo"},
+    ] + [{"sym": f"T{i}", "text": "x", "tac": "y"} for i in range(10)]
+    out = clamp_digest_rows_brief(rows, max_rows=8, text_limit=120, tac_limit=80)
+    assert len(out) == 8
+    assert len(out[0]["text"]) <= 120
+    assert out[0]["text"].endswith("…")
+    assert len(out[0]["tac"]) <= 80
+    assert out[1]["text"] == "коротко"
+
+
 def test_per_ticker_limit_for_uses_group_max(monkeypatch):
     import services.notebook_news_digest as m
 
