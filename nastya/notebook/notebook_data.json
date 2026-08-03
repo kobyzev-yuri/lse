@@ -361,7 +361,23 @@
         "macroAlive": true,
         "sentimentBroken": false
       },
-      "fundament": null
+      "fundament": null,
+      "report_expect": {
+        "watch": {
+          "driver_ru": "Рост рекламы FoA (impressions × price) + окупаемость AI CapEx — не Reality Labs.",
+          "revenue_arr_ru": "Q2’26: $60.8 млрд (+28%) · modest beat vs ~$60.2 млрд консенсуса.",
+          "leading_ru": "Ads: impressions +14%, price +12% · WhatsApp paid messaging (other FoA >$1 млрд).",
+          "capex_ru": "Квартал CapEx ~$31.1 млрд · FY26 сузили до $130–145 млрд (низ подняли с $125).",
+          "margin_path_ru": "EPS $6.18 miss (~14% vs ~$7.2) · расходы +55%; FCF схлопнулся до $784 млн.",
+          "guidance_ru": "Q3 выручка $61–64 млрд (midpoint ниже Street) · expenses FY $165–169 млрд.",
+          "tactics_map_ru": "Сильный: ads beat + без нового подъёма CapEx/low-end. Ловушка: rev ok, но FCF≈0 и гайд CapEx↑ — рынок бьёт оценку."
+        },
+        "last": {
+          "date_verdict_ru": "Q2 2026 (29 июл) · REV BEAT / EPS MISS · акция −8…10% AH",
+          "why_ru": "EPS miss на legal $2.4B + severance $1.2B; FCF $784 млн при CapEx $31B; низ CapEx-гайда поднят.",
+          "risk_shift_ru": "С «растёт ли ads» на «окупится ли AI CapEx / останется ли FCF» → чекать runway кэша vs гайд CapEx перед след. отчётом."
+        }
+      }
     },
     "MSFT": {
       "sym": "MSFT",
@@ -448,7 +464,23 @@
         "macroAlive": true,
         "sentimentBroken": false
       },
-      "fundament": null
+      "fundament": null,
+      "report_expect": {
+        "watch": {
+          "driver_ru": "Azure growth (cc) — главный индикатор AI/cloud спроса; capacity vs demand.",
+          "revenue_arr_ru": "Q4 FY26: выручка $90 млрд (+18%) · beat; Azure +43% cc (ускорение с 40%).",
+          "leading_ru": "Commercial RPO $678 млрд (+84%) · Copilot >30 млн paid seats · Azure FY >$100 млрд.",
+          "capex_ru": "CapEx+leases кв. $41 млрд (+69%) · CY26 ~$175 млрд (сдвиг finance→operating leases); FY27 CapEx >$50 млрд.",
+          "margin_path_ru": "Hood: FCF+ в FY27 · short-lived assets (GPU/CPU) ~2/3 CapEx.",
+          "guidance_ru": "FQ1: Azure ~45% cc · выручка ~$89.85–90.95 млрд.",
+          "tactics_map_ru": "Сильный: Azure accel + RPO↑ + FCF+ подтверждён. Ловушка: CapEx↑ без ускорения Azure / capacity miss."
+        },
+        "last": {
+          "date_verdict_ru": "Q4 FY26 (29 июл 2026) · BEAT · акция +~8% AH",
+          "why_ru": "Azure 43% > консенсуса ~40%; RPO и Copilot seats; гайд Azure 45% на FQ1. Дискреты (Anthropic gain) — шум к EPS.",
+          "risk_shift_ru": "С «догонит ли Azure» на «окупится ли CapEx / останется ли FCF+» → чекать Azure vs CapEx и capacity timing."
+        }
+      }
     },
     "ORCL": {
       "sym": "ORCL",
@@ -1035,6 +1067,10 @@
         "sentimentBroken": false
       },
       "fundament": {
+        "exchange": "NASDAQ",
+        "hq_ru": "Amsterdam, Нидерланды",
+        "listing_origin_ru": "2024 · выделилась из реструктуризации Yandex N.V.",
+        "key_clients_ru": "Microsoft, Meta · hyperscalers и AI-стартапы",
         "tagline": "Full-Stack AI Cloud. Не аренда «сырых» серверов, а готовые GPU-кластеры с софтом, оркестрацией и оптимизацией под обучение больших AI-моделей.",
         "metrics": [
           {
@@ -1205,6 +1241,10 @@
   },
   "card_templates": {
     "fundament_fields_ru": [
+      "exchange",
+      "hq_ru",
+      "listing_origin_ru",
+      "key_clients_ru",
       "tagline",
       "metrics(кэш/FCF/долг/запас)",
       "margin_ru",
@@ -1212,7 +1252,20 @@
       "pluses",
       "risks"
     ],
-    "fundament_note_ru": "Эталон заполнения — карточка NBIS. Остальные тикеры — по ответу Насти (п.11).",
+    "fundament_note_ru": "Паспорт эмитента. Эталон стиля — NBIS. Сектор/слой — на Профиле. Консенсус — Инвестдома (read-only).",
+    "report_expect_fields_ru": [
+      "watch.driver_ru",
+      "watch.revenue_arr_ru",
+      "watch.leading_ru",
+      "watch.capex_ru",
+      "watch.margin_path_ru",
+      "watch.guidance_ru",
+      "watch.tactics_map_ru",
+      "last.date_verdict_ru",
+      "last.why_ru",
+      "last.risk_shift_ru"
+    ],
+    "report_expect_note_ru": "Вокруг earnings. Примеры заполнения — MSFT и META (отчёты ~29 июл 2026). Кратко, как NBIS.",
     "houses_fields_ru": [
       "firm",
       "rate",

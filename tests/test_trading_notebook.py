@@ -29,9 +29,76 @@ def test_notebook_data_file_exists_and_samples():
     assert "SNDK" in tickers and "LITE" in tickers
     assert tickers["NBIS"].get("fundament")
     assert tickers["NBIS"]["fundament"]["metrics"]
+    assert tickers["NBIS"]["fundament"].get("exchange") == "NASDAQ"
+    assert tickers["NBIS"]["fundament"].get("hq_ru")
+    assert tickers["MSFT"].get("report_expect", {}).get("watch", {}).get("driver_ru")
+    assert tickers["META"].get("report_expect", {}).get("last", {}).get("date_verdict_ru")
 
 
-def test_add_and_move_notebook_ticker(tmp_path: Path):
+def test_normalize_and_persist_fundament_report_expect(tmp_path: Path):
+    from services.trading_notebook import (
+        _normalize_fundament,
+        _normalize_report_expect,
+        apply_ticker_overrides as apply_ov,
+        update_ticker_fundament,
+        update_ticker_report_expect,
+    )
+
+    f = _normalize_fundament(
+        {
+            "exchange": "NASDAQ",
+            "hq_ru": "Redmond, WA",
+            "listing_origin_ru": "1986 IPO",
+            "key_clients_ru": "enterprises",
+            "tagline": "Cloud + software",
+            "metrics": [{"k": "КЭШ", "v": "$1", "note": "ok", "tone": "good"}],
+            "margin_ru": "Software",
+            "financing_ru": "FCF",
+            "pluses": ["Scale"],
+            "risks": ["CapEx"],
+            "filing_url": "https://example.com/10q",
+        }
+    )
+    assert f["exchange"] == "NASDAQ"
+    assert f["hq_ru"] == "Redmond, WA"
+    assert f["metrics"][0]["tone"] == "good"
+    assert f["filing_url"].startswith("https://")
+
+    re = _normalize_report_expect(
+        {
+            "watch": {"driver_ru": "Azure", "tactics_map_ru": "beat + guide"},
+            "last": {"date_verdict_ru": "Q4 · BEAT", "why_ru": "Azure accel"},
+            "revenue_arr_ru": "flat key on root",
+        }
+    )
+    assert re["watch"]["driver_ru"] == "Azure"
+    assert re["watch"]["revenue_arr_ru"] == "flat key on root"
+    assert re["last"]["date_verdict_ru"].startswith("Q4")
+
+    ov = tmp_path / "ticker_overrides.json"
+    out_f = update_ticker_fundament("MSFT", fundament=f, updated_by="test", path=ov)
+    assert out_f["fundament"]["tagline"] == "Cloud + software"
+    out_r = update_ticker_report_expect(
+        "MSFT", report_expect=re, updated_by="test", path=ov
+    )
+    assert out_r["report_expect"]["watch"]["driver_ru"] == "Azure"
+
+    base = {"MSFT": {"sym": "MSFT", "fundament": None, "report_expect": None}}
+    merged = apply_ov(
+        base,
+        {
+            "tickers": {
+                "MSFT": {
+                    "fundament": out_f["fundament"],
+                    "report_expect": out_r["report_expect"],
+                }
+            }
+        },
+    )
+    assert merged["MSFT"]["fundament_override"] is True
+    assert merged["MSFT"]["report_expect_override"] is True
+    assert merged["MSFT"]["fundament"]["exchange"] == "NASDAQ"
+    assert merged["MSFT"]["report_expect"]["last"]["why_ru"] == "Azure accel"
     from services.trading_notebook import (
         add_notebook_ticker,
         apply_ticker_overrides,

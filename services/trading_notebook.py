@@ -303,6 +303,9 @@ def _apply_one_ticker_patch(d: Dict[str, Any], patch: Dict[str, Any]) -> Dict[st
     if isinstance(patch.get("fundament"), dict):
         d["fundament"] = _normalize_fundament(patch.get("fundament"))
         d["fundament_override"] = True
+    if isinstance(patch.get("report_expect"), dict):
+        d["report_expect"] = _normalize_report_expect(patch.get("report_expect"))
+        d["report_expect_override"] = True
     if isinstance(patch.get("triggers"), list):
         d["triggers"] = _merge_triggers(
             list(d.get("triggers") or []) if isinstance(d.get("triggers"), list) else [],
@@ -1109,7 +1112,7 @@ def update_ticker_profile(
 
 
 def _normalize_fundament(raw: Any) -> Dict[str, Any]:
-    """Clamp fundament card for overlay storage."""
+    """Clamp fundament passport card for overlay storage."""
     if not isinstance(raw, dict):
         return {}
     metrics_out: List[Dict[str, str]] = []
@@ -1147,6 +1150,10 @@ def _normalize_fundament(raw: Any) -> Dict[str, Any]:
         filing_url = ""
 
     return {
+        "exchange": str(raw.get("exchange") or "").strip()[:40],
+        "hq_ru": str(raw.get("hq_ru") or "").strip()[:160],
+        "listing_origin_ru": str(raw.get("listing_origin_ru") or "").strip()[:240],
+        "key_clients_ru": str(raw.get("key_clients_ru") or "").strip()[:240],
         "tagline": str(raw.get("tagline") or "")[:500],
         "metrics": metrics_out,
         "margin_ru": str(raw.get("margin_ru") or "")[:500],
@@ -1155,6 +1162,41 @@ def _normalize_fundament(raw: Any) -> Dict[str, Any]:
         "risks": _lines("risks"),
         "filing_url": filing_url,
     }
+
+
+_REPORT_EXPECT_WATCH_KEYS = (
+    "driver_ru",
+    "revenue_arr_ru",
+    "leading_ru",
+    "capex_ru",
+    "margin_path_ru",
+    "guidance_ru",
+    "tactics_map_ru",
+)
+_REPORT_EXPECT_LAST_KEYS = (
+    "date_verdict_ru",
+    "why_ru",
+    "risk_shift_ru",
+)
+
+
+def _normalize_report_expect(raw: Any) -> Dict[str, Any]:
+    """Clamp earnings-prep card (watch metrics + last punishment)."""
+    if not isinstance(raw, dict):
+        return {"watch": {}, "last": {}}
+    watch_in = raw.get("watch") if isinstance(raw.get("watch"), dict) else {}
+    last_in = raw.get("last") if isinstance(raw.get("last"), dict) else {}
+    # Flat keys on root also accepted (UI convenience).
+    for k in _REPORT_EXPECT_WATCH_KEYS:
+        if k not in watch_in and raw.get(k) is not None:
+            watch_in[k] = raw.get(k)
+    for k in _REPORT_EXPECT_LAST_KEYS:
+        if k not in last_in and raw.get(k) is not None:
+            last_in[k] = raw.get(k)
+
+    watch = {k: str(watch_in.get(k) or "").strip()[:500] for k in _REPORT_EXPECT_WATCH_KEYS}
+    last = {k: str(last_in.get(k) or "").strip()[:500] for k in _REPORT_EXPECT_LAST_KEYS}
+    return {"watch": watch, "last": last}
 
 
 def update_ticker_fundament(
@@ -1180,6 +1222,34 @@ def update_ticker_fundament(
     return {
         "ticker": u,
         "fundament": dict(cleaned),
+        "updated_at_utc": now,
+        "updated_by": row["updated_by"],
+    }
+
+
+def update_ticker_report_expect(
+    sym: str,
+    *,
+    report_expect: Dict[str, Any],
+    updated_by: str = "notebook-ui",
+    path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist earnings-prep card into overrides overlay."""
+    u, _base_row = _find_base_ticker(sym)
+    if not isinstance(report_expect, dict):
+        raise ValueError("report_expect object required")
+    cleaned = _normalize_report_expect(report_expect)
+    ov, tickers, row = _load_override_ticker_row(u, path)
+    now = datetime.now(timezone.utc).isoformat()
+    row["report_expect"] = cleaned
+    row["updated_at_utc"] = now
+    row["updated_by"] = (updated_by or "notebook-ui")[:80]
+    tickers[u] = row
+    ov["tickers"] = tickers
+    save_notebook_overrides(ov, path)
+    return {
+        "ticker": u,
+        "report_expect": dict(cleaned),
         "updated_at_utc": now,
         "updated_by": row["updated_by"],
     }

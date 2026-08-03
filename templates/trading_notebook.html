@@ -390,6 +390,14 @@
   .fund-list.plus li{color:#5fd67c;} .fund-list.risk li{color:#ef8582;}
   .fund-sec{margin-top:12px;font-size:13px;color:var(--muted);line-height:1.5;}
   .fund-sec b{color:var(--ink);}
+  .fund-passport{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px 14px;margin:0 0 12px;padding:10px 12px;background:var(--panel-2);border-radius:10px;border:1px solid var(--line);}
+  .fund-passport .fp-k{font-size:10px;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);font-weight:700;}
+  .fund-passport .fp-v{font-size:13px;color:var(--ink);margin-top:2px;line-height:1.35;}
+  .fund-block-lbl{font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);font-weight:700;margin:14px 0 6px;}
+  .fund-ro{margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line);}
+  .re-row{margin-top:8px;padding:10px;background:var(--panel-2);border-radius:8px;}
+  .re-row label{display:block;font-size:12px;color:var(--dim);margin-bottom:4px;}
+  .re-row .re-hint{font-size:11px;color:var(--dim);margin-top:4px;line-height:1.35;}
   .nb-home{font-size:12px;color:var(--dim);margin-left:auto;}
   .nb-home a{color:var(--accent);text-decoration:none;}
   .nb-home a:hover{text-decoration:underline;}
@@ -463,6 +471,7 @@ const TABS = [
   {id:"events",label:"Events",stub:false},
   {id:"houses",label:"Инвестдома",stub:false},
   {id:"fundament",label:"Фундамент",stub:false},
+  {id:"report_expect",label:"Ожидания от репорта",stub:false},
   {id:"digest",label:"Дайджесты",stub:false},
   {id:"watchlist",label:"Watchlist",stub:false},
   {id:"guide",label:"Пояснения",stub:false},
@@ -476,6 +485,14 @@ function stubBadge(where){
 }
 function liveBadge(where){
   return `<span class="live-tag" title="${esc(where)}">live · ${esc(where)}</span>`;
+}
+/** Fields Nastya fills by hand (not knowledge_base / digest ingest). */
+function nastyaTag(){
+  return `<span class="manual-tag" title="Заполняет Настя вручную · не из базы новостей / дайджеста">✓ Настя</span>`;
+}
+/** Auto from news KB / digest pipeline. */
+function newsKbTag(){
+  return `<span class="live-tag" title="Из knowledge_base / news cron / дайджеста">KB / новости</span>`;
 }
 function manualBadge(where){
   return `<span class="manual-tag" title="${esc(where)}">вручную · ${esc(where)}</span>`;
@@ -936,6 +953,10 @@ async function saveFundament(){
   }
   const body = {
     fundament: {
+      exchange: val("fund-exchange"),
+      hq_ru: val("fund-hq"),
+      listing_origin_ru: val("fund-listing"),
+      key_clients_ru: val("fund-clients"),
       tagline: val("fund-tagline"),
       metrics,
       margin_ru: val("fund-margin"),
@@ -957,6 +978,56 @@ async function saveFundament(){
     }
     if(j.fundament) DATA[sym].fundament = j.fundament;
     DATA[sym].fundament_override = true;
+    applyOverrideMeta(sym, j);
+    if(status){ status.className = "flag-status ok"; status.textContent = "сохранено"; }
+    renderContent();
+  } catch(e){
+    if(status){ status.className = "flag-status err"; status.textContent = "ошибка: " + (e.message || e); }
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function saveReportExpect(){
+  const sym = current;
+  if(!sym || !DATA[sym]) return;
+  const status = document.getElementById("reStatus");
+  const btn = document.getElementById("re-save");
+  const val = (id) => {
+    const el = document.getElementById(id);
+    return (el && el.value != null) ? String(el.value).trim() : "";
+  };
+  if(btn) btn.disabled = true;
+  if(status){ status.className = "flag-status"; status.textContent = "сохраняю…"; }
+  const body = {
+    report_expect: {
+      watch: {
+        driver_ru: val("re-driver"),
+        revenue_arr_ru: val("re-revenue"),
+        leading_ru: val("re-leading"),
+        capex_ru: val("re-capex"),
+        margin_path_ru: val("re-margin"),
+        guidance_ru: val("re-guidance"),
+        tactics_map_ru: val("re-tactics"),
+      },
+      last: {
+        date_verdict_ru: val("re-verdict"),
+        why_ru: val("re-why"),
+        risk_shift_ru: val("re-shift"),
+      },
+    },
+  };
+  try {
+    const r = await fetch(`/api/notebook/tickers/${encodeURIComponent(sym)}/report-expect`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      throw new Error((j && (j.detail || j.error)) || (`HTTP ${r.status}`));
+    }
+    if(j.report_expect) DATA[sym].report_expect = j.report_expect;
+    DATA[sym].report_expect_override = true;
     applyOverrideMeta(sym, j);
     if(status){ status.className = "flag-status ok"; status.textContent = "сохранено"; }
     renderContent();
@@ -1111,6 +1182,8 @@ function edgarSearchUrl(sym){
 
 function renderFundament(d){
   const f = d.fundament || {};
+  const pf = (d.profile && typeof d.profile === "object") ? d.profile : {};
+  const cons = d.consensus || {};
   const metrics = Array.isArray(f.metrics) ? f.metrics : [];
   const mAt = (i) => metrics[i] || {};
   const slots = [
@@ -1119,15 +1192,56 @@ function renderFundament(d){
     {i:2, defK:"Прямой долг"},
     {i:3, defK:"Запас прочности"},
   ];
+  const hasCard = !!(
+    f.tagline || f.financing_ru || f.margin_ru || f.exchange || f.hq_ru ||
+    f.listing_origin_ru || f.key_clients_ru ||
+    (f.pluses && f.pluses.length) || (f.risks && f.risks.length) || metrics.length
+  );
+  const layer = String(pf["Сектор / слой"] || "").trim();
+  const tickerLine = [d.sym || current || "", f.exchange].filter(Boolean).join(" · ");
+  const tiles = slots.map(({i, defK}) => {
+    const m = mAt(i);
+    if(!m.k && !m.v && !m.note) return "";
+    const tone = m.tone || _fundTone((m.v||"")+" "+(m.note||""));
+    return `<div class="fund-m">
+      <div class="fk">${esc(m.k || defK)}</div>
+      <div class="fv ${esc(tone)}">${esc(m.v || "—")}</div>
+      ${m.note ? `<div class="fn">${esc(m.note)}</div>` : ""}
+    </div>`;
+  }).filter(Boolean).join("");
+  const plusLi = (f.pluses||[]).map(x => `<li>${esc(x)}</li>`).join("");
+  const riskLi = (f.risks||[]).map(x => `<li>${esc(x)}</li>`).join("");
+  const consLine = [cons.rating, cons.pt, cons.n].filter(x => x && String(x).trim() && String(x).trim() !== "—").join(" · ");
+  const passportRo = `<div class="fund-passport">
+      <div><div class="fp-k">Тикер</div><div class="fp-v">${esc(tickerLine || "—")}</div></div>
+      <div><div class="fp-k">Название</div><div class="fp-v">${esc(d.name || "—")}</div></div>
+      <div><div class="fp-k">Сектор / слой</div><div class="fp-v">${esc(layer || "—")} <span class="note">(Профиль)</span></div></div>
+      <div><div class="fp-k">Штаб / юрисдикция</div><div class="fp-v">${esc(f.hq_ru || "—")}</div></div>
+      <div style="grid-column:1/-1"><div class="fp-k">Листинг / происхождение</div><div class="fp-v">${esc(f.listing_origin_ru || "—")}</div></div>
+    </div>`;
+  const readOnly = hasCard ? `<div class="fund-ro">
+    ${passportRo}
+    ${f.tagline ? `<div class="fund-tag">${esc(f.tagline)}</div>` : ""}
+    ${f.key_clients_ru ? `<div class="fund-sec"><b>Клиенты:</b> ${esc(f.key_clients_ru)}</div>` : ""}
+    ${tiles ? `<div class="fund-grid">${tiles}</div>` : ""}
+    ${f.margin_ru ? `<div class="fund-sec"><b>Маржа:</b> ${esc(f.margin_ru)}</div>` : ""}
+    ${f.financing_ru ? `<div class="fund-sec"><b>Финансирование:</b> ${esc(f.financing_ru)}</div>` : ""}
+    ${(plusLi || riskLi) ? `<div class="fund-cols">
+      <div><b>Плюсы</b><ul class="fund-list plus">${plusLi || "<li>—</li>"}</ul></div>
+      <div><b>Риски</b><ul class="fund-list risk">${riskLi || "<li>—</li>"}</ul></div>
+    </div>` : ""}
+    ${consLine ? `<div class="fund-sec" style="margin-top:10px"><b>Консенсус (Инвестдома):</b> ${esc(consLine)}</div>` : ""}
+  </div>` : `<div class="fund-ro"><p class="note">Карточка пуста — заполните блоки ниже (эталон стиля: NBIS). Вывод = эти поля, без LLM.</p></div>`;
+
   const metricFields = slots.map(({i, defK}) => {
     const m = mAt(i);
     return `<div class="edit-grid" style="margin-top:8px;padding:10px;background:var(--panel-2);border-radius:8px">
-      <div class="edit-field"><label>Метрика ${i+1}</label>
+      <div class="edit-field"><label>Метрика ${i+1} ${nastyaTag()}</label>
         <input type="text" id="fund-mk-${i}" value="${esc(m.k||defK)}" placeholder="${esc(defK)}"></div>
-      <div class="edit-field"><label>Значение</label>
+      <div class="edit-field"><label>Значение ${nastyaTag()}</label>
         <input type="text" id="fund-mv-${i}" value="${esc(m.v||'')}" placeholder="—"></div>
-      <div class="edit-field" style="grid-column:1/-1"><label>Комментарий</label>
-        <input type="text" id="fund-mn-${i}" value="${esc(m.note||'')}" placeholder="кратко"></div>
+      <div class="edit-field" style="grid-column:1/-1"><label>Сноска-контекст ${nastyaTag()}</label>
+        <input type="text" id="fund-mn-${i}" value="${esc(m.note||'')}" placeholder="кратко · цвет из тона value/note"></div>
     </div>`;
   }).join("");
   const pluses = (f.pluses||[]).join("\n");
@@ -1136,52 +1250,137 @@ function renderFundament(d){
   const secHref = filingSaved || edgarSearchUrl(current || d.ticker || "");
   const secLabel = filingSaved ? "Открыть сохранённый filing" : "SEC / filings (EDGAR)";
   return tabWrap("fundament", `<div class="card">
-    <h3>Фундамент<span class="hint">справка · не гейт Вердикта · не тактика</span></h3>
-    <p class="note">Краткий фон для тезиса удержания (~20 сек). <b>План входа/выхода</b> — «Тактика». Цифры Buy/Sell — Вердикт.
+    <h3>Фундамент<span class="hint">паспорт эмитента · редко · не гейт Вердикта</span></h3>
+    <p class="note">Справка «что за компания и выживет ли она» (~20 сек). Анализ отчёта — вкладка <b>Ожидания от репорта</b>.
       Регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
-    <div class="gex" style="margin-top:10px"><b>По регламенту</b>
-      <b>Yahoo</b> = основной черновик цифр. Tagline / плюсы / риски — только вручную (Настя) <b>на этой вкладке</b>.
-      После earnings (T+1…2) сверить метрики с 10-K / 10-Q / IR PDF (ссылка SEC ниже). Seeking Alpha — не источник цифр.
-      Кнопка «Подтянуть из SEC» убрана: companyfacts ненадёжен как полный черновик (кэш/долг), см. регламент §3.
-      Полный NBIS-стиль обязателен для <b>ядра по запросу</b>, не для всех тикеров сразу.
-      Не путать с полем «Макро-контекст» на <b>Тактике</b> и тумблером <b>тезис</b> на Вердикте — это другой «тезис».
+    <div class="data-legend">
+      ${nastyaTag()} <span class="hint-txt">= вручную Настя</span>
+      ${liveBadge("Yahoo draft")} <span class="hint-txt">= черновик цифр плиток (не KB)</span>
+      ${newsKbTag()} <span class="hint-txt">= дайджест / news cron (не эти поля)</span>
+    </div>
+    ${readOnly}
+    <div class="gex"><b>По регламенту</b>
+      Yahoo = черновик цифр плиток. Текст блоков A–E — ${nastyaTag()}. После earnings T+1…2 сверить метрики с filing/IR.
+      Сектор/слой правится на <b>Профиле</b>. Консенсус — с вкладки Инвестдома (только чтение здесь).
+      База новостей / дайджест эти поля <b>не</b> заполняет.
     </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button type="button" class="edit-btn" id="fund-suggest" onclick="suggestFundament('yahoo')">Подтянуть из Yahoo</button>
       <a class="edit-btn" id="fund-sec" href="${esc(secHref)}" target="_blank" rel="noopener noreferrer">${esc(secLabel)}</a>
       <span class="flag-status" id="fundSuggestStatus"></span>
     </div>
-    <p class="note" style="margin-top:6px">Yahoo = черновик цифр (в note — источник). Сверка — filing/IR по ссылке SEC. Плюсы и риски — только вручную. После правок — «сохранить».</p>
-    <div class="edit-field" style="margin-top:10px">
-      <label>Суть бизнеса (tagline)</label>
-      <textarea id="fund-tagline" style="min-height:64px" placeholder="Одной-двумя фразами: что за бизнес и почему в тетрадке.">${esc(f.tagline||"")}</textarea>
+    <div class="fund-block-lbl">A · Паспорт ${nastyaTag()}</div>
+    <div class="edit-grid">
+      <div class="edit-field"><label>Биржа ${nastyaTag()}</label>
+        <input type="text" id="fund-exchange" value="${esc(f.exchange||'')}" placeholder="NASDAQ"></div>
+      <div class="edit-field"><label>Штаб / юрисдикция ${nastyaTag()}</label>
+        <input type="text" id="fund-hq" value="${esc(f.hq_ru||'')}" placeholder="Amsterdam, Нидерланды"></div>
+      <div class="edit-field" style="grid-column:1/-1"><label>Год листинга / происхождение ${nastyaTag()}</label>
+        <input type="text" id="fund-listing" value="${esc(f.listing_origin_ru||'')}" placeholder="2024 · выделилась из реструктуризации Yandex N.V."></div>
     </div>
+    <div class="fund-block-lbl">B · Суть бизнеса ${nastyaTag()}</div>
+    <div class="edit-field">
+      <label>Суть бизнеса (1–2 фразы + за счёт чего маржа) ${nastyaTag()}</label>
+      <textarea id="fund-tagline" style="min-height:64px" placeholder="Не аренда сырых серверов, а готовые GPU-кластеры с софтом.">${esc(f.tagline||"")}</textarea>
+    </div>
+    <div class="edit-field" style="margin-top:8px">
+      <label>Ключевые клиенты (опц.) ${nastyaTag()}</label>
+      <input type="text" id="fund-clients" value="${esc(f.key_clients_ru||'')}" placeholder="Microsoft, Meta · или тип: hyperscalers">
+    </div>
+    <div class="edit-field" style="margin-top:8px">
+      <label>Маржа / откуда маржа ${nastyaTag()}</label>
+      <textarea id="fund-margin" style="min-height:52px" placeholder="Софт/оркестрация + длинные контракты…">${esc(f.margin_ru||"")}</textarea>
+    </div>
+    <div class="fund-block-lbl">C · Метрики (плитки) ${nastyaTag()} <span class="hint" style="text-transform:none;letter-spacing:0;font-weight:400">· черновик Yahoo ок, итог Настя</span></div>
     ${metricFields}
-    <div class="edit-field" style="margin-top:10px">
-      <label>Маржа</label>
-      <textarea id="fund-margin" style="min-height:52px" placeholder="Откуда маржа / контракты…">${esc(f.margin_ru||"")}</textarea>
+    <div class="fund-block-lbl">D · Финансирование ${nastyaTag()}</div>
+    <div class="edit-field">
+      <label>Кто оплачивает рост и на каких условиях ${nastyaTag()}</label>
+      <textarea id="fund-financing" style="min-height:52px" placeholder="Источник капитала · качество долга · точка разрыва">${esc(f.financing_ru||"")}</textarea>
     </div>
-    <div class="edit-field" style="margin-top:10px">
-      <label>Финансирование</label>
-      <textarea id="fund-financing" style="min-height:52px" placeholder="Кэш, долг, инвесторы…">${esc(f.financing_ru||"")}</textarea>
-    </div>
-    <div class="edit-grid" style="margin-top:10px">
+    <div class="fund-block-lbl">E · Плюсы / Риски ${nastyaTag()}</div>
+    <div class="edit-grid">
       <div class="edit-field">
-        <label>Плюсы (по строкам)</label>
+        <label>Плюсы (2–3 · по строкам) ${nastyaTag()}</label>
         <textarea id="fund-pluses" style="min-height:80px" placeholder="Один плюс на строку">${esc(pluses)}</textarea>
       </div>
       <div class="edit-field">
-        <label>Риски (по строкам)</label>
+        <label>Риски (2–3 · по строкам) ${nastyaTag()}</label>
         <textarea id="fund-risks" style="min-height:80px" placeholder="Один риск на строку">${esc(risks)}</textarea>
       </div>
     </div>
     <div class="edit-field" style="margin-top:10px">
-      <label>Ссылка на filing (10-Q / 20-F / IR), опционально</label>
+      <label>Ссылка на filing (10-Q / 20-F / IR), опционально ${nastyaTag()}</label>
       <input type="url" id="fund-filing-url" value="${esc(filingSaved)}" placeholder="https://… — иначе кнопка SEC ищет по тикеру">
     </div>
     <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button type="button" class="edit-btn" id="fund-save" onclick="saveFundament()">OK · сохранить фундамент</button>
       <span class="flag-status" id="fundStatus"></span>
+    </div>
+  </div>`);
+}
+
+function renderReportExpect(d){
+  const re = d.report_expect || {};
+  const w = (re.watch && typeof re.watch === "object") ? re.watch : {};
+  const last = (re.last && typeof re.last === "object") ? re.last : {};
+  const rows = [
+    {id:"re-driver", key:"driver_ru", lbl:"Драйвер-метрика №1", ph:"NBIS: sold out мощностей — спрос > предложения", hint:"Главное число для этой бизнес-модели + почему.", val:w.driver_ru},
+    {id:"re-revenue", key:"revenue_arr_ru", lbl:"Рост выручки / ARR", ph:"Q1: +684% до $399 млн", hint:"Ожидаемый % и абсолют.", val:w.revenue_arr_ru},
+    {id:"re-leading", key:"leading_ru", lbl:"Опережающие индикаторы", ph:"contracted power → 4 ГВт", hint:"Backlog / контракты / мощности.", val:w.leading_ru},
+    {id:"re-capex", key:"capex_ru", lbl:"CapEx / расходы", ph:"повышен до $20–25 млрд", hint:"Сумма + направление; жёлтый если двусмысленно.", val:w.capex_ru},
+    {id:"re-margin", key:"margin_path_ru", lbl:"Маржа / путь к прибыли", ph:"EBITDA AI 45% vs 24% кв. ранее", hint:"Динамика к безубыточности.", val:w.margin_path_ru},
+    {id:"re-guidance", key:"guidance_ru", lbl:"Гайденс на год", ph:"$3.0–3.4 млрд; run-rate $7–9 млрд · подняли", hint:"Диапазон + подняли/подтвердили/срезали.", val:w.guidance_ru},
+  ];
+  const watchFields = rows.map(r => `<div class="re-row">
+      <label>${esc(r.lbl)} ${nastyaTag()}</label>
+      <textarea id="${esc(r.id)}" style="min-height:44px" placeholder="${esc(r.ph)}">${esc(r.val||"")}</textarea>
+      <div class="re-hint">${esc(r.hint)}</div>
+    </div>`).join("");
+  const hasRo = !!(w.driver_ru || w.tactics_map_ru || last.date_verdict_ru || last.why_ru || last.risk_shift_ru);
+  const ro = hasRo ? `<div class="fund-ro">
+      ${w.driver_ru ? `<div class="fund-sec"><b>Драйвер:</b> ${esc(w.driver_ru)}</div>` : ""}
+      ${w.revenue_arr_ru ? `<div class="fund-sec"><b>Выручка/ARR:</b> ${esc(w.revenue_arr_ru)}</div>` : ""}
+      ${w.leading_ru ? `<div class="fund-sec"><b>Опережающие:</b> ${esc(w.leading_ru)}</div>` : ""}
+      ${w.capex_ru ? `<div class="fund-sec"><b>CapEx:</b> ${esc(w.capex_ru)}</div>` : ""}
+      ${w.margin_path_ru ? `<div class="fund-sec"><b>Маржа:</b> ${esc(w.margin_path_ru)}</div>` : ""}
+      ${w.guidance_ru ? `<div class="fund-sec"><b>Гайденс:</b> ${esc(w.guidance_ru)}</div>` : ""}
+      ${w.tactics_map_ru ? `<div class="fund-sec"><b>В тактику:</b> ${esc(w.tactics_map_ru)}</div>` : ""}
+      ${last.date_verdict_ru ? `<div class="fund-sec" style="margin-top:10px"><b>Прошлый отчёт:</b> ${esc(last.date_verdict_ru)}</div>` : ""}
+      ${last.why_ru ? `<div class="fund-sec"><b>За что:</b> ${esc(last.why_ru)}</div>` : ""}
+      ${last.risk_shift_ru ? `<div class="fund-sec"><b>Риск сместился:</b> ${esc(last.risk_shift_ru)}</div>` : ""}
+    </div>` : `<div class="fund-ro"><p class="note">Пусто — кратко заполните вокруг даты earnings. Примеры стиля: MSFT / META (последние отчёты). Не доклад.</p></div>`;
+  return tabWrap("report_expect", `<div class="card">
+    <h3>Ожидания от репорта<span class="hint">вокруг earnings · сверка после</span></h3>
+    <p class="note">«На что смотреть в этом отчёте и как реагировать». Паспорт компании — вкладка <b>Фундамент</b>. Вывод = сохранённые поля ниже.</p>
+    <div class="data-legend">
+      ${nastyaTag()} <span class="hint-txt">= все поля этой вкладки вручную</span>
+      ${newsKbTag()} <span class="hint-txt">= дайджест / KB (другая вкладка)</span>
+    </div>
+    ${ro}
+    <div class="fund-block-lbl">A · На что смотрят ${nastyaTag()}</div>
+    ${watchFields}
+    <div class="re-row">
+      <label>Как это в тактику ${nastyaTag()}</label>
+      <textarea id="re-tactics" style="min-height:52px" placeholder="Сильный: beat + sold out + гайд↑ · Ловушка: CapEx↑ без роста контрактов">${esc(w.tactics_map_ru||"")}</textarea>
+      <div class="re-hint">Одно сочетание «сильный» и одно «ловушка».</div>
+    </div>
+    <div class="fund-block-lbl">B · За что наказали в прошлый раз ${nastyaTag()}</div>
+    <div class="re-row">
+      <label>Дата + вердикт квартала ${nastyaTag()}</label>
+      <input type="text" id="re-verdict" value="${esc(last.date_verdict_ru||'')}" placeholder="Q4 2025 · MISS · Q1 2026 · BEAT">
+    </div>
+    <div class="re-row">
+      <label>За что наказали / наградили ${nastyaTag()}</label>
+      <textarea id="re-why" style="min-height:52px" placeholder="Причина + факт">${esc(last.why_ru||"")}</textarea>
+    </div>
+    <div class="re-row">
+      <label>Куда сместился риск ${nastyaTag()}</label>
+      <textarea id="re-shift" style="min-height:44px" placeholder="Одна строка → мостик к тактике перед следующим отчётом">${esc(last.risk_shift_ru||"")}</textarea>
+    </div>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button type="button" class="edit-btn" id="re-save" onclick="saveReportExpect()">OK · сохранить ожидания</button>
+      <span class="flag-status" id="reStatus"></span>
     </div>
   </div>`);
 }
@@ -1302,6 +1501,7 @@ function renderContent(){
     </div>`);
 
   html += renderFundament(d);
+  html += renderReportExpect(d);
   html += renderDigest();
   html += renderWatchlist();
   html += renderGuideTab();
@@ -2807,7 +3007,8 @@ function renderGuideTab(){
         <tr><th>Окружение</th><td>Ручные Env-гейты (ФРС / PT cuts) поверх live VIX/NDX/нефть.</td></tr>
         <tr><th>Events</th><td>Календарь FOMC / FRED / earnings тикера — фон риска даты, не вход.</td></tr>
         <tr><th>Инвестдома</th><td>Консенсус Street (StockAnalysis) + 1–2 предложения по действию/PT дома. Фон ~12м, не ваш ордер.</td></tr>
-        <tr><th>Фундамент</th><td>Справка по компании (регламент NBIS-стиля). Yahoo-черновик + ссылка SEC filings; тезис вручную.</td></tr>
+        <tr><th>Фундамент</th><td>Паспорт эмитента (редко): блоки A–E. Yahoo-черновик цифр; текст вручную. Эталон стиля — NBIS.</td></tr>
+        <tr><th>Ожидания от репорта</th><td>Вокруг earnings: на что смотреть + за что наказали в прошлый раз. Примеры: MSFT / META.</td></tr>
         <tr><th>Дайджесты</th><td>Утренний срез + фильтр по стоку. Источники — «Логика фильтра».</td></tr>
         <tr><th>Watchlist</th><td>Новые стоки из дайджеста (SA/KB) с кратким обоснованием → можно в G3.</td></tr>
         <tr><th>Пояснения</th><td>Эта инструкция.</td></tr>
@@ -2853,18 +3054,21 @@ function renderGuideTab(){
     </div>
 
     <div class="card guide-card">
-      <h3>Фундамент</h3>
-      <p>Вкладка <b>«Фундамент»</b> — справка по компании (~20 сек): tagline, кэш/FCF/долг/runway, маржа, финансирование, плюсы/риски.
-        Полный регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
+      <h3>Фундамент · Ожидания от репорта</h3>
+      <p><b>Фундамент</b> — паспорт («что за компания»), обновляется редко. <b>Ожидания от репорта</b> — вокруг даты earnings.
+        Вывод на экране = сохранённые поля (карточка сверху), не LLM. Эталон краткости — NBIS; примеры репорта — MSFT / META.
+        Регламент: <code>docs/NOTEBOOK_FUNDAMENT_REGLEMENT.md</code>.</p>
       <table class="guide-table">
-        <tr><th>1. Черновик</th><td><b>Yahoo</b> — цифры (кэш, FCF, долг). В note метка источника. Плюсы/риски не трогает. (Кнопка SEC XBRL убрана.)</td></tr>
-        <tr><th>2. Сверка</th><td>Кнопка <b>SEC / filings</b> или своя ссылка на 10-K / 10-Q / IR. После earnings T+1…2 сверить метрики.</td></tr>
-        <tr><th>3. Тезис</th><td>Tagline / маржа / финансирование / плюсы / риски — <b>только вручную</b> (Настя). SA/LLM не источник цифр.</td></tr>
-        <tr><th>4. Сохранить</th><td><b>OK · сохранить фундамент</b> — иначе overlay не обновится.</td></tr>
-        <tr><th>Охват</th><td>Полный NBIS-стиль — для <b>ядра по запросу</b>, не обязательно все тикеры сразу.</td></tr>
+        <tr><th>✓ Настя</th><td>Все поля паспорта и ожиданий — вручную. Не из knowledge_base / дайджеста.</td></tr>
+        <tr><th>Паспорт A–E</th><td>Биржа / HQ / листинг · суть · плитки кэш/FCF/долг/запас · финансирование · плюсы/риски. Слой — на Профиле.</td></tr>
+        <tr><th>Черновик цифр</th><td><b>Yahoo</b> → плитки (не KB). Сверка после earnings — filing/IR (кнопка SEC).</td></tr>
+        <tr><th>Ожидания A</th><td>Драйвер, выручка/ARR, опережающие, CapEx, маржа, гайденс + «как в тактику».</td></tr>
+        <tr><th>Ожидания B</th><td>Прошлый вердикт · за что наказали · куда сместился риск.</td></tr>
+        <tr><th>KB / новости</th><td>Вкладка Дайджесты / Watchlist — не Фундамент.</td></tr>
+        <tr><th>Сохранить</th><td>OK на каждой вкладке отдельно. Без сохранения overlay не обновится.</td></tr>
       </table>
       <div class="gex"><b>Не путать</b>
-        Фундамент ≠ Вердикт и ≠ «Тактика входа / выхода». Слом тезиса отчётом → правьте риски + при необходимости тумблер «тезис» на Вердикте.
+        Фундамент ≠ Вердикт ≠ Тактика. Слом тезиса отчётом → риски на паспорте + Block B ожиданий; при необходимости тумблер «тезис» на Вердикте.
       </div>
     </div>
 
