@@ -260,38 +260,6 @@ def _json_default(obj: Any):
             pass
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
-DIGEST_SYSTEM = """Ты — редактор утреннего дайджеста для торговой «Рабочей тетрадки».
-Стиль — как паспорт NBIS: коротко, по делу, без доклада и без «стены текста».
-Вход: (1) новости KB (SA/Yahoo/Investing/…); (2) earnings-факты, если переданы.
-Дубли одной истории схлопывай.
-
-Верни ТОЛЬКО JSON без markdown:
-{
-  "filtered": <int>,
-  "kept": <int>,
-  "trashed": <int>,
-  "signals": [{"sym":"MSFT","src":"...","text":"...","tac":"<b>Тактика:</b> …","link":"...","date":"2026-07-28 09:15 UTC"}],
-  "risks": [тот же формат],
-  "macro": [{"sym":"МАКРО · …","src":"...","text":"...","tac":"<b>Влияние:</b> …","link":"...","date":"..."}],
-  "newtickers": [{"sym":"XYZ","src":"...","text":"...","tac":"<b>Обоснование:</b> …","link":"...","date":"..."}],
-  "trashNote": "1 фраза: что отсеяно"
-}
-
-Лимиты (жёстко):
-- signals ≤ 8, risks ≤ 8, macro ≤ 4, newtickers ≤ 3.
-- text: ОДНО короткое предложение, ≤120 символов (факт + цифра). Не эссе.
-- tac: ≤80 символов; только действие тетрадки (Buy Dip / Hold / пауза / ждать уровень / не докупать).
-- Одна история → один пункт; src — главный источник; date из входа, не выдумывай.
-
-Корзины:
-- signals: катализатор по нашим тикерам.
-- risks: даунсайд / отчёт скоро / peer spillover (MU↔SNDK, LITE↔CIEN, hyperscalers).
-- macro: ФРС / сектор / гео → влияние на Environment.
-- newtickers: НЕ из текущего списка групп тетрадки.
-
-Не выдумывай новости. Отсев 50–70% шума — норма. Мало данных → пустые массивы ок.
-"""
-
 
 def _clip_digest_field(val: Any, limit: int) -> str:
     s = str(val or "").strip()
@@ -304,9 +272,9 @@ def _clip_digest_field(val: Any, limit: int) -> str:
 def clamp_digest_rows_brief(
     rows: Any,
     *,
-    max_rows: int = 8,
-    text_limit: int = 120,
-    tac_limit: int = 80,
+    max_rows: int = 12,
+    text_limit: int = 160,
+    tac_limit: int = 100,
 ) -> List[Dict[str, Any]]:
     """Enforce NBIS-style brevity on digest bucket rows (post-LLM)."""
     if not isinstance(rows, list):
@@ -461,6 +429,57 @@ def _cfg_int(name: str, default: int) -> int:
         return int(default)
 
 
+def digest_output_limits() -> Dict[str, int]:
+    """UI/LLM output caps for morning digest buckets (env-overridable)."""
+    return {
+        "signals": max(1, min(_cfg_int("NOTEBOOK_DIGEST_MAX_SIGNALS", 12), 24)),
+        "risks": max(1, min(_cfg_int("NOTEBOOK_DIGEST_MAX_RISKS", 12), 24)),
+        "macro": max(1, min(_cfg_int("NOTEBOOK_DIGEST_MAX_MACRO", 6), 16)),
+        "newtickers": max(1, min(_cfg_int("NOTEBOOK_DIGEST_MAX_NEWTICKERS", 5), 12)),
+        "text_chars": max(60, min(_cfg_int("NOTEBOOK_DIGEST_TEXT_CHARS", 160), 280)),
+        "tac_chars": max(40, min(_cfg_int("NOTEBOOK_DIGEST_TAC_CHARS", 100), 160)),
+    }
+
+
+def digest_system_prompt(*, limits: Optional[Dict[str, int]] = None) -> str:
+    lim = limits or digest_output_limits()
+    return f"""Ты — редактор утреннего дайджеста для торговой «Рабочей тетрадки».
+Стиль — как паспорт NBIS: коротко, по делу, без доклада и без «стены текста».
+Вход: (1) новости KB (SA/Yahoo/Investing/…); (2) earnings-факты, если переданы.
+Дубли одной истории схлопывай.
+
+Верни ТОЛЬКО JSON без markdown:
+{{
+  "filtered": <int>,
+  "kept": <int>,
+  "trashed": <int>,
+  "signals": [{{"sym":"MSFT","src":"...","text":"...","tac":"<b>Тактика:</b> …","link":"...","date":"2026-07-28 09:15 UTC"}}],
+  "risks": [тот же формат],
+  "macro": [{{"sym":"МАКРО · …","src":"...","text":"...","tac":"<b>Влияние:</b> …","link":"...","date":"..."}}],
+  "newtickers": [{{"sym":"XYZ","src":"...","text":"...","tac":"<b>Обоснование:</b> …","link":"...","date":"..."}}],
+  "trashNote": "1 фраза: что отсеяно"
+}}
+
+Лимиты (жёстко):
+- signals ≤ {lim["signals"]}, risks ≤ {lim["risks"]}, macro ≤ {lim["macro"]}, newtickers ≤ {lim["newtickers"]}.
+- text: ОДНО короткое предложение, ≤{lim["text_chars"]} символов (факт + цифра). Не эссе.
+- tac: ≤{lim["tac_chars"]} символов; только действие тетрадки (Buy Dip / Hold / пауза / ждать уровень / не докупать).
+- Одна история → один пункт; src — главный источник; date из входа, не выдумывай.
+
+Корзины:
+- signals: катализатор по нашим тикерам.
+- risks: даунсайд / отчёт скоро / peer spillover (MU↔SNDK, LITE↔CIEN, hyperscalers).
+- macro: ФРС / сектор / гео → влияние на Environment.
+- newtickers: НЕ из текущего списка групп тетрадки.
+
+Не выдумывай новости. Отсев шума — норма; при широком входе держи корзины ближе к лимитам, если есть смысл. Мало данных → пустые массивы ок.
+"""
+
+
+# Back-compat alias for imports/tests that expect a string constant.
+DIGEST_SYSTEM = digest_system_prompt()
+
+
 _MACRO_SYMS = frozenset({"MACRO", "US_MACRO"})
 
 
@@ -480,9 +499,10 @@ def news_quota_config() -> Dict[str, int]:
         "g3": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_G3", fallback)),
         "new": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_NEW", fallback)),
         "extra": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_EXTRA", fallback)),
-        "macro_limit": max(0, _cfg_int("NOTEBOOK_NEWS_MACRO_LIMIT", 80)),
+        "macro_limit": max(0, _cfg_int("NOTEBOOK_NEWS_MACRO_LIMIT", 100)),
         "section_limit": max(0, _cfg_int("NOTEBOOK_SA_SECTION_LIMIT", section_default)),
-        "llm_max_items": max(1, _cfg_int("NOTEBOOK_NEWS_LLM_MAX_ITEMS", 600)),
+        # ~25 tickers × 40 + MACRO/sections; raise further if universe grows past ~30.
+        "llm_max_items": max(1, _cfg_int("NOTEBOOK_NEWS_LLM_MAX_ITEMS", 1000)),
     }
 
 
@@ -547,7 +567,7 @@ def fair_sample_for_digest(
     """Cap per ticker by group + MACRO budget, then pack to llm_max_items (newest first)."""
     q = quotas or news_quota_config()
     macro_lim = int(q.get("macro_limit") or 0) if include_macro else 0
-    llm_max = int(q.get("llm_max_items") or 600)
+    llm_max = int(q.get("llm_max_items") or 1000)
 
     by_sym: Dict[str, List[Dict[str, Any]]] = {}
     for it in items:
@@ -856,7 +876,7 @@ def build_sa_fetch_tickers(*, equity_only: bool = True) -> Dict[str, Any]:
     }
 
 
-def format_digest_telegram(digest: Optional[Dict[str, Any]] = None, *, max_items: int = 4) -> str:
+def format_digest_telegram(digest: Optional[Dict[str, Any]] = None, *, max_items: int = 6) -> str:
     """Compact Telegram text from digest_latest (no LLM)."""
     d = digest
     if d is None:
@@ -980,12 +1000,13 @@ def _llm_digest(
         + earn_json[:8000]
         + "\n\nСобери дайджест по схеме."
     )
+    out_lim = digest_output_limits()
     llm = LLMService()
     out = llm.generate_response(
         messages=[{"role": "user", "content": user}],
-        system_prompt=DIGEST_SYSTEM,
+        system_prompt=digest_system_prompt(limits=out_lim),
         temperature=float(get_config_value("NOTEBOOK_NEWS_DIGEST_TEMPERATURE", "0.2") or 0.2),
-        max_tokens=int(get_config_value("NOTEBOOK_NEWS_DIGEST_MAX_TOKENS", "16000") or 16000),
+        max_tokens=int(get_config_value("NOTEBOOK_NEWS_DIGEST_MAX_TOKENS", "20000") or 20000),
     )
     text = (out or {}).get("response") or ""
     parsed = _parse_llm_json(text)
@@ -1129,10 +1150,10 @@ def run_notebook_news_digest(
         try:
             # Load enough rows for fair-sample (per-ticker × groups + MACRO).
             lim = max(
-                int(quotas.get("llm_max_items") or 600),
+                int(quotas.get("llm_max_items") or 1000),
                 per * max(1, len(kb_tickers)) * (3 if kb_src is None else 1),
             )
-            lim = min(lim, 2000)
+            lim = min(lim, 3000)
             items = load_kb_news_items(
                 kb_tickers,
                 lookback_hours=lb,
@@ -1224,15 +1245,18 @@ def run_notebook_news_digest(
         "newtickers": digest_body.get("newtickers") if isinstance(digest_body.get("newtickers"), list) else [],
         "trashNote": digest_body.get("trashNote") or "",
     }
-    for _bucket, _max in (
-        ("signals", 8),
-        ("risks", 8),
-        ("macro", 4),
-        ("newtickers", 3),
+    out_lim = digest_output_limits()
+    for _bucket, _key in (
+        ("signals", "signals"),
+        ("risks", "risks"),
+        ("macro", "macro"),
+        ("newtickers", "newtickers"),
     ):
         digest[_bucket] = clamp_digest_rows_brief(
             enrich_digest_rows_with_dates(digest[_bucket], llm_items),
-            max_rows=_max,
+            max_rows=int(out_lim[_key]),
+            text_limit=int(out_lim["text_chars"]),
+            tac_limit=int(out_lim["tac_chars"]),
         )
     kept_n = sum(len(digest[k]) for k in ("signals", "risks", "macro", "newtickers"))
     digest["kept"] = kept_n
@@ -1265,7 +1289,8 @@ def run_notebook_news_digest(
         "macro_limit": quotas.get("macro_limit"),
         "llm_max_items": quotas.get("llm_max_items"),
         "fair_sample_macro_count": sample.get("macro_count"),
-        "digest_max_tokens": int(get_config_value("NOTEBOOK_NEWS_DIGEST_MAX_TOKENS", "16000") or 16000),
+        "digest_max_tokens": int(get_config_value("NOTEBOOK_NEWS_DIGEST_MAX_TOKENS", "20000") or 20000),
+        "digest_bucket_limits": digest_output_limits(),
     }
 
     result = {

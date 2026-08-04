@@ -246,13 +246,26 @@ def test_clamp_digest_rows_brief_nbis_style():
     rows = [
         {"sym": "MSFT", "text": long, "tac": "<b>Тактика:</b> " + ("ждать уровень " * 10), "src": "SA", "link": "https://x"},
         {"sym": "AMD", "text": "коротко", "tac": "Hold", "src": "Yahoo"},
-    ] + [{"sym": f"T{i}", "text": "x", "tac": "y"} for i in range(10)]
-    out = clamp_digest_rows_brief(rows, max_rows=8, text_limit=120, tac_limit=80)
-    assert len(out) == 8
-    assert len(out[0]["text"]) <= 120
+    ] + [{"sym": f"T{i}", "text": "x", "tac": "y"} for i in range(14)]
+    out = clamp_digest_rows_brief(rows, max_rows=12, text_limit=160, tac_limit=100)
+    assert len(out) == 12
+    assert len(out[0]["text"]) <= 160
     assert out[0]["text"].endswith("…")
-    assert len(out[0]["tac"]) <= 80
+    assert len(out[0]["tac"]) <= 100
     assert out[1]["text"] == "коротко"
+
+
+def test_digest_output_limits_defaults(monkeypatch):
+    import services.notebook_news_digest as m
+
+    monkeypatch.setattr(m, "get_config_value", lambda key, default=None: default)
+    lim = m.digest_output_limits()
+    assert lim["signals"] == 12
+    assert lim["risks"] == 12
+    assert lim["macro"] == 6
+    assert lim["newtickers"] == 5
+    assert lim["text_chars"] == 160
+    assert "signals ≤ 12" in m.digest_system_prompt(limits=lim)
 
 
 def test_per_ticker_limit_for_uses_group_max(monkeypatch):

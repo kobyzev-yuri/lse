@@ -3654,7 +3654,7 @@ function renderGuideTab(){
         <tr><th>Ingest SA</th><td>До <b>40</b> заголовков на тикер за cron (<code>NOTEBOOK_NEWS_PER_TICKER</code>). Yahoo ticker-news — до <b>5</b>.</td></tr>
         <tr><th>KB → дайджест</th><td>Окно ~72ч; чтение до ~400 строк (все источники), затем дедуп.</td></tr>
         <tr><th>Вход в LLM</th><td>Первые <b>120</b> новостей + до <b>20</b> earnings.</td></tr>
-        <tr><th>Корзины макро / новые</th><td><b>Жёсткого N на секцию нет</b> — сколько уложится в ответ LLM (~6000 tokens) после отсева (норма 50–70%). Telegram — до 4 пунктов на корзину.</td></tr>
+        <tr><th>Корзины макро / новые</th><td>Лимиты корзин (дефолт signals/risks 12, macro 6, newtickers 5) — <code>NOTEBOOK_DIGEST_MAX_*</code>. Telegram — до 6 пунктов на корзину.</td></tr>
       </table>
       <div class="gex"><b>Если кажется, что «все статьи»</b>
         Смотрите счётчик: обработано → kept. На экране только kept, разложенный по корзинам. Это выжимка одного утра, не бесконечная лента.

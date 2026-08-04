@@ -96,6 +96,8 @@
 
 Конфиг тетрадки: `NOTEBOOK_NEWS_KB_ALL_SOURCES=0` (только Seeking Alpha Finance), `NOTEBOOK_NEWS_INCLUDE_MACRO=1`, тикеры+`SA:*` секции из подписок. Остальной LSE читает multi-source KB как раньше.
 
+Лимиты утреннего LLM (дефолты, env): вход `NOTEBOOK_NEWS_LLM_MAX_ITEMS=1000` (~+40 на каждый новый тикер сверх ~25); выход корзин `NOTEBOOK_DIGEST_MAX_SIGNALS/RISKS=12`, `MACRO=6`, `NEWTICKERS=5`, text/tac 160/100.
+
 ---
 
 ## Тикеры по группам
