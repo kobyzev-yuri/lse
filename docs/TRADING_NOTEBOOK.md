@@ -58,7 +58,7 @@
 | 9 | Кому слать: только UI, или Telegram (кому)? `/digest` уже читает кэш. | **открыт** |
 | 10 | «Новые тикеры» в дайджесте → сразу G3 с пустыми уровнями или только «к рассмотрению»? | **открыт** — в промпте сейчас «к рассмотрению» |
 
-Проверка API: новость [Intel CapEx / Foundry 4618091](https://seekingalpha.com/news/4618091-intels-capex-increase-positive-for-foundry-business-chip-equipment-makers) приходит по `ticker_slug=intc`. Отдельной геополитической ленты у RapidAPI нет (`/v1/news/list` → 422); макро/гео — из тикерных лент + MACRO в KB + опционально прокси SPY/QQQ/VIX позже.
+Проверка API: новость [Intel CapEx / Foundry 4618091](https://seekingalpha.com/news/4618091-intels-capex-increase-positive-for-foundry-business-chip-equipment-makers) приходит по `ticker_slug=intc`. Отдельной геополитической ленты у RapidAPI tipsters нет (`/v1/news/list` → **422**). Рабочие **разделы** tipsters (не тикерный news): `/v1/articles/list?category=latest-articles|market-outlook|stock-ideas|editors-picks|investing-strategy` и `/v1/markets/day-watch`. Подписка + сырые снимки ~40/группа — вкладка **Дайджесты → SA разделы** (не LLM). Макро/гео в утреннем дайджесте — из тикерных лент + MACRO в KB + extras SPY/QQQ.
 
 ### Фундамент / инвестдома / окружение
 
@@ -84,12 +84,13 @@
 | Источник | Cron / mode | Что даёт | В дайджесте |
 |----------|-------------|----------|-------------|
 | **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные новости SA по universe тетрадки **+ extras** (`SPY,QQQ,NVDA,INTC,AAPL,PYPL,KEYS,VZ`; `NOTEBOOK_NEWS_SA_EXTRA`) | да (`source=Seeking Alpha Finance`) |
+| **SA tipsters sections** (articles / day-watch) | вручную UI/CLI | Подписки на `/v1/articles/list` + `/v1/markets/day-watch`; снимок `local/notebook/sa_sections/` (~40/группа) | **нет** в утреннем LLM; отдельная подвкладка **SA разделы** |
 | **Yahoo + Marketaux** | `5 */2` · `--mode tickers` | Тикерные новости (Motley Fool, Zacks, Reuters, Yahoo, …) | да (разные `source`) |
 | **Investing.com News** (+ calendar) | `0 */2` · `--mode investing` | Лента + экономкалендарь | новости — да; календарь — другой `event_type` |
 | **RSS ЦБ / Alpha Vantage** | `*/15` · `--mode core-fast` | Макро/календарные потоки | если попали как NEWS/MACRO по тикерам |
 | **NewsAPI** | cron **выключен** (`# newsapi`) | макро/equity при включении | сейчас почти не кормит |
 | **Email SA 35–40/день** | нет | — | **ждём п.7** |
-| Отдельная SA «геополитика» лента | нет | RapidAPI `/v1/news/list` → 422 | нет; макро из тикеров + `MACRO` |
+| Отдельная SA «геополитика» лента | нет | RapidAPI `/v1/news/list` → 422 | нет; макро из тикеров + `MACRO`; гипотезы — **SA разделы** (articles) |
 
 **Дайджест:** будни `30 12` UTC ≈ **08:30 ET** · `run_notebook_news_digest.py --from-kb-only` · Telegram `/digest` из кэша.
 

@@ -4112,6 +4112,137 @@ async def api_notebook_news_sources(days: int = 14):
         raise HTTPException(status_code=500, detail=f"Ошибка news-sources: {e!s}")
 
 
+@app.get("/api/notebook/sa-sections", response_class=JSONResponse)
+async def api_notebook_sa_sections():
+    """SA tipsters section catalog + subscriptions + latest snapshot meta."""
+
+    def _run() -> Dict[str, Any]:
+        from services.sa_section_subscriptions import catalog_with_subscriptions
+
+        return catalog_with_subscriptions()
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        logger.exception("GET /api/notebook/sa-sections: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка sa-sections: {e!s}")
+
+
+@app.put("/api/notebook/sa-sections/subscriptions", response_class=JSONResponse)
+async def api_notebook_sa_sections_subscriptions(request: Request):
+    """Update section subscriptions and optional per_group_limit."""
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON object required")
+
+    def _run() -> Dict[str, Any]:
+        from services.sa_section_subscriptions import (
+            catalog_with_subscriptions,
+            set_subscriptions_bulk,
+        )
+
+        mapping: Dict[str, bool] = {}
+        if isinstance(body.get("subscriptions"), dict):
+            mapping = {str(k): bool(v) for k, v in body["subscriptions"].items()}
+        elif isinstance(body.get("ids"), list):
+            enabled = bool(body.get("enabled", True))
+            mapping = {str(x): enabled for x in body["ids"] if str(x).strip()}
+        else:
+            # bare { "articles.market-outlook": true, ... }
+            skip = {"per_group_limit", "enabled", "ids", "subscriptions"}
+            mapping = {str(k): bool(v) for k, v in body.items() if str(k) not in skip}
+
+        lim = body.get("per_group_limit")
+        set_subscriptions_bulk(mapping, per_group_limit=int(lim) if lim is not None else None)
+        return catalog_with_subscriptions()
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        logger.exception("PUT /api/notebook/sa-sections/subscriptions: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка sa-sections subscriptions: {e!s}")
+
+
+@app.post("/api/notebook/sa-sections/snapshot", response_class=JSONResponse)
+async def api_notebook_sa_sections_snapshot(request: Request):
+    """Fetch subscribed tipsters sections into a raw snapshot (no LLM)."""
+
+    body: Dict[str, Any] = {}
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict):
+            body = raw
+    except Exception:
+        body = {}
+
+    def _run() -> Dict[str, Any]:
+        from services.sa_section_subscriptions import run_section_snapshot
+
+        lim = body.get("limit")
+        ids = body.get("section_ids") if isinstance(body.get("section_ids"), list) else None
+        all_known = bool(body.get("all_available") or body.get("all_known"))
+        result = run_section_snapshot(
+            section_ids=[str(x) for x in ids] if ids is not None else None,
+            all_available=all_known,
+            limit=int(lim) if lim is not None else None,
+            write=True,
+        )
+        # Trim items in HTTP response if huge? Keep full — UI needs titles.
+        return result
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("POST /api/notebook/sa-sections/snapshot: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка sa-sections snapshot: {e!s}")
+
+
+@app.get("/api/notebook/sa-sections/snapshots", response_class=JSONResponse)
+async def api_notebook_sa_sections_snapshots(limit: int = 40):
+    """List SA section snapshots (latest + archive)."""
+
+    def _run() -> Dict[str, Any]:
+        from services.sa_section_subscriptions import list_section_snapshots, snapshot_retain_days
+
+        lim = max(1, min(int(limit or 40), 90))
+        rows = list_section_snapshots(limit=lim)
+        return {
+            "snapshots": rows,
+            "retain_days": snapshot_retain_days(),
+            "count": len(rows),
+        }
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        logger.exception("GET /api/notebook/sa-sections/snapshots: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка sa-sections snapshots: {e!s}")
+
+
+@app.get("/api/notebook/sa-sections/snapshots/{snapshot_id}", response_class=JSONResponse)
+async def api_notebook_sa_sections_snapshot_get(snapshot_id: str):
+    """One SA section snapshot payload."""
+
+    def _run() -> Dict[str, Any]:
+        from services.sa_section_subscriptions import load_section_snapshot
+
+        pack = load_section_snapshot(snapshot_id)
+        if not pack:
+            raise KeyError(f"snapshot not found: {snapshot_id}")
+        return pack
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GET /api/notebook/sa-sections/snapshots/%s: %s", snapshot_id, e)
+        raise HTTPException(status_code=500, detail=f"Ошибка sa-sections snapshot: {e!s}")
+
+
 @app.get("/api/notebook", response_class=JSONResponse)
 async def api_trading_notebook(prices: int = 1):
     """Группы + тикеры + дайджест; prices=1 — подмешать live Close."""

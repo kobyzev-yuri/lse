@@ -88,6 +88,75 @@ def summarize_items(payload: Dict[str, Any], *, limit: int = 8) -> List[Dict[str
     return rows
 
 
+def probe_sections(*, timeout: float = 25.0) -> int:
+    """Probe tipsters section endpoints; print status/count TSV."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    key = _api_key()
+    if not key:
+        raise SystemExit("Set RAPIDAPI_KEY or SEEKING_ALPHA_RAPIDAPI_KEY")
+
+    candidates: List[tuple[str, str]] = []
+    for cat in (
+        "latest-articles",
+        "market-outlook",
+        "stock-ideas",
+        "editors-picks",
+        "investing-strategy",
+        "latest",
+        "all",
+    ):
+        candidates.append(
+            (f"articles.{cat}", f"/v1/articles/list?category={urllib.parse.quote(cat)}&page_number=1")
+        )
+    for cat in ("market-news", "economy", "geopolitics", "federal-reserve"):
+        candidates.append(
+            (f"news.{cat}", f"/v1/news/list?category={urllib.parse.quote(cat)}&page_number=1")
+        )
+    candidates.append(("markets.day-watch", "/v1/markets/day-watch"))
+
+    def _count(payload: Dict[str, Any]) -> int:
+        data = payload.get("data")
+        if isinstance(data, list):
+            return len(data)
+        if isinstance(data, dict):
+            return 1
+        return 0
+
+    ok = 0
+    for sid, path in candidates:
+        url = f"{BASE}{path}"
+        req = urllib.request.Request(
+            url,
+            headers={"x-rapidapi-host": HOST, "x-rapidapi-key": key, "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+                code = int(getattr(resp, "status", 200) or 200)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            code = int(e.code)
+        except Exception as e:
+            print(f"ERR\t0\t{sid}\t{e}")
+            continue
+        try:
+            payload = json.loads(body)
+        except Exception:
+            payload = {}
+        n = _count(payload) if isinstance(payload, dict) else 0
+        msg = ""
+        if isinstance(payload, dict):
+            msg = str(payload.get("message") or payload.get("error") or "")[:80]
+        print(f"{code}\t{n}\t{sid}\t{msg}")
+        if code == 200 and n > 0:
+            ok += 1
+    print(f"available={ok}/{len(candidates)}")
+    return 0 if ok else 2
+
+
 def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="SA Finance RapidAPI smoke by ticker")
     p.add_argument("--ticker", default="MSFT")
@@ -95,7 +164,15 @@ def main(argv: List[str] | None = None) -> int:
     p.add_argument("--page", type=int, default=1)
     p.add_argument("--limit", type=int, default=8)
     p.add_argument("--json", action="store_true", help="print full JSON payload")
+    p.add_argument(
+        "--probe-sections",
+        action="store_true",
+        help="Probe tipsters section endpoints (articles/news/markets)",
+    )
     args = p.parse_args(argv)
+
+    if args.probe_sections:
+        return probe_sections()
 
     out = fetch_symbol_news(args.ticker, category=args.category, page_number=args.page)
     items = summarize_items(out["payload"], limit=args.limit)

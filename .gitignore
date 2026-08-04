@@ -12,6 +12,8 @@ local/risk_limits.json
 # Тетрадка: runtime overlay (макро-флаги / будущие уровни) — на VM в ./local
 local/notebook/ticker_overrides.json
 local/notebook/digest_latest.json
+local/notebook/sa_section_subscriptions.json
+local/notebook/sa_sections/
 # Обученные модели CatBoost (игра 5m)
 local/models/*.cbm
 local/models/*.meta.json
@@ -80,3 +82,8 @@ tradenews/
 
 # Локальный symlink на соседний репозиторий moex (вне дерева lse)
 moex
+
+# Kronos local bakeoff / GPU venv
+.venv-kronos/
+third_party/Kronos/
+local/kronos_bakeoff/

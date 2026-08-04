@@ -32,27 +32,27 @@ def rapidapi_key() -> str:
     )
 
 
-def fetch_symbol_news(
-    ticker: str,
+def _request_json(
+    path_or_url: str,
     *,
-    category: str = "all",
-    page_number: int = 1,
+    params: Optional[Dict[str, Any]] = None,
     api_key: Optional[str] = None,
     timeout: float = 30.0,
 ) -> Dict[str, Any]:
-    """GET /v1/symbols/news — news list for ticker_slug."""
+    """GET tipsters SA Finance path (or absolute URL) → {status, url, payload}."""
     key = (api_key or rapidapi_key()).strip()
     if not key:
         raise ValueError("SEEKING_ALPHA_RAPIDAPI_KEY / RAPIDAPI_KEY not set")
-    slug = urllib.parse.quote(str(ticker).strip().lower())
-    qs = urllib.parse.urlencode(
-        {
-            "category": category,
-            "ticker_slug": slug,
-            "page_number": int(page_number),
-        }
-    )
-    url = f"{BASE}/v1/symbols/news?{qs}"
+    raw = str(path_or_url or "").strip()
+    if raw.startswith("http://") or raw.startswith("https://"):
+        url = raw
+    else:
+        path = raw if raw.startswith("/") else f"/{raw}"
+        if params:
+            qs = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+            url = f"{BASE}{path}?{qs}" if qs else f"{BASE}{path}"
+        else:
+            url = f"{BASE}{path}"
     req = urllib.request.Request(
         url,
         headers={
@@ -62,11 +62,276 @@ def fetch_symbol_news(
         },
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read().decode("utf-8", errors="replace")
-        status = int(getattr(resp, "status", 200) or 200)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            status = int(getattr(resp, "status", 200) or 200)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        status = int(e.code)
+        try:
+            payload = json.loads(body) if body else {}
+        except Exception:
+            payload = {"message": body[:500]}
+        return {"status": status, "url": url, "payload": payload if isinstance(payload, dict) else {}}
     payload = json.loads(body)
-    return {"status": status, "url": url, "payload": payload}
+    return {"status": status, "url": url, "payload": payload if isinstance(payload, dict) else {}}
+
+
+def fetch_symbol_news(
+    ticker: str,
+    *,
+    category: str = "all",
+    page_number: int = 1,
+    api_key: Optional[str] = None,
+    timeout: float = 30.0,
+) -> Dict[str, Any]:
+    """GET /v1/symbols/news — news list for ticker_slug."""
+    slug = str(ticker).strip().lower()
+    out = _request_json(
+        "/v1/symbols/news",
+        params={
+            "category": category,
+            "ticker_slug": slug,
+            "page_number": int(page_number),
+        },
+        api_key=api_key,
+        timeout=timeout,
+    )
+    status = int(out.get("status") or 0)
+    if status != 200:
+        msg = ""
+        pl = out.get("payload") if isinstance(out.get("payload"), dict) else {}
+        if isinstance(pl, dict):
+            msg = str(pl.get("message") or pl.get("error") or "")[:300]
+        raise RuntimeError(f"SA symbols/news HTTP {status}" + (f": {msg}" if msg else ""))
+    return out
+
+
+def fetch_section(
+    path: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    api_key: Optional[str] = None,
+    timeout: float = 30.0,
+) -> Dict[str, Any]:
+    """GET arbitrary tipsters section endpoint (articles/list, markets/day-watch, …)."""
+    return _request_json(path, params=params, api_key=api_key, timeout=timeout)
+
+
+def _strip_html(content: str) -> str:
+    text = str(content or "")
+    for tag in ("<p>", "</p>", "<span>", "</span>", "<br>", "<br/>"):
+        text = text.replace(tag, " ")
+    while "<" in text and ">" in text:
+        a = text.find("<")
+        b = text.find(">", a)
+        if b < 0:
+            break
+        text = text[:a] + " " + text[b + 1 :]
+    return " ".join(text.split())
+
+
+def _ticker_slugs_from_relationships(item: Dict[str, Any]) -> List[str]:
+    rel = item.get("relationships") if isinstance(item.get("relationships"), dict) else {}
+    out: List[str] = []
+    for key in ("primaryTickers", "secondaryTickers"):
+        block = rel.get(key) if isinstance(rel.get(key), dict) else {}
+        data = block.get("data")
+        rows = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            # Tipsters often returns tag ids only; prefer explicit slug/name if present.
+            slug = str(row.get("slug") or row.get("name") or "").strip()
+            if slug and not slug.isdigit():
+                out.append(slug.upper()[:16])
+    # de-dupe preserve order
+    seen: set[str] = set()
+    uniq: List[str] = []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+
+def flatten_section_items(
+    payload: Dict[str, Any],
+    *,
+    section_id: str,
+    limit: int = 40,
+    item_kind: str = "articles",
+) -> List[Dict[str, Any]]:
+    """Normalize section payloads into compact rows (title/summary/link/…)."""
+    lim = max(0, int(limit))
+    sid = str(section_id or "").strip() or "section"
+    kind = str(item_kind or "articles").strip().lower()
+    rows: List[Dict[str, Any]] = []
+
+    if kind == "day_watch":
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+        buckets = (
+            "in_the_news",
+            "top_gainers",
+            "top_losers",
+            "sp500_gainers",
+            "sp500_losers",
+            "most_active",
+            "faang_stocks",
+            "cap400_gainers",
+            "cap400_losers",
+            "cap600_gainers",
+            "cap600_losers",
+            "cryptocurrencies",
+        )
+        for bucket in buckets:
+            entries = attrs.get(bucket)
+            if not isinstance(entries, list):
+                continue
+            for ent in entries:
+                if not isinstance(ent, dict):
+                    continue
+                slug = str(ent.get("slug") or "").strip().lower()
+                name = str(ent.get("name") or slug or "").strip()
+                if not slug and not name:
+                    continue
+                eid = str(ent.get("id") or slug or name)
+                rows.append(
+                    {
+                        "id": f"{bucket}:{eid}",
+                        "type": "day_watch",
+                        "section_id": sid,
+                        "publishOn": "",
+                        "title": f"{bucket}: {name}" + (f" ({slug.upper()})" if slug else ""),
+                        "summary_text": name[:900],
+                        "isPaywalled": False,
+                        "link": f"https://seekingalpha.com/symbol/{slug}" if slug else "",
+                        "tickers": [slug.upper()] if slug else [],
+                        "src": KB_SOURCE,
+                        "bucket": bucket,
+                    }
+                )
+                if len(rows) >= lim:
+                    return rows
+        return rows
+
+    # Default: JSON:API list under data[] (articles / news-like).
+    for item in (payload.get("data") or [])[:lim]:
+        if not isinstance(item, dict):
+            continue
+        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+        links = item.get("links") if isinstance(item.get("links"), dict) else {}
+        self_path = str(links.get("self") or "").strip()
+        item_id = str(item.get("id") or "").strip()
+        item_type = str(item.get("type") or kind or "article").strip()
+        if self_path.startswith("http"):
+            link = self_path
+        elif self_path.startswith("/"):
+            link = f"https://seekingalpha.com{self_path}"
+        elif item_id and item_type == "news":
+            link = f"https://seekingalpha.com/news/{item_id}"
+        elif item_id:
+            link = f"https://seekingalpha.com/article/{item_id}"
+        else:
+            link = ""
+        summary = _strip_html(
+            str(
+                attrs.get("summary")
+                or attrs.get("content")
+                or attrs.get("description")
+                or (
+                    ", ".join(str(x) for x in attrs.get("themes"))
+                    if isinstance(attrs.get("themes"), list)
+                    else attrs.get("themes")
+                )
+                or ""
+            )
+        )
+        rows.append(
+            {
+                "id": item_id,
+                "type": item_type,
+                "section_id": sid,
+                "publishOn": str(attrs.get("publishOn") or attrs.get("lastModified") or ""),
+                "title": str(attrs.get("title") or "").strip(),
+                "summary_text": summary[:900],
+                "isPaywalled": bool(attrs.get("isPaywalled") or attrs.get("isLockedPro")),
+                "link": link,
+                "tickers": _ticker_slugs_from_relationships(item),
+                "src": KB_SOURCE,
+            }
+        )
+    return rows
+
+
+def fetch_section_pages(
+    path: str,
+    *,
+    section_id: str,
+    params: Optional[Dict[str, Any]] = None,
+    limit: int = 40,
+    item_kind: str = "articles",
+    page_param: str = "page_number",
+    start_page: int = 1,
+    max_pages: int = 5,
+    sleep_sec: float = 0.25,
+    api_key: Optional[str] = None,
+    timeout: float = 30.0,
+) -> Dict[str, Any]:
+    """Paginate a section endpoint until ``limit`` items or pages exhausted."""
+    lim = max(0, int(limit))
+    pages = max(1, int(max_pages))
+    base_params = dict(params or {})
+    all_items: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    urls: List[str] = []
+    last_status = 0
+    kind = str(item_kind or "articles").strip().lower()
+
+    for i in range(pages):
+        if lim and len(all_items) >= lim:
+            break
+        page_no = int(start_page) + i
+        call_params = dict(base_params)
+        if kind != "day_watch" and page_param:
+            call_params[page_param] = page_no
+        try:
+            raw = fetch_section(path, params=call_params, api_key=api_key, timeout=timeout)
+        except Exception as e:
+            errors.append(str(e))
+            break
+        last_status = int(raw.get("status") or 0)
+        urls.append(str(raw.get("url") or ""))
+        if last_status != 200:
+            msg = ""
+            pl = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+            if isinstance(pl, dict):
+                msg = str(pl.get("message") or pl.get("error") or "")[:200]
+            errors.append(f"HTTP {last_status}" + (f": {msg}" if msg else ""))
+            break
+        payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+        need = lim - len(all_items) if lim else 40
+        batch = flatten_section_items(payload, section_id=section_id, limit=need, item_kind=kind)
+        if not batch:
+            break
+        all_items.extend(batch)
+        if kind == "day_watch":
+            break  # single payload, no pagination
+        if sleep_sec > 0 and i + 1 < pages and (not lim or len(all_items) < lim):
+            time.sleep(float(sleep_sec))
+
+    return {
+        "section_id": section_id,
+        "status": last_status,
+        "items": all_items[:lim] if lim else all_items,
+        "count": len(all_items[:lim] if lim else all_items),
+        "urls": urls,
+        "errors": errors,
+        "path": path,
+        "params": base_params,
+    }
 
 
 def flatten_news_items(payload: Dict[str, Any], *, ticker: str, limit: int = 10) -> List[Dict[str, Any]]:

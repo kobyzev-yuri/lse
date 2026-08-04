@@ -469,6 +469,13 @@ let DIGEST_SNAPSHOT_ID = "latest";
 let DIGEST_SNAPSHOTS = []; // [{id, date, ...}]
 let DIGEST_SNAPSHOTS_LOADED = false;
 let DIGEST_RETAIN_DAYS = 14;
+let SA_SECTIONS = null; // catalog pack from /api/notebook/sa-sections
+let SA_SECTION_SNAP = null; // full snapshot payload
+let SA_SECTION_SNAP_ID = "latest";
+let SA_SECTION_SNAPS = [];
+let SA_SECTION_SNAPS_LOADED = false;
+let SA_SECTION_SNAP_TRIED = false;
+let SA_SECTION_BUSY = false;
 let _digestHydrateInflight = false;
 let _digestAutoLatestTried = false;
 let _digestOptsSynced = false;
@@ -1750,7 +1757,214 @@ function envSourceHint(lbl){
   return "вручную JSON";
 }
 
-function setDigestVariant(v){ digestVariant = v; renderContent(); }
+function setDigestVariant(v){
+  digestVariant = v;
+  if(v === "sa"){
+    queueMicrotask(() => { hydrateSaSectionsQuiet(); });
+  }
+  renderContent();
+}
+
+async function hydrateSaSectionsQuiet(force){
+  try{
+    if(force || !SA_SECTIONS){
+      const r = await fetch("/api/notebook/sa-sections");
+      const j = await r.json().catch(() => ({}));
+      if(r.ok) SA_SECTIONS = j;
+    }
+    if(force || !SA_SECTION_SNAPS_LOADED){
+      const r2 = await fetch("/api/notebook/sa-sections/snapshots?limit=40");
+      const j2 = await r2.json().catch(() => ({}));
+      if(r2.ok){
+        SA_SECTION_SNAPS = Array.isArray(j2.snapshots) ? j2.snapshots : [];
+        SA_SECTION_SNAPS_LOADED = true;
+      }
+    }
+    if(force || !SA_SECTION_SNAP_TRIED){
+      const sid = SA_SECTION_SNAP_ID || "latest";
+      const r3 = await fetch(`/api/notebook/sa-sections/snapshots/${encodeURIComponent(sid)}`);
+      SA_SECTION_SNAP_TRIED = true;
+      if(r3.ok){
+        SA_SECTION_SNAP = await r3.json().catch(() => null);
+        if(SA_SECTION_SNAP && SA_SECTION_SNAP.id) SA_SECTION_SNAP_ID = SA_SECTION_SNAP.id;
+      } else {
+        SA_SECTION_SNAP = SA_SECTION_SNAP || null;
+      }
+    }
+    if(digestVariant === "sa") renderContent();
+  }catch(e){
+    console.warn("sa sections hydrate", e);
+  }
+}
+
+async function toggleSaSection(id, checked){
+  const sid = String(id || "").trim();
+  if(!sid) return;
+  try{
+    const body = { subscriptions: { [sid]: !!checked } };
+    const limEl = document.getElementById("sa-sec-limit");
+    if(limEl && limEl.value) body.per_group_limit = Number(limEl.value) || undefined;
+    const r = await fetch("/api/notebook/sa-sections/subscriptions", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error((j && j.detail) || (`HTTP ${r.status}`));
+    SA_SECTIONS = j;
+    if(digestVariant === "sa") renderContent();
+  }catch(e){
+    console.warn("sa subscribe", e);
+    alert("Подписка: " + (e && e.message ? e.message : e));
+  }
+}
+
+async function saveSaSectionLimit(){
+  const limEl = document.getElementById("sa-sec-limit");
+  const lim = limEl ? Number(limEl.value) : 40;
+  try{
+    const r = await fetch("/api/notebook/sa-sections/subscriptions", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ per_group_limit: lim, subscriptions: {} }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error((j && j.detail) || (`HTTP ${r.status}`));
+    SA_SECTIONS = j;
+    if(digestVariant === "sa") renderContent();
+  }catch(e){
+    alert("Лимит: " + (e && e.message ? e.message : e));
+  }
+}
+
+async function runSaSectionSnapshot(){
+  if(SA_SECTION_BUSY) return;
+  SA_SECTION_BUSY = true;
+  if(digestVariant === "sa") renderContent();
+  try{
+    const limEl = document.getElementById("sa-sec-limit");
+    const lim = limEl ? Number(limEl.value) : undefined;
+    const r = await fetch("/api/notebook/sa-sections/snapshot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(lim ? { limit: lim } : {}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error((j && j.detail) || (`HTTP ${r.status}`));
+    SA_SECTION_SNAP = j;
+    SA_SECTION_SNAP_ID = "latest";
+    SA_SECTION_SNAPS_LOADED = false;
+    SA_SECTION_SNAP_TRIED = false;
+    await hydrateSaSectionsQuiet(true);
+  }catch(e){
+    alert("Снимок: " + (e && e.message ? e.message : e));
+  }finally{
+    SA_SECTION_BUSY = false;
+    if(digestVariant === "sa") renderContent();
+  }
+}
+
+async function selectSaSectionSnapshot(id){
+  const sid = String(id || "latest");
+  try{
+    const r = await fetch(`/api/notebook/sa-sections/snapshots/${encodeURIComponent(sid)}`);
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error((j && j.detail) || (`HTTP ${r.status}`));
+    SA_SECTION_SNAP = j;
+    SA_SECTION_SNAP_ID = j.id || sid;
+    renderContent();
+  }catch(e){
+    console.warn("sa snap", e);
+  }
+}
+
+function shiftSaSectionSnapshot(dir){
+  const rows = SA_SECTION_SNAPS || [];
+  if(!rows.length) return;
+  let idx = rows.findIndex(r => String(r.id) === String(SA_SECTION_SNAP_ID));
+  if(idx < 0) idx = 0;
+  const next = idx + (dir < 0 ? -1 : 1);
+  if(next < 0 || next >= rows.length) return;
+  selectSaSectionSnapshot(rows[next].id);
+}
+
+function saSectionNavHtml(){
+  const rows = SA_SECTION_SNAPS || [];
+  const opts = rows.map(r => {
+    const id = esc(r.id || "");
+    const label = esc((r.generated_at_utc || r.id || "").slice(0, 19));
+    const sel = String(r.id) === String(SA_SECTION_SNAP_ID) ? " selected" : "";
+    return `<option value="${id}"${sel}>${label} · ${Number(r.item_count||0)} шт</option>`;
+  }).join("");
+  return `<div class="digest-nav" style="margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button type="button" class="ghost" onclick="shiftSaSectionSnapshot(-1)">←</button>
+    <select id="sa-sec-snap-sel" onchange="selectSaSectionSnapshot(this.value)">${opts || `<option value="latest">latest</option>`}</select>
+    <button type="button" class="ghost" onclick="shiftSaSectionSnapshot(1)">→</button>
+  </div>`;
+}
+
+function renderSaSectionsPanel(){
+  queueMicrotask(() => { hydrateSaSectionsQuiet(); });
+  const pack = SA_SECTIONS || {};
+  const catalog = Array.isArray(pack.catalog) ? pack.catalog : [];
+  const lim = Number(pack.per_group_limit || 40);
+  const hasKey = !!pack.has_api_key;
+  const snap = SA_SECTION_SNAP || {};
+  const groups = (snap.groups && typeof snap.groups === "object") ? snap.groups : {};
+
+  const checks = catalog.map(c => {
+    const id = esc(c.id || "");
+    const avail = !!c.available;
+    const sub = !!c.subscribed;
+    const dis = avail ? "" : " disabled";
+    const note = esc(c.note || "");
+    const title = esc(c.title || c.id || "");
+    const badge = avail ? "" : ` <span class="stub-tag">unavailable</span>`;
+    return `<label class="sa-sec-row" style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;opacity:${avail?1:0.55}">
+      <input type="checkbox" ${sub?"checked":""}${dis} onchange="toggleSaSection('${id}', this.checked)">
+      <span><b>${title}</b>${badge}<br><span class="note">${note}</span><br><code>${esc(c.path||"")} ${esc(JSON.stringify(c.params||{}))}</code></span>
+    </label>`;
+  }).join("") || `<p class="note">Каталог пуст.</p>`;
+
+  const groupCards = Object.keys(groups).map(sid => {
+    const g = groups[sid] || {};
+    const items = Array.isArray(g.items) ? g.items : [];
+    const rows = items.slice(0, 40).map(it => {
+      const title = esc(it.title || it.id || "");
+      const link = String(it.link || "").trim();
+      const date = esc(it.publishOn || "");
+      const sum = esc((it.summary_text || "").slice(0, 180));
+      const href = link ? `<a href="${esc(link)}" target="_blank" rel="noopener">${title}</a>` : title;
+      return `<div class="sa-sec-item" style="margin:6px 0;padding:6px 0;border-bottom:1px solid var(--border,#333)">
+        <div>${href}</div>
+        <div class="note">${date}${sum ? " · " + sum : ""}</div>
+      </div>`;
+    }).join("");
+    return `<div class="card" style="margin-top:12px">
+      <h3 style="margin:0 0 6px">${esc(g.title || sid)} <span class="note">· ${esc(g.status||"")} · ${Number(g.count||0)}</span></h3>
+      ${g.error ? `<p class="note">${esc(g.error)}</p>` : ""}
+      ${rows || `<p class="note">Пусто.</p>`}
+    </div>`;
+  }).join("");
+
+  return `
+    <div class="card">
+      <h3 style="margin:0">SA разделы (tipsters)${hasKey?liveBadge("RapidAPI"):stubBadge("нет ключа")}</h3>
+      <p class="note">Подписка на <b>нетикерные</b> эндпоинты tipsters (articles / markets). Снимок — сырые ~N статей на группу для гипотез. Не смешивается с утренним LLM-дайджестом. <code>/v1/news/list</code> у tipsters обычно 422.</p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0">
+        <label>N на группу <input id="sa-sec-limit" type="number" min="1" max="200" value="${lim}" style="width:72px"></label>
+        <button type="button" class="ghost" onclick="saveSaSectionLimit()">Сохранить N</button>
+        <button type="button" class="${SA_SECTION_BUSY?"ghost":""}" onclick="runSaSectionSnapshot()" ${SA_SECTION_BUSY?"disabled":""}>
+          ${SA_SECTION_BUSY ? "Снимаю…" : "Снять снимок"}
+        </button>
+      </div>
+      ${checks}
+      ${saSectionNavHtml()}
+      <p class="note">Снимок: ${esc(snap.generated_at_utc || "—")} · секций ${Object.keys(groups).length} · items ${Number(snap.item_count||0)}</p>
+    </div>
+    ${groupCards || `<div class="card" style="margin-top:12px"><p class="note">Нет снимка — включите разделы и нажмите «Снять снимок» (или CLI <code>scripts/run_sa_section_snapshot.py --snapshot</code>).</p></div>`}
+  `;
+}
 function effectiveDigestTickerFilter(){
   if(digestTickerFollowCurrent && current){
     return String(current).toUpperCase();
@@ -3248,10 +3462,15 @@ function renderDigest(){
   const variantSwitch = `<div class="variant-switch">
     <div class="vbtn ${digestVariant==="digest"?"on":""}" onclick="setDigestVariant('digest')">Дайджест (по запросу)</div>
     <div class="vbtn ${digestVariant==="logic"?"on":""}" onclick="setDigestVariant('logic')">Логика фильтра</div>
+    <div class="vbtn ${digestVariant==="sa"?"on":""}" onclick="setDigestVariant('sa')">SA разделы</div>
   </div>`;
 
   // Snapshot list: patch <select> in place. Never call renderContent() from here.
   queueMicrotask(() => { hydrateDigestSnapshotsQuiet(); });
+
+  if(digestVariant==="sa"){
+    return tabWrap("digest", variantSwitch + renderSaSectionsPanel());
+  }
 
   if(digestVariant==="logic"){
     const buckets = (DIGEST_BUCKETS||[]).map(b => `<div class="bucket"><span class="bico">${esc(b.ico)}</span>
@@ -3310,7 +3529,7 @@ function renderGuideTab(){
         <tr><th>Инвестдома</th><td>Консенсус Street (StockAnalysis) + 1–2 предложения по действию/PT дома. Фон ~12м, не ваш ордер.</td></tr>
         <tr><th>Фундамент</th><td>Паспорт эмитента (редко): блоки A–E. Yahoo-черновик цифр; текст вручную. Эталон стиля — NBIS.</td></tr>
         <tr><th>Ожидания от репорта</th><td>Вокруг earnings: на что смотреть + за что наказали в прошлый раз. Примеры: MSFT / META.</td></tr>
-        <tr><th>Дайджесты</th><td>Утренний срез + фильтр по стоку. Источники — «Логика фильтра».</td></tr>
+        <tr><th>Дайджесты</th><td>Утренний срез + фильтр по стоку. Источники — «Логика фильтра». Подвкладка <b>SA разделы</b> — подписка на tipsters articles/markets и сырые снимки ~N/группа.</td></tr>
         <tr><th>Watchlist</th><td>Новые стоки из дайджеста (SA/KB) с кратким обоснованием → можно в G3.</td></tr>
         <tr><th>Пояснения</th><td>Эта инструкция.</td></tr>
       </table>
