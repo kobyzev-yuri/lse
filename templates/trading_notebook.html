@@ -2020,17 +2020,17 @@ function renderSaSectionsPanel(){
         </button>
         <button type="button" class="ghost" onclick="runSaIngest(true)" ${SA_SECTION_BUSY?"disabled":""}>Прогнать все available</button>
       </div>
-      <h4 style="margin:12px 0 6px">Разделы</h4>
-      ${checks}
-      <h4 style="margin:12px 0 6px">Тикеры SA-fetch</h4>
-      <div>${tickChecks}</div>
       <h4 style="margin:14px 0 6px">Закладка новости по URL</h4>
       <p class="note">Tipsters <code>/v1/news/data?news_id=</code> — title + teaser (+ quickInsights), не полный текст. Попадёт в KB и во вход утреннего дайджеста (тикер из тегов / MACRO, либо укажите вручную).</p>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 12px">
         <input id="sa-bookmark-url" type="text" placeholder="https://seekingalpha.com/news/4624428-…" style="flex:1;min-width:220px;max-width:520px" ${SA_SECTION_BUSY?"disabled":""}>
         <input id="sa-bookmark-ticker" type="text" placeholder="тикер (опц.)" style="width:110px" ${SA_SECTION_BUSY?"disabled":""}>
         <button type="button" class="ghost" onclick="bookmarkSaNews()" ${SA_SECTION_BUSY?"disabled":""}>Добавить в KB</button>
       </div>
+      <h4 style="margin:12px 0 6px">Разделы</h4>
+      ${checks}
+      <h4 style="margin:12px 0 6px">Тикеры SA-fetch</h4>
+      <div>${tickChecks}</div>
     </div>
     <div class="card" style="margin-top:12px">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
