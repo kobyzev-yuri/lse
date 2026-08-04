@@ -475,6 +475,7 @@ let SA_SECTION_SNAP_ID = "latest";
 let SA_SECTION_SNAPS = [];
 let SA_SECTION_SNAPS_LOADED = false;
 let SA_SECTION_SNAP_TRIED = false;
+let SA_SECTION_HYDRATING = false;
 let SA_SECTION_BUSY = false;
 let _digestHydrateInflight = false;
 let _digestAutoLatestTried = false;
@@ -1766,11 +1767,17 @@ function setDigestVariant(v){
 }
 
 async function hydrateSaSectionsQuiet(force){
+  if(SA_SECTION_HYDRATING) return;
+  SA_SECTION_HYDRATING = true;
+  let changed = !!force;
   try{
     if(force || !SA_SECTIONS){
       const r = await fetch("/api/notebook/sa-sections");
       const j = await r.json().catch(() => ({}));
-      if(r.ok) SA_SECTIONS = j;
+      if(r.ok){
+        SA_SECTIONS = j;
+        changed = true;
+      }
     }
     if(force || !SA_SECTION_SNAPS_LOADED){
       const r2 = await fetch("/api/notebook/sa-sections/snapshots?limit=40");
@@ -1778,6 +1785,7 @@ async function hydrateSaSectionsQuiet(force){
       if(r2.ok){
         SA_SECTION_SNAPS = Array.isArray(j2.snapshots) ? j2.snapshots : [];
         SA_SECTION_SNAPS_LOADED = true;
+        changed = true;
       }
     }
     if(force || !SA_SECTION_SNAP_TRIED){
@@ -1790,10 +1798,13 @@ async function hydrateSaSectionsQuiet(force){
       } else {
         SA_SECTION_SNAP = SA_SECTION_SNAP || null;
       }
+      changed = true;
     }
-    if(digestVariant === "sa") renderContent();
+    if(changed && digestVariant === "sa") renderContent();
   }catch(e){
     console.warn("sa sections hydrate", e);
+  }finally{
+    SA_SECTION_HYDRATING = false;
   }
 }
 
@@ -1905,10 +1916,14 @@ function saSectionNavHtml(){
 
 function renderSaSectionsPanel(){
   queueMicrotask(() => { hydrateSaSectionsQuiet(); });
-  const pack = SA_SECTIONS || {};
-  const catalog = Array.isArray(pack.catalog) ? pack.catalog : [];
-  const lim = Number(pack.per_group_limit || 40);
-  const hasKey = !!pack.has_api_key;
+  const pack = SA_SECTIONS;
+  const loaded = !!pack;
+  const catalog = (pack && Array.isArray(pack.catalog)) ? pack.catalog : [];
+  const lim = Number((pack && pack.per_group_limit) || 40);
+  const hasKey = !!(pack && pack.has_api_key);
+  const keyBadge = !loaded
+    ? `<span class="note"> · загрузка…</span>`
+    : (hasKey ? liveBadge("RapidAPI") : stubBadge("нет ключа"));
   const snap = SA_SECTION_SNAP || {};
   const groups = (snap.groups && typeof snap.groups === "object") ? snap.groups : {};
 
@@ -1924,7 +1939,7 @@ function renderSaSectionsPanel(){
       <input type="checkbox" ${sub?"checked":""}${dis} onchange="toggleSaSection('${id}', this.checked)">
       <span><b>${title}</b>${badge}<br><span class="note">${note}</span><br><code>${esc(c.path||"")} ${esc(JSON.stringify(c.params||{}))}</code></span>
     </label>`;
-  }).join("") || `<p class="note">Каталог пуст.</p>`;
+  }).join("") || (loaded ? `<p class="note">Каталог пуст.</p>` : `<p class="note">Загрузка каталога…</p>`);
 
   const groupCards = Object.keys(groups).map(sid => {
     const g = groups[sid] || {};
@@ -1949,7 +1964,7 @@ function renderSaSectionsPanel(){
 
   return `
     <div class="card">
-      <h3 style="margin:0">SA разделы (tipsters)${hasKey?liveBadge("RapidAPI"):stubBadge("нет ключа")}</h3>
+      <h3 style="margin:0">SA разделы (tipsters)${keyBadge}</h3>
       <p class="note">Подписка на <b>нетикерные</b> эндпоинты tipsters (articles / markets). Снимок — сырые ~N статей на группу для гипотез. Не смешивается с утренним LLM-дайджестом. <code>/v1/news/list</code> у tipsters обычно 422.</p>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0">
         <label>N на группу <input id="sa-sec-limit" type="number" min="1" max="200" value="${lim}" style="width:72px"></label>
