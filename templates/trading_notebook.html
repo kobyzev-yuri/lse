@@ -1906,6 +1906,47 @@ function setSaFeedFilter(v){
   hydrateSaSectionsQuiet(true);
 }
 
+async function bookmarkSaNews(){
+  const urlEl = document.getElementById("sa-bookmark-url");
+  const tkEl = document.getElementById("sa-bookmark-ticker");
+  const url = urlEl ? String(urlEl.value || "").trim() : "";
+  const ticker = tkEl ? String(tkEl.value || "").trim() : "";
+  if(!url){
+    alert("Вставьте URL Seeking Alpha (/news/…) или news_id");
+    return;
+  }
+  if(SA_SECTION_BUSY) return;
+  SA_SECTION_BUSY = true;
+  if(digestVariant === "sa") renderContent();
+  try{
+    const body = { url, save_kb: true };
+    if(ticker) body.ticker = ticker;
+    const r = await fetch("/api/notebook/sa-sections/bookmark", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error((j && j.detail) || (`HTTP ${r.status}`));
+    const it = (j && j.item) || {};
+    const inserted = Number(j.kb_inserted || 0);
+    alert(
+      (inserted ? "В KB: " : "Уже было / не вставлено: ") +
+      (it.title || j.news_id || "") +
+      " → " + (it.ticker || "") +
+      (it.isPaywalled ? " (teaser)" : "")
+    );
+    if(urlEl) urlEl.value = "";
+    SA_FEED_TRIED = false;
+    await hydrateSaSectionsQuiet(true);
+  }catch(e){
+    alert("Bookmark: " + (e && e.message ? e.message : e));
+  }finally{
+    SA_SECTION_BUSY = false;
+    if(digestVariant === "sa") renderContent();
+  }
+}
+
 function renderSaSectionsPanel(){
   queueMicrotask(() => { hydrateSaSectionsQuiet(); });
   const pack = SA_SECTIONS;
@@ -1983,6 +2024,13 @@ function renderSaSectionsPanel(){
       ${checks}
       <h4 style="margin:12px 0 6px">Тикеры SA-fetch</h4>
       <div>${tickChecks}</div>
+      <h4 style="margin:14px 0 6px">Закладка новости по URL</h4>
+      <p class="note">Tipsters <code>/v1/news/data?news_id=</code> — title + teaser (+ quickInsights), не полный текст. Попадёт в KB и во вход утреннего дайджеста (тикер из тегов / MACRO, либо укажите вручную).</p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0">
+        <input id="sa-bookmark-url" type="text" placeholder="https://seekingalpha.com/news/4624428-…" style="flex:1;min-width:220px;max-width:520px" ${SA_SECTION_BUSY?"disabled":""}>
+        <input id="sa-bookmark-ticker" type="text" placeholder="тикер (опц.)" style="width:110px" ${SA_SECTION_BUSY?"disabled":""}>
+        <button type="button" class="ghost" onclick="bookmarkSaNews()" ${SA_SECTION_BUSY?"disabled":""}>Добавить в KB</button>
+      </div>
     </div>
     <div class="card" style="margin-top:12px">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">

@@ -85,6 +85,7 @@
 |----------|-------------|----------|-------------|
 | **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные news **по чекбоксам** + tipsters sections (articles/day-watch) → KB `SA:<section>` | да, **только SA** (`NOTEBOOK_NEWS_KB_ALL_SOURCES=0`) |
 | **SA tipsters sections** | тот же `--mode sa` + UI «Прогнать» | Подписки `local/notebook/sa_section_subscriptions.json`; лента UI из KB | да (символы `SA:*`) |
+| **SA bookmark URL** | UI «Добавить в KB» | `GET /v1/news/data?news_id=` по ссылке `/news/<id>` → teaser+insights в KB | да (тикер из тегов / MACRO) |
 | **Yahoo + Marketaux** | `5 */2` · `--mode tickers` | Тикерные новости (Motley Fool, Zacks, Reuters, Yahoo, …) | **нет** в дайджесте тетрадки (остаются в KB для LSE) |
 | **Investing.com News** (+ calendar) | `0 */2` · `--mode investing` | Лента + экономкалендарь | новости — да; календарь — другой `event_type` |
 | **RSS ЦБ / Alpha Vantage** | `*/15` · `--mode core-fast` | Макро/календарные потоки | если попали как NEWS/MACRO по тикерам |

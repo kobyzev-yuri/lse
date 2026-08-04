@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -130,6 +131,207 @@ def _strip_html(content: str) -> str:
             break
         text = text[:a] + " " + text[b + 1 :]
     return " ".join(text.split())
+
+
+_SA_NEWS_ID_RE = re.compile(r"(?:/news/|news_id=)(\d{5,12})", re.I)
+_SA_NEWS_ID_ONLY_RE = re.compile(r"^\d{5,12}$")
+
+
+def parse_sa_news_id(url_or_id: str) -> Optional[str]:
+    """Extract tipsters news_id from URL or bare id (e.g. …/news/4624428-slug)."""
+    s = str(url_or_id or "").strip()
+    if not s:
+        return None
+    if _SA_NEWS_ID_ONLY_RE.match(s):
+        return s
+    m = _SA_NEWS_ID_RE.search(s)
+    return m.group(1) if m else None
+
+
+def fetch_news_data(
+    news_id: str,
+    *,
+    api_key: Optional[str] = None,
+    timeout: float = 30.0,
+) -> Dict[str, Any]:
+    """GET /v1/news/data?news_id=… — single news card (often teaser HTML, not full article)."""
+    nid = parse_sa_news_id(news_id) or str(news_id or "").strip()
+    if not nid:
+        raise ValueError("news_id required")
+    return _request_json(
+        "/v1/news/data",
+        params={"news_id": nid},
+        api_key=api_key,
+        timeout=timeout,
+    )
+
+
+def _included_tag_slug_map(payload: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    """tag id → {slug, name, tagType} from JSON:API included."""
+    out: Dict[str, Dict[str, str]] = {}
+    for row in payload.get("included") or []:
+        if not isinstance(row, dict) or str(row.get("type") or "") != "tag":
+            continue
+        tid = str(row.get("id") or "").strip()
+        attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+        slug = str(attrs.get("slug") or attrs.get("name") or "").strip()
+        if not tid or not slug:
+            continue
+        out[tid] = {
+            "slug": slug.upper()[:16],
+            "name": str(attrs.get("name") or slug).strip(),
+            "tagType": str(attrs.get("tagType") or attrs.get("equityType") or "").strip().lower(),
+        }
+    return out
+
+
+def _tickers_from_news_payload(payload: Dict[str, Any]) -> Dict[str, List[str]]:
+    """primary / secondary / all ticker slugs from news/data payload."""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    tags = _included_tag_slug_map(payload)
+    rel = data.get("relationships") if isinstance(data.get("relationships"), dict) else {}
+
+    def _slugs(key: str) -> List[str]:
+        block = rel.get(key) if isinstance(rel.get(key), dict) else {}
+        rows = block.get("data")
+        items = rows if isinstance(rows, list) else ([rows] if isinstance(rows, dict) else [])
+        out: List[str] = []
+        seen: set[str] = set()
+        for row in items:
+            if not isinstance(row, dict):
+                continue
+            tid = str(row.get("id") or "").strip()
+            meta = tags.get(tid) or {}
+            slug = str(meta.get("slug") or row.get("slug") or row.get("name") or "").strip().upper()
+            if not slug or slug.isdigit() or slug in seen:
+                continue
+            seen.add(slug)
+            out.append(slug[:16])
+        return out
+
+    primary = _slugs("primaryTickers")
+    secondary = _slugs("secondaryTickers")
+    all_t: List[str] = []
+    seen2: set[str] = set()
+    for t in primary + secondary:
+        if t not in seen2:
+            seen2.add(t)
+            all_t.append(t)
+    return {"primary": primary, "secondary": secondary, "all": all_t}
+
+
+def resolve_bookmark_ticker(
+    payload: Dict[str, Any],
+    *,
+    ticker_override: Optional[str] = None,
+    prefer_universe: Optional[Sequence[str]] = None,
+) -> str:
+    """Pick KB symbol for a bookmarked news item (override → notebook hit → MACRO)."""
+    ov = str(ticker_override or "").strip().upper()
+    if ov:
+        return ov[:16]
+    info = _tickers_from_news_payload(payload)
+    all_t = list(info.get("all") or [])
+    universe = {str(x).strip().upper() for x in (prefer_universe or []) if str(x).strip()}
+    if universe:
+        for t in all_t:
+            if t in universe:
+                return t
+    # Index / broad primary → MACRO for morning digest inclusion.
+    primary = list(info.get("primary") or [])
+    indexish = {"SPX", "SPY", "QQQ", "DIA", "IWM", "COMP", "NDX", "RUT", "VIX"}
+    if primary and primary[0] in indexish:
+        return "MACRO"
+    if all_t:
+        return str(all_t[0])[:16]
+    return "MACRO"
+
+
+def flatten_news_data_item(
+    payload: Dict[str, Any],
+    *,
+    ticker: Optional[str] = None,
+    prefer_universe: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Normalize /v1/news/data payload → one SA item dict for KB/digest."""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+    nid = str(data.get("id") or "").strip()
+    title = str(attrs.get("title") or attrs.get("originalTitle") or "").strip()
+    content = _strip_html(str(attrs.get("content") or ""))
+    insights: List[str] = []
+    for qi in attrs.get("quickInsights") or []:
+        if not isinstance(qi, dict):
+            continue
+        q = str(qi.get("question") or "").strip()
+        a = str(qi.get("answer") or "").strip()
+        if q and a:
+            insights.append(f"{q} → {a}")
+        elif a:
+            insights.append(a)
+    summary_parts = [p for p in (content, " | ".join(insights)) if p]
+    summary = " ".join(summary_parts).strip()
+    tickers_info = _tickers_from_news_payload(payload)
+    sym = resolve_bookmark_ticker(
+        payload, ticker_override=ticker, prefer_universe=prefer_universe
+    )
+    link = f"https://seekingalpha.com/news/{nid}" if nid else ""
+    return {
+        "id": nid,
+        "type": str(data.get("type") or "news"),
+        "ticker": sym,
+        "publishOn": str(attrs.get("publishOn") or attrs.get("lastModified") or ""),
+        "title": title,
+        "summary_text": summary[:1800],
+        "isPaywalled": bool(attrs.get("isPaywalled") or attrs.get("isLockedPro") or attrs.get("isMpwLocked")),
+        "link": link,
+        "tickers": list(tickers_info.get("all") or []),
+        "src": KB_SOURCE,
+        "teaser_only": True,
+        "metered": bool(attrs.get("metered")),
+    }
+
+
+def ingest_news_bookmark(
+    url_or_id: str,
+    *,
+    ticker: Optional[str] = None,
+    prefer_universe: Optional[Sequence[str]] = None,
+    api_key: Optional[str] = None,
+    save_kb: bool = True,
+) -> Dict[str, Any]:
+    """Fetch tipsters /v1/news/data by URL/id and optionally insert into knowledge_base."""
+    nid = parse_sa_news_id(url_or_id)
+    if not nid:
+        raise ValueError("Нужен URL вида seekingalpha.com/news/<id>-… или числовой news_id")
+    raw = fetch_news_data(nid, api_key=api_key)
+    status = int(raw.get("status") or 0)
+    payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+    if status != 200 or not isinstance(payload.get("data"), dict):
+        msg = ""
+        if isinstance(payload, dict):
+            msg = str(payload.get("message") or payload.get("detail") or "")[:240]
+        raise ValueError(f"tipsters /v1/news/data status={status}" + (f": {msg}" if msg else ""))
+    if prefer_universe is None:
+        try:
+            from services.notebook_news_digest import build_news_universe
+
+            uni = build_news_universe(equity_only=True)
+            prefer_universe = list(uni.get("group3_union") or [])
+        except Exception:
+            prefer_universe = []
+    item = flatten_news_data_item(payload, ticker=ticker, prefer_universe=prefer_universe)
+    inserted = 0
+    if save_kb:
+        inserted = int(save_sa_items_to_kb([item]) or 0)
+    return {
+        "news_id": nid,
+        "status": status,
+        "item": item,
+        "kb_inserted": inserted,
+        "url": raw.get("url"),
+        "note": "content is tipsters teaser (+ quickInsights), not full SA article",
+    }
 
 
 def _ticker_slugs_from_relationships(item: Dict[str, Any]) -> List[str]:

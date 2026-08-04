@@ -4209,6 +4209,39 @@ async def api_notebook_sa_sections_ingest(request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка sa-sections ingest: {e!s}")
 
 
+@app.post("/api/notebook/sa-sections/bookmark", response_class=JSONResponse)
+async def api_notebook_sa_sections_bookmark(request: Request):
+    """Fetch tipsters /v1/news/data by SA news URL/id → knowledge_base (teaser + insights)."""
+
+    body: Dict[str, Any] = {}
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict):
+            body = raw
+    except Exception:
+        body = {}
+
+    url_or_id = str(body.get("url") or body.get("news_id") or body.get("id") or "").strip()
+    if not url_or_id:
+        raise HTTPException(status_code=400, detail="Нужен url или news_id")
+
+    ticker = str(body.get("ticker") or body.get("symbol") or "").strip() or None
+    save_kb = bool(body.get("save_kb", True))
+
+    def _run() -> Dict[str, Any]:
+        from services.seeking_alpha_finance import ingest_news_bookmark
+
+        return ingest_news_bookmark(url_or_id, ticker=ticker, save_kb=save_kb)
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("POST /api/notebook/sa-sections/bookmark: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка sa-sections bookmark: {e!s}")
+
+
 @app.get("/api/notebook/sa-sections/feed", response_class=JSONResponse)
 async def api_notebook_sa_sections_feed(
     hours: int = 72,
