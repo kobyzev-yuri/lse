@@ -83,9 +83,9 @@
 
 | Источник | Cron / mode | Что даёт | В дайджесте |
 |----------|-------------|----------|-------------|
-| **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные новости SA по universe тетрадки **+ extras** (`SPY,QQQ,NVDA,INTC,AAPL,PYPL,KEYS,VZ`; `NOTEBOOK_NEWS_SA_EXTRA`) | да (`source=Seeking Alpha Finance`) |
-| **SA tipsters sections** (articles / day-watch) | вручную UI/CLI | Подписки на `/v1/articles/list` + `/v1/markets/day-watch`; снимок `local/notebook/sa_sections/` (~40/группа) | **нет** в утреннем LLM; отдельная подвкладка **SA разделы** |
-| **Yahoo + Marketaux** | `5 */2` · `--mode tickers` | Тикерные новости (Motley Fool, Zacks, Reuters, Yahoo, …) | да (разные `source`) |
+| **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные news **по чекбоксам** + tipsters sections (articles/day-watch) → KB `SA:<section>` | да, **только SA** (`NOTEBOOK_NEWS_KB_ALL_SOURCES=0`) |
+| **SA tipsters sections** | тот же `--mode sa` + UI «Прогнать» | Подписки `local/notebook/sa_section_subscriptions.json`; лента UI из KB | да (символы `SA:*`) |
+| **Yahoo + Marketaux** | `5 */2` · `--mode tickers` | Тикерные новости (Motley Fool, Zacks, Reuters, Yahoo, …) | **нет** в дайджесте тетрадки (остаются в KB для LSE) |
 | **Investing.com News** (+ calendar) | `0 */2` · `--mode investing` | Лента + экономкалендарь | новости — да; календарь — другой `event_type` |
 | **RSS ЦБ / Alpha Vantage** | `*/15` · `--mode core-fast` | Макро/календарные потоки | если попали как NEWS/MACRO по тикерам |
 | **NewsAPI** | cron **выключен** (`# newsapi`) | макро/equity при включении | сейчас почти не кормит |
@@ -94,7 +94,7 @@
 
 **Дайджест:** будни `30 12` UTC ≈ **08:30 ET** · `run_notebook_news_digest.py --from-kb-only` · Telegram `/digest` из кэша.
 
-Конфиг: `NOTEBOOK_NEWS_KB_ALL_SOURCES=1` (все источники), `NOTEBOOK_NEWS_INCLUDE_MACRO=1`, откат SA-only → `NOTEBOOK_NEWS_KB_ALL_SOURCES=0`.
+Конфиг тетрадки: `NOTEBOOK_NEWS_KB_ALL_SOURCES=0` (только Seeking Alpha Finance), `NOTEBOOK_NEWS_INCLUDE_MACRO=1`, тикеры+`SA:*` секции из подписок. Остальной LSE читает multi-source KB как раньше.
 
 ---
 

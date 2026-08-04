@@ -4114,7 +4114,7 @@ async def api_notebook_news_sources(days: int = 14):
 
 @app.get("/api/notebook/sa-sections", response_class=JSONResponse)
 async def api_notebook_sa_sections():
-    """SA tipsters section catalog + subscriptions + latest snapshot meta."""
+    """SA tipsters section catalog + ticker mute + subscriptions."""
 
     def _run() -> Dict[str, Any]:
         from services.sa_section_subscriptions import catalog_with_subscriptions
@@ -4130,7 +4130,7 @@ async def api_notebook_sa_sections():
 
 @app.put("/api/notebook/sa-sections/subscriptions", response_class=JSONResponse)
 async def api_notebook_sa_sections_subscriptions(request: Request):
-    """Update section subscriptions and optional per_group_limit."""
+    """Update section + ticker SA subscriptions and optional per_group_limit."""
 
     body = await request.json()
     if not isinstance(body, dict):
@@ -4140,21 +4140,33 @@ async def api_notebook_sa_sections_subscriptions(request: Request):
         from services.sa_section_subscriptions import (
             catalog_with_subscriptions,
             set_subscriptions_bulk,
+            subscribe_all_available,
         )
 
-        mapping: Dict[str, bool] = {}
-        if isinstance(body.get("subscriptions"), dict):
-            mapping = {str(k): bool(v) for k, v in body["subscriptions"].items()}
+        if body.get("subscribe_all_available"):
+            subscribe_all_available()
+
+        sections: Optional[Dict[str, bool]] = None
+        if isinstance(body.get("sections"), dict):
+            sections = {str(k): bool(v) for k, v in body["sections"].items()}
+        elif isinstance(body.get("subscriptions"), dict):
+            sections = {str(k): bool(v) for k, v in body["subscriptions"].items()}
         elif isinstance(body.get("ids"), list):
             enabled = bool(body.get("enabled", True))
-            mapping = {str(x): enabled for x in body["ids"] if str(x).strip()}
-        else:
-            # bare { "articles.market-outlook": true, ... }
-            skip = {"per_group_limit", "enabled", "ids", "subscriptions"}
-            mapping = {str(k): bool(v) for k, v in body.items() if str(k) not in skip}
+            sections = {str(x): enabled for x in body["ids"] if str(x).strip()}
 
+        tickers = None
+        if isinstance(body.get("tickers"), dict):
+            tickers = {str(k): bool(v) for k, v in body["tickers"].items()}
+
+        tdo = body.get("tickers_default_on")
         lim = body.get("per_group_limit")
-        set_subscriptions_bulk(mapping, per_group_limit=int(lim) if lim is not None else None)
+        set_subscriptions_bulk(
+            sections=sections,
+            tickers=tickers,
+            tickers_default_on=bool(tdo) if tdo is not None else None,
+            per_group_limit=int(lim) if lim is not None else None,
+        )
         return catalog_with_subscriptions()
 
     try:
@@ -4164,9 +4176,9 @@ async def api_notebook_sa_sections_subscriptions(request: Request):
         raise HTTPException(status_code=500, detail=f"Ошибка sa-sections subscriptions: {e!s}")
 
 
-@app.post("/api/notebook/sa-sections/snapshot", response_class=JSONResponse)
-async def api_notebook_sa_sections_snapshot(request: Request):
-    """Fetch subscribed tipsters sections into a raw snapshot (no LLM)."""
+@app.post("/api/notebook/sa-sections/ingest", response_class=JSONResponse)
+async def api_notebook_sa_sections_ingest(request: Request):
+    """Fetch subscribed SA tickers+sections into knowledge_base."""
 
     body: Dict[str, Any] = {}
     try:
@@ -4177,19 +4189,76 @@ async def api_notebook_sa_sections_snapshot(request: Request):
         body = {}
 
     def _run() -> Dict[str, Any]:
-        from services.sa_section_subscriptions import run_section_snapshot
+        from services.sa_section_subscriptions import run_sa_ingest, subscribe_all_available
+
+        if body.get("subscribe_all_available"):
+            subscribe_all_available()
+        return run_sa_ingest(
+            include_tickers=bool(body.get("include_tickers", True)),
+            include_sections=bool(body.get("include_sections", True)),
+            all_sections=bool(body.get("all_available") or body.get("all_sections")),
+            limit=int(body["limit"]) if body.get("limit") is not None else None,
+        )
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("POST /api/notebook/sa-sections/ingest: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка sa-sections ingest: {e!s}")
+
+
+@app.get("/api/notebook/sa-sections/feed", response_class=JSONResponse)
+async def api_notebook_sa_sections_feed(
+    hours: int = 72,
+    limit: int = 120,
+    section_id: str = "",
+    symbol: str = "",
+):
+    """KB feed of Seeking Alpha Finance rows (sections + tickers)."""
+
+    def _run() -> Dict[str, Any]:
+        from services.sa_section_subscriptions import load_sa_feed
+
+        return load_sa_feed(
+            hours=max(1, min(int(hours or 72), 720)),
+            limit=max(1, min(int(limit or 120), 500)),
+            section_id=(section_id or "").strip() or None,
+            symbol=(symbol or "").strip() or None,
+        )
+
+    try:
+        return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
+    except Exception as e:
+        logger.exception("GET /api/notebook/sa-sections/feed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Ошибка sa-sections feed: {e!s}")
+
+
+@app.post("/api/notebook/sa-sections/snapshot", response_class=JSONResponse)
+async def api_notebook_sa_sections_snapshot(request: Request):
+    """Back-compat: section ingest → KB (+ optional archive). Prefer POST .../ingest."""
+
+    body: Dict[str, Any] = {}
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict):
+            body = raw
+    except Exception:
+        body = {}
+
+    def _run() -> Dict[str, Any]:
+        from services.sa_section_subscriptions import ingest_sections_to_kb
 
         lim = body.get("limit")
         ids = body.get("section_ids") if isinstance(body.get("section_ids"), list) else None
         all_known = bool(body.get("all_available") or body.get("all_known"))
-        result = run_section_snapshot(
+        return ingest_sections_to_kb(
             section_ids=[str(x) for x in ids] if ids is not None else None,
             all_available=all_known,
             limit=int(lim) if lim is not None else None,
-            write=True,
+            write_archive=True,
         )
-        # Trim items in HTTP response if huge? Keep full — UI needs titles.
-        return result
 
     try:
         return JSONResponse(_to_jsonable(await asyncio.to_thread(_run)))
@@ -4202,7 +4271,7 @@ async def api_notebook_sa_sections_snapshot(request: Request):
 
 @app.get("/api/notebook/sa-sections/snapshots", response_class=JSONResponse)
 async def api_notebook_sa_sections_snapshots(limit: int = 40):
-    """List SA section snapshots (latest + archive)."""
+    """List SA section snapshots (latest + archive) — debug archive only."""
 
     def _run() -> Dict[str, Any]:
         from services.sa_section_subscriptions import list_section_snapshots, snapshot_retain_days
@@ -4224,7 +4293,7 @@ async def api_notebook_sa_sections_snapshots(limit: int = 40):
 
 @app.get("/api/notebook/sa-sections/snapshots/{snapshot_id}", response_class=JSONResponse)
 async def api_notebook_sa_sections_snapshot_get(snapshot_id: str):
-    """One SA section snapshot payload."""
+    """One SA section snapshot payload (debug archive)."""
 
     def _run() -> Dict[str, Any]:
         from services.sa_section_subscriptions import load_section_snapshot

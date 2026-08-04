@@ -142,51 +142,24 @@ def fetch_all_news_sources(mode: str = "all"):
 
     if run_sa:
         try:
-            logger.info("\n📰 Источник SA: Seeking Alpha Finance → knowledge_base")
-            from services.notebook_news_digest import build_sa_fetch_tickers
-            from services.seeking_alpha_finance import fetch_and_save_sa_news, rapidapi_key
+            logger.info("\n📰 Источник SA: Seeking Alpha Finance → knowledge_base (tickers+sections)")
+            from services.seeking_alpha_finance import rapidapi_key
+            from services.sa_section_subscriptions import run_sa_ingest
 
             if not rapidapi_key():
                 sources_status["SeekingAlphaFinance"] = "⚠️ нет SEEKING_ALPHA_RAPIDAPI_KEY / RAPIDAPI_KEY"
             else:
-                uni = build_sa_fetch_tickers(equity_only=True)
-                tickers = list(uni.get("sa_fetch_tickers") or uni.get("group3_union") or [])
-                extra_n = len(uni.get("sa_extra") or [])
-                logger.info(
-                    "SA universe: %s tickers (notebook+%s extras)",
-                    len(tickers),
-                    extra_n,
-                )
-                from services.notebook_news_digest import (
-                    news_quota_config,
-                    per_ticker_limits_map,
-                )
-
-                quotas = news_quota_config()
-                per = int(quotas.get("fallback") or 40)
-                try:
-                    sleep = float((get_config_value("NOTEBOOK_NEWS_SLEEP_SEC", "0.35") or "0.35").strip())
-                except (ValueError, TypeError):
-                    sleep = 0.35
-                raw_mx = (get_config_value("NOTEBOOK_NEWS_MAX_TICKERS", "") or "").strip()
-                max_t = int(raw_mx) if raw_mx.isdigit() else None
-                sa_limits = per_ticker_limits_map(
-                    membership=uni.get("membership") or {},
-                    sa_extra=uni.get("sa_extra") or [],
-                    quotas=quotas,
-                )
-                bundle = fetch_and_save_sa_news(
-                    tickers,
-                    per_ticker=per,
-                    per_ticker_limits=sa_limits,
-                    sleep_sec=sleep,
-                    max_tickers=max_t,
-                )
-                sa_news_saved = int(bundle.get("kb_inserted") or 0)
-                err_n = len(bundle.get("errors") or {})
+                result = run_sa_ingest(include_tickers=True, include_sections=True)
+                tp = result.get("tickers") if isinstance(result.get("tickers"), dict) else {}
+                sp = result.get("sections") if isinstance(result.get("sections"), dict) else {}
+                sa_news_saved = int(result.get("kb_inserted_total") or 0)
+                t_n = len(tp.get("tickers") or [])
+                s_n = len(sp.get("requested_sections") or sp.get("groups") or {})
+                err_n = len(tp.get("errors") or {})
                 sources_status["SeekingAlphaFinance"] = (
-                    f"✅ KB +{sa_news_saved}, api_items={len(bundle.get('items') or [])}, "
-                    f"tickers={len(tickers)} (+{extra_n} extra), errors={err_n}"
+                    f"✅ KB +{sa_news_saved}, tickers={t_n}, sections={s_n}, "
+                    f"ticker_api={tp.get('api_items', 0)}, section_items={sp.get('item_count', 0)}, "
+                    f"errors={err_n}"
                 )
         except Exception as e:
             logger.error("❌ Ошибка Seeking Alpha Finance: %s", e)

@@ -467,6 +467,12 @@ _MACRO_SYMS = frozenset({"MACRO", "US_MACRO"})
 def news_quota_config() -> Dict[str, int]:
     """Resolved per-group / MACRO / LLM caps for ingest + fair-sample."""
     fallback = max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER", 40))
+    try:
+        from services.sa_section_subscriptions import default_per_group_limit
+
+        section_default = default_per_group_limit()
+    except Exception:
+        section_default = 40
     return {
         "fallback": fallback,
         "g1": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_G1", fallback)),
@@ -475,6 +481,7 @@ def news_quota_config() -> Dict[str, int]:
         "new": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_NEW", fallback)),
         "extra": max(0, _cfg_int("NOTEBOOK_NEWS_PER_TICKER_EXTRA", fallback)),
         "macro_limit": max(0, _cfg_int("NOTEBOOK_NEWS_MACRO_LIMIT", 80)),
+        "section_limit": max(0, _cfg_int("NOTEBOOK_SA_SECTION_LIMIT", section_default)),
         "llm_max_items": max(1, _cfg_int("NOTEBOOK_NEWS_LLM_MAX_ITEMS", 600)),
     }
 
@@ -493,6 +500,8 @@ def per_ticker_limit_for(
     u = str(sym or "").strip().upper()
     if u in _MACRO_SYMS:
         return int(q.get("macro_limit") or 0)
+    if u.startswith("SA:"):
+        return int(q.get("section_limit") or q.get("fallback") or 40)
     tags = list((membership or {}).get(u) or [])
     tag_to_key = {"g1": "g1", "g2": "g2", "g3": "g3", "new": "new"}
     caps = [int(q[tag_to_key[t]]) for t in tags if t in tag_to_key and tag_to_key[t] in q]
@@ -1052,9 +1061,9 @@ def run_notebook_news_digest(
         if lookback_hours is not None
         else (get_config_value("NOTEBOOK_NEWS_KB_LOOKBACK_HOURS", "72") or 72)
     )
-    # Default: all NEWS sources in KB (Yahoo/Marketaux/Investing/SA/…).
-    # NOTEBOOK_NEWS_KB_ALL_SOURCES=0 → only NOTEBOOK_NEWS_KB_SOURCE (default SA).
-    if _truthy_cfg("NOTEBOOK_NEWS_KB_ALL_SOURCES", "1"):
+    # Notebook digest: SA-only by default (Yahoo/Investing stay in KB for other LSE).
+    # NOTEBOOK_NEWS_KB_ALL_SOURCES=1 → all NEWS sources.
+    if _truthy_cfg("NOTEBOOK_NEWS_KB_ALL_SOURCES", "0"):
         kb_src: Optional[str] = None
     else:
         kb_src = (get_config_value("NOTEBOOK_NEWS_KB_SOURCE", KB_SOURCE) or KB_SOURCE).strip() or KB_SOURCE
@@ -1066,6 +1075,15 @@ def run_notebook_news_digest(
         for m in ("MACRO", "US_MACRO"):
             if m not in kb_tickers:
                 kb_tickers.append(m)
+    # Subscribed tipsters sections live as SA:<section_id> in KB.
+    try:
+        from services.sa_section_subscriptions import enabled_section_kb_symbols
+
+        for sa_sym in enabled_section_kb_symbols():
+            if sa_sym and sa_sym not in kb_tickers:
+                kb_tickers.append(sa_sym)
+    except Exception as e:
+        logger.debug("sa section symbols for digest skipped: %s", e)
 
     fetch_meta: Dict[str, Any] = {"skipped": not fetch_sa}
     kb_inserted = 0

@@ -397,8 +397,12 @@ def items_to_kb_articles(items: Sequence[Dict[str, Any]], *, exchange: str = "NY
         link = str(it.get("link") or "").strip()
         summary = str(it.get("summary_text") or "").strip()
         sa_id = str(it.get("id") or "").strip()
+        section_id = str(it.get("section_id") or "").strip()
         # Stable unique external_id (sha256 hex ≥24 chars for kb_resolved_external_id).
         ext_raw = kb_content_sha256(f"sa_finance|{sym}|{sa_id}|{link}|{title}")
+        raw_payload: Dict[str, Any] = {"provider": "seeking_alpha_finance", "item": it}
+        if section_id:
+            raw_payload["sa_section"] = section_id
         out.append(
             Article(
                 ts=_parse_publish_on(str(it.get("publishOn") or "")),
@@ -409,7 +413,7 @@ def items_to_kb_articles(items: Sequence[Dict[str, Any]], *, exchange: str = "NY
                 summary=summary[:4000],
                 url=link[:2000],
                 external_id_raw=ext_raw,
-                raw_payload={"provider": "seeking_alpha_finance", "item": it},
+                raw_payload=raw_payload,
             )
         )
     return out

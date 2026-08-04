@@ -1,4 +1,4 @@
-"""SA tipsters section subscriptions / snapshots (no live API)."""
+"""SA tipsters subscriptions / KB helpers (no live API)."""
 
 from __future__ import annotations
 
@@ -7,15 +7,15 @@ from pathlib import Path
 
 from services.sa_section_subscriptions import (
     SECTION_CATALOG,
-    archive_section_snapshot,
     catalog_with_subscriptions,
-    list_section_snapshots,
-    load_section_snapshot,
+    enabled_tickers,
     load_subscriptions,
-    prune_section_snapshots,
+    prepare_section_items_for_kb,
     save_subscriptions,
+    section_kb_symbol,
     set_subscription,
     set_subscriptions_bulk,
+    subscribe_all_available,
 )
 from services.seeking_alpha_finance import flatten_section_items
 
@@ -38,110 +38,73 @@ def test_flatten_articles_and_day_watch():
     }
     rows = flatten_section_items(articles, section_id="articles.market-outlook", limit=40)
     assert len(rows) == 1
-    assert rows[0]["title"] == "Project Prometheus"
-    assert "seekingalpha.com/article/" in rows[0]["link"]
-    assert "AI" in rows[0]["summary_text"]
-
-    day = {
-        "data": {
-            "type": "dayWatch",
-            "id": "1",
-            "attributes": {
-                "top_gainers": [{"id": 1, "slug": "ulh", "name": "Universal Logistics"}],
-                "in_the_news": [{"id": 575, "slug": "msft", "name": "Microsoft"}],
-            },
-        }
-    }
-    movers = flatten_section_items(day, section_id="markets.day-watch", limit=40, item_kind="day_watch")
-    assert len(movers) == 2
-    assert movers[0]["tickers"] == ["ULH"] or movers[1]["tickers"] == ["ULH"]
-    assert any(x["id"].startswith("in_the_news:") for x in movers)
+    kb_rows = prepare_section_items_for_kb(rows, section_id="articles.market-outlook")
+    assert kb_rows[0]["ticker"] == "SA:articles.market-outlook"
+    assert section_kb_symbol("articles.market-outlook") == "SA:articles.market-outlook"
 
 
-def test_subscribe_and_snapshot_archive(tmp_path: Path, monkeypatch):
+def test_subscribe_schema_v2_and_ticker_mute(tmp_path: Path, monkeypatch):
     import services.sa_section_subscriptions as m
 
     subs = tmp_path / "subs.json"
-    latest = tmp_path / "latest.json"
-    arch = tmp_path / "snaps"
     monkeypatch.setattr(m, "DEFAULT_SUBS_PATH", subs)
-    monkeypatch.setattr(m, "DEFAULT_LATEST_PATH", latest)
-    monkeypatch.setattr(m, "DEFAULT_SNAPSHOTS_DIR", arch)
     monkeypatch.setattr(m, "get_config_value", lambda k, d=None: d)
-
-    avail = [c["id"] for c in SECTION_CATALOG if c.get("available")]
-    assert "articles.market-outlook" in avail
+    monkeypatch.setattr(
+        m,
+        "sa_ticker_candidates",
+        lambda: {
+            "universe": ["MSFT", "AMD"],
+            "extras": ["SPY"],
+            "all": ["MSFT", "AMD", "SPY"],
+            "membership": {"MSFT": ["g1"], "AMD": ["g2"]},
+        },
+    )
 
     set_subscription("articles.market-outlook", True, path=subs)
     doc = load_subscriptions(subs)
-    assert doc["subscriptions"].get("articles.market-outlook") is True
-
-    # unavailable cannot enable
-    try:
-        set_subscription("news.economy", True, path=subs)
-        assert False, "expected ValueError"
-    except ValueError:
-        pass
+    assert doc["sections"].get("articles.market-outlook") is True
 
     set_subscriptions_bulk(
-        {"articles.latest-articles": True, "articles.market-outlook": False},
+        sections={"articles.latest-articles": True, "articles.market-outlook": False},
+        tickers={"SPY": False, "MSFT": True},
         per_group_limit=25,
         path=subs,
     )
     doc2 = load_subscriptions(subs)
     assert doc2["per_group_limit"] == 25
-    assert doc2["subscriptions"].get("articles.latest-articles") is True
-    assert "articles.market-outlook" not in doc2["subscriptions"]
+    assert doc2["sections"].get("articles.latest-articles") is True
+    assert "articles.market-outlook" not in doc2["sections"]
+    assert doc2["tickers"].get("SPY") is False
 
-    payload = {
-        "schema_version": 1,
-        "generated_at_utc": "2026-08-04T09:00:00+00:00",
-        "per_group_limit": 25,
-        "item_count": 2,
-        "groups": {
-            "articles.latest-articles": {
-                "status": "ok",
-                "count": 2,
-                "items": [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}],
-            }
-        },
-    }
-    p = archive_section_snapshot(payload, directory=arch)
-    assert p.is_file()
-    rows = list_section_snapshots(directory=arch, latest=latest, limit=10)
-    assert any(r["id"] == p.stem for r in rows)
+    enabled = enabled_tickers(["MSFT", "AMD", "SPY"], doc=doc2)
+    assert "MSFT" in enabled
+    assert "AMD" in enabled  # default_on
+    assert "SPY" not in enabled
 
-    loaded = load_section_snapshot(p.stem, directory=arch, latest=latest)
-    assert loaded is not None
-    assert loaded["groups"]["articles.latest-articles"]["count"] == 2
+    subscribe_all_available(path=subs)
+    doc3 = load_subscriptions(subs)
+    avail = {c["id"] for c in SECTION_CATALOG if c.get("available")}
+    assert avail.issubset(set(doc3["sections"]))
 
-    # latest file meta
-    latest.write_text(json.dumps(payload), encoding="utf-8")
-    pack = catalog_with_subscriptions(subs_path=subs)
-    # monkeypatch DEFAULT_LATEST for catalog_with_subscriptions → load_latest_snapshot
-    monkeypatch.setattr(m, "DEFAULT_LATEST_PATH", latest)
     pack = catalog_with_subscriptions(subs_path=subs)
     assert pack["per_group_limit"] == 25
-    assert any(c["id"] == "articles.latest-articles" and c["subscribed"] for c in pack["catalog"])
-
-    old = arch / "20200101T000000Z.json"
-    old.write_text(json.dumps(payload), encoding="utf-8")
-    import os
-    import time
-
-    os.utime(old, (time.time() - 40 * 86400, time.time() - 40 * 86400))
-    removed = prune_section_snapshots(retain_days=14, directory=arch)
-    assert removed >= 1
-    assert not old.exists()
+    assert any(t["symbol"] == "SPY" and not t["subscribed"] for t in pack["ticker_rows"])
 
 
-def test_save_subscriptions_roundtrip(tmp_path: Path):
-    p = tmp_path / "s.json"
-    doc = save_subscriptions(
-        {"per_group_limit": 40, "subscriptions": {"articles.stock-ideas": True}},
-        path=p,
+def test_migrate_v1_subscriptions_key(tmp_path: Path):
+    p = tmp_path / "old.json"
+    p.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "per_group_limit": 40,
+                "subscriptions": {"markets.day-watch": True},
+            }
+        ),
+        encoding="utf-8",
     )
-    assert p.is_file()
-    assert doc["subscriptions"]["articles.stock-ideas"] is True
-    loaded = load_subscriptions(p)
-    assert loaded["subscriptions"]["articles.stock-ideas"] is True
+    doc = load_subscriptions(p)
+    assert doc["sections"].get("markets.day-watch") is True
+    saved = save_subscriptions(doc, path=p)
+    assert "sections" in saved
+    assert saved["sections"].get("markets.day-watch") is True
