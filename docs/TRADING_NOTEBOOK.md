@@ -8,18 +8,18 @@
 
 ---
 
-## Статус (2026-07-26)
+## Статус (2026-08-07)
 
 | Область | Статус | Комментарий |
 |---------|--------|-------------|
 | UI каркас `/notebook` | **готово** | вкладки, группы, образцы |
 | Close → вердикт | **готово** | quotes API |
-| SA ingest → KB | **готово** | cron `--mode sa` каждые 2 ч |
-| Дайджест LLM утро | **готово** | будни 12:30 UTC ≈ 08:30 ET, `--from-kb-only` |
+| Sheet → KB | **готово** | cron `--mode sa_sheet` каждые 2 ч; статьи копируются в `knowledge_base` |
+| Дайджест LLM утро | **готово** | раз в день 12:30 UTC ≈ 08:30 ET; корпус = Sheet за **3 дня** (`LOOKBACK=72`), `--from-kb-only` |
 | Telegram `/digest` | **готово** | кэш, без повторного LLM |
-| Мульти-источник + дедуп | **готово** | все NEWS из KB (Yahoo/Marketaux/Investing/SA/…) + MACRO; дедуп link/title до LLM |
-| Прокси макро (SPY/QQQ/VIX) в ingest | **не делали** | опционально, если мало макро в KB |
-| Email SA 35–40/день | **ждём п.7** | не подключено |
+| NEWS тетрадки | **Sheet only** | `NOTEBOOK_NEWS_KB_PROVIDER=sa_google_sheet` (дайджест, лента, sentiment/draft); календарь/earnings отдельно |
+| Tipsters RapidAPI / bookmark | **в KB для LSE/UI** | в утренний дайджест тетрадки не входят |
+| Email SA 35–40/день | **заменён Sheet** | внешний scraper → Google Sheet |
 | Списки/уровни Насти | **частично** | G1=portfolio, G2=GAME_5M уже в JSON; уровни/G3/Новые — ждём п.1–5 |
 | Фундамент / дома / env-ручное | **фундамент: паспорт + ожидания** | [`NOTEBOOK_FUNDAMENT_REGLEMENT.md`](NOTEBOOK_FUNDAMENT_REGLEMENT.md); схема Насти [`nastya/FUNDAMENT_SCHEMA_NASTYA.md`](../nastya/FUNDAMENT_SCHEMA_NASTYA.md); дома/env п.12–13 открыты |
 | UI гейтов вердикта (уровни + Env ФРС/PT + макро) | **сделано** | `PATCH …/levels`, `…/env`, `…/signals` → `local/notebook/ticker_overrides.json` |
@@ -53,12 +53,12 @@
 
 | # | Вопрос | Наш статус |
 |---|--------|------------|
-| 7 | Достаточен поток из KB (SA API + Yahoo/Marketaux/Investing и др.), или обязателен **email 35–40 писем/день**? | **частично закрыт** — мульти-источник KB + дедуп уже в проде; email только если скажет «нужен» |
-| 8 | Хватает утреннего **08:30 ET**, или ещё вечерний / чаще Telegram? | **открыт** — утро уже есть |
+| 7 | Достаточен поток из Google Sheet (вместо email 35–40/день)? | **закрыт** — Sheet → KB каждые 2 ч; дайджест только из Sheet |
+| 8 | Хватает утреннего **08:30 ET**, или ещё вечерний / чаще Telegram? | **открыт** — утро уже есть (раз в день) |
 | 9 | Кому слать: только UI, или Telegram (кому)? `/digest` уже читает кэш. | **открыт** |
 | 10 | «Новые тикеры» в дайджесте → сразу G3 с пустыми уровнями или только «к рассмотрению»? | **открыт** — в промпте сейчас «к рассмотрению» |
 
-Проверка API: новость [Intel CapEx / Foundry 4618091](https://seekingalpha.com/news/4618091-intels-capex-increase-positive-for-foundry-business-chip-equipment-makers) приходит по `ticker_slug=intc`. Отдельной геополитической ленты у RapidAPI tipsters нет (`/v1/news/list` → **422**). Рабочие **разделы** tipsters (не тикерный news): `/v1/articles/list?category=latest-articles|market-outlook|stock-ideas|editors-picks|investing-strategy` и `/v1/markets/day-watch`. Подписка + сырые снимки ~40/группа — вкладка **Дайджесты → SA разделы** (не LLM). Макро/гео в утреннем дайджесте — из тикерных лент + MACRO в KB + extras SPY/QQQ.
+Tipsters RapidAPI (разделы/тикеры/bookmark) остаются опциональным обогащением KB/UI; утренний LLM тетрадки их не читает.
 
 ### Фундамент / инвестдома / окружение
 
@@ -77,28 +77,42 @@
 
 ---
 
-## Источники новостей (LSE → `knowledge_base` → дайджест)
+## Источники новостей (тетрадка)
 
-Все ленты пишут в одну таблицу `knowledge_base`. Утренний дайджест читает **NEWS** по тикерам тетрадки (+ опционально `MACRO`), **все `source`**, затем дедуп (link / ticker+title) и LLM.
+### Канон тетрадки
 
-| Источник | Cron / mode | Что даёт | В дайджесте |
-|----------|-------------|----------|-------------|
-| **SA Google Sheet** (scraper) | `40 */2` · `--mode sa_sheet` (+ в `--mode sa`/`all`) | Лист A–E (time/URL/title/text/symbols) → KB `source=Seeking Alpha Finance`, `raw_payload.provider=sa_google_sheet` | да — **единственный** корпус утреннего дайджеста (`NOTEBOOK_NEWS_KB_PROVIDER=sa_google_sheet`) |
-| **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные news **по чекбоксам** + tipsters sections (articles/day-watch) → KB `SA:<section>` | нет в утреннем LLM (остаются в KB/UI) |
-| **SA tipsters sections** | тот же `--mode sa` + UI «Прогнать» | Подписки `local/notebook/sa_section_subscriptions.json`; лента UI из KB | нет в утреннем LLM |
-| **SA bookmark URL** | UI «Добавить в KB» | `GET /v1/news/data?news_id=` по ссылке `/news/<id>` → teaser+insights в KB | нет в утреннем LLM (provider ≠ sheet) |
-| **Yahoo + Marketaux** | `5 */2` · `--mode tickers` | Тикерные новости (Motley Fool, Zacks, Reuters, Yahoo, …) | **нет** в дайджесте тетрадки (остаются в KB для LSE) |
-| **Investing.com News** (+ calendar) | `0 */2` · `--mode investing` | Лента + экономкалендарь | новости — да; календарь — другой `event_type` |
-| **RSS ЦБ / Alpha Vantage** | `*/15` · `--mode core-fast` | Макро/календарные потоки | если попали как NEWS/MACRO по тикерам |
-| **NewsAPI** | cron **выключен** (`# newsapi`) | макро/equity при включении | сейчас почти не кормит |
-| **Email SA 35–40/день** | заменён Sheet | внешний scraper пишет в Google Sheet | см. **SA Google Sheet** |
-| Отдельная SA «геополитика» лента | нет | RapidAPI `/v1/news/list` → 422 | нет; макро из тикеров + `MACRO`; гипотезы — **SA разделы** (articles) |
+```text
+Google Sheet (scraper)
+    → каждые 2 ч: --mode sa_sheet
+    → копии статей в knowledge_base
+         (source=Seeking Alpha Finance, provider=sa_google_sheet)
+    → раз в день ~08:30 ET: дайджест LLM за последние 3 дня
+```
 
-**Дайджест:** будни `30 12` UTC ≈ **08:30 ET** · `run_notebook_news_digest.py --from-kb-only` · Telegram `/digest` из кэша.
+| Шаг | Когда | Что |
+|-----|--------|-----|
+| Ingest Sheet → KB | `40 */2` · `fetch_news_cron.py --mode sa_sheet` | Полный лист A–E; новые строки **копируются** в KB (ON CONFLICT / dedup по `external_id`) |
+| Дайджест | `30 12 * * *` UTC ≈ **08:30 ET** · `run_notebook_news_digest.py --from-kb-only` | Только Sheet-строки за **72 ч (3 дня)** → дедуп → LLM → кэш `/digest` |
 
-Конфиг тетрадки: `NOTEBOOK_NEWS_KB_PROVIDER=sa_google_sheet` — **все NEWS тетрадки** (дайджест, лента SA, sentiment/draft из KB) только из таблицы. Календарь и earnings — без этого фильтра. Tipsters/bookmark пишутся в KB, но notebook их не показывает.
+Таблица: https://docs.google.com/spreadsheets/d/15Vt-P0kffD9ERl17XxgEJgcEebJTu20UXALxzERlrzA/edit  
+Колонки: A time, B URL, C title, D text, E symbols (`-` → `MACRO`). Тексты короткие (~1–3k символов); отдельный summary пока не делаем.
 
-Лимиты утреннего LLM (дефолты, env): вход `NOTEBOOK_NEWS_LLM_MAX_ITEMS=1000` (~+40 на каждый новый тикер сверх ~25); выход корзин `NOTEBOOK_DIGEST_MAX_SIGNALS/RISKS=12`, `MACRO=6`, `NEWTICKERS=5`, text/tac 160/100.
+Конфиг: `NOTEBOOK_SA_SHEET_*`, `NOTEBOOK_NEWS_KB_PROVIDER=sa_google_sheet`, `NOTEBOOK_NEWS_KB_LOOKBACK_HOURS=72`.  
+**Все NEWS тетрадки** (дайджест, лента, sentiment/draft из KB) — только Sheet. **Календарь и earnings** — без этого фильтра.
+
+Лимиты утреннего LLM (дефолты): вход `NOTEBOOK_NEWS_LLM_MAX_ITEMS=1000`; корзины signals/risks ≤12, macro ≤6, newtickers ≤5.
+
+### Остальные ленты LSE (не корпус дайджеста тетрадки)
+
+Пишут в ту же `knowledge_base`, но утренний LLM тетрадки их не берёт:
+
+| Источник | Cron / mode | Роль |
+|----------|-------------|------|
+| Seeking Alpha Finance (RapidAPI tipsters/тикеры/bookmark) | `35 */2` · `--mode sa` + UI | KB / вкладка SA разделы |
+| Yahoo + Marketaux | `5 */2` · `--mode tickers` | LSE ticker headlines |
+| Investing.com News + calendar | `0 */2` · `--mode investing` | LSE; календарь — отдельный `event_type` |
+| RSS ЦБ / Alpha Vantage / Yahoo earnings | `core-fast` и др. | LSE / earnings dates |
+| Email SA 35–40/день | — | **заменён** Google Sheet |
 
 ---
 
