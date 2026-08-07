@@ -38,6 +38,10 @@ feedparser>=6.0.10  # Парсинг RSS фидов центральных ба�
 # Примечание: если установка не работает из-за sgmllib3k, используйте:
 # pip install feedparser --no-deps
 
+# Google Sheets (SA news scraper sheet → knowledge_base)
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+
 # Будущие зависимости (для следующих этапов развития)
 # scipy>=1.10.0  # Для Visual Patterns Detection
 # scikit-learn>=1.3.0  # Для нормализации данных (опционально)

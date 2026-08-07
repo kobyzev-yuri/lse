@@ -1,5 +1,8 @@
 # Конфигурационные файлы с секретами
 config.env
+# Google service account for SA Sheet reader (never commit private key)
+config/sa-news-reader*.json
+config/*-credentials*.json
 # Локальный бэкап/копия серверного конфига (не публиковать; шаблон ключей — config.env.example)
 config.env.lse
 config.secrets.env

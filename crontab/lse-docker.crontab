@@ -40,6 +40,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 5 */2 * * * flock -n /tmp/lse_news_tickers.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode tickers >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 # Seeking Alpha Finance → knowledge_base (portfolio ∪ GAME_5M). Нужен SEEKING_ALPHA_RAPIDAPI_KEY в config.env. Без LLM.
 35 */2 * * * flock -n /tmp/lse_news_sa.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode sa >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
+# SA Google Sheet (external scraper) → knowledge_base. Нужен JSON в ./config + NOTEBOOK_SA_SHEET_* в config.env.
+40 */2 * * * flock -n /tmp/lse_news_sa_sheet.lock docker exec lse-bot python scripts/fetch_news_cron.py --mode sa_sheet >> /home/ai8049520/lse/logs/news_fetch.log 2>&1
 # Notebook digest (LLM ProxyAPI): будни 12:30 UTC ≈ 08:30 ET (за час до RTH 09:30). Из KB, без повторного SA fetch.
 30 12 * * 1-5 flock -n /tmp/lse_notebook_digest.lock docker exec lse-bot python scripts/run_notebook_news_digest.py --from-kb-only >> /home/ai8049520/lse/logs/notebook_news_digest.log 2>&1
 # Investing mode: FRED+FOMC → KB, then Investing calendar JSON (may 403 on GCP without proxy) + HTML news.

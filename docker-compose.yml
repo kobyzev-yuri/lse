@@ -42,6 +42,8 @@ services:
       - ./config.env:/app/config.env
       - ./config.secrets.env:/app/config.secrets.env
       - ./config.security.env:/app/config.security.env
+      # Service-account JSON for SA Google Sheet ingest (host-only; gitignored).
+      - ./config:/app/config:ro
       - ./logs:/app/logs
       - ./local:/app/local
     environment:

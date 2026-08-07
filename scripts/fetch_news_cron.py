@@ -42,7 +42,7 @@ def fetch_all_news_sources(mode: str = "all"):
     logger.info("=" * 60)
     
     mode = (mode or "all").strip().lower()
-    if mode not in ("all", "core", "core-fast", "newsapi", "investing", "tickers", "sa"):
+    if mode not in ("all", "core", "core-fast", "newsapi", "investing", "tickers", "sa", "sa_sheet"):
         mode = "all"
 
     sources_status = {}
@@ -52,12 +52,14 @@ def fetch_all_news_sources(mode: str = "all"):
     ticker_news_saved = 0
     yfinance_earnings_saved = 0
     sa_news_saved = 0
+    sa_sheet_saved = 0
 
     run_investing = mode in ("all", "investing")
     run_core_fast = mode in ("all", "core", "core-fast")
     run_newsapi = mode in ("all", "core", "newsapi")
     run_tickers = mode in ("all", "core", "tickers")
     run_sa = mode in ("all", "sa")
+    run_sa_sheet = mode in ("all", "sa", "sa_sheet")
 
     if run_core_fast:
         # 1. RSS фиды центральных банков (всегда работает, бесплатно)
@@ -140,6 +142,27 @@ def fetch_all_news_sources(mode: str = "all"):
             logger.error("❌ Ошибка ticker news: %s", e)
             sources_status["TickerNews"] = f"❌ Ошибка: {e}"
 
+    if run_sa_sheet:
+        try:
+            logger.info("\n📋 Источник SA Sheet: Google Sheet → knowledge_base")
+            from services.sa_sheet_feed import ingest_sheet_to_kb, sheet_enabled
+
+            if not sheet_enabled():
+                sources_status["SeekingAlphaSheet"] = "⏭ пропуск (NOTEBOOK_SA_SHEET_ENABLED off)"
+            else:
+                sheet_result = ingest_sheet_to_kb()
+                sa_sheet_saved = int(sheet_result.get("kb_inserted") or 0)
+                if sheet_result.get("skipped"):
+                    sources_status["SeekingAlphaSheet"] = f"⏭ {sheet_result.get('reason')}"
+                else:
+                    sources_status["SeekingAlphaSheet"] = (
+                        f"✅ KB +{sa_sheet_saved}, rows={sheet_result.get('rows', 0)}, "
+                        f"items={sheet_result.get('items', 0)}"
+                    )
+        except Exception as e:
+            logger.error("❌ Ошибка SA Google Sheet: %s", e)
+            sources_status["SeekingAlphaSheet"] = f"❌ Ошибка: {e}"
+
     if run_sa:
         try:
             logger.info("\n📰 Источник SA: Seeking Alpha Finance → knowledge_base (tickers+sections)")
@@ -219,7 +242,13 @@ def fetch_all_news_sources(mode: str = "all"):
 
     # Итоговый отчет
     total_new = (
-        rss_saved + newsapi_saved + n_investing + ticker_news_saved + yfinance_earnings_saved + sa_news_saved
+        rss_saved
+        + newsapi_saved
+        + n_investing
+        + ticker_news_saved
+        + yfinance_earnings_saved
+        + sa_news_saved
+        + sa_sheet_saved
     )
     logger.info("\n" + "=" * 60)
     logger.info("📊 Итоговый статус источников:")
@@ -234,9 +263,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fetch news from sources")
     parser.add_argument(
         "--mode",
-        choices=("all", "core", "core-fast", "newsapi", "investing", "tickers", "sa"),
+        choices=("all", "core", "core-fast", "newsapi", "investing", "tickers", "sa", "sa_sheet"),
         default="all",
-        help="all=все (+SA если ключ), core=RSS+AV+NewsAPI+TickerNews, core-fast=RSS+AV, newsapi, investing, tickers=Yahoo+Marketaux, sa=Seeking Alpha Finance→KB",
+        help="all=все (+SA/+Sheet), core=RSS+AV+NewsAPI+TickerNews, core-fast=RSS+AV, newsapi, investing, tickers=Yahoo+Marketaux, sa=Sheet+SA Finance→KB, sa_sheet=Google Sheet SA→KB",
     )
     args = parser.parse_args()
     try:

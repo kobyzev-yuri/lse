@@ -22,6 +22,8 @@ logs/
 config.env
 config.secrets.env
 config.security.env
+config/sa-news-reader*.json
+config/*-credentials*.json
 *.sql.gz
 
 # Binaries & caches
