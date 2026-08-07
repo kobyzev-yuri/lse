@@ -2010,7 +2010,7 @@ function renderSaSectionsPanel(){
   return `
     <div class="card">
       <h3 style="margin:0">SA подписки → knowledge_base${keyBadge}</h3>
-      <p class="note">Тикеры и разделы tipsters пишутся в KB (<code>Seeking Alpha Finance</code>). Утренний дайджест тетрадки читает <b>только SA</b>. Лента ниже — из KB. Mute тикера = не качать в SA-cron (в тетрадке тикер остаётся).</p>
+      <p class="note">Новости тетрадки (лента + утренний дайджест) — только Google Sheet (<code>provider=sa_google_sheet</code>). Tipsters/bookmark пишутся в KB для LSE/UI, но в дайджест не попадают. Календарь/earnings — отдельно. Mute тикера = не качать в SA-cron.</p>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0">
         <label>N на раздел <input id="sa-sec-limit" type="number" min="1" max="200" value="${lim}" style="width:72px"></label>
         <button type="button" class="ghost" onclick="saveSaSectionLimit()">Сохранить N</button>
@@ -2038,7 +2038,7 @@ function renderSaSectionsPanel(){
         <select onchange="setSaFeedFilter(this.value)">${filterOpts}</select>
         <button type="button" class="ghost" onclick="SA_FEED_TRIED=false;hydrateSaSectionsQuiet(true)">Обновить</button>
       </div>
-      <p class="note">${Number(feed.count||0)} строк · окно ${esc(String(feed.hours||72))}ч · source ${esc(feed.source||"Seeking Alpha Finance")}</p>
+      <p class="note">${Number(feed.count||0)} строк · окно ${esc(String(feed.hours||72))}ч · source ${esc(feed.source||"Seeking Alpha Finance")}${feed.provider ? ` · provider ${esc(String(feed.provider))}` : ""}${feed.sheet_only ? " · sheet-only" : ""}</p>
       ${feedRows || `<p class="note">Пусто — включите подписки и нажмите «Прогнать сейчас → KB» (или дождитесь cron SA).</p>`}
     </div>
   `;

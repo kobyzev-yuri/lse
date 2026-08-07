@@ -657,16 +657,26 @@ def load_sa_feed(
     section_id: Optional[str] = None,
     symbol: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Load Seeking Alpha Finance NEWS rows from knowledge_base for UI feed."""
+    """Load notebook NEWS rows from knowledge_base for UI feed.
+
+    Honours NOTEBOOK_NEWS_KB_PROVIDER (default sa_google_sheet). Calendar/earnings
+    are separate paths.
+    """
     from sqlalchemy import create_engine, text
 
     from config_loader import get_database_url
+    from services.seeking_alpha_finance import notebook_kb_news_provider, notebook_news_sheet_only
 
     hours = max(1, min(int(hours), 720))
     lim = max(1, min(int(limit), 500))
     want_sym = str(symbol or "").strip().upper() or None
     if section_id and not want_sym:
         want_sym = section_kb_symbol(section_id)
+    provider = notebook_kb_news_provider()
+    sheet_only = notebook_news_sheet_only()
+    # Sheet corpus has no SA:<section> symbols — section filter would empty the feed.
+    if sheet_only and want_sym and str(want_sym).upper().startswith("SA:"):
+        want_sym = None
 
     sql = """
         SELECT id, ts, ticker, source, content, link,
@@ -678,6 +688,9 @@ def load_sa_feed(
           AND ts >= (NOW() AT TIME ZONE 'utc') - make_interval(hours => :hours)
     """
     params: Dict[str, Any] = {"src": KB_SOURCE, "hours": hours, "lim": lim}
+    if provider:
+        sql += " AND COALESCE(raw_payload->>'provider', '') = :provider"
+        params["provider"] = provider
     if want_sym:
         sql += " AND (UPPER(TRIM(COALESCE(symbol,''))) = :sym OR UPPER(TRIM(ticker)) = :sym_legacy)"
         params["sym"] = want_sym
@@ -725,6 +738,8 @@ def load_sa_feed(
         "count": len(rows),
         "items": rows,
         "source": KB_SOURCE,
+        "provider": provider or "ALL",
+        "sheet_only": sheet_only,
     }
 
 

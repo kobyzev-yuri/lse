@@ -346,3 +346,96 @@ def test_fair_sample_respects_g2_and_macro_and_llm_max(monkeypatch):
     # Before pack: 40+10+5=55 ≤ 100 → no trim
     assert sample["before_pack"] == 55
     assert sample["after_fair_sample"] == 55
+
+
+def test_digest_sheet_only_loads_provider_and_skips_earnings(monkeypatch, tmp_path):
+    """Morning digest defaults to Google Sheet corpus only."""
+    import services.notebook_news_digest as m
+
+    captured: dict = {}
+
+    def _cfg(key, default=None):
+        overrides = {
+            "NOTEBOOK_NEWS_KB_PROVIDER": "sa_google_sheet",
+            "NOTEBOOK_NEWS_KB_ALL_SOURCES": "0",
+            "NOTEBOOK_NEWS_INCLUDE_MACRO": "1",
+            "NOTEBOOK_NEWS_INCLUDE_EARNINGS": "1",
+            "NOTEBOOK_NEWS_KB_LOOKBACK_HOURS": "72",
+            "NOTEBOOK_NEWS_KB_SOURCE": "Seeking Alpha Finance",
+        }
+        return overrides.get(key, default)
+
+    def _load_kb(*_a, **kwargs):
+        captured["kwargs"] = kwargs
+        return [
+            {
+                "id": "1",
+                "ticker": "AAPL",
+                "title": "From sheet",
+                "summary_text": "body",
+                "link": "https://seekingalpha.com/news/1",
+                "publishOn": "2026-08-07T10:00:00+00:00",
+                "src": "Seeking Alpha Finance",
+            }
+        ]
+
+    earn_called = {"n": 0}
+
+    def _load_earn(*_a, **_k):
+        earn_called["n"] += 1
+        return [{"ticker": "MSFT", "title": "earn"}]
+
+    monkeypatch.setattr(m, "get_config_value", _cfg)
+    monkeypatch.setattr(
+        m,
+        "_truthy_cfg",
+        lambda k, d="0": str(_cfg(k, d) if _cfg(k, d) is not None else d).lower()
+        in ("1", "true", "yes", "on"),
+    )
+    monkeypatch.setattr(m, "notebook_kb_news_provider", lambda: "sa_google_sheet")
+    monkeypatch.setattr(m, "notebook_news_sheet_only", lambda: True)
+    monkeypatch.setattr(
+        m,
+        "build_news_universe",
+        lambda **_k: {
+            "group3_union": ["MSFT"],
+            "membership": {"MSFT": ["g1"]},
+            "group1_portfolio": ["MSFT"],
+            "group2_game_5m": [],
+            "group3_candidates": [],
+            "group_new": [],
+            "source": "test",
+            "note_ru": "",
+        },
+    )
+    monkeypatch.setattr(m, "load_kb_news_items", _load_kb)
+    monkeypatch.setattr(m, "load_kb_earnings_items", _load_earn)
+
+    out = m.run_notebook_news_digest(
+        tickers=["MSFT"],
+        use_llm=False,
+        write=False,
+        fetch_sa=False,
+        save_kb=False,
+        from_kb=True,
+        out_digest=tmp_path / "d.json",
+        out_raw=tmp_path / "r.json",
+    )
+    assert captured["kwargs"].get("provider") == "sa_google_sheet"
+    assert captured["kwargs"].get("any_symbol") is True
+    assert earn_called["n"] == 0
+    assert out["pipeline"]["sheet_only"] is True
+    assert out["pipeline"]["kb_provider"] == "sa_google_sheet"
+    assert out["pipeline"]["include_earnings"] is False
+    assert (out.get("raw") or {}).get("item_count", 0) >= 1
+
+
+def test_notebook_kb_news_provider_defaults_to_sheet(monkeypatch):
+    from services import seeking_alpha_finance as saf
+
+    monkeypatch.setattr(saf, "get_config_value", lambda k, d=None: d)
+    assert saf.notebook_kb_news_provider() == "sa_google_sheet"
+    assert saf.notebook_news_sheet_only() is True
+    monkeypatch.setattr(saf, "get_config_value", lambda k, d=None: "all")
+    assert saf.notebook_kb_news_provider() is None
+    assert saf.notebook_news_sheet_only() is False

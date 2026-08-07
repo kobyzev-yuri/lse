@@ -21,6 +21,8 @@ from services.seeking_alpha_finance import (
     fetch_and_save_sa_news,
     load_kb_earnings_items,
     load_kb_news_items,
+    notebook_kb_news_provider,
+    notebook_news_sheet_only,
 )
 from services.ticker_groups import get_tickers_for_portfolio_game, get_tickers_game_5m
 
@@ -1088,23 +1090,27 @@ def run_notebook_news_digest(
         kb_src: Optional[str] = None
     else:
         kb_src = (get_config_value("NOTEBOOK_NEWS_KB_SOURCE", KB_SOURCE) or KB_SOURCE).strip() or KB_SOURCE
+    # Notebook NEWS corpus: Google Sheet by default (NOTEBOOK_NEWS_KB_PROVIDER).
+    kb_provider = notebook_kb_news_provider()
+    sheet_only = notebook_news_sheet_only()
 
     requested = wanted[: mx or len(wanted)]
     kb_tickers = list(requested)
     include_macro = _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_MACRO", "1")
-    if include_macro:
+    if include_macro and not sheet_only:
         for m in ("MACRO", "US_MACRO"):
             if m not in kb_tickers:
                 kb_tickers.append(m)
-    # Subscribed tipsters sections live as SA:<section_id> in KB.
-    try:
-        from services.sa_section_subscriptions import enabled_section_kb_symbols
+    # Tipsters sections (SA:<id>) — skip when digest is sheet-only.
+    if not sheet_only:
+        try:
+            from services.sa_section_subscriptions import enabled_section_kb_symbols
 
-        for sa_sym in enabled_section_kb_symbols():
-            if sa_sym and sa_sym not in kb_tickers:
-                kb_tickers.append(sa_sym)
-    except Exception as e:
-        logger.debug("sa section symbols for digest skipped: %s", e)
+            for sa_sym in enabled_section_kb_symbols():
+                if sa_sym and sa_sym not in kb_tickers:
+                    kb_tickers.append(sa_sym)
+        except Exception as e:
+            logger.debug("sa section symbols for digest skipped: %s", e)
 
     fetch_meta: Dict[str, Any] = {"skipped": not fetch_sa}
     kb_inserted = 0
@@ -1151,14 +1157,16 @@ def run_notebook_news_digest(
             # Load enough rows for fair-sample (per-ticker × groups + MACRO).
             lim = max(
                 int(quotas.get("llm_max_items") or 1000),
-                per * max(1, len(kb_tickers)) * (3 if kb_src is None else 1),
+                per * max(1, len(kb_tickers) or 1) * (3 if kb_src is None else 1),
             )
             lim = min(lim, 3000)
             items = load_kb_news_items(
-                kb_tickers,
+                kb_tickers if not sheet_only else [],
                 lookback_hours=lb,
                 source=kb_src,
                 limit=lim,
+                provider=kb_provider,
+                any_symbol=sheet_only,
             )
         except Exception as e:
             logger.exception("KB load for digest failed: %s", e)
@@ -1174,6 +1182,8 @@ def run_notebook_news_digest(
     fetch_meta["raw_item_count"] = raw_count
     fetch_meta["deduped_drop"] = deduped_drop
     fetch_meta["item_count_after_dedupe"] = after_dedupe
+    fetch_meta["kb_provider"] = kb_provider or "ALL"
+    fetch_meta["sheet_only"] = sheet_only
 
     sample = fair_sample_for_digest(
         items, membership, quotas=quotas, include_macro=include_macro
@@ -1186,7 +1196,9 @@ def run_notebook_news_digest(
     fetch_meta["fair_sample_macro_count"] = sample.get("macro_count")
 
     earnings_items: List[Dict[str, Any]] = []
-    if from_kb and _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_EARNINGS", "1"):
+    # Sheet-only morning digest: no Yahoo earnings overlay — corpus is the table alone.
+    include_earnings = (not sheet_only) and _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_EARNINGS", "1")
+    if from_kb and include_earnings:
         try:
             earnings_items = load_kb_earnings_items(requested, days_back=7, days_ahead=45, limit=40)
         except Exception as e:
@@ -1272,8 +1284,12 @@ def run_notebook_news_digest(
         "save_kb": save_kb,
         "from_kb": from_kb,
         "kb_source": kb_src or "ALL",
+        "kb_provider": kb_provider or "ALL",
+        "sheet_only": sheet_only,
         "include_macro": include_macro,
-        "include_earnings": bool(earnings_items) or _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_EARNINGS", "1"),
+        "include_earnings": bool(earnings_items) if sheet_only else (
+            bool(earnings_items) or _truthy_cfg("NOTEBOOK_NEWS_INCLUDE_EARNINGS", "1")
+        ),
         "earnings_count": len(earnings_items),
         "lookback_hours": lb,
         "kb_inserted": kb_inserted,
@@ -1365,17 +1381,18 @@ def load_latest_digest(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     return dig if isinstance(dig, dict) else None
 
 
-# Ingest channels that feed knowledge_base → morning digest (cron fetch_news_cron).
+# Ingest channels (LSE KB). Notebook NEWS UI/digest uses Sheet only by default.
 NOTEBOOK_NEWS_INGEST_CHANNELS: List[Dict[str, str]] = [
-    {"id": "Seeking Alpha Finance", "via": "RapidAPI SA → KB", "role": "primary ticker news"},
-    {"id": "Yahoo Finance", "via": "TickerNews merge", "role": "ticker headlines"},
-    {"id": "Marketaux", "via": "TickerNews merge (if key)", "role": "ticker headlines"},
-    {"id": "Investing.com News", "via": "fetch_news_cron investing", "role": "market / ticker"},
-    {"id": "Investing.com Economic Calendar", "via": "calendar cron", "role": "macro calendar"},
+    {"id": "SA Google Sheet", "via": "sa_sheet_feed → KB", "role": "notebook NEWS (digest + UI)"},
+    {"id": "Seeking Alpha Finance", "via": "RapidAPI tipsters → KB", "role": "LSE/UI tipsters (not notebook digest)"},
+    {"id": "Yahoo Finance", "via": "TickerNews merge", "role": "LSE ticker headlines"},
+    {"id": "Marketaux", "via": "TickerNews merge (if key)", "role": "LSE ticker headlines"},
+    {"id": "Investing.com News", "via": "fetch_news_cron investing", "role": "LSE market / ticker"},
+    {"id": "Investing.com Economic Calendar", "via": "calendar cron", "role": "macro calendar (notebook OK)"},
     {"id": "NewsAPI", "via": "fetch_news_cron", "role": "wire / general"},
     {"id": "Alpha Vantage", "via": "fetch_news_cron core", "role": "sentiment / headlines"},
     {"id": "RSS", "via": "fetch_news_cron core", "role": "feeds"},
-    {"id": "Yahoo Earnings (yfinance)", "via": "earnings calendar", "role": "earnings dates (not headlines)"},
+    {"id": "Yahoo Earnings (yfinance)", "via": "earnings calendar", "role": "earnings dates (notebook OK)"},
 ]
 
 
@@ -1399,9 +1416,12 @@ def notebook_news_sources_catalog(*, days: int = 14, limit: int = 80) -> Dict[st
         "days": int(days),
         "error": err or None,
         "note_ru": (
-            "Дайджест читает все источники KB за lookback (по умолчанию ALL), "
-            "не только Seeking Alpha. Ниже — каналы ingest cron и фактические source за 14д."
+            "Новости тетрадки (дайджест + лента) — только Google Sheet "
+            "(NOTEBOOK_NEWS_KB_PROVIDER=sa_google_sheet). Календарь/earnings — отдельно. "
+            "Ниже — каналы ingest cron и source в KB за 14д."
         ),
+        "notebook_kb_provider": notebook_kb_news_provider() or "ALL",
+        "sheet_only": notebook_news_sheet_only(),
     }
 
 

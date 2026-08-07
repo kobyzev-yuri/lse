@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 HOST = "seeking-alpha-finance.p.rapidapi.com"
 BASE = f"https://{HOST}"
 KB_SOURCE = "Seeking Alpha Finance"
+SHEET_PROVIDER = "sa_google_sheet"
+
+
+def notebook_kb_news_provider() -> Optional[str]:
+    """Provider filter for notebook NEWS reads (digest, UI feed, sentiment drafts).
+
+    Default: sa_google_sheet. Set NOTEBOOK_NEWS_KB_PROVIDER=all (or 0/off) to disable.
+    Calendar / EARNINGS paths do not use this.
+    """
+    raw = (get_config_value("NOTEBOOK_NEWS_KB_PROVIDER", SHEET_PROVIDER) or SHEET_PROVIDER).strip()
+    if raw.lower() in ("", "0", "false", "off", "no", "all", "*"):
+        return None
+    return raw
+
+
+def notebook_news_sheet_only() -> bool:
+    return (notebook_kb_news_provider() or "").lower() == SHEET_PROVIDER
 
 
 def rapidapi_key() -> str:
@@ -667,21 +684,29 @@ def load_kb_news_items(
     lookback_hours: int = 72,
     source: Optional[str] = KB_SOURCE,
     limit: int = 80,
+    provider: Optional[str] = None,
+    any_symbol: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Load recent NEWS rows from knowledge_base for digest (same shape as flatten_news_items)."""
+    """Load recent NEWS rows from knowledge_base for digest (same shape as flatten_news_items).
+
+    provider: filter raw_payload->>'provider' (e.g. sa_google_sheet).
+    any_symbol: ignore ticker list (sheet-wide load for morning digest).
+    """
     from sqlalchemy import bindparam, create_engine, text
 
     from config_loader import get_database_url
     from services.kb_extended_fields import kb_legacy_ticker
 
     wanted = [str(t).strip().upper() for t in tickers if str(t).strip()]
-    if not wanted:
+    if not any_symbol and not wanted:
         return []
     legacy = [kb_legacy_ticker(t) for t in wanted]
-    legacy = [t for t in legacy if t]
+    legacy = [t for t in legacy if t] or ["__none__"]
+    symbols = wanted or ["__none__"]
     hours = max(1, int(lookback_hours))
-    lim = max(1, min(int(limit), 500))
+    lim = max(1, min(int(limit), 3000))
     src = (source or "").strip() or None
+    prov = (provider or "").strip() or None
 
     sql = text(
         """
@@ -691,10 +716,15 @@ def load_kb_news_items(
         WHERE event_type = 'NEWS'
           AND ts >= (NOW() AT TIME ZONE 'utc') - make_interval(hours => :hours)
           AND (
-                UPPER(TRIM(ticker)) IN :tickers
+                :any_sym
+             OR UPPER(TRIM(ticker)) IN :tickers
              OR UPPER(TRIM(COALESCE(symbol, ''))) IN :symbols
           )
           AND (:src IS NULL OR source = :src)
+          AND (
+                :provider IS NULL
+             OR COALESCE(raw_payload->>'provider', '') = :provider
+          )
         ORDER BY ts DESC
         LIMIT :lim
         """
@@ -708,9 +738,11 @@ def load_kb_news_items(
                 sql,
                 {
                     "hours": hours,
+                    "any_sym": bool(any_symbol),
                     "tickers": legacy,
-                    "symbols": wanted,
+                    "symbols": symbols,
                     "src": src,
+                    "provider": prov,
                     "lim": lim,
                 },
             )

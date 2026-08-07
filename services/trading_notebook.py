@@ -683,9 +683,15 @@ def get_ticker_kb_news_sentiment(
     lim = max(1, min(int(limit), 100))
 
     try:
-        from services.seeking_alpha_finance import load_kb_news_items
+        from services.seeking_alpha_finance import load_kb_news_items, notebook_kb_news_provider
 
-        items = load_kb_news_items(tickers, lookback_hours=hours, source=None, limit=lim)
+        items = load_kb_news_items(
+            tickers,
+            lookback_hours=hours,
+            source=None,
+            limit=lim,
+            provider=notebook_kb_news_provider(),
+        )
     except Exception as e:
         logger.warning("KB news sentiment load failed for %s: %s", u, e)
         return {
@@ -1542,9 +1548,15 @@ def suggest_report_expect_from_sources(sym: str) -> Dict[str, Any]:
     titles: List[str] = []
     sources_hit: List[str] = []
     try:
-        from services.seeking_alpha_finance import load_kb_news_items
+        from services.seeking_alpha_finance import load_kb_news_items, notebook_kb_news_provider
 
-        items = load_kb_news_items([u], lookback_hours=24 * 21, source=None, limit=24)
+        items = load_kb_news_items(
+            [u],
+            lookback_hours=24 * 21,
+            source=None,
+            limit=24,
+            provider=notebook_kb_news_provider(),
+        )
         for it in items or []:
             if not isinstance(it, dict):
                 continue

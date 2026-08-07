@@ -83,10 +83,10 @@
 
 | Источник | Cron / mode | Что даёт | В дайджесте |
 |----------|-------------|----------|-------------|
-| **SA Google Sheet** (scraper) | `40 */2` · `--mode sa_sheet` (+ в `--mode sa`/`all`) | Лист A–E (time/URL/title/text/symbols) → KB `source=Seeking Alpha Finance`, `raw_payload.provider=sa_google_sheet` | да — **основной** поток статей для дайджеста |
-| **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные news **по чекбоксам** + tipsters sections (articles/day-watch) → KB `SA:<section>` | да, дополнение к Sheet (`NOTEBOOK_NEWS_KB_ALL_SOURCES=0`) |
-| **SA tipsters sections** | тот же `--mode sa` + UI «Прогнать» | Подписки `local/notebook/sa_section_subscriptions.json`; лента UI из KB | да (символы `SA:*`) |
-| **SA bookmark URL** | UI «Добавить в KB» | `GET /v1/news/data?news_id=` по ссылке `/news/<id>` → teaser+insights в KB | да (тикер из тегов / MACRO) |
+| **SA Google Sheet** (scraper) | `40 */2` · `--mode sa_sheet` (+ в `--mode sa`/`all`) | Лист A–E (time/URL/title/text/symbols) → KB `source=Seeking Alpha Finance`, `raw_payload.provider=sa_google_sheet` | да — **единственный** корпус утреннего дайджеста (`NOTEBOOK_NEWS_KB_PROVIDER=sa_google_sheet`) |
+| **Seeking Alpha Finance** (RapidAPI) | `35 */2` · `--mode sa` | Тикерные news **по чекбоксам** + tipsters sections (articles/day-watch) → KB `SA:<section>` | нет в утреннем LLM (остаются в KB/UI) |
+| **SA tipsters sections** | тот же `--mode sa` + UI «Прогнать» | Подписки `local/notebook/sa_section_subscriptions.json`; лента UI из KB | нет в утреннем LLM |
+| **SA bookmark URL** | UI «Добавить в KB» | `GET /v1/news/data?news_id=` по ссылке `/news/<id>` → teaser+insights в KB | нет в утреннем LLM (provider ≠ sheet) |
 | **Yahoo + Marketaux** | `5 */2` · `--mode tickers` | Тикерные новости (Motley Fool, Zacks, Reuters, Yahoo, …) | **нет** в дайджесте тетрадки (остаются в KB для LSE) |
 | **Investing.com News** (+ calendar) | `0 */2` · `--mode investing` | Лента + экономкалендарь | новости — да; календарь — другой `event_type` |
 | **RSS ЦБ / Alpha Vantage** | `*/15` · `--mode core-fast` | Макро/календарные потоки | если попали как NEWS/MACRO по тикерам |
@@ -96,7 +96,7 @@
 
 **Дайджест:** будни `30 12` UTC ≈ **08:30 ET** · `run_notebook_news_digest.py --from-kb-only` · Telegram `/digest` из кэша.
 
-Конфиг тетрадки: `NOTEBOOK_NEWS_KB_ALL_SOURCES=0` (только Seeking Alpha Finance), `NOTEBOOK_NEWS_INCLUDE_MACRO=1`, тикеры+`SA:*` секции из подписок. Остальной LSE читает multi-source KB как раньше.
+Конфиг тетрадки: `NOTEBOOK_NEWS_KB_PROVIDER=sa_google_sheet` — **все NEWS тетрадки** (дайджест, лента SA, sentiment/draft из KB) только из таблицы. Календарь и earnings — без этого фильтра. Tipsters/bookmark пишутся в KB, но notebook их не показывает.
 
 Лимиты утреннего LLM (дефолты, env): вход `NOTEBOOK_NEWS_LLM_MAX_ITEMS=1000` (~+40 на каждый новый тикер сверх ~25); выход корзин `NOTEBOOK_DIGEST_MAX_SIGNALS/RISKS=12`, `MACRO=6`, `NEWTICKERS=5`, text/tac 160/100.
 
