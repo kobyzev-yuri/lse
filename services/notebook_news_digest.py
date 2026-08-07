@@ -1079,11 +1079,13 @@ def run_notebook_news_digest(
         raw_mx = (get_config_value("NOTEBOOK_NEWS_MAX_TICKERS", "") or "").strip()
         mx = int(raw_mx) if raw_mx.isdigit() else None
     sl = float(sleep_sec if sleep_sec is not None else (get_config_value("NOTEBOOK_NEWS_SLEEP_SEC", "0.35") or 0.35))
+    # Default 72h = last 3 days (daily morning digest over Sheet NEWS).
     lb = int(
         lookback_hours
         if lookback_hours is not None
         else (get_config_value("NOTEBOOK_NEWS_KB_LOOKBACK_HOURS", "72") or 72)
     )
+    lb = max(1, min(lb, 24 * 14))
     # Notebook digest: SA-only by default (Yahoo/Investing stay in KB for other LSE).
     # NOTEBOOK_NEWS_KB_ALL_SOURCES=1 → all NEWS sources.
     if _truthy_cfg("NOTEBOOK_NEWS_KB_ALL_SOURCES", "0"):
